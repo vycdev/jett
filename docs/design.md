@@ -131,21 +131,21 @@ There must be **no spooky action at a distance**. A variable must never be silen
 - No global mutable variables. Global constants are allowed (they never change), but mutable global state is forbidden.
 - No module-level side effects on import. `use math` loads definitions — it does not execute code, register handlers, or modify state.
 - Side effects must be declared in the function signature via **capability parameters** (see Rule Set 16). If a function writes to a file, it receives a `Filesystem` capability. If it accesses the network, it receives a `Network` capability. The signature is the contract.
-- All inputs to a function come through its parameters. No reading from ambient scope, no closures over mutable state, no thread-local storage.
+- All inputs to a function come through its parameters. No reading from ambient scope, no closures over mutable state, no thread-local storage. Anonymous functions can capture **immutable** values from the enclosing scope. Captured values are implicitly viewed — they are not consumed by the closure. Closures over **mutable** state are banned. This allows patterns like `list.find(users, function(u: User) returns bool: return u.id is target_id)` where `target_id` is an immutable value from the outer scope.
 
 **Example — side effects are declared, not hidden:**
 
 ```
-function save_user(fs: Filesystem, user: User) returns Filesystem:
+function save_user(fs: Filesystem, user: User) with Filesystem:
     let data = json.serialize(user)
-    let fs = fs.write("users.json", data)
-    return fs
+    fs = fs.write("users.json", data)
+    return
 
 function compute_tax(income: float, rate: float) returns float:
     return income * rate
 ```
 
-`save_user` declares that it performs filesystem effects by taking a `Filesystem` capability parameter — any caller can see this without reading the function body. `compute_tax` has no capability parameters, so the compiler guarantees it is pure. An LLM reading only the signatures knows exactly what each function does and does not do.
+`save_user` declares that it performs filesystem effects by taking a `Filesystem` capability parameter and declaring `with Filesystem` (meaning it borrows and returns the capability) — any caller can see this without reading the function body. `compute_tax` has no capability parameters, so the compiler guarantees it is pure. An LLM reading only the signatures knows exactly what each function does and does not do.
 
 **Why this matters for LLMs:**
 
@@ -220,10 +220,10 @@ struct EmailSender:
     config: SmtpConfig
     logger: Logger
 
-    function send(self, net: Network, message: Message) returns Network:
-        self.logger.log("sending email")
-        let net = smtp.deliver(net, self.config, message)
-        return net
+    function send(self, net: Network, message: Message) with Network:
+        Logger.log(self.logger, "sending email")
+        net = smtp.deliver(net, self.config, message)
+        return
 ```
 
 `EmailSender` uses a `Logger` and an `SmtpConfig` by containing them — not by inheriting from them. The relationship is visible in the struct definition. An LLM can see every dependency by reading the struct fields.
@@ -254,7 +254,13 @@ struct Dog:
 implement Speaker for Dog:
     function speak(self) returns string:
         return "woof"
+
+# Calling a method — module syntax only:
+let my_dog = Dog(name: "Rex", breed: "labrador")
+let sound = Dog.speak(my_dog)
 ```
+
+Structs define methods with `self` as the first parameter. Methods are called with module syntax: `Dog.speak(my_dog)`, `Point.distance(p1, p2)`. There is no `my_dog.speak()` form.
 
 Everything about `Dog` is right here. No context needed from parent classes. No files to chase.
 
@@ -283,11 +289,13 @@ When an LLM generates code that doesn't type-check, the compiler error tells it 
 ```
 function format_price(cents: int) returns string:
     return string.concat("price is ", cents)
-    # COMPILE ERROR: cannot add string and int
+    # COMPILE ERROR: string.concat expects all arguments to be strings; cannot concatenate string and int
     # hint: convert with string(cents)
 ```
 
 In a dynamically typed language, this would silently produce `"price is [object]"` or crash at runtime. In Jett, the LLM gets an immediate, actionable error.
+
+`string.concat` accepts 2 or more arguments. `string.concat("a", "b")` and `string.concat("a", "b", "c")` are both valid. This is not function overloading — it is a single variadic function.
 
 #### 2. Intent-Based Refinement Types — Constraints in Plain Text
 
@@ -521,7 +529,7 @@ You cannot accidentally ignore an error. The compiler will not let the program c
 **Result type structure:**
 
 ```
-# result[T, E] is a built-in enum with two variants:
+# result[T, E] is a built-in union type with two variants:
 #   ok(value: T)    — the operation succeeded
 #   fail(error: E)  — the operation failed
 ```
@@ -550,6 +558,20 @@ The `handle` block executes only when the result is `fail`. If the result is `ok
 **Why `match` is not allowed on results:**
 
 One canonical form means one way to unwrap. `match` on a `result` would create a second way to do the same thing as `handle`. By restricting `match` to user-defined enums, Jett enforces that all error handling looks identical everywhere. An LLM never has to decide between `match` and `handle` — there is only `handle`.
+
+**`handle` also unwraps `optional[T]`:**
+
+The `handle` keyword works identically for `optional[T]` values. If the value is `none`, the handle block executes:
+
+```
+let first_item = list.first(items) handle:
+    return fail("list is empty")
+
+let user = users.find_by_id(id) handle:
+    return fail(string.concat("user not found: ", id))
+```
+
+This means `handle` is the single canonical unwrap mechanism for both `result[T, E]` and `optional[T]`. There is no separate syntax for optionals.
 
 #### 2. No Global Exits — Control Flow Goes Down, Never Sideways
 
@@ -683,7 +705,7 @@ struct Parser:
     # Required — distinct names:
     function parse_text(self, input: string) returns Ast:
         let tokens = tokenize(input)
-        return self.parse_tokens(tokens)
+        return Parser.parse_tokens(self, tokens)
 
     function parse_tokens(self, input: list[Token]) returns Ast:
         return build_ast(input)
@@ -1331,16 +1353,16 @@ Garbage collection is too slow for native-speed code. C-style manual memory (`ma
 When a variable is passed into a function, it is **consumed** (moved) and immediately becomes invalid in the current scope. If the LLM tries to use it again on the next line, the compiler rejects it. If the LLM wants to keep it, it must explicitly clone.
 
 ```
-function send_message(net: Network, connection: Connection, payload: Payload) returns Network:
-    let net = net.send(connection, payload)
+function send_message(net: Network, connection: Connection, payload: Payload) with Network:
+    net = net.send(connection, payload)
     # `payload` has been consumed by `send`. It no longer exists here.
-    return net
+    return
 
-function example(net: Network, stdout: Stdout) returns Network:
+function example(net: Network, stdout: Stdout) with Network:
     let conn = Connection("localhost", 8080)
     let data = Payload("hello")
 
-    let net = send_message(net, conn, data)
+    net = send_message(net, conn, data)
 
     stdout.write(data.content)
     # COMPILE ERROR: "data" was consumed by "send_message" on the previous line
@@ -1357,10 +1379,10 @@ The rule is completely local. The LLM does not need to track lifetimes across fu
 **When the LLM needs to keep a value:**
 
 ```
-function example(net: Network, stdout: Stdout) returns Network:
+function example(net: Network, stdout: Stdout) with Network:
     let data = Payload("hello")
 
-    let net = send_message(net, conn, data.clone())
+    net = send_message(net, conn, data.clone())
     # `data.clone()` creates a copy that gets consumed. The original `data` survives.
 
     stdout.write(data.content)   # valid — `data` was never consumed
@@ -2261,13 +2283,13 @@ LLMs are pattern matchers. When generating backend code — APIs, database queri
 - Passes API keys through string formatting into error messages
 - Stores secrets in plain-text variables that end up in debug output
 
-The LLM doesn't understand that a password hash is different from a username. Both are strings. Both get passed to functions that accept strings. The LLM generates `print(user)` and the user struct contains `password_hash` and suddenly secrets are in the logs.
+The LLM doesn't understand that a password hash is different from a username. Both are strings. Both get passed to functions that accept strings. The LLM generates `stdout.write(user)` and the user struct contains `password_hash` and suddenly secrets are in the logs.
 
 This is not a hypothetical — it is one of the most common security vulnerabilities in LLM-generated code. The LLM treats all data uniformly because, at the type level, it *is* all the same: `string`.
 
 #### The Solution: Security Sensitivity at the Type Level
 
-Jett introduces a `secret` type wrapper that **taints** data at the type level. Once a value is marked as secret, the compiler tracks it through every operation and **structurally prevents** it from being passed to any output function — `print`, `log`, `http.respond`, `io.write_file`, or any function that is not explicitly authorized to handle secrets.
+Jett introduces a `secret` type wrapper that **taints** data at the type level. Once a value is marked as secret, the compiler tracks it through every operation and **structurally prevents** it from being passed to any output function — `stdout.write`, `log`, `http.respond`, `io.write_file`, or any function that is not explicitly authorized to handle secrets.
 
 **Declaring secret data:**
 
@@ -2532,6 +2554,37 @@ function main(stdout: Stdout, fs: Filesystem):
 
 Every function that touches the filesystem has `fs: Filesystem` in its parameters. Every function that writes output has `stdout: Stdout`. **By reading only the function signature**, the LLM (or a human) knows exactly which side effects a function can perform.
 
+**Capability methods return self implicitly:**
+
+Capability methods like `stdout.write()`, `fs.read_file()`, and `net.send()` **implicitly return the capability**. This means every capability method call must be rebound:
+
+```
+function log_message(stdout: Stdout, message: string) with Stdout:
+    stdout = stdout.write(message)
+    stdout = stdout.write("\n")
+    # stdout is still alive — each .write() returns it
+```
+
+On the error path, the compiler automatically returns all borrowed capabilities declared in the `with` clause:
+
+```
+function read_config(fs: Filesystem, path: string) returns result[Config, error] with Filesystem:
+    let raw = fs.read_file(path) handle:
+        return fail(string.concat("could not read ", path))
+        # The compiler automatically returns fs alongside the fail value
+    let config = json.parse(raw, Config) handle:
+        return fail("invalid config format")
+        # The compiler automatically returns fs here too
+    return ok(config)
+    # The compiler automatically returns fs alongside the ok value
+```
+
+**Error path semantics:** When a function declares `with Capability`, the compiler ensures that every `return` statement (whether `ok(...)`, `fail(...)`, or bare `return`) automatically includes the borrowed capabilities. The programmer never writes `return fail(...), fs` — the `with` clause handles it.
+
+**Capability parameters in `with` functions are implicitly rebindable:**
+
+When a function declares `with Filesystem`, the `fs` parameter is implicitly `mutable` — it can be rebound after each method call. This is the ONLY case where a parameter is implicitly mutable. The `with` clause tells the compiler "this capability will be threaded through the function and returned."
+
 #### What the Compiler Rejects
 
 **A function trying to do I/O without a capability:**
@@ -2594,6 +2647,8 @@ let scoped_fs = fs.scoped("/data/")    # can only access files under /data/
 let local_net = net.allow("localhost")  # can only connect to localhost
 let limited_stdout = stdout.buffered() # writes are buffered, not immediate
 ```
+
+Capability narrowing **consumes** the original capability. `let read_fs = fs.read_only()` consumes `fs` — only `read_fs` remains. To keep both full and restricted access, clone first: `let read_fs = fs.clone().read_only()`.
 
 This gives fine-grained control over what each function can do, and it's all visible in the function signature and the narrowing call.
 
@@ -3221,26 +3276,30 @@ Rule Set 1 establishes that Jett avoids exotic symbols. The `|>` operator is the
 
 To satisfy Rule Set 1 (strictly one canonical form), `|>` and nested function calls are **not** interchangeable. The compiler enforces distinct use cases:
 
-- **`|>` for chains of 2+ operations.** When data flows through a sequence of transformations, use the pipeline. **Nested function calls of depth 2+ are a compile error.**
+- **`|>` for chains of 2+ operations.** When data flows through a sequence of transformations, use the pipeline. **Chained/sequential nesting where data flows through a chain is a compile error** — `f(g(h(x)))` is banned because data flows sequentially through `h`, then `g`, then `f`. Use `x |> h |> g |> f` instead.
+- **Argument expressions are allowed.** `string.concat("prefix", string(value))` is fine because `string(value)` is an argument expression, not a sequential data-flow chain. The rule targets left-to-right data flow chains, not every function call inside another function call.
 - **Direct calls for single operations.** `let x = f(y)` is the form for a single function call.
 
 ```
 # Single call — correct:
 let trimmed = string.trim(name)
 
-# Nested calls — COMPILE ERROR:
-let result = format_json(fetch_data(authenticate(request)))
-# COMPILE ERROR: nested function calls of depth 2+ must use the pipeline operator
-# hint: rewrite as: request |> authenticate |> fetch_data |> format_json
+# ALLOWED — argument expression:
+let message = string.concat("count: ", string(total))
+
+# BANNED — sequential chain (depth 3):
+let result = format(process(parse(input)))
+# COMPILE ERROR: use pipeline instead
+# hint: rewrite as: input |> parse |> process |> format
 
 # Pipeline — correct:
-let result = request
-    |> authenticate
-    |> fetch_data
-    |> format_json
+let result = input
+    |> parse
+    |> process
+    |> format
 ```
 
-This means there is exactly one form for single calls (direct) and exactly one form for chained calls (pipeline). No ambiguity, no choice.
+This means there is exactly one form for single calls (direct) and exactly one form for chained calls (pipeline). Argument expressions inside a function call are not considered chaining — the ban applies to sequential data-flow nesting, not to every function call that appears inside another. No ambiguity, no choice.
 
 #### Why This Is Perfect for LLMs
 
@@ -3538,10 +3597,13 @@ When `--agent` is passed, the compiler outputs **zero formatting, zero spatial a
             "line": 23,
             "column": 41,
             "ast_node": {
-                "type": "binary_op",
-                "op": "add",
-                "left": {"type": "string_literal", "value": "user: "},
-                "right": {"type": "field_access", "object": "user", "field": "password_hash", "field_type": "secret[string]"}
+                "type": "call",
+                "op": "call",
+                "function": "string.concat",
+                "args": [
+                    {"type": "string_literal", "value": "user: "},
+                    {"type": "field_access", "object": "user", "field": "password_hash", "field_type": "secret[string]"}
+                ]
             },
             "scope": {
                 "variables": [
@@ -3553,7 +3615,7 @@ When `--agent` is passed, the compiler outputs **zero formatting, zero spatial a
                 "rule": "secret_type_exposure",
                 "expected": "string",
                 "got": "secret[string]",
-                "explanation": "secret[string] cannot be passed to functions that expose data (string concatenation, print, log, http.respond)"
+                "explanation": "secret[string] cannot be passed to functions that expose data (string concatenation, stdout.write, log, http.respond)"
             },
             "suggested_fix": {
                 "action": "replace",
@@ -4276,7 +4338,7 @@ function count_items(data: view list[Item]) returns int:
 
 function total_price(items: view list[Item]) returns float:
     let mutable sum = 0.0
-    for item in items:
+    for item in view items:
         sum = sum + item.price
     return sum
 ```
@@ -4373,7 +4435,7 @@ function render_frame(state: view GameState, stdout: Stdout):
     stdout.write(string.concat("players: ", string(player_count)))
     stdout.write(string.concat("tick: ", string(state.tick)))
 
-    for player in state.players:
+    for player in view state.players:
         # `player` is also a view — views propagate through field access:
         render_player(view player, stdout)
 
@@ -5506,14 +5568,14 @@ Jett keeps its symbol set **as small as possible**. Symbols are only used where 
 |------------|-----------|
 | `==`, `===` | `is` |
 | `!=`, `!==` | `is not` |
-| `>`, `<`, `>=`, `<=` | `greater`, `less`, `greater_or_equal`, `less_or_equal` (or keep `>` `<` — see open questions) |
+| `>`, `<`, `>=`, `<=` | `greater`, `less`, `greater_or_equal`, `less_or_equal` |
 | `&&` | `and` |
 | `\|\|` | `or` |
 | `!` | `not` |
 | `->`, `=>` | `returns` |
 | `{ }` | indentation |
 | `;` | newline |
-| `#`, `//` | `note` (see open questions) |
+| `#`, `//` | `#` |
 
 ### 3. Predictable Patterns
 
@@ -5609,6 +5671,11 @@ struct Point:
         let dx = self.x - other.x
         let dy = self.y - other.y
         return math.sqrt(dx * dx + dy * dy)
+
+# Methods are called with module syntax — there is no p1.distance(p2) form:
+let p1 = Point(x: 0.0, y: 0.0)
+let p2 = Point(x: 3.0, y: 4.0)
+let d = Point.distance(p1, p2)
 ```
 
 ### Error Handling
@@ -5657,6 +5724,8 @@ function describe_shape(stdout: Stdout, shape: Shape):
 ### Modules
 
 ```
+namespace myapp
+
 use math
 use net.http
 
@@ -5723,7 +5792,7 @@ The standard library is intentionally massive and opinionated. The goal is to ma
 - **json** — parse, serialize, pretty print, nested path access, get_or
 - **time** — now, format, parse, difference, add/subtract, comparisons, day_of_week, years_between
 - **os** — environment variables, process management, file system, argv
-- **test** — built-in testing framework with assertions
+- **test** — mock infrastructure for property-based testing (`test.mock` for mock filesystems, networks, etc.)
 - **log** — structured logging with levels
 - **format** — string formatting and interpolation
 - **crypto** — hashing (sha256, sha512, md5), HMAC
@@ -5813,8 +5882,6 @@ project/
     source/
         main.jett
         utils.jett
-    test/
-        test_utils.jett
 ```
 
 The `.proj` file is minimal:
@@ -5869,6 +5936,9 @@ deps:
 - [ ] Type-aware random input generation (int, float, string, list, struct, enum)
 - [ ] Input shrinking (minimal failing case discovery)
 - [ ] ASP integration for property failure reporting
+- [ ] Pipeline operator (`|>`) with compiler-enforced chaining rules
+- [ ] `secret[T]` type wrapper with taint propagation
+- [ ] `declassify` keyword and `secret.redact()`/`secret.compare()` functions
 
 ### Phase 3 — Memory and Performance
 
@@ -5969,9 +6039,9 @@ deps:
 
 ## Open Questions
 
-- **Comparison operators** — should `>` `<` be kept as symbols, or replaced with keywords like `greater`, `less`? Symbols are fewer tokens but keywords are more AST-native.
+- **Comparison operators** — RESOLVED: keywords (`greater`, `less`, `greater_or_equal`, `less_or_equal`).
 - **Arithmetic expressions** — RESOLVED: standard operators (`+`, `-`, `*`, `/`) with conventional precedence. Function-call forms (`add`, `multiply`) are not provided. Operators are a universal exception to the symbol-minimalism rule — every LLM tokenizer handles them well.
-- **Comments syntax** — `#` (symbol) vs a keyword like `note`? Or should comments just be omitted from the language since LLMs don't need them?
+- **Comments syntax** — RESOLVED: `#` for comments.
 - **Effect system** — RESOLVED: capability-based I/O only. No `effects` keyword. All side effects declared via capability parameters.
 - **Refinement type complexity** — how expressive should `where` clauses be? Simple comparisons only, or allow arbitrary pure function calls like `where is_valid_json(value)`? More power means harder compile-time verification — may need to defer some checks to runtime boundary validation.
 - **Dependent types** — should refinement types be able to reference other values (e.g. `type Matrix = list[list[float]] where rows is cols`)? This approaches dependent type territory and significantly increases type checker complexity.
