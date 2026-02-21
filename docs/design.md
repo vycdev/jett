@@ -43,7 +43,7 @@ Jett uses **common English words** as keywords, not symbols or abbreviations. Ev
 
 **Why symbols are harmful:**
 
-Symbols like `$`, `<=>`, `:=`, `>>=`, `|>` are problematic because:
+Symbols like `$`, `<=>`, `:=`, `>>=` are problematic because:
 1. Tokenizers often split them into multiple tokens (e.g. `>>=` becomes `>>` + `=` or `>` + `>=`), wasting tokens.
 2. LLMs may confuse similar-looking symbol sequences (e.g. `->` vs `=>` vs `<-`).
 3. Symbols carry no inherent semantic meaning — a model must memorize what `<>` means in each language, whereas `not equal` is self-documenting.
@@ -63,7 +63,7 @@ The language syntax is designed so that source code maps **directly and transpar
 
 **What AST-native looks like:**
 
-Jett uses standard arithmetic operators (`+`, `-`, `*`, `/`) with conventional precedence rules. While operators are symbols, arithmetic is a universal exception — every language uses `+` and `-`, every LLM tokenizer handles them well, and function-call alternatives like `add(a, multiply(b, c))` are significantly harder for both LLMs and humans to read:
+Jett uses standard arithmetic operators (`+`, `-`, `*`, `/`) with conventional precedence rules, plus the keyword operator `modulo` for remainder (`a modulo b`). While operators are symbols, arithmetic is a universal exception — every language uses `+` and `-`, every LLM tokenizer handles them well, and function-call alternatives like `add(a, multiply(b, c))` are significantly harder for both LLMs and humans to read:
 
 ```
 # Arithmetic uses standard operators:
@@ -442,7 +442,7 @@ use net.http
 use json
 
 function fetch_data(net: Network, url: string) returns result[map[string, string], error] with Network:
-    let response = http.get(net, url) handle:
+    let response = http.get(net, url) handle error:
         return fail("request failed")
     return ok(json.parse(response.body))
 ```
@@ -453,7 +453,7 @@ function fetch_data(net: Network, url: string) returns result[map[string, string
 function fetch_data(net: Network, url: string) returns result[map[string, string], error] with Network:
     use net.http
     use json
-    let response = http.get(net, url) handle:
+    let response = http.get(net, url) handle error:
         return fail("request failed")
     return ok(json.parse(response.body))
 
@@ -494,10 +494,9 @@ Functions that can fail return a `result[T, E]` type. The caller **must** handle
 
 ```
 function read_config(fs: Filesystem, path: string) returns result[Config, error] with Filesystem:
-    use io
-    let raw = io.read_file(fs, path) handle:
+    let raw = Filesystem.read_file(fs, path) handle error:
         return fail(string.concat("could not read file: ", path))
-    let config = json.parse(raw, Config) handle:
+    let config = json.parse(raw, Config) handle error:
         return fail("invalid config format")
     return ok(config)
 ```
@@ -511,8 +510,8 @@ The `handle` keyword is used at the call site of any function that returns a `re
 **The compiler enforces handling:**
 
 ```
-function bad_example() returns string:
-    let config = read_config("app.conf")
+function bad_example(fs: Filesystem) returns string with Filesystem:
+    let config = read_config(fs, "app.conf")
     # COMPILE ERROR: result[Config, error] must be handled
     # "read_config" can fail, but the error is not handled
     # hint: add a "handle" block after the call
@@ -530,26 +529,31 @@ You cannot accidentally ignore an error. The compiler will not let the program c
 #   fail(error: E)  — the operation failed
 ```
 
-**The `handle` keyword — the only way to unwrap a result:**
+**The `handle` keyword — the only way to unwrap a result or optional:**
 
-The `handle` keyword is the **single canonical form** for unwrapping `result` values. There is no alternative. You cannot use `match` on a `result` type — `match` is reserved for user-defined enums only.
+The `handle` keyword is the **single canonical form** for unwrapping `result` and `optional` values. There is no alternative. You cannot use `match` on a `result` type — `match` is reserved for user-defined enums only.
+
+The syntax form is **mandatory** and encodes the type being unwrapped:
+
+- **`result[T, E]` MUST use `handle error:`** — the error variable is always bound. The `error` keyword is required because results carry error information, and the caller must have access to it.
+- **`optional[T]` MUST use bare `handle:`** — no error variable, because there is no error. The value is simply absent.
 
 ```
-# Unwrap with early return on error:
-let config = read_config(fs, "app.conf") handle:
+# Unwrap a result with early return on error:
+let config = read_config(fs, "app.conf") handle error:
     return fail("config load failed")
 
-# Unwrap with a default value:
-let config = read_config(fs, "app.conf") handle:
+# Unwrap a result with a default value:
+let config = read_config(fs, "app.conf") handle error:
     Config(port: 8080)
 
-# Unwrap and inspect the error:
+# Unwrap a result and use the error value:
 let config = read_config(fs, "app.conf") handle error:
-    log_error(stdout, error.message)
+    Stdout.write(stdout, error.message)
     return fail(error)
 ```
 
-The `handle` block executes only when the result is `fail`. If the result is `ok`, the unwrapped value is bound to the variable on the left (`config`). Inside the `handle` block, you can optionally bind the error with `handle error:` to access the error value.
+The `handle error:` block executes only when the result is `fail`. If the result is `ok`, the unwrapped value is bound to the variable on the left (`config`). The error variable is always available inside the block.
 
 **Why `match` is not allowed on results:**
 
@@ -557,33 +561,33 @@ One canonical form means one way to unwrap. `match` on a `result` would create a
 
 **`handle` also unwraps `optional[T]`:**
 
-The `handle` keyword works identically for `optional[T]` values. If the value is `none`, the handle block executes:
+The `handle` keyword works for `optional[T]` values using the bare `handle:` form (no `error` keyword). If the value is `none`, the handle block executes:
 
 ```
 let first_item = list.first(items) handle:
     return fail("list is empty")
 
-let user = users.find_by_id(id) handle:
+let user = db.find_user(users, id) handle:
     return fail(string.concat("user not found: ", id))
 ```
 
-This means `handle` is the single canonical unwrap mechanism for both `result[T, E]` and `optional[T]`. There is no separate syntax for optionals.
+This means `handle` is the single canonical unwrap mechanism for both `result[T, E]` and `optional[T]`. The distinction between the two is encoded in the syntax form.
 
-**The form of `handle` tells you what you're unwrapping:**
+**The form of `handle` tells you what you're unwrapping -- and the form is mandatory:**
 
-- **`result[T, E]`** uses `handle error:` to bind the error value. The `error` variable is available inside the block:
+- **`result[T, E]` MUST use `handle error:`** -- the `error` keyword is required. The error variable is always bound inside the block:
   ```
   let config = read_config(fs, "app.conf") handle error:
-      log_error(stdout, error.message)
+      Stdout.write(stdout, error.message)
       return fail(error)
   ```
-- **`optional[T]`** uses bare `handle:` with **no error variable**, because there is no error — the value is simply absent:
+- **`optional[T]` MUST use bare `handle:`** with **no error variable**, because there is no error -- the value is simply absent:
   ```
   let user = find_user(id) handle:
       return fail("user not found")
   ```
 
-The syntactic difference (`handle error:` vs `handle:`) makes the unwrapped type immediately visible. When an LLM sees `handle error:`, it knows the expression returns `result[T, E]`. When it sees `handle:`, it knows the expression returns `optional[T]`.
+This distinction is mandatory -- using the wrong form is a **compile error**. `handle:` on a `result[T, E]` is rejected. `handle error:` on an `optional[T]` is rejected. The syntax form encodes the type being unwrapped, and the compiler enforces it. When an LLM sees `handle error:`, it knows the expression returns `result[T, E]`. When it sees `handle:`, it knows the expression returns `optional[T]`.
 
 #### 2. No Global Exits — Control Flow Goes Down, Never Sideways
 
@@ -613,17 +617,17 @@ Jett bans every construct that causes control flow to jump to a non-obvious dest
 **Example — error propagation is always visible:**
 
 ```
-function process_order(order_id: string) returns result[Receipt, error]:
+function process_order(net: Network, order_id: string) returns result[Receipt, error] with Network:
     use db
     use payment
 
-    let order = db.find_order(order_id) handle:
+    let order = db.find_order(net, order_id) handle error:
         return fail(string.concat("order not found: ", order_id))
 
-    let charge = payment.charge(order.total, order.card) handle:
+    let charge = payment.charge(net, order.total, order.card) handle error:
         return fail(string.concat("payment failed for order: ", order_id))
 
-    let receipt = db.save_receipt(order, charge) handle:
+    let receipt = db.save_receipt(net, order, charge) handle error:
         return fail("could not save receipt")
 
     return ok(receipt)
@@ -650,9 +654,9 @@ If a variable named `user_id` exists in an outer scope, creating another variabl
 **What the compiler rejects:**
 
 ```
-function process_user(user_id: string) returns result[User, error]:
+function process_user(net: Network, user_id: string) returns result[User, error] with Network:
     use db
-    let user = db.find(user_id) handle:
+    let user = db.find(net, user_id) handle error:
         return fail("not found")
 
     for item in user.orders:
@@ -664,9 +668,9 @@ function process_user(user_id: string) returns result[User, error]:
 **What you write instead:**
 
 ```
-function process_user(user_id: string) returns result[User, error]:
+function process_user(net: Network, user_id: string) returns result[User, error] with Network:
     use db
-    let user = db.find(user_id) handle:
+    let user = db.find(net, user_id) handle error:
         return fail("not found")
 
     for item in user.orders:
@@ -801,8 +805,8 @@ struct AppCapabilities:
     stdout: Stdout
     stderr: Stderr
 
-function deploy_service(caps: AppCapabilities, config: Config, target: Server):
-    let manifest = Filesystem.read_file(caps.fs, "manifest.json") handle:
+function deploy_service(caps: AppCapabilities, config: Config, target: Server) with AppCapabilities:
+    let manifest = Filesystem.read_file(caps.fs, "manifest.json") handle error:
         Stderr.write(caps.stderr, "failed to read manifest")
         return
     Stdout.write(caps.stdout, "deploying...")
@@ -850,7 +854,7 @@ function format_report(summary: Summary) returns Report:
     # formatting logic (~10 statements)
 
 function process_report(data: list[Record]) returns result[Report, error]:
-    let valid = validate_records(data) handle:
+    let valid = validate_records(data) handle error:
         return fail("invalid records")
     let transformed = transform_records(valid)
     let summary = aggregate_results(transformed)
@@ -1015,35 +1019,33 @@ let safe = json.get_or(data, "user.nickname", "anon") # with default
 ```
 use net.http
 
-let response = http.get(net, "https://api.example.com/users") handle:
+let response = http.get(net, "https://api.example.com/users") handle error:
     return fail("request failed")
 
 let body = json.parse(response.body)
 let status = response.status
 
 # POST with body:
-let post_response = http.post(net, "https://api.example.com/users", json.serialize(new_user)) handle:
+let post_response = http.post(net, "https://api.example.com/users", json.serialize(new_user)) handle error:
     return fail("could not create user")
 ```
 
 **File system — simple and complete:**
 
 ```
-use io
-
-let content = io.read_file(fs, "config.json") handle:
+let content = Filesystem.read_file(fs, "config.json") handle error:
     return fail("file not found")
 
-io.write_file(fs, "output.txt", data) handle:
+Filesystem.write_file(fs, "output.txt", data) handle error:
     return fail("could not write")
 
-let files = io.list_dir(fs, "./data") handle:
+let files = Filesystem.list_dir(fs, "./data") handle error:
     return fail("directory not found")
 
-let exists = io.file_exists(fs, "config.json")
-let size = io.file_size(fs, "data.bin")
-io.copy_file(fs, "source.txt", "dest.txt")
-io.delete_file(fs, "temp.txt")
+let exists = Filesystem.file_exists(fs, "config.json")
+let size = Filesystem.file_size(fs, "data.bin")
+Filesystem.copy_file(fs, "source.txt", "dest.txt")
+Filesystem.delete_file(fs, "temp.txt")
 ```
 
 **Math — common operations without manual implementation:**
@@ -1093,12 +1095,11 @@ With a dense standard library, the LLM's role shifts fundamentally. It is no lon
 
 ```
 function process_csv_report(fs: Filesystem, clock: Clock, path: string) returns result[Report, error] with Filesystem, Clock:
-    use io
     use string
     use list
     use time
 
-    let raw = io.read_file(fs, path) handle:
+    let raw = Filesystem.read_file(fs, path) handle error:
         return fail("could not read file")
 
     let lines = string.split(raw, "\n")
@@ -1260,7 +1261,7 @@ If the LLM tries to call `post_comment` with a session in the wrong state:
 
 ```
 let session = UserAuth(guest)
-let result = post_comment(session, "hello")
+let result = post_comment(clock, session, "hello")
 # COMPILE ERROR: expected "UserAuth at logged_in" but got "UserAuth at guest"
 # hint: transition the session to "logged_in" before calling post_comment
 ```
@@ -1326,27 +1327,28 @@ machine Payment:
         authorized to failed
         captured to refunded
 
-function authorize_payment(pay: Payment at pending) returns result[Payment at authorized, Payment at failed]:
+function authorize_payment(net: Network, pay: Payment at pending) returns result[Payment at authorized, Payment at failed] with Network:
     use payment_gateway
-    let auth = payment_gateway.authorize(pay.amount, pay.currency) handle:
+    let auth = payment_gateway.authorize(net, pay.amount, pay.currency) handle error:
         return ok(Payment.transition(pay, failed, reason: "gateway error"))
     return ok(Payment.transition(pay, authorized, amount: pay.amount, auth_code: auth.code))
 
-function capture_payment(pay: Payment at authorized) returns result[Payment at captured, Payment at failed]:
+function capture_payment(net: Network, pay: Payment at authorized) returns result[Payment at captured, Payment at failed] with Network:
     use payment_gateway
-    let capture = payment_gateway.capture(pay.auth_code, pay.amount) handle:
+    let capture = payment_gateway.capture(net, pay.auth_code, pay.amount) handle error:
         return ok(Payment.transition(pay, failed, reason: "capture failed"))
     return ok(Payment.transition(pay, captured,
         amount: pay.amount,
         auth_code: pay.auth_code,
         capture_id: capture.id))
 
-function refund_payment(pay: Payment at captured) returns Payment at refunded:
+function refund_payment(net: Network, pay: Payment at captured) returns result[Payment at refunded, error] with Network:
     use payment_gateway
-    let refund = payment_gateway.refund(pay.capture_id, pay.amount)
-    return Payment.transition(pay, refunded,
+    let refund = payment_gateway.refund(net, pay.capture_id, pay.amount) handle error:
+        return fail(string.concat("refund failed: ", error.message))
+    return ok(Payment.transition(pay, refunded,
         original_amount: pay.amount,
-        refund_id: refund.id)
+        refund_id: refund.id))
 ```
 
 Every function operates on a payment in a specific state and transitions it to the next state. The compiler ensures that `capture_payment` can only be called on an `authorized` payment, and `refund_payment` can only be called on a `captured` payment. The LLM cannot accidentally refund a pending payment or capture an already-refunded payment. The state machine makes the illegal states unrepresentable.
@@ -1402,6 +1404,20 @@ function example(net: Network, stdout: Stdout) with Network, Stdout:
 ```
 
 The `Linear.clone()` call is explicit and visible. The LLM (and any reader) can see exactly where copies are made. There is no hidden reference counting or invisible borrowing.
+
+**Auto-view for field access:**
+
+Field access on a value implicitly creates a view of the parent. `self.x` is equivalent to `(view self).x`. Accessing `user.name` does NOT consume `user` — it reads the field through an implicit view. Only passing the entire value to a function (as an owned parameter) consumes it.
+
+This means code like the following is valid:
+
+```
+let dx = self.x - other.x
+let dy = self.y - other.y
+# Neither access consumes `self` or `other` — field access is a view operation.
+```
+
+Both `self.x` and `self.y` work because each field access creates an implicit view rather than consuming the struct. Similarly, `dx * dx` is valid because primitive types (`int`, `float`, `bool`, `string`) are implicitly copyable — they are not linear. Linear typing only restricts compound types (structs, lists, maps, etc.) that own heap-allocated resources.
 
 **Rebinding semantics for mutable variables:**
 
@@ -1494,10 +1510,14 @@ Under the hood, `list[Particle]` is not stored as an array of Particle objects. 
 **The LLM code looks the same either way:**
 
 ```
-function update_positions(particles: list[Particle], dt: float):
-    for p in particles:
-        p.x = p.x + p.velocity_x * dt
-        p.y = p.y + p.velocity_y * dt
+function update_positions(particles: list[Particle], dt: float) returns list[Particle]:
+    return list.map(particles, function(p: Particle) returns Particle:
+        return Particle(
+            x: p.x + p.velocity_x * dt,
+            y: p.y + p.velocity_y * dt,
+            velocity_x: p.velocity_x,
+            velocity_y: p.velocity_y,
+            mass: p.mass))
 ```
 
 The LLM writes simple, field-access-based code. The compiler handles the memory transformation. The LLM's attention stays focused on the logic. The CPU gets cache-friendly data.
@@ -1575,9 +1595,9 @@ Since capabilities are linear types, passing a capability to `spawn` would consu
 
 ```
 actor Processor:
-    receive process(data: Payload) responds Result:
-        let result = heavy_computation(data)
-        respond result
+    receive process(data: Payload) responds ProcessResult:
+        let process_result = heavy_computation(data)
+        respond process_result
 
 function main(stdout: Stdout) with Stdout:
     let worker = spawn Processor()
@@ -1612,11 +1632,11 @@ function fetch_all_data(net: Network) returns result[DashboardData, error] with 
         # All three requests run in parallel.
         # The `concurrent` block CANNOT exit until all three are resolved.
 
-        let users_result = join users handle:
+        let users_result = join users handle error:
             return fail("users request failed")
-        let orders_result = join orders handle:
+        let orders_result = join orders handle error:
             return fail("orders request failed")
-        let stats_result = join stats handle:
+        let stats_result = join stats handle error:
             return fail("stats request failed")
 
         DashboardData(
@@ -1643,7 +1663,7 @@ function bad_example(net: Network) with Network:
         let users = spawn http.get(net, "https://api.example.com/users")
         let orders = spawn http.get(net, "https://api.example.com/orders")
 
-        let users_result = join users handle:
+        let users_result = join users handle error:
             return fail("failed")
 
         # COMPILE ERROR: spawned task "orders" is never joined or cancelled
@@ -1784,9 +1804,9 @@ LLMs naturally group concepts based on **token proximity**. Tokens that are clos
 
 ```
 function process_order(order: Order) returns result[Receipt, error]:
-    let validated = validate(order) handle:
+    let validated = validate(order) handle error:
         return fail("invalid order")
-    let charged = charge(validated) handle:
+    let charged = charge(validated) handle error:
         return fail("payment failed")
     return ok(create_receipt(charged))
 ```
@@ -2308,7 +2328,7 @@ This is not a hypothetical — it is one of the most common security vulnerabili
 
 #### The Solution: Security Sensitivity at the Type Level
 
-Jett introduces a `secret` type wrapper that **taints** data at the type level. Once a value is marked as secret, the compiler tracks it through every operation and **structurally prevents** it from being passed to any output function — `stdout.write`, `log`, `http.respond`, `io.write_file`, or any function that is not explicitly authorized to handle secrets.
+Jett introduces a `secret` type wrapper that **taints** data at the type level. Once a value is marked as secret, the compiler tracks it through every operation and **structurally prevents** it from being passed to any output function — `Stdout.write`, `log`, `http.respond`, `Filesystem.write_file`, or any function that is not explicitly authorized to handle secrets.
 
 **Declaring secret data:**
 
@@ -2346,7 +2366,7 @@ function log_user(stdout: Stdout, user: User) with Stdout:
 ```
 function handle_login(net: Network, request: Request) returns result[Response, error] with Network:
     use net.http
-    let user = authenticate(request) handle:
+    let user = authenticate(request) handle error:
         return http.response(400, "invalid credentials")
     return http.response(200, json.serialize(user))
     # COMPILE ERROR: cannot pass struct containing secret fields to http.response
@@ -2388,7 +2408,7 @@ function authenticate(stored_hash: secret[string], input_password: string) retur
 function call_external_api(net: Network, api_key: secret[string], payload: string) returns result[Response, error] with Network:
     use net.http
     let headers = map("Authorization": string.concat("Bearer ", declassify api_key))
-    return http.post("https://api.example.com/data", payload, headers: headers)
+    return http.post(net, "https://api.example.com/data", payload, headers: headers)
 ```
 
 Every use of `declassify` is a **visible, searchable marker** in the codebase. A security audit can grep for `declassify` and review every place where secrets are accessed. If an LLM generates `declassify`, it is making an explicit choice that a reviewer can catch.
@@ -2472,7 +2492,7 @@ secret[T] ──→ Stdout.write()  BLOCKED
 secret[T] ──→ log()           BLOCKED
 secret[T] ──→ http.respond()  BLOCKED
 secret[T] ──→ json.serialize() BLOCKED
-secret[T] ──→ io.write_file() BLOCKED
+secret[T] ──→ Filesystem.write_file() BLOCKED
 secret[T] ──→ string concat   BLOCKED
 secret[T] ──→ declassify ──→  ALLOWED (auditable)
 secret[T] ──→ secret.redact() ALLOWED (masked output)
@@ -2516,11 +2536,11 @@ Capability objects are created **only in `main()`** and must be explicitly passe
 
 ```
 function main(stdout: Stdout, stderr: Stderr, fs: Filesystem, net: Network, env: Environment) with Stdout, Stderr, Filesystem, Network, Environment:
-    let config_path = Environment.get(env, "CONFIG_PATH") handle:
+    let config_path = Environment.get(env, "CONFIG_PATH") handle error:
         Stderr.write(stderr, "CONFIG_PATH not set")
         return
 
-    let config = load_config(fs, config_path) handle:
+    let config = load_config(fs, config_path) handle error:
         Stderr.write(stderr, "failed to load config")
         return
 
@@ -2536,7 +2556,7 @@ Because capabilities are linear types (Rule Set 10.1), they are **consumed** whe
 
 ```
 function example(fs: Filesystem, stdout: Stdout) with Filesystem, Stdout:
-    let config = read_config(fs, "app.conf") handle:
+    let config = read_config(fs, "app.conf") handle error:
         Stdout.write(stdout, "failed")
         return
     # `fs` is auto-rebound because read_config declares `with Filesystem`.
@@ -2547,9 +2567,9 @@ function example(fs: Filesystem, stdout: Stdout) with Filesystem, Stdout:
 
 ```
 function read_config(fs: Filesystem, path: string) returns result[Config, error] with Filesystem:
-    let raw = Filesystem.read_file(fs, path) handle:
+    let raw = Filesystem.read_file(fs, path) handle error:
         return fail(string.concat("could not read ", path))
-    let config = json.parse(raw, Config) handle:
+    let config = json.parse(raw, Config) handle error:
         return fail("invalid config format")
     return ok(config)
     # The `with Filesystem` clause means this function returns the Filesystem
@@ -2560,11 +2580,11 @@ The `with Filesystem` clause explicitly states that this function borrows the fi
 
 ```
 function main(stdout: Stdout, fs: Filesystem) with Stdout, Filesystem:
-    let config = read_config(fs, "app.conf") handle:
+    let config = read_config(fs, "app.conf") handle error:
         Stdout.write(stdout, "failed")
         return
     # `fs` is still available — the compiler auto-rebound it because read_config declares `with Filesystem`.
-    let data = read_data(fs, config.data_path) handle:
+    let data = read_data(fs, config.data_path) handle error:
         Stdout.write(stdout, "failed")
         return
     process(data)
@@ -2590,10 +2610,10 @@ On the error path, the compiler automatically returns all borrowed capabilities 
 
 ```
 function read_config(fs: Filesystem, path: string) returns result[Config, error] with Filesystem:
-    let raw = Filesystem.read_file(fs, path) handle:
+    let raw = Filesystem.read_file(fs, path) handle error:
         return fail(string.concat("could not read ", path))
         # The compiler automatically returns fs alongside the fail value
-    let config = json.parse(raw, Config) handle:
+    let config = json.parse(raw, Config) handle error:
         return fail("invalid config format")
         # The compiler automatically returns fs here too
     return ok(config)
@@ -2653,7 +2673,7 @@ function main(fs: Filesystem, net: Network, stdout: Stdout) with Filesystem, Net
     let read_fs = Filesystem.read_only(fs)
 
     # Pass only read access to the config loader:
-    let config = load_config(read_fs, "app.conf") handle:
+    let config = load_config(read_fs, "app.conf") handle error:
         Stdout.write(stdout, "failed")
         return
 
@@ -2715,7 +2735,7 @@ property load_config_parses_valid_json:
     let mock_fs = test.mock.filesystem(map(
         "app.conf": string.concat("{\"port\": ", string(port), "}")
     ))
-    let config = load_config(mock_fs, "app.conf") handle:
+    let config = load_config(mock_fs, "app.conf") handle error:
         assert false "should not fail"
     assert config.port is port
 ```
@@ -2750,14 +2770,14 @@ Jett's capability system (Rule Set 16) naturally solves cross-platform compilati
 
 ```
 function start_server(net: Network, stdout: Stdout, port: int) with Network, Stdout:
-    let listener = Network.listen(net, "0.0.0.0", port) handle:
+    let listener = Network.listen(net, "0.0.0.0", port) handle error:
         Stdout.write(stdout, "failed to bind port")
         return
 
     Stdout.write(stdout, string.concat("listening on port ", string(port)))
 
     while true:
-        let connection = Network.accept(net, listener) handle:
+        let connection = Network.accept(net, listener) handle error:
             Stdout.write(stdout, "accept failed")
             continue
         handle_connection(net, stdout, connection)
@@ -2815,7 +2835,7 @@ Every capability type has a **universal interface** that the LLM programs agains
 
 ```
 # The LLM writes forward slashes everywhere:
-let config = Filesystem.read_file(fs, "data/config/app.json") handle:
+let config = Filesystem.read_file(fs, "data/config/app.json") handle error:
     return fail("config not found")
 
 # When compiled for Windows, the compiler automatically translates
@@ -2906,7 +2926,7 @@ Even JSON — the "easy" format — causes problems. An LLM might forget to hand
 
 In Jett, serialization and deserialization are **not libraries**. They are **native compiler features** that are automatically generated for every data type. The LLM never writes a parser. It defines the data structure, and the compiler produces correct, optimized serialization code at compile time.
 
-**Every struct automatically gets:**
+**Every struct is automatically compatible with the `json` module and binary serialization:**
 
 ```
 struct User:
@@ -2915,28 +2935,30 @@ struct User:
     email: string
     age: int
 
-# The compiler auto-generates these for User:
-# User.to_json(user)       → string (JSON representation)
-# User.from_json(raw)      → result[User, error]
-# User.to_bytes(user)      → bytes (compact binary representation)
-# User.from_bytes(raw)     → result[User, error]
+# The compiler makes User compatible with:
+# json.serialize(user)      → string (JSON representation)
+# json.parse(raw, User)     → result[User, error]
+# User.to_bytes(user)       → bytes (compact binary representation)
+# User.from_bytes(raw)      → result[User, error]
 ```
 
-The LLM does not write these functions. The LLM does not import a serialization library. The LLM does not annotate fields with `#[serde(rename = "...")]` or `@JsonProperty`. The compiler sees the struct definition and generates everything.
+The compiler makes every struct compatible with `json.serialize()` and `json.parse(raw, Type)` automatically. There are no auto-generated `.to_json()` or `.from_json()` methods on the struct itself — the `json` module functions are the canonical API. `json.serialize` takes a `view` of the value (it does not consume). `json.parse(raw, Type)` parses a JSON string into the specified type and returns `result[Type, error]`. For structs with `secret[T]` fields, `json.serialize_public(value)` omits those fields.
+
+The LLM does not write parsing functions. The LLM does not import a serialization library. The LLM does not annotate fields with `#[serde(rename = "...")]` or `@JsonProperty`. The compiler sees the struct definition and generates everything.
 
 **Using auto-generated serialization:**
 
 ```
 function save_user(fs: Filesystem, user: User) returns result[nothing, error] with Filesystem:
-    let json_data = User.to_json(view user)
-    Filesystem.write_file(fs, string.concat("users/", user.id, ".json"), json_data) handle:
+    let json_data = json.serialize(view user)
+    Filesystem.write_file(fs, string.concat("users/", user.id, ".json"), json_data) handle error:
         return fail("could not save user")
     return ok()
 
 function load_user(fs: Filesystem, id: string) returns result[User, error] with Filesystem:
-    let raw = Filesystem.read_file(fs, string.concat("users/", id, ".json")) handle:
+    let raw = Filesystem.read_file(fs, string.concat("users/", id, ".json")) handle error:
         return fail("user file not found")
-    let user = User.from_json(raw) handle:
+    let user = json.parse(raw, User) handle error:
         return fail("invalid user data")
     return ok(user)
 ```
@@ -2958,7 +2980,7 @@ struct Product:
 
 let p = Product(name: "widget", price: 9.99, in_stock: true, tags: list("sale", "new"))
 
-let json_string = Product.to_json(p)
+let json_string = json.serialize(p)
 # Result: {"name":"widget","price":9.99,"in_stock":true,"tags":["sale","new"]}
 ```
 
@@ -2974,7 +2996,7 @@ let binary_data = Product.to_bytes(p)
 # - Byte order is always little-endian (no configuration)
 # - The format is deterministic: same input → same bytes, always
 
-let restored = Product.from_bytes(binary_data) handle:
+let restored = Product.from_bytes(binary_data) handle error:
     return fail("corrupt data")
 # restored is identical to p
 ```
@@ -2992,18 +3014,18 @@ struct UserRecord:
     password_hash: secret[string]
     api_key: secret[string]
 
-# Auto-generated:
-# UserRecord.to_json(user) → COMPILE ERROR: struct contains secret fields
-#   hint: use UserRecord.to_json_public(user) to serialize non-secret fields only
+# Serialization behavior:
+# json.serialize(user) → COMPILE ERROR: struct contains secret fields
+#   hint: use json.serialize_public(user) to serialize non-secret fields only
 
-# The compiler generates two JSON serializers:
-# UserRecord.to_json_public(user) → {"id":"123","name":"alice"}
+# The json module provides two serialization paths:
+# json.serialize_public(user) → {"id":"123","name":"alice"}
 #   (secret fields are omitted)
-# UserRecord.to_json_full(user, declassify_token) → requires explicit declassification
+# json.serialize_full(user, declassify_token) → requires explicit declassification
 #   (only callable with a declassification token — see Rule Set 15)
 ```
 
-The default `to_json` on a struct with secret fields is a compile error. The LLM cannot accidentally serialize secrets. It must explicitly choose `to_json_public` (safe) or `to_json_full` with a declassification token (auditable).
+Calling `json.serialize` on a struct with secret fields is a compile error. The LLM cannot accidentally serialize secrets. It must explicitly choose `json.serialize_public` (safe) or `json.serialize_full` with a declassification token (auditable).
 
 #### Serialization with State Machines
 
@@ -3018,10 +3040,10 @@ machine OrderProcess:
 
 let order = OrderProcess(draft, items: list(Item(name: "widget", qty: 2)))
 
-let json_string = OrderProcess.to_json(order)
+let json_string = json.serialize(order)
 # Result: {"state":"draft","items":[{"name":"widget","qty":2}]}
 
-let restored = OrderProcess.from_json(json_string) handle:
+let restored = json.parse(json_string, OrderProcess) handle error:
     return fail("invalid order data")
 # restored is in the "draft" state with the same items
 ```
@@ -3042,13 +3064,13 @@ struct ValidatedUser:
     email: Email
 
 let raw = "{\"name\":\"alice\",\"age\":-5,\"email\":\"alice@example.com\"}"
-let user = ValidatedUser.from_json(raw) handle error:
+let user = json.parse(raw, ValidatedUser) handle error:
     return fail(string.concat("invalid user: ", error.message))
-# RUNTIME ERROR during from_json:
+# RUNTIME ERROR during json.parse:
 #   field "age": value -5 does not satisfy: value greater_or_equal 0
 ```
 
-The compiler-generated `from_json` checks every refinement constraint during deserialization. The LLM does not write validation logic. It defines the types with constraints, and the deserializer enforces them automatically.
+The compiler ensures `json.parse` checks every refinement constraint during deserialization. The LLM does not write validation logic. It defines the types with constraints, and the deserializer enforces them automatically.
 
 #### Custom Field Naming (When External APIs Require It)
 
@@ -3060,8 +3082,8 @@ struct ApiResponse:
     total_count: int serialize "totalCount"
     is_active: bool serialize "isActive"
 
-# to_json produces: {"userName":"...","totalCount":42,"isActive":true}
-# from_json accepts: {"userName":"...","totalCount":42,"isActive":true}
+# json.serialize produces: {"userName":"...","totalCount":42,"isActive":true}
+# json.parse accepts: {"userName":"...","totalCount":42,"isActive":true}
 # The struct code always uses snake_case field names internally.
 ```
 
@@ -3101,11 +3123,11 @@ Refinement types are enforced during deserialization. The LLM defines `type Age 
 
 **4. Security is automatic.**
 
-Secret fields are excluded from default serialization. The LLM cannot accidentally serialize a password hash into a JSON API response because `to_json` on a struct with secret fields is a compile error.
+Secret fields are excluded from default serialization. The LLM cannot accidentally serialize a password hash into a JSON API response because `json.serialize` on a struct with secret fields is a compile error.
 
 **5. The LLM writes business logic, not I/O plumbing.**
 
-The LLM's job is reduced to: define the struct, call `.to_json()` or `.from_json()`. The entire serialization layer — format handling, error checking, validation, security — is generated by the compiler.
+The LLM's job is reduced to: define the struct, call `json.serialize()` or `json.parse()`. The entire serialization layer — format handling, error checking, validation, security — is generated by the compiler.
 
 ### Rule Set 19: The Native Pipeline Operator
 
@@ -3192,7 +3214,7 @@ let response = request
     |> validate_auth
     |> extract_user_id
     |> load_user_profile
-    |> User.to_json
+    |> json.serialize
 ```
 
 ```
@@ -3232,13 +3254,13 @@ Pipelines integrate with the `result` type and `handle` keyword (Rule Set 5). Wh
 
 ```
 let user_data = request
-    |> validate_auth handle:
+    |> validate_auth handle error:
         return fail("auth failed")
-    |> extract_user_id handle:
+    |> extract_user_id handle error:
         return fail("no user id")
-    |> load_user_profile handle:
+    |> load_user_profile handle error:
         return fail("user not found")
-    |> User.to_json_public
+    |> json.serialize_public
 ```
 
 Each `handle` block applies to the pipeline step immediately before it. The error handling is co-located with the operation that can fail — no distant `catch` blocks, no forgotten error paths.
@@ -3261,10 +3283,10 @@ function process_request(fs: Filesystem, net: Network, stdout: Stdout, request: 
     let output = request
         |> authenticate
         |> authorize
-        |> fetch_data(fs) handle:
+        |> fetch_data(fs) handle error:
             return fail("data fetch failed")
         |> transform_response
-        |> Response.to_json
+        |> json.serialize
 
     Stdout.write(stdout, "processed request")
     return ok(output)
@@ -3422,7 +3444,7 @@ The compiler automatically:
 function create_game_window(stdout: Stdout) returns result[sdl.Window, error] with Stdout:
     use c "SDL2/SDL.h" as sdl
 
-    sdl.init(sdl.INIT_VIDEO) handle:
+    sdl.init(sdl.INIT_VIDEO) handle error:
         return fail("SDL init failed")
 
     let window = sdl.create_window(
@@ -3431,7 +3453,7 @@ function create_game_window(stdout: Stdout) returns result[sdl.Window, error] wi
         sdl.WINDOWPOS_CENTERED,
         800, 600,
         sdl.WINDOW_SHOWN
-    ) handle:
+    ) handle error:
         return fail("could not create window")
 
     Stdout.write(stdout, "window created")
@@ -3448,10 +3470,10 @@ C pointers are translated into **opaque, linear handle types**. Because they are
 function window_lifecycle(stdout: Stdout) with Stdout:
     use c "SDL2/SDL.h" as sdl
 
-    sdl.init(sdl.INIT_VIDEO) handle:
+    sdl.init(sdl.INIT_VIDEO) handle error:
         return
 
-    let window = sdl.create_window("Test", 100, 100, 640, 480, 0) handle:
+    let window = sdl.create_window("Test", 100, 100, 640, 480, 0) handle error:
         Stdout.write(stdout, "failed to create window")
         sdl.quit()
         return
@@ -3472,7 +3494,7 @@ function window_lifecycle(stdout: Stdout) with Stdout:
 function bad_example():
     use c "SDL2/SDL.h" as sdl
 
-    let window = sdl.create_window("Test", 100, 100, 640, 480, 0) handle:
+    let window = sdl.create_window("Test", 100, 100, 640, 480, 0) handle error:
         return
 
     sdl.destroy_window(window)
@@ -3516,13 +3538,13 @@ C header imports integrate with the capability system (Rule Set 16) and cross-pl
 
 ```
 # The LLM writes platform-agnostic GUI code using capabilities:
-function create_text_input(gui: GuiCapability, label: string) returns result[TextInput, error]:
+function create_text_input(gui: GuiCapability, label: string) returns result[TextInput, error] with GuiCapability:
     # The compiler resolves GuiCapability to platform-specific C calls:
     # Windows: CreateWindowExW("EDIT", ...) via windows.h
     # macOS: NSTextField via Cocoa.h
     # Linux: gtk_entry_new() via gtk/gtk.h
 
-    let input = GuiCapability.create_text_field(gui, label, width: 200, height: 30) handle:
+    let input = GuiCapability.create_text_field(gui, label, width: 200, height: 30) handle error:
         return fail("could not create text input")
     return ok(input)
 ```
@@ -3645,7 +3667,7 @@ When `--agent` is passed, the compiler outputs **zero formatting, zero spatial a
                 "rule": "secret_type_exposure",
                 "expected": "string",
                 "got": "secret[string]",
-                "explanation": "secret[string] cannot be passed to functions that expose data (string concatenation, stdout.write, log, http.respond)"
+                "explanation": "secret[string] cannot be passed to functions that expose data (string concatenation, Stdout.write, log, http.respond)"
             },
             "suggested_fix": {
                 "action": "replace",
@@ -3772,8 +3794,8 @@ jett query --agent --complete-at src/server.jett:30:15
         "expecting": "function taking User as first argument"
     },
     "completions": [
-        {"name": "User.to_json_public", "signature": "(user: User) returns string"},
-        {"name": "User.to_json", "signature": "BLOCKED — User contains secret fields"},
+        {"name": "json.serialize_public", "signature": "(value: User) returns string"},
+        {"name": "json.serialize", "signature": "BLOCKED — User contains secret fields"},
         {"name": "validate_user", "signature": "(user: User) returns result[User, error]"}
     ]
 }
@@ -3885,10 +3907,10 @@ namespace server
 use auth
 
 function handle_login(stdout: Stdout, request: Request) returns result[Response, error] with Stdout:
-    let session = auth.login(request.credentials) handle:
+    let session = auth.login(request.credentials) handle error:
         return fail("login failed")
     Stdout.write(stdout, "user logged in")
-    return ok(Response(200, Session.to_json_public(session)))
+    return ok(Response(status: 200, body: json.serialize_public(session)))
 ```
 
 `use auth` works regardless of whether `auth.jett` is in the same directory, a subdirectory, or a completely different part of the project tree. The compiler resolves `auth` to whichever file declared `namespace auth`. The LLM never writes a file path in an import.
@@ -4047,9 +4069,9 @@ function process_payment(net: Network, order: Order) returns result[Receipt, err
     use auth                # inline import — scoped to this function
     use payment.gateway     # inline import — scoped to this function
 
-    let session = auth.validate_token(order.token) handle:
+    let session = auth.validate_token(order.token) handle error:
         return fail("auth failed")
-    let receipt = payment.gateway.charge(net, order.total) handle:
+    let receipt = payment.gateway.charge(net, order.total) handle error:
         return fail("payment failed")
     return ok(receipt)
 ```
@@ -4171,7 +4193,7 @@ Reading and writing bitfield values uses the same dot-access syntax as regular s
 
 ```
 function parse_ip_packet(raw: bytes) returns result[IpHeader, error]:
-    let header = IpHeader.from_bytes(raw) handle:
+    let header = IpHeader.from_bytes(raw) handle error:
         return fail("invalid IP header")
 
     if header.version is not 4:
@@ -4301,10 +4323,10 @@ bitfield TcpHeader layout network_order:
 Bitfields get the same auto-generated serialization as regular structs (Rule Set 18):
 
 ```
-let header = IpHeader.from_bytes(raw_packet) handle:
+let header = IpHeader.from_bytes(raw_packet) handle error:
     return fail("invalid header")
 
-let json = IpHeader.to_json(header)
+let json = json.serialize(header)
 # {"version":4,"header_length":5,"dscp":0,"ecn":0,"total_length":60,...}
 
 let bytes = IpHeader.to_bytes(header)
@@ -4490,7 +4512,7 @@ Views work naturally with pipelines (Rule Set 19):
 let report = view large_dataset
     |> filter_active_records
     |> calculate_summary
-    |> Summary.to_json
+    |> json.serialize
 ```
 
 The first step receives a view. Subsequent steps may receive owned values (if `filter_active_records` produces a new list) or views (if the function is designed to take views). The types are checked at each `|>` boundary as usual.
@@ -4564,7 +4586,7 @@ Lifetime errors are the single most common compilation failure in Rust. They are
 When an LLM writes unit tests (or `verify` blocks from Rule Set 13), it writes the patterns it saw most often in training data:
 
 ```
-verify add:
+verify add_positive:
     assert add_positive(2, 3) is 5
     assert add_positive(0, 0) is 0
     assert add_positive(-1, 1) is 0
@@ -4615,7 +4637,7 @@ When the developer or LLM runs `jett test`, the compiler:
 | Type | What the fuzzer generates |
 |------|--------------------------|
 | `int` | 0, 1, -1, max_int, min_int, random positive, random negative, powers of 2, boundary values |
-| `float` | 0.0, -0.0, 1.0, -1.0, very small (epsilon), very large, max_float, min_float, infinity, negative infinity |
+| `float` | 0.0, -0.0, 1.0, -1.0, very small (epsilon), very large, max_float, min_float, infinity, negative infinity, NaN |
 | `string` | empty, single char, ASCII, unicode, multi-byte characters, very long strings, strings with null bytes, whitespace-only |
 | `list[T]` | empty, single element, two elements, many elements, duplicates, sorted, reverse-sorted, all-same |
 | `bool` | true, false |
@@ -4759,9 +4781,9 @@ Properties naturally verify serialization round-trips (Rule Set 18):
 ```
 property json_round_trip:
     given user: User
-    let json_string = User.to_json(user)
-    let restored = User.from_json(json_string) handle:
-        assert false "round-trip failed: from_json returned error"
+    let json_string = json.serialize(user)
+    let restored = json.parse(json_string, User) handle error:
+        assert false "round-trip failed: json.parse returned error"
     assert restored is user
 ```
 
@@ -4969,7 +4991,7 @@ Each `|>` step is a lineage entry. The trace output shows the value flowing left
 When a tracked value passes through a `handle` block, the lineage records the error path:
 
 ```
-let data: tracked[string] = read_config(fs, "app.conf") handle:
+let data: tracked[string] = read_config(fs, "app.conf") handle error:
     return fail("config not found")
 ```
 
@@ -5022,7 +5044,7 @@ When a `property` block finds a failing input, the LLM can re-run with tracking 
 # LLM adds tracking to debug:
 
 function sort_list_debug(items: view list[int], stdout: Stdout) returns tracked[list[int]] with Stdout:
-    let mutable result: tracked[list[int]] = list.copy(items)
+    let mutable result: tracked[list[int]] = Linear.clone(items)
     result = partition(result)
     result = merge(result)
     trace(view result, stdout)
@@ -5080,12 +5102,12 @@ The running application becomes a **chatbot** that the LLM can interrogate.
 
 ```
 function process_order(fs: Filesystem, order: Order) returns result[Receipt, error] with Filesystem:
-    let validated = validate_order(order) handle:
+    let validated = validate_order(order) handle error:
         return fail("validation failed")
 
     agent_breakpoint()   # execution pauses here
 
-    let charged = charge_payment(validated) handle:
+    let charged = charge_payment(validated) handle error:
         return fail("payment failed")
     return ok(create_receipt(charged))
 ```
@@ -5217,10 +5239,10 @@ The LLM can make breakpoints conditional — they only pause when a condition is
 
 ```
 function process_batch(fs: Filesystem, orders: view list[Order]) with Filesystem:
-    for order in orders:
+    for order in view orders:
         if order.total greater 1000.0:
             agent_breakpoint()   # only pause for high-value orders
-        let result = process_single_order(fs, order)
+        let result = process_single_order(fs, view order)
 ```
 
 Or using a more targeted form:
@@ -5585,7 +5607,7 @@ Jett keeps its symbol set **as small as possible**. Symbols are only used where 
 | Symbol | Usage |
 |--------|-------|
 | `=` | Assignment |
-| `+` `-` `*` `/` | Arithmetic (convenience for simple expressions) |
+| `+` `-` `*` `/` | Arithmetic (convenience for simple expressions). `modulo` is a keyword operator: `a modulo b` |
 | `.` | Member access |
 | `,` | Separator |
 | `(` `)` | Grouping, function calls |
@@ -5699,7 +5721,7 @@ struct Point:
     x: float
     y: float
 
-    function distance(self, other: Point) returns float:
+    function distance(self: view Point, other: view Point) returns float:
         let dx = self.x - other.x
         let dy = self.y - other.y
         return math.sqrt(dx * dx + dy * dy)
@@ -5714,7 +5736,7 @@ let d = Point.distance(p1, p2)
 
 ```
 function read_file(fs: Filesystem, path: string) returns result[string, error] with Filesystem:
-    let content = Filesystem.read_file(fs, path) handle:
+    let content = Filesystem.read_file(fs, path) handle error:
         return fail("could not open file")
     return ok(content)
 
@@ -5763,7 +5785,9 @@ use net.http
 
 function main(stdout: Stdout, net: Network) with Stdout, Network:
     let pi = math.pi
-    let response = http.get(net, "https://example.com")
+    let response = http.get(net, "https://example.com") handle error:
+        Stdout.write(stdout, string.concat("request failed: ", error.message))
+        return
 ```
 
 ---
@@ -5797,7 +5821,7 @@ let y: float = 42       # explicit annotation
 ### Generics
 
 ```
-function first[T](items: list[T]) returns optional[T]:
+function first[T](items: view list[T]) returns optional[T]:
     if list.length(items) greater 0:
         return list.get(items, 0)
     return none
@@ -5813,15 +5837,14 @@ The standard library is intentionally massive and opinionated. The goal is to ma
 
 ### Core Modules
 
-- **io** — file read/write, stdin/stdout, directory operations, file metadata
 - **string** — trim, split, join, replace, pad, slugify, truncate, contains, between, starts/ends_with
 - **math** — arithmetic, clamp, round, abs, min/max, average, median, pow, floor, ceil, constants
-- **list** — filter, map, reduce, find, sort, unique, chunk, zip, group_by, flatten, first, last, skip, take
+- **list** — filter, map, reduce, find, sort, sort_by, unique, chunk, zip, group_by, flatten, first, last, skip, take, length, get, append
 - **map** — get, set, keys, values, merge, filter, contains_key, get_or
 - **set** — add, remove, union, intersection, difference, contains
 - **net.http** — HTTP client (get, post, put, delete), response handling
 - **net.socket** — low-level TCP/UDP networking
-- **json** — parse, serialize, pretty print, nested path access, get_or
+- **json** — parse, serialize, serialize_public, serialize_full, pretty print, nested path access, get_or
 - **time** — now, format, parse, difference, add/subtract, comparisons, day_of_week, years_between
 - **os** — environment variables, process management, file system, argv
 - **test** — mock infrastructure for property-based testing (`test.mock` for mock filesystems, networks, etc.)
@@ -5867,7 +5890,7 @@ An LLM only needs to learn one pattern.
 
 Jett's keyword set uses complete, common English words that each map to a single token:
 
-`let`, `mutable`, `function`, `return`, `returns`, `if`, `else`, `for`, `in`, `while`, `struct`, `enum`, `match`, `use`, `true`, `false`, `none`, `and`, `or`, `not`, `is`, `self`, `handle`, `error`, `result`, `ok`, `fail`, `public`, `as`, `break`, `continue`, `interface`, `implement`, `assert`, `type`, `where`, `value`, `mutual`, `machine`, `states`, `transitions`, `to`, `at`, `transition`, `arena`, `clone`, `actor`, `receive`, `send`, `ask`, `respond`, `spawn`, `concurrent`, `join`, `cancel`, `comptime`, `layout`, `verify`, `secret`, `declassify`, `with`, `serialize`, `namespace`, `bitfield`, `bit`, `bits`, `remaining`, `view`, `property`, `given`, `tracked`, `trace`, `agent_breakpoint`, `greater`, `less`, `greater_or_equal`, `less_or_equal`, `some`, `optional`, `nothing`, `int`, `float`, `string`, `bool`, `list`, `map`, `set`
+`let`, `mutable`, `function`, `return`, `returns`, `if`, `else`, `for`, `in`, `while`, `struct`, `enum`, `match`, `use`, `true`, `false`, `none`, `and`, `or`, `not`, `is`, `self`, `handle`, `error`, `result`, `ok`, `fail`, `public`, `as`, `break`, `continue`, `interface`, `implement`, `assert`, `type`, `where`, `value`, `mutual`, `machine`, `states`, `transitions`, `to`, `at`, `transition`, `arena`, `clone`, `actor`, `receive`, `send`, `ask`, `respond`, `spawn`, `concurrent`, `join`, `cancel`, `comptime`, `layout`, `verify`, `secret`, `declassify`, `with`, `serialize`, `namespace`, `bitfield`, `bit`, `bits`, `remaining`, `view`, `property`, `given`, `tracked`, `trace`, `agent_breakpoint`, `greater`, `less`, `greater_or_equal`, `less_or_equal`, `some`, `optional`, `nothing`, `int`, `float`, `string`, `bool`, `list`, `map`, `set`, `modulo`
 
 ### JSON AST Round-Tripping
 
@@ -5978,7 +6001,7 @@ deps:
 - [ ] `layout soa` annotation and compiler SoA transformation
 - [ ] `comptime` keyword and compile-time function execution
 - [ ] Comptime generic specialization
-- [ ] Auto-generated `to_json` / `from_json` for all structs
+- [ ] Compiler makes all structs compatible with `json.serialize()` / `json.parse(raw, Type)`
 - [ ] Auto-generated `to_bytes` / `from_bytes` for all structs
 - [ ] `serialize` field annotation for custom naming
 - [ ] `layout binary` with `size` for network protocol structs
@@ -5987,7 +6010,7 @@ deps:
 - [ ] `layout network_order` annotation with auto byte-swap
 - [ ] Bitfield enum integration (`as EnumType` on fields)
 - [ ] Bitfield range validation (bit width → value range enforcement)
-- [ ] Secret-aware serialization (`to_json_public`, compile error on `to_json` with secrets)
+- [ ] Secret-aware serialization (`json.serialize_public`, compile error on `json.serialize` with secrets)
 - [ ] Refinement type validation during deserialization
 
 ### Phase 4 — Concurrency
@@ -6072,7 +6095,7 @@ deps:
 ## Open Questions
 
 - **Comparison operators** — RESOLVED: keywords (`greater`, `less`, `greater_or_equal`, `less_or_equal`).
-- **Arithmetic expressions** — RESOLVED: standard operators (`+`, `-`, `*`, `/`) with conventional precedence. Function-call forms (`add`, `multiply`) are not provided. Operators are a universal exception to the symbol-minimalism rule — every LLM tokenizer handles them well.
+- **Arithmetic expressions** — RESOLVED: standard operators (`+`, `-`, `*`, `/`) plus keyword operator `modulo` (`a modulo b`) with conventional precedence. Function-call forms (`add`, `multiply`) are not provided. Operators are a universal exception to the symbol-minimalism rule — every LLM tokenizer handles them well.
 - **Comments syntax** — RESOLVED: `#` for comments.
 - **Effect system** — RESOLVED: capability-based I/O only. No `effects` keyword. All side effects declared via capability parameters.
 - **Refinement type complexity** — how expressive should `where` clauses be? Simple comparisons only, or allow arbitrary pure function calls like `where is_valid_json(value)`? More power means harder compile-time verification — may need to defer some checks to runtime boundary validation.
