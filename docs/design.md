@@ -137,8 +137,9 @@ There must be **no spooky action at a distance**. A variable must never be silen
 
 ```
 function save_user(fs: Filesystem, user: User) with Filesystem:
-    let data = json.serialize(user)
-    Filesystem.write_file(fs, "users.json", data)
+    let data = json.serialize(view user)
+    Filesystem.write_file(fs, "users.json", data) handle error:
+        return
     return
 
 function compute_tax(income: float, rate: float) returns float:
@@ -351,10 +352,11 @@ type PositiveFloat = float where value greater 0.0
 type HttpStatus = int where value greater_or_equal 100 and value less 600
 type JsonString = string where is_valid_json(value)
 
-function parse_config(raw: JsonString) returns Config:
+function parse_config(raw: JsonString) returns result[Config, error]:
     # `raw` is guaranteed to be valid JSON — the type says so.
-    # No need to wrap this in try/catch for parse errors.
-    return json.deserialize(raw, Config)
+    let config = json.parse(raw, Config) handle error:
+        return fail("invalid config structure")
+    return ok(config)
 ```
 
 **Refinement types with struct fields:**
@@ -444,7 +446,9 @@ use json
 function fetch_data(net: Network, url: string) returns result[map[string, string], error] with Network:
     let response = http.get(net, url) handle error:
         return fail("request failed")
-    return ok(json.parse(response.body))
+    let data = json.parse(response.body, map[string, string]) handle error:
+        return fail(error.message)
+    return ok(data)
 ```
 
 **Preferred style — inline imports:**
@@ -455,7 +459,9 @@ function fetch_data(net: Network, url: string) returns result[map[string, string
     use json
     let response = http.get(net, url) handle error:
         return fail("request failed")
-    return ok(json.parse(response.body))
+    let data = json.parse(response.body, map[string, string]) handle error:
+        return fail(error.message)
+    return ok(data)
 
 function compute_stats(values: list[float]) returns float:
     use math
@@ -1007,9 +1013,10 @@ Date logic is one of the most error-prone areas in programming. An LLM should ne
 ```
 use json
 
-let data = json.parse(raw_string)                    # string to value
-let text = json.serialize(data)                       # value to string
-let pretty = json.serialize_pretty(data)              # value to formatted string
+let data = json.parse(raw_string, Config) handle error:
+    return fail("invalid json")                          # string to typed value
+let text = json.serialize(view data)                     # value to string
+let pretty = json.serialize_pretty(view data)            # value to formatted string
 let field = json.get(data, "user.address.city")       # nested field access by path
 let safe = json.get_or(data, "user.nickname", "anon") # with default
 ```
@@ -1022,11 +1029,12 @@ use net.http
 let response = http.get(net, "https://api.example.com/users") handle error:
     return fail("request failed")
 
-let body = json.parse(response.body)
+let body = json.parse(response.body, list[User]) handle error:
+    return fail("invalid json")
 let status = response.status
 
 # POST with body:
-let post_response = http.post(net, "https://api.example.com/users", json.serialize(new_user)) handle error:
+let post_response = http.post(net, "https://api.example.com/users", json.serialize(view new_user)) handle error:
     return fail("could not create user")
 ```
 
@@ -1044,8 +1052,10 @@ let files = Filesystem.list_dir(fs, "./data") handle error:
 
 let exists = Filesystem.file_exists(fs, "config.json")
 let size = Filesystem.file_size(fs, "data.bin")
-Filesystem.copy_file(fs, "source.txt", "dest.txt")
-Filesystem.delete_file(fs, "temp.txt")
+Filesystem.copy_file(fs, "source.txt", "dest.txt") handle error:
+    return fail("could not copy file")
+Filesystem.delete_file(fs, "temp.txt") handle error:
+    return fail("could not delete file")
 ```
 
 **Math — common operations without manual implementation:**
@@ -1327,20 +1337,32 @@ machine Payment:
         authorized to failed
         captured to refunded
 
-function authorize_payment(net: Network, pay: Payment at pending) returns result[Payment at authorized, Payment at failed] with Network:
+enum PaymentOutcome:
+    authorized(payment: Payment at authorized)
+    declined(payment: Payment at failed)
+
+enum CaptureOutcome:
+    captured(payment: Payment at captured)
+    declined(payment: Payment at failed)
+
+function authorize_payment(net: Network, pay: Payment at pending) returns result[PaymentOutcome, error] with Network:
     use payment_gateway
     let auth = payment_gateway.authorize(net, pay.amount, pay.currency) handle error:
-        return ok(Payment.transition(pay, failed, reason: "gateway error"))
-    return ok(Payment.transition(pay, authorized, amount: pay.amount, auth_code: auth.code))
+        return fail("gateway error")
+    if auth.declined:
+        return ok(PaymentOutcome.declined(payment: Payment.transition(pay, failed, reason: auth.reason)))
+    return ok(PaymentOutcome.authorized(payment: Payment.transition(pay, authorized, amount: pay.amount, auth_code: auth.code)))
 
-function capture_payment(net: Network, pay: Payment at authorized) returns result[Payment at captured, Payment at failed] with Network:
+function capture_payment(net: Network, pay: Payment at authorized) returns result[CaptureOutcome, error] with Network:
     use payment_gateway
     let capture = payment_gateway.capture(net, pay.auth_code, pay.amount) handle error:
-        return ok(Payment.transition(pay, failed, reason: "capture failed"))
-    return ok(Payment.transition(pay, captured,
+        return fail("capture failed")
+    if capture.declined:
+        return ok(CaptureOutcome.declined(payment: Payment.transition(pay, failed, reason: capture.reason)))
+    return ok(CaptureOutcome.captured(payment: Payment.transition(pay, captured,
         amount: pay.amount,
         auth_code: pay.auth_code,
-        capture_id: capture.id))
+        capture_id: capture.id)))
 
 function refund_payment(net: Network, pay: Payment at captured) returns result[Payment at refunded, error] with Network:
     use payment_gateway
@@ -1395,6 +1417,7 @@ The rule is completely local. The LLM does not need to track lifetimes across fu
 
 ```
 function example(net: Network, stdout: Stdout) with Network, Stdout:
+    let conn = Connection(host: "localhost", port: 8080)
     let data = Payload("hello")
 
     send_message(net, conn, Linear.clone(data))
@@ -1404,6 +1427,8 @@ function example(net: Network, stdout: Stdout) with Network, Stdout:
 ```
 
 The `Linear.clone()` call is explicit and visible. The LLM (and any reader) can see exactly where copies are made. There is no hidden reference counting or invisible borrowing.
+
+`Linear.clone(view_value)` creates an owned deep copy from a viewed value. This is a common pattern — you often want to make a mutable copy of borrowed data.
 
 **Auto-view for field access:**
 
@@ -1639,10 +1664,17 @@ function fetch_all_data(net: Network) returns result[DashboardData, error] with 
         let stats_result = join stats handle error:
             return fail("stats request failed")
 
+        let users_data = json.parse(users_result.body, list[User]) handle error:
+            return fail("invalid users json")
+        let orders_data = json.parse(orders_result.body, list[Order]) handle error:
+            return fail("invalid orders json")
+        let stats_data = json.parse(stats_result.body, Stats) handle error:
+            return fail("invalid stats json")
+
         DashboardData(
-            users: json.parse(users_result.body),
-            orders: json.parse(orders_result.body),
-            stats: json.parse(stats_result.body)
+            users: users_data,
+            orders: orders_data,
+            stats: stats_data
         )
 
     return ok(data)
@@ -2095,7 +2127,7 @@ verify add_positive:
     assert add_positive(0, 0) is 0       # passes at compile time
     assert add_positive(-1, 1) is 0      # passes at compile time
     assert add_positive(1, 1) is 3       # COMPILE ERROR:
-    # verify "add_positive" failed:
+    # verify add_positive failed:
     #   assert add_positive(1, 1) is 3
     #   left:  2
     #   right: 3
@@ -2357,7 +2389,7 @@ function get_user_debug(user: User) returns string:
 ```
 function log_user(stdout: Stdout, user: User) with Stdout:
     use log
-    log.info(string.concat("user logged in: ", json.serialize(user)))
+    log.info(string.concat("user logged in: ", json.serialize(view user)))
     # COMPILE ERROR: cannot serialize struct containing secret fields
     # "User" contains secret fields: password_hash, api_key, ssn
     # hint: use json.serialize_public(user) to serialize only non-secret fields
@@ -2368,7 +2400,7 @@ function handle_login(net: Network, request: Request) returns result[Response, e
     use net.http
     let user = authenticate(request) handle error:
         return http.response(400, "invalid credentials")
-    return http.response(200, json.serialize(user))
+    return http.response(200, json.serialize(view user))
     # COMPILE ERROR: cannot pass struct containing secret fields to http.response
     # hint: create a public view of User without secret fields
 ```
@@ -2419,7 +2451,7 @@ The standard library provides functions that work with secret-containing types s
 
 ```
 # Serialize only non-secret fields:
-let public_json = json.serialize_public(user)
+let public_json = json.serialize_public(view user)
 # Result: {"id": "123", "name": "alice", "email": "alice@example.com"}
 # password_hash, api_key, ssn are omitted automatically.
 
@@ -2936,13 +2968,13 @@ struct User:
     age: int
 
 # The compiler makes User compatible with:
-# json.serialize(user)      → string (JSON representation)
-# json.parse(raw, User)     → result[User, error]
-# User.to_bytes(user)       → bytes (compact binary representation)
+# json.serialize(view user)  → string (JSON representation)
+# json.parse(raw, User)      → result[User, error]
+# User.to_bytes(user)        → bytes (compact binary representation)
 # User.from_bytes(raw)      → result[User, error]
 ```
 
-The compiler makes every struct compatible with `json.serialize()` and `json.parse(raw, Type)` automatically. There are no auto-generated `.to_json()` or `.from_json()` methods on the struct itself — the `json` module functions are the canonical API. `json.serialize` takes a `view` of the value (it does not consume). `json.parse(raw, Type)` parses a JSON string into the specified type and returns `result[Type, error]`. For structs with `secret[T]` fields, `json.serialize_public(value)` omits those fields.
+The compiler makes every struct compatible with `json.serialize()` and `json.parse(raw, Type)` automatically. There are no auto-generated `.to_json()` or `.from_json()` methods on the struct itself — the `json` module functions are the canonical API. `json.serialize` declares a `view` parameter — it reads the value without consuming it. Because the parameter is declared as `view`, callers **must** write `view` explicitly at the call site: `json.serialize(view user)`, not `json.serialize(user)`. This follows the general rule: when a function declares a `view` parameter, callers must pass `view value` explicitly, making ownership intent visible at every call site. `json.parse(raw, Type)` is the **only** form — the Type parameter is mandatory, not optional. It parses a JSON string into the specified type and returns `result[Type, error]`. There is no single-argument `json.parse(raw)` that returns an untyped value. For structs with `secret[T]` fields, `json.serialize_public(value)` omits those fields.
 
 The LLM does not write parsing functions. The LLM does not import a serialization library. The LLM does not annotate fields with `#[serde(rename = "...")]` or `@JsonProperty`. The compiler sees the struct definition and generates everything.
 
@@ -2980,7 +3012,7 @@ struct Product:
 
 let p = Product(name: "widget", price: 9.99, in_stock: true, tags: list("sale", "new"))
 
-let json_string = json.serialize(p)
+let json_string = json.serialize(view p)
 # Result: {"name":"widget","price":9.99,"in_stock":true,"tags":["sale","new"]}
 ```
 
@@ -3015,7 +3047,7 @@ struct UserRecord:
     api_key: secret[string]
 
 # Serialization behavior:
-# json.serialize(user) → COMPILE ERROR: struct contains secret fields
+# json.serialize(view user) → COMPILE ERROR: struct contains secret fields
 #   hint: use json.serialize_public(user) to serialize non-secret fields only
 
 # The json module provides two serialization paths:
@@ -3040,7 +3072,7 @@ machine OrderProcess:
 
 let order = OrderProcess(draft, items: list(Item(name: "widget", qty: 2)))
 
-let json_string = json.serialize(order)
+let json_string = json.serialize(view order)
 # Result: {"state":"draft","items":[{"name":"widget","qty":2}]}
 
 let restored = json.parse(json_string, OrderProcess) handle error:
@@ -3794,7 +3826,7 @@ jett query --agent --complete-at src/server.jett:30:15
         "expecting": "function taking User as first argument"
     },
     "completions": [
-        {"name": "json.serialize_public", "signature": "(value: User) returns string"},
+        {"name": "json.serialize_public", "signature": "(value: view User) returns string"},
         {"name": "json.serialize", "signature": "BLOCKED — User contains secret fields"},
         {"name": "validate_user", "signature": "(user: User) returns result[User, error]"}
     ]
@@ -3910,7 +3942,7 @@ function handle_login(stdout: Stdout, request: Request) returns result[Response,
     let session = auth.login(request.credentials) handle error:
         return fail("login failed")
     Stdout.write(stdout, "user logged in")
-    return ok(Response(status: 200, body: json.serialize_public(session)))
+    return ok(Response(status: 200, body: json.serialize_public(view session)))
 ```
 
 `use auth` works regardless of whether `auth.jett` is in the same directory, a subdirectory, or a completely different part of the project tree. The compiler resolves `auth` to whichever file declared `namespace auth`. The LLM never writes a file path in an import.
@@ -4212,8 +4244,8 @@ The LLM writes `header.version`, `header.ttl`, `header.protocol`. It never write
 ```
 function create_tcp_flags(syn: bool, ack: bool) returns TcpFlags:
     return TcpFlags(
-        fin: 0, syn: bool_to_int(syn), rst: 0, psh: 0,
-        ack: bool_to_int(ack), urg: 0, ece: 0, cwr: 0
+        fin: 0, syn: int(syn), rst: 0, psh: 0,
+        ack: int(ack), urg: 0, ece: 0, cwr: 0
     )
 ```
 
@@ -4290,7 +4322,7 @@ The `remaining` keyword captures everything after the fixed-size fields as a raw
 | Traditional (LLM-hostile) | Jett bitfield (LLM-friendly) |
 |--------------------------|----------------------------|
 | `(value >> 4) & 0x0F` | `header.version` (4-bit field) |
-| `value \| (1 << 5)` | `flags.ack = 1` (1-bit field) |
+| `value \| (1 << 5)` | `TcpFlags(..., ack: 1, ...)` — construct a new TcpFlags with the modified field |
 | `value & ~(0xFF << 8)` | Direct field assignment — compiler handles masking |
 | `htons(port)` / `ntohs(port)` | Compiler handles byte order based on `layout network_order` annotation |
 | `memcpy(&header, buffer, sizeof(header))` | `Header.from_bytes(buffer)` |
@@ -4326,7 +4358,7 @@ Bitfields get the same auto-generated serialization as regular structs (Rule Set
 let header = IpHeader.from_bytes(raw_packet) handle error:
     return fail("invalid header")
 
-let json = json.serialize(header)
+let serialized = json.serialize(view header)
 # {"version":4,"header_length":5,"dscp":0,"ecn":0,"total_length":60,...}
 
 let bytes = IpHeader.to_bytes(header)
@@ -4406,7 +4438,8 @@ function process_order(order: Order):
     let total = total_price(view order.items)
 
     # order.items is still valid here — it was never moved:
-    let first = list.first(view order.items)
+    let first = list.first(view order.items) handle:
+        return
 
     # Now consume it when we're done reading:
     submit_order(order)
@@ -4414,6 +4447,8 @@ function process_order(order: Order):
 ```
 
 The `view` keyword at the call site marks the pass-by-view explicitly. The LLM (and reader) can see exactly which passes are views (read-only, non-consuming) and which are moves (ownership transfer).
+
+**General rule: when a function declares a `view` parameter, callers must pass `view value` explicitly.** This is not optional — the compiler requires it. This makes ownership intent visible at every call site. For example, `json.serialize` declares its parameter as `view`, so every call must write `json.serialize(view user)`, not `json.serialize(user)`. If the caller omits `view`, the compiler rejects it. This rule applies uniformly to all functions with `view` parameters — standard library, user-defined, or otherwise.
 
 #### The Three Strict Rules of Views
 
@@ -5318,6 +5353,8 @@ jett build app.jett --release
 
 In release builds, `agent_breakpoint()` does not exist — it compiles to nothing. There is no performance cost and no security risk of leaving a breakpoint in production. The compiler can optionally warn about `agent_breakpoint()` calls in release builds.
 
+`agent_breakpoint()` is a compiler primitive exempt from the capability system. It only exists in debug mode and is compiled out in release builds. No capability parameter is required.
+
 #### ASP Communication Modes
 
 The agent breakpoint communicates through two modes:
@@ -5429,7 +5466,7 @@ The output is a JSON array of bottleneck entries, sorted by impact (highest CPU 
             "total_samples": 8976,
             "self_samples": 1536,
             "hot_lines": [
-                {"line": 45, "percent": 8.1, "code": "let parsed = json.parse(raw_text)"},
+                {"line": 45, "percent": 8.1, "code": "let parsed = json.parse(raw_text, Document) handle error: return fail(error.message)"},
                 {"line": 52, "percent": 7.4, "code": "let validated = schema.validate(parsed)"}
             ],
             "call_chain": [
@@ -5682,6 +5719,8 @@ function greet(stdout: Stdout, name: string) with Stdout:
 
 Functions that return no value omit the `returns` clause entirely. This is the single canonical form — there is no `returns nothing` or `returns unit` alternative.
 
+Named arguments work in both struct construction AND function calls. Any parameter can be passed by name for clarity. This allows `agent_breakpoint(when: condition)` and `GuiCapability.create_text_field(gui, label, width: 200, height: 30)` — mixing positional and named arguments in a single call.
+
 ### Conditionals
 
 ```
@@ -5808,6 +5847,8 @@ function main(stdout: Stdout, net: Network) with Stdout, Network:
 | `optional[T]` | Either a `T` or `none` |
 | `result[T, E]` | Either `ok(T)` or `fail(E)` |
 | `error` | Default error type (has `message: string`) |
+| `nothing` | Unit type with exactly one value, also called `nothing`. Used in `result[nothing, error]` for functions that can fail but return no value on success. `ok()` is syntactic sugar for `ok(nothing)`. |
+| `bytes` | Sequence of raw bytes (0-255). Distinct from `string` (which is UTF-8 text). Used for binary data, network packets, file I/O with binary formats. |
 
 ### Type Inference
 
