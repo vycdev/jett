@@ -41,12 +41,14 @@ Jett uses **common English words** as keywords, not symbols or abbreviations. Ev
 - Use `let` for variable binding — short, common, single-token.
 - Avoid abbreviations that may tokenize into subwords (e.g. `fmt` might become `f` + `mt`).
 
-**Why symbols are harmful:**
+**Why obscure symbols are harmful:**
 
-Symbols like `$`, `<=>`, `:=`, `>>=` are problematic because:
+Language-specific symbols like `$`, `<=>`, `:=`, `>>=` are problematic because:
 1. Tokenizers often split them into multiple tokens (e.g. `>>=` becomes `>>` + `=` or `>` + `>=`), wasting tokens.
 2. LLMs may confuse similar-looking symbol sequences (e.g. `->` vs `=>` vs `<-`).
-3. Symbols carry no inherent semantic meaning — a model must memorize what `<>` means in each language, whereas `not equal` is self-documenting.
+3. Obscure symbols carry no inherent semantic meaning — a model must memorize what `<>` means in each language, whereas `not equal` is self-documenting.
+
+**Universal symbol exceptions:** Arithmetic (`+`, `-`, `*`, `/`) and comparison (`>`, `<`, `>=`, `<=`) operators are universal across virtually all programming languages. Every LLM has seen them millions of times and every tokenizer handles them as single tokens. These are kept as symbols. All other operators use English keywords (`and`, `or`, `not`, `is`, `is not`, `modulo`).
 
 #### 3. AST-Native Syntax
 
@@ -63,7 +65,7 @@ The language syntax is designed so that source code maps **directly and transpar
 
 **What AST-native looks like:**
 
-Jett uses standard arithmetic operators (`+`, `-`, `*`, `/`) with conventional precedence rules, plus the keyword operator `modulo` for remainder (`a modulo b`). While operators are symbols, arithmetic is a universal exception — every language uses `+` and `-`, every LLM tokenizer handles them well, and function-call alternatives like `add(a, multiply(b, c))` are significantly harder for both LLMs and humans to read:
+Jett uses standard arithmetic operators (`+`, `-`, `*`, `/`) and comparison operators (`>`, `<`, `>=`, `<=`) with conventional precedence rules, plus the keyword operator `modulo` for remainder (`a modulo b`). These symbols are universal exceptions — every language uses them, every LLM tokenizer handles them as single tokens, and function-call alternatives like `add(a, multiply(b, c))` or keyword alternatives like `a greater_or_equal b` are significantly harder to read without saving tokens:
 
 ```
 # Arithmetic uses standard operators:
@@ -212,15 +214,14 @@ An interface is just a contract — a list of function signatures. It carries no
 ```
 struct EmailSender:
     config: SmtpConfig
-    logger: Logger
 
-    function send(self: EmailSender, net: Network, message: Message):
-        Logger.log(self.logger, "sending email")
+    function send(self: EmailSender, stdout: Stdout, net: Network, message: Message) returns nothing:
+        Stdout.write(stdout, "sending email")
         smtp.deliver(net, self.config, message)
         return
 ```
 
-`EmailSender` uses a `Logger` and an `SmtpConfig` by containing them — not by inheriting from them. The relationship is visible in the struct definition. An LLM can see every dependency by reading the struct fields.
+`EmailSender` uses an `SmtpConfig` by containing it — not by inheriting from it. Side effects (logging via `Stdout`, networking via `Network`) are declared as capability parameters. The relationship is visible in the struct definition and function signatures. An LLM can see every dependency by reading the struct fields and method signatures.
 
 **Why this matters for LLMs:**
 
@@ -812,7 +813,7 @@ struct AppCapabilities:
     stdout: Stdout
     stderr: Stderr
 
-function deploy_service(caps: AppCapabilities, config: Config, target: Server):
+function deploy_service(caps: AppCapabilities, config: Config, target: Server) returns nothing:
     let manifest = Filesystem.read_file(caps.fs, "manifest.json") handle error:
         Stderr.write(caps.stderr, "failed to read manifest")
         return
@@ -999,7 +1000,8 @@ use time
 
 let now = Clock.now(clock)
 let formatted = time.format(now, "YYYY-MM-DD")
-let parsed = time.parse("2025-03-15", "YYYY-MM-DD")
+let parsed = time.parse("2025-03-15", "YYYY-MM-DD") handle error:
+    return fail("invalid date")
 let diff = time.difference(start, end)
 let tomorrow = time.add_days(now, 1)
 let weekday = time.day_of_week(now)
@@ -1014,12 +1016,17 @@ Date logic is one of the most error-prone areas in programming. An LLM should ne
 ```
 use json
 
-let data = json.parse(raw_string, Config) handle error:
-    return fail("invalid json")                          # string to typed value
-let text = json.serialize(data)                     # value to string
-let pretty = json.serialize_pretty(data)            # value to formatted string
-let field = json.get(data, "user.address.city")       # nested field access by path
-let safe = json.get_or(data, "user.nickname", "anon") # with default
+let config = json.parse(raw_string, Config) handle error:
+    return fail("invalid json")                              # string to typed value
+let text = json.serialize(config)                        # value to string
+let pretty = json.serialize_pretty(config)               # value to formatted string
+
+# For dynamic/untyped JSON access (when the schema is unknown):
+let raw = json.parse_raw(raw_string) handle error:
+    return fail("invalid json")                              # string to raw json value
+let field = json.get(raw, "user.address.city") handle:
+    return fail("field not found")                           # nested field access by path
+let safe = json.get_or(raw, "user.nickname", "anon")     # with default
 ```
 
 **HTTP — high-level client out of the box:**
@@ -1052,7 +1059,8 @@ let files = Filesystem.list_dir(fs, "./data") handle error:
     return fail("directory not found")
 
 let exists = Filesystem.file_exists(fs, "config.json")
-let size = Filesystem.file_size(fs, "data.bin")
+let size = Filesystem.file_size(fs, "data.bin") handle error:
+    return fail("could not get file size")
 Filesystem.copy_file(fs, "source.txt", "dest.txt") handle error:
     return fail("could not copy file")
 Filesystem.delete_file(fs, "temp.txt") handle error:
@@ -1175,9 +1183,9 @@ Jett eliminates boolean soup by making **finite state machines (FSMs) a foundati
 machine UserAuth:
     states:
         guest
-        authenticating
-        logged_in
-        banned
+        authenticating(user_id: string)
+        logged_in(user_id: string)
+        banned(user_id: string)
 
     transitions:
         guest to authenticating
@@ -1197,24 +1205,24 @@ This declaration is the **single source of truth** for the entire lifecycle of u
 **Using the state machine:**
 
 ```
-function start_login(session: UserAuth at guest) returns UserAuth at authenticating:
+function start_login(session: UserAuth at guest, user_id: string) returns UserAuth at authenticating:
     # This function can ONLY be called when session is in the "guest" state.
     # It MUST return the session in the "authenticating" state.
     # The compiler enforces both of these constraints.
-    return UserAuth.transition(session, authenticating)
+    return UserAuth.transition(session, authenticating, user_id: user_id)
 
 function complete_login(session: UserAuth at authenticating) returns UserAuth at logged_in:
-    return UserAuth.transition(session, logged_in)
+    return UserAuth.transition(session, logged_in, user_id: session.user_id)
 
 function ban_user(session: UserAuth at logged_in) returns UserAuth at banned:
-    return UserAuth.transition(session, banned)
+    return UserAuth.transition(session, banned, user_id: session.user_id)
 ```
 
 If the LLM tries to write a function that transitions from `banned` to `logged_in`:
 
 ```
 function unban_user(session: UserAuth at banned) returns UserAuth at logged_in:
-    return UserAuth.transition(session, logged_in)
+    return UserAuth.transition(session, logged_in, user_id: session.user_id)
     # COMPILE ERROR: transition from "banned" to "logged_in" is not declared
     # declared transitions from "banned": (none)
     # hint: add "banned to logged_in" to the transitions block if this is intended
@@ -1393,12 +1401,12 @@ Garbage collection is too slow for native-speed code. C-style manual memory (`ma
 When a variable is passed into a function, it is **consumed** (moved) and immediately becomes invalid in the current scope. If the LLM tries to use it again on the next line, the compiler rejects it. If the LLM wants to keep it, it must explicitly clone.
 
 ```
-function send_message(net: Network, connection: Connection, payload: Payload):
+function send_message(net: Network, connection: Connection, payload: Payload) returns nothing:
     Network.send(net, connection, payload)
     # `payload` has been consumed by `send`. It no longer exists here.
     return
 
-function example(net: Network, stdout: Stdout):
+function example(net: Network, stdout: Stdout) returns nothing:
     let conn = Connection("localhost", 8080)
     let data = Payload("hello")
 
@@ -1419,7 +1427,7 @@ The rule is completely local. The LLM does not need to track lifetimes across fu
 **When the LLM needs to keep a value:**
 
 ```
-function example(net: Network, stdout: Stdout):
+function example(net: Network, stdout: Stdout) returns nothing:
     let conn = Connection(host: "localhost", port: 8080)
     let data = Payload("hello")
 
@@ -1577,7 +1585,7 @@ actor Counter(stdout: Stdout):
     receive print_count:
         Stdout.write(stdout, string(count))
 
-function main(stdout: Stdout):
+function main(stdout: Stdout) returns nothing:
     let counter = spawn Counter(Linear.clone(stdout))
 
     send counter increment
@@ -1604,7 +1612,7 @@ actor Logger(stdout: Stdout):
     receive log(message: string):
         Stdout.write(stdout, message)
 
-function main(stdout: Stdout):
+function main(stdout: Stdout) returns nothing:
     let logger = spawn Logger(Linear.clone(stdout))
     send logger log("application started")
     # stdout is still available here because we cloned it
@@ -1627,7 +1635,7 @@ actor Processor:
         let process_result = heavy_computation(data)
         respond process_result
 
-function main(stdout: Stdout):
+function main(stdout: Stdout) returns nothing:
     let worker = spawn Processor()
     let data = Payload("input data")
 
@@ -1685,7 +1693,7 @@ function fetch_all_data(net: Network) returns result[DashboardData, error]:
 
 **Rules enforced by the compiler:**
 
-- `spawn` creates a concurrent task. It can only appear inside a `concurrent` block.
+- `spawn` creates a concurrent task or an actor. Inside a `concurrent` block, it spawns a task that must be joined or cancelled. Outside a `concurrent` block, it spawns an actor (see Rule Set 10.3).
 - `join` waits for a spawned task to complete. It returns a `result` that must be handled.
 - The `concurrent` block **cannot exit** until every spawned task is either `join`ed or explicitly `cancel`led. If the LLM forgets to join a task, the compiler rejects the code.
 - No orphaned tasks. No background processes silently running after the scope ends.
@@ -1693,7 +1701,7 @@ function fetch_all_data(net: Network) returns result[DashboardData, error]:
 **What the compiler rejects:**
 
 ```
-function bad_example(net: Network):
+function bad_example(net: Network) returns result[string, error]:
     concurrent:
         let users = spawn http.get(net, "https://api.example.com/users")
         let orders = spawn http.get(net, "https://api.example.com/orders")
@@ -1743,7 +1751,7 @@ comptime function type_name[T]() returns string:
 comptime function is_numeric[T]() returns bool:
     return T is int or T is float
 
-function print_value[T](stdout: Stdout, val: T):
+function print_value[T](stdout: Stdout, val: T) returns nothing:
     if comptime is_numeric[T]():
         Stdout.write(stdout, "number: {val}")
     else:
@@ -1878,12 +1886,12 @@ Jett's whitespace rules are rigid. There is exactly one way to indent code, and 
 Ambiguous whitespace (Python allows both 2 and 4 spaces, tabs, and mixes) creates the same problem as syntactic sugar — multiple ways to express the same structure. LLMs may inconsistently mix indentation styles within a file. Jett eliminates this by enforcing one style absolutely.
 
 ```
-function example():
+function example() returns nothing:
     let x = 1          # 4 spaces — valid
       let y = 2        # 6 spaces — COMPILE ERROR: expected 4 or 8 spaces
   let z = 3            # 2 spaces — COMPILE ERROR: indent must be multiple of 4
 
-function another():
+function another() returns nothing:
 	let a = 1           # tab — COMPILE ERROR: tabs are not allowed, use 4 spaces
 ```
 
@@ -2193,10 +2201,22 @@ verify calculate_grade:
     assert calculate_grade(85, 100) is 85.0
     assert calculate_grade(0, 100) is 0.0
     assert calculate_grade(50, 50) is 100.0
-    assert calculate_grade(1, 3) is 33.333333333333336
+    assert calculate_grade(1, 3) is_near 33.33 within 0.01
 ```
 
 The return type `Percentage` guarantees the result is between 0 and 100. The `verify` block proves specific input/output pairs. Together, the type system and the verification contracts provide two layers of correctness: the type constrains the range, the verify proves specific behaviors.
+
+**Float comparison with `is_near`:**
+
+LLMs cannot reliably predict exact IEEE 754 floating point representations (e.g., `33.333333333333336`). For float comparisons, Jett provides `is_near ... within ...` syntax:
+
+```
+assert calculate_grade(1, 3) is_near 33.33 within 0.01
+# Passes if the result is within 0.01 of 33.33
+```
+
+- `is` — exact comparison. Use for `int`, `string`, `bool`, and exact float values like `0.0` or `100.0`.
+- `is_near X within Y` — approximate comparison. Use for float results that involve division or irrational numbers. The tolerance `Y` is mandatory — there is no implicit epsilon.
 
 #### Why This Matters for LLMs
 
@@ -2390,7 +2410,7 @@ function get_user_debug(user: User) returns string:
 ```
 
 ```
-function log_user(stdout: Stdout, user: User):
+function log_user(stdout: Stdout, user: User) returns nothing:
     use log
     Stdout.write(stdout, "user logged in: {json.serialize(user)}")
     # COMPILE ERROR: cannot serialize struct containing secret fields
@@ -2402,8 +2422,8 @@ function log_user(stdout: Stdout, user: User):
 function handle_login(net: Network, request: Request) returns result[Response, error]:
     use net.http
     let user = authenticate(request) handle error:
-        return http.response(400, "invalid credentials")
-    return http.response(200, json.serialize(user))
+        return ok(http.response(400, "invalid credentials"))
+    return ok(http.response(200, json.serialize(user)))
     # COMPILE ERROR: cannot pass struct containing secret fields to http.response
     # hint: create a public view of User without secret fields
 ```
@@ -2570,7 +2590,7 @@ Capability objects are created **only in `main()`** and must be explicitly passe
 **How `main()` receives capabilities:**
 
 ```
-function main(stdout: Stdout, stderr: Stderr, fs: Filesystem, net: Network, env: Environment):
+function main(stdout: Stdout, stderr: Stderr, fs: Filesystem, net: Network, env: Environment) returns nothing:
     let config_path = Environment.get(env, "CONFIG_PATH") handle error:
         Stderr.write(stderr, "CONFIG_PATH not set")
         return
@@ -2590,7 +2610,7 @@ function main(stdout: Stdout, stderr: Stderr, fs: Filesystem, net: Network, env:
 Because capabilities are linear types (Rule Set 10.1), they are **consumed** when passed to a function. This means:
 
 ```
-function example(fs: Filesystem, stdout: Stdout):
+function example(fs: Filesystem, stdout: Stdout) returns nothing:
     let config = read_config(fs, "app.conf") handle error:
         Stdout.write(stdout, "failed")
         return
@@ -2614,7 +2634,7 @@ function read_config(fs: Filesystem, path: string) returns result[Config, error]
 The compiler recognizes `Filesystem` as a capability type and automatically borrows and returns it. The compiler auto-rebinds the capability in the caller's scope — no manual destructuring needed:
 
 ```
-function main(stdout: Stdout, fs: Filesystem):
+function main(stdout: Stdout, fs: Filesystem) returns nothing:
     let config = read_config(fs, "app.conf") handle error:
         Stdout.write(stdout, "failed")
         return
@@ -2633,7 +2653,7 @@ Every function that touches the filesystem has `fs: Filesystem` in its parameter
 The compiler recognizes capability types (Filesystem, Network, Stdout, Stderr, Stdin, Clock, Random, Process, Environment) and **automatically rebinds** their parameters after each method call. You do NOT need to write `stdout = Stdout.write(stdout, msg)` — just `Stdout.write(stdout, msg)`. The compiler handles rebinding implicitly. No `with` clause is needed — the compiler infers this from the parameter types.
 
 ```
-function log_message(stdout: Stdout, message: string):
+function log_message(stdout: Stdout, message: string) returns nothing:
     Stdout.write(stdout, message)
     Stdout.write(stdout, "\n")
     # stdout is still alive — the compiler recognizes Stdout as a capability type and auto-rebinds after each method call
@@ -2664,7 +2684,7 @@ When a function has a capability parameter like `fs: Filesystem`, every call to 
 **A function trying to do I/O without a capability:**
 
 ```
-function sneaky_logger(message: string):
+function sneaky_logger(message: string) returns nothing:
     Stdout.write(stdout, message)
     # COMPILE ERROR: "stdout" is not defined
     # "sneaky_logger" does not have a Stdout capability in its parameters
@@ -2701,7 +2721,7 @@ function calculate_tax(income: float, rate: float) returns float:
 Capabilities can be **narrowed** before being passed down. This lets `main()` grant only the minimum permissions needed:
 
 ```
-function main(fs: Filesystem, net: Network, stdout: Stdout):
+function main(fs: Filesystem, net: Network, stdout: Stdout) returns nothing:
     # Create a read-only filesystem view:
     let read_fs = Filesystem.read_only(fs)
 
@@ -2802,7 +2822,7 @@ Jett's capability system (Rule Set 16) naturally solves cross-platform compilati
 **The LLM writes this — once, for all platforms:**
 
 ```
-function start_server(net: Network, stdout: Stdout, port: int):
+function start_server(net: Network, stdout: Stdout, port: int) returns nothing:
     let listener = Network.listen(net, "0.0.0.0", port) handle error:
         Stdout.write(stdout, "failed to bind port")
         return
@@ -3068,8 +3088,8 @@ State machines (Rule Set 9) also get auto-generated serialization, with the stat
 machine OrderProcess:
     states:
         draft(items: list[Item])
-        submitted(items: list[Item], submitted_at: string)
-        shipped(tracking: string, shipped_at: string)
+        submitted(items: list[Item], submitted_at: time.Timestamp)
+        shipped(tracking: string, shipped_at: time.Timestamp)
 
 let order = OrderProcess(draft, items: list(Item(name: "widget", qty: 2)))
 
@@ -3096,7 +3116,7 @@ struct ValidatedUser:
     age: Age
     email: Email
 
-let raw = "{\"name\":\"alice\",\"age\":-5,\"email\":\"alice@example.com\"}"
+let raw = "{{\"name\":\"alice\",\"age\":-5,\"email\":\"alice@example.com\"}}"
 let user = json.parse(raw, ValidatedUser) handle error:
     return fail("invalid user: {error.message}")
 # RUNTIME ERROR during json.parse:
@@ -3502,7 +3522,7 @@ This code calls the real SDL2 C library with full native performance. The LLM wr
 C pointers are translated into **opaque, linear handle types**. Because they are linear (Rule Set 10.1), they must be explicitly consumed — preventing use-after-free across the language boundary.
 
 ```
-function window_lifecycle(stdout: Stdout):
+function window_lifecycle(stdout: Stdout) returns nothing:
     use c "SDL2/SDL.h" as sdl
 
     sdl.init(sdl.INIT_VIDEO) handle error:
@@ -3518,7 +3538,7 @@ function window_lifecycle(stdout: Stdout):
 
     # window was consumed by do_rendering (linear type).
     # If do_rendering doesn't return it, we can't use it here.
-    # If we need it back, do_rendering must return it with `with sdl.Window`.
+    # If we need it back, do_rendering must return it as part of its return type.
 
     sdl.quit()
 ```
@@ -3526,7 +3546,7 @@ function window_lifecycle(stdout: Stdout):
 **What the compiler prevents:**
 
 ```
-function bad_example():
+function bad_example() returns nothing:
     use c "SDL2/SDL.h" as sdl
 
     let window = sdl.create_window("Test", 100, 100, 640, 480, 0) handle error:
@@ -3679,7 +3699,7 @@ When `--agent` is passed, the compiler outputs **zero formatting, zero spatial a
         {
             "code": "E0012",
             "severity": "error",
-            "message": "cannot use secret[string] in string concatenation",
+            "message": "cannot use secret[string] in string interpolation",
             "file": "src/handlers.jett",
             "line": 23,
             "column": 41,
@@ -3927,7 +3947,7 @@ namespace auth
 function login(credentials: Credentials) returns result[Session, error]:
     # ...
 
-function logout(session: Session):
+function logout(session: Session) returns nothing:
     # ...
 ```
 
@@ -4058,7 +4078,7 @@ namespace server
 use auth
 use models
 
-function main(stdout: Stdout, net: Network):
+function main(stdout: Stdout, net: Network) returns nothing:
     # ...
 ```
 
@@ -4398,7 +4418,7 @@ Rule Set 10.1 established linear typing: when a variable is passed to a function
 
 But there is a performance problem. If the LLM has a 10GB data structure and wants to pass it to a function that only reads its `.length` field, linear typing forces a choice:
 
-1. **Move it.** The data moves to the callee. The caller loses access. The callee must return it via `with` to give it back. This works but creates verbose plumbing.
+1. **Move it.** The data moves to the callee. The caller loses access. The callee must return it as part of its return type to give it back. This works but creates verbose plumbing.
 2. **Clone it.** `Linear.clone(data)` copies the entire 10GB structure just to read one field. This is absurdly wasteful.
 
 Other languages solve this with borrowing and lifetimes. Rust uses `&T` (immutable reference) and `&'a T` (lifetime-annotated reference). But Rust's lifetime syntax is notoriously complex:
@@ -4433,7 +4453,7 @@ The `view` keyword before the type means: "this function can read this data but 
 **Calling with a view:**
 
 ```
-function process_order(order: Order):
+function process_order(order: Order) returns nothing:
     # order.items is NOT consumed — it is viewed:
     let count = count_items(order.items)
     let total = total_price(order.items)
@@ -4459,7 +4479,7 @@ Views are governed by three rules that the compiler enforces absolutely. These r
 **Rule 1: A view cannot be mutated.**
 
 ```
-function bad_mutate(data: view list[int]):
+function bad_mutate(data: view list[int]) returns nothing:
     list.append(data, 42)
     # COMPILE ERROR: cannot mutate a view
     # "data" is a read-only view and cannot be modified
@@ -4471,7 +4491,7 @@ A view is read-only. Period. Any operation that would modify the data — append
 **Rule 2: A view cannot be sent to another thread.**
 
 ```
-function bad_send(data: view list[int]):
+function bad_send(data: view list[int]) returns nothing:
     let worker = spawn Processor()
     send worker process(data)
     # COMPILE ERROR: cannot send a view to an actor
@@ -4518,7 +4538,7 @@ struct GameState:
     world: World
     tick: int
 
-function render_frame(state: view GameState, stdout: Stdout):
+function render_frame(state: view GameState, stdout: Stdout) returns nothing:
     # Read any field through the view — zero copy:
     let player_count = list.length(state.players)
     Stdout.write(stdout, "players: {player_count}")
@@ -4528,7 +4548,7 @@ function render_frame(state: view GameState, stdout: Stdout):
         # `player` is also a view — views propagate through field access:
         render_player(player, stdout)
 
-function game_loop(stdout: Stdout):
+function game_loop(stdout: Stdout) returns nothing:
     let mutable state = GameState(players: list(), world: World(), tick: 0)
 
     while true:
@@ -4559,7 +4579,7 @@ The compiler knows that `json.serialize` declares a `view` parameter and automat
 View parameters work alongside capability parameters:
 
 ```
-function log_stats(stdout: Stdout, state: view GameState):
+function log_stats(stdout: Stdout, state: view GameState) returns nothing:
     Stdout.write(stdout, "players: {list.length(state.players)}")
     Stdout.write(stdout, "world size: {state.world.size}")
     # stdout is owned (capability), state is viewed (read-only)
@@ -4790,12 +4810,12 @@ Multiple `where` clauses compose. The fuzzer generates only inputs that satisfy 
 Properties can test state machine transitions (Rule Set 9):
 
 ```
-function apply_auth_action(session: UserAuth, action: AuthAction) returns UserAuth:
+function apply_auth_action(session: UserAuth, action: AuthAction, user_id: string) returns UserAuth:
     match action:
         login_attempt:
             if session at guest:
-                let s = UserAuth.transition(session, authenticating)
-                return UserAuth.transition(s, logged_in)
+                let s = UserAuth.transition(session, authenticating, user_id: user_id)
+                return UserAuth.transition(s, logged_in, user_id: user_id)
             return session
         logout:
             if session at logged_in:
@@ -4803,14 +4823,14 @@ function apply_auth_action(session: UserAuth, action: AuthAction) returns UserAu
             return session
         ban:
             if session at logged_in:
-                return UserAuth.transition(session, banned)
+                return UserAuth.transition(session, banned, user_id: session.user_id)
             return session
 
 property user_auth_lifecycle:
-    given actions: list[AuthAction]
+    given actions: list[AuthAction], user_id: string
     let mutable session = UserAuth(guest)
     for action in actions:
-        session = apply_auth_action(session, action)
+        session = apply_auth_action(session, action, user_id)
     # After any sequence of actions, the session is in a valid state:
     assert session at guest or session at authenticating or session at logged_in or session at banned
 ```
@@ -4946,7 +4966,7 @@ When a variable is typed as `tracked[T]`, the compiler:
 **The trace output:**
 
 ```
-function process_invoice(stdout: Stdout, income: float):
+function process_invoice(stdout: Stdout, income: float) returns nothing:
     let mutable tax: tracked[float] = calculate_base_tax(income)
     tax = apply_state_tax(tax, "CA")
     tax = apply_discount(tax, "veteran")
@@ -5281,7 +5301,7 @@ The LLM sends JSON queries. The running application responds with JSON answers. 
 The LLM can make breakpoints conditional — they only pause when a condition is true:
 
 ```
-function process_batch(fs: Filesystem, orders: view list[Order]):
+function process_batch(fs: Filesystem, orders: view list[Order]) returns nothing:
     for order in view orders:
         if order.total > 1000.0:
             agent_breakpoint()   # only pause for high-value orders
@@ -5721,20 +5741,20 @@ Variables are immutable by default. The `mutable` keyword opts into mutability. 
 function add(a: int, b: int) returns int:
     return a + b
 
-function greet(stdout: Stdout, name: string):
+function greet(stdout: Stdout, name: string) returns nothing:
     Stdout.write(stdout, "hello {name}")
 ```
 
 `function` is always spelled out. `returns` declares the return type. No `->` arrow.
 
-Functions that return no value omit the `returns` clause entirely. This is the single canonical form — there is no `returns nothing` or `returns unit` alternative.
+Every function always has a `returns` clause — functions that produce no value use `returns nothing`. This is consistent with the one-canonical-form principle: there is always exactly one pattern for function signatures, never "sometimes there's a `returns` clause, sometimes there isn't."
 
 Named arguments work in both struct construction AND function calls. Any parameter can be passed by name for clarity. This allows `agent_breakpoint(when: condition)` and `GuiCapability.create_text_field(gui, label, width: 200, height: 30)` — mixing positional and named arguments in a single call.
 
 ### Conditionals
 
 ```
-function classify(stdout: Stdout, x: int):
+function classify(stdout: Stdout, x: int) returns nothing:
     if x > 0:
         Stdout.write(stdout, "positive")
     else if x is 0:
@@ -5748,12 +5768,13 @@ Note: `else if condition:` is the construct for chaining conditionals. It is not
 ### Loops
 
 ```
-function process_items(stdout: Stdout, items: list[string]):
+function process_items(stdout: Stdout, items: list[string]) returns nothing:
     for item in items:
         Stdout.write(stdout, item)
 
-while running:
-    step()
+function run_loop(mutable running: bool) returns nothing:
+    while running:
+        running = false
 ```
 
 ### Collections
@@ -5830,7 +5851,7 @@ enum Shape:
 `match` is used exclusively for user-defined enums. It cannot be used on `result` types — use `handle` for those (see Rule Set 5).
 
 ```
-function describe_shape(stdout: Stdout, shape: Shape):
+function describe_shape(stdout: Stdout, shape: Shape) returns nothing:
     match shape:
         circle(r):
             Stdout.write(stdout, "circle with radius {r}")
@@ -5857,7 +5878,7 @@ namespace myapp
 use math
 use net.http
 
-function main(stdout: Stdout, net: Network):
+function main(stdout: Stdout, net: Network) returns nothing:
     let pi = math.pi
     let response = http.get(net, "https://example.com") handle error:
         Stdout.write(stdout, "request failed: {error.message}")
@@ -5921,7 +5942,7 @@ Capability parameters (such as `Filesystem`, `Stdout`, `Network`, etc.) are auto
 ```
 # The compiler sees that stdout is a Stdout capability and automatically
 # threads it through — no 'with Stdout' annotation needed.
-function greet(stdout: Stdout, name: string):
+function greet(stdout: Stdout, name: string) returns nothing:
     Stdout.write(stdout, "hello {name}")
 ```
 
@@ -5981,7 +6002,7 @@ The standard library is intentionally massive and opinionated. The goal is to ma
 - **set** — add, remove, union, intersection, difference, contains
 - **net.http** — HTTP client (get, post, put, delete), response handling
 - **net.socket** — low-level TCP/UDP networking
-- **json** — parse, serialize, serialize_public, serialize_full, pretty print, nested path access, get_or
+- **json** — parse, parse_raw, serialize, serialize_public, serialize_full, pretty print, nested path access, get, get_or
 - **time** — now, format, parse, difference, add/subtract, comparisons, day_of_week, years_between
 - **os** — environment variables, process management, file system, argv
 - **test** — mock infrastructure for property-based testing (`test.mock` for mock filesystems, networks, etc.)
@@ -6037,7 +6058,7 @@ All 17 block constructs share the same shape. An LLM only needs to learn one pat
 
 Jett's keyword set uses complete, common English words that each map to a single token:
 
-`let`, `mutable`, `function`, `return`, `returns`, `if`, `else`, `for`, `in`, `while`, `struct`, `enum`, `match`, `use`, `true`, `false`, `none`, `and`, `or`, `not`, `is`, `self`, `handle`, `error`, `result`, `ok`, `fail`, `as`, `break`, `continue`, `interface`, `implement`, `assert`, `type`, `where`, `value`, `mutual`, `machine`, `states`, `transitions`, `to`, `at`, `transition`, `arena`, `clone`, `actor`, `receive`, `send`, `ask`, `respond`, `spawn`, `concurrent`, `join`, `cancel`, `comptime`, `layout`, `verify`, `secret`, `declassify`, `serialize`, `namespace`, `bitfield`, `bit`, `bits`, `remaining`, `view`, `property`, `given`, `tracked`, `trace`, `agent_breakpoint`, `some`, `optional`, `nothing`, `int`, `float`, `string`, `bool`, `bytes`, `list`, `map`, `set`, `modulo`
+`let`, `mutable`, `function`, `return`, `returns`, `if`, `else`, `for`, `in`, `while`, `struct`, `enum`, `match`, `use`, `true`, `false`, `none`, `and`, `or`, `not`, `is`, `is_near`, `within`, `self`, `handle`, `error`, `result`, `ok`, `fail`, `as`, `break`, `continue`, `interface`, `implement`, `assert`, `type`, `where`, `value`, `mutual`, `machine`, `states`, `transitions`, `to`, `at`, `transition`, `arena`, `clone`, `actor`, `receive`, `send`, `ask`, `respond`, `spawn`, `concurrent`, `join`, `cancel`, `comptime`, `layout`, `verify`, `secret`, `declassify`, `serialize`, `namespace`, `bitfield`, `bit`, `bits`, `remaining`, `view`, `property`, `given`, `tracked`, `trace`, `agent_breakpoint`, `some`, `optional`, `nothing`, `int`, `float`, `string`, `bool`, `bytes`, `list`, `map`, `set`, `modulo`
 
 ### JSON AST Round-Tripping
 
@@ -6260,5 +6281,5 @@ deps:
 - **String building** — RESOLVED: string interpolation `"text {expr}"`. No `+` operator for strings, no `string.concat()`.
 - **Testing constructs** — RESOLVED: `verify` blocks (comptime, pure functions) and `property` blocks (runtime fuzzing). No `test` blocks.
 - **Method syntax** — RESOLVED: module function syntax only (`list.length(items)`, not `items.length()`).
-- **Void functions** — RESOLVED: omit the `returns` clause. No `returns nothing` or `returns unit`.
+- **Void functions** — RESOLVED: every function always has a `returns` clause. Functions that produce no value use `returns nothing`. This is consistent with the one-canonical-form principle.
 - **Mutable semantics** — RESOLVED: rebinding semantics. `mutable` allows consume-and-rebind to the same name.
