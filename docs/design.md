@@ -131,12 +131,12 @@ There must be **no spooky action at a distance**. A variable must never be silen
 - No global mutable variables. Global constants are allowed (they never change), but mutable global state is forbidden.
 - No module-level side effects on import. `use math` loads definitions — it does not execute code, register handlers, or modify state.
 - Side effects must be declared in the function signature via **capability parameters** (see Rule Set 16). If a function writes to a file, it receives a `Filesystem` capability. If it accesses the network, it receives a `Network` capability. The signature is the contract.
-- All inputs to a function come through its parameters. No reading from ambient scope, no closures over mutable state, no thread-local storage. Anonymous functions can capture **immutable** values from the enclosing scope. Captured values are implicitly viewed — they are not consumed by the closure. Closures over **mutable** state are banned. This allows patterns like `list.find(users, function(u: User) returns bool: return u.id is target_id)` where `target_id` is an immutable value from the outer scope.
+- All inputs to a function come through its parameters. No reading from ambient scope, no closures over mutable state, no thread-local storage. Anonymous functions can capture **immutable** values from the enclosing scope. Captured values are implicitly viewed — they are not consumed by the closure. Closures over **mutable** state are banned. This allows patterns like `list.find(view users, function(u: User) returns bool: return u.id is target_id)` where `target_id` is an immutable value from the outer scope.
 
 **Example — side effects are declared, not hidden:**
 
 ```
-function save_user(fs: Filesystem, user: User) with Filesystem:
+function save_user(fs: Filesystem, user: view User) with Filesystem:
     let data = json.serialize(view user)
     Filesystem.write_file(fs, "users.json", data) handle error:
         return
@@ -204,8 +204,8 @@ Instead, Jett uses two mechanisms that keep relationships **flat and local**:
 interface Printable:
     function to_string(self) returns string
 
-interface Serializable:
-    function serialize(self) returns string
+interface Displayable:
+    function display(self) returns string
 ```
 
 An interface is just a contract — a list of function signatures. It carries no implementation, no state, no hidden behavior.
@@ -303,7 +303,7 @@ This is where Jett's type system becomes truly LLM-native. Standard types descri
 ```
 type Password = string where length greater 8
 type Age = int where value greater_or_equal 0 and value less 150
-type Email = string where contains(value, "@")
+type Email = string where string.contains(value, "@")
 type Port = int where value greater_or_equal 1 and value less_or_equal 65535
 type NonEmpty[T] = list[T] where length greater 0
 type Percentage = float where value greater_or_equal 0.0 and value less_or_equal 100.0
@@ -345,12 +345,12 @@ error at line 45: cannot assign int to Port
 **Complex refinement examples:**
 
 ```
-type SortedList[T] = list[T] where is_sorted(value)
+type SortedList[T] = list[T] where list.is_sorted(value)
 type BoundedList[T] = list[T] where length less_or_equal 100
 type PositiveFloat = float where value greater 0.0
 
 type HttpStatus = int where value greater_or_equal 100 and value less 600
-type JsonString = string where is_valid_json(value)
+type JsonString = string where string.is_valid_json(value)
 
 function parse_config(raw: JsonString) returns result[Config, error]:
     # `raw` is guaranteed to be valid JSON — the type says so.
@@ -465,8 +465,8 @@ function fetch_data(net: Network, url: string) returns result[map[string, string
 
 function compute_stats(values: list[float]) returns float:
     use math
-    let total = math.sum(values)
-    return total / float(list.length(values))
+    let total = math.sum(view values)
+    return total / float(list.length(view values))
 ```
 
 **What this achieves:**
@@ -570,10 +570,10 @@ One canonical form means one way to unwrap. `match` on a `result` would create a
 The `handle` keyword works for `optional[T]` values using the bare `handle:` form (no `error` keyword). If the value is `none`, the handle block executes:
 
 ```
-let first_item = list.first(items) handle:
+let first_item = list.first(view items) handle:
     return fail("list is empty")
 
-let user = db.find_user(users, id) handle:
+let user = db.find_user(view users, id) handle:
     return fail(string.concat("user not found: ", id))
 ```
 
@@ -949,10 +949,10 @@ let adults = list.filter(users, function(u: User) returns bool: return u.age gre
 let names = list.map(users, function(u: User) returns string: return u.name)
 
 # Instead of writing a reduce loop:
-let total = list.sum(prices)
+let total = list.sum(view prices)
 
 # Instead of writing a search loop:
-let found = list.find(users, function(u: User) returns bool: return u.id is target_id)
+let found = list.find(view users, function(u: User) returns bool: return u.id is target_id)
 
 # Instead of writing a sort with comparator:
 let sorted = list.sort_by(users, function(u: User) returns int: return u.age)
@@ -996,7 +996,7 @@ No regex for simple operations. No manual index arithmetic. Each function does o
 ```
 use time
 
-let now = time.now(clock)
+let now = Clock.now(clock)
 let formatted = time.format(now, "YYYY-MM-DD")
 let parsed = time.parse("2025-03-15", "YYYY-MM-DD")
 let diff = time.difference(start, end)
@@ -1017,8 +1017,8 @@ let data = json.parse(raw_string, Config) handle error:
     return fail("invalid json")                          # string to typed value
 let text = json.serialize(view data)                     # value to string
 let pretty = json.serialize_pretty(view data)            # value to formatted string
-let field = json.get(data, "user.address.city")       # nested field access by path
-let safe = json.get_or(data, "user.nickname", "anon") # with default
+let field = json.get(view data, "user.address.city")       # nested field access by path
+let safe = json.get_or(view data, "user.nickname", "anon") # with default
 ```
 
 **HTTP — high-level client out of the box:**
@@ -1068,8 +1068,8 @@ let rounded = math.round(price, 2)
 let absolute = math.abs(difference)
 let maximum = math.max(a, b)
 let minimum = math.min(a, b)
-let average = math.average(scores)
-let median = math.median(scores)
+let average = math.average(view scores)
+let median = math.median(view scores)
 let floored = math.floor(3.7)
 let ceiled = math.ceil(3.2)
 let power = math.pow(base, exponent)
@@ -1116,18 +1116,20 @@ function process_csv_report(fs: Filesystem, clock: Clock, path: string) returns 
     let rows = list.map(lines, function(line: string) returns list[string]:
         return string.split(line, ","))
 
-    let header = list.first(rows) handle:
+    let header = list.first(view rows) handle:
         return fail("CSV file is empty")
     let data = list.skip(rows, 1)
 
     let filtered = list.filter(data, function(row: list[string]) returns bool:
-        return string.is_not_empty(list.get(row, 2)))
+        let cell = list.get(view row, 2) handle:
+            return false
+        return string.is_not_empty(cell))
 
     let sorted = list.sort_by_index(filtered, 0)
 
     let report = Report(
-        generated: time.now(clock),
-        row_count: list.length(sorted),
+        generated: Clock.now(clock),
+        row_count: list.length(view sorted),
         data: sorted
     )
 
@@ -1263,7 +1265,7 @@ function post_comment(clock: Clock, session: UserAuth at logged_in, text: string
     # No if-checks needed. This function can ONLY be called when
     # the session is in the "logged_in" state. The compiler enforces this
     # at every call site. The LLM cannot forget. The human cannot forget.
-    let comment = Comment(author: session.user_id, text: text, created: time.now(clock))
+    let comment = Comment(author: session.user_id, text: text, created: Clock.now(clock))
     return ok(comment)
 ```
 
@@ -1305,7 +1307,7 @@ function get_tracking(order: OrderProcess at shipped) returns string:
     return order.tracking
 
 function ship_order(clock: Clock, order: OrderProcess at submitted, tracking: string) returns OrderProcess at shipped with Clock:
-    return OrderProcess.transition(order, shipped, tracking: tracking, shipped_at: time.now(clock))
+    return OrderProcess.transition(order, shipped, tracking: tracking, shipped_at: Clock.now(clock))
 ```
 
 **5. The LLM defines reality once, then the compiler enforces it forever.**
@@ -1488,10 +1490,10 @@ function process_batch(records: list[Record]) returns Summary:
     let pool = arena()
 
     # All allocations in this function use `pool`.
-    let parsed = pool.allocate(list[ParsedRecord])
+    let mutable parsed = pool.allocate(list[ParsedRecord])
     for record in records:
         let parsed_record = pool.allocate(parse(record))
-        list.append(parsed, parsed_record)
+        parsed = list.append(parsed, parsed_record)
 
     let summary = compute_summary(parsed)
 
@@ -1721,7 +1723,7 @@ comptime function generate_lookup_table(size: int) returns list[int]:
     let mutable table = list[int]()
     let mutable i = 0
     while i less size:
-        list.append(table, i * i)
+        table = list.append(table, i * i)
         i = i + 1
     return table
 
@@ -2144,7 +2146,7 @@ The binary is **never emitted** if a `verify` block fails. This means:
 
 `verify` blocks can only call **pure functions** (no capability parameters). This is enforced by the compiler. A function that takes a `Filesystem` or `Network` capability cannot be verified at compile time because it would require actual I/O during compilation. For impure functions, Jett provides `property` blocks that run during `jett test` (see Rule Set 25).
 
-#### 4. The Full Pattern: Function → Verify → Next Function
+#### 3. The Full Pattern: Function → Verify → Next Function
 
 The idiomatic Jett file follows a strict rhythm: define, verify, define, verify. Each function and its proof live together as a unit.
 
@@ -2176,7 +2178,7 @@ verify is_boiling:
 
 Each function is immediately followed by its contract. When the LLM generates `celsius_to_fahrenheit`, it writes the verify block while the formula `c * 1.8 + 32.0` is still the most recent thing in its context. By the time it moves on to `fahrenheit_to_celsius`, the previous function is fully verified and can be trusted.
 
-#### 5. Verify Blocks and Refinement Types
+#### 4. Verify Blocks and Refinement Types
 
 `verify` blocks work with refinement types (Rule Set 3) to create a powerful proof chain:
 
@@ -2392,7 +2394,7 @@ function log_user(stdout: Stdout, user: User) with Stdout:
     log.info(string.concat("user logged in: ", json.serialize(view user)))
     # COMPILE ERROR: cannot serialize struct containing secret fields
     # "User" contains secret fields: password_hash, api_key, ssn
-    # hint: use json.serialize_public(user) to serialize only non-secret fields
+    # hint: use json.serialize_public(view user) to serialize only non-secret fields
 ```
 
 ```
@@ -2459,7 +2461,7 @@ let public_json = json.serialize_public(view user)
 let masked = secret.redact(user.api_key)
 # Result: "sk-****...****3f2a" (shows only last 4 characters)
 
-let log_safe = secret.redact_all(user)
+let log_safe = secret.redact_all(view user)
 # Result: User with all secret fields replaced by "[REDACTED]"
 
 # Compare secrets without exposing them:
@@ -2515,7 +2517,7 @@ Every place where a secret is unwrapped is marked with the `declassify` keyword.
 
 **4. Safe alternatives are easier to use than unsafe ones.**
 
-`json.serialize_public(user)` is fewer tokens and less effort than manually constructing a response without secret fields. The path of least resistance for the LLM is the secure path.
+`json.serialize_public(view user)` is fewer tokens and less effort than manually constructing a response without secret fields. The path of least resistance for the LLM is the secure path.
 
 **Summary — the compiler enforces a simple rule:**
 
@@ -2974,18 +2976,18 @@ struct User:
 # User.from_bytes(raw)      → result[User, error]
 ```
 
-The compiler makes every struct compatible with `json.serialize()` and `json.parse(raw, Type)` automatically. There are no auto-generated `.to_json()` or `.from_json()` methods on the struct itself — the `json` module functions are the canonical API. `json.serialize` declares a `view` parameter — it reads the value without consuming it. Because the parameter is declared as `view`, callers **must** write `view` explicitly at the call site: `json.serialize(view user)`, not `json.serialize(user)`. This follows the general rule: when a function declares a `view` parameter, callers must pass `view value` explicitly, making ownership intent visible at every call site. `json.parse(raw, Type)` is the **only** form — the Type parameter is mandatory, not optional. It parses a JSON string into the specified type and returns `result[Type, error]`. There is no single-argument `json.parse(raw)` that returns an untyped value. For structs with `secret[T]` fields, `json.serialize_public(value)` omits those fields.
+The compiler makes every struct compatible with `json.serialize()` and `json.parse(raw, Type)` automatically. There are no auto-generated `.to_json()` or `.from_json()` methods on the struct itself — the `json` module functions are the canonical API. `json.serialize` declares a `view` parameter — it reads the value without consuming it. Because the parameter is declared as `view`, callers **must** write `view` explicitly at the call site: `json.serialize(view user)`, not `json.serialize(user)`. This follows the general rule: when a function declares a `view` parameter, callers must pass `view value` explicitly, making ownership intent visible at every call site. `json.parse(raw, Type)` is the **only** form — the Type parameter is mandatory, not optional. It parses a JSON string into the specified type and returns `result[Type, error]`. There is no single-argument `json.parse(raw)` that returns an untyped value. For structs with `secret[T]` fields, `json.serialize_public(view value)` omits those fields.
 
 The LLM does not write parsing functions. The LLM does not import a serialization library. The LLM does not annotate fields with `#[serde(rename = "...")]` or `@JsonProperty`. The compiler sees the struct definition and generates everything.
 
 **Using auto-generated serialization:**
 
 ```
-function save_user(fs: Filesystem, user: User) returns result[nothing, error] with Filesystem:
+function save_user(fs: Filesystem, user: view User) returns result[nothing, error] with Filesystem:
     let json_data = json.serialize(view user)
     Filesystem.write_file(fs, string.concat("users/", user.id, ".json"), json_data) handle error:
         return fail("could not save user")
-    return ok()
+    return ok(nothing)
 
 function load_user(fs: Filesystem, id: string) returns result[User, error] with Filesystem:
     let raw = Filesystem.read_file(fs, string.concat("users/", id, ".json")) handle error:
@@ -3048,10 +3050,10 @@ struct UserRecord:
 
 # Serialization behavior:
 # json.serialize(view user) → COMPILE ERROR: struct contains secret fields
-#   hint: use json.serialize_public(user) to serialize non-secret fields only
+#   hint: use json.serialize_public(view user) to serialize non-secret fields only
 
 # The json module provides two serialization paths:
-# json.serialize_public(user) → {"id":"123","name":"alice"}
+# json.serialize_public(view user) → {"id":"123","name":"alice"}
 #   (secret fields are omitted)
 # json.serialize_full(user, declassify_token) → requires explicit declassification
 #   (only callable with a declassification token — see Rule Set 15)
@@ -3246,7 +3248,7 @@ let response = request
     |> validate_auth
     |> extract_user_id
     |> load_user_profile
-    |> json.serialize
+    |> view json.serialize
 ```
 
 ```
@@ -3263,14 +3265,14 @@ let slug = title
 The compiler checks that types match at every `|>` boundary. If a function returns `string` but the next function in the pipeline expects `int`, the compiler catches it immediately.
 
 ```
-function get_name(user: User) returns string:
+function get_name(user: view User) returns string:
     return user.name
 
 function double(x: int) returns int:
     return x * 2
 
 let result = user
-    |> get_name
+    |> view get_name
     |> double
     # COMPILE ERROR at |> double:
     #   "get_name" returns string
@@ -3292,7 +3294,7 @@ let user_data = request
         return fail("no user id")
     |> load_user_profile handle error:
         return fail("user not found")
-    |> json.serialize_public
+    |> view json.serialize_public
 ```
 
 Each `handle` block applies to the pipeline step immediately before it. The error handling is co-located with the operation that can fail — no distant `catch` blocks, no forgotten error paths.
@@ -3301,8 +3303,10 @@ Each `handle` block applies to the pipeline step immediately before it. The erro
 
 - `|> function_call handle: ...` is a **single pipeline step**. The `handle` is attached to the function call, not to the pipeline itself.
 - On success: `handle` unwraps the `result` (or `optional`), and the unwrapped success value flows to the next `|>` step.
-- On failure: the `handle` block executes. This is an **early-return branch** — if the `handle` block runs (error/none case), it must `return`, which exits the pipeline entirely.
-- The pipeline only continues to the next `|>` if every preceding step succeeded.
+- On failure: the `handle` block executes. There are **two valid forms**:
+  1. **Expression form (default value):** `handle error: Config(port: 8080)` — the expression becomes the bound value and execution continues normally. This is useful when you want to provide a fallback default instead of aborting.
+  2. **Early return form:** `handle error: return fail(...)` — early exit from the enclosing function. The pipeline (and function) terminates immediately.
+- The pipeline only continues to the next `|>` if every preceding step either succeeded or provided a default value via the expression form.
 
 In the example above, if `validate_auth` returns `fail(...)`, the `handle` block runs `return fail("auth failed")` and the entire pipeline (and enclosing function) returns immediately. If `validate_auth` returns `ok(auth_token)`, the unwrapped `auth_token` flows into `extract_user_id` as the first argument.
 
@@ -3318,7 +3322,7 @@ function process_request(fs: Filesystem, net: Network, stdout: Stdout, request: 
         |> fetch_data(fs) handle error:
             return fail("data fetch failed")
         |> transform_response
-        |> json.serialize
+        |> view json.serialize
 
     Stdout.write(stdout, "processed request")
     return ok(output)
@@ -4270,7 +4274,7 @@ bitfield IpHeader:
 ```
 
 ```
-function is_tcp(header: IpHeader) returns bool:
+function is_tcp(header: view IpHeader) returns bool:
     return header.protocol is IpProtocol.tcp
 ```
 
@@ -4418,7 +4422,7 @@ Jett introduces one concept: the **view**. A view is a read-only, non-owning ref
 
 ```
 function count_items(data: view list[Item]) returns int:
-    return list.length(data)
+    return list.length(view data)
 
 function total_price(items: view list[Item]) returns float:
     let mutable sum = 0.0
@@ -4518,7 +4522,7 @@ struct GameState:
 
 function render_frame(state: view GameState, stdout: Stdout) with Stdout:
     # Read any field through the view — zero copy:
-    let player_count = list.length(state.players)
+    let player_count = list.length(view state.players)
     Stdout.write(stdout, string.concat("players: ", string(player_count)))
     Stdout.write(stdout, string.concat("tick: ", string(state.tick)))
 
@@ -4541,16 +4545,16 @@ function game_loop(stdout: Stdout) with Stdout:
 
 #### Views with the Pipeline Operator
 
-Views work naturally with pipelines (Rule Set 19):
+Views work naturally with pipelines (Rule Set 19). When a pipeline step pipes into a function that declares a `view` parameter, use `|> view function_name` to make the view intent explicit at the call site:
 
 ```
-let report = view large_dataset
+let report = large_dataset
     |> filter_active_records
     |> calculate_summary
-    |> json.serialize
+    |> view json.serialize
 ```
 
-The first step receives a view. Subsequent steps may receive owned values (if `filter_active_records` produces a new list) or views (if the function is designed to take views). The types are checked at each `|>` boundary as usual.
+The `|> view json.serialize` syntax means: "pipe the result into `json.serialize`, which declares a `view` parameter — pass the value as a view, not a move." The `view` keyword appears before the function name in the pipeline step, mirroring how `view` appears before the argument at a regular call site. Transform functions like `filter_active_records` consume their input and produce a new value, so they do not use `|> view`. Read-only functions like `json.serialize` take a `view` parameter, so they require `|> view`. The types are checked at each `|>` boundary as usual.
 
 #### Views and Capabilities
 
@@ -4558,7 +4562,7 @@ View parameters work alongside capability parameters:
 
 ```
 function log_stats(stdout: Stdout, state: view GameState) with Stdout:
-    Stdout.write(stdout, string.concat("players: ", string(list.length(state.players))))
+    Stdout.write(stdout, string.concat("players: ", string(list.length(view state.players))))
     Stdout.write(stdout, string.concat("world size: ", string(state.world.size)))
     # stdout is owned (capability), state is viewed (read-only)
     # The function can write to stdout but cannot modify state
@@ -4788,21 +4792,27 @@ Multiple `where` clauses compose. The fuzzer generates only inputs that satisfy 
 Properties can test state machine transitions (Rule Set 9):
 
 ```
+function apply_auth_action(session: UserAuth, action: AuthAction) returns UserAuth:
+    match action:
+        login_attempt:
+            if session at guest:
+                let s = UserAuth.transition(session, authenticating)
+                return UserAuth.transition(s, logged_in)
+            return session
+        logout:
+            if session at logged_in:
+                return UserAuth.transition(session, guest)
+            return session
+        ban:
+            if session at logged_in:
+                return UserAuth.transition(session, banned)
+            return session
+
 property user_auth_lifecycle:
     given actions: list[AuthAction]
     let mutable session = UserAuth(guest)
     for action in actions:
-        match action:
-            login_attempt:
-                if session at guest:
-                    session = UserAuth.transition(session, authenticating)
-                    session = UserAuth.transition(session, logged_in)
-            logout:
-                if session at logged_in:
-                    session = UserAuth.transition(session, guest)
-            ban:
-                if session at logged_in:
-                    session = UserAuth.transition(session, banned)
+        session = apply_auth_action(session, action)
     # After any sequence of actions, the session is in a valid state:
     assert session at guest or session at authenticating or session at logged_in or session at banned
 ```
@@ -4816,7 +4826,7 @@ Properties naturally verify serialization round-trips (Rule Set 18):
 ```
 property json_round_trip:
     given user: User
-    let json_string = json.serialize(user)
+    let json_string = json.serialize(view user)
     let restored = json.parse(json_string, User) handle error:
         assert false "round-trip failed: json.parse returned error"
     assert restored is user
@@ -4944,7 +4954,7 @@ function process_invoice(stdout: Stdout, income: float) with Stdout:
     tax = apply_discount(tax, "veteran")
     let final_amount = finalize(tax)
 
-    trace(final_amount, stdout)
+    trace(view final_amount, stdout)
 ```
 
 **Output — a tiny, hyper-specific JSON log for one variable:**
@@ -5006,7 +5016,7 @@ let tax_amount: tracked[float] = income
     |> apply_discount("veteran")
     |> finalize
 
-trace(tax_amount, stdout)
+trace(view tax_amount, stdout)
 ```
 
 Each `|>` step is a lineage entry. The trace output shows the value flowing left-to-right through the pipeline, with before/after at every step. The pipeline structure maps 1:1 to the lineage array.
@@ -5653,6 +5663,8 @@ Jett keeps its symbol set **as small as possible**. Symbols are only used where 
 | `"` | Strings |
 | `\|>` | Pipeline operator (left-to-right data flow) |
 
+When a pipeline step pipes into a function that declares a `view` parameter, use `|> view function_name` to make the view intent explicit at the call site. For example: `data |> view json.serialize`.
+
 **Replaced by keywords:**
 
 | Instead of | Jett uses |
@@ -5733,6 +5745,8 @@ function classify(stdout: Stdout, x: int) with Stdout:
         Stdout.write(stdout, "negative")
 ```
 
+Note: `else if condition:` is the construct for chaining conditionals. It is not a separate keyword -- it is `else` followed by `if`, which naturally composes under the unified block syntax.
+
 ### Loops
 
 ```
@@ -5768,7 +5782,7 @@ struct Point:
 # Methods are called with module syntax — there is no p1.distance(p2) form:
 let p1 = Point(x: 0.0, y: 0.0)
 let p2 = Point(x: 3.0, y: 4.0)
-let d = Point.distance(p1, p2)
+let d = Point.distance(view p1, view p2)
 ```
 
 ### Error Handling
@@ -5787,6 +5801,18 @@ Stdout.write(stdout, content)
 ```
 
 Errors are values, never exceptions. Functions that can fail return `result[T, E]`. The `handle` keyword is the **only** way to unwrap a result — `match` is reserved for user-defined enums. See Rule Set 5 for the full rationale.
+
+The `handle` block has two forms:
+
+- **Expression form (default value):** provides a fallback value when the result is an error.
+  ```
+  let content = read_file(fs, "data.txt") handle error: "default content"
+  ```
+- **Return/fail form (early exit):** executes a block that must exit the enclosing function via `return` or `return fail(...)`.
+  ```
+  let content = read_file(fs, "data.txt") handle error:
+      return fail(error.message)
+  ```
 
 ### Enums
 
@@ -5813,6 +5839,17 @@ function describe_shape(stdout: Stdout, shape: Shape) with Stdout:
         rect(w, h):
             Stdout.write(stdout, string.concat("rect ", string(w), " by ", string(h)))
 ```
+
+### Assert
+
+`assert` checks a condition and halts the program if it fails. Two forms are supported:
+
+```
+assert list.length(view items) greater 0
+assert balance greater_or_equal 0.0 "balance must not be negative"
+```
+
+The first form checks truthiness. The second form provides a custom failure message.
 
 ### Modules
 
@@ -5847,7 +5884,7 @@ function main(stdout: Stdout, net: Network) with Stdout, Network:
 | `optional[T]` | Either a `T` or `none` |
 | `result[T, E]` | Either `ok(T)` or `fail(E)` |
 | `error` | Default error type (has `message: string`) |
-| `nothing` | Unit type with exactly one value, also called `nothing`. Used in `result[nothing, error]` for functions that can fail but return no value on success. `ok()` is syntactic sugar for `ok(nothing)`. |
+| `nothing` | Unit type with exactly one value, also called `nothing`. Used in `result[nothing, error]` for functions that can fail but return no value on success. `ok(nothing)` is the canonical form for wrapping success in `result[nothing, E]`. |
 | `bytes` | Sequence of raw bytes (0-255). Distinct from `string` (which is UTF-8 text). Used for binary data, network packets, file I/O with binary formats. |
 
 ### Type Inference
@@ -5863,9 +5900,7 @@ let y: float = 42       # explicit annotation
 
 ```
 function first[T](items: view list[T]) returns optional[T]:
-    if list.length(items) greater 0:
-        return list.get(items, 0)
-    return none
+    return list.get(items, 0)
 ```
 
 Generics use `[T]` (square brackets) rather than `<T>` — avoids ambiguity with comparison and is more reliably tokenized.
@@ -5878,9 +5913,9 @@ The standard library is intentionally massive and opinionated. The goal is to ma
 
 ### Core Modules
 
-- **string** — trim, split, join, replace, pad, slugify, truncate, contains, between, starts/ends_with
+- **string** — trim, split, join, replace, pad, slugify, truncate, contains, between, starts/ends_with, is_empty, is_not_empty
 - **math** — arithmetic, clamp, round, abs, min/max, average, median, pow, floor, ceil, constants
-- **list** — filter, map, reduce, find, sort, sort_by, unique, chunk, zip, group_by, flatten, first, last, skip, take, length, get, append
+- **list** — filter, map, reduce, find, sort, sort_by, sort_by_index, unique, chunk, zip, group_by, flatten, first, last, skip, take, length, get, append, is_sorted, all_elements_in
 - **map** — get, set, keys, values, merge, filter, contains_key, get_or
 - **set** — add, remove, union, intersection, difference, contains
 - **net.http** — HTTP client (get, post, put, delete), response handling
@@ -5890,7 +5925,7 @@ The standard library is intentionally massive and opinionated. The goal is to ma
 - **os** — environment variables, process management, file system, argv
 - **test** — mock infrastructure for property-based testing (`test.mock` for mock filesystems, networks, etc.)
 - **log** — structured logging with levels
-- **format** — string formatting and interpolation
+- **format** — string formatting and template rendering
 - **crypto** — hashing (sha256, sha512, md5), HMAC
 - **encoding** — base64, hex, URL encoding/decoding
 - **validate** — email, URL, UUID, IPv4/IPv6, common format validation
@@ -5918,20 +5953,30 @@ Every block construct follows exactly one pattern — `keyword ... :` then inden
 ```
 function ...:
 if ...:
+else ...:
 for ...:
 while ...:
 struct ...:
 enum ...:
 match ...:
+machine ...:
+actor ...:
+concurrent ...:
+verify ...:
+property ...:
+mutual ...:
+implement ...:
+receive ...:
+bitfield ...:
 ```
 
-An LLM only needs to learn one pattern.
+All 17 block constructs share the same shape. An LLM only needs to learn one pattern.
 
 ### Full English Keywords
 
 Jett's keyword set uses complete, common English words that each map to a single token:
 
-`let`, `mutable`, `function`, `return`, `returns`, `if`, `else`, `for`, `in`, `while`, `struct`, `enum`, `match`, `use`, `true`, `false`, `none`, `and`, `or`, `not`, `is`, `self`, `handle`, `error`, `result`, `ok`, `fail`, `public`, `as`, `break`, `continue`, `interface`, `implement`, `assert`, `type`, `where`, `value`, `mutual`, `machine`, `states`, `transitions`, `to`, `at`, `transition`, `arena`, `clone`, `actor`, `receive`, `send`, `ask`, `respond`, `spawn`, `concurrent`, `join`, `cancel`, `comptime`, `layout`, `verify`, `secret`, `declassify`, `with`, `serialize`, `namespace`, `bitfield`, `bit`, `bits`, `remaining`, `view`, `property`, `given`, `tracked`, `trace`, `agent_breakpoint`, `greater`, `less`, `greater_or_equal`, `less_or_equal`, `some`, `optional`, `nothing`, `int`, `float`, `string`, `bool`, `list`, `map`, `set`, `modulo`
+`let`, `mutable`, `function`, `return`, `returns`, `if`, `else`, `for`, `in`, `while`, `struct`, `enum`, `match`, `use`, `true`, `false`, `none`, `and`, `or`, `not`, `is`, `self`, `handle`, `error`, `result`, `ok`, `fail`, `as`, `break`, `continue`, `interface`, `implement`, `assert`, `type`, `where`, `value`, `mutual`, `machine`, `states`, `transitions`, `to`, `at`, `transition`, `arena`, `clone`, `actor`, `receive`, `send`, `ask`, `respond`, `spawn`, `concurrent`, `join`, `cancel`, `comptime`, `layout`, `verify`, `secret`, `declassify`, `with`, `serialize`, `namespace`, `bitfield`, `bit`, `bits`, `remaining`, `view`, `property`, `given`, `tracked`, `trace`, `agent_breakpoint`, `greater`, `less`, `greater_or_equal`, `less_or_equal`, `some`, `optional`, `nothing`, `int`, `float`, `string`, `bool`, `bytes`, `list`, `map`, `set`, `modulo`
 
 ### JSON AST Round-Tripping
 
