@@ -22,7 +22,7 @@ There must be exactly **one way** to express any given logic. No shortcuts, no a
 - No shorthand lambdas alongside named functions. There is only `function`.
 - No implicit returns. Always use `return`.
 - No optional parentheses. If a construct uses parentheses, it always uses them.
-- No operator aliases (`&&` vs `and`, `||` vs `or`). Pick one. Jett uses `and`, `or`, `not`.
+- No operator aliases (`&&` vs `and`, `||` vs `or`). Pick one. Jett uses `and`, `or`, `not`, `is`, `!=`.
 - No multiple import styles. One `use` syntax, always.
 - No string concatenation with `+` alongside interpolation. Pick one mechanism.
 
@@ -37,7 +37,7 @@ Jett uses **common English words** as keywords, not symbols or abbreviations. Ev
 - Use `function` not `fn`, `func`, `def`, or `λ`.
 - Use `if`, `else`, `for`, `while`, `return` — universally recognized words.
 - Use `and`, `or`, `not` instead of `&&`, `||`, `!`.
-- Use `is` instead of `===` or `==` for equality.
+- Use `is` instead of `===` or `==` for equality. Use `!=` for inequality (a symbol exception, like the comparison operators).
 - Use `let` for variable binding — short, common, single-token.
 - Avoid abbreviations that may tokenize into subwords (e.g. `fmt` might become `f` + `mt`).
 
@@ -48,7 +48,9 @@ Language-specific symbols like `$`, `<=>`, `:=`, `>>=` are problematic because:
 2. LLMs may confuse similar-looking symbol sequences (e.g. `->` vs `=>` vs `<-`).
 3. Obscure symbols carry no inherent semantic meaning — a model must memorize what `<>` means in each language, whereas `not equal` is self-documenting.
 
-**Universal symbol exceptions:** Arithmetic (`+`, `-`, `*`, `/`) and comparison (`>`, `<`, `>=`, `<=`) operators are universal across virtually all programming languages. Every LLM has seen them millions of times and every tokenizer handles them as single tokens. These are kept as symbols. All other operators use English keywords (`and`, `or`, `not`, `is`, `is not`, `modulo`).
+**Universal symbol exceptions:** Arithmetic (`+`, `-`, `*`, `/`), comparison (`>`, `<`, `>=`, `<=`), and inequality (`!=`) operators are universal across virtually all programming languages. Every LLM has seen them millions of times and every tokenizer handles them as 1-2 tokens. These are kept as symbols. All other operators use English keywords (`and`, `or`, `not`, `is`, `modulo`).
+
+**Why `!=` is a symbol but `is` is a keyword:** `is not` was Jett's only two-word operator, creating parsing ambiguity (is `is` followed by `not x` or `is not` as a unit?) and breaking the rule that every keyword is a single token. `!=` eliminates this problem — it is universal across languages, every tokenizer handles it cleanly, and it is consistent with the existing symbol comparison operators. `is` stays as a keyword because it is a clean single token with no ambiguity. This pragmatic mix (keyword equality + symbol inequality) mirrors Python, the most common language in LLM training data.
 
 #### 3. AST-Native Syntax
 
@@ -303,15 +305,15 @@ This is where Jett's type system becomes truly LLM-native. Standard types descri
 **Syntax:**
 
 ```
-type Password = string where length > 8
+type Password = string where string.char_count(value) > 8
 type Age = int where value >= 0 and value < 150
 type Email = string where string.contains(value, "@")
 type Port = int where value >= 1 and value <= 65535
-type NonEmpty[T] = list[T] where length > 0
+type NonEmpty[T] = list[T] where list.length(value) > 0
 type Percentage = float where value >= 0.0 and value <= 100.0
 ```
 
-The `where` clause attaches a constraint to a base type. The constraint reads as plain English. The compiler checks it wherever a value of that type is created.
+The `where` clause attaches a constraint to a base type. `value` refers to the value being constrained, and the clause accepts any pure expression (no capabilities, no mutation) that evaluates to `bool`. The compiler checks it wherever a value of that type is created.
 
 **How refinement types work at runtime:**
 
@@ -319,18 +321,18 @@ Refinement types are checked at **type boundaries** — when a value enters the 
 
 ```
 function create_user(name: string, password: Password) returns User:
-    # Inside this function, `password` is guaranteed to have length > 8.
+    # Inside this function, `password` is guaranteed to satisfy string.char_count > 8.
     # No need to check again. The type system already enforced it.
     return User(name: name, password: password)
 
 # At the call site, the compiler inserts a check:
-let user_password: Password = input   # checked here: is length > 8?
+let user_password: Password = input   # checked here: is string.char_count > 8?
 let user = create_user("alice", user_password)
 ```
 
 **Why this is powerful for LLMs:**
 
-1. **Constraints are readable English.** `type Password = string where length > 8` is something an LLM can generate from a natural language requirement like "passwords must be at least 8 characters" with near-perfect accuracy.
+1. **Constraints are readable English.** `type Password = string where string.char_count(value) > 8` is something an LLM can generate from a natural language requirement like "passwords must be at least 8 characters" with near-perfect accuracy.
 
 2. **The compiler enforces what the LLM declares.** The LLM doesn't need to remember to add validation checks throughout the code — the type system does it automatically.
 
@@ -348,7 +350,7 @@ error at line 45: cannot assign int to Port
 
 ```
 type SortedList[T] = list[T] where list.is_sorted(value)
-type BoundedList[T] = list[T] where length <= 100
+type BoundedList[T] = list[T] where list.length(value) <= 100
 type PositiveFloat = float where value > 0.0
 
 type HttpStatus = int where value >= 100 and value < 600
@@ -365,7 +367,7 @@ function parse_config(raw: JsonString) returns result[Config, error]:
 
 ```
 struct User:
-    name: string where length > 0
+    name: string where string.char_count(value) > 0
     email: Email
     age: Age
 
@@ -893,7 +895,7 @@ function find_active_user(users: list[User], role: string) returns optional[User
     for user in users:
         if not user.active:
             continue
-        if user.role is not role:
+        if user.role != role:
             continue
         if not user.verified:
             continue
@@ -2495,9 +2497,9 @@ let match = secret.compare(stored_hash, computed_hash)
 Secret types compose with refinement types (Rule Set 3) for validated, secure data:
 
 ```
-type ApiKey = secret[string] where length is 40
+type ApiKey = secret[string] where string.char_count(value) is 40
 type PasswordHash = secret[string] where string.starts_with(value, "$2b$")
-type Ssn = secret[string] where length is 11 and string.char_at(value, 3) is "-"
+type Ssn = secret[string] where string.char_count(value) is 11 and string.char_at(value, 3) is "-"
 ```
 
 The type system enforces both the security constraint (cannot be leaked) and the format constraint (must match the expected pattern). An `ApiKey` is guaranteed to be exactly 40 characters long AND is guaranteed to never appear in logs, responses, or error messages.
@@ -3802,7 +3804,7 @@ jett query --agent --type-at src/server.jett:45:12
     "result": {
         "expression": "user.email",
         "type": "string",
-        "refinements": ["contains(value, \"@\")"],
+        "refinements": ["string.contains(value, \"@\")"],
         "defined_in": "src/models.jett:12"
     }
 }
@@ -4249,7 +4251,7 @@ function parse_ip_packet(raw: bytes) returns result[IpHeader, error]:
     let header = IpHeader.from_bytes(raw) handle error:
         return fail("invalid IP header")
 
-    if header.version is not 4:
+    if header.version != 4:
         return fail("not IPv4")
 
     if header.ttl is 0:
@@ -4783,12 +4785,12 @@ The `where` clause in a `property` block filters generated inputs to only valid 
 ```
 property divide:
     given a: int, b: int
-    where b is not 0
+    where b != 0
     let result = a / b
     assert result * b is a
 ```
 
-**Note: This is an INTENTIONAL example of property testing catching a bug.** The assertion `result * b is a` does NOT hold for integer division when `a` is not evenly divisible by `b`. For example, `7 / 2 = 3` (integer division truncates), then `3 * 2 = 6`, and `6 is not 7`. The fuzzer will quickly find a counterexample like `(a=7, b=2)` and report a failure. This demonstrates a key strength of property testing: it catches mathematical assumptions that humans (and LLMs) miss. The programmer assumed division is the inverse of multiplication, but that only holds for exact division. The correct property would be `result * b + (a modulo b) is a`.
+**Note: This is an INTENTIONAL example of property testing catching a bug.** The assertion `result * b is a` does NOT hold for integer division when `a` is not evenly divisible by `b`. For example, `7 / 2 = 3` (integer division truncates), then `3 * 2 = 6`, and `6 != 7`. The fuzzer will quickly find a counterexample like `(a=7, b=2)` and report a failure. This demonstrates a key strength of property testing: it catches mathematical assumptions that humans (and LLMs) miss. The programmer assumed division is the inverse of multiplication, but that only holds for exact division. The correct property would be `result * b + (a modulo b) is a`.
 
 The fuzzer only generates cases where `b` is not zero. The `where` clause expresses a precondition — the LLM states what inputs are valid, and the fuzzer respects it.
 
@@ -5674,6 +5676,7 @@ Jett keeps its symbol set **as small as possible**. Symbols are only used where 
 | `=` | Assignment |
 | `+` `-` `*` `/` | Arithmetic (convenience for simple expressions). `modulo` is a keyword operator: `a modulo b` |
 | `>` `<` `>=` `<=` | Comparison operators |
+| `!=` | Inequality |
 | `.` | Member access |
 | `,` | Separator |
 | `(` `)` | Grouping, function calls |
@@ -5689,7 +5692,6 @@ The compiler infers `view` at call sites automatically. When a pipeline step pip
 | Instead of | Jett uses |
 |------------|-----------|
 | `==`, `===` | `is` |
-| `!=`, `!==` | `is not` |
 | `&&` | `and` |
 | `\|\|` | `or` |
 | `!` | `not` |
@@ -5921,7 +5923,7 @@ Jett uses symbolic comparison operators alongside keyword operators for equality
 | `>=` | Greater than or equal |
 | `<=` | Less than or equal |
 | `is` | Equality |
-| `is not` | Inequality |
+| `!=` | Inequality |
 | `and` | Logical and |
 | `or` | Logical or |
 | `not` | Logical not |
@@ -6266,7 +6268,7 @@ deps:
 - **Arithmetic expressions** — RESOLVED: standard operators (`+`, `-`, `*`, `/`) plus keyword operator `modulo` (`a modulo b`) with conventional precedence. Function-call forms (`add`, `multiply`) are not provided. Operators are a universal exception to the symbol-minimalism rule — every LLM tokenizer handles them well.
 - **Comments syntax** — RESOLVED: `#` for comments.
 - **Effect system** — RESOLVED: capability-based I/O only. No `effects` keyword. All side effects declared via capability parameters.
-- **Refinement type complexity** — how expressive should `where` clauses be? Simple comparisons only, or allow arbitrary pure function calls like `where is_valid_json(value)`? More power means harder compile-time verification — may need to defer some checks to runtime boundary validation.
+- **Refinement type complexity** — RESOLVED: `where` clauses accept any pure expression (no capabilities, no mutation) that evaluates to `bool`. `value` refers to the value being constrained. Expressions use normal Jett syntax — no special intrinsics. Constraints are checked at runtime type boundaries (when a value enters the refined type). This means `where string.is_valid_json(value)` and `where list.length(value) <= 100` are both valid.
 - **Dependent types** — should refinement types be able to reference other values (e.g. `type Matrix = list[list[float]] where rows is cols`)? This approaches dependent type territory and significantly increases type checker complexity.
 - **Concurrency model** — RESOLVED: actor model with zero shared memory, structured concurrency with enforced join/cancel. Concurrency uses `concurrent` blocks and `spawn`/`join`/`cancel` keywords with capability parameters for I/O.
 - **Memory management** — RESOLVED: linear types (move-by-default, explicit `Linear.clone()`) plus scope-bound arenas for bulk allocation. No GC, no manual `free`, no lifetime annotations.
