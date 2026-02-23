@@ -232,6 +232,8 @@ struct EmailSender:
 - There is no `super()` call chain to trace. No method resolution order. No diamond problem. No hidden overrides.
 - An LLM can generate a correct struct implementation by looking at the struct definition and the interface definition — two flat, local pieces of information.
 
+**Note on deep composition:** Composition can still produce deeply nested structures — a struct containing a struct containing a struct. This does not cause the same problems as deep inheritance. Each nested struct is self-describing: its fields are visible in its definition, it has no hidden overrides, and no method resolution order. Reading any struct's definition tells you everything it contains without tracing a parent chain. Deep nesting may be a code smell, but it is not a source of hidden behavior.
+
 **Comparison with inheritance-based languages:**
 
 ```
