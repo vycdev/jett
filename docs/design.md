@@ -6050,12 +6050,64 @@ let y: float = 42       # explicit annotation
 
 ### Generics
 
+Generics use `[T]` (square brackets) rather than `<T>` — avoids ambiguity with comparison operators and is more reliably tokenized.
+
+**Basic generic function:**
+
 ```
 function first[T](items: view list[T]) returns optional[T]:
     return list.get(items, 0)
 ```
 
-Generics use `[T]` (square brackets) rather than `<T>` — avoids ambiguity with comparison and is more reliably tokenized.
+**Constrained generics — limiting which types T can be:**
+
+Generic type parameters can be constrained to types that implement specific interfaces using the `implements` keyword:
+
+```
+function sort[T implements Orderable](items: list[T]) returns list[T]:
+    # T is guaranteed to support comparison operations
+    ...
+
+function display_sorted[T implements Orderable, Displayable](items: list[T], stdout: Stdout) returns nothing:
+    # T must implement both Orderable and Displayable
+    let sorted = sort(items)
+    for item in sorted:
+        Stdout.write(stdout, Displayable.display(item))
+```
+
+Multiple constraints are separated by commas — not `and`, which is reserved for boolean logic.
+
+**Unconstrained generics:**
+
+If a generic type parameter has no constraint, the only operations available are storing it and passing it around. You cannot compare, display, or otherwise operate on an unconstrained `T` — the compiler enforces this:
+
+```
+function wrap[T](value: T) returns list[T]:
+    return [value]    # OK — storing T in a list
+
+function bad_sort[T](items: list[T]) returns list[T]:
+    if items[0] > items[1]:    # COMPILE ERROR: T does not implement Orderable
+        ...
+```
+
+**Monomorphization — generics are resolved at compile time:**
+
+The compiler generates a separate version of each generic function for every concrete type used at call sites. If the codebase calls `sort[int](numbers)` and `sort[string](names)`, the compiler produces two functions: one for `int` and one for `string`. There is no runtime type erasure and no runtime overhead — generic code runs at the same speed as hand-written type-specific code.
+
+The interface constraint does not cause the compiler to pre-generate code for all implementing types. It only generates code for types **actually used**. The constraint is for type-checking the function body, not for driving code generation.
+
+**Standard library interfaces for primitives:**
+
+Primitive types (`int`, `float`, `string`, `bool`) implement standard interfaces from the standard library:
+
+| Interface | Implemented by | Operations |
+|-----------|---------------|------------|
+| `Equatable` | `int`, `float`, `string`, `bool` | `is`, `!=` |
+| `Orderable` | `int`, `float`, `string` | `<`, `>`, `<=`, `>=` |
+| `Displayable` | `int`, `float`, `string`, `bool` | string representation (used by string interpolation) |
+| `Hashable` | `int`, `string`, `bool` | can be used as `map` keys and `set` elements |
+
+These are ordinary interface implementations, not compiler magic. They follow the same `implement` block pattern as any user-defined struct.
 
 ---
 
