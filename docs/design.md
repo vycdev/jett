@@ -6,6 +6,21 @@ Jett is a programming language designed from the ground up to be **optimized for
 
 Jett is not an "AI framework" or a language about AI — it is a general-purpose language whose syntax, semantics, and conventions are shaped by how LLMs tokenize, predict, and reason about code.
 
+## Language Paradigm
+
+Jett is a **statically-typed imperative language with enforced purity boundaries**. It is not a functional language, and it is not an object-oriented language.
+
+You write straightforward procedural code — loops, mutable variables, sequential steps — but the type system and capability system enforce the safety guarantees that purely functional languages achieve through purity. Pure functions are guaranteed pure by the compiler. Side effects are tracked explicitly through capability parameters, not hidden behind monads or implicit state.
+
+**What Jett borrows from each tradition:**
+
+- **From imperative/procedural:** `for`/`while` loops, mutable `let` bindings, sequential control flow, straightforward step-by-step code.
+- **From functional:** pure functions by default, pipeline operator, immutable data encouraged, composition over inheritance, no shared mutable global state.
+- **From structural typing (Go/Rust style):** structs + interfaces, no classes, no inheritance, explicit interface implementation.
+- **What Jett avoids:** no monads, no higher-kinded types, no class hierarchies, no method overriding, no implicit side effects.
+
+The closest comparison in feel is **Go or Rust** — you write normal imperative code, but the compiler enforces strong guarantees about purity, side effects, and type safety. Jett is pragmatic, not academic.
+
 ---
 
 ## Foundational Rules
