@@ -679,21 +679,32 @@ The syntax form is **mandatory** and encodes the type being unwrapped:
 - **`optional[T]` MUST use bare `handle:`** — no error variable, because there is no error. The value is simply absent.
 
 ```
-# Unwrap a result with early return on error:
+# Return form — exit the function on error:
 let config = read_config(fs, "app.conf") handle error:
     return fail("config load failed")
 
-# Unwrap a result with a default value:
+# Default form — provide a fallback value:
 let config = read_config(fs, "app.conf") handle error:
-    Config(port: 8080)
+    default Config(port: 8080)
 
-# Unwrap a result and use the error value:
+# Default form with side effects — log the error, then provide a fallback:
 let config = read_config(fs, "app.conf") handle error:
-    Stdout.write(stdout, error)
-    return fail(error)
+    Stdout.write(stdout, "config failed, using defaults: {error}")
+    default Config(port: 8080)
 ```
 
 The `handle error:` block executes only when the result is `fail`. If the result is `ok`, the unwrapped value is bound to the variable on the left (`config`). The error variable is always available inside the block.
+
+**Every handle block must end with either `return` or `default`** — there is no implicit value. A handle block that does neither is a compile error:
+
+```
+let config = read_config(fs, "app.conf") handle error:
+    Stdout.write(stdout, "something failed")
+    # COMPILE ERROR: handle block must end with "return" or "default"
+    # hint: add "return fail(...)" to exit, or "default <value>" to provide a fallback
+```
+
+This is consistent with Jett's "no implicit returns" principle. In functions, you always write `return`. In handle blocks, you always write `return` or `default`. Nothing is ever silently inferred from the last expression.
 
 **Why `match` is not allowed on results:**
 
@@ -3457,9 +3468,9 @@ Each `handle` block applies to the pipeline step immediately before it. The erro
 - `|> function_call handle: ...` is a **single pipeline step**. The `handle` is attached to the function call, not to the pipeline itself.
 - On success: `handle` unwraps the `result` (or `optional`), and the unwrapped success value flows to the next `|>` step.
 - On failure: the `handle` block executes. There are **two valid forms**:
-  1. **Expression form (default value):** `handle error: Config(port: 8080)` — the expression becomes the bound value and execution continues normally. This is useful when you want to provide a fallback default instead of aborting.
-  2. **Early return form:** `handle error: return fail(...)` — early exit from the enclosing function. The pipeline (and function) terminates immediately.
-- The pipeline only continues to the next `|>` if every preceding step either succeeded or provided a default value via the expression form.
+  1. **Default form:** `handle error: default Config(port: 8080)` — the `default` keyword provides a fallback value and execution continues normally.
+  2. **Return form:** `handle error: return fail(...)` — early exit from the enclosing function. The pipeline (and function) terminates immediately.
+- The pipeline only continues to the next `|>` if every preceding step either succeeded or provided a fallback via `default`.
 
 In the example above, if `validate_auth` returns `fail(...)`, the `handle` block runs `return fail("auth failed")` and the entire pipeline (and enclosing function) returns immediately. If `validate_auth` returns `ok(auth_token)`, the unwrapped `auth_token` flows into `extract_user_id` as the first argument.
 
@@ -5968,13 +5979,14 @@ Stdout.write(stdout, content)
 
 Errors are values, never exceptions. Functions that can fail return `result[T, E]`. The `handle` keyword is the **only** way to unwrap a result — `match` is reserved for user-defined enums. See Rule Set 5 for the full rationale.
 
-The `handle` block has two forms:
+Every `handle` block must end with either `return` (exit function) or `default` (provide fallback value):
 
-- **Expression form (default value):** provides a fallback value when the result is an error.
+- **Default form:** provides a fallback value using the `default` keyword.
   ```
-  let content = read_file(fs, "data.txt") handle error: "default content"
+  let content = read_file(fs, "data.txt") handle error:
+      default "default content"
   ```
-- **Return/fail form (early exit):** executes a block that must exit the enclosing function via `return` or `return fail(...)`.
+- **Return form:** exits the enclosing function via `return` or `return fail(...)`.
   ```
   let content = read_file(fs, "data.txt") handle error:
       return fail(error)
@@ -6266,7 +6278,7 @@ All 17 block constructs share the same shape. An LLM only needs to learn one pat
 
 Jett's keyword set uses complete, common English words that each map to a single token:
 
-`let`, `mutable`, `function`, `return`, `returns`, `if`, `else`, `for`, `in`, `while`, `struct`, `enum`, `match`, `use`, `true`, `false`, `none`, `and`, `or`, `not`, `is`, `is_near`, `within`, `self`, `handle`, `error`, `result`, `ok`, `fail`, `as`, `break`, `continue`, `interface`, `implement`, `assert`, `type`, `where`, `value`, `mutual`, `machine`, `states`, `transitions`, `to`, `at`, `transition`, `arena`, `clone`, `actor`, `receive`, `send`, `ask`, `respond`, `spawn`, `concurrent`, `join`, `cancel`, `comptime`, `layout`, `verify`, `secret`, `declassify`, `serialize`, `namespace`, `bitfield`, `bit`, `bits`, `remaining`, `view`, `property`, `given`, `tracked`, `trace`, `agent_breakpoint`, `some`, `optional`, `nothing`, `int`, `float`, `string`, `bool`, `bytes`, `list`, `map`, `set`, `modulo`
+`let`, `mutable`, `function`, `return`, `returns`, `if`, `else`, `for`, `in`, `while`, `struct`, `enum`, `match`, `use`, `true`, `false`, `none`, `and`, `or`, `not`, `is`, `is_near`, `within`, `self`, `handle`, `error`, `default`, `result`, `ok`, `fail`, `as`, `break`, `continue`, `interface`, `implement`, `assert`, `type`, `where`, `value`, `mutual`, `machine`, `states`, `transitions`, `to`, `at`, `transition`, `arena`, `clone`, `actor`, `receive`, `send`, `ask`, `respond`, `spawn`, `concurrent`, `join`, `cancel`, `comptime`, `layout`, `verify`, `secret`, `declassify`, `serialize`, `namespace`, `bitfield`, `bit`, `bits`, `remaining`, `view`, `property`, `given`, `tracked`, `trace`, `agent_breakpoint`, `some`, `optional`, `nothing`, `int`, `float`, `string`, `bool`, `bytes`, `list`, `map`, `set`, `modulo`
 
 ### JSON AST Round-Tripping
 
