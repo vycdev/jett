@@ -636,10 +636,33 @@ You cannot accidentally ignore an error. The compiler will not let the program c
 **Result type structure:**
 
 ```
-# result[T, E] is a built-in union type with two variants:
+# result[T, E] is a built-in generic type with two variants:
 #   ok(value: T)    — the operation succeeded
 #   fail(error: E)  — the operation failed
 ```
+
+`result[T, E]` is fully generic — both `T` and `E` can be any type. The `E` parameter is not restricted to the built-in `error` type. Users can define custom error types (structs, enums) and use them as the error parameter:
+
+```
+enum DatabaseError:
+    connection_failed(message: string)
+    query_failed(query: string, reason: string)
+    timeout
+
+function query(net: Network, sql: string) returns result[list[Row], DatabaseError]:
+    # ...
+
+let rows = query(net, "select * from users") handle error:
+    match error:
+        connection_failed(msg):
+            return fail("db down: {msg}")
+        query_failed(q, reason):
+            return fail("bad query: {q} — {reason}")
+        timeout:
+            return fail("db timed out")
+```
+
+The built-in `error` type is a convenience default — a simple struct with a `message: string` field. When you write `fail("some string")`, it creates an `error` with that message. This is shorthand for the common case where a structured error type is unnecessary. For functions that need richer error information, define a custom error type and use `result[T, YourErrorType]`.
 
 **The `handle` keyword — the only way to unwrap a result or optional:**
 
