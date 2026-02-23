@@ -315,6 +315,53 @@ In a dynamically typed language, type mismatches would silently produce garbage 
 
 Jett uses string interpolation `"text {expr}"` as the single canonical mechanism for building strings. Expressions inside `{}` are automatically converted to strings. There is no `+` operator for strings and no `string.concat()` function.
 
+#### Explicit Type Conversions
+
+Jett has **no implicit type conversions**. An `int` is never silently promoted to a `float`, and a number is never silently coerced to a `string`. All type conversions are explicit function calls using the standard module function syntax: `TargetType.from_SourceType(value)`.
+
+**Infallible conversions** (lossless — always succeed, return `T` directly):
+
+```
+let x = float.from_int(42)          # → 42.0
+let s = string.from_int(42)         # → "42"
+let s = string.from_float(3.14)     # → "3.14"
+let s = string.from_bool(true)      # → "true"
+```
+
+**Fallible conversions** (can fail — return `result[T, error]`):
+
+```
+let n = int.from_string("42") handle error:
+    return fail("not a number")
+
+let f = float.from_string("3.14") handle error:
+    return fail("not a float")
+
+let n = int.from_float(3.14) handle error:
+    return fail("not a whole number")
+    # Fails because 3.14 is not exactly representable as int.
+    # int.from_float(3.0) would succeed → 3
+```
+
+**Design rules:**
+
+- Every conversion is a uniquely named function — no overloading. `int.from_string` and `int.from_float` are separate functions, not overloads of `int()`.
+- Lossy numeric conversions return `result`. Converting `float` to `int` can fail because the float may not be a whole number. Converting `int` to `float` can fail for very large integers that lose precision. The compiler never silently truncates or rounds.
+- The pattern is always `TargetType.from_SourceType(value)` — predictable and discoverable. An LLM can infer the correct function name from the types involved.
+- String interpolation `"text {expr}"` is the only place where automatic string conversion happens. Outside of interpolation, converting to string requires an explicit `string.from_int()` or `string.from_float()` call.
+
+**What the compiler rejects:**
+
+```
+let x: float = 42
+# COMPILE ERROR: expected float, got int
+# hint: use float.from_int(42)
+
+let y: int = 3.14
+# COMPILE ERROR: expected int, got float
+# hint: use int.from_float(3.14) and handle the possible error
+```
+
 #### 2. Intent-Based Refinement Types — Constraints in Plain Text
 
 This is where Jett's type system becomes truly LLM-native. Standard types describe *what shape* data has (int, string, list). Refinement types describe *what rules* data must follow. The LLM can express business logic constraints directly as types, and the compiler enforces them automatically.
