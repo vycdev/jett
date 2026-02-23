@@ -6024,7 +6024,9 @@ Every `handle` block must end with either `return` (exit function) or `default` 
       return fail(error)
   ```
 
-### Enums
+### Enums (User-Defined Union Types)
+
+Enums are Jett's user-defined union types. Each variant can carry different associated data, and `match` forces exhaustive handling of all variants. There are no anonymous union types (`string | int`) — if you need a value that can be one of several types, define an enum.
 
 ```
 enum Color:
@@ -6036,6 +6038,14 @@ enum Shape:
     circle(radius: float)
     rect(width: float, height: float)
 ```
+
+Jett has three union-like constructs, each with its own unwrap mechanism:
+
+| Type | Variants | Unwrap mechanism |
+|------|----------|-----------------|
+| `result[T, E]` | `ok(T)`, `fail(E)` | `handle error:` |
+| `optional[T]` | `some(T)`, `none` | `handle:` |
+| User-defined enums | Any number of variants | `match` |
 
 ### Match (User-Defined Enums Only)
 
