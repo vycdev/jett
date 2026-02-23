@@ -6304,3 +6304,4 @@ deps:
 - **Method syntax** — RESOLVED: module function syntax only (`list.length(items)`, not `items.length()`).
 - **Void functions** — RESOLVED: every function always has a `returns` clause. Functions that produce no value use `returns nothing`. This is consistent with the one-canonical-form principle.
 - **Mutable semantics** — RESOLVED: rebinding semantics. `mutable` allows consume-and-rebind to the same name.
+- **Mutual struct composition** — two structs cannot contain each other (composition is physical containment, so circular inclusion would be infinitely sized). The `mutual` block exists for functions but not for structs. Need to determine how recursive data structures (trees, linked lists, graphs) are expressed in Jett — possibly via arena-allocated indices or some form of indirection.
