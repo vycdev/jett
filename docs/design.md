@@ -155,7 +155,7 @@ There must be **no spooky action at a distance**. A variable must never be silen
 **Example — side effects are declared, not hidden:**
 
 ```
-function save_user(fs: Filesystem, user: view User) returns result[nothing, error]:
+function save_user(fs: Filesystem, user: view User) returns result[nothing, string]:
     let data = json.serialize(user)
     Filesystem.write_file(fs, "users.json", data) handle error:
         return fail("could not save user")
@@ -328,7 +328,7 @@ let s = string.from_float(3.14)     # → "3.14"
 let s = string.from_bool(true)      # → "true"
 ```
 
-**Fallible conversions** (can fail — return `result[T, error]`):
+**Fallible conversions** (can fail — return `result[T, string]`):
 
 ```
 let n = int.from_string("42") handle error:
@@ -427,7 +427,7 @@ type PositiveFloat = float where value > 0.0
 type HttpStatus = int where value >= 100 and value < 600
 type JsonString = string where string.is_valid_json(value)
 
-function parse_config(raw: JsonString) returns result[Config, error]:
+function parse_config(raw: JsonString) returns result[Config, string]:
     # `raw` is guaranteed to be valid JSON — the type says so.
     let config = json.parse(raw, Config) handle error:
         return fail("invalid config structure")
@@ -444,15 +444,15 @@ struct User:
 
 # Constructing a User validates all refined fields — and requires handle:
 let user = User(name: name, email: email, age: age) handle error:
-    return fail("invalid user data: {error.message}")
+    return fail("invalid user data: {error}")
 ```
 
 **Refinement type constraints must be self-contained.** The `where` clause can only reference `value` (the value being constrained) and call pure functions with literal or constant arguments. Constraints cannot take external parameters — there is no `type Password[min: int] = string where string.char_count(value) > min`. This keeps `[]` unambiguous: it always means generics, never parameterized constraints.
 
-**For parameterized validation, use functions.** If validation rules depend on runtime values (e.g., a minimum password length from config), write a regular function that returns `result[T, error]`:
+**For parameterized validation, use functions.** If validation rules depend on runtime values (e.g., a minimum password length from config), write a regular function that returns `result[T, string]`:
 
 ```
-function validate_password(input: string, min_length: int) returns result[string, error]:
+function validate_password(input: string, min_length: int) returns result[string, string]:
     if string.char_count(input) <= min_length:
         return fail("password must be longer than {min_length} characters")
     return ok(input)
@@ -546,13 +546,13 @@ function handle_login(stdout: Stdout) returns nothing:
 **What you write instead — all imports inside functions:**
 
 ```
-function fetch_data(net: Network, url: string) returns result[map[string, string], error]:
+function fetch_data(net: Network, url: string) returns result[map[string, string], string]:
     use net.http
     use json
     let response = http.get(net, url) handle error:
         return fail("request failed")
     let data = json.parse(response.body, map[string, string]) handle error:
-        return fail(error.message)
+        return fail(error)
     return ok(data)
 
 function compute_stats(values: list[float]) returns float:
@@ -605,7 +605,7 @@ Functions that can fail return a `result[T, E]` type. The caller **must** handle
 **The pattern:**
 
 ```
-function read_config(fs: Filesystem, path: string) returns result[Config, error]:
+function read_config(fs: Filesystem, path: string) returns result[Config, string]:
     let raw = Filesystem.read_file(fs, path) handle error:
         return fail("could not read file: {path}")
     let config = json.parse(raw, Config) handle error:
@@ -624,7 +624,7 @@ The `handle` keyword is used at the call site of any function that returns a `re
 ```
 function bad_example(fs: Filesystem) returns string:
     let config = read_config(fs, "app.conf")
-    # COMPILE ERROR: result[Config, error] must be handled
+    # COMPILE ERROR: result[Config, string] must be handled
     # "read_config" can fail, but the error is not handled
     # hint: add a "handle" block after the call
 
@@ -641,9 +641,16 @@ You cannot accidentally ignore an error. The compiler will not let the program c
 #   fail(error: E)  — the operation failed
 ```
 
-`result[T, E]` is fully generic — both `T` and `E` can be any type. The `E` parameter is not restricted to the built-in `error` type. Users can define custom error types (structs, enums) and use them as the error parameter:
+`result[T, E]` is fully generic — both `T` and `E` can be any type. There is no built-in error type. `fail()` takes a value of whatever type `E` is. For simple cases, use `string` as the error type. For complex cases, define a custom error struct or enum:
 
 ```
+# Simple — E is string:
+function read_config(fs: Filesystem, path: string) returns result[Config, string]:
+    let raw = Filesystem.read_file(fs, path) handle error:
+        return fail("could not read file")
+    return ok(json.parse(raw, Config))
+
+# Complex — E is a custom enum:
 enum DatabaseError:
     connection_failed(message: string)
     query_failed(query: string, reason: string)
@@ -661,8 +668,6 @@ let rows = query(net, "select * from users") handle error:
         timeout:
             return fail("db timed out")
 ```
-
-The built-in `error` type is a convenience default — a simple struct with a `message: string` field. When you write `fail("some string")`, it creates an `error` with that message. This is shorthand for the common case where a structured error type is unnecessary. For functions that need richer error information, define a custom error type and use `result[T, YourErrorType]`.
 
 **The `handle` keyword — the only way to unwrap a result or optional:**
 
@@ -684,7 +689,7 @@ let config = read_config(fs, "app.conf") handle error:
 
 # Unwrap a result and use the error value:
 let config = read_config(fs, "app.conf") handle error:
-    Stdout.write(stdout, error.message)
+    Stdout.write(stdout, error)
     return fail(error)
 ```
 
@@ -713,7 +718,7 @@ This means `handle` is the single canonical unwrap mechanism for both `result[T,
 - **`result[T, E]` MUST use `handle error:`** -- the `error` keyword is required. The error variable is always bound inside the block:
   ```
   let config = read_config(fs, "app.conf") handle error:
-      Stdout.write(stdout, error.message)
+      Stdout.write(stdout, error)
       return fail(error)
   ```
 - **`optional[T]` MUST use bare `handle:`** with **no error variable**, because there is no error -- the value is simply absent:
@@ -752,7 +757,7 @@ Jett bans every construct that causes control flow to jump to a non-obvious dest
 **Example — error propagation is always visible:**
 
 ```
-function process_order(net: Network, order_id: string) returns result[Receipt, error]:
+function process_order(net: Network, order_id: string) returns result[Receipt, string]:
     use db
     use payment
 
@@ -789,7 +794,7 @@ If a variable named `user_id` exists in an outer scope, creating another variabl
 **What the compiler rejects:**
 
 ```
-function process_user(net: Network, user_id: string) returns result[User, error]:
+function process_user(net: Network, user_id: string) returns result[User, string]:
     use db
     let user = db.find(net, user_id) handle error:
         return fail("not found")
@@ -803,7 +808,7 @@ function process_user(net: Network, user_id: string) returns result[User, error]
 **What you write instead:**
 
 ```
-function process_user(net: Network, user_id: string) returns result[User, error]:
+function process_user(net: Network, user_id: string) returns result[User, string]:
     use db
     let user = db.find(net, user_id) handle error:
         return fail("not found")
@@ -967,7 +972,7 @@ error at line 12: function "validate_input" exceeds the nesting depth limit
 This function is too large and the compiler rejects it:
 
 ```
-function process_report(data: list[Record]) returns result[Report, error]:
+function process_report(data: list[Record]) returns result[Report, string]:
     # ... 60+ statements doing validation, transformation,
     # aggregation, formatting, and output ...
     # COMPILE ERROR: exceeds 50 statement limit
@@ -976,7 +981,7 @@ function process_report(data: list[Record]) returns result[Report, error]:
 The LLM must break it apart:
 
 ```
-function validate_records(data: list[Record]) returns result[list[Record], error]:
+function validate_records(data: list[Record]) returns result[list[Record], string]:
     # validation logic (~10 statements)
 
 function transform_records(records: list[Record]) returns list[TransformedRecord]:
@@ -988,7 +993,7 @@ function aggregate_results(records: list[TransformedRecord]) returns Summary:
 function format_report(summary: Summary) returns Report:
     # formatting logic (~10 statements)
 
-function process_report(data: list[Record]) returns result[Report, error]:
+function process_report(data: list[Record]) returns result[Report, string]:
     let valid = validate_records(data) handle error:
         return fail("invalid records")
     let transformed = transform_records(valid)
@@ -1240,7 +1245,7 @@ let is_ip = validate.ipv4("192.168.1.1")
 With a dense standard library, the LLM's role shifts fundamentally. It is no longer writing algorithms — it is **connecting well-tested components**. A typical Jett program written by an LLM looks like:
 
 ```
-function process_csv_report(fs: Filesystem, clock: Clock, path: string) returns result[Report, error]:
+function process_csv_report(fs: Filesystem, clock: Clock, path: string) returns result[Report, string]:
     use string
     use list
     use time
@@ -1384,7 +1389,7 @@ In traditional languages, the LLM must remember to write defensive checks at the
 
 ```
 # Traditional (bad for LLMs — requires remembering to check state):
-function post_comment(user: User, text: string) returns result[Comment, error]:
+function post_comment(user: User, text: string) returns result[Comment, string]:
     if user.is_banned:
         return fail("user is banned")
     if not user.is_logged_in:
@@ -1397,7 +1402,7 @@ The LLM might forget one of these checks. It might check the wrong flag. It migh
 In Jett, the function signature declares which state is required. No checks needed — it is **impossible** to call the function in the wrong state:
 
 ```
-function post_comment(clock: Clock, session: UserAuth at logged_in, text: string) returns result[Comment, error]:
+function post_comment(clock: Clock, session: UserAuth at logged_in, text: string) returns result[Comment, string]:
     # No if-checks needed. This function can ONLY be called when
     # the session is in the "logged_in" state. The compiler enforces this
     # at every call site. The LLM cannot forget. The human cannot forget.
@@ -1483,7 +1488,7 @@ enum CaptureOutcome:
     captured(payment: Payment at captured)
     declined(payment: Payment at failed)
 
-function authorize_payment(net: Network, pay: Payment at pending) returns result[PaymentOutcome, error]:
+function authorize_payment(net: Network, pay: Payment at pending) returns result[PaymentOutcome, string]:
     use payment_gateway
     let auth = payment_gateway.authorize(net, pay.amount, pay.currency) handle error:
         return fail("gateway error")
@@ -1491,7 +1496,7 @@ function authorize_payment(net: Network, pay: Payment at pending) returns result
         return ok(PaymentOutcome.declined(payment: Payment.transition(pay, failed, reason: auth.reason)))
     return ok(PaymentOutcome.authorized(payment: Payment.transition(pay, authorized, amount: pay.amount, auth_code: auth.code)))
 
-function capture_payment(net: Network, pay: Payment at authorized) returns result[CaptureOutcome, error]:
+function capture_payment(net: Network, pay: Payment at authorized) returns result[CaptureOutcome, string]:
     use payment_gateway
     let capture = payment_gateway.capture(net, pay.auth_code, pay.amount) handle error:
         return fail("capture failed")
@@ -1502,10 +1507,10 @@ function capture_payment(net: Network, pay: Payment at authorized) returns resul
         auth_code: pay.auth_code,
         capture_id: capture.id)))
 
-function refund_payment(net: Network, pay: Payment at captured) returns result[Payment at refunded, error]:
+function refund_payment(net: Network, pay: Payment at captured) returns result[Payment at refunded, string]:
     use payment_gateway
     let refund = payment_gateway.refund(net, pay.capture_id, pay.amount) handle error:
-        return fail("refund failed: {error.message}")
+        return fail("refund failed: {error}")
     return ok(Payment.transition(pay, refunded,
         original_amount: pay.amount,
         refund_id: refund.id))
@@ -1786,7 +1791,7 @@ In languages like JavaScript or C#, you can spawn a background async task and fo
 Jett uses **structured concurrency**: all async tasks are bound to a scope. The scope cannot exit until all child tasks are resolved.
 
 ```
-function fetch_all_data(net: Network) returns result[DashboardData, error]:
+function fetch_all_data(net: Network) returns result[DashboardData, string]:
     let data = concurrent:
         let users = spawn http.get(net, "https://api.example.com/users")
         let orders = spawn http.get(net, "https://api.example.com/orders")
@@ -1828,7 +1833,7 @@ function fetch_all_data(net: Network) returns result[DashboardData, error]:
 **What the compiler rejects:**
 
 ```
-function bad_example(net: Network) returns result[string, error]:
+function bad_example(net: Network) returns result[string, string]:
     concurrent:
         let users = spawn http.get(net, "https://api.example.com/users")
         let orders = spawn http.get(net, "https://api.example.com/orders")
@@ -1973,7 +1978,7 @@ LLMs naturally group concepts based on **token proximity**. Tokens that are clos
 **How attention heads process indented code:**
 
 ```
-function process_order(order: Order) returns result[Receipt, error]:
+function process_order(order: Order) returns result[Receipt, string]:
     let validated = validate(order) handle error:
         return fail("invalid order")
     let charged = charge(validated) handle error:
@@ -2546,7 +2551,7 @@ function log_user(stdout: Stdout, user: User) returns nothing:
 ```
 
 ```
-function handle_login(net: Network, request: Request) returns result[Response, error]:
+function handle_login(net: Network, request: Request) returns result[Response, string]:
     use net.http
     let user = authenticate(request) handle error:
         return ok(http.response(400, "invalid credentials"))
@@ -2587,7 +2592,7 @@ function authenticate(stored_hash: secret[string], input_password: string) retur
 ```
 
 ```
-function call_external_api(net: Network, api_key: secret[string], payload: string) returns result[Response, error]:
+function call_external_api(net: Network, api_key: secret[string], payload: string) returns result[Response, string]:
     use net.http
     let headers = map("Authorization": "Bearer {declassify api_key}")
     return http.post(net, "https://api.example.com/data", payload, headers: headers)
@@ -2750,7 +2755,7 @@ function example(fs: Filesystem, stdout: Stdout) returns nothing:
 **Capability threading — functions borrow and return capabilities:**
 
 ```
-function read_config(fs: Filesystem, path: string) returns result[Config, error]:
+function read_config(fs: Filesystem, path: string) returns result[Config, string]:
     let raw = Filesystem.read_file(fs, path) handle error:
         return fail("could not read {path}")
     let config = json.parse(raw, Config) handle error:
@@ -2791,7 +2796,7 @@ function log_message(stdout: Stdout, message: string) returns nothing:
 On the error path, the compiler automatically returns all borrowed capability parameters:
 
 ```
-function read_config(fs: Filesystem, path: string) returns result[Config, error]:
+function read_config(fs: Filesystem, path: string) returns result[Config, string]:
     let raw = Filesystem.read_file(fs, path) handle error:
         return fail("could not read {path}")
         # The compiler automatically returns fs alongside the fail value
@@ -2823,7 +2828,7 @@ function sneaky_logger(message: string) returns nothing:
 **A function trying to access the network without a capability:**
 
 ```
-function fetch_data(url: string) returns result[string, error]:
+function fetch_data(url: string) returns result[string, string]:
     use net.http
     return http.get(url)
     # COMPILE ERROR: "http.get" requires a Network capability
@@ -3119,25 +3124,25 @@ struct User:
 
 # The compiler makes User compatible with:
 # json.serialize(user)       → string (JSON representation)
-# json.parse(raw, User)      → result[User, error]
+# json.parse(raw, User)      → result[User, string]
 # User.to_bytes(user)        → bytes (compact binary representation)
-# User.from_bytes(raw)      → result[User, error]
+# User.from_bytes(raw)      → result[User, string]
 ```
 
-The compiler makes every struct compatible with `json.serialize()` and `json.parse(raw, Type)` automatically. There are no auto-generated `.to_json()` or `.from_json()` methods on the struct itself — the `json` module functions are the canonical API. `json.serialize` declares a `view` parameter — it reads the value without consuming it. Because the parameter is declared as `view`, callers simply write `json.serialize(user)` — the `view` keyword only appears in parameter declarations, not at call sites. The compiler handles the view semantics automatically. `json.parse(raw, Type)` is the **only** form — the Type parameter is mandatory, not optional. It parses a JSON string into the specified type and returns `result[Type, error]`. There is no single-argument `json.parse(raw)` that returns an untyped value. For structs with `secret[T]` fields, `json.serialize_public(value)` omits those fields.
+The compiler makes every struct compatible with `json.serialize()` and `json.parse(raw, Type)` automatically. There are no auto-generated `.to_json()` or `.from_json()` methods on the struct itself — the `json` module functions are the canonical API. `json.serialize` declares a `view` parameter — it reads the value without consuming it. Because the parameter is declared as `view`, callers simply write `json.serialize(user)` — the `view` keyword only appears in parameter declarations, not at call sites. The compiler handles the view semantics automatically. `json.parse(raw, Type)` is the **only** form — the Type parameter is mandatory, not optional. It parses a JSON string into the specified type and returns `result[Type, string]`. There is no single-argument `json.parse(raw)` that returns an untyped value. For structs with `secret[T]` fields, `json.serialize_public(value)` omits those fields.
 
 The LLM does not write parsing functions. The LLM does not import a serialization library. The LLM does not annotate fields with `#[serde(rename = "...")]` or `@JsonProperty`. The compiler sees the struct definition and generates everything.
 
 **Using auto-generated serialization:**
 
 ```
-function save_user(fs: Filesystem, user: view User) returns result[nothing, error]:
+function save_user(fs: Filesystem, user: view User) returns result[nothing, string]:
     let json_data = json.serialize(user)
     Filesystem.write_file(fs, "users/{user.id}.json", json_data) handle error:
         return fail("could not save user")
     return ok(nothing)
 
-function load_user(fs: Filesystem, id: string) returns result[User, error]:
+function load_user(fs: Filesystem, id: string) returns result[User, string]:
     let raw = Filesystem.read_file(fs, "users/{id}.json") handle error:
         return fail("user file not found")
     let user = json.parse(raw, User) handle error:
@@ -3247,7 +3252,7 @@ struct ValidatedUser:
 
 let raw = "{{\"name\":\"alice\",\"age\":-5,\"email\":\"alice@example.com\"}}"
 let user = json.parse(raw, ValidatedUser) handle error:
-    return fail("invalid user: {error.message}")
+    return fail("invalid user: {error}")
 # RUNTIME ERROR during json.parse:
 #   field "age": value -5 does not satisfy: value >= 0
 ```
@@ -3463,7 +3468,7 @@ In the example above, if `validate_auth` returns `fail(...)`, the `handle` block
 Pipelines work naturally with capability-based I/O (Rule Set 16). The capability is passed as an additional argument:
 
 ```
-function process_request(fs: Filesystem, net: Network, stdout: Stdout, request: Request) returns result[string, error]:
+function process_request(fs: Filesystem, net: Network, stdout: Stdout, request: Request) returns result[string, string]:
     let output = request
         |> authenticate
         |> authorize
@@ -3608,8 +3613,8 @@ The LLM never sees a pointer. The LLM never calculates a struct offset. The LLM 
 // void SDL_Quit(void);
 
 # What the LLM sees in Jett after `use c "SDL2/SDL.h" as sdl`:
-# sdl.init(flags: int) returns result[int, error]
-# sdl.create_window(title: string, x: int, y: int, w: int, h: int, flags: int) returns result[sdl.Window, error]
+# sdl.init(flags: int) returns result[int, string]
+# sdl.create_window(title: string, x: int, y: int, w: int, h: int, flags: int) returns result[sdl.Window, string]
 # sdl.destroy_window(window: sdl.Window)
 # sdl.quit()
 ```
@@ -3618,14 +3623,14 @@ The compiler automatically:
 
 - **Translates `char*` to `string`** with null-termination handled internally.
 - **Wraps raw pointers in opaque handle types** (`SDL_Window*` becomes `sdl.Window` — an opaque, linear type).
-- **Makes fallible functions return `result`** (any C function that can return NULL or an error code gets wrapped in `result[T, error]`).
+- **Makes fallible functions return `result`** (any C function that can return NULL or an error code gets wrapped in `result[T, string]`).
 - **Converts naming conventions** (`SDL_CreateWindow` → `sdl.create_window` in snake_case).
 - **Handles memory ownership** based on C conventions (functions named `Create*` allocate, functions named `Destroy*`/`Free*` deallocate).
 
 **Using the translated API — the LLM writes safe Jett code:**
 
 ```
-function create_game_window(stdout: Stdout) returns result[sdl.Window, error]:
+function create_game_window(stdout: Stdout) returns result[sdl.Window, string]:
     use c "SDL2/SDL.h" as sdl
 
     sdl.init(sdl.INIT_VIDEO) handle error:
@@ -3722,7 +3727,7 @@ C header imports integrate with the capability system (Rule Set 16) and cross-pl
 
 ```
 # The LLM writes platform-agnostic GUI code using capabilities:
-function create_text_input(gui: GuiCapability, label: string) returns result[TextInput, error]:
+function create_text_input(gui: GuiCapability, label: string) returns result[TextInput, string]:
     # The compiler resolves GuiCapability to platform-specific C calls:
     # Windows: CreateWindowExW("EDIT", ...) via windows.h
     # macOS: NSTextField via Cocoa.h
@@ -3978,7 +3983,7 @@ jett query --agent --complete-at src/server.jett:30:15
     "completions": [
         {"name": "json.serialize_public", "signature": "(value: view User) returns string"},
         {"name": "json.serialize", "signature": "BLOCKED — User contains secret fields"},
-        {"name": "validate_user", "signature": "(user: User) returns result[User, error]"}
+        {"name": "validate_user", "signature": "(user: User) returns result[User, string]"}
     ]
 }
 ```
@@ -4073,7 +4078,7 @@ In Jett, the physical location of files on disk is **irrelevant to the module sy
 # File: auth.jett (or login_stuff.jett, or anything.jett — the filename doesn't matter)
 namespace auth
 
-function login(credentials: Credentials) returns result[Session, error]:
+function login(credentials: Credentials) returns result[Session, string]:
     # ...
 
 function logout(session: Session) returns nothing:
@@ -4086,7 +4091,7 @@ function logout(session: Session) returns nothing:
 # File: server.jett (or handlers.jett, or app.jett — doesn't matter)
 namespace server
 
-function handle_login(stdout: Stdout, request: Request) returns result[Response, error]:
+function handle_login(stdout: Stdout, request: Request) returns result[Response, string]:
     use auth
     let session = auth.login(request.credentials) handle error:
         return fail("login failed")
@@ -4196,7 +4201,7 @@ struct User:
 
 namespace auth
 
-function authenticate(name: string, password: string) returns result[models.User, error]:
+function authenticate(name: string, password: string) returns result[models.User, string]:
     use models
     # ...
 
@@ -4244,7 +4249,7 @@ The inline `use` from Rule Set 4 works with namespaces:
 ```
 namespace handlers
 
-function process_payment(net: Network, order: Order) returns result[Receipt, error]:
+function process_payment(net: Network, order: Order) returns result[Receipt, string]:
     use auth                # inline import — scoped to this function
     use payment.gateway     # inline import — scoped to this function
 
@@ -4387,7 +4392,7 @@ The LLM writes field names and bit widths using **base-10 integers** — which i
 Reading and writing bitfield values uses the same dot-access syntax as regular structs:
 
 ```
-function parse_ip_packet(raw: bytes) returns result[IpHeader, error]:
+function parse_ip_packet(raw: bytes) returns result[IpHeader, string]:
     let header = IpHeader.from_bytes(raw) handle error:
         return fail("invalid IP header")
 
@@ -5306,7 +5311,7 @@ The running application becomes a **chatbot** that the LLM can interrogate.
 **Inserting a breakpoint:**
 
 ```
-function process_order(fs: Filesystem, order: Order) returns result[Receipt, error]:
+function process_order(fs: Filesystem, order: Order) returns result[Receipt, string]:
     let validated = validate_order(order) handle error:
         return fail("validation failed")
 
@@ -5636,7 +5641,7 @@ The output is a JSON array of bottleneck entries, sorted by impact (highest CPU 
             "total_samples": 8976,
             "self_samples": 1536,
             "hot_lines": [
-                {"line": 45, "percent": 8.1, "code": "let parsed = json.parse(raw_text, Document) handle error: return fail(error.message)"},
+                {"line": 45, "percent": 8.1, "code": "let parsed = json.parse(raw_text, Document) handle error: return fail(error)"},
                 {"line": 52, "percent": 7.4, "code": "let validated = schema.validate(parsed)"}
             ],
             "call_chain": [
@@ -5949,14 +5954,14 @@ let d = Point.distance(p1, p2)
 ### Error Handling
 
 ```
-function read_file(fs: Filesystem, path: string) returns result[string, error]:
+function read_file(fs: Filesystem, path: string) returns result[string, string]:
     let content = Filesystem.read_file(fs, path) handle error:
         return fail("could not open file")
     return ok(content)
 
 # handle is the ONLY way to unwrap a result:
 let content = read_file(fs, "data.txt") handle error:
-    Stdout.write(stdout, error.message)
+    Stdout.write(stdout, error)
     return
 Stdout.write(stdout, content)
 ```
@@ -5972,7 +5977,7 @@ The `handle` block has two forms:
 - **Return/fail form (early exit):** executes a block that must exit the enclosing function via `return` or `return fail(...)`.
   ```
   let content = read_file(fs, "data.txt") handle error:
-      return fail(error.message)
+      return fail(error)
   ```
 
 ### Enums
@@ -6022,7 +6027,7 @@ function main(stdout: Stdout, net: Network) returns nothing:
     use net.http
     let pi = math.pi
     let response = http.get(net, "https://example.com") handle error:
-        Stdout.write(stdout, "request failed: {error.message}")
+        Stdout.write(stdout, "request failed: {error}")
         return
 ```
 
@@ -6113,8 +6118,7 @@ The `view` keyword is used only in parameter declarations to indicate read-only,
 | `set[T]` | Unique collection |
 | `optional[T]` | Either a `T` or `none` |
 | `result[T, E]` | Either `ok(T)` or `fail(E)` |
-| `error` | Default error type (has `message: string`) |
-| `nothing` | Unit type with exactly one value, also called `nothing`. Used in `result[nothing, error]` for functions that can fail but return no value on success. `ok(nothing)` is the canonical form for wrapping success in `result[nothing, E]`. |
+| `nothing` | Unit type with exactly one value, also called `nothing`. Used in `result[nothing, string]` for functions that can fail but return no value on success. `ok(nothing)` is the canonical form for wrapping success in `result[nothing, E]`. |
 | `bytes` | Sequence of raw bytes (0-255). Distinct from `string` (which is UTF-8 text). Used for binary data, network packets, file I/O with binary formats. |
 
 ### Type Inference
