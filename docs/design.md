@@ -447,6 +447,23 @@ let user = User(name: name, email: email, age: age) handle error:
     return fail("invalid user data: {error.message}")
 ```
 
+**Refinement type constraints must be self-contained.** The `where` clause can only reference `value` (the value being constrained) and call pure functions with literal or constant arguments. Constraints cannot take external parameters — there is no `type Password[min: int] = string where string.char_count(value) > min`. This keeps `[]` unambiguous: it always means generics, never parameterized constraints.
+
+**For parameterized validation, use functions.** If validation rules depend on runtime values (e.g., a minimum password length from config), write a regular function that returns `result[T, error]`:
+
+```
+function validate_password(input: string, min_length: int) returns result[string, error]:
+    if string.char_count(input) <= min_length:
+        return fail("password must be longer than {min_length} characters")
+    return ok(input)
+
+# Usage:
+let password = validate_password(raw_input, config.min_password_length) handle error:
+    return fail(error)
+```
+
+The rule is simple: refinement types for fixed constraints, functions for dynamic validation.
+
 ### Rule Set 4: Auto-Regressive Friendly Structure (Strict Linearity)
 
 LLMs generate code **token-by-token, left-to-right, top-to-bottom**. They cannot look ahead. When an LLM writes a function call on line 10, it is committing to a name, argument list, and return type *right now* — if the actual definition doesn't appear until line 50, the LLM is guessing. By line 50, the model may have forgotten or drifted from what it assumed on line 10, producing mismatched signatures, wrong argument counts, or hallucinated parameter names.
