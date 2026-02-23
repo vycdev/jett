@@ -383,7 +383,7 @@ The `where` clause attaches a constraint to a base type. `value` refers to the v
 
 **How refinement types work at runtime:**
 
-Refinement types are checked at **type boundaries** — when a value enters the refined type from an unrefined one. Inside the type, the constraint is guaranteed.
+Refinement types are checked at **type boundaries** — when a value enters the refined type from an unrefined one. Inside the type, the constraint is guaranteed. Assigning to a refinement type is a **fallible operation** — the value might not satisfy the constraint — so the compiler requires `handle`, just like any other operation that can fail:
 
 ```
 function create_user(name: string, password: Password) returns User:
@@ -391,10 +391,13 @@ function create_user(name: string, password: Password) returns User:
     # No need to check again. The type system already enforced it.
     return User(name: name, password: password)
 
-# At the call site, the compiler inserts a check:
-let user_password: Password = input   # checked here: is string.char_count > 8?
+# At the call site, the compiler forces you to handle the possible failure:
+let user_password: Password = raw_input handle error:
+    return fail("password must be at least 8 characters")
 let user = create_user("alice", user_password)
 ```
+
+This uses the same `handle error:` pattern as `result[T, E]` — no new syntax. The compiler **refuses to compile** a refinement type assignment without a `handle` block. The LLM is forced to consider and handle the case where the value does not satisfy the constraint.
 
 **Why this is powerful for LLMs:**
 
@@ -404,12 +407,14 @@ let user = create_user("alice", user_password)
 
 3. **Refinement types compose.** If a function takes a `Port` and a `NonEmpty[string]`, the LLM knows from the types alone that the port is valid and the list is non-empty. No defensive checks needed inside the function.
 
-4. **Errors are caught early and described clearly:**
+4. **Failure handling is mandatory.** The `handle` pattern forces the LLM to write error handling for every refinement type boundary. An LLM cannot silently assume a string is a valid password — the compiler requires an explicit `handle error:` block.
+
+5. **Errors are caught early and described clearly:**
 
 ```
-error at line 45: cannot assign int to Port
-  the value -1 does not satisfy: value >= 1
-  hint: validate the value before assigning to Port
+error at line 45: refinement type assignment requires error handling
+  assigning int to Port may fail the constraint: value >= 1
+  hint: add "handle error:" to handle the case where the value is invalid
 ```
 
 **Complex refinement examples:**
@@ -437,9 +442,9 @@ struct User:
     email: Email
     age: Age
 
-# Constructing a User automatically validates all fields.
-# If any field violates its constraint, it fails at the construction site
-# with a clear error — not deep inside some method later.
+# Constructing a User validates all refined fields — and requires handle:
+let user = User(name: name, email: email, age: age) handle error:
+    return fail("invalid user data: {error.message}")
 ```
 
 ### Rule Set 4: Auto-Regressive Friendly Structure (Strict Linearity)
