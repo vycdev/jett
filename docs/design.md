@@ -362,6 +362,8 @@ let y: int = 3.14
 # hint: use int.from_float(3.14) and handle the possible error
 ```
 
+**These are standard library functions, not language magic.** Primitive types (`int`, `float`, `string`, `bool`) serve as their own modules, exactly like structs do. When you define `struct Dog`, you call `Dog.speak(my_dog)` — `Dog` is both the type and the module. Primitive types work the same way: `int` is both the type (in `x: int`) and the module (in `int.from_string("42")`). The context disambiguates — type position vs expression position. There is no special compiler treatment for conversion functions; they are ordinary standard library functions that anyone could reimplement in a custom module.
+
 #### 2. Intent-Based Refinement Types — Constraints in Plain Text
 
 This is where Jett's type system becomes truly LLM-native. Standard types describe *what shape* data has (int, string, list). Refinement types describe *what rules* data must follow. The LLM can express business logic constraints directly as types, and the compiler enforces them automatically.
