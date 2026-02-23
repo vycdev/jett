@@ -717,6 +717,27 @@ let first = list.first(items) handle:
 
 This is consistent with Jett's "no implicit returns" principle. In functions, you always write `return`. In handle blocks, you always write `return` or `default`. Nothing is ever silently inferred from the last expression.
 
+**Return values must be consumed — no silent discards:**
+
+A function that returns anything other than `nothing` cannot be called as a standalone statement. The return value must be assigned to a variable. This is enforced by Jett's linear type system (Rule Set 10) — every value must be consumed.
+
+```
+# returns nothing — OK as standalone statement:
+Stdout.write(stdout, "hello")
+
+# returns float — MUST assign:
+math.sqrt(16.0)
+# COMPILE ERROR: return value of math.sqrt (float) is not consumed
+# hint: assign to a variable with "let x = math.sqrt(16.0)"
+
+# returns result[T, E] — MUST assign AND handle:
+read_config(fs, "app.conf")
+# COMPILE ERROR: result[Config, string] is not consumed and not handled
+# hint: assign and handle with "let config = read_config(...) handle error: ..."
+```
+
+This means there is always a variable on the left side of a `handle` block. The `default` keyword always has a target to assign to, and return values can never be silently ignored.
+
 **Why `match` is not allowed on results:**
 
 One canonical form means one way to unwrap. `match` on a `result` would create a second way to do the same thing as `handle`. By restricting `match` to user-defined enums, Jett enforces that all error handling looks identical everywhere. An LLM never has to decide between `match` and `handle` — there is only `handle`.
