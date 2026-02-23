@@ -572,7 +572,21 @@ function compute_stats(values: list[float]) returns float:
 **Scoping rules:**
 
 - A `use` statement is scoped to the block it appears in. `use math` inside a function is not visible outside that function.
+- All `use` statements in a function must appear at the top, before any other code. Imports scattered throughout the function body are a compile error. This gives every function a predictable structure: imports first, then logic.
 - A module imported in two functions is resolved once by the compiler — no runtime cost to repeated `use` statements.
+
+```
+function good_example(stdout: Stdout) returns nothing:
+    use math
+    use json
+    let x = math.sqrt(2.0)
+    Stdout.write(stdout, json.serialize(x))
+
+function bad_example(stdout: Stdout) returns nothing:
+    let x = 42
+    use math          # COMPILE ERROR: use statements must appear before any other code
+    Stdout.write(stdout, "value: {x}")
+```
 
 **Why this matters for LLMs:**
 
