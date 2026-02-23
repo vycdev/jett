@@ -303,7 +303,7 @@ When an LLM generates code that doesn't type-check, the compiler error tells it 
 ```
 function format_price(cents: int) returns string:
     return "price is {cents}"
-    # This works — string interpolation auto-converts values to strings inside {}.
+    # This works — int implements Displayable, so it can be used in string interpolation.
 
 function add_to_price(price: string, tax: int) returns string:
     return price + tax
@@ -313,7 +313,7 @@ function add_to_price(price: string, tax: int) returns string:
 
 In a dynamically typed language, type mismatches would silently produce garbage or crash at runtime. In Jett, the LLM gets an immediate, actionable error.
 
-Jett uses string interpolation `"text {expr}"` as the single canonical mechanism for building strings. Expressions inside `{}` are automatically converted to strings. There is no `+` operator for strings and no `string.concat()` function.
+Jett uses string interpolation `"text {expr}"` as the single canonical mechanism for building strings. Expressions inside `{}` must implement the `Displayable` interface — the compiler calls `Displayable.display()` to produce the string representation. There is no `+` operator for strings and no `string.concat()` function.
 
 #### Explicit Type Conversions
 
@@ -348,7 +348,7 @@ let n = int.from_float(3.14) handle error:
 - Every conversion is a uniquely named function — no overloading. `int.from_string` and `int.from_float` are separate functions, not overloads of `int()`.
 - Lossy numeric conversions return `result`. Converting `float` to `int` can fail because the float may not be a whole number. Converting `int` to `float` can fail for very large integers that lose precision. The compiler never silently truncates or rounds.
 - The pattern is always `TargetType.from_SourceType(value)` — predictable and discoverable. An LLM can infer the correct function name from the types involved.
-- String interpolation `"text {expr}"` is the only place where automatic string conversion happens. Outside of interpolation, converting to string requires an explicit `string.from_int()` or `string.from_float()` call.
+- String interpolation `"text {expr}"` requires the expression to implement `Displayable` — this is a compiler-stdlib coupling, not a general implicit conversion. Outside of interpolation, converting to string requires an explicit `string.from_int()` or `string.from_float()` call.
 
 **What the compiler rejects:**
 
@@ -5988,12 +5988,17 @@ let result = "total: {order.total}"     # expressions inside {} are evaluated
 let multi = "{a} + {b} = {a + b}"       # arbitrary expressions allowed
 ```
 
-**Auto-conversion:** Non-string types are automatically converted to strings inside `{}`. There is no need for an explicit `string()` conversion:
+**Displayable requirement:** Expressions inside `{}` must be of a type that implements the `Displayable` interface. The compiler calls `Displayable.display()` under the hood to produce the string representation. Types that do not implement `Displayable` are rejected:
 
 ```
 let count = 42
-let message = "count is {count}"        # count (int) is auto-converted to "42"
+let message = "count is {count}"        # OK — int implements Displayable
+
+let user = User(name: "alice")
+let msg = "user: {user}"               # COMPILE ERROR: User does not implement Displayable
 ```
+
+**Compiler-stdlib coupling:** This is one of a small number of places where the compiler has special knowledge of a standard library interface. String interpolation depends on `Displayable`, just as `handle error:` depends on the built-in `result` type and `handle:` depends on `optional`. These are intentional, well-defined couplings — not a general implicit conversion system. Outside of string interpolation, converting to string requires an explicit `string.from_int()` or `string.from_float()` call.
 
 **Literal braces:** Use `{{` and `}}` for literal `{` and `}` characters:
 
