@@ -529,23 +529,21 @@ This perfectly mirrors the auto-regressive generation process. When the LLM writ
 
 Traditional languages put all imports at the top of a file. By the time the LLM is generating code on line 200, those imports are far away in its context — potentially outside its effective attention window. The LLM may forget which module a function came from, or hallucinate an import that doesn't exist.
 
-Jett allows (and encourages) **imports to be declared locally**, right where they are used. This keeps the relevant context exactly where the LLM's attention mechanism is focused.
+Jett requires **all imports to be declared locally**, inside a function or block, right where they are used. File-level imports are banned. This keeps the relevant context exactly where the LLM's attention mechanism is focused.
 
-**Traditional style (allowed but discouraged for long files):**
+**What the compiler rejects:**
 
 ```
-use net.http
-use json
+namespace server
 
-function fetch_data(net: Network, url: string) returns result[map[string, string], error]:
-    let response = http.get(net, url) handle error:
-        return fail("request failed")
-    let data = json.parse(response.body, map[string, string]) handle error:
-        return fail(error.message)
-    return ok(data)
+use auth          # COMPILE ERROR: imports must be inside a function or block
+use models        # COMPILE ERROR: imports must be inside a function or block
+
+function handle_login(stdout: Stdout) returns nothing:
+    ...
 ```
 
-**Preferred style — inline imports:**
+**What you write instead — all imports inside functions:**
 
 ```
 function fetch_data(net: Network, url: string) returns result[map[string, string], error]:
@@ -560,7 +558,7 @@ function fetch_data(net: Network, url: string) returns result[map[string, string
 function compute_stats(values: list[float]) returns float:
     use math
     let total = math.sum(values)
-    return total / float(list.length(values))
+    return total / float.from_int(list.length(values))
 ```
 
 **What this achieves:**
@@ -569,16 +567,16 @@ function compute_stats(values: list[float]) returns float:
 - An LLM generating `fetch_data` sees `use net.http` and `use json` immediately in local context — not 150 lines away at the top of the file.
 - When an LLM reads or modifies a single function, it has **complete information** without scrolling or searching. The function is a self-describing unit.
 - Removing a function automatically removes its imports. No orphaned imports accumulating at the top of files.
+- If 10 functions use `math`, you write `use math` 10 times. The token cost is trivial — and the compiler resolves the import once regardless.
 
 **Scoping rules:**
 
-- An inline `use` is scoped to the block it appears in. `use math` inside a function is not visible outside that function.
-- File-level `use` (at the top) is scoped to the entire file — still allowed for types or constants used pervasively.
+- A `use` statement is scoped to the block it appears in. `use math` inside a function is not visible outside that function.
 - A module imported in two functions is resolved once by the compiler — no runtime cost to repeated `use` statements.
 
 **Why this matters for LLMs:**
 
-The LLM attention mechanism works best on nearby tokens. Inline imports guarantee that every piece of information needed to understand a block of code is physically close to that block. The LLM never has to "remember" what was imported 200 lines ago — it is right there.
+The LLM attention mechanism works best on nearby tokens. Inline imports guarantee that every piece of information needed to understand a block of code is physically close to that block. The LLM never has to "remember" what was imported 200 lines ago — it is right there. If file-level imports were allowed, LLMs would default to them — because that is what all their training data does — defeating the purpose of inline imports entirely.
 
 ### Rule Set 5: Zero Hidden Control Flow (Errors as Values Only)
 
@@ -4051,9 +4049,8 @@ function logout(session: Session) returns nothing:
 # File: server.jett (or handlers.jett, or app.jett — doesn't matter)
 namespace server
 
-use auth
-
 function handle_login(stdout: Stdout, request: Request) returns result[Response, error]:
+    use auth
     let session = auth.login(request.credentials) handle error:
         return fail("login failed")
     Stdout.write(stdout, "user logged in")
@@ -4162,21 +4159,19 @@ struct User:
 
 namespace auth
 
-use models
-
 function authenticate(name: string, password: string) returns result[models.User, error]:
+    use models
     # ...
 
 namespace server
 
-use auth
-use models
-
 function main(stdout: Stdout, net: Network) returns nothing:
+    use auth
+    use models
     # ...
 ```
 
-The compiler treats each `namespace` block as a separate module. Other files can `use models`, `use auth`, or `use server` without knowing they all live in the same file.
+The compiler treats each `namespace` block as a separate module. Other files can `use models`, `use auth`, or `use server` without knowing they all live in the same file. All `use` statements are inside functions, consistent with the inline-only import rule.
 
 #### Sub-Namespaces for Large Projects
 
@@ -5985,15 +5980,16 @@ The first form checks truthiness. The second form provides a custom failure mess
 ```
 namespace myapp
 
-use math
-use net.http
-
 function main(stdout: Stdout, net: Network) returns nothing:
+    use math
+    use net.http
     let pi = math.pi
     let response = http.get(net, "https://example.com") handle error:
         Stdout.write(stdout, "request failed: {error.message}")
         return
 ```
+
+All `use` statements must be inside a function or block — file-level imports are banned.
 
 ### String Interpolation
 
