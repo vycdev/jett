@@ -5979,7 +5979,7 @@ function main(stdout: Stdout, net: Network) returns nothing:
 
 ### String Interpolation
 
-String interpolation is the ONE canonical mechanism for building strings in Jett. There is no `string.concat()` function and no `+` operator for strings.
+String interpolation is the ONE canonical mechanism for building strings in Jett. There is no `string.concat()` function and no `+` operator for strings. **All strings are interpolated by default** — there is no separate "plain string" vs "template string" distinction, no `f""` prefix, no backtick delimiter. Every `"..."` string supports `{expr}` interpolation. This eliminates a decision point: the LLM never has to choose between string types.
 
 ```
 let name = "world"
