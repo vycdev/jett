@@ -695,13 +695,24 @@ let config = read_config(fs, "app.conf") handle error:
 
 The `handle error:` block executes only when the result is `fail`. If the result is `ok`, the unwrapped value is bound to the variable on the left (`config`). The error variable is always available inside the block.
 
-**Every handle block must end with either `return` or `default`** — there is no implicit value. A handle block that does neither is a compile error:
+**Every handle block must end with either `return` or `default`** — there is no implicit value. This rule applies to both `handle error:` (for `result`) and bare `handle:` (for `optional`). A handle block that does neither is a compile error:
 
 ```
+# result — COMPILE ERROR:
 let config = read_config(fs, "app.conf") handle error:
     Stdout.write(stdout, "something failed")
     # COMPILE ERROR: handle block must end with "return" or "default"
     # hint: add "return fail(...)" to exit, or "default <value>" to provide a fallback
+
+# optional — COMPILE ERROR:
+let first = list.first(items) handle:
+    Stdout.write(stdout, "list was empty")
+    # COMPILE ERROR: handle block must end with "return" or "default"
+
+# optional — valid with default:
+let first = list.first(items) handle:
+    Stdout.write(stdout, "list was empty, using fallback")
+    default Item(name: "unknown")
 ```
 
 This is consistent with Jett's "no implicit returns" principle. In functions, you always write `return`. In handle blocks, you always write `return` or `default`. Nothing is ever silently inferred from the last expression.
