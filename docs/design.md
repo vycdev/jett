@@ -6090,7 +6090,7 @@ The Jett compiler and toolchain will be **written initially in Rust**. Rust prov
 
 ### Target
 
-Jett compiles to native code via an LLVM backend for performance-critical applications, and can also be interpreted for scripting and rapid prototyping.
+Jett compiles to native code via an **LLVM backend** (primary target) for performance-critical applications, and can also be interpreted for scripting and rapid prototyping. As a future secondary target, Jett will support **transpilation to C** — this provides portability to platforms LLVM does not cover well (e.g., niche embedded targets), enables building Jett programs without an LLVM installation, and produces inspectable intermediate output for debugging.
 
 ### Modes
 
