@@ -41,6 +41,8 @@ Jett is optimized not just for LLM code generation, but also for how coding agen
 
 **Builds are deterministic.** Content-addressed dependencies with SHA-256 hashes mean builds are reproducible across environments. An agent will never encounter "works on my machine" issues.
 
+*Note: The `--agent` flag and the Agent Server Protocol (ASP) referenced above are defined in Rule Set 21. The ASP specifies how the compiler communicates structured JSON output to agents — including build errors, type queries, signature lookups, completions, and test results. The exact capabilities and query formats are still being refined and may evolve as the compiler is implemented. See Rule Set 21 for the current specification.*
+
 ---
 
 ## Foundational Rules
