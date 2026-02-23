@@ -21,6 +21,26 @@ You write straightforward procedural code — loops, mutable variables, sequenti
 
 The closest comparison in feel is **Go or Rust** — you write normal imperative code, but the compiler enforces strong guarantees about purity, side effects, and type safety. Jett is pragmatic, not academic.
 
+## Designed for Agent Tooling
+
+Jett is optimized not just for LLM code generation, but also for how coding agents **navigate, understand, and modify** existing codebases. Modern agents use standard tools — search, grep, file reading, text replacement, CLI commands — and Jett's design makes every one of these operations more reliable.
+
+**Search and grep are deterministic.** One canonical form means searching for a pattern always finds it. An agent grepping for a function call will never miss it because someone wrote it differently — there is only one way to write it.
+
+**Reading a function gives complete context.** Self-contained functions with inline imports mean an agent can read a single function and understand all its dependencies without searching for file-level imports or tracing class hierarchies.
+
+**Text replacement is safe.** No function overloading and unique `namespace.function_name` identifiers mean renaming is a global text replacement across all files. There is no ambiguity about which function is being renamed.
+
+**Diffs are clean.** One canonical formatting style (enforced by `jett format`) means diffs only contain logical changes, never formatting noise. When an agent changes one line of logic, the diff shows one line — not 50 lines of reformatting.
+
+**The compile-fix loop is structured.** The Agent Server Protocol (Rule Set 21) outputs structured JSON errors that agents can parse and act on mechanically. The agent runs `jett build --agent`, reads the JSON error, fixes the issue, and repeats. Each error includes the file, line, column, expected type, got type, and a suggested fix.
+
+**Discovering available code is a flat query.** The ASP provides `jett query --agent --namespaces` — a flat list of all available namespaces, functions, and types. An agent does not need to traverse directory trees or class hierarchies to find what it can call.
+
+**New code can be added safely.** Jett's strict top-to-bottom ordering means an agent appending a new function at the end of a file cannot break existing code above it. Adding functionality is always additive.
+
+**Builds are deterministic.** Content-addressed dependencies with SHA-256 hashes mean builds are reproducible across environments. An agent will never encounter "works on my machine" issues.
+
 ---
 
 ## Foundational Rules
