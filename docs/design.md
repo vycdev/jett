@@ -4239,6 +4239,22 @@ use "src/auth.jett"
 
 **No relative paths, no absolute paths, no file extensions.** The `use` keyword takes a namespace name and nothing else.
 
+**No circular imports:**
+
+```
+# auth.jett:
+namespace auth
+use models       # OK — auth depends on models
+
+# models.jett:
+namespace models
+use auth          # COMPILE ERROR: circular import detected
+                  # "models" and "auth" depend on each other
+                  # hint: extract shared definitions into a third namespace
+```
+
+Circular imports are a compile error. If two namespaces need each other, extract the shared part into a third namespace that both can import. This forces a clean dependency hierarchy and fits the strict topological ordering principle — the compiler can always process namespaces in dependency order.
+
 #### Why This Is Perfect for LLMs
 
 **1. Zero path hallucination.**
