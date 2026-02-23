@@ -519,6 +519,8 @@ function is_odd(n: int) returns bool:
 
 The `mutual` block puts both signatures into context before either body is written. This is the minimal, explicit escape hatch — no silent forward references allowed anywhere else.
 
+**Why the keyword is `mutual`:** The only reason to forward-declare function signatures in Jett is mutual recursion — functions that depend on each other in a cycle. If function A needs function B, you simply define B first. The only case where that is impossible is when A calls B and B calls A. The keyword `mutual` communicates this intent directly: an LLM seeing `mutual:` immediately knows "these functions call each other." A more generic keyword like `declare` or `forward` would describe the mechanism without explaining why it exists.
+
 **Why this matters for LLMs:**
 
 This perfectly mirrors the auto-regressive generation process. When the LLM writes `return double(double(x))`, the definition of `double` is already in its past context — it knows the exact signature, parameter types, and return type. It is not guessing. The code generation order *is* the dependency order.
