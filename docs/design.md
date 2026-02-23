@@ -2606,6 +2606,8 @@ Capability objects are created **only in `main()`** and must be explicitly passe
 # Environment  — read environment variables
 ```
 
+**Capabilities are a closed, built-in set.** Users cannot define custom capability types. Capabilities represent primitive OS-level side effects (file I/O, networking, stdout, etc.) — these are a finite, well-known set. Higher-level abstractions like database access or HTTP clients are built on top of primitive capabilities (e.g., a database module takes a `Network` parameter internally). This keeps the capability system simple: the compiler knows the full set, auto-rebinding and purity tracking are straightforward, and LLMs have a small, fixed list to learn rather than an open-ended set that varies per project. Capability types are not syntactically distinguished from other types in function signatures — they follow the same pass-and-propagate pattern as any other parameter.
+
 **How `main()` receives capabilities:**
 
 ```
