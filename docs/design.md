@@ -6068,14 +6068,18 @@ function sort[T implements Orderable](items: list[T]) returns list[T]:
     # T is guaranteed to support comparison operations
     ...
 
-function display_sorted[T implements Orderable, Displayable](items: list[T], stdout: Stdout) returns nothing:
+function display_sorted[T implements Orderable and Displayable](items: list[T], stdout: Stdout) returns nothing:
     # T must implement both Orderable and Displayable
     let sorted = sort(items)
     for item in sorted:
         Stdout.write(stdout, Displayable.display(item))
+
+# Multiple type parameters — comma separates parameters, and separates interfaces:
+function merge[T implements Orderable and Hashable, U implements Displayable](a: T, b: U) returns string:
+    ...
 ```
 
-Multiple constraints are separated by commas — not `and`, which is reserved for boolean logic.
+Multiple interface constraints on the same type parameter are joined with `and`. Commas separate distinct type parameters. This avoids ambiguity: `and` always means "also this interface," and commas always mean "next type parameter."
 
 **Unconstrained generics:**
 
