@@ -980,6 +980,15 @@ A mutable variable that gets reassigned on lines 5, 12, and 23 requires the LLM 
 
 Immutable variables eliminate this entirely. `trimmed_name` has one value, forever, from the line it is defined. There is no timeline to track. The LLM's attention head links the name to one definition and one value — done.
 
+**Mutability is local only — no mutable references.** There is no way for a function to modify the caller's data. When a value is passed to a function, it is either consumed (moved) or borrowed read-only via `view`. There is no `param: mutable T` — no mutable references exist in the language. If a function needs to transform a value, it takes ownership, transforms it, and returns the new value. The caller rebinds:
+
+```
+let mutable x = 5
+x = transform(x)    # transform consumes x, returns new value, x is rebound
+```
+
+This guarantees that reading a mutable variable's current value never requires looking at function implementations. The only place `x` can change is at explicit rebinding statements in the same scope.
+
 ### Rule Set 7: Syntactically Enforced Modularity (Chunking)
 
 LLM performance degrades as the amount of code in a single block grows. Attention gets diluted across thousands of tokens, and the model starts losing track of variables, control flow, and intent. The solution is not to hope the LLM writes small functions — it is to make the compiler **refuse to accept large ones**.
