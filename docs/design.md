@@ -486,6 +486,24 @@ let password = validate_password(raw_input, config.min_password_length) handle e
 
 The rule is simple: refinement types for fixed constraints, functions for dynamic validation.
 
+**Refinement types are not implicitly usable as their base type.** A `Password` is not a `string` — it is a `Password`. You cannot pass a `Password` to a function that expects `string`. This follows the "no implicit conversions" rule (Rule Set 2) and keeps the LLM aware of type boundaries. To widen a refinement type to its base type, use the standard type conversion pattern:
+
+```
+let raw: string = string.from_Password(user_password)
+```
+
+This is the same pattern used for all other type conversions (`string.from_int()`, `int.from_string()`, etc.). The compiler **automatically generates** `BaseType.from_RefinedType()` for every refinement type — no manual implementation needed. If you need the base type multiple times in one function, assign it to a local variable once:
+
+```
+function process(password: Password, stdout: Stdout) returns nothing:
+    let raw = string.from_Password(password)
+    let len = string.char_count(raw)
+    let upper = string.to_upper(raw)
+    Stdout.write(stdout, "password length: {len}")
+```
+
+> **Why not implicit widening?** Implicit widening would hide information from the LLM. If `Password` silently becomes `string` wherever a string is expected, the LLM loses track of which values are validated and which are raw. Explicit conversion makes the type boundary visible in the source code — the LLM can see exactly where a validated value is being treated as a plain string, and can reason about whether that is intentional.
+
 ### Rule Set 4: Auto-Regressive Friendly Structure (Strict Linearity)
 
 LLMs generate code **token-by-token, left-to-right, top-to-bottom**. They cannot look ahead. When an LLM writes a function call on line 10, it is committing to a name, argument list, and return type *right now* — if the actual definition doesn't appear until line 50, the LLM is guessing. By line 50, the model may have forgotten or drifted from what it assumed on line 10, producing mismatched signatures, wrong argument counts, or hallucinated parameter names.
