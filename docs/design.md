@@ -4782,6 +4782,21 @@ function game_loop(stdout: Stdout) returns nothing:
 
 `render_frame` receives a view of the entire game state. It can read every field, iterate through players, access nested structures — all without copying a single byte. When it returns, the game loop still owns `state` and can mutate it.
 
+> **Note:** Views propagate through access. If you have a `view list[T]`, accessing any element gives you a `view T`, not an owned copy. The same applies to struct fields, nested lists, and any sub-structure. To get an owned value from a view, you must explicitly clone with `Linear.clone()`.
+>
+> ```
+> function example(data: view list[Item], stdout: Stdout) returns nothing:
+>     for item in view data:
+>         # item is view Item — read-only, not copied
+>         Stdout.write(stdout, item.name)    # OK — reading a field
+>
+>     let first = list.first(data)
+>     # first is view Item — still a view, not an owned copy
+>
+>     let owned = Linear.clone(first)
+>     # NOW it's an owned copy — explicit
+> ```
+
 #### Views with the Pipeline Operator
 
 Views work naturally with pipelines (Rule Set 19). When a pipeline step pipes into a function that declares a `view` parameter, the compiler automatically handles the view semantics. No special syntax is needed at the pipeline call site:
