@@ -4840,7 +4840,32 @@ function process_order(order: Order) returns nothing:
 
 The `view` keyword appears in **both** declarations and call sites. The function parameter declares `view` to tell the function body it can only read. The call site writes `view` to tell the LLM (and any reader) that the value is not consumed.
 
-**General rule: `view` is explicit on both sides.** When a function declares a `view` parameter, the caller must pass the argument with the `view` keyword: `json.serialize(view user)`, not `json.serialize(user)`. This means the LLM never has to read a function signature to know whether a value survives a call — it can see `view` right at the call site. The compiler enforces that the two sides match: if a function declares `view`, the caller must write `view`; if the caller writes `view` but the function does not declare it, the compiler rejects it.
+**General rule: `view` at the call site means "this variable survives this line."** The LLM never has to read a function signature to know whether a value survives a call — it can see `view` right at the call site. If the caller writes `view` but the function does not declare a `view` parameter, the compiler rejects it — the function needs ownership and cannot accept a view.
+
+**Passing to a view parameter without `view`:** When a function declares a `view` parameter, the caller can choose whether to keep the value:
+
+```
+function count(data: view list[int]) returns int:
+    return list.length(data)
+
+# Keep the value — view at call site:
+let len = count(view items)
+let total = list.sum(items)    # items is still valid
+
+# Last use — no view at call site:
+let len = count(items)
+# items is freed after the call — the function still only reads it,
+# but the caller has relinquished ownership
+```
+
+The function always gets read-only access — it declared `view`, so it cannot consume or modify the data. The `view` at the call site controls the **caller's** ownership, not the function's behavior. This gives the LLM a simple, universal rule: **no `view` at the call site means the variable is gone after this line**, regardless of whether the function takes ownership or just reads it.
+
+| Function parameter | Call site | What happens |
+|---|---|---|
+| `view` | `f(view x)` | Borrow — x survives, function reads only |
+| `view` | `f(x)` | Borrow then free — x is gone, function reads only |
+| owned (default) | `f(x)` | Consumed — x is gone, function takes ownership |
+| owned (default) | `f(view x)` | **Compile error** — function needs ownership |
 
 #### The Three Strict Rules of Views
 
