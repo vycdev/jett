@@ -1081,6 +1081,8 @@ The result: `process_report` is now 4 lines. Each helper function is small, focu
 
 Linter warnings are suggestions — LLMs (and humans) ignore them. A compile error is absolute. The LLM's code generation loop becomes: write function → compile → if too large, decompose → compile again. This loop naturally produces well-chunked code without any prompting or instructions. The language structure *forces* good architecture.
 
+> **Note:** The limits target logic complexity, not data size. Struct construction is a single expression regardless of field count — a 100-field struct literal is one statement. Struct functions each have their own independent 50-statement limit, so a struct with many functions is not a problem. Heavy math or sequential I/O that appears to need 50+ statements is almost always decomposable into named sub-computations (`calculate_velocity`, `apply_drag`, `resolve_collision`) or grouped operations (`load_configs`, `load_assets`), which produces better code. These limits have no flags or per-function overrides — they are absolute. If the compiler rejects a function, the function is doing too much.
+
 **Nesting depth enforcement — guards over nesting:**
 
 ```
