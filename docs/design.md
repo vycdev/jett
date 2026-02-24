@@ -568,13 +568,13 @@ function handle_login(stdout: Stdout) returns nothing:
 **What you write instead — all imports inside functions:**
 
 ```
-function fetch_data(net: Network, url: string) returns result[map[string, string], string]:
+function fetch_data(net: Network, url: string) returns result[map[string, string], HttpError]:
     use net.http
     use json
     let response = http.get(net, url) handle error:
-        return fail("request failed")
-    let data = json.parse(response.body, map[string, string]) handle error:
         return fail(error)
+    let data = json.parse(response.body, map[string, string]) handle error:
+        return fail(HttpError.status_error(0, error))
     return ok(data)
 
 function compute_stats(values: list[float]) returns float:
@@ -1239,11 +1239,26 @@ let safe = json.get_or(raw, "user.nickname", "anon")     # with default
 
 **HTTP — high-level client out of the box:**
 
+The `net.http` module defines its own error type for HTTP operations:
+
+```
+# Defined by the net.http standard library module:
+enum HttpError:
+    connection_failed(message: string)
+    timeout(message: string)
+    status_error(code: int, message: string)
+```
+
 ```
 use net.http
 
 let response = http.get(net, "https://api.example.com/users") handle error:
-    return fail("request failed")
+    # error is HttpError — match to handle specific cases:
+    match error:
+        HttpError.timeout(msg):
+            return fail(HttpError.timeout(msg))
+        other:
+            return fail(other)
 
 let body = json.parse(response.body, list[User]) handle error:
     return fail("invalid json")
@@ -1251,7 +1266,7 @@ let status = response.status
 
 # POST with body:
 let post_response = http.post(net, "https://api.example.com/users", json.serialize(new_user)) handle error:
-    return fail("could not create user")
+    return fail(error)
 ```
 
 **File system — simple and complete:**
@@ -1867,7 +1882,7 @@ In languages like JavaScript or C#, you can spawn a background async task and fo
 Jett uses **structured concurrency**: all async tasks are bound to a scope. The scope cannot exit until all child tasks are resolved.
 
 ```
-function fetch_all_data(net: Network) returns result[DashboardData, string]:
+function fetch_all_data(net: Network) returns result[DashboardData, HttpError]:
     let data = concurrent:
         let users = spawn http.get(net, "https://api.example.com/users")
         let orders = spawn http.get(net, "https://api.example.com/orders")
@@ -1877,18 +1892,18 @@ function fetch_all_data(net: Network) returns result[DashboardData, string]:
         # The `concurrent` block CANNOT exit until all three are resolved.
 
         let users_result = join users handle error:
-            return fail("users request failed")
+            return fail(error)
         let orders_result = join orders handle error:
-            return fail("orders request failed")
+            return fail(error)
         let stats_result = join stats handle error:
-            return fail("stats request failed")
+            return fail(error)
 
         let users_data = json.parse(users_result.body, list[User]) handle error:
-            return fail("invalid users json")
+            return fail(HttpError.status_error(0, error))
         let orders_data = json.parse(orders_result.body, list[Order]) handle error:
-            return fail("invalid orders json")
+            return fail(HttpError.status_error(0, error))
         let stats_data = json.parse(stats_result.body, Stats) handle error:
-            return fail("invalid stats json")
+            return fail(HttpError.status_error(0, error))
 
         DashboardData(
             users: users_data,
@@ -6160,6 +6175,7 @@ function main(stdout: Stdout, net: Network) returns nothing:
     use net.http
     let pi = math.pi
     let response = http.get(net, "https://example.com") handle error:
+        # error is HttpError — the module's specific error type
         Stdout.write(stdout, "request failed: {error}")
         return
 ```
@@ -6341,7 +6357,7 @@ The standard library is intentionally massive and opinionated. The goal is to ma
 - **list** — filter, map, reduce, find, sort, sort_by, sort_by_index, unique, chunk, zip, group_by, flatten, first, last, skip, take, length, get, append, is_sorted, all_elements_in
 - **map** — get, set, keys, values, merge, filter, contains_key, get_or
 - **set** — add, remove, union, intersection, difference, contains
-- **net.http** — HTTP client (get, post, put, delete), response handling
+- **net.http** — HTTP client (get, post, put, delete), response handling, HttpError enum (connection_failed, timeout, status_error)
 - **net.socket** — low-level TCP/UDP networking
 - **json** — parse, parse_raw, serialize, serialize_public, serialize_full, pretty print, nested path access, get, get_or
 - **time** — now, format, parse, difference, add/subtract, comparisons, day_of_week, years_between
