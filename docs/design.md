@@ -178,7 +178,7 @@ There must be **no spooky action at a distance**. A variable must never be silen
 
 ```
 function save_user(fs: Filesystem, user: view User) returns result[nothing, string]:
-    let data = json.serialize(user)
+    let data = json.serialize(view user)
     Filesystem.write_file(fs, "users.json", data) handle error:
         return fail("could not save user")
     return ok(nothing)
@@ -620,7 +620,7 @@ function good_example(stdout: Stdout) returns nothing:
     use math
     use json
     let x = math.sqrt(2.0)
-    Stdout.write(stdout, json.serialize(x))
+    Stdout.write(stdout, json.serialize(view x))
 
 function bad_example(stdout: Stdout) returns nothing:
     let x = 42
@@ -1244,8 +1244,8 @@ use json
 
 let config = json.parse(raw_string, Config) handle error:
     return fail("invalid json")                              # string to typed value
-let text = json.serialize(config)                        # value to string
-let pretty = json.serialize_pretty(config)               # value to formatted string
+let text = json.serialize(view config)                    # value to string
+let pretty = json.serialize_pretty(view config)           # value to formatted string
 
 # For dynamic/untyped JSON access (when the schema is unknown):
 let raw = json.parse_raw(raw_string) handle error:
@@ -1283,7 +1283,7 @@ let body = json.parse(response.body, list[User]) handle error:
 let status = response.status
 
 # POST with body:
-let post_response = http.post(net, "https://api.example.com/users", json.serialize(new_user)) handle error:
+let post_response = http.post(net, "https://api.example.com/users", json.serialize(view new_user)) handle error:
     return fail(error)
 ```
 
@@ -1670,7 +1670,7 @@ function example(net: Network, stdout: Stdout) returns nothing:
 
     Stdout.write(stdout, data.content)
     # COMPILE ERROR: "data" was consumed by "send_message" on the previous line
-    # hint: use Linear.clone(data) if you need to keep a copy
+    # hint: use "clone data" if you need to keep a copy
 
     Stdout.write(stdout, conn.status)
     # COMPILE ERROR: "conn" was consumed by "send_message"
@@ -1687,15 +1687,15 @@ function example(net: Network, stdout: Stdout) returns nothing:
     let conn = Connection(host: "localhost", port: 8080)
     let data = Payload("hello")
 
-    send_message(net, conn, Linear.clone(data))
-    # `Linear.clone(data)` creates a copy that gets consumed. The original `data` survives.
+    send_message(net, conn, clone data)
+    # `clone data` creates a copy that gets consumed. The original `data` survives.
 
     Stdout.write(stdout, data.content)   # valid — `data` was never consumed
 ```
 
-The `Linear.clone()` call is explicit and visible. The LLM (and any reader) can see exactly where copies are made. There is no hidden reference counting or invisible borrowing.
+The `clone` keyword is explicit and visible. The LLM (and any reader) can see exactly where copies are made. There is no hidden reference counting or invisible borrowing.
 
-`Linear.clone(view_value)` creates an owned deep copy from a viewed value. This is a common pattern — you often want to make a mutable copy of borrowed data.
+`clone view_value` creates an owned deep copy from a viewed value. This is a common pattern — you often want to make an owned copy of borrowed data.
 
 **Auto-view for field access:**
 
@@ -1842,7 +1842,7 @@ actor Counter(stdout: Stdout):
         Stdout.write(stdout, string(count))
 
 function main(stdout: Stdout) returns nothing:
-    let counter = spawn Counter(Linear.clone(stdout))
+    let counter = spawn Counter(clone stdout)
 
     send counter increment
     send counter increment
@@ -1869,17 +1869,17 @@ actor Logger(stdout: Stdout):
         Stdout.write(stdout, message)
 
 function main(stdout: Stdout) returns nothing:
-    let logger = spawn Logger(Linear.clone(stdout))
+    let logger = spawn Logger(clone stdout)
     send logger log("application started")
     # stdout is still available here because we cloned it
 ```
 
 **Capability cloning for actors:**
 
-Since capabilities are linear types, passing a capability to `spawn` would consume it. To share a capability between the main function and one or more actors, use `Linear.clone()`:
+Since capabilities are linear types, passing a capability to `spawn` would consume it. To share a capability between the main function and one or more actors, use `clone`:
 
-- `Linear.clone(stdout)` creates a second Stdout capability. Both the original and clone can write to stdout independently.
-- `Linear.clone(fs)` creates a second Filesystem capability. Both can read/write files.
+- `clone stdout` creates a second Stdout capability. Both the original and clone can write to stdout independently.
+- `clone fs` creates a second Filesystem capability. Both can read/write files.
 - Cloning is explicit — the programmer (or LLM) consciously decides which capabilities to share.
 - The runtime serializes concurrent access to the same underlying resource (e.g., two Stdout clones writing to the same terminal are serialized to avoid garbled output).
 
@@ -2668,7 +2668,7 @@ function get_user_debug(user: User) returns string:
 ```
 function log_user(stdout: Stdout, user: User) returns nothing:
     use log
-    Stdout.write(stdout, "user logged in: {json.serialize(user)}")
+    Stdout.write(stdout, "user logged in: {json.serialize(view user)}")
     # COMPILE ERROR: cannot serialize struct containing secret fields
     # "User" contains secret fields: password_hash, api_key, ssn
     # hint: use json.serialize_public(user) to serialize only non-secret fields
@@ -2679,7 +2679,7 @@ function handle_login(net: Network, request: Request) returns result[Response, s
     use net.http
     let user = authenticate(request) handle error:
         return ok(http.response(400, "invalid credentials"))
-    return ok(http.response(200, json.serialize(user)))
+    return ok(http.response(200, json.serialize(view user)))
     # COMPILE ERROR: cannot pass struct containing secret fields to http.response
     # hint: create a public view of User without secret fields
 ```
@@ -2730,7 +2730,7 @@ The standard library provides functions that work with secret-containing types s
 
 ```
 # Serialize only non-secret fields:
-let public_json = json.serialize_public(user)
+let public_json = json.serialize_public(view user)
 # Result: {"id": "123", "name": "alice", "email": "alice@example.com"}
 # password_hash, api_key, ssn are omitted automatically.
 
@@ -3000,7 +3000,7 @@ let local_net = Network.allow(net, "localhost")  # can only connect to localhost
 let limited_stdout = Stdout.buffered(stdout) # writes are buffered, not immediate
 ```
 
-Capability narrowing **consumes** the original capability. `let read_fs = Filesystem.read_only(fs)` consumes `fs` — only `read_fs` remains. To keep both full and restricted access, clone first: `let read_fs = Filesystem.read_only(Linear.clone(fs))`.
+Capability narrowing **consumes** the original capability. `let read_fs = Filesystem.read_only(fs)` consumes `fs` — only `read_fs` remains. To keep both full and restricted access, clone first: `let read_fs = Filesystem.read_only(clone fs)`.
 
 This gives fine-grained control over what each function can do, and it's all visible in the function signature and the narrowing call.
 
@@ -3253,7 +3253,7 @@ struct User:
 # User.from_bytes(raw)      → result[User, string]
 ```
 
-The compiler makes every struct compatible with `json.serialize()` and `json.parse(raw, Type)` automatically. There are no auto-generated `.to_json()` or `.from_json()` methods on the struct itself — the `json` module functions are the canonical API. `json.serialize` declares a `view` parameter — it reads the value without consuming it. Because the parameter is declared as `view`, callers simply write `json.serialize(user)` — the `view` keyword only appears in parameter declarations, not at call sites. The compiler handles the view semantics automatically. `json.parse(raw, Type)` is the **only** form — the Type parameter is mandatory, not optional. It parses a JSON string into the specified type and returns `result[Type, string]`. There is no single-argument `json.parse(raw)` that returns an untyped value. For structs with `secret[T]` fields, `json.serialize_public(value)` omits those fields.
+The compiler makes every struct compatible with `json.serialize()` and `json.parse(raw, Type)` automatically. There are no auto-generated `.to_json()` or `.from_json()` methods on the struct itself — the `json` module functions are the canonical API. `json.serialize` declares a `view` parameter — it reads the value without consuming it. The caller writes `json.serialize(view user)` with the `view` keyword explicit at the call site. `json.parse(raw, Type)` is the **only** form — the Type parameter is mandatory, not optional. It parses a JSON string into the specified type and returns `result[Type, string]`. There is no single-argument `json.parse(raw)` that returns an untyped value. For structs with `secret[T]` fields, `json.serialize_public(value)` omits those fields.
 
 The LLM does not write parsing functions. The LLM does not import a serialization library. The LLM does not annotate fields with `#[serde(rename = "...")]` or `@JsonProperty`. The compiler sees the struct definition and generates everything.
 
@@ -3261,7 +3261,7 @@ The LLM does not write parsing functions. The LLM does not import a serializatio
 
 ```
 function save_user(fs: Filesystem, user: view User) returns result[nothing, string]:
-    let json_data = json.serialize(user)
+    let json_data = json.serialize(view user)
     Filesystem.write_file(fs, "users/{user.id}.json", json_data) handle error:
         return fail("could not save user")
     return ok(nothing)
@@ -3291,7 +3291,7 @@ struct Product:
 
 let p = Product(name: "widget", price: 9.99, in_stock: true, tags: list("sale", "new"))
 
-let json_string = json.serialize(p)
+let json_string = json.serialize(view p)
 # Result: {"name":"widget","price":9.99,"in_stock":true,"tags":["sale","new"]}
 ```
 
@@ -3351,7 +3351,7 @@ machine OrderProcess:
 
 let order = OrderProcess(draft, items: list(Item(name: "widget", qty: 2)))
 
-let json_string = json.serialize(order)
+let json_string = json.serialize(view order)
 # Result: {"state":"draft","items":[{"name":"widget","qty":2}]}
 
 let restored = json.parse(json_string, OrderProcess) handle error:
@@ -3549,7 +3549,7 @@ function double(x: int) returns int:
     return x * 2
 
 let result = user
-    |> get_name
+    |> view get_name
     |> double
     # COMPILE ERROR at |> double:
     #   "get_name" returns string
@@ -4220,7 +4220,7 @@ function handle_login(stdout: Stdout, request: Request) returns result[Response,
     let session = auth.login(request.credentials) handle error:
         return fail("login failed")
     Stdout.write(stdout, "user logged in")
-    return ok(Response(status: 200, body: json.serialize_public(session)))
+    return ok(Response(status: 200, body: json.serialize_public(view session)))
 ```
 
 `use auth` works regardless of whether `auth.jett` is in the same directory, a subdirectory, or a completely different part of the project tree. The compiler resolves `auth` to whichever file declared `namespace auth`. The LLM never writes a file path in an import.
@@ -4749,7 +4749,7 @@ Bitfields get the same auto-generated serialization as regular structs (Rule Set
 let header = IpHeader.from_bytes(raw_packet) handle error:
     return fail("invalid header")
 
-let serialized = json.serialize(header)
+let serialized = json.serialize(view header)
 # {"version":4,"header_length":5,"dscp":0,"ecn":0,"total_length":60,...}
 
 let bytes = IpHeader.to_bytes(header)
@@ -4789,7 +4789,7 @@ Rule Set 10.1 established linear typing: when a variable is passed to a function
 But there is a performance problem. If the LLM has a 10GB data structure and wants to pass it to a function that only reads its `.length` field, linear typing forces a choice:
 
 1. **Move it.** The data moves to the callee. The caller loses access. The callee must return it as part of its return type to give it back. This works but creates verbose plumbing.
-2. **Clone it.** `Linear.clone(data)` copies the entire 10GB structure just to read one field. This is absurdly wasteful.
+2. **Clone it.** `clone data` copies the entire 10GB structure just to read one field. This is absurdly wasteful.
 
 Other languages solve this with borrowing and lifetimes. Rust uses `&T` (immutable reference) and `&'a T` (lifetime-annotated reference). But Rust's lifetime syntax is notoriously complex:
 
@@ -4824,12 +4824,12 @@ The `view` keyword before the type means: "this function can read this data but 
 
 ```
 function process_order(order: Order) returns nothing:
-    # order.items is NOT consumed — it is viewed:
-    let count = count_items(order.items)
-    let total = total_price(order.items)
+    # order.items is NOT consumed — view is explicit at the call site:
+    let count = count_items(view order.items)
+    let total = total_price(view order.items)
 
     # order.items is still valid here — it was never moved:
-    let first = list.first(order.items) handle:
+    let first = list.first(view order.items) handle:
         return
 
     # Now consume it when we're done reading:
@@ -4838,9 +4838,9 @@ function process_order(order: Order) returns nothing:
     return
 ```
 
-The `view` keyword only appears in declarations (parameter types and for-loop bindings), not at call sites. The compiler knows from the function signature whether a parameter is a view and handles it automatically.
+The `view` keyword appears in **both** declarations and call sites. The function parameter declares `view` to tell the function body it can only read. The call site writes `view` to tell the LLM (and any reader) that the value is not consumed.
 
-**General rule: `view` only appears in declarations.** When a function declares a `view` parameter, the compiler automatically treats the argument as a view at the call site. The caller writes `json.serialize(user)`, not `json.serialize(view user)`. The `view` keyword appears only in the parameter declaration (`data: view list[Item]`) and in for-loop bindings (`for item in view items`). This keeps call sites clean while the function signature communicates the read-only intent.
+**General rule: `view` is explicit on both sides.** When a function declares a `view` parameter, the caller must pass the argument with the `view` keyword: `json.serialize(view user)`, not `json.serialize(user)`. This means the LLM never has to read a function signature to know whether a value survives a call — it can see `view` right at the call site. The compiler enforces that the two sides match: if a function declares `view`, the caller must write `view`; if the caller writes `view` but the function does not declare it, the compiler rejects it.
 
 #### The Three Strict Rules of Views
 
@@ -4916,14 +4916,14 @@ function render_frame(state: view GameState, stdout: Stdout) returns nothing:
 
     for player in view state.players:
         # `player` is also a view — views propagate through field access:
-        render_player(player, stdout)
+        render_player(view player, stdout)
 
 function game_loop(stdout: Stdout) returns nothing:
     let mutable state = GameState(players: list(), world: World(), tick: 0)
 
     while true:
         # Pass a view for rendering (read-only, zero-copy):
-        render_frame(state, stdout)
+        render_frame(view state, stdout)
 
         # Then mutate the owned state:
         state = update_game(state)
@@ -4931,7 +4931,7 @@ function game_loop(stdout: Stdout) returns nothing:
 
 `render_frame` receives a view of the entire game state. It can read every field, iterate through players, access nested structures — all without copying a single byte. When it returns, the game loop still owns `state` and can mutate it.
 
-> **Note:** Views propagate through access. If you have a `view list[T]`, accessing any element gives you a `view T`, not an owned copy. The same applies to struct fields, nested lists, and any sub-structure. To get an owned value from a view, you must explicitly clone with `Linear.clone()`.
+> **Note:** Views propagate through access. If you have a `view list[T]`, accessing any element gives you a `view T`, not an owned copy. The same applies to struct fields, nested lists, and any sub-structure. To get an owned value from a view, you must explicitly clone with `clone`.
 >
 > ```
 > function example(data: view list[Item], stdout: Stdout) returns nothing:
@@ -4942,22 +4942,22 @@ function game_loop(stdout: Stdout) returns nothing:
 >     let first = list.first(data)
 >     # first is view Item — still a view, not an owned copy
 >
->     let owned = Linear.clone(first)
+>     let owned = clone first
 >     # NOW it's an owned copy — explicit
 > ```
 
 #### Views with the Pipeline Operator
 
-Views work naturally with pipelines (Rule Set 19). When a pipeline step pipes into a function that declares a `view` parameter, the compiler automatically handles the view semantics. No special syntax is needed at the pipeline call site:
+Views work naturally with pipelines (Rule Set 19). The `view` keyword is used in the pipeline step to indicate a read-only pass:
 
 ```
 let report = large_dataset
     |> filter_active_records
     |> calculate_summary
-    |> json.serialize
+    |> view json.serialize
 ```
 
-The compiler knows that `json.serialize` declares a `view` parameter and automatically treats the piped value as a view. No `view` keyword is needed in the pipeline step. Transform functions like `filter_active_records` consume their input and produce a new value. Read-only functions like `json.serialize` take a `view` parameter. The compiler handles the distinction automatically. The types are checked at each `|>` boundary as usual.
+Transform functions like `filter_active_records` consume their input and produce a new value. Read-only functions like `json.serialize` take a `view` parameter — and the pipeline step must use the `view` keyword to match. The types are checked at each `|>` boundary as usual.
 
 #### Views and Capabilities
 
@@ -4991,13 +4991,13 @@ With views, Jett's ownership model has exactly three modes:
 |------|---------|--------------|-------------|
 | **Own** | (default) | Value is moved. Caller loses it. | When the function needs to consume, store, or modify the data. |
 | **View** | `view` | Read-only reference. Caller keeps ownership. | When the function only needs to read. Zero-copy, zero-cost. |
-| **Clone** | `Linear.clone()` | Deep copy. Both sides have independent copies. | When both caller and callee need independent ownership. |
+| **Clone** | `clone` | Deep copy. Both sides have independent copies. | When both caller and callee need independent ownership. |
 
 Three modes, three keywords, zero lifetime annotations. The LLM chooses between them based on one simple question: does this function need to modify or keep the data?
 
 - **Yes, modify or keep** → pass normally (move).
 - **No, just read** → pass as `view`.
-- **Both need their own copy** → `Linear.clone()`.
+- **Both need their own copy** → `clone`.
 
 #### Why This Is Perfect for LLMs
 
@@ -5013,9 +5013,9 @@ No `&`, `&mut`, `&'a`, `&'a mut`, `&'static`. Just `view`. One concept, one word
 
 The LLM gets C-level performance (pointer dereference, no copying) without writing any unsafe code or lifetime annotations. The compiler guarantees safety from the three structural rules.
 
-**4. Views are explicit in declarations.**
+**4. Views are explicit everywhere.**
 
-`count_items(data: view list[Item])` — the `view` keyword in the parameter declaration tells the LLM (and the reader) exactly what is happening. There is no implicit borrowing, no hidden reference creation. The declaration says what it does.
+`count_items(view data)` at the call site and `data: view list[Item]` in the parameter — the `view` keyword appears on both sides. The LLM writing the call sees that `data` survives. The LLM writing the function sees it can only read. There is no implicit borrowing, no hidden reference creation.
 
 **5. No lifetime errors — the most common Rust stumbling block eliminated.**
 
@@ -5027,7 +5027,7 @@ Lifetime errors are the single most common compilation failure in Rust. They are
 > - **List operations**: `list.append(old_list, item)` — `old_list` is consumed, so the compiler can append in-place to the existing buffer. No need to copy the entire list.
 > - **Struct updates**: Returning a modified struct after consuming the original — the compiler can update fields in-place since it knows the original is dead.
 > - **Views are zero-cost**: Reading through a view is just pointer dereferencing. No allocation, no reference counting, no copies.
-> - **`Linear.clone()` is the only real copy**: Actual memory duplication only happens when the programmer explicitly requests it — and that cost is visible in the source code.
+> - **`clone` is the only real copy**: Actual memory duplication only happens when the programmer explicitly requests it — and that cost is visible in the source code.
 >
 > The immutable-looking style is actually more memory-efficient than languages with mutable aliasing, because the compiler has perfect ownership knowledge and never needs defensive copies.
 
@@ -5502,7 +5502,7 @@ When a `property` block finds a failing input, the LLM can re-run with tracking 
 # LLM adds tracking to debug:
 
 function sort_list_debug(items: view list[int], stdout: Stdout) returns tracked[list[int]]:
-    let mutable result: tracked[list[int]] = Linear.clone(items)
+    let mutable result: tracked[list[int]] = clone items
     result = partition(result)
     result = merge(result)
     trace(result, stdout)
@@ -5700,7 +5700,7 @@ function process_batch(fs: Filesystem, orders: view list[Order]) returns nothing
     for order in view orders:
         if order.total > 1000.0:
             agent_breakpoint()   # only pause for high-value orders
-        let result = process_single_order(fs, order)
+        let result = process_single_order(fs, view order)
 ```
 
 Or using a more targeted form:
@@ -6078,7 +6078,7 @@ Jett keeps its symbol set **as small as possible**. Symbols are only used where 
 | `"` | Strings |
 | `\|>` | Pipeline operator (left-to-right data flow) |
 
-The compiler infers `view` at call sites automatically. When a pipeline step pipes into a function that declares a `view` parameter, the compiler handles the view semantics — no explicit `view` annotation is needed at the call site. For example: `data |> json.serialize`.
+The `view` keyword is explicit at both call sites and declarations. When passing a value to a function that declares a `view` parameter, the caller must write `view`: `process(view data)`. In pipelines: `data |> view json.serialize`.
 
 **Replaced by keywords:**
 
@@ -6217,7 +6217,7 @@ struct Point:
 # Methods are called with module syntax — there is no p1.distance(p2) form:
 let p1 = Point(x: 0.0, y: 0.0)
 let p2 = Point(x: 3.0, y: 4.0)
-let d = Point.distance(p1, p2)
+let d = Point.distance(view p1, view p2)
 ```
 
 ### Error Handling
@@ -6639,7 +6639,7 @@ deps:
 - [ ] Generics
 - [ ] Refinement types (`type X = T where ...`)
 - [ ] Compile-time constraint validation
-- [ ] Linear type system (move semantics, `Linear.clone()`)
+- [ ] Linear type system (move semantics, `clone` keyword)
 - [ ] `view` keyword (read-only, non-owning references)
 - [ ] View enforcement: no mutation, no thread escape, no scope escape
 - [ ] Active view tracking (prevent mutation of owned data while views exist)
@@ -6758,7 +6758,7 @@ deps:
 - **Refinement type complexity** — RESOLVED: `where` clauses accept any pure expression (no capabilities, no mutation) that evaluates to `bool`. `value` refers to the value being constrained. Expressions use normal Jett syntax — no special intrinsics. Constraints are checked at runtime type boundaries (when a value enters the refined type). This means `where string.is_valid_json(value)` and `where list.length(value) <= 100` are both valid.
 - **Dependent types** — should refinement types be able to reference other values (e.g. `type Matrix = list[list[float]] where rows is cols`)? This approaches dependent type territory and significantly increases type checker complexity.
 - **Concurrency model** — RESOLVED: actor model with zero shared memory, structured concurrency with enforced join/cancel. Concurrency uses `concurrent` blocks and `spawn`/`join`/`cancel` keywords with capability parameters for I/O.
-- **Memory management** — RESOLVED: linear types (move-by-default, explicit `Linear.clone()`) plus scope-bound arenas for bulk allocation. No GC, no manual `free`, no lifetime annotations.
+- **Memory management** — RESOLVED: linear types (move-by-default, explicit `clone` keyword) plus scope-bound arenas for bulk allocation. No GC, no manual `free`, no lifetime annotations.
 - **Arena granularity** — should arenas be function-scoped only, or can they be passed across function boundaries? Passing arenas adds flexibility but introduces a form of lifetime tracking.
 - **SoA limitations** — which struct features are compatible with `layout soa`? Can SoA structs contain other structs, or only primitive fields? How do optional fields interact with SoA layout?
 - **Comptime boundaries** — what standard library functions are available at comptime? All pure functions? Only a subset? File I/O at comptime (for code generation from schemas)?
