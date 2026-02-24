@@ -5908,7 +5908,7 @@ Every syntactic choice should minimize the number of tokens required to express 
 
 - Prefer common English words as keywords (they typically map to single tokens).
 - Avoid multi-character symbolic operators that tokenizers split unpredictably.
-- Eliminate mandatory boilerplate (no `public static void main`, no required imports for standard functionality).
+- Eliminate mandatory boilerplate (the entry point is just `function main(...)`, no required imports for standard functionality).
 - Use indentation-based structure to remove the need for braces or `end` keywords.
 
 ### 2. Symbol Minimalism
@@ -5972,6 +5972,27 @@ Clever shortcuts and implicit behavior are where LLMs make mistakes. Jett favors
 ---
 
 ## Syntax Overview
+
+### Program Entry Point
+
+Every Jett program starts with a `main` function. There are no top-level statements — not even in the main file. Every file consists only of struct definitions, function definitions, and namespace declarations.
+
+```
+namespace app
+
+function main(stdout: Stdout, fs: Filesystem) returns nothing:
+    use config
+
+    let app_config = config.load(fs) handle error:
+        Stdout.write(stdout, "config failed: {error}")
+        return
+
+    Stdout.write(stdout, "running with config: {app_config.name}")
+```
+
+The runtime provides capabilities to `main` based on its parameter list. If `main` does not declare a `Network` parameter, the program physically cannot access the network — the capability is never created. This is where the capability system begins: `main` is the root of the capability tree.
+
+> **Note:** `main` follows the same limits as every other function (50 statements, 4 nesting levels, 6 parameters, 10 cyclomatic complexity). If `main` is hitting those limits, it is doing too much — extract the logic into named functions. A well-structured `main` is a short orchestrator that wires together capabilities and delegates to other functions.
 
 ### Variables
 
