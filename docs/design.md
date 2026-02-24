@@ -4397,17 +4397,60 @@ The inline `use` from Rule Set 4 works with namespaces:
 namespace handlers
 
 function process_payment(net: Network, order: Order) returns result[Receipt, string]:
-    use auth                # inline import — scoped to this function
-    use payment.gateway     # inline import — scoped to this function
+    use auth                # inline import — binds to "auth"
+    use payment.gateway     # inline import — binds to "gateway"
 
     let session = auth.validate_token(order.token) handle error:
         return fail("auth failed")
-    let receipt = payment.gateway.charge(net, order.total) handle error:
+    let receipt = gateway.charge(net, order.total) handle error:
         return fail("payment failed")
     return ok(receipt)
 ```
 
 Inline `use` keeps dependencies local to the function (Rule Set 4). Namespace resolution makes the import path-free (Rule Set 22). Together, they create self-contained functions with zero directory knowledge.
+
+#### Import Binding and Conflict Resolution
+
+When you write `use net.http`, the import binds to the **last segment** of the namespace — `http`. You call functions with `http.get(...)`, not `net.http.get(...)`.
+
+```
+function fetch(net: Network) returns result[string, HttpError]:
+    use net.http
+    let response = http.get(net, "https://example.com") handle error:
+        return fail(error)
+    return ok(response.body)
+```
+
+If two imports share the same last segment, the compiler produces an error and requires the `as` keyword to disambiguate:
+
+```
+function fetch_both(net: Network) returns nothing:
+    use net.http
+    use tor.http
+    # COMPILE ERROR: import name conflict — "http" is bound by both
+    #   "net.http" and "tor.http"
+    # hint: use the "as" keyword to rename one or both imports:
+    #   use net.http as net_http
+    #   use tor.http as tor_http
+```
+
+The fix — explicit aliasing with `as`:
+
+```
+function fetch_both(net: Network, stdout: Stdout) returns nothing:
+    use net.http as net_http
+    use tor.http as tor_http
+
+    let clearnet = net_http.get(net, "https://example.com") handle error:
+        Stdout.write(stdout, "clearnet failed: {error}")
+        return
+    let onion = tor_http.get(net, "http://example.onion") handle error:
+        Stdout.write(stdout, "tor failed: {error}")
+        return
+    Stdout.write(stdout, "both fetched")
+```
+
+The `as` keyword works uniformly across all import types — namespace imports, external URL imports (`use "url" as name`), and C interop imports (`use c "header.h" as name`). One pattern for all cases.
 
 #### What the Compiler Rejects
 
