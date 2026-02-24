@@ -1320,15 +1320,30 @@ let url_safe = encoding.url_encode(query)
 let hex = encoding.hex_encode(bytes)
 ```
 
-**Validation — common checks built in:**
+**Validation — standard library refinement types:**
+
+The `validate` module provides common formats as refinement types. The type IS the validation — once assigned, the value is guaranteed valid:
 
 ```
 use validate
 
-let is_email = validate.email("user@example.com")
-let is_url = validate.url("https://example.com")
-let is_uuid = validate.uuid("550e8400-e29b-41d4-a716-446655440000")
-let is_ip = validate.ipv4("192.168.1.1")
+# Assignment enforces validation via the refinement type constraint:
+let email: validate.Email = user_input handle error:
+    return fail("invalid email")
+
+let url: validate.URL = link handle error:
+    return fail("invalid url")
+
+let id: validate.UUID = raw_id handle error:
+    return fail("invalid uuid")
+
+let addr: validate.IPv4 = ip_string handle error:
+    return fail("invalid ip")
+
+# Functions declare the validated type — no re-validation needed:
+function send_email(net: Network, to: validate.Email, body: string) returns result[nothing, string]:
+    # "to" is guaranteed to be a valid email by the type system
+    # ...
 ```
 
 #### 2. The Orchestration Principle
@@ -6466,7 +6481,7 @@ The standard library is intentionally massive and opinionated. The goal is to ma
 - **format** — number formatting, padding, and text alignment
 - **crypto** — hashing (sha256, sha512, md5), HMAC
 - **encoding** — base64, hex, URL encoding/decoding
-- **validate** — email, URL, UUID, IPv4/IPv6, common format validation
+- **validate** — standard refinement types for common formats: Email, URL, UUID, IPv4, IPv6. The type IS the validation — once assigned, the value is guaranteed valid.
 - **regex** — pattern matching and extraction (when string functions aren't enough)
 - **csv** — parsing and writing CSV data
 - **random** — random numbers, random selection, shuffling
