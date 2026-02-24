@@ -4872,6 +4872,16 @@ The LLM gets C-level performance (pointer dereference, no copying) without writi
 
 Lifetime errors are the single most common compilation failure in Rust. They are also the hardest for LLMs to fix because the errors reference abstract lifetime relationships (`'a does not live long enough`). Jett eliminates the concept entirely. There are no lifetime errors because there are no lifetimes.
 
+> **Note: Memory optimization through linear types.** Because Jett enforces single ownership, the compiler always knows that a value has no other references (except read-only views). This enables aggressive in-place memory reuse without runtime checks:
+>
+> - **Consuming transforms**: `x = transform(x)` — `x` is consumed, so `transform` can mutate the underlying memory in-place and return it. It looks like a new value is created, but the compiled code reuses the same allocation.
+> - **List operations**: `list.append(old_list, item)` — `old_list` is consumed, so the compiler can append in-place to the existing buffer. No need to copy the entire list.
+> - **Struct updates**: Returning a modified struct after consuming the original — the compiler can update fields in-place since it knows the original is dead.
+> - **Views are zero-cost**: Reading through a view is just pointer dereferencing. No allocation, no reference counting, no copies.
+> - **`Linear.clone()` is the only real copy**: Actual memory duplication only happens when the programmer explicitly requests it — and that cost is visible in the source code.
+>
+> The immutable-looking style is actually more memory-efficient than languages with mutable aliasing, because the compiler has perfect ownership knowledge and never needs defensive copies.
+
 ### Rule Set 25: Native Property-Testing (Fuzzing) Over Unit Testing
 
 #### The Problem: LLMs Only Test the Happy Path
