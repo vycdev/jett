@@ -4306,6 +4306,62 @@ function main(stdout: Stdout, net: Network) returns nothing:
 
 The compiler treats each `namespace` block as a separate module. Other files can `use models`, `use auth`, or `use server` without knowing they all live in the same file. All `use` statements are inside functions, consistent with the inline-only import rule.
 
+#### Single-File Libraries
+
+Multiple namespaces in one file is the foundation for distributable libraries. Since Jett's dependency system imports external code via single-file URLs with cryptographic hashes (Rule Set 14), a library that spans multiple namespaces must be distributed as a single file:
+
+```
+# File: https://packages.jett-lang.org/v1.0/http_toolkit.jett
+# This single file IS the entire library.
+
+namespace http_toolkit.client
+
+struct HttpRequest:
+    method: string
+    url: string
+    headers: map[string, string]
+
+function get(net: Network, url: string) returns result[Response, HttpToolkitError]:
+    # ...
+
+namespace http_toolkit.server
+
+function listen(net: Network, port: int) returns result[Listener, HttpToolkitError]:
+    # ...
+
+namespace http_toolkit.errors
+
+enum HttpToolkitError:
+    connection_failed(message: string)
+    timeout(message: string)
+    status_error(code: int, message: string)
+```
+
+A consumer imports this single file and gets access to all its namespaces:
+
+```
+# In jett.lock:
+# http_toolkit:
+#     url = "https://packages.jett-lang.org/v1.0/http_toolkit.jett"
+#     hash = "sha256:a1b2c3..."
+
+function main(net: Network, stdout: Stdout) returns nothing:
+    use http_toolkit.client
+    use http_toolkit.errors
+    let response = client.get(net, "https://example.com") handle error:
+        Stdout.write(stdout, "failed: {error}")
+        return
+    Stdout.write(stdout, response.body)
+```
+
+**The bundle tool** — for library authors who develop across multiple files, the compiler provides a bundling command:
+
+```
+jett bundle --output my_library.jett
+```
+
+This concatenates all project files into a single distributable file, preserving all namespace declarations. The result is a self-contained `.jett` file that can be hosted at any URL and imported by other projects. Library authors develop with whatever file organization they prefer, then bundle for distribution.
+
 #### Sub-Namespaces for Large Projects
 
 Hierarchical namespaces use dot notation for logical grouping:
