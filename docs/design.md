@@ -1648,9 +1648,9 @@ To achieve C/Zig/Rust-level execution speed while keeping the language optimized
 
 Jett's approach: **offload everything that requires long-term memory onto the structural rules of the syntax itself.** The compiler manages what the LLM cannot.
 
-#### 1. Memory Management: Linear Typing + Scope-Bound Arenas
+#### 1. Memory Management: Linear Typing
 
-Garbage collection is too slow for native-speed code. C-style manual memory (`malloc`/`free`) causes LLMs to hallucinate use-after-free bugs. Rust-style lifetimes (`&'a mut T`) introduce heavy syntactic noise that splits the LLM's attention. Jett uses two complementary mechanisms that give the compiler perfect knowledge of when every value dies, with zero hidden pointers.
+Garbage collection is too slow for native-speed code. C-style manual memory (`malloc`/`free`) causes LLMs to hallucinate use-after-free bugs. Rust-style lifetimes (`&'a mut T`) introduce heavy syntactic noise that splits the LLM's attention. Jett uses linear typing to give the compiler perfect knowledge of when every value dies, with zero hidden pointers.
 
 **Linear typing — consume by default:**
 
@@ -1746,32 +1746,14 @@ for item in view items:
 submit_order(items)
 ```
 
-**Scope-bound arenas — bulk memory management:**
+**Compiler-managed allocation:** Because linear types give the compiler perfect ownership knowledge — every value has exactly one owner, no aliasing, no hidden references — the compiler can automatically determine the optimal allocation and deallocation strategy. The programmer never thinks about memory. The compiler handles:
 
-Instead of managing individual allocations, memory is allocated into an **arena** — a block of memory that is freed all at once when the scope ends. The LLM defines an arena at the start of a function. All allocations go into it. When the function returns, the arena drops everything. The LLM never has to remember to call `free()` on line 90 for a variable it created on line 10.
+- **Scope-based freeing**: values are freed when they go out of scope or are consumed.
+- **In-place reuse**: consuming transforms reuse the same allocation (see memory optimization note in Rule Set 24).
+- **Bulk allocation**: when a loop creates many small values, the compiler can batch-allocate them into a single memory region automatically.
+- **Cross-function tracking**: because data flows one way (linear, no aliasing), the compiler can track a value's lifetime across function calls and free it at the earliest possible point.
 
-```
-function process_batch(records: list[Record]) returns Summary:
-    let pool: Arena = arena()
-
-    # All allocations in this function use `pool`.
-    let mutable parsed: list[ParsedRecord] = pool.allocate(list[ParsedRecord])
-    for record in records:
-        let parsed_record: ParsedRecord = pool.allocate(parse(record))
-        parsed = list.append(parsed, parsed_record)
-
-    let summary: Summary = compute_summary(parsed)
-
-    return summary
-    # `pool` is dropped here. All memory allocated through it is freed instantly.
-    # No individual free() calls. No memory leaks possible.
-```
-
-**Why arenas are LLM-friendly:**
-
-- **One line to set up, zero lines to tear down.** The LLM writes `let pool = arena()` and never thinks about memory again.
-- **No dangling pointers.** Everything allocated in the arena dies together. There is no "free this but not that" decision tree.
-- **Bulk efficiency.** Arenas are how high-performance systems (game engines, compilers) manage memory in practice. One deallocation per scope, not one per object.
+The LLM never writes allocation code, never calls `free()`, never chooses an allocation strategy. The compiler does all of it.
 
 #### 2. High-Performance Data Layout: Native Structure of Arrays (SoA)
 
@@ -2026,14 +2008,14 @@ The `if comptime` branch is resolved at compile time. The compiled binary only c
 
 | Concern | Traditional approach (LLM-hostile) | Jett approach (LLM-friendly) |
 |---------|-----------------------------------|------------------------------|
-| Memory allocation | `malloc`/`free` (forget to free = leak) | Arenas (bulk free on scope exit) |
+| Memory allocation | `malloc`/`free` (forget to free = leak) | Compiler-managed (linear types give perfect ownership knowledge) |
 | Ownership tracking | Lifetimes with syntactic annotations (`&'a mut T`) | Linear types (consumed on use, clone to keep) |
 | Data layout | Manual SoA transformations | `layout soa` annotation, compiler transforms |
 | Thread safety | Mutexes and locks (forget to unlock = deadlock) | Actor model, zero shared memory, message passing |
 | Concurrency | Fire-and-forget async (orphaned tasks) | Structured concurrency (compiler forces join/cancel) |
 | Meta-programming | Macros / templates (secondary syntax) | `comptime` (same syntax, executed at compile time) |
 
-The underlying philosophy: **isolate every responsibility that requires long-term memory onto the compiler.** Memory is managed in bulk (arenas) so the LLM doesn't micromanage pointers. Threads are mathematically isolated (actors) so the LLM doesn't manage locks. Concurrency is physically bound to indentation blocks so tasks can't escape the context window. Meta-programming uses the same syntax so the LLM doesn't learn two languages.
+The underlying philosophy: **isolate every responsibility that requires long-term memory onto the compiler.** Memory is managed automatically (linear types give the compiler perfect ownership knowledge) so the LLM never thinks about allocation. Threads are mathematically isolated (actors) so the LLM doesn't manage locks. Concurrency is physically bound to indentation blocks so tasks can't escape the context window. Meta-programming uses the same syntax so the LLM doesn't learn two languages.
 
 ### Rule Set 11: Token-Optimized Syntax (Strict Semantic Whitespace)
 
@@ -5356,7 +5338,7 @@ Both approaches share the same flaw: they generate **far more information than n
 
 #### The Solution: `tracked[T]` — Per-Variable Lineage at the Type Level
 
-Jett introduces a `tracked` type wrapper. When the LLM suspects a specific variable is wrong, it changes the type from `T` to `tracked[T]`. The compiler then secretly attaches a lightweight history log to that variable's memory arena. Every time the value passes through a function or is transformed in a pipeline, the compiler records the file name, line number, function name, and the before/after state.
+Jett introduces a `tracked` type wrapper. When the LLM suspects a specific variable is wrong, it changes the type from `T` to `tracked[T]`. The compiler then secretly attaches a lightweight history log to that variable. Every time the value passes through a function or is transformed in a pipeline, the compiler records the file name, line number, function name, and the before/after state.
 
 **Standard code:**
 
@@ -5378,7 +5360,7 @@ Because Jett uses linear typing (Rule Set 10.1), the compiler knows every functi
 
 When a variable is typed as `tracked[T]`, the compiler:
 
-1. Allocates a small array in the current arena (Rule Set 10.1).
+1. Allocates a small array for the lineage log.
 2. Records the initial value and source location.
 3. At every function call or pipeline step that takes and returns the value, records: function name, file, line, value before, value after.
 4. When the LLM calls `trace()`, the accumulated lineage is emitted as structured JSON.
@@ -5466,7 +5448,7 @@ Each `|>` step is a lineage entry. The trace output shows the value flowing left
 | Variable type | Runtime cost |
 |--------------|-------------|
 | `int` | Zero overhead — native speed |
-| `tracked[int]` | Small overhead — arena allocation + lineage recording per step |
+| `tracked[int]` | Small overhead — lineage recording per step |
 | Every other variable in the program | Zero overhead — unaffected by the tracked variable |
 
 #### Tracked Types with Error Handling
@@ -6013,7 +5995,7 @@ Output follows the same structure but reports allocation-heavy functions instead
             "hot_lines": [
                 {"line": 102, "percent": 31.0, "code": "let entry = IndexEntry(term, doc_id, position)"}
             ],
-            "suggestion": "build_index is responsible for 42.1% of all allocations. Each IndexEntry is allocated individually inside a loop. Consider using an arena (Rule Set 10.2) to batch-allocate all entries."
+            "suggestion": "build_index is responsible for 42.1% of all allocations. Each IndexEntry is allocated individually inside a loop. Consider restructuring to batch-create entries or pre-allocate the list with a known size."
         }
     ]
 }
@@ -6576,7 +6558,7 @@ All 17 block constructs share the same shape. An LLM only needs to learn one pat
 
 Jett's keyword set uses complete, common English words that each map to a single token:
 
-`let`, `mutable`, `function`, `return`, `returns`, `if`, `else`, `for`, `in`, `while`, `struct`, `enum`, `match`, `use`, `true`, `false`, `none`, `and`, `or`, `not`, `is`, `is_near`, `within`, `self`, `handle`, `error`, `default`, `result`, `ok`, `fail`, `as`, `break`, `continue`, `interface`, `implement`, `assert`, `type`, `where`, `value`, `mutual`, `machine`, `states`, `transitions`, `to`, `at`, `transition`, `arena`, `clone`, `actor`, `receive`, `send`, `ask`, `respond`, `spawn`, `concurrent`, `join`, `cancel`, `comptime`, `layout`, `verify`, `secret`, `declassify`, `serialize`, `namespace`, `bitfield`, `bit`, `bits`, `remaining`, `view`, `property`, `given`, `tracked`, `trace`, `agent_breakpoint`, `some`, `optional`, `nothing`, `int`, `float`, `string`, `bool`, `bytes`, `list`, `map`, `set`, `modulo`
+`let`, `mutable`, `function`, `return`, `returns`, `if`, `else`, `for`, `in`, `while`, `struct`, `enum`, `match`, `use`, `true`, `false`, `none`, `and`, `or`, `not`, `is`, `is_near`, `within`, `self`, `handle`, `error`, `default`, `result`, `ok`, `fail`, `as`, `break`, `continue`, `interface`, `implement`, `assert`, `type`, `where`, `value`, `mutual`, `machine`, `states`, `transitions`, `to`, `at`, `transition`, `clone`, `actor`, `receive`, `send`, `ask`, `respond`, `spawn`, `concurrent`, `join`, `cancel`, `comptime`, `layout`, `verify`, `secret`, `declassify`, `serialize`, `namespace`, `bitfield`, `bit`, `bits`, `remaining`, `view`, `property`, `given`, `tracked`, `trace`, `agent_breakpoint`, `some`, `optional`, `nothing`, `int`, `float`, `string`, `bool`, `bytes`, `list`, `map`, `set`, `modulo`
 
 ### JSON AST Round-Tripping
 
@@ -6683,7 +6665,7 @@ deps:
 
 ### Phase 3 — Memory and Performance
 
-- [ ] Arena allocator (`arena()`, scope-bound bulk deallocation)
+- [ ] Compiler-managed memory allocation (automatic allocation/deallocation from linear type analysis)
 - [ ] `layout soa` annotation and compiler SoA transformation
 - [ ] `comptime` keyword and compile-time function execution
 - [ ] Comptime generic specialization
@@ -6787,8 +6769,7 @@ deps:
 - **Refinement type complexity** — RESOLVED: `where` clauses accept any pure expression (no capabilities, no mutation) that evaluates to `bool`. `value` refers to the value being constrained. Expressions use normal Jett syntax — no special intrinsics. Constraints are checked at runtime type boundaries (when a value enters the refined type). This means `where string.is_valid_json(value)` and `where list.length(value) <= 100` are both valid.
 - **Dependent types** — should refinement types be able to reference other values (e.g. `type Matrix = list[list[float]] where rows is cols`)? This approaches dependent type territory and significantly increases type checker complexity.
 - **Concurrency model** — RESOLVED: actor model with zero shared memory, structured concurrency with enforced join/cancel. Concurrency uses `concurrent` blocks and `spawn`/`join`/`cancel` keywords with capability parameters for I/O.
-- **Memory management** — RESOLVED: linear types (move-by-default, explicit `clone` keyword) plus scope-bound arenas for bulk allocation. No GC, no manual `free`, no lifetime annotations.
-- **Arena granularity** — should arenas be function-scoped only, or can they be passed across function boundaries? Passing arenas adds flexibility but introduces a form of lifetime tracking.
+- **Memory management** — RESOLVED: linear types (move-by-default, explicit `clone` keyword) with fully compiler-managed allocation. No GC, no manual `free`, no lifetime annotations, no arenas. The compiler has perfect ownership knowledge from linear types and handles all allocation/deallocation automatically.
 - **SoA limitations** — which struct features are compatible with `layout soa`? Can SoA structs contain other structs, or only primitive fields? How do optional fields interact with SoA layout?
 - **Comptime boundaries** — what standard library functions are available at comptime? All pure functions? Only a subset? File I/O at comptime (for code generation from schemas)?
 - **Actor supervision** — should there be a built-in actor supervision tree (like Erlang/OTP) for handling actor crashes? Or is the error-as-values model sufficient?
@@ -6801,6 +6782,6 @@ deps:
 - **Method syntax** — RESOLVED: module function syntax only (`list.length(items)`, not `items.length()`).
 - **Void functions** — RESOLVED: every function always has a `returns` clause. Functions that produce no value use `returns nothing`. This is consistent with the one-canonical-form principle.
 - **Mutable semantics** — RESOLVED: rebinding semantics. `mutable` allows consume-and-rebind to the same name.
-- **Mutual struct composition** — two structs cannot contain each other (composition is physical containment, so circular inclusion would be infinitely sized). The `mutual` block exists for functions but not for structs. Need to determine how recursive data structures (trees, linked lists, graphs) are expressed in Jett — possibly via arena-allocated indices or some form of indirection.
+- **Mutual struct composition** — two structs cannot contain each other (composition is physical containment, so circular inclusion would be infinitely sized). The `mutual` block exists for functions but not for structs. Need to determine how recursive data structures (trees, linked lists, graphs) are expressed in Jett — possibly via indices or some form of indirection.
 - **Events** — RESOLVED: Jett does not have a dedicated event system. Event-driven patterns are built from existing constructs: actors with `receive` for async event handling (pub/sub, event loops), function parameters for callbacks, and state machines for state-driven events. No `event` keyword is needed — existing constructs compose to cover these use cases.
 - **TOON (Token Oriented Object Notation)** — a serialization format optimized for token efficiency, more compact than JSON. Could be added as standard library functions (`toon.serialize()`, `toon.parse()`) alongside the existing JSON support. Not a syntax change — purely a stdlib addition for LLM-friendly data interchange.
