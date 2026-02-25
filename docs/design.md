@@ -108,13 +108,13 @@ Jett uses standard arithmetic operators (`+`, `-`, `*`, `/`) and comparison oper
 
 ```
 # Arithmetic uses standard operators:
-let x = a + b * c - d / e
+let x: int = a + b * c - d / e
 ```
 
 The operator precedence is standard (multiplication and division bind tighter than addition and subtraction), matching every other language the LLM has been trained on. Parentheses are used for explicit grouping when needed:
 
 ```
-let x = (a + b) * (c - d) / e
+let x: int = (a + b) * (c - d) / e
 ```
 
 **JSON AST equivalence:**
@@ -178,7 +178,7 @@ There must be **no spooky action at a distance**. A variable must never be silen
 
 ```
 function save_user(fs: Filesystem, user: view User) returns result[nothing, string]:
-    let data = json.serialize(view user)
+    let data: string = json.serialize(view user)
     Filesystem.write_file(fs, "users.json", data) handle error:
         return fail("could not save user")
     return ok(nothing)
@@ -292,8 +292,8 @@ implement Speaker for Dog:
         return "woof"
 
 # Calling a method — module syntax only:
-let my_dog = Dog(name: "Rex", breed: "labrador")
-let sound = Dog.speak(my_dog)
+let my_dog: Dog = Dog(name: "Rex", breed: "labrador")
+let sound: string = Dog.speak(my_dog)
 ```
 
 Structs define methods with `self` as the first parameter. Methods are called with module syntax: `Dog.speak(my_dog)`, `Point.distance(p1, p2)`. There is no `my_dog.speak()` form. This rule applies uniformly to ALL types, including capability types — `Stdout.write(stdout, msg)`, `Filesystem.read_file(fs, path)`, `Network.listen(net, addr, port)`. Capabilities are not an exception.
@@ -344,22 +344,22 @@ Jett has **no implicit type conversions**. An `int` is never silently promoted t
 **Infallible conversions** (lossless — always succeed, return `T` directly):
 
 ```
-let x = float.from_int(42)          # → 42.0
-let s = string.from_int(42)         # → "42"
-let s = string.from_float(3.14)     # → "3.14"
-let s = string.from_bool(true)      # → "true"
+let x: float = float.from_int(42)          # → 42.0
+let s: string = string.from_int(42)         # → "42"
+let s: string = string.from_float(3.14)     # → "3.14"
+let s: string = string.from_bool(true)      # → "true"
 ```
 
 **Fallible conversions** (can fail — return `result[T, string]`):
 
 ```
-let n = int.from_string("42") handle error:
+let n: int = int.from_string("42") handle error:
     return fail("not a number")
 
-let f = float.from_string("3.14") handle error:
+let f: float = float.from_string("3.14") handle error:
     return fail("not a float")
 
-let n = int.from_float(3.14) handle error:
+let n: int = int.from_float(3.14) handle error:
     return fail("not a whole number")
     # Fails because 3.14 is not exactly representable as int.
     # int.from_float(3.0) would succeed → 3
@@ -416,7 +416,7 @@ function create_user(name: string, password: Password) returns User:
 # At the call site, the compiler forces you to handle the possible failure:
 let user_password: Password = raw_input handle error:
     return fail("password must be at least 8 characters")
-let user = create_user("alice", user_password)
+let user: User = create_user("alice", user_password)
 ```
 
 This uses the same `handle error:` pattern as `result[T, E]` — no new syntax. The compiler **refuses to compile** a refinement type assignment without a `handle` block. The LLM is forced to consider and handle the case where the value does not satisfy the constraint.
@@ -451,7 +451,7 @@ type JsonString = string where string.is_valid_json(value)
 
 function parse_config(raw: JsonString) returns result[Config, string]:
     # `raw` is guaranteed to be valid JSON — the type says so.
-    let config = json.parse(raw, Config) handle error:
+    let config: Config = json.parse(raw, Config) handle error:
         return fail("invalid config structure")
     return ok(config)
 ```
@@ -465,7 +465,7 @@ struct User:
     age: Age
 
 # Constructing a User validates all refined fields — and requires handle:
-let user = User(name: name, email: email, age: age) handle error:
+let user: User = User(name: name, email: email, age: age) handle error:
     return fail("invalid user data: {error}")
 ```
 
@@ -480,7 +480,7 @@ function validate_password(input: string, min_length: int) returns result[string
     return ok(input)
 
 # Usage:
-let password = validate_password(raw_input, config.min_password_length) handle error:
+let password: string = validate_password(raw_input, config.min_password_length) handle error:
     return fail(error)
 ```
 
@@ -496,9 +496,9 @@ This is the same pattern used for all other type conversions (`string.from_int()
 
 ```
 function process(password: Password, stdout: Stdout) returns nothing:
-    let raw = string.from_Password(password)
-    let len = string.char_count(raw)
-    let upper = string.to_upper(raw)
+    let raw: string = string.from_Password(password)
+    let len: int = string.char_count(raw)
+    let upper: string = string.to_upper(raw)
     Stdout.write(stdout, "password length: {len}")
 ```
 
@@ -589,15 +589,15 @@ function handle_login(stdout: Stdout) returns nothing:
 function fetch_data(net: Network, url: string) returns result[map[string, string], HttpError]:
     use net.http
     use json
-    let response = http.get(net, url) handle error:
+    let response: HttpResponse = http.get(net, url) handle error:
         return fail(error)
-    let data = json.parse(response.body, map[string, string]) handle error:
+    let data: map[string, string] = json.parse(response.body, map[string, string]) handle error:
         return fail(HttpError.status_error(0, error))
     return ok(data)
 
 function compute_stats(values: list[float]) returns float:
     use math
-    let total = math.sum(values)
+    let total: float = math.sum(values)
     return total / float.from_int(list.length(values))
 ```
 
@@ -619,11 +619,11 @@ function compute_stats(values: list[float]) returns float:
 function good_example(stdout: Stdout) returns nothing:
     use math
     use json
-    let x = math.sqrt(2.0)
+    let x: float = math.sqrt(2.0)
     Stdout.write(stdout, json.serialize(view x))
 
 function bad_example(stdout: Stdout) returns nothing:
-    let x = 42
+    let x: int = 42
     use math          # COMPILE ERROR: use statements must appear before any other code
     Stdout.write(stdout, "value: {x}")
 ```
@@ -646,9 +646,9 @@ Functions that can fail return a `result[T, E]` type. The caller **must** handle
 
 ```
 function read_config(fs: Filesystem, path: string) returns result[Config, string]:
-    let raw = Filesystem.read_file(fs, path) handle error:
+    let raw: string = Filesystem.read_file(fs, path) handle error:
         return fail("could not read file: {path}")
-    let config = json.parse(raw, Config) handle error:
+    let config: Config = json.parse(raw, Config) handle error:
         return fail("invalid config format")
     return ok(config)
 ```
@@ -663,7 +663,7 @@ The `handle` keyword is used at the call site of any function that returns a `re
 
 ```
 function bad_example(fs: Filesystem) returns string:
-    let config = read_config(fs, "app.conf")
+    let config: Config = read_config(fs, "app.conf")
     # COMPILE ERROR: result[Config, string] must be handled
     # "read_config" can fail, but the error is not handled
     # hint: add a "handle" block after the call
@@ -686,7 +686,7 @@ You cannot accidentally ignore an error. The compiler will not let the program c
 ```
 # Simple — E is string:
 function read_config(fs: Filesystem, path: string) returns result[Config, string]:
-    let raw = Filesystem.read_file(fs, path) handle error:
+    let raw: string = Filesystem.read_file(fs, path) handle error:
         return fail("could not read file")
     return ok(json.parse(raw, Config))
 
@@ -699,7 +699,7 @@ enum DatabaseError:
 function query(net: Network, sql: string) returns result[list[Row], DatabaseError]:
     # ...
 
-let rows = query(net, "select * from users") handle error:
+let rows: list[Row] = query(net, "select * from users") handle error:
     match error:
         connection_failed(msg):
             return fail("db down: {msg}")
@@ -720,15 +720,15 @@ The syntax form is **mandatory** and encodes the type being unwrapped:
 
 ```
 # Return form — exit the function on error:
-let config = read_config(fs, "app.conf") handle error:
+let config: Config = read_config(fs, "app.conf") handle error:
     return fail("config load failed")
 
 # Default form — provide a fallback value:
-let config = read_config(fs, "app.conf") handle error:
+let config: Config = read_config(fs, "app.conf") handle error:
     default Config(port: 8080)
 
 # Default form with side effects — log the error, then provide a fallback:
-let config = read_config(fs, "app.conf") handle error:
+let config: Config = read_config(fs, "app.conf") handle error:
     Stdout.write(stdout, "config failed, using defaults: {error}")
     default Config(port: 8080)
 ```
@@ -739,18 +739,18 @@ The `handle error:` block executes only when the result is `fail`. If the result
 
 ```
 # result — COMPILE ERROR:
-let config = read_config(fs, "app.conf") handle error:
+let config: Config = read_config(fs, "app.conf") handle error:
     Stdout.write(stdout, "something failed")
     # COMPILE ERROR: handle block must end with "return" or "default"
     # hint: add "return fail(...)" to exit, or "default <value>" to provide a fallback
 
 # optional — COMPILE ERROR:
-let first = list.first(items) handle:
+let first: Item = list.first(items) handle:
     Stdout.write(stdout, "list was empty")
     # COMPILE ERROR: handle block must end with "return" or "default"
 
 # optional — valid with default:
-let first = list.first(items) handle:
+let first: Item = list.first(items) handle:
     Stdout.write(stdout, "list was empty, using fallback")
     default Item(name: "unknown")
 ```
@@ -787,10 +787,10 @@ One canonical form means one way to unwrap. `match` on a `result` would create a
 The `handle` keyword works for `optional[T]` values using the bare `handle:` form (no `error` keyword). If the value is `none`, the handle block executes:
 
 ```
-let first_item = list.first(items) handle:
+let first_item: Item = list.first(items) handle:
     return fail("list is empty")
 
-let user = db.find_user(users, id) handle:
+let user: User = db.find_user(users, id) handle:
     return fail("user not found: {id}")
 ```
 
@@ -800,13 +800,13 @@ This means `handle` is the single canonical unwrap mechanism for both `result[T,
 
 - **`result[T, E]` MUST use `handle error:`** -- the `error` keyword is required. The error variable is always bound inside the block:
   ```
-  let config = read_config(fs, "app.conf") handle error:
+  let config: Config = read_config(fs, "app.conf") handle error:
       Stdout.write(stdout, error)
       return fail(error)
   ```
 - **`optional[T]` MUST use bare `handle:`** with **no error variable**, because there is no error -- the value is simply absent:
   ```
-  let user = find_user(id) handle:
+  let user: User = find_user(id) handle:
       return fail("user not found")
   ```
 
@@ -844,13 +844,13 @@ function process_order(net: Network, order_id: string) returns result[Receipt, s
     use db
     use payment
 
-    let order = db.find_order(net, order_id) handle error:
+    let order: Order = db.find_order(net, order_id) handle error:
         return fail("order not found: {order_id}")
 
-    let charge = payment.charge(net, order.total, order.card) handle error:
+    let charge: Charge = payment.charge(net, order.total, order.card) handle error:
         return fail("payment failed for order: {order_id}")
 
-    let receipt = db.save_receipt(net, order, charge) handle error:
+    let receipt: Receipt = db.save_receipt(net, order, charge) handle error:
         return fail("could not save receipt")
 
     return ok(receipt)
@@ -879,11 +879,11 @@ If a variable named `user_id` exists in an outer scope, creating another variabl
 ```
 function process_user(net: Network, user_id: string) returns result[User, string]:
     use db
-    let user = db.find(net, user_id) handle error:
+    let user: User = db.find(net, user_id) handle error:
         return fail("not found")
 
     for item in user.orders:
-        let user_id = item.buyer_id
+        let user_id: string = item.buyer_id
         # COMPILE ERROR: "user_id" already exists in an outer scope
         # hint: use a distinct name, e.g. "buyer_id"
 ```
@@ -893,11 +893,11 @@ function process_user(net: Network, user_id: string) returns result[User, string
 ```
 function process_user(net: Network, user_id: string) returns result[User, string]:
     use db
-    let user = db.find(net, user_id) handle error:
+    let user: User = db.find(net, user_id) handle error:
         return fail("not found")
 
     for item in user.orders:
-        let buyer_id = item.buyer_id
+        let buyer_id: string = item.buyer_id
         # Clear. Unambiguous. No confusion possible.
 ```
 
@@ -943,7 +943,7 @@ struct Parser:
 
     # Required — distinct names:
     function parse_text(self: view Parser, input: string) returns Ast:
-        let tokens = tokenize(input)
+        let tokens: list[Token] = tokenize(input)
         return Parser.parse_tokens(self, tokens)
 
     function parse_tokens(self: view Parser, input: list[Token]) returns Ast:
@@ -962,9 +962,9 @@ Variables in Jett cannot change value once assigned. If state must change, a **n
 
 ```
 function normalize_name(raw_name: string) returns string:
-    let trimmed_name = string.trim(raw_name)
-    let lower_name = string.lower(trimmed_name)
-    let clean_name = string.replace(lower_name, "  ", " ")
+    let trimmed_name: string = string.trim(raw_name)
+    let lower_name: string = string.lower(trimmed_name)
+    let clean_name: string = string.replace(lower_name, "  ", " ")
     return clean_name
 ```
 
@@ -974,7 +974,7 @@ Each transformation gets a new name. At any point in this function, the LLM know
 
 ```
 function normalize_name(raw_name: string) returns string:
-    let name = string.trim(raw_name)
+    let name: string = string.trim(raw_name)
     name = string.lower(name)
     # COMPILE ERROR: "name" is not mutable
     # hint: use "let mutable name" or create a new variable
@@ -984,7 +984,7 @@ function normalize_name(raw_name: string) returns string:
 
 ```
 function sum_list(items: list[int]) returns int:
-    let mutable total = 0
+    let mutable total: int = 0
     for item in items:
         total = total + item
     return total
@@ -1001,7 +1001,7 @@ Immutable variables eliminate this entirely. `trimmed_name` has one value, forev
 **Mutability is local only — no mutable references.** There is no way for a function to modify the caller's data. When a value is passed to a function, it is either consumed (moved) or borrowed read-only via `view`. There is no `param: mutable T` — no mutable references exist in the language. If a function needs to transform a value, it takes ownership, transforms it, and returns the new value. The caller rebinds:
 
 ```
-let mutable x = 5
+let mutable x: int = 5
 x = transform(x)    # transform consumes x, returns new value, x is rebound
 ```
 
@@ -1038,7 +1038,7 @@ struct AppCapabilities:
     stderr: Stderr
 
 function deploy_service(caps: AppCapabilities, config: Config, target: Server) returns nothing:
-    let manifest = Filesystem.read_file(caps.fs, "manifest.json") handle error:
+    let manifest: string = Filesystem.read_file(caps.fs, "manifest.json") handle error:
         Stderr.write(caps.stderr, "failed to read manifest")
         return
     Stdout.write(caps.stdout, "deploying...")
@@ -1086,10 +1086,10 @@ function format_report(summary: Summary) returns Report:
     # formatting logic (~10 statements)
 
 function process_report(data: list[Record]) returns result[Report, string]:
-    let valid = validate_records(data) handle error:
+    let valid: list[Record] = validate_records(data) handle error:
         return fail("invalid records")
-    let transformed = transform_records(valid)
-    let summary = aggregate_results(transformed)
+    let transformed: list[TransformedRecord] = transform_records(valid)
+    let summary: Summary = aggregate_results(transformed)
     return ok(format_report(summary))
 ```
 
@@ -1171,31 +1171,31 @@ Instead of providing low-level building blocks and hoping the LLM assembles them
 
 ```
 # Instead of writing a filter loop:
-let adults = list.filter(users, function(u: User) returns bool: return u.age >= 18)
+let adults: list[User] = list.filter(users, function(u: User) returns bool: return u.age >= 18)
 
 # Instead of writing a map loop:
-let names = list.map(users, function(u: User) returns string: return u.name)
+let names: list[string] = list.map(users, function(u: User) returns string: return u.name)
 
 # Instead of writing a reduce loop:
-let total = list.sum(prices)
+let total: float = list.sum(prices)
 
 # Instead of writing a search loop:
-let found = list.find(users, function(u: User) returns bool: return u.id is target_id)
+let found: optional[User] = list.find(users, function(u: User) returns bool: return u.id is target_id)
 
 # Instead of writing a sort with comparator:
-let sorted = list.sort_by(users, function(u: User) returns int: return u.age)
+let sorted: list[User] = list.sort_by(users, function(u: User) returns int: return u.age)
 
 # Instead of writing deduplication logic:
-let unique = list.unique(items)
+let unique: list[Item] = list.unique(items)
 
 # Instead of writing chunk/batch logic:
-let batches = list.chunk(items, 100)
+let batches: list[list[Item]] = list.chunk(items, 100)
 
 # Instead of writing zip logic:
-let pairs = list.zip(names, scores)
+let pairs: list[tuple[string, int]] = list.zip(names, scores)
 
 # Group by a field:
-let by_role = list.group_by(users, function(u: User) returns string: return u.role)
+let by_role: map[string, list[User]] = list.group_by(users, function(u: User) returns string: return u.role)
 ```
 
 An LLM calling `list.filter` cannot produce an off-by-one error. It cannot forget to handle an empty list. It cannot accidentally mutate the original. The standard library handles all of this.
@@ -1203,18 +1203,18 @@ An LLM calling `list.filter` cannot produce an off-by-one error. It cannot forge
 **String operations — no manual parsing:**
 
 ```
-let trimmed = string.trim(input)
-let parts = string.split(csv_line, ",")
-let joined = string.join(names, ", ")
-let replaced = string.replace(text, "old", "new")
-let upper = string.upper(name)
-let lower = string.lower(name)
-let contains = string.contains(email, "@")
-let starts = string.starts_with(url, "https")
-let padded = string.pad_left(code, 6, "0")
-let slug = string.slugify("Hello World!")        # "hello-world"
-let truncated = string.truncate(bio, 100, "...") # cut with suffix
-let extracted = string.between(html, "<title>", "</title>")
+let trimmed: string = string.trim(input)
+let parts: list[string] = string.split(csv_line, ",")
+let joined: string = string.join(names, ", ")
+let replaced: string = string.replace(text, "old", "new")
+let upper: string = string.upper(name)
+let lower: string = string.lower(name)
+let contains: bool = string.contains(email, "@")
+let starts: bool = string.starts_with(url, "https")
+let padded: string = string.pad_left(code, 6, "0")
+let slug: string = string.slugify("Hello World!")        # "hello-world"
+let truncated: string = string.truncate(bio, 100, "...") # cut with suffix
+let extracted: string = string.between(html, "<title>", "</title>")
 ```
 
 No regex for simple operations. No manual index arithmetic. Each function does one thing, is named obviously, and handles edge cases internally.
@@ -1224,15 +1224,15 @@ No regex for simple operations. No manual index arithmetic. Each function does o
 ```
 use time
 
-let now = Clock.now(clock)
-let formatted = time.format(now, "YYYY-MM-DD")
-let parsed = time.parse("2025-03-15", "YYYY-MM-DD") handle error:
+let now: Time = Clock.now(clock)
+let formatted: string = time.format(now, "YYYY-MM-DD")
+let parsed: Time = time.parse("2025-03-15", "YYYY-MM-DD") handle error:
     return fail("invalid date")
-let diff = time.difference(start, end)
-let tomorrow = time.add_days(now, 1)
-let weekday = time.day_of_week(now)
-let is_before = time.before(start, end)
-let age = time.years_between(birth_date, now)
+let diff: Duration = time.difference(start, end)
+let tomorrow: Time = time.add_days(now, 1)
+let weekday: string = time.day_of_week(now)
+let is_before: bool = time.before(start, end)
+let age: int = time.years_between(birth_date, now)
 ```
 
 Date logic is one of the most error-prone areas in programming. An LLM should never be computing leap years or timezone offsets — the standard library does it correctly.
@@ -1242,17 +1242,17 @@ Date logic is one of the most error-prone areas in programming. An LLM should ne
 ```
 use json
 
-let config = json.parse(raw_string, Config) handle error:
+let config: Config = json.parse(raw_string, Config) handle error:
     return fail("invalid json")                              # string to typed value
-let text = json.serialize(view config)                    # value to string
-let pretty = json.serialize_pretty(view config)           # value to formatted string
+let text: string = json.serialize(view config)                    # value to string
+let pretty: string = json.serialize_pretty(view config)           # value to formatted string
 
 # For dynamic/untyped JSON access (when the schema is unknown):
-let raw = json.parse_raw(raw_string) handle error:
+let raw: JsonValue = json.parse_raw(raw_string) handle error:
     return fail("invalid json")                              # string to raw json value
-let field = json.get(raw, "user.address.city") handle:
+let field: JsonValue = json.get(raw, "user.address.city") handle:
     return fail("field not found")                           # nested field access by path
-let safe = json.get_or(raw, "user.nickname", "anon")     # with default
+let safe: string = json.get_or(raw, "user.nickname", "anon")     # with default
 ```
 
 **HTTP — high-level client out of the box:**
@@ -1270,7 +1270,7 @@ enum HttpError:
 ```
 use net.http
 
-let response = http.get(net, "https://api.example.com/users") handle error:
+let response: HttpResponse = http.get(net, "https://api.example.com/users") handle error:
     # error is HttpError — match to handle specific cases:
     match error:
         HttpError.timeout(msg):
@@ -1278,29 +1278,29 @@ let response = http.get(net, "https://api.example.com/users") handle error:
         other:
             return fail(other)
 
-let body = json.parse(response.body, list[User]) handle error:
+let body: list[User] = json.parse(response.body, list[User]) handle error:
     return fail("invalid json")
-let status = response.status
+let status: int = response.status
 
 # POST with body:
-let post_response = http.post(net, "https://api.example.com/users", json.serialize(view new_user)) handle error:
+let post_response: HttpResponse = http.post(net, "https://api.example.com/users", json.serialize(view new_user)) handle error:
     return fail(error)
 ```
 
 **File system — simple and complete:**
 
 ```
-let content = Filesystem.read_file(fs, "config.json") handle error:
+let content: string = Filesystem.read_file(fs, "config.json") handle error:
     return fail("file not found")
 
 Filesystem.write_file(fs, "output.txt", data) handle error:
     return fail("could not write")
 
-let files = Filesystem.list_dir(fs, "./data") handle error:
+let files: list[string] = Filesystem.list_dir(fs, "./data") handle error:
     return fail("directory not found")
 
-let exists = Filesystem.file_exists(fs, "config.json")
-let size = Filesystem.file_size(fs, "data.bin") handle error:
+let exists: bool = Filesystem.file_exists(fs, "config.json")
+let size: int = Filesystem.file_size(fs, "data.bin") handle error:
     return fail("could not get file size")
 Filesystem.copy_file(fs, "source.txt", "dest.txt") handle error:
     return fail("could not copy file")
@@ -1313,16 +1313,16 @@ Filesystem.delete_file(fs, "temp.txt") handle error:
 ```
 use math
 
-let clamped = math.clamp(value, 0, 100)
-let rounded = math.round(price, 2)
-let absolute = math.abs(difference)
-let maximum = math.max(a, b)
-let minimum = math.min(a, b)
-let average = math.average(scores)
-let median = math.median(scores)
-let floored = math.floor(3.7)
-let ceiled = math.ceil(3.2)
-let power = math.pow(base, exponent)
+let clamped: int = math.clamp(value, 0, 100)
+let rounded: float = math.round(price, 2)
+let absolute: float = math.abs(difference)
+let maximum: float = math.max(a, b)
+let minimum: float = math.min(a, b)
+let average: float = math.average(scores)
+let median: float = math.median(scores)
+let floored: float = math.floor(3.7)
+let ceiled: float = math.ceil(3.2)
+let power: float = math.pow(base, exponent)
 ```
 
 **Hashing and encoding — no third-party dependencies:**
@@ -1331,11 +1331,11 @@ let power = math.pow(base, exponent)
 use crypto
 use encoding
 
-let hashed = crypto.sha256(password)
-let b64 = encoding.base64_encode(data)
-let decoded = encoding.base64_decode(b64)
-let url_safe = encoding.url_encode(query)
-let hex = encoding.hex_encode(bytes)
+let hashed: string = crypto.sha256(password)
+let b64: string = encoding.base64_encode(data)
+let decoded: string = encoding.base64_decode(b64)
+let url_safe: string = encoding.url_encode(query)
+let hex: string = encoding.hex_encode(bytes)
 ```
 
 **Validation — standard library refinement types:**
@@ -1374,25 +1374,25 @@ function process_csv_report(fs: Filesystem, clock: Clock, path: string) returns 
     use list
     use time
 
-    let raw = Filesystem.read_file(fs, path) handle error:
+    let raw: string = Filesystem.read_file(fs, path) handle error:
         return fail("could not read file")
 
-    let lines = string.split(raw, "\n")
-    let rows = list.map(lines, function(line: string) returns list[string]:
+    let lines: list[string] = string.split(raw, "\n")
+    let rows: list[list[string]] = list.map(lines, function(line: string) returns list[string]:
         return string.split(line, ","))
 
-    let header = list.first(rows) handle:
+    let header: list[string] = list.first(rows) handle:
         return fail("CSV file is empty")
-    let data = list.skip(rows, 1)
+    let data: list[list[string]] = list.skip(rows, 1)
 
-    let filtered = list.filter(data, function(row: list[string]) returns bool:
-        let cell = list.get(row, 2) handle:
+    let filtered: list[list[string]] = list.filter(data, function(row: list[string]) returns bool:
+        let cell: string = list.get(row, 2) handle:
             return false
         return string.is_not_empty(cell))
 
-    let sorted = list.sort_by_index(filtered, 0)
+    let sorted: list[list[string]] = list.sort_by_index(filtered, 0)
 
-    let report = Report(
+    let report: Report = Report(
         generated: Clock.now(clock),
         row_count: list.length(sorted),
         data: sorted
@@ -1417,10 +1417,10 @@ This function reads a CSV file, parses it, filters empty rows, sorts by the firs
 In traditional languages, developers track system state using multiple boolean flags or variables:
 
 ```
-let mutable is_loading = true
-let mutable is_logged_in = false
-let mutable has_error = false
-let mutable is_banned = false
+let mutable is_loading: bool = true
+let mutable is_logged_in: bool = false
+let mutable has_error: bool = false
+let mutable is_banned: bool = false
 ```
 
 Humans implicitly understand the rules between these variables — a user cannot be `is_logged_in = true` AND `is_banned = true` simultaneously. But those rules exist only in the programmer's head. They are nowhere in the code.
@@ -1494,10 +1494,10 @@ Instead of the LLM scanning its context window to check the values of 4 differen
 
 ```
 # Boolean soup — LLM must track 4 variables and their relationships:
-let mutable is_loading = true
-let mutable is_logged_in = false
-let mutable has_error = false
-let mutable is_banned = false
+let mutable is_loading: bool = true
+let mutable is_logged_in: bool = false
+let mutable has_error: bool = false
+let mutable is_banned: bool = false
 
 # State machine — LLM tracks one value:
 let mutable session: UserAuth = UserAuth(guest)
@@ -1530,15 +1530,15 @@ function post_comment(clock: Clock, session: UserAuth at logged_in, text: string
     # No if-checks needed. This function can ONLY be called when
     # the session is in the "logged_in" state. The compiler enforces this
     # at every call site. The LLM cannot forget. The human cannot forget.
-    let comment = Comment(author: session.user_id, text: text, created: Clock.now(clock))
+    let comment: Comment = Comment(author: session.user_id, text: text, created: Clock.now(clock))
     return ok(comment)
 ```
 
 If the LLM tries to call `post_comment` with a session in the wrong state:
 
 ```
-let session = UserAuth(guest)
-let result = post_comment(clock, session, "hello")
+let session: UserAuth = UserAuth(guest)
+let result: result[Comment, string] = post_comment(clock, session, "hello")
 # COMPILE ERROR: expected "UserAuth at logged_in" but got "UserAuth at guest"
 # hint: transition the session to "logged_in" before calling post_comment
 ```
@@ -1614,7 +1614,7 @@ enum CaptureOutcome:
 
 function authorize_payment(net: Network, pay: Payment at pending) returns result[PaymentOutcome, string]:
     use payment_gateway
-    let auth = payment_gateway.authorize(net, pay.amount, pay.currency) handle error:
+    let auth: AuthResult = payment_gateway.authorize(net, pay.amount, pay.currency) handle error:
         return fail("gateway error")
     if auth.declined:
         return ok(PaymentOutcome.declined(payment: Payment.transition(pay, failed, reason: auth.reason)))
@@ -1622,7 +1622,7 @@ function authorize_payment(net: Network, pay: Payment at pending) returns result
 
 function capture_payment(net: Network, pay: Payment at authorized) returns result[CaptureOutcome, string]:
     use payment_gateway
-    let capture = payment_gateway.capture(net, pay.auth_code, pay.amount) handle error:
+    let capture: CaptureResult = payment_gateway.capture(net, pay.auth_code, pay.amount) handle error:
         return fail("capture failed")
     if capture.declined:
         return ok(CaptureOutcome.declined(payment: Payment.transition(pay, failed, reason: capture.reason)))
@@ -1633,7 +1633,7 @@ function capture_payment(net: Network, pay: Payment at authorized) returns resul
 
 function refund_payment(net: Network, pay: Payment at captured) returns result[Payment at refunded, string]:
     use payment_gateway
-    let refund = payment_gateway.refund(net, pay.capture_id, pay.amount) handle error:
+    let refund: RefundResult = payment_gateway.refund(net, pay.capture_id, pay.amount) handle error:
         return fail("refund failed: {error}")
     return ok(Payment.transition(pay, refunded,
         original_amount: pay.amount,
@@ -1663,8 +1663,8 @@ function send_message(net: Network, connection: Connection, payload: Payload) re
     return
 
 function example(net: Network, stdout: Stdout) returns nothing:
-    let conn = Connection("localhost", 8080)
-    let data = Payload("hello")
+    let conn: Connection = Connection("localhost", 8080)
+    let data: Payload = Payload("hello")
 
     send_message(net, conn, data)
 
@@ -1684,8 +1684,8 @@ The rule is completely local. The LLM does not need to track lifetimes across fu
 
 ```
 function example(net: Network, stdout: Stdout) returns nothing:
-    let conn = Connection(host: "localhost", port: 8080)
-    let data = Payload("hello")
+    let conn: Connection = Connection(host: "localhost", port: 8080)
+    let data: Payload = Payload("hello")
 
     send_message(net, conn, clone data)
     # `clone data` creates a copy that gets consumed. The original `data` survives.
@@ -1704,8 +1704,8 @@ Field access on a value implicitly creates a view of the parent. `self.x` is equ
 This means code like the following is valid:
 
 ```
-let dx = self.x - other.x
-let dy = self.y - other.y
+let dx: float = self.x - other.x
+let dy: float = self.y - other.y
 # Neither access consumes `self` or `other` — field access is a view operation.
 ```
 
@@ -1716,7 +1716,7 @@ Both `self.x` and `self.y` work because each field access creates an implicit vi
 The `mutable` keyword allows a variable name to be rebound after its previous value is consumed. This is not mutation — it is consume-and-rebind:
 
 ```
-let mutable total = 0
+let mutable total: int = 0
 for item in items:
     total = total + item
     # The old `total` is consumed by `+`, the result is rebound to `total`.
@@ -1733,13 +1733,13 @@ Without `mutable`, the compiler would reject `total = total + item` because `tot
 
 ```
 # Owned iteration (items consumed):
-let mutable sum = 0
+let mutable sum: int = 0
 for item in items:
     sum = sum + item.price
 # items is no longer available here
 
 # View iteration (items preserved):
-let mutable sum = 0
+let mutable sum: int = 0
 for item in view items:
     sum = sum + item.price
 # items is still available here
@@ -1752,15 +1752,15 @@ Instead of managing individual allocations, memory is allocated into an **arena*
 
 ```
 function process_batch(records: list[Record]) returns Summary:
-    let pool = arena()
+    let pool: Arena = arena()
 
     # All allocations in this function use `pool`.
-    let mutable parsed = pool.allocate(list[ParsedRecord])
+    let mutable parsed: list[ParsedRecord] = pool.allocate(list[ParsedRecord])
     for record in records:
-        let parsed_record = pool.allocate(parse(record))
+        let parsed_record: ParsedRecord = pool.allocate(parse(record))
         parsed = list.append(parsed, parsed_record)
 
-    let summary = compute_summary(parsed)
+    let summary: Summary = compute_summary(parsed)
 
     return summary
     # `pool` is dropped here. All memory allocated through it is freed instantly.
@@ -1842,13 +1842,13 @@ actor Counter(stdout: Stdout):
         Stdout.write(stdout, string(count))
 
 function main(stdout: Stdout) returns nothing:
-    let counter = spawn Counter(clone stdout)
+    let counter: Counter = spawn Counter(clone stdout)
 
     send counter increment
     send counter increment
     send counter increment
 
-    let total = ask counter get_count
+    let total: int = ask counter get_count
     Stdout.write(stdout, string(total))   # prints "3"
 ```
 
@@ -1869,7 +1869,7 @@ actor Logger(stdout: Stdout):
         Stdout.write(stdout, message)
 
 function main(stdout: Stdout) returns nothing:
-    let logger = spawn Logger(clone stdout)
+    let logger: Logger = spawn Logger(clone stdout)
     send logger log("application started")
     # stdout is still available here because we cloned it
 ```
@@ -1888,14 +1888,14 @@ Since capabilities are linear types, passing a capability to `spawn` would consu
 ```
 actor Processor:
     receive process(data: Payload) responds ProcessResult:
-        let process_result = heavy_computation(data)
+        let process_result: ProcessResult = heavy_computation(data)
         respond process_result
 
 function main(stdout: Stdout) returns nothing:
-    let worker = spawn Processor()
-    let data = Payload("input data")
+    let worker: Processor = spawn Processor()
+    let data: Payload = Payload("input data")
 
-    let response = ask worker process(data)
+    let response: ProcessResult = ask worker process(data)
     # `data` has been consumed — it was sent to the actor.
     # The LLM cannot accidentally access it here.
     Stdout.write(stdout, response.summary)
@@ -1916,26 +1916,26 @@ Jett uses **structured concurrency**: all async tasks are bound to a scope. The 
 
 ```
 function fetch_all_data(net: Network) returns result[DashboardData, HttpError]:
-    let data = concurrent:
-        let users = spawn http.get(net, "https://api.example.com/users")
-        let orders = spawn http.get(net, "https://api.example.com/orders")
-        let stats = spawn http.get(net, "https://api.example.com/stats")
+    let data: DashboardData = concurrent:
+        let users: Task[HttpResponse] = spawn http.get(net, "https://api.example.com/users")
+        let orders: Task[HttpResponse] = spawn http.get(net, "https://api.example.com/orders")
+        let stats: Task[HttpResponse] = spawn http.get(net, "https://api.example.com/stats")
 
         # All three requests run in parallel.
         # The `concurrent` block CANNOT exit until all three are resolved.
 
-        let users_result = join users handle error:
+        let users_result: HttpResponse = join users handle error:
             return fail(error)
-        let orders_result = join orders handle error:
+        let orders_result: HttpResponse = join orders handle error:
             return fail(error)
-        let stats_result = join stats handle error:
+        let stats_result: HttpResponse = join stats handle error:
             return fail(error)
 
-        let users_data = json.parse(users_result.body, list[User]) handle error:
+        let users_data: list[User] = json.parse(users_result.body, list[User]) handle error:
             return fail(HttpError.status_error(0, error))
-        let orders_data = json.parse(orders_result.body, list[Order]) handle error:
+        let orders_data: list[Order] = json.parse(orders_result.body, list[Order]) handle error:
             return fail(HttpError.status_error(0, error))
-        let stats_data = json.parse(stats_result.body, Stats) handle error:
+        let stats_data: Stats = json.parse(stats_result.body, Stats) handle error:
             return fail(HttpError.status_error(0, error))
 
         DashboardData(
@@ -1959,10 +1959,10 @@ function fetch_all_data(net: Network) returns result[DashboardData, HttpError]:
 ```
 function bad_example(net: Network) returns result[string, string]:
     concurrent:
-        let users = spawn http.get(net, "https://api.example.com/users")
-        let orders = spawn http.get(net, "https://api.example.com/orders")
+        let users: Task[HttpResponse] = spawn http.get(net, "https://api.example.com/users")
+        let orders: Task[HttpResponse] = spawn http.get(net, "https://api.example.com/orders")
 
-        let users_result = join users handle error:
+        let users_result: HttpResponse = join users handle error:
             return fail("failed")
 
         # COMPILE ERROR: spawned task "orders" is never joined or cancelled
@@ -1985,15 +1985,15 @@ Jett borrows from Zig: there are **no macros**. Instead, there is a `comptime` k
 
 ```
 comptime function generate_lookup_table(size: int) returns list[int]:
-    let mutable table = list[int]()
-    let mutable i = 0
+    let mutable table: list[int] = list[int]()
+    let mutable i: int = 0
     while i < size:
         table = list.append(table, i * i)
         i = i + 1
     return table
 
 # This runs at compile time. The result is baked into the binary.
-let squares = comptime generate_lookup_table(256)
+let squares: list[int] = comptime generate_lookup_table(256)
 ```
 
 The LLM writes a normal function — same syntax, same rules, same keywords. The `comptime` keyword simply tells the compiler to run it during compilation rather than at runtime. The LLM does not need to learn a separate template language, a macro syntax, or a preprocessor. **One syntax, two execution times.**
@@ -2103,9 +2103,9 @@ LLMs naturally group concepts based on **token proximity**. Tokens that are clos
 
 ```
 function process_order(order: Order) returns result[Receipt, string]:
-    let validated = validate(order) handle error:
+    let validated: Order = validate(order) handle error:
         return fail("invalid order")
-    let charged = charge(validated) handle error:
+    let charged: Charge = charge(validated) handle error:
         return fail("payment failed")
     return ok(create_receipt(charged))
 ```
@@ -2143,12 +2143,12 @@ Ambiguous whitespace (Python allows both 2 and 4 spaces, tabs, and mixes) create
 
 ```
 function example() returns nothing:
-    let x = 1          # 4 spaces — valid
-      let y = 2        # 6 spaces — COMPILE ERROR: expected 4 or 8 spaces
-  let z = 3            # 2 spaces — COMPILE ERROR: indent must be multiple of 4
+    let x: int = 1          # 4 spaces — valid
+      let y: int = 2        # 6 spaces — COMPILE ERROR: expected 4 or 8 spaces
+  let z: int = 3            # 2 spaces — COMPILE ERROR: indent must be multiple of 4
 
 function another() returns nothing:
-	let a = 1           # tab — COMPILE ERROR: tabs are not allowed, use 4 spaces
+	let a: int = 1           # tab — COMPILE ERROR: tabs are not allowed, use 4 spaces
 ```
 
 **Colon as block opener:**
@@ -2201,8 +2201,8 @@ In Jett, the `string` type is an **opaque, high-performance byte array** that ca
 **What the compiler rejects:**
 
 ```
-let name = "hello world"
-let char = name[5]
+let name: string = "hello world"
+let char: string = name[5]
 # COMPILE ERROR: string does not support integer indexing
 # hint: use string.char_at(name, 5) to get the 5th character,
 # or use string.split(), string.take_chars(), string.find() for common operations
@@ -2220,23 +2220,23 @@ Every common string task has a dedicated function that handles encoding, boundar
 use string
 
 # Take the first N characters (not bytes):
-let first_five = string.take_chars("こんにちは世界", 5)
+let first_five: string = string.take_chars("こんにちは世界", 5)
 # Result: "こんにちは" — correct regardless of byte width
 
 # Take the last N characters:
-let last_three = string.take_last_chars("hello world", 3)
+let last_three: string = string.take_last_chars("hello world", 3)
 # Result: "rld"
 
 # Drop the first N characters:
-let rest = string.drop_chars("hello world", 6)
+let rest: string = string.drop_chars("hello world", 6)
 # Result: "world"
 
 # Get a character by position (returns optional, not a raw byte):
-let third = string.char_at("hello", 2)
+let third: optional[string] = string.char_at("hello", 2)
 # Result: optional containing "l"
 
 # Character count (not byte count):
-let len = string.char_count("こんにちは")
+let len: int = string.char_count("こんにちは")
 # Result: 5 (not 15, which would be the byte count)
 ```
 
@@ -2246,26 +2246,26 @@ let len = string.char_count("こんにちは")
 use string
 
 # Find a substring:
-let position = string.find("hello world", "world")
+let position: optional[StringPosition] = string.find("hello world", "world")
 # Result: optional containing a string iterator position (not a byte offset)
 
 # Check containment:
-let has_at = string.contains(email, "@")
+let has_at: bool = string.contains(email, "@")
 
 # Split into parts:
-let words = string.split("hello world foo", " ")
+let words: list[string] = string.split("hello world foo", " ")
 # Result: list["hello", "world", "foo"]
 
 # Split with limit:
-let parts = string.split_max("a.b.c.d", ".", 2)
+let parts: list[string] = string.split_max("a.b.c.d", ".", 2)
 # Result: list["a", "b.c.d"]
 
 # Get text between delimiters:
-let title = string.between(html, "<title>", "</title>")
+let title: string = string.between(html, "<title>", "</title>")
 
 # Get text before/after a delimiter:
-let domain = string.after(email, "@")
-let username = string.before(email, "@")
+let domain: string = string.after(email, "@")
+let username: string = string.before(email, "@")
 ```
 
 **Transforming strings — no manual character loops:**
@@ -2273,16 +2273,16 @@ let username = string.before(email, "@")
 ```
 use string
 
-let upper = string.upper("hello")              # "HELLO"
-let lower = string.lower("Hello")              # "hello"
-let trimmed = string.trim("  hello  ")         # "hello"
-let trim_left = string.trim_start("  hello  ") # "hello  "
-let replaced = string.replace("hello", "l", "r") # "herro"
-let reversed = string.reverse("hello")         # "olleh"
-let repeated = string.repeat("ha", 3)          # "hahaha"
-let padded = string.pad_left("42", 5, "0")     # "00042"
-let slug = string.slugify("Hello World!")       # "hello-world"
-let truncated = string.truncate("long text here", 8, "...") # "long tex..."
+let upper: string = string.upper("hello")              # "HELLO"
+let lower: string = string.lower("Hello")              # "hello"
+let trimmed: string = string.trim("  hello  ")         # "hello"
+let trim_left: string = string.trim_start("  hello  ") # "hello  "
+let replaced: string = string.replace("hello", "l", "r") # "herro"
+let reversed: string = string.reverse("hello")         # "olleh"
+let repeated: string = string.repeat("ha", 3)          # "hahaha"
+let padded: string = string.pad_left("42", 5, "0")     # "00042"
+let slug: string = string.slugify("Hello World!")       # "hello-world"
+let truncated: string = string.truncate("long text here", 8, "...") # "long tex..."
 ```
 
 **Iterating over characters — when a loop is genuinely needed:**
@@ -2677,7 +2677,7 @@ function log_user(stdout: Stdout, user: User) returns nothing:
 ```
 function handle_login(net: Network, request: Request) returns result[Response, string]:
     use net.http
-    let user = authenticate(request) handle error:
+    let user: User = authenticate(request) handle error:
         return ok(http.response(400, "invalid credentials"))
     return ok(http.response(200, json.serialize(view user)))
     # COMPILE ERROR: cannot pass struct containing secret fields to http.response
@@ -2695,10 +2695,10 @@ Any operation on a secret value produces another secret value. The taint cannot 
 ```
 let key: secret[string] = load_api_key()
 
-let upper_key = string.upper(key)
+let upper_key: secret[string] = string.upper(key)
 # upper_key is secret[string] — the taint propagates through string operations
 
-let combined = string.join(list("prefix", key, "suffix"), "-")
+let combined: string = string.join(list("prefix", key, "suffix"), "-")
 # COMPILE ERROR: cannot pass secret[string] to string.join with non-secret arguments
 # hint: the result would leak the secret value
 ```
@@ -2709,7 +2709,7 @@ When code genuinely needs to use a secret value (e.g., to send it in an authenti
 
 ```
 function authenticate(stored_hash: secret[string], input_password: string) returns bool:
-    let input_hash = crypto.sha256(input_password)
+    let input_hash: string = crypto.sha256(input_password)
     return declassify stored_hash is input_hash
     # `declassify` explicitly unwraps the secret for this comparison.
     # This is auditable — grep for "declassify" to find every place secrets are accessed.
@@ -2718,7 +2718,7 @@ function authenticate(stored_hash: secret[string], input_password: string) retur
 ```
 function call_external_api(net: Network, api_key: secret[string], payload: string) returns result[Response, string]:
     use net.http
-    let headers = map("Authorization": "Bearer {declassify api_key}")
+    let headers: map[string, string] = map("Authorization": "Bearer {declassify api_key}")
     return http.post(net, "https://api.example.com/data", payload, headers: headers)
 ```
 
@@ -2730,19 +2730,19 @@ The standard library provides functions that work with secret-containing types s
 
 ```
 # Serialize only non-secret fields:
-let public_json = json.serialize_public(view user)
+let public_json: string = json.serialize_public(view user)
 # Result: {"id": "123", "name": "alice", "email": "alice@example.com"}
 # password_hash, api_key, ssn are omitted automatically.
 
 # Redact for logging:
-let masked = secret.redact(user.api_key)
+let masked: string = secret.redact(user.api_key)
 # Result: "sk-****...****3f2a" (shows only last 4 characters)
 
-let log_safe = secret.redact_all(user)
+let log_safe: User = secret.redact_all(user)
 # Result: User with all secret fields replaced by "[REDACTED]"
 
 # Compare secrets without exposing them:
-let match = secret.compare(stored_hash, computed_hash)
+let match: bool = secret.compare(stored_hash, computed_hash)
 # Constant-time comparison that returns bool without declassifying either value.
 ```
 
@@ -2849,11 +2849,11 @@ Capability objects are created **only in `main()`** and must be explicitly passe
 
 ```
 function main(stdout: Stdout, stderr: Stderr, fs: Filesystem, net: Network, env: Environment) returns nothing:
-    let config_path = Environment.get(env, "CONFIG_PATH") handle error:
+    let config_path: string = Environment.get(env, "CONFIG_PATH") handle error:
         Stderr.write(stderr, "CONFIG_PATH not set")
         return
 
-    let config = load_config(fs, config_path) handle error:
+    let config: Config = load_config(fs, config_path) handle error:
         Stderr.write(stderr, "failed to load config")
         return
 
@@ -2869,7 +2869,7 @@ Because capabilities are linear types (Rule Set 10.1), they are **consumed** whe
 
 ```
 function example(fs: Filesystem, stdout: Stdout) returns nothing:
-    let config = read_config(fs, "app.conf") handle error:
+    let config: Config = read_config(fs, "app.conf") handle error:
         Stdout.write(stdout, "failed")
         return
     # `fs` is auto-rebound because the compiler recognizes Filesystem as a capability type.
@@ -2880,9 +2880,9 @@ function example(fs: Filesystem, stdout: Stdout) returns nothing:
 
 ```
 function read_config(fs: Filesystem, path: string) returns result[Config, string]:
-    let raw = Filesystem.read_file(fs, path) handle error:
+    let raw: string = Filesystem.read_file(fs, path) handle error:
         return fail("could not read {path}")
-    let config = json.parse(raw, Config) handle error:
+    let config: Config = json.parse(raw, Config) handle error:
         return fail("invalid config format")
     return ok(config)
     # The compiler recognizes Filesystem as a capability type and auto-rebinds
@@ -2893,11 +2893,11 @@ The compiler recognizes `Filesystem` as a capability type and automatically borr
 
 ```
 function main(stdout: Stdout, fs: Filesystem) returns nothing:
-    let config = read_config(fs, "app.conf") handle error:
+    let config: Config = read_config(fs, "app.conf") handle error:
         Stdout.write(stdout, "failed")
         return
     # `fs` is still available — the compiler auto-rebound it because Filesystem is a capability type.
-    let data = read_data(fs, config.data_path) handle error:
+    let data: Data = read_data(fs, config.data_path) handle error:
         Stdout.write(stdout, "failed")
         return
     process(data)
@@ -2921,10 +2921,10 @@ On the error path, the compiler automatically returns all borrowed capability pa
 
 ```
 function read_config(fs: Filesystem, path: string) returns result[Config, string]:
-    let raw = Filesystem.read_file(fs, path) handle error:
+    let raw: string = Filesystem.read_file(fs, path) handle error:
         return fail("could not read {path}")
         # The compiler automatically returns fs alongside the fail value
-    let config = json.parse(raw, Config) handle error:
+    let config: Config = json.parse(raw, Config) handle error:
         return fail("invalid config format")
         # The compiler automatically returns fs here too
     return ok(config)
@@ -2981,10 +2981,10 @@ Capabilities can be **narrowed** before being passed down. This lets `main()` gr
 ```
 function main(fs: Filesystem, net: Network, stdout: Stdout) returns nothing:
     # Create a read-only filesystem view:
-    let read_fs = Filesystem.read_only(fs)
+    let read_fs: Filesystem = Filesystem.read_only(fs)
 
     # Pass only read access to the config loader:
-    let config = load_config(read_fs, "app.conf") handle error:
+    let config: Config = load_config(read_fs, "app.conf") handle error:
         Stdout.write(stdout, "failed")
         return
 
@@ -2994,10 +2994,10 @@ function main(fs: Filesystem, net: Network, stdout: Stdout) returns nothing:
 **Narrowing options:**
 
 ```
-let read_fs = Filesystem.read_only(fs)           # can read, cannot write
-let scoped_fs = Filesystem.scoped(fs, "/data/")    # can only access files under /data/
-let local_net = Network.allow(net, "localhost")  # can only connect to localhost
-let limited_stdout = Stdout.buffered(stdout) # writes are buffered, not immediate
+let read_fs: Filesystem = Filesystem.read_only(fs)           # can read, cannot write
+let scoped_fs: Filesystem = Filesystem.scoped(fs, "/data/")    # can only access files under /data/
+let local_net: Network = Network.allow(net, "localhost")  # can only connect to localhost
+let limited_stdout: Stdout = Stdout.buffered(stdout) # writes are buffered, not immediate
 ```
 
 Capability narrowing **consumes** the original capability. `let read_fs = Filesystem.read_only(fs)` consumes `fs` — only `read_fs` remains. To keep both full and restricted access, clone first: `let read_fs = Filesystem.read_only(clone fs)`.
@@ -3043,10 +3043,10 @@ To test a function that takes a `Filesystem` capability, pass a mock filesystem.
 property load_config_parses_valid_json:
     use test.mock
     given port: int where port > 0 and port < 65536
-    let mock_fs = test.mock.filesystem(map(
+    let mock_fs: Filesystem = test.mock.filesystem(map(
         "app.conf": "{{\"port\": {port}}"
     ))
-    let config = load_config(mock_fs, "app.conf") handle error:
+    let config: Config = load_config(mock_fs, "app.conf") handle error:
         assert false "should not fail"
     assert config.port is port
 ```
@@ -3081,14 +3081,14 @@ Jett's capability system (Rule Set 16) naturally solves cross-platform compilati
 
 ```
 function start_server(net: Network, stdout: Stdout, port: int) returns nothing:
-    let listener = Network.listen(net, "0.0.0.0", port) handle error:
+    let listener: Listener = Network.listen(net, "0.0.0.0", port) handle error:
         Stdout.write(stdout, "failed to bind port")
         return
 
     Stdout.write(stdout, "listening on port {port}")
 
     while true:
-        let connection = Network.accept(net, listener) handle error:
+        let connection: Connection = Network.accept(net, listener) handle error:
             Stdout.write(stdout, "accept failed")
             continue
         handle_connection(net, stdout, connection)
@@ -3146,7 +3146,7 @@ Every capability type has a **universal interface** that the LLM programs agains
 
 ```
 # The LLM writes forward slashes everywhere:
-let config = Filesystem.read_file(fs, "data/config/app.json") handle error:
+let config: string = Filesystem.read_file(fs, "data/config/app.json") handle error:
     return fail("config not found")
 
 # When compiled for Windows, the compiler automatically translates
@@ -3261,15 +3261,15 @@ The LLM does not write parsing functions. The LLM does not import a serializatio
 
 ```
 function save_user(fs: Filesystem, user: view User) returns result[nothing, string]:
-    let json_data = json.serialize(view user)
+    let json_data: string = json.serialize(view user)
     Filesystem.write_file(fs, "users/{user.id}.json", json_data) handle error:
         return fail("could not save user")
     return ok(nothing)
 
 function load_user(fs: Filesystem, id: string) returns result[User, string]:
-    let raw = Filesystem.read_file(fs, "users/{id}.json") handle error:
+    let raw: string = Filesystem.read_file(fs, "users/{id}.json") handle error:
         return fail("user file not found")
-    let user = json.parse(raw, User) handle error:
+    let user: User = json.parse(raw, User) handle error:
         return fail("invalid user data")
     return ok(user)
 ```
@@ -3289,9 +3289,9 @@ struct Product:
     in_stock: bool
     tags: list[string]
 
-let p = Product(name: "widget", price: 9.99, in_stock: true, tags: list("sale", "new"))
+let p: Product = Product(name: "widget", price: 9.99, in_stock: true, tags: list("sale", "new"))
 
-let json_string = json.serialize(view p)
+let json_string: string = json.serialize(view p)
 # Result: {"name":"widget","price":9.99,"in_stock":true,"tags":["sale","new"]}
 ```
 
@@ -3300,14 +3300,14 @@ There is no configuration. Field names in JSON match field names in the struct. 
 **Binary generation — compact, deterministic layout:**
 
 ```
-let binary_data = Product.to_bytes(p)
+let binary_data: bytes = Product.to_bytes(p)
 # Compact binary representation:
 # - Fixed-size fields are stored inline
 # - Variable-size fields (strings, lists) use length-prefixed encoding
 # - Byte order is always little-endian (no configuration)
 # - The format is deterministic: same input → same bytes, always
 
-let restored = Product.from_bytes(binary_data) handle error:
+let restored: Product = Product.from_bytes(binary_data) handle error:
     return fail("corrupt data")
 # restored is identical to p
 ```
@@ -3349,12 +3349,12 @@ machine OrderProcess:
         submitted(items: list[Item], submitted_at: time.Timestamp)
         shipped(tracking: string, shipped_at: time.Timestamp)
 
-let order = OrderProcess(draft, items: list(Item(name: "widget", qty: 2)))
+let order: OrderProcess = OrderProcess(draft, items: list(Item(name: "widget", qty: 2)))
 
-let json_string = json.serialize(view order)
+let json_string: string = json.serialize(view order)
 # Result: {"state":"draft","items":[{"name":"widget","qty":2}]}
 
-let restored = json.parse(json_string, OrderProcess) handle error:
+let restored: OrderProcess = json.parse(json_string, OrderProcess) handle error:
     return fail("invalid order data")
 # restored is in the "draft" state with the same items
 ```
@@ -3374,8 +3374,8 @@ struct ValidatedUser:
     age: Age
     email: Email
 
-let raw = "{{\"name\":\"alice\",\"age\":-5,\"email\":\"alice@example.com\"}}"
-let user = json.parse(raw, ValidatedUser) handle error:
+let raw: string = "{{\"name\":\"alice\",\"age\":-5,\"email\":\"alice@example.com\"}}"
+let user: ValidatedUser = json.parse(raw, ValidatedUser) handle error:
     return fail("invalid user: {error}")
 # RUNTIME ERROR during json.parse:
 #   field "age": value -5 does not satisfy: value >= 0
@@ -3448,7 +3448,7 @@ In most languages, composing multiple operations requires nesting function calls
 
 ```
 # The LLM must plan this inside-out:
-let response = format_to_json(fetch_database_records(authenticate_user(request)))
+let response: string = format_to_json(fetch_database_records(authenticate_user(request)))
 ```
 
 To generate this line, the LLM must:
@@ -3468,7 +3468,7 @@ Jett provides a native pipeline operator `|>` that passes the result of the left
 **The same logic, written as a pipeline:**
 
 ```
-let response = request
+let response: string = request
     |> authenticate_user
     |> fetch_database_records
     |> format_to_json
@@ -3513,7 +3513,7 @@ f(x, extra_arg)
 
 ```
 # Data processing pipeline:
-let report = raw_data
+let report: Report = raw_data
     |> string.split("\n")
     |> list.filter(function(line: string) returns bool: return string.is_not_empty(line))
     |> list.map(function(line: string) returns list[string]: return string.split(line, ","))
@@ -3521,7 +3521,7 @@ let report = raw_data
     |> build_report
 
 # HTTP request handling:
-let response = request
+let response: string = request
     |> validate_auth
     |> extract_user_id
     |> load_user_profile
@@ -3530,7 +3530,7 @@ let response = request
 
 ```
 # String transformation pipeline:
-let slug = title
+let slug: string = title
     |> string.trim
     |> string.lower
     |> string.replace(" ", "-")
@@ -3548,7 +3548,7 @@ function get_name(user: view User) returns string:
 function double(x: int) returns int:
     return x * 2
 
-let result = user
+let result: int = user
     |> view get_name
     |> double
     # COMPILE ERROR at |> double:
@@ -3564,7 +3564,7 @@ The compiler error points at the exact `|>` step where the types break. The LLM 
 Pipelines integrate with the `result` type and `handle` keyword (Rule Set 5). When a pipeline step can fail, the LLM handles the error inline:
 
 ```
-let user_data = request
+let user_data: string = request
     |> validate_auth handle error:
         return fail("auth failed")
     |> extract_user_id handle error:
@@ -3593,7 +3593,7 @@ Pipelines work naturally with capability-based I/O (Rule Set 16). The capability
 
 ```
 function process_request(fs: Filesystem, net: Network, stdout: Stdout, request: Request) returns result[string, string]:
-    let output = request
+    let output: string = request
         |> authenticate
         |> authorize
         |> fetch_data(fs) handle error:
@@ -3620,7 +3620,7 @@ The LLM never sees the multi-value return. It writes the pipeline as if capabili
 If a pipeline step consumes a capability but does not allow the compiler to auto-rebind it, the compiler reports an error:
 
 ```
-let result = request
+let result: string = request
     |> authenticate
     |> consume_filesystem(fs)
     # COMPILE ERROR: pipeline step "consume_filesystem" consumes capability "fs"
@@ -3647,18 +3647,18 @@ To satisfy Rule Set 1 (strictly one canonical form), `|>` and nested function ca
 
 ```
 # Single call — correct:
-let trimmed = string.trim(name)
+let trimmed: string = string.trim(name)
 
 # ALLOWED — string interpolation:
-let message = "count: {total}"
+let message: string = "count: {total}"
 
 # BANNED — sequential chain (depth 3):
-let result = format(process(parse(input)))
+let result: string = format(process(parse(input)))
 # COMPILE ERROR: use pipeline instead
 # hint: rewrite as: input |> parse |> process |> format
 
 # Pipeline — correct:
-let result = input
+let result: string = input
     |> parse
     |> process
     |> format
@@ -3760,7 +3760,7 @@ function create_game_window(stdout: Stdout) returns result[sdl.Window, string]:
     sdl.init(sdl.INIT_VIDEO) handle error:
         return fail("SDL init failed")
 
-    let window = sdl.create_window(
+    let window: sdl.Window = sdl.create_window(
         "My Game",
         sdl.WINDOWPOS_CENTERED,
         sdl.WINDOWPOS_CENTERED,
@@ -3786,7 +3786,7 @@ function window_lifecycle(stdout: Stdout) returns nothing:
     sdl.init(sdl.INIT_VIDEO) handle error:
         return
 
-    let window = sdl.create_window("Test", 100, 100, 640, 480, 0) handle error:
+    let window: sdl.Window = sdl.create_window("Test", 100, 100, 640, 480, 0) handle error:
         Stdout.write(stdout, "failed to create window")
         sdl.quit()
         return
@@ -3807,7 +3807,7 @@ function window_lifecycle(stdout: Stdout) returns nothing:
 function bad_example() returns nothing:
     use c "SDL2/SDL.h" as sdl
 
-    let window = sdl.create_window("Test", 100, 100, 640, 480, 0) handle error:
+    let window: sdl.Window = sdl.create_window("Test", 100, 100, 640, 480, 0) handle error:
         return
 
     sdl.destroy_window(window)
@@ -3857,7 +3857,7 @@ function create_text_input(gui: GuiCapability, label: string) returns result[Tex
     # macOS: NSTextField via Cocoa.h
     # Linux: gtk_entry_new() via gtk/gtk.h
 
-    let input = GuiCapability.create_text_field(gui, label, width: 200, height: 30) handle error:
+    let input: TextInput = GuiCapability.create_text_field(gui, label, width: 200, height: 30) handle error:
         return fail("could not create text input")
     return ok(input)
 ```
@@ -4217,7 +4217,7 @@ namespace server
 
 function handle_login(stdout: Stdout, request: Request) returns result[Response, string]:
     use auth
-    let session = auth.login(request.credentials) handle error:
+    let session: Session = auth.login(request.credentials) handle error:
         return fail("login failed")
     Stdout.write(stdout, "user logged in")
     return ok(Response(status: 200, body: json.serialize_public(view session)))
@@ -4381,7 +4381,7 @@ A consumer imports this single file and gets access to all its namespaces:
 function main(net: Network, stdout: Stdout) returns nothing:
     use http_toolkit.client
     use http_toolkit.errors
-    let response = client.get(net, "https://example.com") handle error:
+    let response: Response = client.get(net, "https://example.com") handle error:
         Stdout.write(stdout, "failed: {error}")
         return
     Stdout.write(stdout, response.body)
@@ -4433,9 +4433,9 @@ function process_payment(net: Network, order: Order) returns result[Receipt, str
     use auth                # inline import — binds to "auth"
     use payment.gateway     # inline import — binds to "gateway"
 
-    let session = auth.validate_token(order.token) handle error:
+    let session: Session = auth.validate_token(order.token) handle error:
         return fail("auth failed")
-    let receipt = gateway.charge(net, order.total) handle error:
+    let receipt: Receipt = gateway.charge(net, order.total) handle error:
         return fail("payment failed")
     return ok(receipt)
 ```
@@ -4449,7 +4449,7 @@ When you write `use net.http`, the import binds to the **last segment** of the n
 ```
 function fetch(net: Network) returns result[string, HttpError]:
     use net.http
-    let response = http.get(net, "https://example.com") handle error:
+    let response: HttpResponse = http.get(net, "https://example.com") handle error:
         return fail(error)
     return ok(response.body)
 ```
@@ -4474,10 +4474,10 @@ function fetch_both(net: Network, stdout: Stdout) returns nothing:
     use net.http as net_http
     use tor.http as tor_http
 
-    let clearnet = net_http.get(net, "https://example.com") handle error:
+    let clearnet: HttpResponse = net_http.get(net, "https://example.com") handle error:
         Stdout.write(stdout, "clearnet failed: {error}")
         return
-    let onion = tor_http.get(net, "http://example.onion") handle error:
+    let onion: HttpResponse = tor_http.get(net, "http://example.onion") handle error:
         Stdout.write(stdout, "tor failed: {error}")
         return
     Stdout.write(stdout, "both fetched")
@@ -4616,7 +4616,7 @@ Reading and writing bitfield values uses the same dot-access syntax as regular s
 
 ```
 function parse_ip_packet(raw: bytes) returns result[IpHeader, string]:
-    let header = IpHeader.from_bytes(raw) handle error:
+    let header: IpHeader = IpHeader.from_bytes(raw) handle error:
         return fail("invalid IP header")
 
     if header.version != 4:
@@ -4678,7 +4678,7 @@ bitfield ColorChannel:
     blue: 8 bits      # auto-constrained: 0 to 255
     alpha: 8 bits     # auto-constrained: 0 to 255
 
-let color = ColorChannel(red: 300, green: 128, blue: 0, alpha: 255)
+let color: ColorChannel = ColorChannel(red: 300, green: 128, blue: 0, alpha: 255)
 # COMPILE ERROR: field "red" is 8 bits wide (range 0 to 255), but value is 300
 ```
 
@@ -4746,13 +4746,13 @@ bitfield TcpHeader layout network_order:
 Bitfields get the same auto-generated serialization as regular structs (Rule Set 18):
 
 ```
-let header = IpHeader.from_bytes(raw_packet) handle error:
+let header: IpHeader = IpHeader.from_bytes(raw_packet) handle error:
     return fail("invalid header")
 
-let serialized = json.serialize(view header)
+let serialized: string = json.serialize(view header)
 # {"version":4,"header_length":5,"dscp":0,"ecn":0,"total_length":60,...}
 
-let bytes = IpHeader.to_bytes(header)
+let bytes: bytes = IpHeader.to_bytes(header)
 # Exact binary representation, bit-packed, correct byte order
 ```
 
@@ -4812,7 +4812,7 @@ function count_items(data: view list[Item]) returns int:
     return list.length(data)
 
 function total_price(items: view list[Item]) returns float:
-    let mutable sum = 0.0
+    let mutable sum: float = 0.0
     for item in view items:
         sum = sum + item.price
     return sum
@@ -4825,11 +4825,11 @@ The `view` keyword before the type means: "this function can read this data but 
 ```
 function process_order(order: Order) returns nothing:
     # order.items is NOT consumed — view is explicit at the call site:
-    let count = count_items(view order.items)
-    let total = total_price(view order.items)
+    let count: int = count_items(view order.items)
+    let total: float = total_price(view order.items)
 
     # order.items is still valid here — it was never moved:
-    let first = list.first(view order.items) handle:
+    let first: Item = list.first(view order.items) handle:
         return
 
     # Now consume it when we're done reading:
@@ -4849,11 +4849,11 @@ function count(data: view list[int]) returns int:
     return list.length(data)
 
 # Keep the value — view at call site:
-let len = count(view items)
-let total = list.sum(items)    # items is still valid
+let len: int = count(view items)
+let total: int = list.sum(items)    # items is still valid
 
 # Last use — no view at call site:
-let len = count(items)
+let len: int = count(items)
 # items is freed after the call — the function still only reads it,
 # but the caller has relinquished ownership
 ```
@@ -4887,7 +4887,7 @@ A view is read-only. Period. Any operation that would modify the data — append
 
 ```
 function bad_send(data: view list[int]) returns nothing:
-    let worker = spawn Processor()
+    let worker: Processor = spawn Processor()
     send worker process(data)
     # COMPILE ERROR: cannot send a view to an actor
     # views are confined to the current thread
@@ -4935,7 +4935,7 @@ struct GameState:
 
 function render_frame(state: view GameState, stdout: Stdout) returns nothing:
     # Read any field through the view — zero copy:
-    let player_count = list.length(state.players)
+    let player_count: int = list.length(state.players)
     Stdout.write(stdout, "players: {player_count}")
     Stdout.write(stdout, "tick: {state.tick}")
 
@@ -4944,7 +4944,7 @@ function render_frame(state: view GameState, stdout: Stdout) returns nothing:
         render_player(view player, stdout)
 
 function game_loop(stdout: Stdout) returns nothing:
-    let mutable state = GameState(players: list(), world: World(), tick: 0)
+    let mutable state: GameState = GameState(players: list(), world: World(), tick: 0)
 
     while true:
         # Pass a view for rendering (read-only, zero-copy):
@@ -4964,10 +4964,10 @@ function game_loop(stdout: Stdout) returns nothing:
 >         # item is view Item — read-only, not copied
 >         Stdout.write(stdout, item.name)    # OK — reading a field
 >
->     let first = list.first(data)
+>     let first: Item = list.first(data)
 >     # first is view Item — still a view, not an owned copy
 >
->     let owned = clone first
+>     let owned: Item = clone first
 >     # NOW it's an owned copy — explicit
 > ```
 
@@ -4976,7 +4976,7 @@ function game_loop(stdout: Stdout) returns nothing:
 Views work naturally with pipelines (Rule Set 19). The `view` keyword is used in the pipeline step to indicate a read-only pass:
 
 ```
-let report = large_dataset
+let report: string = large_dataset
     |> filter_active_records
     |> calculate_summary
     |> view json.serialize
@@ -5091,7 +5091,7 @@ function sort_list(items: view list[int]) returns list[int]:
 
 property sort_list:
     given items: list[int]
-    let sorted = sort_list(items)
+    let sorted: list[int] = sort_list(items)
     assert list.length(sorted) is list.length(items)
     assert list.is_sorted(sorted)
     assert list.all_elements_in(sorted, items)
@@ -5187,7 +5187,7 @@ verify clamp:
 property clamp:
     given value: int, low: int, high: int
     where low <= high
-    let result = clamp(value, low, high)
+    let result: int = clamp(value, low, high)
     assert result >= low
     assert result <= high
     if value >= low and value <= high:
@@ -5204,7 +5204,7 @@ The `where` clause in a `property` block filters generated inputs to only valid 
 property divide:
     given a: int, b: int
     where b != 0
-    let result = a / b
+    let result: int = a / b
     assert result * b is a
 ```
 
@@ -5218,7 +5218,7 @@ property percentage:
     where total > 0
     where score >= 0
     where score <= total
-    let pct = calculate_percentage(score, total)
+    let pct: float = calculate_percentage(score, total)
     assert pct >= 0.0
     assert pct <= 100.0
 ```
@@ -5234,7 +5234,7 @@ function apply_auth_action(session: UserAuth, action: AuthAction, user_id: strin
     match action:
         login_attempt:
             if session at guest:
-                let s = UserAuth.transition(session, authenticating, user_id: user_id)
+                let s: UserAuth = UserAuth.transition(session, authenticating, user_id: user_id)
                 return UserAuth.transition(s, logged_in, user_id: user_id)
             return session
         logout:
@@ -5248,7 +5248,7 @@ function apply_auth_action(session: UserAuth, action: AuthAction, user_id: strin
 
 property user_auth_lifecycle:
     given actions: list[AuthAction], user_id: string
-    let mutable session = UserAuth(guest)
+    let mutable session: UserAuth = UserAuth(guest)
     for action in actions:
         session = apply_auth_action(session, action, user_id)
     # After any sequence of actions, the session is in a valid state:
@@ -5264,8 +5264,8 @@ Properties naturally verify serialization round-trips (Rule Set 18):
 ```
 property json_round_trip:
     given user: User
-    let json_string = json.serialize(user)
-    let restored = json.parse(json_string, User) handle error:
+    let json_string: string = json.serialize(user)
+    let restored: User = json.parse(json_string, User) handle error:
         assert false "round-trip failed: json.parse returned error"
     assert restored is user
 ```
@@ -5327,7 +5327,7 @@ In `property` blocks, `verify` blocks, and `agent_breakpoint()` evaluations, all
 ```
 property sort_preserves_elements:
     given items: list[int]
-    let sorted = sort_list(items)
+    let sorted: list[int] = sort_list(items)
     # In property blocks, sorted can be used multiple times:
     assert list.length(sorted) is list.length(items)
     assert list.is_sorted(sorted)
@@ -5390,7 +5390,7 @@ function process_invoice(stdout: Stdout, income: float) returns nothing:
     let mutable tax: tracked[float] = calculate_base_tax(income)
     tax = apply_state_tax(tax, "CA")
     tax = apply_discount(tax, "veteran")
-    let final_amount = finalize(tax)
+    let final_amount: tracked[float] = finalize(tax)
 
     trace(final_amount, stdout)
 ```
@@ -5585,12 +5585,12 @@ The running application becomes a **chatbot** that the LLM can interrogate.
 
 ```
 function process_order(fs: Filesystem, order: Order) returns result[Receipt, string]:
-    let validated = validate_order(order) handle error:
+    let validated: ValidatedOrder = validate_order(order) handle error:
         return fail("validation failed")
 
     agent_breakpoint()   # execution pauses here
 
-    let charged = charge_payment(validated) handle error:
+    let charged: ChargedOrder = charge_payment(validated) handle error:
         return fail("payment failed")
     return ok(create_receipt(charged))
 ```
@@ -5725,7 +5725,7 @@ function process_batch(fs: Filesystem, orders: view list[Order]) returns nothing
     for order in view orders:
         if order.total > 1000.0:
             agent_breakpoint()   # only pause for high-value orders
-        let result = process_single_order(fs, view order)
+        let result: result[nothing, string] = process_single_order(fs, view order)
 ```
 
 Or using a more targeted form:
@@ -5766,11 +5766,11 @@ The LLM can insert multiple breakpoints:
 
 ```
 function calculate_tax(income: float, state: string) returns float:
-    let base = income * 0.15
+    let base: float = income * 0.15
     agent_breakpoint()   # check base calculation
 
-    let state_rate = get_state_rate(state)
-    let state_tax = base * state_rate
+    let state_rate: float = get_state_rate(state)
+    let state_tax: float = base * state_rate
     agent_breakpoint()   # check state tax calculation
 
     return base + state_tax
@@ -6137,6 +6137,7 @@ Clever shortcuts and implicit behavior are where LLMs make mistakes. Jett favors
 
 - No operator overloading.
 - No implicit type coercion.
+- No type inference — every `let` binding requires an explicit type annotation.
 - No variable shadowing.
 - No hoisting or order-independent definitions.
 - Error handling is explicit (no hidden exceptions propagating silently).
@@ -6155,7 +6156,7 @@ namespace app
 function main(stdout: Stdout, fs: Filesystem) returns nothing:
     use config
 
-    let app_config = config.load(fs) handle error:
+    let app_config: Config = config.load(fs) handle error:
         Stdout.write(stdout, "config failed: {error}")
         return
 
@@ -6169,12 +6170,14 @@ The runtime provides capabilities to `main` based on its parameter list. If `mai
 ### Variables
 
 ```
-let name = "jett"
-let age = 1
-let mutable counter = 0
+let name: string = "jett"
+let age: int = 1
+let mutable counter: int = 0
 ```
 
 Variables are immutable by default. The `mutable` keyword opts into mutability. (Full word, not `mut` — see tokenizer-friendly keywords rule.)
+
+**Every `let` binding requires an explicit type annotation.** There is no type inference for variable declarations. `let x = 5` is a compile error — write `let x: int = 5`. This eliminates a decision point (the LLM never chooses between implicit and explicit typing) and ensures the type of every variable is visible at its declaration. The LLM never needs to trace through function calls to determine a variable's type.
 
 ### Functions
 
@@ -6221,8 +6224,8 @@ function run_loop(mutable running: bool) returns nothing:
 ### Collections
 
 ```
-let names = list("alice", "bob", "charlie")
-let scores = map("alice": 10, "bob": 20)
+let names: list[string] = list("alice", "bob", "charlie")
+let scores: map[string, int] = map("alice": 10, "bob": 20)
 ```
 
 Collections are constructed with explicit keywords. No `[]` literal for lists, no `{}` for maps. The constructor keyword *is* the type — AST-native.
@@ -6235,26 +6238,26 @@ struct Point:
     y: float
 
     function distance(self: view Point, other: view Point) returns float:
-        let dx = self.x - other.x
-        let dy = self.y - other.y
+        let dx: float = self.x - other.x
+        let dy: float = self.y - other.y
         return math.sqrt(dx * dx + dy * dy)
 
 # Methods are called with module syntax — there is no p1.distance(p2) form:
-let p1 = Point(x: 0.0, y: 0.0)
-let p2 = Point(x: 3.0, y: 4.0)
-let d = Point.distance(view p1, view p2)
+let p1: Point = Point(x: 0.0, y: 0.0)
+let p2: Point = Point(x: 3.0, y: 4.0)
+let d: float = Point.distance(view p1, view p2)
 ```
 
 ### Error Handling
 
 ```
 function read_file(fs: Filesystem, path: string) returns result[string, string]:
-    let content = Filesystem.read_file(fs, path) handle error:
+    let content: string = Filesystem.read_file(fs, path) handle error:
         return fail("could not open file")
     return ok(content)
 
 # handle is the ONLY way to unwrap a result:
-let content = read_file(fs, "data.txt") handle error:
+let content: string = read_file(fs, "data.txt") handle error:
     Stdout.write(stdout, error)
     return
 Stdout.write(stdout, content)
@@ -6266,12 +6269,12 @@ Every `handle` block must end with either `return` (exit function) or `default` 
 
 - **Default form:** provides a fallback value using the `default` keyword.
   ```
-  let content = read_file(fs, "data.txt") handle error:
+  let content: string = read_file(fs, "data.txt") handle error:
       default "default content"
   ```
 - **Return form:** exits the enclosing function via `return` or `return fail(...)`.
   ```
-  let content = read_file(fs, "data.txt") handle error:
+  let content: string = read_file(fs, "data.txt") handle error:
       return fail(error)
   ```
 
@@ -6330,8 +6333,8 @@ namespace myapp
 function main(stdout: Stdout, net: Network) returns nothing:
     use math
     use net.http
-    let pi = math.pi
-    let response = http.get(net, "https://example.com") handle error:
+    let pi: float = math.pi
+    let response: HttpResponse = http.get(net, "https://example.com") handle error:
         # error is HttpError — the module's specific error type
         Stdout.write(stdout, "request failed: {error}")
         return
@@ -6344,20 +6347,20 @@ All `use` statements must be inside a function or block — file-level imports a
 String interpolation is the ONE canonical mechanism for building strings in Jett. There is no `string.concat()` function and no `+` operator for strings. **All strings are interpolated by default** — there is no separate "plain string" vs "template string" distinction, no `f""` prefix, no backtick delimiter. Every `"..."` string supports `{expr}` interpolation. This eliminates a decision point: the LLM never has to choose between string types.
 
 ```
-let name = "world"
-let greeting = "hello {name}"           # "hello world"
-let result = "total: {order.total}"     # expressions inside {} are evaluated
-let multi = "{a} + {b} = {a + b}"       # arbitrary expressions allowed
+let name: string = "world"
+let greeting: string = "hello {name}"           # "hello world"
+let result: string = "total: {order.total}"     # expressions inside {} are evaluated
+let multi: string = "{a} + {b} = {a + b}"       # arbitrary expressions allowed
 ```
 
 **Displayable requirement:** Expressions inside `{}` must be of a type that implements the `Displayable` interface. The compiler calls `Displayable.display()` under the hood to produce the string representation. Types that do not implement `Displayable` are rejected:
 
 ```
-let count = 42
-let message = "count is {count}"        # OK — int implements Displayable
+let count: int = 42
+let message: string = "count is {count}"        # OK — int implements Displayable
 
-let user = User(name: "alice")
-let msg = "user: {user}"               # COMPILE ERROR: User does not implement Displayable
+let user: User = User(name: "alice")
+let msg: string = "user: {user}"               # COMPILE ERROR: User does not implement Displayable
 ```
 
 **Compiler-stdlib coupling:** This is one of a small number of places where the compiler has special knowledge of a standard library interface. String interpolation depends on `Displayable`, just as `handle error:` depends on the built-in `result` type and `handle:` depends on `optional`. These are intentional, well-defined couplings — not a general implicit conversion system. Outside of string interpolation, converting to string requires an explicit `string.from_int()` or `string.from_float()` call.
@@ -6365,7 +6368,7 @@ let msg = "user: {user}"               # COMPILE ERROR: User does not implement 
 **Literal braces:** Use `{{` and `}}` for literal `{` and `}` characters:
 
 ```
-let json_example = "the format is: {{key: value}}"
+let json_example: string = "the format is: {{key: value}}"
 # produces: "the format is: {key: value}"
 ```
 
@@ -6427,13 +6430,14 @@ The `view` keyword is used only in parameter declarations to indicate read-only,
 | `nothing` | Unit type with exactly one value, also called `nothing`. Used in `result[nothing, string]` for functions that can fail but return no value on success. `ok(nothing)` is the canonical form for wrapping success in `result[nothing, E]`. |
 | `bytes` | Sequence of raw bytes (0-255). Distinct from `string` (which is UTF-8 text). Used for binary data, network packets, file I/O with binary formats. |
 
-### Type Inference
+### Explicit Typing
 
-Types are inferred where unambiguous. Annotations are required on function signatures but optional on local variables.
+Every variable declaration requires a type annotation. There is no type inference for `let` bindings.
 
 ```
-let x = 42              # inferred as int
-let y: float = 42       # explicit annotation
+let x: int = 42
+let y: float = 42.0
+let name: string = "jett"
 ```
 
 ### Generics
@@ -6458,7 +6462,7 @@ function sort[T implements Orderable](items: list[T]) returns list[T]:
 
 function display_sorted[T implements Orderable and Displayable](items: list[T], stdout: Stdout) returns nothing:
     # T must implement both Orderable and Displayable
-    let sorted = sort(items)
+    let sorted: list[T] = sort(items)
     for item in sorted:
         Stdout.write(stdout, Displayable.display(item))
 
