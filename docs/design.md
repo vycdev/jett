@@ -1755,54 +1755,7 @@ submit_order(items)
 
 The LLM never writes allocation code, never calls `free()`, never chooses an allocation strategy. The compiler does all of it.
 
-#### 2. High-Performance Data Layout: Native Structure of Arrays (SoA)
-
-Native performance relies heavily on CPU cache hits and SIMD operations. Data that is laid out contiguously in memory (all X coordinates together, all Y coordinates together) is dramatically faster to process than data interleaved in objects (X1, Y1, velocity1, X2, Y2, velocity2...).
-
-LLMs naturally write "Array of Structs" (AoS) because it groups related concepts cleanly — which is good for the LLM's attention mechanism. Jett lets the LLM write clean, grouped structs but gives the compiler a hint to **transform the memory layout** for performance.
-
-**The LLM writes this (clean, readable, AoS):**
-
-```
-struct Particle layout soa:
-    x: float
-    y: float
-    velocity_x: float
-    velocity_y: float
-    mass: float
-```
-
-**The compiler generates this (fast, cache-friendly, SoA):**
-
-Under the hood, `list[Particle]` is not stored as an array of Particle objects. It is stored as:
-- One contiguous array of all `x` values
-- One contiguous array of all `y` values
-- One contiguous array of all `velocity_x` values
-- One contiguous array of all `velocity_y` values
-- One contiguous array of all `mass` values
-
-**The LLM code looks the same either way:**
-
-```
-function update_positions(particles: list[Particle], dt: float) returns list[Particle]:
-    return list.map(particles, function(p: Particle) returns Particle:
-        return Particle(
-            x: p.x + p.velocity_x * dt,
-            y: p.y + p.velocity_y * dt,
-            velocity_x: p.velocity_x,
-            velocity_y: p.velocity_y,
-            mass: p.mass))
-```
-
-The LLM writes simple, field-access-based code. The compiler handles the memory transformation. The LLM's attention stays focused on the logic. The CPU gets cache-friendly data.
-
-**Why this matters:**
-
-- The LLM writes exactly the code it would write without `layout soa` — zero cognitive overhead.
-- The `layout soa` tag is a single annotation. The LLM either includes it or doesn't. No complex template meta-programming.
-- The performance difference can be 5-10x for data-heavy workloads (physics, graphics, data processing).
-
-#### 3. Multithreading: Strict Actor Model (Zero Shared Memory)
+#### 2. Multithreading: Strict Actor Model (Zero Shared Memory)
 
 Shared mutable state — multiple threads modifying the same variable using locks or mutexes — is a disaster for LLMs. An LLM will reliably lock a mutex on line 5 and completely forget to unlock it on line 50 when an early return happens, causing a fatal deadlock.
 
@@ -2010,7 +1963,7 @@ The `if comptime` branch is resolved at compile time. The compiled binary only c
 |---------|-----------------------------------|------------------------------|
 | Memory allocation | `malloc`/`free` (forget to free = leak) | Compiler-managed (linear types give perfect ownership knowledge) |
 | Ownership tracking | Lifetimes with syntactic annotations (`&'a mut T`) | Linear types (consumed on use, clone to keep) |
-| Data layout | Manual SoA transformations | `layout soa` annotation, compiler transforms |
+| Data layout | Manual SoA transformations | Compiler-optimized (future: automatic layout decisions based on access patterns) |
 | Thread safety | Mutexes and locks (forget to unlock = deadlock) | Actor model, zero shared memory, message passing |
 | Concurrency | Fire-and-forget async (orphaned tasks) | Structured concurrency (compiler forces join/cancel) |
 | Meta-programming | Macros / templates (secondary syntax) | `comptime` (same syntax, executed at compile time) |
@@ -6666,7 +6619,6 @@ deps:
 ### Phase 3 — Memory and Performance
 
 - [ ] Compiler-managed memory allocation (automatic allocation/deallocation from linear type analysis)
-- [ ] `layout soa` annotation and compiler SoA transformation
 - [ ] `comptime` keyword and compile-time function execution
 - [ ] Comptime generic specialization
 - [ ] Compiler makes all structs compatible with `json.serialize()` / `json.parse(raw, Type)`
@@ -6770,7 +6722,7 @@ deps:
 - **Dependent types** — should refinement types be able to reference other values (e.g. `type Matrix = list[list[float]] where rows is cols`)? This approaches dependent type territory and significantly increases type checker complexity.
 - **Concurrency model** — RESOLVED: actor model with zero shared memory, structured concurrency with enforced join/cancel. Concurrency uses `concurrent` blocks and `spawn`/`join`/`cancel` keywords with capability parameters for I/O.
 - **Memory management** — RESOLVED: linear types (move-by-default, explicit `clone` keyword) with fully compiler-managed allocation. No GC, no manual `free`, no lifetime annotations, no arenas. The compiler has perfect ownership knowledge from linear types and handles all allocation/deallocation automatically.
-- **SoA limitations** — which struct features are compatible with `layout soa`? Can SoA structs contain other structs, or only primitive fields? How do optional fields interact with SoA layout?
+- **Data layout optimization** — the compiler may automatically apply SoA (Structure of Arrays) transformations as a future optimization when access patterns suggest it. No syntax is needed — this is a compiler-internal optimization like auto-vectorization.
 - **Comptime boundaries** — what standard library functions are available at comptime? All pure functions? Only a subset? File I/O at comptime (for code generation from schemas)?
 - **Actor supervision** — should there be a built-in actor supervision tree (like Erlang/OTP) for handling actor crashes? Or is the error-as-values model sufficient?
 - **Interop** — RESOLVED: Auto-FFI with built-in C header parser. `use c "header.h"` imports C libraries with automatic safe wrapping. C pointers become opaque linear handles. WASM target is supported via capability lowering (Rule Set 17).
