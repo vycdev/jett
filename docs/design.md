@@ -2352,7 +2352,7 @@ verify calculate_discount:
     assert calculate_discount(50.0, "silver") is 45.0
 ```
 
-The `verify` block is attached to `calculate_discount` by name. It appears directly below the function — zero distance between implementation and tests. When the LLM generates the `verify` block, it just wrote the function body. Every branch, every edge case, every constant is fresh in its context.
+The `verify` block is attached to `calculate_discount` by name. It **must** appear directly below the function it verifies — the compiler rejects `verify` blocks placed anywhere else. This is not a convention, it is enforced. Zero distance between implementation and tests. When the LLM generates the `verify` block, it just wrote the function body. Every branch, every edge case, every constant is fresh in its context.
 
 **Why `verify` and not `test`:**
 
