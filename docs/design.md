@@ -1779,11 +1779,11 @@ actor Counter(stdout: Stdout):
 function main(stdout: Stdout) returns nothing:
     let counter: Counter = spawn Counter(stdout: clone stdout)
 
-    send counter increment
-    send counter increment
-    send counter increment
+    send counter.increment
+    send counter.increment
+    send counter.increment
 
-    let total: int = ask counter get_count
+    let total: int = ask counter.get_count
     Stdout.write(stdout, string(total))   # prints "3"
 ```
 
@@ -1805,7 +1805,7 @@ actor Logger(stdout: Stdout):
 
 function main(stdout: Stdout) returns nothing:
     let logger: Logger = spawn Logger(stdout: clone stdout)
-    send logger log("application started")
+    send logger.log("application started")
     # stdout is still available here because we cloned it
 ```
 
@@ -1830,7 +1830,7 @@ function main(stdout: Stdout) returns nothing:
     let worker: Processor = spawn Processor()
     let data: Payload = Payload(content: "input data")
 
-    let response: ProcessResult = ask worker process(data)
+    let response: ProcessResult = ask worker.process(data)
     # `data` has been consumed — it was sent to the actor.
     # The LLM cannot accidentally access it here.
     Stdout.write(stdout, response.summary)
@@ -4823,7 +4823,7 @@ A view is read-only. Period. Any operation that would modify the data — append
 ```
 function bad_send(data: view list[int]) returns nothing:
     let worker: Processor = spawn Processor()
-    send worker process(data)
+    send worker.process(data)
     # COMPILE ERROR: cannot send a view to an actor
     # views are confined to the current thread
     # hint: clone the data or move ownership to the actor instead
