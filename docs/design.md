@@ -2102,15 +2102,7 @@ function process_order(order: Order) returns result[Receipt, string]:
 
 Every line inside this function is at the same indentation level. The LLM's attention mechanism naturally groups them together because they are physically close and share the same leading whitespace pattern. The function boundary is visually obvious — the next line at indentation level 0 is a different function.
 
-**Contrast with brace-based scoping:**
-
-```
-// Brace-based: the LLM must match { to } across potentially hundreds of lines.
-// A missing } on line 150 causes an error that manifests on line 300.
-// The attention head linking the opening { to its closing } must span the entire function.
-```
-
-With indentation, there is **nothing to match**. The scope is defined by the indentation level itself. There is no opening delimiter that needs a closing delimiter 200 lines later. The most common class of syntax errors in brace-based languages — mismatched or missing brackets — is eliminated entirely.
+**Contrast with brace-based scoping:** in brace-based languages, the LLM must match `{` to `}` across potentially hundreds of lines. A missing `}` on line 150 causes an error that manifests on line 300. The attention head linking the opening `{` to its closing `}` must span the entire function. With indentation, there is **nothing to match**. The scope is defined by the indentation level itself. There is no opening delimiter that needs a closing delimiter 200 lines later. The most common class of syntax errors in brace-based languages — mismatched or missing brackets — is eliminated entirely.
 
 #### 3. Strict Rules — Zero Ambiguity
 
