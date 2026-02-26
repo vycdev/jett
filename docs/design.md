@@ -2436,22 +2436,22 @@ verify calculate_grade:
     assert calculate_grade(85, 100) is 85.0
     assert calculate_grade(0, 100) is 0.0
     assert calculate_grade(50, 50) is 100.0
-    assert calculate_grade(1, 3) is_near 33.33 within 0.01
+    assert calculate_grade(1, 3) is 33.33 within 0.01
 ```
 
 The return type `Percentage` guarantees the result is between 0 and 100. The `verify` block proves specific input/output pairs. Together, the type system and the verification contracts provide two layers of correctness: the type constrains the range, the verify proves specific behaviors.
 
-**Float comparison with `is_near`:**
+**Float comparison with `is ... within`:**
 
-LLMs cannot reliably predict exact IEEE 754 floating point representations (e.g., `33.333333333333336`). For float comparisons, Jett provides `is_near ... within ...` syntax:
+Nobody can reliably predict exact IEEE 754 floating point representations (e.g., `33.333333333333336`). For approximate float comparisons, Jett extends `is` with `within`:
 
 ```
-assert calculate_grade(1, 3) is_near 33.33 within 0.01
+assert calculate_grade(1, 3) is 33.33 within 0.01
 # Passes if the result is within 0.01 of 33.33
 ```
 
-- `is` — exact comparison. Use for `int`, `string`, `bool`, and exact float values like `0.0` or `100.0`.
-- `is_near X within Y` — approximate comparison. Use for float results that involve division or irrational numbers. The tolerance `Y` is mandatory — there is no implicit epsilon.
+- `is X` — exact comparison. Use for `int`, `string`, `bool`, and exact float values like `0.0` or `100.0`.
+- `is X within Y` — approximate comparison. Use for float results that involve division or irrational numbers. The tolerance `Y` is mandatory — there is no implicit epsilon.
 
 #### Why This Matters for LLMs
 
@@ -6567,7 +6567,7 @@ All 17 block constructs share the same shape. An LLM only needs to learn one pat
 
 Jett's keyword set uses complete, common English words that each map to a single token:
 
-`let`, `mutable`, `function`, `return`, `returns`, `if`, `else`, `for`, `in`, `while`, `struct`, `enum`, `match`, `use`, `true`, `false`, `none`, `and`, `or`, `not`, `is`, `is_near`, `within`, `self`, `handle`, `error`, `default`, `result`, `ok`, `fail`, `as`, `break`, `continue`, `interface`, `implement`, `assert`, `type`, `where`, `value`, `mutual`, `machine`, `states`, `transitions`, `to`, `at`, `transition`, `clone`, `actor`, `receive`, `send`, `ask`, `respond`, `spawn`, `run`, `join`, `cancel`, `comptime`, `layout`, `verify`, `secret`, `declassify`, `serialize`, `namespace`, `bitfield`, `bit`, `bits`, `remaining`, `view`, `property`, `given`, `tracked`, `trace`, `agent_breakpoint`, `some`, `optional`, `nothing`, `int`, `float`, `string`, `bool`, `bytes`, `list`, `map`, `set`, `modulo`
+`let`, `mutable`, `function`, `return`, `returns`, `if`, `else`, `for`, `in`, `while`, `struct`, `enum`, `match`, `use`, `true`, `false`, `none`, `and`, `or`, `not`, `is`, `within`, `self`, `handle`, `error`, `default`, `result`, `ok`, `fail`, `as`, `break`, `continue`, `interface`, `implement`, `assert`, `type`, `where`, `value`, `mutual`, `machine`, `states`, `transitions`, `to`, `at`, `transition`, `clone`, `actor`, `receive`, `send`, `ask`, `respond`, `spawn`, `run`, `join`, `cancel`, `comptime`, `layout`, `verify`, `secret`, `declassify`, `serialize`, `namespace`, `bitfield`, `bit`, `bits`, `remaining`, `view`, `property`, `given`, `tracked`, `trace`, `agent_breakpoint`, `some`, `optional`, `nothing`, `int`, `float`, `string`, `bool`, `bytes`, `list`, `map`, `set`, `modulo`
 
 ### JSON AST Round-Tripping
 
