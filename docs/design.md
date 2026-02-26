@@ -6421,7 +6421,7 @@ let name: string = "jett"
 
 ### Generics
 
-Generics use `[T]` (square brackets) rather than `<T>` — avoids ambiguity with comparison operators and is more reliably tokenized.
+Generics use `[T]` (square brackets) rather than `<T>` — avoids ambiguity with comparison operators and is more reliably tokenized. Square brackets **only** mean generics in Jett — there is no `[]` indexing operator. List access uses `list.get[T](items, index)` (which returns `optional[T]`, forcing bounds checking), and string indexing does not exist (see Rule Set 12). This makes `[]` completely unambiguous: it always means a type parameter.
 
 **Generic type parameters are always explicit at call sites.** The compiler does not infer type parameters — the caller must specify them. This keeps types visible everywhere, especially in pipes and nested calls where there is no `let` binding to show the type:
 
@@ -6472,7 +6472,9 @@ function wrap[T](value: T) returns list[T]:
     return [value]    # OK — storing T in a list
 
 function bad_sort[T](items: list[T]) returns list[T]:
-    if items[0] > items[1]:    # COMPILE ERROR: T does not implement Orderable
+    let a: optional[T] = list.get[T](items, 0)
+    let b: optional[T] = list.get[T](items, 1)
+    if a > b:    # COMPILE ERROR: T does not implement Orderable
         ...
 ```
 
