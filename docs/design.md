@@ -1851,11 +1851,13 @@ Jett uses **structured concurrency** without function coloring. `run` launches a
 
 ```
 function fetch_all_data(net: Network) returns result[DashboardData, HttpError]:
-    let users: Task[HttpResponse] = run http.get(net, "https://api.example.com/users")
-    let orders: Task[HttpResponse] = run http.get(net, "https://api.example.com/orders")
-    let stats: Task[HttpResponse] = run http.get(net, "https://api.example.com/stats")
+    let users: HttpResponse = run http.get(net, "https://api.example.com/users")
+    let orders: HttpResponse = run http.get(net, "https://api.example.com/orders")
+    let stats: HttpResponse = run http.get(net, "https://api.example.com/stats")
 
     # All three requests run in parallel.
+    # users, orders, stats are pending — the compiler tracks them as unresolved.
+    # They cannot be used as HttpResponse until joined.
     # The function CANNOT return until all three are resolved.
 
     let users_result: HttpResponse = join users handle error:
@@ -1883,7 +1885,7 @@ function fetch_all_data(net: Network) returns result[DashboardData, HttpError]:
 
 **Rules enforced by the compiler:**
 
-- `run` launches a function call as a concurrent task, returning a `Task[T]`. `spawn` is used separately for actors (see Rule Set 10.3).
+- `run` launches a function call as a concurrent task. The variable is typed with the function's return type, but the compiler tracks it as pending — it cannot be used until `join`ed. `spawn` is used separately for actors (see Rule Set 10.3).
 - `join` waits for a task to complete. It returns a `result` that must be handled.
 - Every `run` must have a matching `join` or `cancel` before the enclosing function returns. If the LLM forgets one, the compiler rejects the code.
 - No orphaned tasks. No background processes silently running after the function ends.
@@ -1893,7 +1895,7 @@ function fetch_all_data(net: Network) returns result[DashboardData, HttpError]:
 `cancel` sets a cancellation flag on a task. The task is not killed immediately — instead, the next capability use (I/O operation) inside the cancelled task returns a `CancelledError`. The task's normal error handling cleans up resources. No cancellation tokens, no manual flag checking — the capability system provides natural cancellation checkpoints:
 
 ```
-let work: Task[Data] = run expensive_operation(net, data)
+let work: Data = run expensive_operation(net, data)
 
 # If we need to stop the task:
 cancel work
@@ -1910,8 +1912,8 @@ join work handle error:
 
 ```
 function bad_example(net: Network) returns result[string, string]:
-    let users: Task[HttpResponse] = run http.get(net, "https://api.example.com/users")
-    let orders: Task[HttpResponse] = run http.get(net, "https://api.example.com/orders")
+    let users: HttpResponse = run http.get(net, "https://api.example.com/users")
+    let orders: HttpResponse = run http.get(net, "https://api.example.com/orders")
 
     let users_result: HttpResponse = join users handle error:
         return fail("failed")
