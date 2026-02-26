@@ -2465,7 +2465,7 @@ The LLM generates code → the compiler runs verify blocks → if they fail, the
 
 **3. Tests are contracts, not afterthoughts.**
 
-Because verify blocks are compiler-enforced, the LLM cannot "skip" testing. Every pure function is proven correct before the binary exists. This matches the LLM workflow perfectly — generate function, generate proof, move on.
+Verify blocks are optional — but when present, they are compiler-enforced. If a verify block exists, the function is proven correct (for the tested inputs) before the binary exists. The natural workflow encourages writing them: generate function, generate verify, move on.
 
 **4. The LLM never writes a test for code it can't see.**
 
