@@ -1908,6 +1908,40 @@ join work handle error:
     log(stdout, "Task was cancelled")
 ```
 
+**Running tasks in a loop:**
+
+Pending values created by `run` can be added to lists and joined later — individually or all at once. The compiler tracks pending state through list operations:
+
+```
+let mutable tasks: list[HttpResponse] = list[]
+
+for url in urls:
+    let response: HttpResponse = run http.get(net, url)
+    tasks = list.append(tasks, response)
+
+# join the whole list — resolves all pending items
+let results: list[HttpResponse] = join tasks handle error:
+    return fail(error)
+```
+
+`join` means "ensure this value is resolved." On a pending value, it waits. On an already-resolved value, it returns immediately. This means lists can contain a mix of pending and non-pending values — `join` handles both:
+
+```
+let mutable tasks: list[HttpResponse] = list[]
+
+for url in urls:
+    if cache.has(url):
+        let cached: HttpResponse = cache.get(url)
+        tasks = list.append(tasks, cached)
+    else:
+        let response: HttpResponse = run http.get(net, url)
+        tasks = list.append(tasks, response)
+
+# join resolves pending items, passes through already-resolved ones
+let results: list[HttpResponse] = join tasks handle error:
+    return fail(error)
+```
+
 **What the compiler rejects:**
 
 ```
