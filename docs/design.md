@@ -1843,71 +1843,90 @@ function main(stdout: Stdout) returns nothing:
 - **Linear typing prevents data races.** When data is sent, it is gone from the sender. Two threads cannot hold the same data.
 - **Message passing is explicit.** The LLM can see exactly what data flows where. No hidden side channels.
 
-#### 4. Async/Await: Enforced Structured Concurrency
+#### 4. Structured Concurrency
 
-In languages like JavaScript or C#, you can launch a background async task and forget about it. For an LLM, these "fire-and-forget" patterns create invisible ghost processes that it loses track of.
+In languages like JavaScript or C#, you can launch a background async task and forget about it. For an LLM, these "fire-and-forget" patterns create invisible ghost processes that it loses track of. Other languages split functions into `async` and non-`async` variants, creating a "function coloring" problem where the LLM must track which world each function lives in.
 
-Jett uses **structured concurrency**: all async tasks are bound to a scope. The scope cannot exit until all child tasks are resolved.
+Jett uses **structured concurrency** without function coloring. `run` launches any function call as a concurrent task. `join` waits for it. `cancel` stops it. The compiler enforces that every task is resolved before the enclosing function returns.
 
 ```
 function fetch_all_data(net: Network) returns result[DashboardData, HttpError]:
-    let data: DashboardData = concurrent:
-        let users: Task[HttpResponse] = run http.get(net, "https://api.example.com/users")
-        let orders: Task[HttpResponse] = run http.get(net, "https://api.example.com/orders")
-        let stats: Task[HttpResponse] = run http.get(net, "https://api.example.com/stats")
+    let users: Task[HttpResponse] = run http.get(net, "https://api.example.com/users")
+    let orders: Task[HttpResponse] = run http.get(net, "https://api.example.com/orders")
+    let stats: Task[HttpResponse] = run http.get(net, "https://api.example.com/stats")
 
-        # All three requests run in parallel.
-        # The `concurrent` block CANNOT exit until all three are resolved.
+    # All three requests run in parallel.
+    # The function CANNOT return until all three are resolved.
 
-        let users_result: HttpResponse = join users handle error:
-            return fail(error)
-        let orders_result: HttpResponse = join orders handle error:
-            return fail(error)
-        let stats_result: HttpResponse = join stats handle error:
-            return fail(error)
+    let users_result: HttpResponse = join users handle error:
+        return fail(error)
+    let orders_result: HttpResponse = join orders handle error:
+        return fail(error)
+    let stats_result: HttpResponse = join stats handle error:
+        return fail(error)
 
-        let users_data: list[User] = json.parse(users_result.body, list[User]) handle error:
-            return fail(HttpError.status_error(0, error))
-        let orders_data: list[Order] = json.parse(orders_result.body, list[Order]) handle error:
-            return fail(HttpError.status_error(0, error))
-        let stats_data: Stats = json.parse(stats_result.body, Stats) handle error:
-            return fail(HttpError.status_error(0, error))
+    let users_data: list[User] = json.parse(users_result.body, list[User]) handle error:
+        return fail(HttpError.status_error(0, error))
+    let orders_data: list[Order] = json.parse(orders_result.body, list[Order]) handle error:
+        return fail(HttpError.status_error(0, error))
+    let stats_data: Stats = json.parse(stats_result.body, Stats) handle error:
+        return fail(HttpError.status_error(0, error))
 
-        DashboardData(
-            users: users_data,
-            orders: orders_data,
-            stats: stats_data
-        )
-
-    return ok(data)
+    return ok(DashboardData(
+        users: users_data,
+        orders: orders_data,
+        stats: stats_data
+    ))
 ```
+
+**No function coloring.** There is no `async` keyword. Any function can be launched concurrently with `run` — it is the caller's decision, not the function's. A function that takes `net: Network` clearly does I/O (the capability tells you), but whether to run it concurrently is up to whoever calls it.
 
 **Rules enforced by the compiler:**
 
-- `run` creates a concurrent task inside a `concurrent` block. Each task must be joined or cancelled before the block exits. `spawn` is used separately for actors (see Rule Set 10.3).
-- `join` waits for a running task to complete. It returns a `result` that must be handled.
-- The `concurrent` block **cannot exit** until every task started with `run` is either `join`ed or explicitly `cancel`led. If the LLM forgets to join a task, the compiler rejects the code.
-- No orphaned tasks. No background processes silently running after the scope ends.
+- `run` launches a function call as a concurrent task, returning a `Task[T]`. `spawn` is used separately for actors (see Rule Set 10.3).
+- `join` waits for a task to complete. It returns a `result` that must be handled.
+- Every `run` must have a matching `join` or `cancel` before the enclosing function returns. If the LLM forgets one, the compiler rejects the code.
+- No orphaned tasks. No background processes silently running after the function ends.
+
+**Cancellation through capabilities:**
+
+`cancel` sets a cancellation flag on a task. The task is not killed immediately — instead, the next capability use (I/O operation) inside the cancelled task returns a `CancelledError`. The task's normal error handling cleans up resources. No cancellation tokens, no manual flag checking — the capability system provides natural cancellation checkpoints:
+
+```
+let work: Task[Data] = run expensive_operation(net, data)
+
+# If we need to stop the task:
+cancel work
+# Inside expensive_operation, the next I/O call (http.get, file.read, etc.)
+# returns a CancelledError through normal error handling.
+# Linear resources are cleaned up by the function's existing handle blocks.
+
+# A cancelled task must still be joined to collect its result:
+join work handle error:
+    log(stdout, "Task was cancelled")
+```
 
 **What the compiler rejects:**
 
 ```
 function bad_example(net: Network) returns result[string, string]:
-    concurrent:
-        let users: Task[HttpResponse] = run http.get(net, "https://api.example.com/users")
-        let orders: Task[HttpResponse] = run http.get(net, "https://api.example.com/orders")
+    let users: Task[HttpResponse] = run http.get(net, "https://api.example.com/users")
+    let orders: Task[HttpResponse] = run http.get(net, "https://api.example.com/orders")
 
-        let users_result: HttpResponse = join users handle error:
-            return fail("failed")
+    let users_result: HttpResponse = join users handle error:
+        return fail("failed")
 
-        # COMPILE ERROR: task "orders" is never joined or cancelled
-        # hint: add "join orders" or "cancel orders" before the concurrent block exits
+    return ok(users_result.body)
+
+    # COMPILE ERROR: task "orders" is never joined or cancelled
+    # hint: add "join orders" or "cancel orders" before returning
 ```
 
 **Why this works for LLMs:**
 
-- **Task lifecycles are bound to indentation blocks.** The LLM's attention mechanism understands blocks and indentation. If it starts a task with `run` inside a `concurrent` block, it must resolve that task within the same visual chunk of code.
-- **No invisible background processes.** Every concurrent task has a visible `run`, a visible `join` or `cancel`, and both live in the same block.
+- **No function coloring.** The LLM doesn't need to track which functions are async. `run` is a caller-side keyword applied to any function call.
+- **Task lifecycles are visible.** Every task has a visible `run` and a visible `join` or `cancel` in the same function.
+- **Cancellation is automatic.** The LLM doesn't need to thread cancellation tokens or check flags. `cancel` plus the capability system handles everything.
 - **The compiler catches forgotten tasks.** The LLM cannot "fire and forget."
 
 #### 5. Meta-Programming: Comptime Over Macros
@@ -2101,7 +2120,6 @@ enum ...:
 match ...:
 machine ...:
 actor ...:
-concurrent:
 verify ...:
 property ...:
 mutual:
@@ -6496,7 +6514,6 @@ enum ...:
 match ...:
 machine ...:
 actor ...:
-concurrent ...:
 verify ...:
 property ...:
 mutual ...:
@@ -6511,7 +6528,7 @@ All 17 block constructs share the same shape. An LLM only needs to learn one pat
 
 Jett's keyword set uses complete, common English words that each map to a single token:
 
-`let`, `mutable`, `function`, `return`, `returns`, `if`, `else`, `for`, `in`, `while`, `struct`, `enum`, `match`, `use`, `true`, `false`, `none`, `and`, `or`, `not`, `is`, `is_near`, `within`, `self`, `handle`, `error`, `default`, `result`, `ok`, `fail`, `as`, `break`, `continue`, `interface`, `implement`, `assert`, `type`, `where`, `value`, `mutual`, `machine`, `states`, `transitions`, `to`, `at`, `transition`, `clone`, `actor`, `receive`, `send`, `ask`, `respond`, `spawn`, `run`, `concurrent`, `join`, `cancel`, `comptime`, `layout`, `verify`, `secret`, `declassify`, `serialize`, `namespace`, `bitfield`, `bit`, `bits`, `remaining`, `view`, `property`, `given`, `tracked`, `trace`, `agent_breakpoint`, `some`, `optional`, `nothing`, `int`, `float`, `string`, `bool`, `bytes`, `list`, `map`, `set`, `modulo`
+`let`, `mutable`, `function`, `return`, `returns`, `if`, `else`, `for`, `in`, `while`, `struct`, `enum`, `match`, `use`, `true`, `false`, `none`, `and`, `or`, `not`, `is`, `is_near`, `within`, `self`, `handle`, `error`, `default`, `result`, `ok`, `fail`, `as`, `break`, `continue`, `interface`, `implement`, `assert`, `type`, `where`, `value`, `mutual`, `machine`, `states`, `transitions`, `to`, `at`, `transition`, `clone`, `actor`, `receive`, `send`, `ask`, `respond`, `spawn`, `run`, `join`, `cancel`, `comptime`, `layout`, `verify`, `secret`, `declassify`, `serialize`, `namespace`, `bitfield`, `bit`, `bits`, `remaining`, `view`, `property`, `given`, `tracked`, `trace`, `agent_breakpoint`, `some`, `optional`, `nothing`, `int`, `float`, `string`, `bool`, `bytes`, `list`, `map`, `set`, `modulo`
 
 ### JSON AST Round-Tripping
 
@@ -6637,7 +6654,7 @@ deps:
 
 - [ ] Actor model (`actor`, `receive`, `send`, `ask`, `respond`)
 - [ ] Linear typing enforcement across actor message passing
-- [ ] Structured concurrency (`concurrent`, `run`, `join`, `cancel`)
+- [ ] Structured concurrency (`run`, `join`, `cancel`)
 - [ ] Compiler enforcement: no orphaned tasks, no unjoined spawns
 
 ### Phase 5 — Standard Library
@@ -6720,7 +6737,7 @@ deps:
 - **Effect system** — RESOLVED: capability-based I/O only. No `effects` keyword. All side effects declared via capability parameters.
 - **Refinement type complexity** — RESOLVED: `where` clauses accept any pure expression (no capabilities, no mutation) that evaluates to `bool`. `value` refers to the value being constrained. Expressions use normal Jett syntax — no special intrinsics. Constraints are checked at runtime type boundaries (when a value enters the refined type). This means `where string.is_valid_json(value)` and `where list.length(value) <= 100` are both valid.
 - **Dependent types** — should refinement types be able to reference other values (e.g. `type Matrix = list[list[float]] where rows is cols`)? This approaches dependent type territory and significantly increases type checker complexity.
-- **Concurrency model** — RESOLVED: actor model with zero shared memory, structured concurrency with enforced join/cancel. Actors use `spawn`, concurrent tasks use `run`/`join`/`cancel` keywords inside `concurrent` blocks, with capability parameters for I/O.
+- **Concurrency model** — RESOLVED: actor model with zero shared memory, structured concurrency with enforced join/cancel. Actors use `spawn`, concurrent tasks use `run`/`join`/`cancel` at the function level (no special blocks). Cancellation works through capabilities — `cancel` sets a flag, the next I/O operation returns `CancelledError`. No function coloring.
 - **Memory management** — RESOLVED: linear types (move-by-default, explicit `clone` keyword) with fully compiler-managed allocation. No GC, no manual `free`, no lifetime annotations, no arenas. The compiler has perfect ownership knowledge from linear types and handles all allocation/deallocation automatically.
 - **Data layout optimization** — the compiler may automatically apply SoA (Structure of Arrays) transformations as a future optimization when access patterns suggest it. No syntax is needed — this is a compiler-internal optimization like auto-vectorization.
 - **Comptime boundaries** — what standard library functions are available at comptime? All pure functions? Only a subset? File I/O at comptime (for code generation from schemas)?
