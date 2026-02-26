@@ -1663,8 +1663,8 @@ function send_message(net: Network, connection: Connection, payload: Payload) re
     return
 
 function example(net: Network, stdout: Stdout) returns nothing:
-    let conn: Connection = Connection("localhost", 8080)
-    let data: Payload = Payload("hello")
+    let conn: Connection = Connection(host: "localhost", port: 8080)
+    let data: Payload = Payload(content: "hello")
 
     send_message(net, conn, data)
 
@@ -1685,7 +1685,7 @@ The rule is completely local. The LLM does not need to track lifetimes across fu
 ```
 function example(net: Network, stdout: Stdout) returns nothing:
     let conn: Connection = Connection(host: "localhost", port: 8080)
-    let data: Payload = Payload("hello")
+    let data: Payload = Payload(content: "hello")
 
     send_message(net, conn, clone data)
     # `clone data` creates a copy that gets consumed. The original `data` survives.
@@ -1777,7 +1777,7 @@ actor Counter(stdout: Stdout):
         Stdout.write(stdout, string(count))
 
 function main(stdout: Stdout) returns nothing:
-    let counter: Counter = spawn Counter(clone stdout)
+    let counter: Counter = spawn Counter(stdout: clone stdout)
 
     send counter increment
     send counter increment
@@ -1804,7 +1804,7 @@ actor Logger(stdout: Stdout):
         Stdout.write(stdout, message)
 
 function main(stdout: Stdout) returns nothing:
-    let logger: Logger = spawn Logger(clone stdout)
+    let logger: Logger = spawn Logger(stdout: clone stdout)
     send logger log("application started")
     # stdout is still available here because we cloned it
 ```
@@ -1828,7 +1828,7 @@ actor Processor:
 
 function main(stdout: Stdout) returns nothing:
     let worker: Processor = spawn Processor()
-    let data: Payload = Payload("input data")
+    let data: Payload = Payload(content: "input data")
 
     let response: ProcessResult = ask worker process(data)
     # `data` has been consumed — it was sent to the actor.
@@ -5946,7 +5946,7 @@ Output follows the same structure but reports allocation-heavy functions instead
             "total_allocations": 1010400,
             "total_bytes": 375272960,
             "hot_lines": [
-                {"line": 102, "percent": 31.0, "code": "let entry = IndexEntry(term, doc_id, position)"}
+                {"line": 102, "percent": 31.0, "code": "let entry: IndexEntry = IndexEntry(term: term, doc_id: doc_id, position: position)"}
             ],
             "suggestion": "build_index is responsible for 42.1% of all allocations. Each IndexEntry is allocated individually inside a loop. Consider restructuring to batch-create entries or pre-allocate the list with a known size."
         }
