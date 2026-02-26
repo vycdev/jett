@@ -2160,20 +2160,18 @@ The colon is the **only** token that signals "the next line will be indented." T
 
 ### Rule Set 12: Opaque, Iterator-Only String Manipulation
 
-This addresses a fundamental and often overlooked mismatch between how LLMs perceive text and how programming languages represent it.
+Byte-level string indexing is a persistent source of bugs in every language that exposes it — for both humans and LLMs.
 
-#### The Problem: LLMs Cannot Count Bytes
+#### The Problem: Byte Indexing Is Error-Prone
 
-LLMs do not see individual characters or bytes. They see **tokens** — variable-length chunks of text determined by the tokenizer. The word `apple` is one token. The character `語` might be 3 separate byte tokens. The emoji `🎉` might be 4 bytes.
+When a language allows raw byte or integer indexing into strings (e.g., `string[7]`, `string.charAt(3)`, `&string[2..5]`), it assumes the programmer knows exactly which byte offset corresponds to which character. In practice, this is fragile. UTF-8 characters are variable-width: ASCII characters are 1 byte, most international characters are 2-4 bytes, and emoji can be even longer. Code that indexes by byte position can:
 
-When a language allows raw byte or integer indexing into strings (e.g., `string[7]`, `string.charAt(3)`, `&string[2..5]`), it assumes the programmer knows exactly which byte offset corresponds to which character. LLMs are **fundamentally incapable of this**. They will hallucinate byte offsets, producing code that:
+- Slice a multi-byte UTF-8 character in half → runtime panic or segfault
+- Return the wrong character due to miscounted byte offsets
+- Produce off-by-one errors on strings containing any non-ASCII text
+- Work on test strings (`"hello"`) but crash on real data (`"こんにちは"`)
 
-- Slices a multi-byte UTF-8 character in half → runtime panic or segfault
-- Returns the wrong character because the LLM miscounted bytes
-- Produces off-by-one errors on strings containing any non-ASCII text
-- Generates code that works on test strings (`"hello"`) but crashes on real data (`"こんにちは"`)
-
-This is not a matter of training or prompting — the neural architecture itself does not have a byte-counting mechanism. It is a structural limitation.
+Human programmers get this wrong routinely. LLMs get it wrong too — they reason about text at the token/word level, not the byte level, so byte offset calculations are particularly unnatural for them. The fix is the same either way: don't expose byte offsets at all.
 
 #### The Solution: Strings Are Opaque
 
@@ -2286,27 +2284,27 @@ for line in string.lines(multiline_text):
 
 The `string.chars()` iterator yields **grapheme clusters** — what a human would call "a character." The emoji `👨‍👩‍👧‍👦` (a family emoji composed of multiple Unicode code points joined by zero-width joiners) is yielded as a single element, not as 7 separate code points. The LLM never has to know about code points, surrogate pairs, or combining characters.
 
-#### Why This Matters for LLMs
+#### Why This Design
 
-**1. Eliminates an entire class of hallucinations.**
+**1. Eliminates an entire class of bugs by construction.**
 
-The LLM cannot generate `string[7]` because the syntax doesn't exist. It cannot produce a wrong byte offset because byte offsets are not exposed. The bug class of "sliced a UTF-8 character in half" is structurally impossible.
+Neither humans nor LLMs can generate `string[7]` because the syntax doesn't exist. Wrong byte offsets are impossible because byte offsets are not exposed. The bug class of "sliced a UTF-8 character in half" is structurally impossible.
 
 **2. Every operation is semantic, not positional.**
 
-`string.split(csv, ",")` expresses intent: "separate this string at commas." The LLM doesn't need to know that commas are 1 byte in ASCII but that the fields between them might contain multi-byte characters. The standard library handles it.
+`string.split(csv, ",")` expresses intent: "separate this string at commas." Nobody needs to know that commas are 1 byte in ASCII but that the fields between them might contain multi-byte characters. The standard library handles it.
 
-**3. LLM-generated string code works on all human languages.**
+**3. String code works on all human languages.**
 
-Because the API operates on grapheme clusters, not bytes, code that works on `"hello"` also works on `"こんにちは"`, `"مرحبا"`, and `"🎉🎊🎈"`. The LLM doesn't need to special-case Unicode — the language handles it uniformly.
+Because the API operates on grapheme clusters, not bytes, code that works on `"hello"` also works on `"こんにちは"`, `"مرحبا"`, and `"🎉🎊🎈"`. No special-casing for Unicode — the language handles it uniformly.
 
-**4. The API surface matches how LLMs think about text.**
+**4. The API surface matches how people think about text.**
 
-LLMs think about text in terms of "words", "lines", "the part before the @", "the first 5 characters." These are exactly the operations Jett's string API provides. The API matches the LLM's natural abstraction level, not the machine's byte-level representation.
+Both humans and LLMs think about text in terms of "words", "lines", "the part before the @", "the first 5 characters." These are exactly the operations Jett's string API provides. The API matches the natural abstraction level, not the machine's byte-level representation.
 
 **Comparison with traditional string handling:**
 
-| Task | C / Rust (LLM-hostile) | Jett (LLM-friendly) |
+| Task | C / Rust (byte-level) | Jett (character-level) |
 |------|----------------------|-------------------|
 | Get first 5 characters | Manual byte counting, UTF-8 boundary checking | `string.take_chars(s, 5)` |
 | Find a substring | Returns byte offset, manual boundary handling | `string.find(s, "target")` returns iterator position |
