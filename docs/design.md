@@ -1845,16 +1845,16 @@ function main(stdout: Stdout) returns nothing:
 
 #### 4. Async/Await: Enforced Structured Concurrency
 
-In languages like JavaScript or C#, you can spawn a background async task and forget about it. For an LLM, these "fire-and-forget" patterns create invisible ghost processes that it loses track of.
+In languages like JavaScript or C#, you can launch a background async task and forget about it. For an LLM, these "fire-and-forget" patterns create invisible ghost processes that it loses track of.
 
 Jett uses **structured concurrency**: all async tasks are bound to a scope. The scope cannot exit until all child tasks are resolved.
 
 ```
 function fetch_all_data(net: Network) returns result[DashboardData, HttpError]:
     let data: DashboardData = concurrent:
-        let users: Task[HttpResponse] = spawn http.get(net, "https://api.example.com/users")
-        let orders: Task[HttpResponse] = spawn http.get(net, "https://api.example.com/orders")
-        let stats: Task[HttpResponse] = spawn http.get(net, "https://api.example.com/stats")
+        let users: Task[HttpResponse] = run http.get(net, "https://api.example.com/users")
+        let orders: Task[HttpResponse] = run http.get(net, "https://api.example.com/orders")
+        let stats: Task[HttpResponse] = run http.get(net, "https://api.example.com/stats")
 
         # All three requests run in parallel.
         # The `concurrent` block CANNOT exit until all three are resolved.
@@ -1884,9 +1884,9 @@ function fetch_all_data(net: Network) returns result[DashboardData, HttpError]:
 
 **Rules enforced by the compiler:**
 
-- `spawn` creates a concurrent task or an actor. Inside a `concurrent` block, it spawns a task that must be joined or cancelled. Outside a `concurrent` block, it spawns an actor (see Rule Set 10.3).
-- `join` waits for a spawned task to complete. It returns a `result` that must be handled.
-- The `concurrent` block **cannot exit** until every spawned task is either `join`ed or explicitly `cancel`led. If the LLM forgets to join a task, the compiler rejects the code.
+- `run` creates a concurrent task inside a `concurrent` block. Each task must be joined or cancelled before the block exits. `spawn` is used separately for actors (see Rule Set 10.3).
+- `join` waits for a running task to complete. It returns a `result` that must be handled.
+- The `concurrent` block **cannot exit** until every task started with `run` is either `join`ed or explicitly `cancel`led. If the LLM forgets to join a task, the compiler rejects the code.
 - No orphaned tasks. No background processes silently running after the scope ends.
 
 **What the compiler rejects:**
@@ -1894,20 +1894,20 @@ function fetch_all_data(net: Network) returns result[DashboardData, HttpError]:
 ```
 function bad_example(net: Network) returns result[string, string]:
     concurrent:
-        let users: Task[HttpResponse] = spawn http.get(net, "https://api.example.com/users")
-        let orders: Task[HttpResponse] = spawn http.get(net, "https://api.example.com/orders")
+        let users: Task[HttpResponse] = run http.get(net, "https://api.example.com/users")
+        let orders: Task[HttpResponse] = run http.get(net, "https://api.example.com/orders")
 
         let users_result: HttpResponse = join users handle error:
             return fail("failed")
 
-        # COMPILE ERROR: spawned task "orders" is never joined or cancelled
+        # COMPILE ERROR: task "orders" is never joined or cancelled
         # hint: add "join orders" or "cancel orders" before the concurrent block exits
 ```
 
 **Why this works for LLMs:**
 
-- **Task lifecycles are bound to indentation blocks.** The LLM's attention mechanism understands blocks and indentation. If it spawns a task inside a `concurrent` block, it must resolve that task within the same visual chunk of code.
-- **No invisible background processes.** Every concurrent task has a visible `spawn`, a visible `join` or `cancel`, and both live in the same block.
+- **Task lifecycles are bound to indentation blocks.** The LLM's attention mechanism understands blocks and indentation. If it starts a task with `run` inside a `concurrent` block, it must resolve that task within the same visual chunk of code.
+- **No invisible background processes.** Every concurrent task has a visible `run`, a visible `join` or `cancel`, and both live in the same block.
 - **The compiler catches forgotten tasks.** The LLM cannot "fire and forget."
 
 #### 5. Meta-Programming: Comptime Over Macros
@@ -6511,7 +6511,7 @@ All 17 block constructs share the same shape. An LLM only needs to learn one pat
 
 Jett's keyword set uses complete, common English words that each map to a single token:
 
-`let`, `mutable`, `function`, `return`, `returns`, `if`, `else`, `for`, `in`, `while`, `struct`, `enum`, `match`, `use`, `true`, `false`, `none`, `and`, `or`, `not`, `is`, `is_near`, `within`, `self`, `handle`, `error`, `default`, `result`, `ok`, `fail`, `as`, `break`, `continue`, `interface`, `implement`, `assert`, `type`, `where`, `value`, `mutual`, `machine`, `states`, `transitions`, `to`, `at`, `transition`, `clone`, `actor`, `receive`, `send`, `ask`, `respond`, `spawn`, `concurrent`, `join`, `cancel`, `comptime`, `layout`, `verify`, `secret`, `declassify`, `serialize`, `namespace`, `bitfield`, `bit`, `bits`, `remaining`, `view`, `property`, `given`, `tracked`, `trace`, `agent_breakpoint`, `some`, `optional`, `nothing`, `int`, `float`, `string`, `bool`, `bytes`, `list`, `map`, `set`, `modulo`
+`let`, `mutable`, `function`, `return`, `returns`, `if`, `else`, `for`, `in`, `while`, `struct`, `enum`, `match`, `use`, `true`, `false`, `none`, `and`, `or`, `not`, `is`, `is_near`, `within`, `self`, `handle`, `error`, `default`, `result`, `ok`, `fail`, `as`, `break`, `continue`, `interface`, `implement`, `assert`, `type`, `where`, `value`, `mutual`, `machine`, `states`, `transitions`, `to`, `at`, `transition`, `clone`, `actor`, `receive`, `send`, `ask`, `respond`, `spawn`, `run`, `concurrent`, `join`, `cancel`, `comptime`, `layout`, `verify`, `secret`, `declassify`, `serialize`, `namespace`, `bitfield`, `bit`, `bits`, `remaining`, `view`, `property`, `given`, `tracked`, `trace`, `agent_breakpoint`, `some`, `optional`, `nothing`, `int`, `float`, `string`, `bool`, `bytes`, `list`, `map`, `set`, `modulo`
 
 ### JSON AST Round-Tripping
 
@@ -6637,7 +6637,7 @@ deps:
 
 - [ ] Actor model (`actor`, `receive`, `send`, `ask`, `respond`)
 - [ ] Linear typing enforcement across actor message passing
-- [ ] Structured concurrency (`concurrent`, `spawn`, `join`, `cancel`)
+- [ ] Structured concurrency (`concurrent`, `run`, `join`, `cancel`)
 - [ ] Compiler enforcement: no orphaned tasks, no unjoined spawns
 
 ### Phase 5 — Standard Library
@@ -6720,7 +6720,7 @@ deps:
 - **Effect system** — RESOLVED: capability-based I/O only. No `effects` keyword. All side effects declared via capability parameters.
 - **Refinement type complexity** — RESOLVED: `where` clauses accept any pure expression (no capabilities, no mutation) that evaluates to `bool`. `value` refers to the value being constrained. Expressions use normal Jett syntax — no special intrinsics. Constraints are checked at runtime type boundaries (when a value enters the refined type). This means `where string.is_valid_json(value)` and `where list.length(value) <= 100` are both valid.
 - **Dependent types** — should refinement types be able to reference other values (e.g. `type Matrix = list[list[float]] where rows is cols`)? This approaches dependent type territory and significantly increases type checker complexity.
-- **Concurrency model** — RESOLVED: actor model with zero shared memory, structured concurrency with enforced join/cancel. Concurrency uses `concurrent` blocks and `spawn`/`join`/`cancel` keywords with capability parameters for I/O.
+- **Concurrency model** — RESOLVED: actor model with zero shared memory, structured concurrency with enforced join/cancel. Actors use `spawn`, concurrent tasks use `run`/`join`/`cancel` keywords inside `concurrent` blocks, with capability parameters for I/O.
 - **Memory management** — RESOLVED: linear types (move-by-default, explicit `clone` keyword) with fully compiler-managed allocation. No GC, no manual `free`, no lifetime annotations, no arenas. The compiler has perfect ownership knowledge from linear types and handles all allocation/deallocation automatically.
 - **Data layout optimization** — the compiler may automatically apply SoA (Structure of Arrays) transformations as a future optimization when access patterns suggest it. No syntax is needed — this is a compiler-internal optimization like auto-vectorization.
 - **Comptime boundaries** — what standard library functions are available at comptime? All pure functions? Only a subset? File I/O at comptime (for code generation from schemas)?
