@@ -397,7 +397,7 @@ type Password = string where string.char_count(value) > 8
 type Age = int where value >= 0 and value < 150
 type Email = string where string.contains(value, "@")
 type Port = int where value >= 1 and value <= 65535
-type NonEmpty[T] = list[T] where list.length(value) > 0
+type NonEmpty[T] = list[T] where list.length[T](value) > 0
 type Percentage = float where value >= 0.0 and value <= 100.0
 ```
 
@@ -443,7 +443,7 @@ error at line 45: refinement type assignment requires error handling
 
 ```
 type SortedList[T] = list[T] where list.is_sorted(value)
-type BoundedList[T] = list[T] where list.length(value) <= 100
+type BoundedList[T] = list[T] where list.length[T](value) <= 100
 type PositiveFloat = float where value > 0.0
 
 type HttpStatus = int where value >= 100 and value < 600
@@ -598,7 +598,7 @@ function fetch_data(net: Network, url: string) returns result[map[string, string
 function compute_stats(values: list[float]) returns float:
     use math
     let total: float = math.sum(values)
-    return total / float.from_int(list.length(values))
+    return total / float.from_int(list.length[float](values))
 ```
 
 **What this achieves:**
@@ -1171,13 +1171,13 @@ Instead of providing low-level building blocks and hoping the LLM assembles them
 
 ```
 # Instead of writing a filter loop:
-let adults: list[User] = list.filter(users, function(u: User) returns bool: return u.age >= 18)
+let adults: list[User] = list.filter[User](users, function(u: User) returns bool: return u.age >= 18)
 
 # Instead of writing a map loop:
-let names: list[string] = list.map(users, function(u: User) returns string: return u.name)
+let names: list[string] = list.map[User, string](users, function(u: User) returns string: return u.name)
 
 # Instead of writing a reduce loop:
-let total: float = list.sum(prices)
+let total: float = list.sum[float](prices)
 
 # Instead of writing a search loop:
 let found: optional[User] = list.find(users, function(u: User) returns bool: return u.id is target_id)
@@ -1378,15 +1378,15 @@ function process_csv_report(fs: Filesystem, clock: Clock, path: string) returns 
         return fail("could not read file")
 
     let lines: list[string] = string.split(raw, "\n")
-    let rows: list[list[string]] = list.map(lines, function(line: string) returns list[string]:
+    let rows: list[list[string]] = list.map[string, list[string]](lines, function(line: string) returns list[string]:
         return string.split(line, ","))
 
     let header: list[string] = list.first(rows) handle:
         return fail("CSV file is empty")
     let data: list[list[string]] = list.skip(rows, 1)
 
-    let filtered: list[list[string]] = list.filter(data, function(row: list[string]) returns bool:
-        let cell: string = list.get(row, 2) handle:
+    let filtered: list[list[string]] = list.filter[list[string]](data, function(row: list[string]) returns bool:
+        let cell: string = list.get[string](row, 2) handle:
             return false
         return string.is_not_empty(cell))
 
@@ -1394,7 +1394,7 @@ function process_csv_report(fs: Filesystem, clock: Clock, path: string) returns 
 
     let report: Report = Report(
         generated: Clock.now(clock),
-        row_count: list.length(sorted),
+        row_count: list.length[list[string]](sorted),
         data: sorted
     )
 
@@ -1917,7 +1917,7 @@ let mutable tasks: list[HttpResponse] = list[]
 
 for url in urls:
     let response: HttpResponse = run http.get(net, url)
-    tasks = list.append(tasks, response)
+    tasks = list.append[HttpResponse](tasks, response)
 
 # join the whole list — resolves all pending items
 let results: list[HttpResponse] = join tasks handle error:
@@ -1932,10 +1932,10 @@ let mutable tasks: list[HttpResponse] = list[]
 for url in urls:
     if cache.has(url):
         let cached: HttpResponse = cache.get(url)
-        tasks = list.append(tasks, cached)
+        tasks = list.append[HttpResponse](tasks, cached)
     else:
         let response: HttpResponse = run http.get(net, url)
-        tasks = list.append(tasks, response)
+        tasks = list.append[HttpResponse](tasks, response)
 
 # join resolves pending items, passes through already-resolved ones
 let results: list[HttpResponse] = join tasks handle error:
@@ -1978,7 +1978,7 @@ comptime function generate_lookup_table(size: int) returns list[int]:
     let mutable table: list[int] = list[int]()
     let mutable i: int = 0
     while i < size:
-        table = list.append(table, i * i)
+        table = list.append[int](table, i * i)
         i = i + 1
     return table
 
@@ -3504,8 +3504,8 @@ f(x, extra_arg)
 # Data processing pipeline:
 let report: Report = raw_data
     |> string.split("\n")
-    |> list.filter(function(line: string) returns bool: return string.is_not_empty(line))
-    |> list.map(function(line: string) returns list[string]: return string.split(line, ","))
+    |> list.filter[string](function(line: string) returns bool: return string.is_not_empty(line))
+    |> list.map[string, list[string]](function(line: string) returns list[string]: return string.split(line, ","))
     |> list.skip(1)
     |> build_report
 
@@ -4798,7 +4798,7 @@ Jett introduces one concept: the **view**. A view is a read-only, non-owning ref
 
 ```
 function count_items(data: view list[Item]) returns int:
-    return list.length(data)
+    return list.length[Item](data)
 
 function total_price(items: view list[Item]) returns float:
     let mutable sum: float = 0.0
@@ -4835,11 +4835,11 @@ The `view` keyword appears in **both** declarations and call sites. The function
 
 ```
 function count(data: view list[int]) returns int:
-    return list.length(data)
+    return list.length[int](data)
 
 # Keep the value — view at call site:
 let len: int = count(view items)
-let total: int = list.sum(items)    # items is still valid
+let total: int = list.sum[int](items)    # items is still valid
 
 # Last use — no view at call site:
 let len: int = count(items)
@@ -4864,7 +4864,7 @@ Views are governed by three rules that the compiler enforces absolutely. These r
 
 ```
 function bad_mutate(data: view list[int]) returns nothing:
-    list.append(data, 42)
+    list.append[int](data, 42)
     # COMPILE ERROR: cannot mutate a view
     # "data" is a read-only view and cannot be modified
     # hint: if mutation is needed, take ownership instead of a view
@@ -4924,7 +4924,7 @@ struct GameState:
 
 function render_frame(state: view GameState, stdout: Stdout) returns nothing:
     # Read any field through the view — zero copy:
-    let player_count: int = list.length(state.players)
+    let player_count: int = list.length[Player](state.players)
     Stdout.write(stdout, "players: {player_count}")
     Stdout.write(stdout, "tick: {state.tick}")
 
@@ -4979,7 +4979,7 @@ View parameters work alongside capability parameters:
 
 ```
 function log_stats(stdout: Stdout, state: view GameState) returns nothing:
-    Stdout.write(stdout, "players: {list.length(state.players)}")
+    Stdout.write(stdout, "players: {list.length[Player](state.players)}")
     Stdout.write(stdout, "world size: {state.world.size}")
     # stdout is owned (capability), state is viewed (read-only)
     # The function can write to stdout but cannot modify state
@@ -5081,7 +5081,7 @@ function sort_list(items: view list[int]) returns list[int]:
 property sort_list:
     given items: list[int]
     let sorted: list[int] = sort_list(items)
-    assert list.length(sorted) is list.length(items)
+    assert list.length[int](sorted) is list.length[int](items)
     assert list.is_sorted(sorted)
     assert list.all_elements_in(sorted, items)
 ```
@@ -5318,7 +5318,7 @@ property sort_preserves_elements:
     given items: list[int]
     let sorted: list[int] = sort_list(items)
     # In property blocks, sorted can be used multiple times:
-    assert list.length(sorted) is list.length(items)
+    assert list.length[int](sorted) is list.length[int](items)
     assert list.is_sorted(sorted)
     assert list.all_elements_in(sorted, items)
     # Without implicit views, each use of `sorted` would consume it.
@@ -5648,12 +5648,12 @@ The LLM sends JSON queries. The running application responds with JSON answers. 
 **Evaluate an expression:**
 
 ```json
-{"query": "evaluate", "expression": "list.length(validated.items)"}
+{"query": "evaluate", "expression": "list.length[Item](validated.items)"}
 ```
 
 ```json
 {
-    "expression": "list.length(validated.items)",
+    "expression": "list.length[Item](validated.items)",
     "type": "int",
     "value": 2
 }
@@ -5739,7 +5739,7 @@ The LLM's debugging loop with `agent_breakpoint()`:
 6. LLM sends inspect queries:
    - "What is validated.total?" → 44.97
    - "What is validated.items?" → [{widget, 2}, {gadget, 1}]
-   - "What does list.length(validated.items) give?" → 2
+   - "What does list.length[Item](validated.items) give?" → 2
    - Aha — the total should be 44.97 but the expected was 45.97.
      The bug is in validate_order's total calculation.
 7. LLM sends "continue" to resume.
@@ -6308,7 +6308,7 @@ function describe_shape(stdout: Stdout, shape: Shape) returns nothing:
 `assert` checks a condition and halts the program if it fails. Two forms are supported:
 
 ```
-assert list.length(items) > 0
+assert list.length[Item](items) > 0
 assert balance >= 0.0 "balance must not be negative"
 ```
 
@@ -6433,11 +6433,22 @@ let name: string = "jett"
 
 Generics use `[T]` (square brackets) rather than `<T>` — avoids ambiguity with comparison operators and is more reliably tokenized.
 
+**Generic type parameters are always explicit at call sites.** The compiler does not infer type parameters — the caller must specify them. This keeps types visible everywhere, especially in pipes and nested calls where there is no `let` binding to show the type:
+
+```
+# Always explicit — no inference
+let result: string = add[string]("hello", " world")
+let items: list[int] = list.new[int]()
+
+# In pipes — types stay visible without needing let bindings
+data |> json.parse[list[User]] |> process_users
+```
+
 **Basic generic function:**
 
 ```
 function first[T](items: view list[T]) returns optional[T]:
-    return list.get(items, 0)
+    return list.get[T](items, 0)
 ```
 
 **Constrained generics — limiting which types T can be:**
@@ -6451,7 +6462,7 @@ function sort[T implements Orderable](items: list[T]) returns list[T]:
 
 function display_sorted[T implements Orderable and Displayable](items: list[T], stdout: Stdout) returns nothing:
     # T must implement both Orderable and Displayable
-    let sorted: list[T] = sort(items)
+    let sorted: list[T] = sort[T](items)
     for item in sorted:
         Stdout.write(stdout, Displayable.display(item))
 
