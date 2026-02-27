@@ -2487,9 +2487,11 @@ The result: code that looks correct, passes a casual review, but fails on the fi
 
 #### The Solution: Vendored Dependencies
 
-Jett has **no package manager and no package registry**. There is no `jett install cool-lib`. External dependencies are `.jett` files that live in the project's `deps/` directory, tracked in git alongside the rest of the source code.
+Jett has **no package manager and no package registry**. There is no `jett install cool-lib`. External dependencies are `.jett` files that live in the project, tracked in git alongside the rest of the source code.
 
-**Project structure:**
+The compiler doesn't enforce a specific folder for dependencies — `use` resolves module paths to file paths like any other import. A common convention is `deps/`, but `lib/`, `vendor/`, or any other folder works the same way:
+
+**Project structure (example):**
 
 ```
 my_project/
@@ -2518,7 +2520,7 @@ use deps.super_fast_auth
 
 # COMPILE ERROR: module not found
 #   no file at "deps/super_fast_auth.jett"
-#   hint: available dependencies: json_extra, websocket
+#   hint: available modules: deps.json_extra, deps.websocket
 #   or use the standard library (use string, use json, etc.)
 ```
 
