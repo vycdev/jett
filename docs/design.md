@@ -296,7 +296,7 @@ let my_dog: Dog = Dog(name: "Rex", breed: "labrador")
 let sound: string = Dog.speak(my_dog)
 ```
 
-Structs define methods with `self` as the first parameter. Methods are called with module syntax: `Dog.speak(my_dog)`, `Point.distance(p1, p2)`. There is no `my_dog.speak()` form. This rule applies uniformly to ALL types, including capability types — `Stdout.write(stdout, msg)`, `Filesystem.read_file(fs, path)`, `Network.listen(net, addr, port)`. Capabilities are not an exception.
+Structs define methods with `self` as the first parameter. Methods are called with module syntax: `Dog.speak(my_dog)`, `Point.distance(p1, p2)`. There is no `my_dog.speak()` form. This rule applies uniformly to ALL types, including capability types — `Stdout.write(view stdout, msg)`, `Filesystem.read_file(view fs, path)`, `Network.listen(view net, addr, port)`. Capabilities are not an exception.
 
 Everything about `Dog` is right here. No context needed from parent classes. No files to chase.
 
@@ -2923,9 +2923,9 @@ The presence of a capability parameter **is** the effect declaration. There is n
 
 | Signature | What it tells you |
 |-----------|------------------|
-| `function read(fs: Filesystem, path: string)` | Reads/writes files |
-| `function send(net: Network, data: string)` | Accesses the network |
-| `function log(stdout: Stdout, msg: string)` | Writes to stdout |
+| `function read(view fs: Filesystem, path: string)` | Reads/writes files |
+| `function send(view net: Network, data: string)` | Accesses the network |
+| `function log(view stdout: Stdout, msg: string)` | Writes to stdout |
 | `function compute(x: int) returns int` | Pure — no capability, no side effects |
 
 A `Filesystem` parameter tells you "this function reads/writes files specifically." A `Network` parameter tells you "this function accesses the network." The capability is the effect declaration, made concrete.
@@ -2934,7 +2934,7 @@ A `Filesystem` parameter tells you "this function reads/writes files specificall
 
 **1. Side effects are visible in the signature — zero call-chain analysis needed.**
 
-The LLM reads `function send_report(net: Network, stdout: Stdout, report: Report)` and knows instantly: this function uses the network and writes to stdout. No implementation reading required. No recursive call-chain analysis. The signature is a complete contract.
+The LLM reads `function send_report(view net: Network, view stdout: Stdout, report: Report)` and knows instantly: this function uses the network and writes to stdout. No implementation reading required. No recursive call-chain analysis. The signature is a complete contract.
 
 **2. Pure functions are provably pure.**
 
@@ -3042,12 +3042,12 @@ Every capability type has a **universal interface** that the LLM programs agains
 
 ```
 # Filesystem capability — platform-agnostic operations:
-# Filesystem.read_file(fs, path)      → reads a file, returns string
-# Filesystem.write_file(fs, path, data) → writes data to a file
-# Filesystem.list_dir(fs, path)       → lists directory contents
-# Filesystem.file_exists(fs, path)    → checks if file exists
-# Filesystem.delete_file(fs, path)    → deletes a file
-# Filesystem.create_dir(fs, path)     → creates a directory
+# Filesystem.read_file(view fs, path)      → reads a file, returns string
+# Filesystem.write_file(view fs, path, data) → writes data to a file
+# Filesystem.list_dir(view fs, path)       → lists directory contents
+# Filesystem.file_exists(view fs, path)    → checks if file exists
+# Filesystem.delete_file(view fs, path)    → deletes a file
+# Filesystem.create_dir(view fs, path)     → creates a directory
 
 # The LLM never sees:
 # - Windows: CreateFileW, ReadFile, FindFirstFileW
@@ -3071,14 +3071,14 @@ let config: string = Filesystem.read_file(view fs, "data/config/app.json") handl
 
 | Capability | What the LLM writes | Windows lowering | Linux lowering | macOS lowering |
 |-----------|---------------------|-----------------|---------------|---------------|
-| `Filesystem.read_file` | `Filesystem.read_file(fs, path)` | `CreateFileW` + `ReadFile` | `open` + `read` | `open` + `read` |
-| `Filesystem.write_file` | `Filesystem.write_file(fs, path, data)` | `CreateFileW` + `WriteFile` | `open` + `write` | `open` + `write` |
-| `Network.listen` | `Network.listen(net, addr, port)` | Winsock `WSASocket` + `bind` | `socket` + `bind` + `listen` | BSD `socket` + `bind` + `listen` |
-| `Network.connect` | `Network.connect(net, addr, port)` | Winsock `connect` | `connect` | `connect` |
-| `Stdout.write` | `Stdout.write(stdout, text)` | `WriteConsoleW` | `write(1, ...)` | `write(1, ...)` |
-| `Process.spawn` | `Process.spawn(proc, cmd, args)` | `CreateProcessW` | `fork` + `execvp` | `posix_spawn` |
-| `Clock.now` | `Clock.now(clock)` | `GetSystemTimeAsFileTime` | `clock_gettime` | `gettimeofday` |
-| `Environment.get` | `Environment.get(env, key)` | `GetEnvironmentVariableW` | `getenv` | `getenv` |
+| `Filesystem.read_file` | `Filesystem.read_file(view fs, path)` | `CreateFileW` + `ReadFile` | `open` + `read` | `open` + `read` |
+| `Filesystem.write_file` | `Filesystem.write_file(view fs, path, data)` | `CreateFileW` + `WriteFile` | `open` + `write` | `open` + `write` |
+| `Network.listen` | `Network.listen(view net, addr, port)` | Winsock `WSASocket` + `bind` | `socket` + `bind` + `listen` | BSD `socket` + `bind` + `listen` |
+| `Network.connect` | `Network.connect(view net, addr, port)` | Winsock `connect` | `connect` | `connect` |
+| `Stdout.write` | `Stdout.write(view stdout, text)` | `WriteConsoleW` | `write(1, ...)` | `write(1, ...)` |
+| `Process.spawn` | `Process.spawn(view proc, cmd, args)` | `CreateProcessW` | `fork` + `execvp` | `posix_spawn` |
+| `Clock.now` | `Clock.now(view clock)` | `GetSystemTimeAsFileTime` | `clock_gettime` | `gettimeofday` |
+| `Environment.get` | `Environment.get(view env, key)` | `GetEnvironmentVariableW` | `getenv` | `getenv` |
 
 The entire left column is what the LLM writes. The right columns are what the compiler generates. The LLM never sees the right columns.
 
