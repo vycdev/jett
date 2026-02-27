@@ -312,7 +312,7 @@ Every value in Jett has a known type at compile time. There is no `any`, no unty
 
 - No implicit conversions. An `int` is not a `float` unless explicitly converted.
 - No union types without exhaustive matching. All enums require exhaustive `match`, and all `result` types require `handle`.
-- No null. Values are either present (`T`) or explicitly optional (`optional[T]`), and optionals must be unwrapped before use.
+- No null. Values are either present (`T`) or explicitly optional (`optional[T]`), and optionals must be coarsenped before use.
 - No duck typing. A struct satisfies an interface only if it has an explicit `implement` block — accidental structural matches do not count.
 - Function signatures are complete contracts. The parameter types, return type, and capability parameters fully describe what the function does. The compiler enforces this.
 
@@ -486,23 +486,35 @@ let password: string = validate_password(raw_input, config.min_password_length) 
 
 The rule is simple: refinement types for fixed constraints, functions for dynamic validation.
 
-**Refinement types are not implicitly usable as their base type.** A `Password` is not a `string` — it is a `Password`. You cannot pass a `Password` to a function that expects `string`. This follows the "no implicit conversions" rule (Rule Set 2) and keeps the LLM aware of type boundaries. To widen a refinement type to its base type, use the standard type conversion pattern:
+**Refinement types are not implicitly usable as their base type.** A `Password` is not a `string` — it is a `Password`. You cannot pass a `Password` to a function that expects `string`. This follows the "no implicit conversions" rule (Rule Set 2) and keeps the LLM aware of type boundaries. To coarsen a refinement type to its base type, use the `coarsen` keyword:
 
 ```
-let raw: string = string.from_Password(user_password)
+let raw: string = coarsen user_password
 ```
 
-This is the same pattern used for all other type conversions (`string.from_int()`, `int.from_string()`, etc.). The compiler **automatically generates** `BaseType.from_RefinedType()` for every refinement type — no manual implementation needed. If you need the base type multiple times in one function, assign it to a local variable once:
+The target type is determined by the `let` binding's type annotation — the LLM and compiler both know what `coarsen` produces. For nested refinement types, `coarsen` can go to any ancestor in the chain:
+
+```
+type NonEmpty = string where string.char_count(value) > 0
+type Password = NonEmpty where string.char_count(value) >= 8
+
+let ne: NonEmpty = coarsen password       # Password → NonEmpty
+let raw: string = coarsen password        # Password → string (skips to base)
+```
+
+If you need the base type multiple times in one function, assign it to a local variable once:
 
 ```
 function process(password: Password, stdout: Stdout) returns nothing:
-    let raw: string = string.from_Password(password)
+    let raw: string = coarsen password
     let len: int = string.char_count(raw)
     let upper: string = string.to_upper(raw)
     Stdout.write(stdout, "password length: {len}")
 ```
 
-> **Why not implicit widening?** Implicit widening would hide information from the LLM. If `Password` silently becomes `string` wherever a string is expected, the LLM loses track of which values are validated and which are raw. Explicit conversion makes the type boundary visible in the source code — the LLM can see exactly where a validated value is being treated as a plain string, and can reason about whether that is intentional.
+> **Why not implicit coarsening?** Implicit coarsening would hide information from the LLM. If `Password` silently becomes `string` wherever a string is expected, the LLM loses track of which values are validated and which are raw. `coarsen` makes the type boundary visible in the source code — the LLM can see exactly where a validated value is being treated as a plain string, and can reason about whether that is intentional.
+
+> **Why `coarsen` and not `declassify`?** `declassify` is reserved for `secret` types (Rule Set 15), where it serves as a grep-able security audit keyword. `coarsen` is the antonym of "refine" — it reverses refinement, returning a value to its base type. Two different intents, two different keywords.
 
 ### Rule Set 4: Auto-Regressive Friendly Structure (Strict Linearity)
 
@@ -709,11 +721,11 @@ let rows: list[Row] = query(net, "select * from users") handle error:
             return fail("db timed out")
 ```
 
-**The `handle` keyword — the only way to unwrap a result or optional:**
+**The `handle` keyword — the only way to coarsen a result or optional:**
 
-The `handle` keyword is the **single canonical form** for unwrapping `result` and `optional` values. There is no alternative. You cannot use `match` on a `result` type — `match` is reserved for user-defined enums only.
+The `handle` keyword is the **single canonical form** for coarsenping `result` and `optional` values. There is no alternative. You cannot use `match` on a `result` type — `match` is reserved for user-defined enums only.
 
-The syntax form is **mandatory** and encodes the type being unwrapped:
+The syntax form is **mandatory** and encodes the type being coarsenped:
 
 - **`result[T, E]` MUST use `handle error:`** — the error variable is always bound. The `error` keyword is required because results carry error information, and the caller must have access to it.
 - **`optional[T]` MUST use bare `handle:`** — no error variable, because there is no error. The value is simply absent.
@@ -733,7 +745,7 @@ let config: Config = read_config(fs, "app.conf") handle error:
     default Config(port: 8080)
 ```
 
-The `handle error:` block executes only when the result is `fail`. If the result is `ok`, the unwrapped value is bound to the variable on the left (`config`). The error variable is always available inside the block.
+The `handle error:` block executes only when the result is `fail`. If the result is `ok`, the coarsenped value is bound to the variable on the left (`config`). The error variable is always available inside the block.
 
 **Every handle block must end with either `return` or `default`** — there is no implicit value. This rule applies to both `handle error:` (for `result`) and bare `handle:` (for `optional`). A handle block that does neither is a compile error:
 
@@ -780,9 +792,9 @@ This means there is always a variable on the left side of a `handle` block. The 
 
 **Why `match` is not allowed on results:**
 
-One canonical form means one way to unwrap. `match` on a `result` would create a second way to do the same thing as `handle`. By restricting `match` to user-defined enums, Jett enforces that all error handling looks identical everywhere. An LLM never has to decide between `match` and `handle` — there is only `handle`.
+One canonical form means one way to coarsen. `match` on a `result` would create a second way to do the same thing as `handle`. By restricting `match` to user-defined enums, Jett enforces that all error handling looks identical everywhere. An LLM never has to decide between `match` and `handle` — there is only `handle`.
 
-**`handle` also unwraps `optional[T]`:**
+**`handle` also coarsens `optional[T]`:**
 
 The `handle` keyword works for `optional[T]` values using the bare `handle:` form (no `error` keyword). If the value is `none`, the handle block executes:
 
@@ -794,9 +806,9 @@ let user: User = db.find_user(users, id) handle:
     return fail("user not found: {id}")
 ```
 
-This means `handle` is the single canonical unwrap mechanism for both `result[T, E]` and `optional[T]`. The distinction between the two is encoded in the syntax form.
+This means `handle` is the single canonical coarsen mechanism for both `result[T, E]` and `optional[T]`. The distinction between the two is encoded in the syntax form.
 
-**The form of `handle` tells you what you're unwrapping -- and the form is mandatory:**
+**The form of `handle` tells you what you're coarsenping -- and the form is mandatory:**
 
 - **`result[T, E]` MUST use `handle error:`** -- the `error` keyword is required. The error variable is always bound inside the block:
   ```
@@ -810,7 +822,7 @@ This means `handle` is the single canonical unwrap mechanism for both `result[T,
       return fail("user not found")
   ```
 
-This distinction is mandatory -- using the wrong form is a **compile error**. `handle:` on a `result[T, E]` is rejected. `handle error:` on an `optional[T]` is rejected. The syntax form encodes the type being unwrapped, and the compiler enforces it. When an LLM sees `handle error:`, it knows the expression returns `result[T, E]`. When it sees `handle:`, it knows the expression returns `optional[T]`.
+This distinction is mandatory -- using the wrong form is a **compile error**. `handle:` on a `result[T, E]` is rejected. `handle error:` on an `optional[T]` is rejected. The syntax form encodes the type being coarsenped, and the compiler enforces it. When an LLM sees `handle error:`, it knows the expression returns `result[T, E]`. When it sees `handle:`, it knows the expression returns `optional[T]`.
 
 #### 2. No Global Exits — Control Flow Goes Down, Never Sideways
 
@@ -2649,7 +2661,7 @@ let combined: string = string.join(list("prefix", key, "suffix"), "-")
 # hint: the result would leak the secret value
 ```
 
-**2. Explicit declassification — the only way to unwrap a secret.**
+**2. Explicit declassification — the only way to coarsen a secret.**
 
 When code genuinely needs to use a secret value (e.g., to send it in an authentication header, to compare against a hash), it must use the `declassify` keyword. This is a deliberate, auditable action:
 
@@ -2657,7 +2669,7 @@ When code genuinely needs to use a secret value (e.g., to send it in an authenti
 function authenticate(stored_hash: secret[string], input_password: string) returns bool:
     let input_hash: string = crypto.sha256(input_password)
     return declassify stored_hash is input_hash
-    # `declassify` explicitly unwraps the secret for this comparison.
+    # `declassify` explicitly coarsens the secret for this comparison.
     # This is auditable — grep for "declassify" to find every place secrets are accessed.
 ```
 
@@ -2736,7 +2748,7 @@ In traditional languages, everything is public by default and security is added 
 
 **3. `declassify` is a searchable audit point.**
 
-Every place where a secret is unwrapped is marked with the `declassify` keyword. Security reviewers can `grep declassify` across the entire codebase to find every secret access point. This is trivially automatable.
+Every place where a secret is coarsenped is marked with the `declassify` keyword. Security reviewers can `grep declassify` across the entire codebase to find every secret access point. This is trivially automatable.
 
 **4. Safe alternatives are easier to use than unsafe ones.**
 
@@ -3525,13 +3537,13 @@ Each `handle` block applies to the pipeline step immediately before it. The erro
 **Pipeline + handle semantics:**
 
 - `|> function_call handle: ...` is a **single pipeline step**. The `handle` is attached to the function call, not to the pipeline itself.
-- On success: `handle` unwraps the `result` (or `optional`), and the unwrapped success value flows to the next `|>` step.
+- On success: `handle` coarsens the `result` (or `optional`), and the coarsenped success value flows to the next `|>` step.
 - On failure: the `handle` block executes. There are **two valid forms**:
   1. **Default form:** `handle error: default Config(port: 8080)` — the `default` keyword provides a fallback value and execution continues normally.
   2. **Return form:** `handle error: return fail(...)` — early exit from the enclosing function. The pipeline (and function) terminates immediately.
 - The pipeline only continues to the next `|>` if every preceding step either succeeded or provided a fallback via `default`.
 
-In the example above, if `validate_auth` returns `fail(...)`, the `handle` block runs `return fail("auth failed")` and the entire pipeline (and enclosing function) returns immediately. If `validate_auth` returns `ok(auth_token)`, the unwrapped `auth_token` flows into `extract_user_id` as the first argument.
+In the example above, if `validate_auth` returns `fail(...)`, the `handle` block runs `return fail("auth failed")` and the entire pipeline (and enclosing function) returns immediately. If `validate_auth` returns `ok(auth_token)`, the coarsenped `auth_token` flows into `extract_user_id` as the first argument.
 
 #### Pipelines with Capabilities
 
@@ -6199,14 +6211,14 @@ function read_file(fs: Filesystem, path: string) returns result[string, string]:
         return fail("could not open file")
     return ok(content)
 
-# handle is the ONLY way to unwrap a result:
+# handle is the ONLY way to coarsen a result:
 let content: string = read_file(fs, "data.txt") handle error:
     Stdout.write(stdout, error)
     return
 Stdout.write(stdout, content)
 ```
 
-Errors are values, never exceptions. Functions that can fail return `result[T, E]`. The `handle` keyword is the **only** way to unwrap a result — `match` is reserved for user-defined enums. See Rule Set 5 for the full rationale.
+Errors are values, never exceptions. Functions that can fail return `result[T, E]`. The `handle` keyword is the **only** way to coarsen a result — `match` is reserved for user-defined enums. See Rule Set 5 for the full rationale.
 
 Every `handle` block must end with either `return` (exit function) or `default` (provide fallback value):
 
@@ -6236,7 +6248,7 @@ enum Shape:
     rect(width: float, height: float)
 ```
 
-Jett has three union-like constructs, each with its own unwrap mechanism:
+Jett has three union-like constructs, each with its own coarsen mechanism:
 
 | Type | Variants | Unwrap mechanism |
 |------|----------|-----------------|
@@ -6531,7 +6543,7 @@ All 17 block constructs share the same shape. An LLM only needs to learn one pat
 
 Jett's keyword set uses complete, common English words that each map to a single token:
 
-`let`, `mutable`, `function`, `return`, `returns`, `if`, `else`, `for`, `in`, `while`, `struct`, `enum`, `match`, `use`, `true`, `false`, `none`, `and`, `or`, `not`, `is`, `within`, `self`, `handle`, `error`, `default`, `result`, `ok`, `fail`, `as`, `break`, `continue`, `interface`, `implement`, `assert`, `type`, `where`, `value`, `mutual`, `machine`, `states`, `transitions`, `to`, `at`, `transition`, `clone`, `actor`, `receive`, `send`, `ask`, `respond`, `spawn`, `run`, `join`, `cancel`, `comptime`, `layout`, `verify`, `secret`, `declassify`, `serialize`, `namespace`, `bitfield`, `bit`, `bits`, `remaining`, `view`, `property`, `given`, `tracked`, `trace`, `agent_breakpoint`, `some`, `optional`, `nothing`, `int`, `float`, `string`, `bool`, `bytes`, `list`, `map`, `set`, `modulo`
+`let`, `mutable`, `function`, `return`, `returns`, `if`, `else`, `for`, `in`, `while`, `struct`, `enum`, `match`, `use`, `true`, `false`, `none`, `and`, `or`, `not`, `is`, `within`, `self`, `handle`, `error`, `default`, `result`, `ok`, `fail`, `as`, `break`, `continue`, `interface`, `implement`, `assert`, `type`, `where`, `value`, `mutual`, `machine`, `states`, `transitions`, `to`, `at`, `transition`, `clone`, `actor`, `receive`, `send`, `ask`, `respond`, `spawn`, `run`, `join`, `cancel`, `comptime`, `layout`, `verify`, `secret`, `declassify`, `coarsen`, `serialize`, `namespace`, `bitfield`, `bit`, `bits`, `remaining`, `view`, `property`, `given`, `tracked`, `trace`, `agent_breakpoint`, `some`, `optional`, `nothing`, `int`, `float`, `string`, `bool`, `bytes`, `list`, `map`, `set`, `modulo`
 
 ### JSON AST Round-Tripping
 
@@ -6743,7 +6755,7 @@ External dependencies live in the `deps/` directory as vendored `.jett` files tr
 - **Interop** — RESOLVED: Auto-FFI with built-in C header parser. `use c "header.h"` imports C libraries with automatic safe wrapping. C pointers become opaque linear handles. WASM target is supported via capability lowering (Rule Set 17).
 - **C++ interop** — Auto-FFI targets C headers. C++ headers with templates, classes, and name mangling are significantly harder. Should Jett support C++ headers directly, or require a C-compatible wrapper? C-only is simpler and covers most OS APIs.
 - **Self-hosting timeline** — at what point is Jett mature enough to rewrite the compiler from Rust into Jett? Likely after Phase 5 (standard library) at the earliest.
-- **Error handling syntax** — RESOLVED: `handle` is the only way to unwrap `result` types. `match` is reserved for user-defined enums only.
+- **Error handling syntax** — RESOLVED: `handle` is the only way to coarsen `result` types. `match` is reserved for user-defined enums only.
 - **String building** — RESOLVED: string interpolation `"text {expr}"`. No `+` operator for strings, no `string.concat()`.
 - **Testing constructs** — RESOLVED: `verify` blocks (comptime, pure functions) and `property` blocks (runtime fuzzing). No `test` blocks.
 - **Method syntax** — RESOLVED: module function syntax only (`list.length(items)`, not `items.length()`).
