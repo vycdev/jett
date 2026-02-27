@@ -6212,7 +6212,7 @@ function read_file(fs: Filesystem, path: string) returns result[string, string]:
 # handle is the ONLY way to coarsen a result:
 let content: string = read_file(fs, "data.txt") handle error:
     Stdout.write(stdout, error)
-    return
+    return nothing
 Stdout.write(stdout, content)
 ```
 
