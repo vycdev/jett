@@ -177,9 +177,9 @@ There must be **no spooky action at a distance**. A variable must never be silen
 **Example — side effects are declared, not hidden:**
 
 ```
-function save_user(fs: Filesystem, user: view User) returns result[nothing, string]:
+function save_user(view fs: Filesystem, user: view User) returns result[nothing, string]:
     let data: string = json.serialize[User](view user)
-    Filesystem.write_file(fs, "users.json", data) handle error:
+    Filesystem.write_file(view fs, "users.json", data) handle error:
         return fail("could not save user")
     return ok(nothing)
 
@@ -187,7 +187,7 @@ function compute_tax(income: float, rate: float) returns float:
     return income * rate
 ```
 
-`save_user` declares that it performs filesystem effects by taking a `Filesystem` capability parameter — the compiler auto-rebinds capability parameters, so no `with` clause is needed. Any caller can see this without reading the function body. `compute_tax` has no capability parameters, so the compiler guarantees it is pure. An LLM reading only the signatures knows exactly what each function does and does not do.
+`save_user` declares that it performs filesystem effects by taking a `view Filesystem` capability parameter. Any caller can see this without reading the function body. `compute_tax` has no capability parameters, so the compiler guarantees it is pure. An LLM reading only the signatures knows exactly what each function does and does not do.
 
 **Why this matters for LLMs:**
 
@@ -254,9 +254,9 @@ An interface is just a contract — a list of function signatures. It carries no
 struct EmailSender:
     config: SmtpConfig
 
-    function send(self: EmailSender, stdout: Stdout, net: Network, message: Message) returns nothing:
-        Stdout.write(stdout, "sending email")
-        smtp.deliver(net, self.config, message)
+    function send(self: EmailSender, view stdout: Stdout, view net: Network, message: Message) returns nothing:
+        Stdout.write(view stdout, "sending email")
+        smtp.deliver(view net, self.config, message)
         return nothing
 ```
 
@@ -505,11 +505,11 @@ let raw: string = coarsen password        # Password → string (skips to base)
 If you need the base type multiple times in one function, assign it to a local variable once:
 
 ```
-function process(password: Password, stdout: Stdout) returns nothing:
+function process(password: Password, view stdout: Stdout) returns nothing:
     let raw: string = coarsen password
     let len: int = string.char_count(raw)
     let upper: string = string.to_upper(raw)
-    Stdout.write(stdout, "password length: {len}")
+    Stdout.write(view stdout, "password length: {len}")
 ```
 
 > **Why not implicit coarsening?** Implicit coarsening would hide information from the LLM. If `Password` silently becomes `string` wherever a string is expected, the LLM loses track of which values are validated and which are raw. `coarsen` makes the type boundary visible in the source code — the LLM can see exactly where a validated value is being treated as a plain string, and can reason about whether that is intentional.
@@ -591,17 +591,17 @@ namespace server
 use auth          # COMPILE ERROR: imports must be inside a function or block
 use models        # COMPILE ERROR: imports must be inside a function or block
 
-function handle_login(stdout: Stdout) returns nothing:
+function handle_login(view stdout: Stdout) returns nothing:
     ...
 ```
 
 **What you write instead — all imports inside functions:**
 
 ```
-function fetch_data(net: Network, url: string) returns result[map[string, string], HttpError]:
+function fetch_data(view net: Network, url: string) returns result[map[string, string], HttpError]:
     use net.http
     use json
-    let response: HttpResponse = http.get(net, url) handle error:
+    let response: HttpResponse = http.get(view net, url) handle error:
         return fail(error)
     let data: map[string, string] = json.parse[map[string, string]](response.body) handle error:
         return fail(HttpError.status_error(0, error))
@@ -628,16 +628,16 @@ function compute_stats(values: list[float]) returns float:
 - A module imported in two functions is resolved once by the compiler — no runtime cost to repeated `use` statements.
 
 ```
-function good_example(stdout: Stdout) returns nothing:
+function good_example(view stdout: Stdout) returns nothing:
     use math
     use json
     let x: float = math.sqrt(2.0)
-    Stdout.write(stdout, json.serialize[float](view x))
+    Stdout.write(view stdout, json.serialize[float](view x))
 
-function bad_example(stdout: Stdout) returns nothing:
+function bad_example(view stdout: Stdout) returns nothing:
     let x: int = 42
     use math          # COMPILE ERROR: use statements must appear before any other code
-    Stdout.write(stdout, "value: {x}")
+    Stdout.write(view stdout, "value: {x}")
 ```
 
 **Why this matters for LLMs:**
@@ -657,8 +657,8 @@ Functions that can fail return a `result[T, E]` type. The caller **must** handle
 **The pattern:**
 
 ```
-function read_config(fs: Filesystem, path: string) returns result[Config, string]:
-    let raw: string = Filesystem.read_file(fs, path) handle error:
+function read_config(view fs: Filesystem, path: string) returns result[Config, string]:
+    let raw: string = Filesystem.read_file(view fs, path) handle error:
         return fail("could not read file: {path}")
     let config: Config = json.parse[Config](raw) handle error:
         return fail("invalid config format")
@@ -674,8 +674,8 @@ The `handle` keyword is used at the call site of any function that returns a `re
 **The compiler enforces handling:**
 
 ```
-function bad_example(fs: Filesystem) returns string:
-    let config: Config = read_config(fs, "app.conf")
+function bad_example(view fs: Filesystem) returns string:
+    let config: Config = read_config(view fs, "app.conf")
     # COMPILE ERROR: result[Config, string] must be handled
     # "read_config" can fail, but the error is not handled
     # hint: add a "handle" block after the call
@@ -697,8 +697,8 @@ You cannot accidentally ignore an error. The compiler will not let the program c
 
 ```
 # Simple — E is string:
-function read_config(fs: Filesystem, path: string) returns result[Config, string]:
-    let raw: string = Filesystem.read_file(fs, path) handle error:
+function read_config(view fs: Filesystem, path: string) returns result[Config, string]:
+    let raw: string = Filesystem.read_file(view fs, path) handle error:
         return fail("could not read file")
     return ok(json.parse[Config](raw))
 
@@ -708,10 +708,10 @@ enum DatabaseError:
     query_failed(query: string, reason: string)
     timeout
 
-function query(net: Network, sql: string) returns result[list[Row], DatabaseError]:
+function query(view net: Network, sql: string) returns result[list[Row], DatabaseError]:
     # ...
 
-let rows: list[Row] = query(net, "select * from users") handle error:
+let rows: list[Row] = query(view net, "select * from users") handle error:
     match error:
         connection_failed(msg):
             return fail("db down: {msg}")
@@ -732,16 +732,16 @@ The syntax form is **mandatory** and encodes the type being coarsenped:
 
 ```
 # Return form — exit the function on error:
-let config: Config = read_config(fs, "app.conf") handle error:
+let config: Config = read_config(view fs, "app.conf") handle error:
     return fail("config load failed")
 
 # Default form — provide a fallback value:
-let config: Config = read_config(fs, "app.conf") handle error:
+let config: Config = read_config(view fs, "app.conf") handle error:
     default Config(port: 8080)
 
 # Default form with side effects — log the error, then provide a fallback:
-let config: Config = read_config(fs, "app.conf") handle error:
-    Stdout.write(stdout, "config failed, using defaults: {error}")
+let config: Config = read_config(view fs, "app.conf") handle error:
+    Stdout.write(view stdout, "config failed, using defaults: {error}")
     default Config(port: 8080)
 ```
 
@@ -751,19 +751,19 @@ The `handle error:` block executes only when the result is `fail`. If the result
 
 ```
 # result — COMPILE ERROR:
-let config: Config = read_config(fs, "app.conf") handle error:
-    Stdout.write(stdout, "something failed")
+let config: Config = read_config(view fs, "app.conf") handle error:
+    Stdout.write(view stdout, "something failed")
     # COMPILE ERROR: handle block must end with "return" or "default"
     # hint: add "return fail(...)" to exit, or "default <value>" to provide a fallback
 
 # optional — COMPILE ERROR:
 let first: Item = list.first(items) handle:
-    Stdout.write(stdout, "list was empty")
+    Stdout.write(view stdout, "list was empty")
     # COMPILE ERROR: handle block must end with "return" or "default"
 
 # optional — valid with default:
 let first: Item = list.first(items) handle:
-    Stdout.write(stdout, "list was empty, using fallback")
+    Stdout.write(view stdout, "list was empty, using fallback")
     default Item(name: "unknown")
 ```
 
@@ -775,7 +775,7 @@ A function that returns anything other than `nothing` cannot be called as a stan
 
 ```
 # returns nothing — OK as standalone statement:
-Stdout.write(stdout, "hello")
+Stdout.write(view stdout, "hello")
 
 # returns float — MUST assign:
 math.sqrt(16.0)
@@ -783,7 +783,7 @@ math.sqrt(16.0)
 # hint: assign to a variable with "let x = math.sqrt(16.0)"
 
 # returns result[T, E] — MUST assign AND handle:
-read_config(fs, "app.conf")
+read_config(view fs, "app.conf")
 # COMPILE ERROR: result[Config, string] is not consumed and not handled
 # hint: assign and handle with "let config = read_config(...) handle error: ..."
 ```
@@ -812,8 +812,8 @@ This means `handle` is the single canonical coarsen mechanism for both `result[T
 
 - **`result[T, E]` MUST use `handle error:`** -- the `error` keyword is required. The error variable is always bound inside the block:
   ```
-  let config: Config = read_config(fs, "app.conf") handle error:
-      Stdout.write(stdout, error)
+  let config: Config = read_config(view fs, "app.conf") handle error:
+      Stdout.write(view stdout, error)
       return fail(error)
   ```
 - **`optional[T]` MUST use bare `handle:`** with **no error variable**, because there is no error -- the value is simply absent:
@@ -852,17 +852,17 @@ Jett bans every construct that causes control flow to jump to a non-obvious dest
 **Example — error propagation is always visible:**
 
 ```
-function process_order(net: Network, order_id: string) returns result[Receipt, string]:
+function process_order(view net: Network, order_id: string) returns result[Receipt, string]:
     use db
     use payment
 
-    let order: Order = db.find_order(net, order_id) handle error:
+    let order: Order = db.find_order(view net, order_id) handle error:
         return fail("order not found: {order_id}")
 
-    let charge: Charge = payment.charge(net, order.total, order.card) handle error:
+    let charge: Charge = payment.charge(view net, order.total, order.card) handle error:
         return fail("payment failed for order: {order_id}")
 
-    let receipt: Receipt = db.save_receipt(net, order, charge) handle error:
+    let receipt: Receipt = db.save_receipt(view net, order, charge) handle error:
         return fail("could not save receipt")
 
     return ok(receipt)
@@ -889,9 +889,9 @@ If a variable named `user_id` exists in an outer scope, creating another variabl
 **What the compiler rejects:**
 
 ```
-function process_user(net: Network, user_id: string) returns result[User, string]:
+function process_user(view net: Network, user_id: string) returns result[User, string]:
     use db
-    let user: User = db.find(net, user_id) handle error:
+    let user: User = db.find(view net, user_id) handle error:
         return fail("not found")
 
     for item in user.orders:
@@ -903,9 +903,9 @@ function process_user(net: Network, user_id: string) returns result[User, string
 **What you write instead:**
 
 ```
-function process_user(net: Network, user_id: string) returns result[User, string]:
+function process_user(view net: Network, user_id: string) returns result[User, string]:
     use db
-    let user: User = db.find(net, user_id) handle error:
+    let user: User = db.find(view net, user_id) handle error:
         return fail("not found")
 
     for item in user.orders:
@@ -1050,10 +1050,10 @@ struct AppCapabilities:
     stderr: Stderr
 
 function deploy_service(caps: AppCapabilities, config: Config, target: Server) returns nothing:
-    let manifest: string = Filesystem.read_file(caps.fs, "manifest.json") handle error:
-        Stderr.write(caps.stderr, "failed to read manifest")
+    let manifest: string = Filesystem.read_file(view caps.fs, "manifest.json") handle error:
+        Stderr.write(view caps.stderr, "failed to read manifest")
         return nothing
-    Stdout.write(caps.stdout, "deploying...")
+    Stdout.write(view caps.stdout, "deploying...")
     # 3 parameters instead of 7
 ```
 
@@ -1236,7 +1236,7 @@ No regex for simple operations. No manual index arithmetic. Each function does o
 ```
 use time
 
-let now: Time = Clock.now(clock)
+let now: Time = Clock.now(view clock)
 let formatted: string = time.format(now, "YYYY-MM-DD")
 let parsed: Time = time.parse("2025-03-15", "YYYY-MM-DD") handle error:
     return fail("invalid date")
@@ -1282,7 +1282,7 @@ enum HttpError:
 ```
 use net.http
 
-let response: HttpResponse = http.get(net, "https://api.example.com/users") handle error:
+let response: HttpResponse = http.get(view net, "https://api.example.com/users") handle error:
     # error is HttpError — match to handle specific cases:
     match error:
         HttpError.timeout(msg):
@@ -1295,28 +1295,28 @@ let body: list[User] = json.parse[list[User]](response.body) handle error:
 let status: int = response.status
 
 # POST with body:
-let post_response: HttpResponse = http.post(net, "https://api.example.com/users", json.serialize[User](view new_user)) handle error:
+let post_response: HttpResponse = http.post(view net, "https://api.example.com/users", json.serialize[User](view new_user)) handle error:
     return fail(error)
 ```
 
 **File system — simple and complete:**
 
 ```
-let content: string = Filesystem.read_file(fs, "config.json") handle error:
+let content: string = Filesystem.read_file(view fs, "config.json") handle error:
     return fail("file not found")
 
-Filesystem.write_file(fs, "output.txt", data) handle error:
+Filesystem.write_file(view fs, "output.txt", data) handle error:
     return fail("could not write")
 
-let files: list[string] = Filesystem.list_dir(fs, "./data") handle error:
+let files: list[string] = Filesystem.list_dir(view fs, "./data") handle error:
     return fail("directory not found")
 
-let exists: bool = Filesystem.file_exists(fs, "config.json")
-let size: int = Filesystem.file_size(fs, "data.bin") handle error:
+let exists: bool = Filesystem.file_exists(view fs, "config.json")
+let size: int = Filesystem.file_size(view fs, "data.bin") handle error:
     return fail("could not get file size")
-Filesystem.copy_file(fs, "source.txt", "dest.txt") handle error:
+Filesystem.copy_file(view fs, "source.txt", "dest.txt") handle error:
     return fail("could not copy file")
-Filesystem.delete_file(fs, "temp.txt") handle error:
+Filesystem.delete_file(view fs, "temp.txt") handle error:
     return fail("could not delete file")
 ```
 
@@ -1371,7 +1371,7 @@ let addr: validate.IPv4 = ip_string handle error:
     return fail("invalid ip")
 
 # Functions declare the validated type — no re-validation needed:
-function send_email(net: Network, to: validate.Email, body: string) returns result[nothing, string]:
+function send_email(view net: Network, to: validate.Email, body: string) returns result[nothing, string]:
     # "to" is guaranteed to be a valid email by the type system
     # ...
 ```
@@ -1381,12 +1381,12 @@ function send_email(net: Network, to: validate.Email, body: string) returns resu
 With a dense standard library, the LLM's role shifts fundamentally. It is no longer writing algorithms — it is **connecting well-tested components**. A typical Jett program written by an LLM looks like:
 
 ```
-function process_csv_report(fs: Filesystem, clock: Clock, path: string) returns result[Report, string]:
+function process_csv_report(view fs: Filesystem, view clock: Clock, path: string) returns result[Report, string]:
     use string
     use list
     use time
 
-    let raw: string = Filesystem.read_file(fs, path) handle error:
+    let raw: string = Filesystem.read_file(view fs, path) handle error:
         return fail("could not read file")
 
     let lines: list[string] = string.split(raw, "\n")
@@ -1405,7 +1405,7 @@ function process_csv_report(fs: Filesystem, clock: Clock, path: string) returns 
     let sorted: list[list[string]] = list.sort_by_index(filtered, 0)
 
     let report: Report = Report(
-        generated: Clock.now(clock),
+        generated: Clock.now(view clock),
         row_count: list.length[list[string]](sorted),
         data: sorted
     )
@@ -1538,11 +1538,11 @@ The LLM might forget one of these checks. It might check the wrong flag. It migh
 In Jett, the function signature declares which state is required. No checks needed — it is **impossible** to call the function in the wrong state:
 
 ```
-function post_comment(clock: Clock, session: UserAuth at logged_in, text: string) returns result[Comment, string]:
+function post_comment(view clock: Clock, session: UserAuth at logged_in, text: string) returns result[Comment, string]:
     # No if-checks needed. This function can ONLY be called when
     # the session is in the "logged_in" state. The compiler enforces this
     # at every call site. The LLM cannot forget. The human cannot forget.
-    let comment: Comment = Comment(author: session.user_id, text: text, created: Clock.now(clock))
+    let comment: Comment = Comment(author: session.user_id, text: text, created: Clock.now(view clock))
     return ok(comment)
 ```
 
@@ -1550,7 +1550,7 @@ If the LLM tries to call `post_comment` with a session in the wrong state:
 
 ```
 let session: UserAuth = UserAuth(guest)
-let result: result[Comment, string] = post_comment(clock, session, "hello")
+let result: result[Comment, string] = post_comment(view clock, session, "hello")
 # COMPILE ERROR: expected "UserAuth at logged_in" but got "UserAuth at guest"
 # hint: transition the session to "logged_in" before calling post_comment
 ```
@@ -1583,8 +1583,8 @@ function get_tracking(order: OrderProcess at shipped) returns string:
     # order.tracking is guaranteed to exist — we are in the "shipped" state.
     return order.tracking
 
-function ship_order(clock: Clock, order: OrderProcess at submitted, tracking: string) returns OrderProcess at shipped:
-    return OrderProcess.transition(order, shipped, tracking: tracking, shipped_at: Clock.now(clock))
+function ship_order(view clock: Clock, order: OrderProcess at submitted, tracking: string) returns OrderProcess at shipped:
+    return OrderProcess.transition(order, shipped, tracking: tracking, shipped_at: Clock.now(view clock))
 ```
 
 **5. The LLM defines reality once, then the compiler enforces it forever.**
@@ -1624,17 +1624,17 @@ enum CaptureOutcome:
     captured(payment: Payment at captured)
     declined(payment: Payment at failed)
 
-function authorize_payment(net: Network, pay: Payment at pending) returns result[PaymentOutcome, string]:
+function authorize_payment(view net: Network, pay: Payment at pending) returns result[PaymentOutcome, string]:
     use payment_gateway
-    let auth: AuthResult = payment_gateway.authorize(net, pay.amount, pay.currency) handle error:
+    let auth: AuthResult = payment_gateway.authorize(view net, pay.amount, pay.currency) handle error:
         return fail("gateway error")
     if auth.declined:
         return ok(PaymentOutcome.declined(payment: Payment.transition(pay, failed, reason: auth.reason)))
     return ok(PaymentOutcome.authorized(payment: Payment.transition(pay, authorized, amount: pay.amount, auth_code: auth.code)))
 
-function capture_payment(net: Network, pay: Payment at authorized) returns result[CaptureOutcome, string]:
+function capture_payment(view net: Network, pay: Payment at authorized) returns result[CaptureOutcome, string]:
     use payment_gateway
-    let capture: CaptureResult = payment_gateway.capture(net, pay.auth_code, pay.amount) handle error:
+    let capture: CaptureResult = payment_gateway.capture(view net, pay.auth_code, pay.amount) handle error:
         return fail("capture failed")
     if capture.declined:
         return ok(CaptureOutcome.declined(payment: Payment.transition(pay, failed, reason: capture.reason)))
@@ -1643,9 +1643,9 @@ function capture_payment(net: Network, pay: Payment at authorized) returns resul
         auth_code: pay.auth_code,
         capture_id: capture.id)))
 
-function refund_payment(net: Network, pay: Payment at captured) returns result[Payment at refunded, string]:
+function refund_payment(view net: Network, pay: Payment at captured) returns result[Payment at refunded, string]:
     use payment_gateway
-    let refund: RefundResult = payment_gateway.refund(net, pay.capture_id, pay.amount) handle error:
+    let refund: RefundResult = payment_gateway.refund(view net, pay.capture_id, pay.amount) handle error:
         return fail("refund failed: {error}")
     return ok(Payment.transition(pay, refunded,
         original_amount: pay.amount,
@@ -1669,22 +1669,22 @@ Garbage collection is too slow for native-speed code. C-style manual memory (`ma
 When a variable is passed into a function, it is **consumed** (moved) and immediately becomes invalid in the current scope. If the LLM tries to use it again on the next line, the compiler rejects it. If the LLM wants to keep it, it must explicitly clone.
 
 ```
-function send_message(net: Network, connection: Connection, payload: Payload) returns nothing:
-    Network.send(net, connection, payload)
+function send_message(view net: Network, connection: Connection, payload: Payload) returns nothing:
+    Network.send(view net, connection, payload)
     # `payload` has been consumed by `send`. It no longer exists here.
     return nothing
 
-function example(net: Network, stdout: Stdout) returns nothing:
+function example(view net: Network, view stdout: Stdout) returns nothing:
     let conn: Connection = Connection(host: "localhost", port: 8080)
     let data: Payload = Payload(content: "hello")
 
-    send_message(net, conn, data)
+    send_message(view net, conn, data)
 
-    Stdout.write(stdout, data.content)
+    Stdout.write(view stdout, data.content)
     # COMPILE ERROR: "data" was consumed by "send_message" on the previous line
     # hint: use "clone data" if you need to keep a copy
 
-    Stdout.write(stdout, conn.status)
+    Stdout.write(view stdout, conn.status)
     # COMPILE ERROR: "conn" was consumed by "send_message"
 ```
 
@@ -1695,14 +1695,14 @@ The rule is completely local. The LLM does not need to track lifetimes across fu
 **When the LLM needs to keep a value:**
 
 ```
-function example(net: Network, stdout: Stdout) returns nothing:
+function example(view net: Network, view stdout: Stdout) returns nothing:
     let conn: Connection = Connection(host: "localhost", port: 8080)
     let data: Payload = Payload(content: "hello")
 
-    send_message(net, conn, clone data)
+    send_message(view net, conn, clone data)
     # `clone data` creates a copy that gets consumed. The original `data` survives.
 
-    Stdout.write(stdout, data.content)   # valid — `data` was never consumed
+    Stdout.write(view stdout, data.content)   # valid — `data` was never consumed
 ```
 
 The `clone` keyword is explicit and visible. The LLM (and any reader) can see exactly where copies are made. There is no hidden reference counting or invisible borrowing.
@@ -1786,7 +1786,7 @@ actor Counter(stdout: Stdout):
         respond count
 
     receive print_count:
-        Stdout.write(stdout, string(count))
+        Stdout.write(view stdout, string(count))
 
 function main(stdout: Stdout) returns nothing:
     let counter: Counter = spawn Counter(stdout: clone stdout)
@@ -1796,7 +1796,7 @@ function main(stdout: Stdout) returns nothing:
     send counter.increment
 
     let total: int = ask counter.get_count
-    Stdout.write(stdout, string(total))   # prints "3"
+    Stdout.write(view stdout, string(total))   # prints "3"
 ```
 
 **Rules enforced by the compiler:**
@@ -1813,7 +1813,7 @@ Actors receive capabilities at spawn time. The capability is moved (or cloned) i
 ```
 actor Logger(stdout: Stdout):
     receive log(message: string):
-        Stdout.write(stdout, message)
+        Stdout.write(view stdout, message)
 
 function main(stdout: Stdout) returns nothing:
     let logger: Logger = spawn Logger(stdout: clone stdout)
@@ -1845,7 +1845,7 @@ function main(stdout: Stdout) returns nothing:
     let response: ProcessResult = ask worker.process(data)
     # `data` has been consumed — it was sent to the actor.
     # The LLM cannot accidentally access it here.
-    Stdout.write(stdout, response.summary)
+    Stdout.write(view stdout, response.summary)
 ```
 
 **Why this works for LLMs:**
@@ -1862,10 +1862,10 @@ In languages like JavaScript or C#, you can launch a background async task and f
 Jett uses **structured concurrency** without function coloring. `run` launches any function call as a concurrent task. `join` waits for it. `cancel` stops it. The compiler enforces that every task is resolved before the enclosing function returns.
 
 ```
-function fetch_all_data(net: Network) returns result[DashboardData, HttpError]:
-    let users: HttpResponse = run http.get(net, "https://api.example.com/users")
-    let orders: HttpResponse = run http.get(net, "https://api.example.com/orders")
-    let stats: HttpResponse = run http.get(net, "https://api.example.com/stats")
+function fetch_all_data(view net: Network) returns result[DashboardData, HttpError]:
+    let users: HttpResponse = run http.get(view net, "https://api.example.com/users")
+    let orders: HttpResponse = run http.get(view net, "https://api.example.com/orders")
+    let stats: HttpResponse = run http.get(view net, "https://api.example.com/stats")
 
     # All three requests run in parallel.
     # users, orders, stats are pending — the compiler tracks them as unresolved.
@@ -1907,7 +1907,7 @@ function fetch_all_data(net: Network) returns result[DashboardData, HttpError]:
 `cancel` sets a cancellation flag on a task. The task is not killed immediately — instead, the next capability use (I/O operation) inside the cancelled task returns a `CancelledError`. The task's normal error handling cleans up resources. No cancellation tokens, no manual flag checking — the capability system provides natural cancellation checkpoints:
 
 ```
-let work: Data = run expensive_operation(net, data)
+let work: Data = run expensive_operation(view net, data)
 
 # If we need to stop the task:
 cancel work
@@ -1917,7 +1917,7 @@ cancel work
 
 # A cancelled task must still be joined to collect its result:
 join work handle error:
-    log(stdout, "Task was cancelled")
+    log(view stdout, "Task was cancelled")
 ```
 
 **Running tasks in a loop:**
@@ -1928,7 +1928,7 @@ Pending values created by `run` can be added to lists and joined later — indiv
 let mutable tasks: list[HttpResponse] = list[]
 
 for url in urls:
-    let response: HttpResponse = run http.get(net, url)
+    let response: HttpResponse = run http.get(view net, url)
     tasks = list.append[HttpResponse](tasks, response)
 
 # join the whole list — resolves all pending items
@@ -1946,7 +1946,7 @@ for url in urls:
         let cached: HttpResponse = cache.get(url)
         tasks = list.append[HttpResponse](tasks, cached)
     else:
-        let response: HttpResponse = run http.get(net, url)
+        let response: HttpResponse = run http.get(view net, url)
         tasks = list.append[HttpResponse](tasks, response)
 
 # join resolves pending items, passes through already-resolved ones
@@ -1957,9 +1957,9 @@ let results: list[HttpResponse] = join tasks handle error:
 **What the compiler rejects:**
 
 ```
-function bad_example(net: Network) returns result[string, string]:
-    let users: HttpResponse = run http.get(net, "https://api.example.com/users")
-    let orders: HttpResponse = run http.get(net, "https://api.example.com/orders")
+function bad_example(view net: Network) returns result[string, string]:
+    let users: HttpResponse = run http.get(view net, "https://api.example.com/users")
+    let orders: HttpResponse = run http.get(view net, "https://api.example.com/orders")
 
     let users_result: HttpResponse = join users handle error:
         return fail("failed")
@@ -2009,11 +2009,11 @@ comptime function type_name[T]() returns string:
 comptime function is_numeric[T]() returns bool:
     return T is int or T is float
 
-function print_value[T](stdout: Stdout, val: T) returns nothing:
+function print_value[T](view stdout: Stdout, val: T) returns nothing:
     if comptime is_numeric[T]():
-        Stdout.write(stdout, "number: {val}")
+        Stdout.write(view stdout, "number: {val}")
     else:
-        Stdout.write(stdout, "value: {val}")
+        Stdout.write(view stdout, "value: {val}")
 ```
 
 The `if comptime` branch is resolved at compile time. The compiled binary only contains the branch that applies. This gives the same power as C++ template specialization or Rust trait bounds, but the LLM writes it as a normal `if` statement.
@@ -2282,12 +2282,12 @@ let truncated: string = string.truncate("long text here", 8, "...") # "long tex.
 use string
 
 for char in string.chars("hello"):
-    Stdout.write(stdout, char)
+    Stdout.write(view stdout, char)
     # Yields: "h", "e", "l", "l", "o"
     # Each `char` is a single Unicode grapheme cluster, not a byte.
 
 for word in string.words("the quick brown fox"):
-    Stdout.write(stdout, word)
+    Stdout.write(view stdout, word)
     # Yields: "the", "quick", "brown", "fox"
 
 for line in string.lines(multiline_text):
@@ -2624,16 +2624,16 @@ function get_user_debug(user: User) returns string:
 ```
 
 ```
-function log_user(stdout: Stdout, user: User) returns nothing:
+function log_user(view stdout: Stdout, user: User) returns nothing:
     use log
-    Stdout.write(stdout, "user logged in: {json.serialize[User](view user)}")
+    Stdout.write(view stdout, "user logged in: {json.serialize[User](view user)}")
     # COMPILE ERROR: User contains secret fields and cannot be serialized
     # secret fields: password_hash, api_key, ssn
     # hint: use json.serialize_public[User](view user) to serialize only non-secret fields
 ```
 
 ```
-function handle_login(net: Network, request: Request) returns result[Response, string]:
+function handle_login(view net: Network, request: Request) returns result[Response, string]:
     use net.http
     let user: User = authenticate(request) handle error:
         return ok(http.response(400, "invalid credentials"))
@@ -2674,10 +2674,10 @@ function authenticate(stored_hash: secret[string], input_password: string) retur
 ```
 
 ```
-function call_external_api(net: Network, api_key: secret[string], payload: string) returns result[Response, string]:
+function call_external_api(view net: Network, api_key: secret[string], payload: string) returns result[Response, string]:
     use net.http
     let headers: map[string, string] = map("Authorization": "Bearer {declassify api_key}")
-    return http.post(net, "https://api.example.com/data", payload, headers: headers)
+    return http.post(view net, "https://api.example.com/data", payload, headers: headers)
 ```
 
 Every use of `declassify` is a **visible, searchable marker** in the codebase. A security audit can grep for `declassify` and review every place where secrets are accessed. If an LLM generates `declassify`, it is making an explicit choice that a reviewer can catch.
@@ -2799,99 +2799,56 @@ Capability objects are created **only in `main()`** and must be explicitly passe
 # Environment  — read environment variables
 ```
 
-**Capabilities are a closed, built-in set.** Users cannot define custom capability types. Capabilities represent primitive OS-level side effects (file I/O, networking, stdout, etc.) — these are a finite, well-known set. Higher-level abstractions like database access or HTTP clients are built on top of primitive capabilities (e.g., a database module takes a `Network` parameter internally). This keeps the capability system simple: the compiler knows the full set, auto-rebinding and purity tracking are straightforward, and LLMs have a small, fixed list to learn rather than an open-ended set that varies per project. Capability types are not syntactically distinguished from other types in function signatures — they follow the same pass-and-propagate pattern as any other parameter.
+**Capabilities are a closed, built-in set.** Users cannot define custom capability types. Capabilities represent primitive OS-level side effects (file I/O, networking, stdout, etc.) — these are a finite, well-known set. Higher-level abstractions like database access or HTTP clients are built on top of primitive capabilities (e.g., a database module takes a `Network` parameter internally). This keeps the capability system simple: the compiler knows the full set, purity tracking is straightforward, and LLMs have a small, fixed list to learn rather than an open-ended set that varies per project. Capability types are not syntactically distinguished from other types in function signatures — they follow the same `view` pattern as any other borrowed parameter.
 
 **How `main()` receives capabilities:**
 
 ```
 function main(stdout: Stdout, stderr: Stderr, fs: Filesystem, net: Network, env: Environment) returns nothing:
-    let config_path: string = Environment.get(env, "CONFIG_PATH") handle error:
-        Stderr.write(stderr, "CONFIG_PATH not set")
+    let config_path: string = Environment.get(view env, "CONFIG_PATH") handle error:
+        Stderr.write(view stderr, "CONFIG_PATH not set")
         return nothing
 
-    let config: Config = load_config(fs, config_path) handle error:
-        Stderr.write(stderr, "failed to load config")
+    let config: Config = load_config(view fs, config_path) handle error:
+        Stderr.write(view stderr, "failed to load config")
         return nothing
 
-    run_server(fs, net, stdout, config)
-    Stdout.write(stdout, "server stopped")
+    run_server(view fs, view net, view stdout, config)
+    Stdout.write(view stdout, "server stopped")
 ```
 
 `main()` is the **only** function that receives capabilities from the runtime. Every other function in the program gets its capabilities by having them passed in as parameters. If a function doesn't have a `Filesystem` parameter, it **cannot** touch the file system. Period. The compiler enforces this.
 
-#### Capabilities Are Linear — Threading Makes Side Effects Visible
+#### Capabilities Use `view` — Ownership Stays in `main()`
 
-Because capabilities are linear types (Rule Set 10.1), they are **consumed** when passed to a function. This means:
-
-```
-function example(fs: Filesystem, stdout: Stdout) returns nothing:
-    let config: Config = read_config(fs, "app.conf") handle error:
-        Stdout.write(stdout, "failed")
-        return nothing
-    # `fs` is auto-rebound because the compiler recognizes Filesystem as a capability type.
-    # The compiler handles returning capabilities transparently.
-```
-
-**Capability threading — functions borrow and return capabilities:**
+`main()` **owns** all capabilities. Every other function **borrows** them via `view` — the same `view` keyword used for any other borrowed parameter (Rule Set 19). No special compiler magic is needed for capabilities.
 
 ```
-function read_config(fs: Filesystem, path: string) returns result[Config, string]:
-    let raw: string = Filesystem.read_file(fs, path) handle error:
+function read_config(view fs: Filesystem, path: string) returns result[Config, string]:
+    let raw: string = Filesystem.read_file(view fs, path) handle error:
         return fail("could not read {path}")
     let config: Config = json.parse[Config](raw) handle error:
         return fail("invalid config format")
     return ok(config)
-    # The compiler recognizes Filesystem as a capability type and auto-rebinds
-    # `fs` after each call, returning it to the caller alongside the result.
 ```
 
-The compiler recognizes `Filesystem` as a capability type and automatically borrows and returns it. The compiler auto-rebinds the capability in the caller's scope — no manual destructuring needed:
+The caller keeps ownership. The function borrows via `view`. After the call returns, the caller's capability is still available — because it was never consumed:
 
 ```
 function main(stdout: Stdout, fs: Filesystem) returns nothing:
-    let config: Config = read_config(fs, "app.conf") handle error:
-        Stdout.write(stdout, "failed")
+    let config: Config = read_config(view fs, "app.conf") handle error:
+        Stdout.write(view stdout, "failed")
         return nothing
-    # `fs` is still available — the compiler auto-rebound it because Filesystem is a capability type.
-    let data: Data = read_data(fs, config.data_path) handle error:
-        Stdout.write(stdout, "failed")
+    let data: Data = read_data(view fs, config.data_path) handle error:
+        Stdout.write(view stdout, "failed")
         return nothing
     process(data)
-    Stdout.write(stdout, "done")
+    Stdout.write(view stdout, "done")
 ```
 
-Every function that touches the filesystem has `fs: Filesystem` in its parameters. Every function that writes output has `stdout: Stdout`. **By reading only the function signature**, the LLM (or a human) knows exactly which side effects a function can perform.
+Every function that touches the filesystem has `view fs: Filesystem` in its parameters. Every function that writes output has `view stdout: Stdout`. **By reading only the function signature**, the LLM (or a human) knows exactly which side effects a function can perform.
 
-**Auto-rebinding of capability parameters:**
-
-The compiler recognizes capability types (Filesystem, Network, Stdout, Stderr, Stdin, Clock, Random, Process, Environment) and **automatically rebinds** their parameters after each method call. You do NOT need to write `stdout = Stdout.write(stdout, msg)` — just `Stdout.write(stdout, msg)`. The compiler handles rebinding implicitly. No `with` clause is needed — the compiler infers this from the parameter types.
-
-```
-function log_message(stdout: Stdout, message: string) returns nothing:
-    Stdout.write(stdout, message)
-    Stdout.write(stdout, "\n")
-    # stdout is still alive — the compiler recognizes Stdout as a capability type and auto-rebinds after each method call
-```
-
-On the error path, the compiler automatically returns all borrowed capability parameters:
-
-```
-function read_config(fs: Filesystem, path: string) returns result[Config, string]:
-    let raw: string = Filesystem.read_file(fs, path) handle error:
-        return fail("could not read {path}")
-        # The compiler automatically returns fs alongside the fail value
-    let config: Config = json.parse[Config](raw) handle error:
-        return fail("invalid config format")
-        # The compiler automatically returns fs here too
-    return ok(config)
-    # The compiler automatically returns fs alongside the ok value
-```
-
-**Error path semantics:** Because the compiler recognizes capability types, it ensures that every `return` statement (whether `ok(...)`, `fail(...)`, or bare `return`) automatically includes the borrowed capabilities. The programmer never writes `return fail(...), fs` — the compiler handles it based on the parameter types.
-
-**How auto-rebinding works:**
-
-When a function has a capability parameter like `fs: Filesystem`, every call to a method on `fs` (like `Filesystem.read_file(fs, path)`) is automatically rebound by the compiler. The programmer writes the call without an assignment prefix, and the compiler silently updates `fs` to the returned capability value. This is the ONLY case where a parameter is implicitly rebound. The compiler recognizes capability types (Filesystem, Network, Stdout, Stderr, Stdin, Clock, Random, Process, Environment) and automatically threads them through the function and returns them to the caller. No `with` clause is needed.
+This is the same `view` system as any other type — no special rules for capabilities. The programmer already knows how `view` works; capabilities just use it.
 
 #### What the Compiler Rejects
 
@@ -2902,7 +2859,7 @@ function sneaky_logger(message: string) returns nothing:
     Stdout.write(stdout, message)
     # COMPILE ERROR: "stdout" is not defined
     # "sneaky_logger" does not have a Stdout capability in its parameters
-    # hint: add "stdout: Stdout" to the function parameters
+    # hint: add "view stdout: Stdout" to the function parameters
 ```
 
 **A function trying to access the network without a capability:**
@@ -2913,7 +2870,7 @@ function fetch_data(url: string) returns result[string, string]:
     return http.get(url)
     # COMPILE ERROR: "http.get" requires a Network capability
     # but "fetch_data" does not have one in its parameters
-    # hint: add "net: Network" to the function parameters
+    # hint: add "view net: Network" to the function parameters
 ```
 
 **A pure function guaranteed by its signature:**
@@ -2940,8 +2897,8 @@ function main(fs: Filesystem, net: Network, stdout: Stdout) returns nothing:
     let read_fs: Filesystem = Filesystem.read_only(fs)
 
     # Pass only read access to the config loader:
-    let config: Config = load_config(read_fs, "app.conf") handle error:
-        Stdout.write(stdout, "failed")
+    let config: Config = load_config(view read_fs, "app.conf") handle error:
+        Stdout.write(view stdout, "failed")
         return nothing
 
     # load_config physically cannot write files — it only has read_only access.
@@ -3002,7 +2959,7 @@ property load_config_parses_valid_json:
     let mock_fs: Filesystem = test.mock.filesystem(map(
         "app.conf": "{{\"port\": {port}}"
     ))
-    let config: Config = load_config(mock_fs, "app.conf") handle error:
+    let config: Config = load_config(view mock_fs, "app.conf") handle error:
         assert false "should not fail"
     assert config.port is port
 ```
@@ -3036,18 +2993,18 @@ Jett's capability system (Rule Set 16) naturally solves cross-platform compilati
 **The LLM writes this — once, for all platforms:**
 
 ```
-function start_server(net: Network, stdout: Stdout, port: int) returns nothing:
-    let listener: Listener = Network.listen(net, "0.0.0.0", port) handle error:
-        Stdout.write(stdout, "failed to bind port")
+function start_server(view net: Network, view stdout: Stdout, port: int) returns nothing:
+    let listener: Listener = Network.listen(view net, "0.0.0.0", port) handle error:
+        Stdout.write(view stdout, "failed to bind port")
         return nothing
 
-    Stdout.write(stdout, "listening on port {port}")
+    Stdout.write(view stdout, "listening on port {port}")
 
     while true:
-        let connection: Connection = Network.accept(net, listener) handle error:
-            Stdout.write(stdout, "accept failed")
+        let connection: Connection = Network.accept(view net, listener) handle error:
+            Stdout.write(view stdout, "accept failed")
             continue
-        handle_connection(net, stdout, connection)
+        handle_connection(view net, view stdout, connection)
 ```
 
 This code does not contain a single OS-specific reference. No `#ifdef`, no `cfg!()`, no `#[target_os]`. The LLM writes against the `Network` capability interface. The compiler does the rest.
@@ -3102,7 +3059,7 @@ Every capability type has a **universal interface** that the LLM programs agains
 
 ```
 # The LLM writes forward slashes everywhere:
-let config: string = Filesystem.read_file(fs, "data/config/app.json") handle error:
+let config: string = Filesystem.read_file(view fs, "data/config/app.json") handle error:
     return fail("config not found")
 
 # When compiled for Windows, the compiler automatically translates
@@ -3216,14 +3173,14 @@ The LLM does not write parsing functions. The LLM does not import a serializatio
 **Using auto-generated serialization:**
 
 ```
-function save_user(fs: Filesystem, user: view User) returns result[nothing, string]:
+function save_user(view fs: Filesystem, user: view User) returns result[nothing, string]:
     let json_data: string = json.serialize[User](view user)
-    Filesystem.write_file(fs, "users/{user.id}.json", json_data) handle error:
+    Filesystem.write_file(view fs, "users/{user.id}.json", json_data) handle error:
         return fail("could not save user")
     return ok(nothing)
 
-function load_user(fs: Filesystem, id: string) returns result[User, string]:
-    let raw: string = Filesystem.read_file(fs, "users/{id}.json") handle error:
+function load_user(view fs: Filesystem, id: string) returns result[User, string]:
+    let raw: string = Filesystem.read_file(view fs, "users/{id}.json") handle error:
         return fail("user file not found")
     let user: User = json.parse[User](raw) handle error:
         return fail("invalid user data")
@@ -3548,42 +3505,31 @@ In the example above, if `validate_auth` returns `fail(...)`, the `handle` block
 Pipelines work naturally with capability-based I/O (Rule Set 16). The capability is passed as an additional argument:
 
 ```
-function process_request(fs: Filesystem, net: Network, stdout: Stdout, request: Request) returns result[string, string]:
+function process_request(view fs: Filesystem, view net: Network, view stdout: Stdout, request: Request) returns result[string, string]:
     let output: string = request
         |> authenticate
         |> authorize
-        |> fetch_data(fs) handle error:
+        |> fetch_data(view fs) handle error:
             return fail("data fetch failed")
         |> transform_response
         |> json.serialize[Response]
 
-    Stdout.write(stdout, "processed request")
+    Stdout.write(view stdout, "processed request")
     return ok(output)
 ```
 
-**Capability auto-threading in pipelines:**
+**Capabilities in pipelines:**
 
-When a pipeline step takes a capability parameter, the compiler auto-rebinds capability parameters and automatically threads the capability through the pipeline. The LLM writes `fetch_data(fs)` as a pipeline step, and the compiler handles the multi-value return invisibly:
-
-1. `fetch_data(fs)` consumes `fs` and the compiler auto-rebinds it.
-2. The compiler extracts `data` as the pipeline value for the next step.
-3. The compiler holds `fs` aside and returns it from the enclosing function automatically.
-
-The LLM never sees the multi-value return. It writes the pipeline as if capabilities don't exist — a single value flows left to right. The compiler handles the plumbing.
-
-**What the compiler rejects:**
-
-If a pipeline step consumes a capability but does not allow the compiler to auto-rebind it, the compiler reports an error:
+When a pipeline step takes a capability parameter, the capability is passed as `view` — same as any other function call. The capability is borrowed, not consumed, so it remains available for subsequent pipeline steps:
 
 ```
 let result: string = request
-    |> authenticate
-    |> consume_filesystem(fs)
-    # COMPILE ERROR: pipeline step "consume_filesystem" consumes capability "fs"
-    # but does not allow the compiler to auto-rebind it
-    # hint: ensure consume_filesystem returns the capability for auto-rebinding
-    |> transform
+    |> validate
+    |> fetch_data(view fs)
+    |> process(view stdout)
 ```
+
+Each step borrows the capability via `view`. No special pipeline rules needed — it's just normal `view` semantics.
 
 #### Why `|>` Is an Exception to Symbol Minimalism
 
@@ -3710,7 +3656,7 @@ The compiler automatically:
 **Using the translated API — the LLM writes safe Jett code:**
 
 ```
-function create_game_window(stdout: Stdout) returns result[sdl.Window, string]:
+function create_game_window(view stdout: Stdout) returns result[sdl.Window, string]:
     use c "SDL2/SDL.h" as sdl
 
     sdl.init(sdl.INIT_VIDEO) handle error:
@@ -3725,7 +3671,7 @@ function create_game_window(stdout: Stdout) returns result[sdl.Window, string]:
     ) handle error:
         return fail("could not create window")
 
-    Stdout.write(stdout, "window created")
+    Stdout.write(view stdout, "window created")
     return ok(window)
 ```
 
@@ -3736,14 +3682,14 @@ This code calls the real SDL2 C library with full native performance. The LLM wr
 C pointers are translated into **opaque, linear handle types**. Because they are linear (Rule Set 10.1), they must be explicitly consumed — preventing use-after-free across the language boundary.
 
 ```
-function window_lifecycle(stdout: Stdout) returns nothing:
+function window_lifecycle(view stdout: Stdout) returns nothing:
     use c "SDL2/SDL.h" as sdl
 
     sdl.init(sdl.INIT_VIDEO) handle error:
         return nothing
 
     let window: sdl.Window = sdl.create_window("Test", 100, 100, 640, 480, 0) handle error:
-        Stdout.write(stdout, "failed to create window")
+        Stdout.write(view stdout, "failed to create window")
         sdl.quit()
         return nothing
 
@@ -4171,11 +4117,11 @@ function logout(session: Session) returns nothing:
 # File: server.jett (or handlers.jett, or app.jett — doesn't matter)
 namespace server
 
-function handle_login(stdout: Stdout, request: Request) returns result[Response, string]:
+function handle_login(view stdout: Stdout, request: Request) returns result[Response, string]:
     use auth
     let session: Session = auth.login(request.credentials) handle error:
         return fail("login failed")
-    Stdout.write(stdout, "user logged in")
+    Stdout.write(view stdout, "user logged in")
     return ok(Response(status: 200, body: json.serialize_public[Session](view session)))
 ```
 
@@ -4310,12 +4256,12 @@ struct HttpRequest:
     url: string
     headers: map[string, string]
 
-function get(net: Network, url: string) returns result[Response, HttpToolkitError]:
+function get(view net: Network, url: string) returns result[Response, HttpToolkitError]:
     # ...
 
 namespace http_toolkit.server
 
-function listen(net: Network, port: int) returns result[Listener, HttpToolkitError]:
+function listen(view net: Network, port: int) returns result[Listener, HttpToolkitError]:
     # ...
 
 namespace http_toolkit.errors
@@ -4334,10 +4280,10 @@ A consumer imports this single file and gets access to all its namespaces:
 function main(net: Network, stdout: Stdout) returns nothing:
     use deps.http_toolkit.client
     use deps.http_toolkit.errors
-    let response: Response = client.get(net, "https://example.com") handle error:
-        Stdout.write(stdout, "failed: {error}")
+    let response: Response = client.get(view net, "https://example.com") handle error:
+        Stdout.write(view stdout, "failed: {error}")
         return nothing
-    Stdout.write(stdout, response.body)
+    Stdout.write(view stdout, response.body)
 ```
 
 **The bundle tool** — for library authors who develop across multiple files, the compiler provides a bundling command:
@@ -4382,13 +4328,13 @@ The inline `use` from Rule Set 4 works with namespaces:
 ```
 namespace handlers
 
-function process_payment(net: Network, order: Order) returns result[Receipt, string]:
+function process_payment(view net: Network, order: Order) returns result[Receipt, string]:
     use auth                # inline import — binds to "auth"
     use payment.gateway     # inline import — binds to "gateway"
 
     let session: Session = auth.validate_token(order.token) handle error:
         return fail("auth failed")
-    let receipt: Receipt = gateway.charge(net, order.total) handle error:
+    let receipt: Receipt = gateway.charge(view net, order.total) handle error:
         return fail("payment failed")
     return ok(receipt)
 ```
@@ -4400,9 +4346,9 @@ Inline `use` keeps dependencies local to the function (Rule Set 4). Namespace re
 When you write `use net.http`, the import binds to the **last segment** of the namespace — `http`. You call functions with `http.get(...)`, not `net.http.get(...)`.
 
 ```
-function fetch(net: Network) returns result[string, HttpError]:
+function fetch(view net: Network) returns result[string, HttpError]:
     use net.http
-    let response: HttpResponse = http.get(net, "https://example.com") handle error:
+    let response: HttpResponse = http.get(view net, "https://example.com") handle error:
         return fail(error)
     return ok(response.body)
 ```
@@ -4410,7 +4356,7 @@ function fetch(net: Network) returns result[string, HttpError]:
 If two imports share the same last segment, the compiler produces an error and requires the `as` keyword to disambiguate:
 
 ```
-function fetch_both(net: Network) returns nothing:
+function fetch_both(view net: Network) returns nothing:
     use net.http
     use tor.http
     # COMPILE ERROR: import name conflict — "http" is bound by both
@@ -4423,17 +4369,17 @@ function fetch_both(net: Network) returns nothing:
 The fix — explicit aliasing with `as`:
 
 ```
-function fetch_both(net: Network, stdout: Stdout) returns nothing:
+function fetch_both(view net: Network, view stdout: Stdout) returns nothing:
     use net.http as net_http
     use tor.http as tor_http
 
-    let clearnet: HttpResponse = net_http.get(net, "https://example.com") handle error:
-        Stdout.write(stdout, "clearnet failed: {error}")
+    let clearnet: HttpResponse = net_http.get(view net, "https://example.com") handle error:
+        Stdout.write(view stdout, "clearnet failed: {error}")
         return nothing
-    let onion: HttpResponse = tor_http.get(net, "http://example.onion") handle error:
-        Stdout.write(stdout, "tor failed: {error}")
+    let onion: HttpResponse = tor_http.get(view net, "http://example.onion") handle error:
+        Stdout.write(view stdout, "tor failed: {error}")
         return nothing
-    Stdout.write(stdout, "both fetched")
+    Stdout.write(view stdout, "both fetched")
 ```
 
 The `as` keyword works uniformly across all import types — namespace imports, external URL imports (`use "url" as name`), and C interop imports (`use c "header.h" as name`). One pattern for all cases.
@@ -4886,22 +4832,22 @@ struct GameState:
     world: World
     tick: int
 
-function render_frame(state: view GameState, stdout: Stdout) returns nothing:
+function render_frame(state: view GameState, view stdout: Stdout) returns nothing:
     # Read any field through the view — zero copy:
     let player_count: int = list.length[Player](state.players)
-    Stdout.write(stdout, "players: {player_count}")
-    Stdout.write(stdout, "tick: {state.tick}")
+    Stdout.write(view stdout, "players: {player_count}")
+    Stdout.write(view stdout, "tick: {state.tick}")
 
     for player in view state.players:
         # `player` is also a view — views propagate through field access:
-        render_player(view player, stdout)
+        render_player(view player, view stdout)
 
-function game_loop(stdout: Stdout) returns nothing:
+function game_loop(view stdout: Stdout) returns nothing:
     let mutable state: GameState = GameState(players: list(), world: World(), tick: 0)
 
     while true:
         # Pass a view for rendering (read-only, zero-copy):
-        render_frame(view state, stdout)
+        render_frame(view state, view stdout)
 
         # Then mutate the owned state:
         state = update_game(state)
@@ -4912,10 +4858,10 @@ function game_loop(stdout: Stdout) returns nothing:
 > **Note:** Views propagate through access. If you have a `view list[T]`, accessing any element gives you a `view T`, not an owned copy. The same applies to struct fields, nested lists, and any sub-structure. To get an owned value from a view, you must explicitly clone with `clone`.
 >
 > ```
-> function example(data: view list[Item], stdout: Stdout) returns nothing:
+> function example(data: view list[Item], view stdout: Stdout) returns nothing:
 >     for item in view data:
 >         # item is view Item — read-only, not copied
->         Stdout.write(stdout, item.name)    # OK — reading a field
+>         Stdout.write(view stdout, item.name)    # OK — reading a field
 >
 >     let first: Item = list.first(data)
 >     # first is view Item — still a view, not an owned copy
@@ -4942,10 +4888,10 @@ Transform functions like `filter_active_records` consume their input and produce
 View parameters work alongside capability parameters:
 
 ```
-function log_stats(stdout: Stdout, state: view GameState) returns nothing:
-    Stdout.write(stdout, "players: {list.length[Player](state.players)}")
-    Stdout.write(stdout, "world size: {state.world.size}")
-    # stdout is owned (capability), state is viewed (read-only)
+function log_stats(view stdout: Stdout, state: view GameState) returns nothing:
+    Stdout.write(view stdout, "players: {list.length[Player](state.players)}")
+    Stdout.write(view stdout, "world size: {state.world.size}")
+    # stdout is viewed (capability), state is viewed (read-only)
     # The function can write to stdout but cannot modify state
 ```
 
@@ -5339,13 +5285,13 @@ When a variable is typed as `tracked[T]`, the compiler:
 **The trace output:**
 
 ```
-function process_invoice(stdout: Stdout, income: float) returns nothing:
+function process_invoice(view stdout: Stdout, income: float) returns nothing:
     let mutable tax: tracked[float] = calculate_base_tax(income)
     tax = apply_state_tax(tax, "CA")
     tax = apply_discount(tax, "veteran")
     let final_amount: tracked[float] = finalize(tax)
 
-    trace(final_amount, stdout)
+    trace(final_amount, view stdout)
 ```
 
 **Output — a tiny, hyper-specific JSON log for one variable:**
@@ -5479,11 +5425,11 @@ When a `property` block finds a failing input, the LLM can re-run with tracking 
 # Property test found: sort_list([3, 1, 2]) returned [3, 1, 2] (not sorted)
 # LLM adds tracking to debug:
 
-function sort_list_debug(items: view list[int], stdout: Stdout) returns tracked[list[int]]:
+function sort_list_debug(items: view list[int], view stdout: Stdout) returns tracked[list[int]]:
     let mutable result: tracked[list[int]] = clone items
     result = partition(result)
     result = merge(result)
-    trace(result, stdout)
+    trace(result, view stdout)
     return result
 ```
 
@@ -5537,7 +5483,7 @@ The running application becomes a **chatbot** that the LLM can interrogate.
 **Inserting a breakpoint:**
 
 ```
-function process_order(fs: Filesystem, order: Order) returns result[Receipt, string]:
+function process_order(view fs: Filesystem, order: Order) returns result[Receipt, string]:
     let validated: ValidatedOrder = validate_order(order) handle error:
         return fail("validation failed")
 
@@ -5674,11 +5620,11 @@ The LLM sends JSON queries. The running application responds with JSON answers. 
 The LLM can make breakpoints conditional — they only pause when a condition is true:
 
 ```
-function process_batch(fs: Filesystem, orders: view list[Order]) returns nothing:
+function process_batch(view fs: Filesystem, orders: view list[Order]) returns nothing:
     for order in view orders:
         if order.total > 1000.0:
             agent_breakpoint()   # only pause for high-value orders
-        let result: result[nothing, string] = process_single_order(fs, view order)
+        let result: result[nothing, string] = process_single_order(view fs, view order)
 ```
 
 Or using a more targeted form:
@@ -6109,11 +6055,11 @@ namespace app
 function main(stdout: Stdout, fs: Filesystem) returns nothing:
     use config
 
-    let app_config: Config = config.load(fs) handle error:
-        Stdout.write(stdout, "config failed: {error}")
+    let app_config: Config = config.load(view fs) handle error:
+        Stdout.write(view stdout, "config failed: {error}")
         return nothing
 
-    Stdout.write(stdout, "running with config: {app_config.name}")
+    Stdout.write(view stdout, "running with config: {app_config.name}")
 ```
 
 The runtime provides capabilities to `main` based on its parameter list. If `main` does not declare a `Network` parameter, the program physically cannot access the network — the capability is never created. This is where the capability system begins: `main` is the root of the capability tree.
@@ -6138,8 +6084,8 @@ Variables are immutable by default. The `mutable` keyword opts into mutability. 
 function add(a: int, b: int) returns int:
     return a + b
 
-function greet(stdout: Stdout, name: string) returns nothing:
-    Stdout.write(stdout, "hello {name}")
+function greet(view stdout: Stdout, name: string) returns nothing:
+    Stdout.write(view stdout, "hello {name}")
 ```
 
 `function` is always spelled out. `returns` declares the return type. No `->` arrow.
@@ -6151,13 +6097,13 @@ Named arguments work in both struct construction AND function calls. Any paramet
 ### Conditionals
 
 ```
-function classify(stdout: Stdout, x: int) returns nothing:
+function classify(view stdout: Stdout, x: int) returns nothing:
     if x > 0:
-        Stdout.write(stdout, "positive")
+        Stdout.write(view stdout, "positive")
     else if x is 0:
-        Stdout.write(stdout, "zero")
+        Stdout.write(view stdout, "zero")
     else:
-        Stdout.write(stdout, "negative")
+        Stdout.write(view stdout, "negative")
 ```
 
 Note: `else if condition:` is the construct for chaining conditionals. It is not a separate keyword -- it is `else` followed by `if`, which naturally composes under the unified block syntax.
@@ -6165,9 +6111,9 @@ Note: `else if condition:` is the construct for chaining conditionals. It is not
 ### Loops
 
 ```
-function process_items(stdout: Stdout, items: list[string]) returns nothing:
+function process_items(view stdout: Stdout, items: list[string]) returns nothing:
     for item in items:
-        Stdout.write(stdout, item)
+        Stdout.write(view stdout, item)
 
 function run_loop(mutable running: bool) returns nothing:
     while running:
@@ -6204,16 +6150,16 @@ let d: float = Point.distance(view p1, view p2)
 ### Error Handling
 
 ```
-function read_file(fs: Filesystem, path: string) returns result[string, string]:
-    let content: string = Filesystem.read_file(fs, path) handle error:
+function read_file(view fs: Filesystem, path: string) returns result[string, string]:
+    let content: string = Filesystem.read_file(view fs, path) handle error:
         return fail("could not open file")
     return ok(content)
 
 # handle is the ONLY way to coarsen a result:
-let content: string = read_file(fs, "data.txt") handle error:
-    Stdout.write(stdout, error)
+let content: string = read_file(view fs, "data.txt") handle error:
+    Stdout.write(view stdout, error)
     return nothing
-Stdout.write(stdout, content)
+Stdout.write(view stdout, content)
 ```
 
 Errors are values, never exceptions. Functions that can fail return `result[T, E]`. The `handle` keyword is the **only** way to coarsen a result — `match` is reserved for user-defined enums. See Rule Set 5 for the full rationale.
@@ -6222,12 +6168,12 @@ Every `handle` block must end with either `return` (exit function) or `default` 
 
 - **Default form:** provides a fallback value using the `default` keyword.
   ```
-  let content: string = read_file(fs, "data.txt") handle error:
+  let content: string = read_file(view fs, "data.txt") handle error:
       default "default content"
   ```
 - **Return form:** exits the enclosing function via `return` or `return fail(...)`.
   ```
-  let content: string = read_file(fs, "data.txt") handle error:
+  let content: string = read_file(view fs, "data.txt") handle error:
       return fail(error)
   ```
 
@@ -6259,12 +6205,12 @@ Jett has three union-like constructs, each with its own coarsen mechanism:
 `match` is used exclusively for user-defined enums. It cannot be used on `result` types — use `handle` for those (see Rule Set 5).
 
 ```
-function describe_shape(stdout: Stdout, shape: Shape) returns nothing:
+function describe_shape(view stdout: Stdout, shape: Shape) returns nothing:
     match shape:
         circle(r):
-            Stdout.write(stdout, "circle with radius {r}")
+            Stdout.write(view stdout, "circle with radius {r}")
         rect(w, h):
-            Stdout.write(stdout, "rect {w} by {h}")
+            Stdout.write(view stdout, "rect {w} by {h}")
 ```
 
 ### Assert
@@ -6287,9 +6233,9 @@ function main(stdout: Stdout, net: Network) returns nothing:
     use math
     use net.http
     let pi: float = math.pi
-    let response: HttpResponse = http.get(net, "https://example.com") handle error:
+    let response: HttpResponse = http.get(view net, "https://example.com") handle error:
         # error is HttpError — the module's specific error type
-        Stdout.write(stdout, "request failed: {error}")
+        Stdout.write(view stdout, "request failed: {error}")
         return nothing
 ```
 
@@ -6345,23 +6291,21 @@ Arithmetic: `+`, `-`, `*`, `/`, `modulo`.
 
 ```
 if x > 0:
-    Stdout.write(stdout, "positive")
+    Stdout.write(view stdout, "positive")
 if balance >= 0.0:
-    Stdout.write(stdout, "solvent")
+    Stdout.write(view stdout, "solvent")
 ```
 
-### Capability Auto-Rebinding
+### Capabilities Use `view`
 
-Capability parameters (such as `Filesystem`, `Stdout`, `Network`, etc.) are automatically rebound by the compiler. Functions declare capability parameters as regular parameters in their signature, and the compiler recognizes capability types and handles rebinding without needing a `with` clause.
+`main()` owns all capabilities. Every other function borrows them via `view` — the same keyword used for any other non-owning parameter. Callers write `view` at call sites, just like any other view parameter.
 
 ```
-# The compiler sees that stdout is a Stdout capability and automatically
-# threads it through — no 'with Stdout' annotation needed.
-function greet(stdout: Stdout, name: string) returns nothing:
-    Stdout.write(stdout, "hello {name}")
+function greet(view stdout: Stdout, name: string) returns nothing:
+    Stdout.write(view stdout, "hello {name}")
 ```
 
-The `view` keyword is used only in parameter declarations to indicate read-only, non-owning references. The compiler infers `view` at call sites automatically — callers do not write `view` when passing arguments.
+No special compiler rules for capabilities. They follow the same `view` semantics as every other type.
 
 ---
 
@@ -6424,11 +6368,11 @@ function sort[T implements Orderable](items: list[T]) returns list[T]:
     # T is guaranteed to support comparison operations
     ...
 
-function display_sorted[T implements Orderable and Displayable](items: list[T], stdout: Stdout) returns nothing:
+function display_sorted[T implements Orderable and Displayable](items: list[T], view stdout: Stdout) returns nothing:
     # T must implement both Orderable and Displayable
     let sorted: list[T] = sort[T](items)
     for item in sorted:
-        Stdout.write(stdout, Displayable.display(item))
+        Stdout.write(view stdout, Displayable.display(item))
 
 # Multiple type parameters — comma separates parameters, and separates interfaces:
 function merge[T implements Orderable and Hashable, U implements Displayable](a: T, b: U) returns string:
@@ -6621,7 +6565,7 @@ External dependencies live in the `deps/` directory as vendored `.jett` files tr
 - [ ] Pattern matching
 - [ ] Error handling (`result[T, E]`, `handle`, `ok`/`fail`)
 - [ ] Capability types (Filesystem, Network, Stdout, Stderr, Stdin, Clock, Random, Process, Environment)
-- [ ] Capability threading and auto-rebinding (compiler infers capability parameters)
+- [ ] Capability types passed via `view` (no auto-rebinding — same rules as any other type)
 - [ ] Capability narrowing (read_only, scoped, allow)
 - [ ] Namespace-based module system (`namespace`, inline `use`, path-free resolution)
 - [ ] Namespace scanner (recursive `.jett` file discovery, duplicate detection)
