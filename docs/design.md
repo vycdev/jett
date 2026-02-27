@@ -2618,8 +2618,8 @@ The `secret[string]` type is not just a label — it is a distinct type that the
 ```
 function get_user_debug(user: User) returns string:
     return "user: {user.name} hash: {user.password_hash}"
-    # COMPILE ERROR: cannot use secret[string] in string interpolation
-    # "password_hash" is marked as secret and cannot be exposed
+    # COMPILE ERROR: secret[string] does not implement Displayable
+    # "user.password_hash" is of type secret[string] which cannot be interpolated
     # hint: use secret.redact(user.password_hash) to get a masked representation
 ```
 
@@ -2627,8 +2627,8 @@ function get_user_debug(user: User) returns string:
 function log_user(stdout: Stdout, user: User) returns nothing:
     use log
     Stdout.write(stdout, "user logged in: {json.serialize(view user)}")
-    # COMPILE ERROR: cannot serialize struct containing secret fields
-    # "User" contains secret fields: password_hash, api_key, ssn
+    # COMPILE ERROR: User contains secret fields and cannot be serialized
+    # secret fields: password_hash, api_key, ssn
     # hint: use json.serialize_public(user) to serialize only non-secret fields
 ```
 
@@ -3915,7 +3915,7 @@ When `--agent` is passed, the compiler outputs **zero formatting, zero spatial a
         {
             "code": "E0012",
             "severity": "error",
-            "message": "cannot use secret[string] in string interpolation",
+            "message": "secret[string] does not implement Displayable",
             "file": "src/handlers.jett",
             "line": 23,
             "column": 41,
