@@ -257,7 +257,7 @@ struct EmailSender:
     function send(self: EmailSender, stdout: Stdout, net: Network, message: Message) returns nothing:
         Stdout.write(stdout, "sending email")
         smtp.deliver(net, self.config, message)
-        return
+        return nothing
 ```
 
 `EmailSender` uses an `SmtpConfig` by containing it — not by inheriting from it. Side effects (logging via `Stdout`, networking via `Network`) are declared as capability parameters. The relationship is visible in the struct definition and function signatures. An LLM can see every dependency by reading the struct fields and method signatures.
@@ -1052,7 +1052,7 @@ struct AppCapabilities:
 function deploy_service(caps: AppCapabilities, config: Config, target: Server) returns nothing:
     let manifest: string = Filesystem.read_file(caps.fs, "manifest.json") handle error:
         Stderr.write(caps.stderr, "failed to read manifest")
-        return
+        return nothing
     Stdout.write(caps.stdout, "deploying...")
     # 3 parameters instead of 7
 ```
@@ -1672,7 +1672,7 @@ When a variable is passed into a function, it is **consumed** (moved) and immedi
 function send_message(net: Network, connection: Connection, payload: Payload) returns nothing:
     Network.send(net, connection, payload)
     # `payload` has been consumed by `send`. It no longer exists here.
-    return
+    return nothing
 
 function example(net: Network, stdout: Stdout) returns nothing:
     let conn: Connection = Connection(host: "localhost", port: 8080)
@@ -2807,11 +2807,11 @@ Capability objects are created **only in `main()`** and must be explicitly passe
 function main(stdout: Stdout, stderr: Stderr, fs: Filesystem, net: Network, env: Environment) returns nothing:
     let config_path: string = Environment.get(env, "CONFIG_PATH") handle error:
         Stderr.write(stderr, "CONFIG_PATH not set")
-        return
+        return nothing
 
     let config: Config = load_config(fs, config_path) handle error:
         Stderr.write(stderr, "failed to load config")
-        return
+        return nothing
 
     run_server(fs, net, stdout, config)
     Stdout.write(stdout, "server stopped")
@@ -2827,7 +2827,7 @@ Because capabilities are linear types (Rule Set 10.1), they are **consumed** whe
 function example(fs: Filesystem, stdout: Stdout) returns nothing:
     let config: Config = read_config(fs, "app.conf") handle error:
         Stdout.write(stdout, "failed")
-        return
+        return nothing
     # `fs` is auto-rebound because the compiler recognizes Filesystem as a capability type.
     # The compiler handles returning capabilities transparently.
 ```
@@ -2851,11 +2851,11 @@ The compiler recognizes `Filesystem` as a capability type and automatically borr
 function main(stdout: Stdout, fs: Filesystem) returns nothing:
     let config: Config = read_config(fs, "app.conf") handle error:
         Stdout.write(stdout, "failed")
-        return
+        return nothing
     # `fs` is still available — the compiler auto-rebound it because Filesystem is a capability type.
     let data: Data = read_data(fs, config.data_path) handle error:
         Stdout.write(stdout, "failed")
-        return
+        return nothing
     process(data)
     Stdout.write(stdout, "done")
 ```
@@ -2942,7 +2942,7 @@ function main(fs: Filesystem, net: Network, stdout: Stdout) returns nothing:
     # Pass only read access to the config loader:
     let config: Config = load_config(read_fs, "app.conf") handle error:
         Stdout.write(stdout, "failed")
-        return
+        return nothing
 
     # load_config physically cannot write files — it only has read_only access.
 ```
@@ -3039,7 +3039,7 @@ Jett's capability system (Rule Set 16) naturally solves cross-platform compilati
 function start_server(net: Network, stdout: Stdout, port: int) returns nothing:
     let listener: Listener = Network.listen(net, "0.0.0.0", port) handle error:
         Stdout.write(stdout, "failed to bind port")
-        return
+        return nothing
 
     Stdout.write(stdout, "listening on port {port}")
 
@@ -3740,12 +3740,12 @@ function window_lifecycle(stdout: Stdout) returns nothing:
     use c "SDL2/SDL.h" as sdl
 
     sdl.init(sdl.INIT_VIDEO) handle error:
-        return
+        return nothing
 
     let window: sdl.Window = sdl.create_window("Test", 100, 100, 640, 480, 0) handle error:
         Stdout.write(stdout, "failed to create window")
         sdl.quit()
-        return
+        return nothing
 
     # Use the window...
     do_rendering(window)
@@ -3764,7 +3764,7 @@ function bad_example() returns nothing:
     use c "SDL2/SDL.h" as sdl
 
     let window: sdl.Window = sdl.create_window("Test", 100, 100, 640, 480, 0) handle error:
-        return
+        return nothing
 
     sdl.destroy_window(window)
     sdl.destroy_window(window)
@@ -4336,7 +4336,7 @@ function main(net: Network, stdout: Stdout) returns nothing:
     use deps.http_toolkit.errors
     let response: Response = client.get(net, "https://example.com") handle error:
         Stdout.write(stdout, "failed: {error}")
-        return
+        return nothing
     Stdout.write(stdout, response.body)
 ```
 
@@ -4429,10 +4429,10 @@ function fetch_both(net: Network, stdout: Stdout) returns nothing:
 
     let clearnet: HttpResponse = net_http.get(net, "https://example.com") handle error:
         Stdout.write(stdout, "clearnet failed: {error}")
-        return
+        return nothing
     let onion: HttpResponse = tor_http.get(net, "http://example.onion") handle error:
         Stdout.write(stdout, "tor failed: {error}")
-        return
+        return nothing
     Stdout.write(stdout, "both fetched")
 ```
 
@@ -4783,12 +4783,12 @@ function process_order(order: Order) returns nothing:
 
     # order.items is still valid here — it was never moved:
     let first: Item = list.first(view order.items) handle:
-        return
+        return nothing
 
     # Now consume it when we're done reading:
     submit_order(order)
     # order is consumed here — moved into submit_order
-    return
+    return nothing
 ```
 
 The `view` keyword appears in **both** declarations and call sites. The function parameter declares `view` to tell the function body it can only read. The call site writes `view` to tell the LLM (and any reader) that the value is not consumed.
@@ -6111,7 +6111,7 @@ function main(stdout: Stdout, fs: Filesystem) returns nothing:
 
     let app_config: Config = config.load(fs) handle error:
         Stdout.write(stdout, "config failed: {error}")
-        return
+        return nothing
 
     Stdout.write(stdout, "running with config: {app_config.name}")
 ```
@@ -6290,7 +6290,7 @@ function main(stdout: Stdout, net: Network) returns nothing:
     let response: HttpResponse = http.get(net, "https://example.com") handle error:
         # error is HttpError — the module's specific error type
         Stdout.write(stdout, "request failed: {error}")
-        return
+        return nothing
 ```
 
 All `use` statements must be inside a function or block — file-level imports are banned.
