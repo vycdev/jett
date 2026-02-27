@@ -2694,10 +2694,8 @@ let public_json: string = json.serialize_public[User](view user)
 
 # Redact for logging:
 let masked: string = secret.redact(user.api_key)
-# Result: "sk-****...****3f2a" (shows only last 4 characters)
-
-let log_safe: User = secret.redact_all(user)
-# Result: User with all secret fields replaced by "[REDACTED]"
+# Result: "***" — always exactly 3 stars regardless of input length or content.
+# No partial reveal, no length information leaked.
 
 # Compare secrets without exposing them:
 let match: bool = secret.compare(stored_hash, computed_hash)
