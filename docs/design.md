@@ -2756,6 +2756,8 @@ secret[T] ──→ secret.redact() ALLOWED (masked output)
 secret[T] ──→ secret.compare() ALLOWED (constant-time comparison)
 ```
 
+> **Footnote:** Before working on the compiler, it would be valuable to have an LLM generate a non-trivial Jett program (e.g., a hashing algorithm) to see how the code looks and feels in practice. This would validate the syntax and semantics before committing to implementation.
+
 ### Rule Set 16: Capability-Based I/O (Zero Hidden Side Effects)
 
 #### The Problem: Side Effects Hide in the Call Stack
