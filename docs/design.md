@@ -2485,59 +2485,54 @@ This happens because:
 
 The result: code that looks correct, passes a casual review, but fails on the first `jett build` because the dependency doesn't exist — or worse, it exists but is a completely different library than what the LLM assumed.
 
-#### The Solution: Content-Addressable Imports with Cryptographic Hashes
+#### The Solution: Vendored Dependencies
 
-Jett has **no centralized package manager with short, guessable names**. There is no `jett install cool-lib`. External code is imported via an **absolute URL** paired with a **mandatory cryptographic hash**.
+Jett has **no package manager and no package registry**. There is no `jett install cool-lib`. External dependencies are `.jett` files that live in the project's `deps/` directory, tracked in git alongside the rest of the source code.
 
-**Syntax:**
+**Project structure:**
 
 ```
-use "https://packages.jett-lang.org/v1.2/json_extra.jett" as json_extra
-    hash "sha256:a1b2c3d4e5f6..."
+my_project/
+    src/
+        main.jett
+        routes.jett
+    deps/
+        json_extra.jett
+        websocket.jett
+    jett.proj
 ```
 
-Every external import has two components:
-1. **A full URL** — not a short name, not a registry identifier, a complete address.
-2. **A cryptographic hash** — the SHA-256 of the exact file contents. If the content at the URL changes, the hash won't match and the compiler rejects it.
+**Using a dependency:**
 
-**What the compiler does:**
+```
+use deps.json_extra
+use deps.websocket
+```
 
-1. Fetches the file at the URL.
-2. Computes the SHA-256 hash of the downloaded content.
-3. Compares it to the declared hash.
-4. If they match → import succeeds.
-5. If the URL returns 404 → **compile error** ("dependency not found at URL").
-6. If the hash doesn't match → **compile error** ("dependency content has changed, expected hash X got hash Y").
+The compiler resolves `deps.json_extra` to `deps/json_extra.jett` — a file that exists in the repository. No URL fetching, no hash checking, no registry lookup. The dependency is right there, readable by the LLM, tracked by git.
 
 **What happens when an LLM hallucinates a dependency:**
 
 ```
-use "https://packages.jett-lang.org/v3.0/super_fast_auth.jett" as auth
-    hash "sha256:fake1234..."
+use deps.super_fast_auth
 
-# COMPILE ERROR: dependency not found
-#   URL "https://packages.jett-lang.org/v3.0/super_fast_auth.jett" returned 404
-#   hint: this dependency does not exist. Use the standard library
-#   or provide a valid URL to an existing package.
+# COMPILE ERROR: module not found
+#   no file at "deps/super_fast_auth.jett"
+#   hint: available dependencies: json_extra, websocket
+#   or use the standard library (use string, use json, etc.)
 ```
 
-The hallucinated library is caught instantly. The compiler doesn't try to guess what the LLM meant. It doesn't search a registry for close matches. It simply fails with a clear message: this does not exist.
+The hallucinated library is caught instantly. The file doesn't exist. The compiler lists what IS available.
 
-#### Why This Design Eliminates Hallucinations
+#### Why Vendoring Works for LLMs
 
-**1. Zero magic identifiers.**
+**1. Dependencies are readable source code.**
 
-In npm, `use "left-pad"` works because a registry resolves the short name. The LLM can guess short names. In Jett, `use "https://exact-url/exact-file.jett"` requires the LLM to know the exact URL. LLMs cannot hallucinate valid URLs with correct hashes — the probability of generating a valid SHA-256 hash by chance is effectively zero.
+The LLM can read `deps/json_extra.jett` to understand the API — function signatures, types, verify blocks. No guessing what a library does based on a name. The source is right there in context.
 
-**2. The hash is an unforgeable proof.**
+**2. The LLM cannot add dependencies.**
 
-Even if the LLM guesses a real URL, it must also provide the correct SHA-256 hash. The hash cannot be guessed. It must come from actually downloading the file and computing the hash. This means:
-
-- A human developer adds dependencies (they can verify URLs and compute hashes).
-- The LLM uses dependencies that are already declared in the project.
-- The LLM writes logic itself using the standard library instead of reaching for packages.
-
-This is the **intended behavior**. The massive standard library (Rule Set 8) covers most needs. External dependencies should be rare and deliberately chosen.
+Adding a dependency means adding a `.jett` file to `deps/`. This shows up as a new file in git diff. A human reviews it. The LLM can only `use` what already exists in the project — it works with what it has.
 
 **3. Forces the LLM to use what it knows.**
 
@@ -2546,60 +2541,30 @@ When an LLM encounters a task that would typically require a third-party library
 1. Use the Jett standard library (which is in its context/training data).
 2. Write the logic itself using Jett primitives.
 
-Both options produce code that actually works. Neither option involves guessing at package names.
-
-#### Dependency Lock File
-
-For projects with external dependencies, the `jett.lock` file records all resolved URLs and their hashes:
-
-```
-dependencies:
-    json_extra:
-        url = "https://packages.jett-lang.org/v1.2/json_extra.jett"
-        hash = "sha256:a1b2c3d4e5f6..."
-        fetched = "2025-03-15T10:30:00Z"
-
-    websocket:
-        url = "https://packages.jett-lang.org/v2.0/websocket.jett"
-        hash = "sha256:b2c3d4e5f6a1..."
-        fetched = "2025-03-15T10:30:00Z"
-```
-
-The lock file is committed to version control. It is the source of truth for reproducible builds. The LLM can **read** the lock file to see which dependencies are available and use them by name within the project:
-
-```
-# Inside a project with json_extra in jett.lock:
-use json_extra
-
-# The compiler resolves "json_extra" to the URL and hash in jett.lock.
-# No guessing. No registry lookup. The dependency is pinned.
-```
-
-This gives the LLM a safe path: it reads `jett.lock`, sees what's available, and uses those. It cannot add new dependencies — only a human (or an LLM with explicit instructions and the actual URL + hash) can do that.
+Both options produce code that actually works. Neither option involves guessing at package names. The massive standard library (Rule Set 8) covers most needs. External dependencies should be rare and deliberately chosen.
 
 #### Adding Dependencies: The Human Workflow
 
-```
-# Human adds a dependency (fetches, verifies, computes hash):
-jett dep add https://packages.jett-lang.org/v1.2/json_extra.jett
+Adding a dependency is a deliberate human action:
 
-# The CLI:
-# 1. Downloads the file
-# 2. Computes SHA-256
-# 3. Adds the entry to jett.lock
-# 4. Prints: added json_extra (sha256:a1b2c3d4e5f6...)
-```
+1. Find the library's `.jett` file (from the author's repository, a trusted source, etc.)
+2. Download it into `deps/`
+3. Review the source code
+4. Commit to git
 
-The LLM never runs `jett dep add`. It works with what is already in `jett.lock`. This division of responsibility — humans manage dependencies, LLMs write code — plays to each party's strengths.
+There is no `jett install` command. No lock file. Git is the lock file — the commit hash pins the exact dependency content. `git diff` shows exactly what changed when a dependency is added or updated.
 
-#### Supply Chain Security: A Free Bonus
+#### Supply Chain Security
 
-Content-addressable imports with hashes provide supply chain security as a side effect:
+Vendored dependencies provide supply chain security by default:
 
-- **No dependency confusion attacks.** There is no registry namespace to squat. A URL is unique.
-- **No silent updates.** If a package author publishes a new version at the same URL, the hash won't match and the build fails. Updates are always explicit.
-- **No typosquatting.** There is no short name to misspell. You either have the exact URL or you don't.
-- **Reproducible builds.** The lock file pins exact content hashes. Building the same project on two machines produces identical results.
+- **No dependency confusion attacks.** There is no registry namespace to squat.
+- **No silent updates.** Dependencies only change when someone commits a change to `deps/`. Every update is a visible git diff.
+- **No typosquatting.** There is no short name to misspell. The file either exists in `deps/` or it doesn't.
+- **Reproducible builds.** The git repository IS the source of truth. Clone the repo, build — same result everywhere.
+- **Full auditability.** Every dependency is readable source code in the repo. Code review covers dependencies and application code equally.
+
+> **Note:** Third-party package managers may emerge for Jett, but they are not part of the language. The recommended approach is vendored dependencies with git tracking.
 
 ### Rule Set 15: Explicit Data Masking for Security Contexts
 
@@ -4320,10 +4285,10 @@ The compiler treats each `namespace` block as a separate module. Other files can
 
 #### Single-File Libraries
 
-Multiple namespaces in one file is the foundation for distributable libraries. Since Jett's dependency system imports external code via single-file URLs with cryptographic hashes (Rule Set 14), a library that spans multiple namespaces must be distributed as a single file:
+Multiple namespaces in one file is the foundation for distributable libraries. Since Jett uses vendored dependencies (Rule Set 14), a library that spans multiple namespaces is distributed as a single `.jett` file placed in `deps/`:
 
 ```
-# File: https://packages.jett-lang.org/v1.0/http_toolkit.jett
+# File: deps/http_toolkit.jett
 # This single file IS the entire library.
 
 namespace http_toolkit.client
@@ -4352,14 +4317,11 @@ enum HttpToolkitError:
 A consumer imports this single file and gets access to all its namespaces:
 
 ```
-# In jett.lock:
-# http_toolkit:
-#     url = "https://packages.jett-lang.org/v1.0/http_toolkit.jett"
-#     hash = "sha256:a1b2c3..."
+# http_toolkit.jett is in the deps/ directory
 
 function main(net: Network, stdout: Stdout) returns nothing:
-    use http_toolkit.client
-    use http_toolkit.errors
+    use deps.http_toolkit.client
+    use deps.http_toolkit.errors
     let response: Response = client.get(net, "https://example.com") handle error:
         Stdout.write(stdout, "failed: {error}")
         return
@@ -6621,13 +6583,9 @@ The `.proj` file is minimal:
 ```
 name = "myproject"
 version = "0.1.0"
-
-deps:
-    http = "https://packages.jett-lang.org/std/http/1.0/http.jett"
-        hash "sha256:a1b2c3d4..."
-    json = "https://packages.jett-lang.org/std/json/2.1/json.jett"
-        hash "sha256:e5f6a7b8..."
 ```
+
+External dependencies live in the `deps/` directory as vendored `.jett` files tracked in git (see Rule Set 14).
 
 ---
 
@@ -6732,8 +6690,7 @@ deps:
 - [ ] Comparison profiling (`--agent-profile-compare`) with delta reporting
 - [ ] Profiler threshold configuration (`--profile-threshold`)
 - [ ] Profiler integration with Agent Server Protocol (ASP JSON output)
-- [ ] Dependency manager (`jett dep add`, URL fetch, SHA-256 hashing)
-- [ ] Lock file (`jett.lock`) generation and resolution
+- [ ] Vendored dependency resolution (`deps/` directory, `use deps.module` imports)
 - [ ] LLVM backend for native compilation
 - [ ] Jett-to-JSON and JSON-to-Jett CLI tools
 
