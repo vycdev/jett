@@ -178,7 +178,7 @@ There must be **no spooky action at a distance**. A variable must never be silen
 
 ```
 function save_user(fs: Filesystem, user: view User) returns result[nothing, string]:
-    let data: string = json.serialize(view user)
+    let data: string = json.serialize[User](view user)
     Filesystem.write_file(fs, "users.json", data) handle error:
         return fail("could not save user")
     return ok(nothing)
@@ -451,7 +451,7 @@ type JsonString = string where string.is_valid_json(value)
 
 function parse_config(raw: JsonString) returns result[Config, string]:
     # `raw` is guaranteed to be valid JSON — the type says so.
-    let config: Config = json.parse(raw, Config) handle error:
+    let config: Config = json.parse[Config](raw) handle error:
         return fail("invalid config structure")
     return ok(config)
 ```
@@ -603,7 +603,7 @@ function fetch_data(net: Network, url: string) returns result[map[string, string
     use json
     let response: HttpResponse = http.get(net, url) handle error:
         return fail(error)
-    let data: map[string, string] = json.parse(response.body, map[string, string]) handle error:
+    let data: map[string, string] = json.parse[map[string, string]](response.body) handle error:
         return fail(HttpError.status_error(0, error))
     return ok(data)
 
@@ -632,7 +632,7 @@ function good_example(stdout: Stdout) returns nothing:
     use math
     use json
     let x: float = math.sqrt(2.0)
-    Stdout.write(stdout, json.serialize(view x))
+    Stdout.write(stdout, json.serialize[float](view x))
 
 function bad_example(stdout: Stdout) returns nothing:
     let x: int = 42
@@ -660,7 +660,7 @@ Functions that can fail return a `result[T, E]` type. The caller **must** handle
 function read_config(fs: Filesystem, path: string) returns result[Config, string]:
     let raw: string = Filesystem.read_file(fs, path) handle error:
         return fail("could not read file: {path}")
-    let config: Config = json.parse(raw, Config) handle error:
+    let config: Config = json.parse[Config](raw) handle error:
         return fail("invalid config format")
     return ok(config)
 ```
@@ -700,7 +700,7 @@ You cannot accidentally ignore an error. The compiler will not let the program c
 function read_config(fs: Filesystem, path: string) returns result[Config, string]:
     let raw: string = Filesystem.read_file(fs, path) handle error:
         return fail("could not read file")
-    return ok(json.parse(raw, Config))
+    return ok(json.parse[Config](raw))
 
 # Complex — E is a custom enum:
 enum DatabaseError:
@@ -1254,10 +1254,10 @@ Date logic is one of the most error-prone areas in programming. An LLM should ne
 ```
 use json
 
-let config: Config = json.parse(raw_string, Config) handle error:
+let config: Config = json.parse[Config](raw_string) handle error:
     return fail("invalid json")                              # string to typed value
-let text: string = json.serialize(view config)                    # value to string
-let pretty: string = json.serialize_pretty(view config)           # value to formatted string
+let text: string = json.serialize[Config](view config)                    # value to string
+let pretty: string = json.serialize_pretty[Config](view config)           # value to formatted string
 
 # For dynamic/untyped JSON access (when the schema is unknown):
 let raw: JsonValue = json.parse_raw(raw_string) handle error:
@@ -1290,12 +1290,12 @@ let response: HttpResponse = http.get(net, "https://api.example.com/users") hand
         other:
             return fail(other)
 
-let body: list[User] = json.parse(response.body, list[User]) handle error:
+let body: list[User] = json.parse[list[User]](response.body) handle error:
     return fail("invalid json")
 let status: int = response.status
 
 # POST with body:
-let post_response: HttpResponse = http.post(net, "https://api.example.com/users", json.serialize(view new_user)) handle error:
+let post_response: HttpResponse = http.post(net, "https://api.example.com/users", json.serialize[User](view new_user)) handle error:
     return fail(error)
 ```
 
@@ -1879,11 +1879,11 @@ function fetch_all_data(net: Network) returns result[DashboardData, HttpError]:
     let stats_result: HttpResponse = join stats handle error:
         return fail(error)
 
-    let users_data: list[User] = json.parse(users_result.body, list[User]) handle error:
+    let users_data: list[User] = json.parse[list[User]](users_result.body) handle error:
         return fail(HttpError.status_error(0, error))
-    let orders_data: list[Order] = json.parse(orders_result.body, list[Order]) handle error:
+    let orders_data: list[Order] = json.parse[list[Order]](orders_result.body) handle error:
         return fail(HttpError.status_error(0, error))
-    let stats_data: Stats = json.parse(stats_result.body, Stats) handle error:
+    let stats_data: Stats = json.parse[Stats](stats_result.body) handle error:
         return fail(HttpError.status_error(0, error))
 
     return ok(DashboardData(
@@ -2626,10 +2626,10 @@ function get_user_debug(user: User) returns string:
 ```
 function log_user(stdout: Stdout, user: User) returns nothing:
     use log
-    Stdout.write(stdout, "user logged in: {json.serialize(view user)}")
+    Stdout.write(stdout, "user logged in: {json.serialize[User](view user)}")
     # COMPILE ERROR: User contains secret fields and cannot be serialized
     # secret fields: password_hash, api_key, ssn
-    # hint: use json.serialize_public(user) to serialize only non-secret fields
+    # hint: use json.serialize_public[User](view user) to serialize only non-secret fields
 ```
 
 ```
@@ -2637,7 +2637,7 @@ function handle_login(net: Network, request: Request) returns result[Response, s
     use net.http
     let user: User = authenticate(request) handle error:
         return ok(http.response(400, "invalid credentials"))
-    return ok(http.response(200, json.serialize(view user)))
+    return ok(http.response(200, json.serialize[User](view user)))
     # COMPILE ERROR: cannot pass struct containing secret fields to http.response
     # hint: create a public view of User without secret fields
 ```
@@ -2688,7 +2688,7 @@ The standard library provides functions that work with secret-containing types s
 
 ```
 # Serialize only non-secret fields:
-let public_json: string = json.serialize_public(view user)
+let public_json: string = json.serialize_public[User](view user)
 # Result: {"id": "123", "name": "alice", "email": "alice@example.com"}
 # password_hash, api_key, ssn are omitted automatically.
 
@@ -2752,7 +2752,7 @@ Every place where a secret is coarsenped is marked with the `declassify` keyword
 
 **4. Safe alternatives are easier to use than unsafe ones.**
 
-`json.serialize_public(user)` is fewer tokens and less effort than manually constructing a response without secret fields. The path of least resistance for the LLM is the secure path.
+`json.serialize_public[User](view user)` is fewer tokens and less effort than manually constructing a response without secret fields. The path of least resistance for the LLM is the secure path.
 
 **Summary — the compiler enforces a simple rule:**
 
@@ -2840,7 +2840,7 @@ function example(fs: Filesystem, stdout: Stdout) returns nothing:
 function read_config(fs: Filesystem, path: string) returns result[Config, string]:
     let raw: string = Filesystem.read_file(fs, path) handle error:
         return fail("could not read {path}")
-    let config: Config = json.parse(raw, Config) handle error:
+    let config: Config = json.parse[Config](raw) handle error:
         return fail("invalid config format")
     return ok(config)
     # The compiler recognizes Filesystem as a capability type and auto-rebinds
@@ -2882,7 +2882,7 @@ function read_config(fs: Filesystem, path: string) returns result[Config, string
     let raw: string = Filesystem.read_file(fs, path) handle error:
         return fail("could not read {path}")
         # The compiler automatically returns fs alongside the fail value
-    let config: Config = json.parse(raw, Config) handle error:
+    let config: Config = json.parse[Config](raw) handle error:
         return fail("invalid config format")
         # The compiler automatically returns fs here too
     return ok(config)
@@ -3205,13 +3205,13 @@ struct User:
     age: int
 
 # The compiler makes User compatible with:
-# json.serialize(user)       → string (JSON representation)
-# json.parse(raw, User)      → result[User, string]
+# json.serialize[User](view user)       → string (JSON representation)
+# json.parse[User](raw)      → result[User, string]
 # User.to_bytes(user)        → bytes (compact binary representation)
 # User.from_bytes(raw)      → result[User, string]
 ```
 
-The compiler makes every struct compatible with `json.serialize()` and `json.parse(raw, Type)` automatically. There are no auto-generated `.to_json()` or `.from_json()` methods on the struct itself — the `json` module functions are the canonical API. `json.serialize` declares a `view` parameter — it reads the value without consuming it. The caller writes `json.serialize(view user)` with the `view` keyword explicit at the call site. `json.parse(raw, Type)` is the **only** form — the Type parameter is mandatory, not optional. It parses a JSON string into the specified type and returns `result[Type, string]`. There is no single-argument `json.parse(raw)` that returns an untyped value. For structs with `secret[T]` fields, `json.serialize_public(value)` omits those fields.
+The compiler makes every struct compatible with `json.serialize[Type]()` and `json.parse[Type](raw)` automatically. There are no auto-generated `.to_json()` or `.from_json()` methods on the struct itself — the `json` module functions are the canonical API. `json.serialize` declares a `view` parameter — it reads the value without consuming it. The caller writes `json.serialize[User](view user)` with the `view` keyword explicit at the call site. `json.parse[Type](raw)` is the **only** form — the Type parameter is mandatory, not optional. It parses a JSON string into the specified type and returns `result[Type, string]`. There is no single-argument `json.parse(raw)` that returns an untyped value. For structs with `secret[T]` fields, `json.serialize_public[Type](view value)` omits those fields.
 
 The LLM does not write parsing functions. The LLM does not import a serialization library. The LLM does not annotate fields with `#[serde(rename = "...")]` or `@JsonProperty`. The compiler sees the struct definition and generates everything.
 
@@ -3219,7 +3219,7 @@ The LLM does not write parsing functions. The LLM does not import a serializatio
 
 ```
 function save_user(fs: Filesystem, user: view User) returns result[nothing, string]:
-    let json_data: string = json.serialize(view user)
+    let json_data: string = json.serialize[User](view user)
     Filesystem.write_file(fs, "users/{user.id}.json", json_data) handle error:
         return fail("could not save user")
     return ok(nothing)
@@ -3227,7 +3227,7 @@ function save_user(fs: Filesystem, user: view User) returns result[nothing, stri
 function load_user(fs: Filesystem, id: string) returns result[User, string]:
     let raw: string = Filesystem.read_file(fs, "users/{id}.json") handle error:
         return fail("user file not found")
-    let user: User = json.parse(raw, User) handle error:
+    let user: User = json.parse[User](raw) handle error:
         return fail("invalid user data")
     return ok(user)
 ```
@@ -3249,7 +3249,7 @@ struct Product:
 
 let p: Product = Product(name: "widget", price: 9.99, in_stock: true, tags: list("sale", "new"))
 
-let json_string: string = json.serialize(view p)
+let json_string: string = json.serialize[Product](view p)
 # Result: {"name":"widget","price":9.99,"in_stock":true,"tags":["sale","new"]}
 ```
 
@@ -3284,13 +3284,13 @@ struct UserRecord:
     api_key: secret[string]
 
 # Serialization behavior:
-# json.serialize(user) → COMPILE ERROR: struct contains secret fields
-#   hint: use json.serialize_public(user) to serialize non-secret fields only
+# json.serialize[UserRecord](view user) → COMPILE ERROR: struct contains secret fields
+#   hint: use json.serialize_public[UserRecord](view user) to serialize non-secret fields only
 
 # The json module provides two serialization paths:
-# json.serialize_public(user) → {"id":"123","name":"alice"}
+# json.serialize_public[UserRecord](view user) → {"id":"123","name":"alice"}
 #   (secret fields are omitted)
-# json.serialize_full(user, declassify_token) → requires explicit declassification
+# json.serialize_full[UserRecord](view user, declassify_token) → requires explicit declassification
 #   (only callable with a declassification token — see Rule Set 15)
 ```
 
@@ -3309,10 +3309,10 @@ machine OrderProcess:
 
 let order: OrderProcess = OrderProcess(draft, items: list(Item(name: "widget", qty: 2)))
 
-let json_string: string = json.serialize(view order)
+let json_string: string = json.serialize[OrderProcess](view order)
 # Result: {"state":"draft","items":[{"name":"widget","qty":2}]}
 
-let restored: OrderProcess = json.parse(json_string, OrderProcess) handle error:
+let restored: OrderProcess = json.parse[OrderProcess](json_string) handle error:
     return fail("invalid order data")
 # restored is in the "draft" state with the same items
 ```
@@ -3333,7 +3333,7 @@ struct ValidatedUser:
     email: Email
 
 let raw: string = "{{\"name\":\"alice\",\"age\":-5,\"email\":\"alice@example.com\"}}"
-let user: ValidatedUser = json.parse(raw, ValidatedUser) handle error:
+let user: ValidatedUser = json.parse[ValidatedUser](raw) handle error:
     return fail("invalid user: {error}")
 # RUNTIME ERROR during json.parse:
 #   field "age": value -5 does not satisfy: value >= 0
@@ -3351,8 +3351,8 @@ struct ApiResponse:
     total_count: int serialize "totalCount"
     is_active: bool serialize "isActive"
 
-# json.serialize produces: {"userName":"...","totalCount":42,"isActive":true}
-# json.parse accepts: {"userName":"...","totalCount":42,"isActive":true}
+# json.serialize[ApiResponse](view ...) produces: {"userName":"...","totalCount":42,"isActive":true}
+# json.parse[ApiResponse](...) accepts: {"userName":"...","totalCount":42,"isActive":true}
 # The struct code always uses snake_case field names internally.
 ```
 
@@ -3483,7 +3483,7 @@ let response: string = request
     |> validate_auth
     |> extract_user_id
     |> load_user_profile
-    |> json.serialize
+    |> json.serialize[User]
 ```
 
 ```
@@ -3529,7 +3529,7 @@ let user_data: string = request
         return fail("no user id")
     |> load_user_profile handle error:
         return fail("user not found")
-    |> json.serialize_public
+    |> json.serialize_public[User]
 ```
 
 Each `handle` block applies to the pipeline step immediately before it. The error handling is co-located with the operation that can fail — no distant `catch` blocks, no forgotten error paths.
@@ -3557,7 +3557,7 @@ function process_request(fs: Filesystem, net: Network, stdout: Stdout, request: 
         |> fetch_data(fs) handle error:
             return fail("data fetch failed")
         |> transform_response
-        |> json.serialize
+        |> json.serialize[Response]
 
     Stdout.write(stdout, "processed request")
     return ok(output)
@@ -4178,7 +4178,7 @@ function handle_login(stdout: Stdout, request: Request) returns result[Response,
     let session: Session = auth.login(request.credentials) handle error:
         return fail("login failed")
     Stdout.write(stdout, "user logged in")
-    return ok(Response(status: 200, body: json.serialize_public(view session)))
+    return ok(Response(status: 200, body: json.serialize_public[Session](view session)))
 ```
 
 `use auth` works regardless of whether `auth.jett` is in the same directory, a subdirectory, or a completely different part of the project tree. The compiler resolves `auth` to whichever file declared `namespace auth`. The LLM never writes a file path in an import.
@@ -4704,7 +4704,7 @@ Bitfields get the same auto-generated serialization as regular structs (Rule Set
 let header: IpHeader = IpHeader.from_bytes(raw_packet) handle error:
     return fail("invalid header")
 
-let serialized: string = json.serialize(view header)
+let serialized: string = json.serialize[IpHeader](view header)
 # {"version":4,"header_length":5,"dscp":0,"ecn":0,"total_length":60,...}
 
 let bytes: bytes = IpHeader.to_bytes(header)
@@ -4934,7 +4934,7 @@ Views work naturally with pipelines (Rule Set 19). The `view` keyword is used in
 let report: string = large_dataset
     |> filter_active_records
     |> calculate_summary
-    |> view json.serialize
+    |> view json.serialize[Summary]
 ```
 
 Transform functions like `filter_active_records` consume their input and produce a new value. Read-only functions like `json.serialize` take a `view` parameter — and the pipeline step must use the `view` keyword to match. The types are checked at each `|>` boundary as usual.
@@ -5219,8 +5219,8 @@ Properties naturally verify serialization round-trips (Rule Set 18):
 ```
 property json_round_trip:
     given user: User
-    let json_string: string = json.serialize(user)
-    let restored: User = json.parse(json_string, User) handle error:
+    let json_string: string = json.serialize[User](user)
+    let restored: User = json.parse[User](json_string) handle error:
         assert false "round-trip failed: json.parse returned error"
     assert restored is user
 ```
@@ -5869,7 +5869,7 @@ The output is a JSON array of bottleneck entries, sorted by impact (highest CPU 
             "total_samples": 8976,
             "self_samples": 1536,
             "hot_lines": [
-                {"line": 45, "percent": 8.1, "code": "let parsed = json.parse(raw_text, Document) handle error: return fail(error)"},
+                {"line": 45, "percent": 8.1, "code": "let parsed = json.parse[Document](raw_text) handle error: return fail(error)"},
                 {"line": 52, "percent": 7.4, "code": "let validated = schema.validate(parsed)"}
             ],
             "call_chain": [
@@ -6058,7 +6058,7 @@ Jett keeps its symbol set **as small as possible**. Symbols are only used where 
 | `"` | Strings |
 | `\|>` | Pipeline operator (left-to-right data flow) |
 
-The `view` keyword is explicit at both call sites and declarations. When passing a value to a function that declares a `view` parameter, the caller must write `view`: `process(view data)`. In pipelines: `data |> view json.serialize`.
+The `view` keyword is explicit at both call sites and declarations. When passing a value to a function that declares a `view` parameter, the caller must write `view`: `process(view data)`. In pipelines: `data |> view json.serialize[Type]`.
 
 **Replaced by keywords:**
 
@@ -6649,7 +6649,7 @@ External dependencies live in the `deps/` directory as vendored `.jett` files tr
 - [ ] Compiler-managed memory allocation (automatic allocation/deallocation from linear type analysis)
 - [ ] `comptime` keyword and compile-time function execution
 - [ ] Comptime generic specialization
-- [ ] Compiler makes all structs compatible with `json.serialize()` / `json.parse(raw, Type)`
+- [ ] Compiler makes all structs compatible with `json.serialize[Type]()` / `json.parse[Type](raw)`
 - [ ] Auto-generated `to_bytes` / `from_bytes` for all structs
 - [ ] `serialize` field annotation for custom naming
 - [ ] `layout binary` with `size` for network protocol structs
@@ -6751,6 +6751,7 @@ External dependencies live in the `deps/` directory as vendored `.jett` files tr
 - **Memory management** — RESOLVED: linear types (move-by-default, explicit `clone` keyword) with fully compiler-managed allocation. No GC, no manual `free`, no lifetime annotations, no arenas. The compiler has perfect ownership knowledge from linear types and handles all allocation/deallocation automatically.
 - **Data layout optimization** — the compiler may automatically apply SoA (Structure of Arrays) transformations as a future optimization when access patterns suggest it. No syntax is needed — this is a compiler-internal optimization like auto-vectorization.
 - **Comptime boundaries** — what standard library functions are available at comptime? All pure functions? Only a subset? File I/O at comptime (for code generation from schemas)?
+- **Comptime struct introspection** — `json.serialize[T]()` currently requires compiler magic to inspect struct fields. The goal is to make this implementable via comptime introspection (e.g., `type.fields[T]()` returning field metadata) so users can write their own serialization formats. This requires comptime type dispatching (branching on field types) and recursive serialization of nested structs, lists, optionals, etc. Syntax TBD.
 - **Actor supervision** — should there be a built-in actor supervision tree (like Erlang/OTP) for handling actor crashes? Or is the error-as-values model sufficient?
 - **Interop** — RESOLVED: Auto-FFI with built-in C header parser. `use c "header.h"` imports C libraries with automatic safe wrapping. C pointers become opaque linear handles. WASM target is supported via capability lowering (Rule Set 17).
 - **C++ interop** — Auto-FFI targets C headers. C++ headers with templates, classes, and name mangling are significantly harder. Should Jett support C++ headers directly, or require a C-compatible wrapper? C-only is simpler and covers most OS APIs.
