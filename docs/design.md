@@ -3765,6 +3765,10 @@ The C header parsing happens entirely at **compile time** using the comptime eng
 
 The LLM never sees this process. It sees a clean Jett module with safe functions.
 
+#### C Interop Breaks Platform Agnosticism
+
+Pure Jett code is platform-agnostic — the capability system (Rule Set 16) and capability lowering (Rule Set 17) ensure that user code never contains platform-specific logic. C interop is the deliberate escape hatch from this guarantee. Importing a C header like `use c "windows.h" as win` introduces platform-specific code — that import only works on Windows. This is the user's responsibility: if you import a platform-specific header, you own that complexity. The standard library uses C FFI internally to implement capabilities, but that is hidden from user code. For most programs, capabilities are sufficient and C interop is unnecessary.
+
 #### Limitations and Safety Boundaries
 
 Not everything in a C header can be safely auto-translated. The compiler handles these cases explicitly:
