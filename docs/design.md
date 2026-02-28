@@ -541,7 +541,8 @@ function double(x: int64) returns int64:
     return x * 2
 
 function quadruple(x: int64) returns int64:
-    return double(double(x))
+    let doubled: int64 = double(x)
+    return double(doubled)
 
 # INVALID — forward reference:
 function quadruple(x: int64) returns int64:
@@ -604,7 +605,8 @@ function fetch_data(view net: Network, url: string) returns result[map[string, s
     let response: HttpResponse = http.get(view net, url) handle error:
         return fail(error)
     let data: map[string, string] = json.parse[map[string, string]](response.body) handle error:
-        return fail(HttpError.status_error(0, error))
+        let parse_error: HttpError = HttpError.status_error(0, error)
+        return fail(parse_error)
     return ok(data)
 
 function compute_stats(values: list[float64]) returns float64:
@@ -1102,7 +1104,8 @@ function process_report(data: list[Record]) returns result[Report, string]:
         return fail("invalid records")
     let transformed: list[TransformedRecord] = transform_records(valid)
     let summary: Summary = aggregate_results(transformed)
-    return ok(format_report(summary))
+    let report: Report = format_report(summary)
+    return ok(report)
 ```
 
 The result: `process_report` is now 4 lines. Each helper function is small, focused, and independently understandable. An LLM can generate, test, and reason about each one in isolation without its attention being diluted across a massive block.
@@ -1286,7 +1289,8 @@ let response: HttpResponse = http.get(view net, "https://api.example.com/users")
     # error is HttpError — match to handle specific cases:
     match error:
         HttpError.timeout(msg):
-            return fail(HttpError.timeout(msg))
+            let timeout_error: HttpError = HttpError.timeout(msg)
+            return fail(timeout_error)
         other:
             return fail(other)
 
@@ -1542,7 +1546,8 @@ function post_comment(view clock: Clock, session: UserAuth at logged_in, text: s
     # No if-checks needed. This function can ONLY be called when
     # the session is in the "logged_in" state. The compiler enforces this
     # at every call site. The LLM cannot forget. The human cannot forget.
-    let comment: Comment = Comment(author: session.user_id, text: text, created: Clock.now(view clock))
+    let now: Timestamp = Clock.now(view clock)
+    let comment: Comment = Comment(author: session.user_id, text: text, created: now)
     return ok(comment)
 ```
 
@@ -1584,7 +1589,8 @@ function get_tracking(order: OrderProcess at shipped) returns string:
     return order.tracking
 
 function ship_order(view clock: Clock, order: OrderProcess at submitted, tracking: string) returns OrderProcess at shipped:
-    return OrderProcess.transition(order, shipped, tracking: tracking, shipped_at: Clock.now(view clock))
+    let shipped_at: Timestamp = Clock.now(view clock)
+    return OrderProcess.transition(order, shipped, tracking: tracking, shipped_at: shipped_at)
 ```
 
 **5. The LLM defines reality once, then the compiler enforces it forever.**
@@ -1629,27 +1635,36 @@ function authorize_payment(view net: Network, pay: Payment at pending) returns r
     let auth: AuthResult = payment_gateway.authorize(view net, pay.amount, pay.currency) handle error:
         return fail("gateway error")
     if auth.declined:
-        return ok(PaymentOutcome.declined(payment: Payment.transition(pay, failed, reason: auth.reason)))
-    return ok(PaymentOutcome.authorized(payment: Payment.transition(pay, authorized, amount: pay.amount, auth_code: auth.code)))
+        let failed_payment: Payment at failed = Payment.transition(pay, failed, reason: auth.reason)
+        let outcome: PaymentOutcome = PaymentOutcome.declined(payment: failed_payment)
+        return ok(outcome)
+    let authorized_payment: Payment at authorized = Payment.transition(pay, authorized, amount: pay.amount, auth_code: auth.code)
+    let outcome: PaymentOutcome = PaymentOutcome.authorized(payment: authorized_payment)
+    return ok(outcome)
 
 function capture_payment(view net: Network, pay: Payment at authorized) returns result[CaptureOutcome, string]:
     use payment_gateway
     let capture: CaptureResult = payment_gateway.capture(view net, pay.auth_code, pay.amount) handle error:
         return fail("capture failed")
     if capture.declined:
-        return ok(CaptureOutcome.declined(payment: Payment.transition(pay, failed, reason: capture.reason)))
-    return ok(CaptureOutcome.captured(payment: Payment.transition(pay, captured,
+        let failed_payment: Payment at failed = Payment.transition(pay, failed, reason: capture.reason)
+        let outcome: CaptureOutcome = CaptureOutcome.declined(payment: failed_payment)
+        return ok(outcome)
+    let captured_payment: Payment at captured = Payment.transition(pay, captured,
         amount: pay.amount,
         auth_code: pay.auth_code,
-        capture_id: capture.id)))
+        capture_id: capture.id)
+    let outcome: CaptureOutcome = CaptureOutcome.captured(payment: captured_payment)
+    return ok(outcome)
 
 function refund_payment(view net: Network, pay: Payment at captured) returns result[Payment at refunded, string]:
     use payment_gateway
     let refund: RefundResult = payment_gateway.refund(view net, pay.capture_id, pay.amount) handle error:
         return fail("refund failed: {error}")
-    return ok(Payment.transition(pay, refunded,
+    let refunded_payment: Payment at refunded = Payment.transition(pay, refunded,
         original_amount: pay.amount,
-        refund_id: refund.id))
+        refund_id: refund.id)
+    return ok(refunded_payment)
 ```
 
 Every function operates on a payment in a specific state and transitions it to the next state. The compiler ensures that `capture_payment` can only be called on an `authorized` payment, and `refund_payment` can only be called on a `captured` payment. The LLM cannot accidentally refund a pending payment or capture an already-refunded payment. The state machine makes the illegal states unrepresentable.
@@ -1786,7 +1801,8 @@ actor Counter(stdout: Stdout):
         respond count
 
     receive print_count:
-        Stdout.write(view stdout, string(count))
+        let count_str: string = string(count)
+        Stdout.write(view stdout, count_str)
 
 function main(stdout: Stdout) returns nothing:
     let counter: Counter = spawn Counter(stdout: clone stdout)
@@ -1796,7 +1812,8 @@ function main(stdout: Stdout) returns nothing:
     send counter.increment
 
     let total: int64 = ask counter.get_count
-    Stdout.write(view stdout, string(total))   # prints "3"
+    let total_str: string = string(total)
+    Stdout.write(view stdout, total_str)   # prints "3"
 ```
 
 **Rules enforced by the compiler:**
@@ -1880,11 +1897,14 @@ function fetch_all_data(view net: Network) returns result[DashboardData, HttpErr
         return fail(error)
 
     let users_data: list[User] = json.parse[list[User]](users_result.body) handle error:
-        return fail(HttpError.status_error(0, error))
+        let users_error: HttpError = HttpError.status_error(0, error)
+        return fail(users_error)
     let orders_data: list[Order] = json.parse[list[Order]](orders_result.body) handle error:
-        return fail(HttpError.status_error(0, error))
+        let orders_error: HttpError = HttpError.status_error(0, error)
+        return fail(orders_error)
     let stats_data: Stats = json.parse[Stats](stats_result.body) handle error:
-        return fail(HttpError.status_error(0, error))
+        let stats_error: HttpError = HttpError.status_error(0, error)
+        return fail(stats_error)
 
     return ok(DashboardData(
         users: users_data,
@@ -2109,7 +2129,8 @@ function process_order(order: Order) returns result[Receipt, string]:
         return fail("invalid order")
     let charged: Charge = charge(validated) handle error:
         return fail("payment failed")
-    return ok(create_receipt(charged))
+    let receipt: Receipt = create_receipt(charged)
+    return ok(receipt)
 ```
 
 Every line inside this function is at the same indentation level. The LLM's attention mechanism naturally groups them together because they are physically close and share the same leading whitespace pattern. The function boundary is visually obvious — the next line at indentation level 0 is a different function.
@@ -2636,10 +2657,12 @@ function log_user(view stdout: Stdout, user: User) returns nothing:
 function handle_login(view net: Network, request: Request) returns result[Response, string]:
     use net.http
     let user: User = authenticate(request) handle error:
-        return ok(http.response(400, "invalid credentials"))
-    return ok(http.response(200, json.serialize[User](view user)))
-    # COMPILE ERROR: cannot pass struct containing secret fields to http.response
-    # hint: create a public view of User without secret fields
+        let bad_request: Response = http.response(400, "invalid credentials")
+        return ok(bad_request)
+    let user_json: string = json.serialize[User](view user)
+    # COMPILE ERROR: cannot pass struct containing secret fields to json.serialize
+    # secret fields: password_hash, api_key, ssn
+    # hint: use json.serialize_public[User](view user) to serialize only non-secret fields
 ```
 
 The compiler catches every path where a secret value could reach an output boundary. The LLM is **physically blocked** from generating code that leaks secrets.
@@ -4117,7 +4140,8 @@ function handle_login(view stdout: Stdout, request: Request) returns result[Resp
     let session: Session = auth.login(request.credentials) handle error:
         return fail("login failed")
     Stdout.write(view stdout, "user logged in")
-    return ok(Response(status: 200, body: json.serialize_public[Session](view session)))
+    let session_json: string = json.serialize_public[Session](view session)
+    return ok(Response(status: 200, body: session_json))
 ```
 
 `use auth` works regardless of whether `auth.jett` is in the same directory, a subdirectory, or a completely different part of the project tree. The compiler resolves `auth` to whichever file declared `namespace auth`. The LLM never writes a file path in an import.
@@ -5486,7 +5510,8 @@ function process_order(view fs: Filesystem, order: Order) returns result[Receipt
 
     let charged: ChargedOrder = charge_payment(validated) handle error:
         return fail("payment failed")
-    return ok(create_receipt(charged))
+    let receipt: Receipt = create_receipt(charged)
+    return ok(receipt)
 ```
 
 **What the LLM receives when the breakpoint is hit:**
@@ -6373,7 +6398,8 @@ function display_sorted[T implements Orderable and Displayable](items: list[T], 
     # T must implement both Orderable and Displayable
     let sorted: list[T] = sort[T](items)
     for item in sorted:
-        Stdout.write(view stdout, Displayable.display(item))
+        let displayed: string = Displayable.display(item)
+        Stdout.write(view stdout, displayed)
 
 # Multiple type parameters — comma separates parameters, and separates interfaces:
 function merge[T implements Orderable and Hashable, U implements Displayable](a: T, b: U) returns string:
