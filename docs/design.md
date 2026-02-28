@@ -2868,8 +2868,7 @@ function sneaky_logger(message: string) returns nothing:
 function fetch_data(url: string) returns result[string, string]:
     use net.http
     return http.get(url)
-    # COMPILE ERROR: "http.get" requires a Network capability
-    # but "fetch_data" does not have one in its parameters
+    # COMPILE ERROR: "http.get" expects 2 arguments, got 1
     # hint: add "view net: Network" to the function parameters
 ```
 
@@ -2950,19 +2949,7 @@ The LLM generates `main()` first, which has all capabilities. As it generates ch
 
 **5. Testing is trivial.**
 
-To test a function that takes a `Filesystem` capability, pass a mock filesystem. The function doesn't know the difference — it just calls methods on the capability object. No dependency injection framework, no global state to reset, no monkey-patching:
-
-```
-property load_config_parses_valid_json:
-    use test.mock
-    given port: int where port > 0 and port < 65536
-    let mock_fs: Filesystem = test.mock.filesystem(map(
-        "app.conf": "{{\"port\": {port}}"
-    ))
-    let config: Config = load_config(view mock_fs, "app.conf") handle error:
-        assert false "should not fail"
-    assert config.port is port
-```
+To test a function that takes a capability, pass a mock. The function doesn't know the difference — it just calls methods on the capability object. No dependency injection framework, no global state to reset, no monkey-patching. Mock capabilities and property-based testing are covered in Rule Set 25.
 
 ### Rule Set 17: Cross-Platform Compilation (Agnostic Capability Lowering)
 
