@@ -3997,9 +3997,9 @@ function handle_login(view stdout: Stdout, request: Request) returns result[Resp
 
 #### How Namespace Resolution Works
 
-**1. The compiler scans the project.**
+**1. The compiler scans the project (two-pass resolution).**
 
-At build time, the compiler finds all `.jett` files in the project directory (recursively). For each file, it reads the `namespace` declaration at the top.
+At build time, the compiler first discovers all `.jett` files in the project directory (recursively) and reads the `namespace` declaration at the top of each file. This builds a complete namespace registry before any `use` statements are resolved. This two-pass approach is necessary because file `a.jett` might `use` a namespace declared in `b.jett` — if the compiler tried to resolve imports on the first encounter, it could fail simply because it hadn't read `b.jett` yet. By scanning all namespace declarations first, resolution order doesn't matter.
 
 **2. Namespaces map to files — not paths.**
 
