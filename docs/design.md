@@ -4203,9 +4203,9 @@ use net.http            # imports both server and client
 
 The dot notation is purely logical — it does not imply a directory structure. `net.http.server` can live in a file called `http_server.jett` in the root directory, or `server.jett` in a `net/http/` subdirectory, or `everything.jett` alongside 10 other namespaces.
 
-#### Inline Imports Remain — Now with Namespaces
+#### Inline Imports Use Namespaces
 
-The inline `use` from Rule Set 4 works with namespaces:
+Inline `use` (Rule Set 4) resolves against namespace declarations:
 
 ```
 namespace handlers
