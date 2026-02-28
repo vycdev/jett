@@ -2524,6 +2524,20 @@ Jett has **no package manager and no package registry**. There is no `jett insta
 
 The compiler doesn't enforce a specific folder for dependencies — `use` resolves module paths to file paths like any other import. A common convention is `deps/`, but `lib/`, `vendor/`, or any other folder works the same way:
 
+**The `jett.proj` file** marks the project root and contains project metadata. The compiler scans for `.jett` files starting from the directory that contains `jett.proj`. Its format is TOON:
+
+```toon
+name: my_project
+version: 0.1.0
+entry: src/main.jett
+```
+
+- `name` — the project name.
+- `version` — the project version.
+- `entry` — the file containing the `main()` function. The compiler uses this as the program's entry point.
+
+That's it. No dependency lists (dependencies are vendored `.jett` files — git tracks them), no build configuration (the compiler has one mode), no scripts. The project file is small because the language eliminates the reasons other project files are large.
+
 **Project structure (example):**
 
 ```
