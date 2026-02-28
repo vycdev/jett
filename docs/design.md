@@ -3516,32 +3516,48 @@ Each step borrows the capability via `view`. No special pipeline rules needed �
 
 #### The `into` Keyword vs Direct Calls — Compiler-Enforced One Form Per Case
 
-To satisfy Rule Set 1 (strictly one canonical form), `into` and nested function calls are **not** interchangeable. The compiler enforces distinct use cases:
+**No function call can appear as an argument to another function call.** If you need the result of a function call as an argument, bind it to a variable first. The only exception is string interpolation, where inline expressions like `"hello {string.upper(name)}"` are allowed.
 
-- **`into` for chains of 2+ operations.** When data flows through a sequence of transformations, use the pipeline. **Chained/sequential nesting where data flows through a chain is a compile error** — `f(g(h(x)))` is banned because data flows sequentially through `h`, then `g`, then `f`. Use `x into h into g into f` instead.
-- **Argument expressions are allowed.** `"prefix{value}"` is fine because string interpolation is an expression, not a sequential data-flow chain. The rule targets left-to-right data flow chains, not every function call inside another function call.
-- **Direct calls for single operations.** `let x = f(y)` is the form for a single function call.
+- **`into` for sequential data transformations.** When data flows through a sequence of operations, use the pipeline.
+- **Direct calls for single operations.** `let x: T = f(y)` is the form for a single function call.
+- **Bind intermediate results.** When a function takes multiple computed arguments, bind each to a variable.
 
 ```
 # Single call — correct:
 let trimmed: string = string.trim(name)
 
 # ALLOWED — string interpolation:
-let message: string = "count: {total}"
+let message: string = "hello {string.upper(name)}"
 
-# BANNED — sequential chain (depth 3):
-let result: string = format(process(parse(input)))
-# COMPILE ERROR: use pipeline instead
-# hint: rewrite as: input into parse into process into format
+# BANNED — function call as argument:
+let result: string = f(g(x))
+# COMPILE ERROR: function call "g(x)" cannot appear as an argument
+# hint: bind the result to a variable first
 
-# Pipeline — correct:
+# Correct — bind intermediate result:
+let g_result: T = g(x)
+let result: string = f(g_result)
+
+# BANNED — nested argument calls:
+let result: T = f(g(d(), b(x, c())), n())
+# COMPILE ERROR: function call "d()" cannot appear as an argument
+
+# Correct — bind each intermediate result:
+let c_result: T = c()
+let b_result: T = b(x, c_result)
+let d_result: T = d()
+let g_result: T = g(d_result, b_result)
+let n_result: T = n()
+let result: T = f(g_result, n_result)
+
+# Sequential chain — use pipeline:
 let result: string = input
     into parse
     into process
     into format
 ```
 
-This means there is exactly one form for single calls (direct) and exactly one form for chained calls (pipeline). Argument expressions inside a function call are not considered chaining — the ban applies to sequential data-flow nesting, not to every function call that appears inside another. No ambiguity, no choice.
+This means every function call stands alone on its own line with its result bound to a named variable, or flows through an `into` pipeline. No nesting, no ambiguity, no parenthesis matching.
 
 #### Why This Is Perfect for LLMs
 
