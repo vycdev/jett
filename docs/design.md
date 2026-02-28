@@ -3079,6 +3079,8 @@ There is simply no syntax for it. The LLM cannot write "if windows then X else Y
 
 If a genuinely platform-specific behavior is needed (rare, and only for advanced use cases), it is handled in the **standard library's capability implementations**, not in user code. The user code stays agnostic.
 
+**Note on debug instrumentation:** Debug features like breakpoints and profiling annotations are automatically stripped by the compiler in production builds. This is not conditional compilation — the LLM never writes "if debug then X else Y." It writes the same code regardless of build mode, and the compiler silently removes debug instrumentation when building for release.
+
 #### Build Targets
 
 ```
