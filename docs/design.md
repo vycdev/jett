@@ -3808,19 +3808,12 @@ The LLM does not parse formatting. It reads structured TOON — compact, labeled
 
 The Agent Server Protocol enables a **self-healing development loop** where the compiler feeds directly back into the LLM:
 
-```
-┌─────────────┐     Jett source      ┌──────────────┐
-│             │ ──────────────────→  │              │
-│     LLM     │                      │   Compiler   │
-│             │ ←──────────────────  │  (--agent)   │
-└─────────────┘     TOON errors      └──────────────┘
-       │                                    │
-       │  fix code                          │  if no errors
-       │  based on                          │
-       │  TOON payload                      ▼
-       │                             ┌──────────────┐
-       └─────────────────────────→   │    Binary    │
-                                     └──────────────┘
+```mermaid
+flowchart LR
+    LLM -->|Jett source| Compiler["Compiler\n(--agent)"]
+    Compiler -->|TOON errors| LLM
+    Compiler -->|no errors| Binary
+    LLM -->|fix code based\non TOON payload| LLM
 ```
 
 **The cycle:**
