@@ -3810,10 +3810,9 @@ The Agent Server Protocol enables a **self-healing development loop** where the 
 
 ```mermaid
 flowchart LR
-    LLM -->|Jett source| Compiler["Compiler\n(--agent)"]
+    LLM -->|Jett source| Compiler["Compiler<br>(--agent)"]
     Compiler -->|TOON errors| LLM
     Compiler -->|no errors| Binary
-    LLM -->|fix code based\non TOON payload| LLM
 ```
 
 **The cycle:**
