@@ -3353,15 +3353,9 @@ In most languages, composing multiple operations requires nesting function calls
 let response: string = format_to_json(fetch_database_records(authenticate_user(request)))
 ```
 
-To generate this line, the LLM must:
+LLMs can generate nested calls — they write the outermost function first and work inward, which is a form of goal-directed reasoning ("I want JSON, so `format_to_json` wraps everything"). This works fine for 2-3 levels of nesting.
 
-1. Know the final operation it wants (`format_to_json`) — but it can't write it first, because the argument isn't ready yet.
-2. Know the middle operation (`fetch_database_records`) — same problem.
-3. Start with the innermost call (`authenticate_user(request)`) — the first thing to execute is the last thing to write.
-
-This is **anti-auto-regressive**. The LLM generates tokens left-to-right, but the execution order is right-to-left (innermost to outermost). The LLM must mentally plan the entire chain before emitting the first token, then write it backwards. This is exactly the kind of "look-ahead" planning that LLMs are bad at.
-
-Deeply nested calls also create bracket-matching problems (Rule Set 11) and split the LLM's attention across multiple nesting levels (Rule Set 7).
+The problem emerges at depth. With 4-5+ nested calls, bracket-matching becomes error-prone (Rule Set 11), the execution order is the reverse of the writing order, and the LLM's attention is split across multiple nesting levels (Rule Set 7). Reading `send_email(format_report(aggregate(filter_active(fetch_users(db, query)), threshold), template), recipient)` requires mentally parsing which arguments belong to which function — a task that gets harder as depth increases.
 
 #### The Solution: The `|>` Pipeline Operator
 
