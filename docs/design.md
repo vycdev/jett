@@ -108,13 +108,13 @@ Jett uses standard arithmetic operators (`+`, `-`, `*`, `/`) and comparison oper
 
 ```
 # Arithmetic uses standard operators:
-let x: int = a + b * c - d / e
+let x: int64 = a + b * c - d / e
 ```
 
 The operator precedence is standard (multiplication and division bind tighter than addition and subtraction), matching every other language the LLM has been trained on. Parentheses are used for explicit grouping when needed:
 
 ```
-let x: int = (a + b) * (c - d) / e
+let x: int64 = (a + b) * (c - d) / e
 ```
 
 **JSON AST equivalence:**
@@ -128,7 +128,7 @@ Any Jett program can be represented as a JSON AST, and that JSON can be converte
 Example — a function in Jett source and its JSON AST:
 
 ```
-function max(a: int, b: int) returns int:
+function max(a: int64, b: int64) returns int64:
     if a > b:
         return a
     return b
@@ -139,10 +139,10 @@ function max(a: int, b: int) returns int:
     "type": "function",
     "name": "max",
     "params": [
-        {"name": "a", "type": "int"},
-        {"name": "b", "type": "int"}
+        {"name": "a", "type": "int64"},
+        {"name": "b", "type": "int64"}
     ],
-    "returns": "int",
+    "returns": "int64",
     "body": [
         {
             "type": "if",
@@ -183,7 +183,7 @@ function save_user(view fs: Filesystem, user: view User) returns result[nothing,
         return fail("could not save user")
     return ok(nothing)
 
-function compute_tax(income: float, rate: float) returns float:
+function compute_tax(income: float64, rate: float64) returns float64:
     return income * rate
 ```
 
@@ -217,7 +217,7 @@ This is a dramatic reduction in the context an LLM needs per task.
 **Example — testing a pure function needs zero context:**
 
 ```
-function calculate_discount(price: float, tier: string) returns float:
+function calculate_discount(price: float64, tier: string) returns float64:
     if tier is "gold":
         return price * 0.8
     else if tier is "silver":
@@ -310,7 +310,7 @@ Every value in Jett has a known type at compile time. There is no `any`, no unty
 
 **What strict means in practice:**
 
-- No implicit conversions. An `int` is not a `float` unless explicitly converted.
+- No implicit conversions. An `int64` is not a `float64` unless explicitly converted.
 - No union types without exhaustive matching. All enums require exhaustive `match`, and all `result` types require `handle`.
 - No null. Values are either present (`T`) or explicitly optional (`optional[T]`), and optionals must be coarsenped before use.
 - No duck typing. A struct satisfies an interface only if it has an explicit `implement` block — accidental structural matches do not count.
@@ -323,13 +323,13 @@ When an LLM generates code that doesn't type-check, the compiler error tells it 
 **Example — the type system catches a hallucinated conversion:**
 
 ```
-function format_price(cents: int) returns string:
+function format_price(cents: int64) returns string:
     return "price is {cents}"
-    # This works — int implements Displayable, so it can be used in string interpolation.
+    # This works — int64 implements Displayable, so it can be used in string interpolation.
 
-function add_to_price(price: string, tax: int) returns string:
+function add_to_price(price: string, tax: int64) returns string:
     return price + tax
-    # COMPILE ERROR: operator + is not defined for string and int
+    # COMPILE ERROR: operator + is not defined for string and int64
     # hint: use string interpolation "..." or convert types explicitly
 ```
 
@@ -339,66 +339,66 @@ Jett uses string interpolation `"text {expr}"` as the single canonical mechanism
 
 #### Explicit Type Conversions
 
-Jett has **no implicit type conversions**. An `int` is never silently promoted to a `float`, and a number is never silently coerced to a `string`. All type conversions are explicit function calls using the standard module function syntax: `TargetType.from_SourceType(value)`.
+Jett has **no implicit type conversions**. An `int64` is never silently promoted to a `float64`, and a number is never silently coerced to a `string`. All type conversions are explicit function calls using the standard module function syntax: `TargetType.from_SourceType(value)`.
 
 **Infallible conversions** (lossless — always succeed, return `T` directly):
 
 ```
-let x: float = float.from_int(42)          # → 42.0
-let s: string = string.from_int(42)         # → "42"
-let s: string = string.from_float(3.14)     # → "3.14"
+let x: float64 = float64.from_int64(42)          # → 42.0
+let s: string = string.from_int64(42)         # → "42"
+let s: string = string.from_float64(3.14)     # → "3.14"
 let s: string = string.from_bool(true)      # → "true"
 ```
 
 **Fallible conversions** (can fail — return `result[T, string]`):
 
 ```
-let n: int = int.from_string("42") handle error:
+let n: int64 = int64.from_string("42") handle error:
     return fail("not a number")
 
-let f: float = float.from_string("3.14") handle error:
-    return fail("not a float")
+let f: float64 = float64.from_string("3.14") handle error:
+    return fail("not a float64")
 
-let n: int = int.from_float(3.14) handle error:
+let n: int64 = int64.from_float64(3.14) handle error:
     return fail("not a whole number")
-    # Fails because 3.14 is not exactly representable as int.
-    # int.from_float(3.0) would succeed → 3
+    # Fails because 3.14 is not exactly representable as int64.
+    # int64.from_float64(3.0) would succeed → 3
 ```
 
 **Design rules:**
 
-- Every conversion is a uniquely named function — no overloading. `int.from_string` and `int.from_float` are separate functions, not overloads of `int()`.
-- Lossy numeric conversions return `result`. Converting `float` to `int` can fail because the float may not be a whole number. Converting `int` to `float` can fail for very large integers that lose precision. The compiler never silently truncates or rounds.
+- Every conversion is a uniquely named function — no overloading. `int64.from_string` and `int64.from_float64` are separate functions, not overloads of `int64()`.
+- Lossy numeric conversions return `result`. Converting `float64` to `int64` can fail because the float64 may not be a whole number. Converting `int64` to `float64` can fail for very large integers that lose precision. The compiler never silently truncates or rounds.
 - The pattern is always `TargetType.from_SourceType(value)` — predictable and discoverable. An LLM can infer the correct function name from the types involved.
-- String interpolation `"text {expr}"` requires the expression to implement `Displayable` — this is a compiler-stdlib coupling, not a general implicit conversion. Outside of interpolation, converting to string requires an explicit `string.from_int()` or `string.from_float()` call.
+- String interpolation `"text {expr}"` requires the expression to implement `Displayable` — this is a compiler-stdlib coupling, not a general implicit conversion. Outside of interpolation, converting to string requires an explicit `string.from_int64()` or `string.from_float64()` call.
 
 **What the compiler rejects:**
 
 ```
-let x: float = 42
-# COMPILE ERROR: expected float, got int
-# hint: use float.from_int(42)
+let x: float64 = 42
+# COMPILE ERROR: expected float64, got int64
+# hint: use float64.from_int64(42)
 
-let y: int = 3.14
-# COMPILE ERROR: expected int, got float
-# hint: use int.from_float(3.14) and handle the possible error
+let y: int64 = 3.14
+# COMPILE ERROR: expected int64, got float64
+# hint: use int64.from_float64(3.14) and handle the possible error
 ```
 
-**These are standard library functions, not language magic.** Primitive types (`int`, `float`, `string`, `bool`) serve as their own modules, exactly like structs do. When you define `struct Dog`, you call `Dog.speak(my_dog)` — `Dog` is both the type and the module. Primitive types work the same way: `int` is both the type (in `x: int`) and the module (in `int.from_string("42")`). The context disambiguates — type position vs expression position. There is no special compiler treatment for conversion functions; they are ordinary standard library functions that anyone could reimplement in a custom module.
+**These are standard library functions, not language magic.** Primitive types (`int64`, `float64`, `string`, `bool`) serve as their own modules, exactly like structs do. When you define `struct Dog`, you call `Dog.speak(my_dog)` — `Dog` is both the type and the module. Primitive types work the same way: `int64` is both the type (in `x: int64`) and the module (in `int64.from_string("42")`). The context disambiguates — type position vs expression position. There is no special compiler treatment for conversion functions; they are ordinary standard library functions that anyone could reimplement in a custom module.
 
 #### 2. Intent-Based Refinement Types — Constraints in Plain Text
 
-This is where Jett's type system becomes truly LLM-native. Standard types describe *what shape* data has (int, string, list). Refinement types describe *what rules* data must follow. The LLM can express business logic constraints directly as types, and the compiler enforces them automatically.
+This is where Jett's type system becomes truly LLM-native. Standard types describe *what shape* data has (int64, string, list). Refinement types describe *what rules* data must follow. The LLM can express business logic constraints directly as types, and the compiler enforces them automatically.
 
 **Syntax:**
 
 ```
 type Password = string where string.char_count(value) > 8
-type Age = int where value >= 0 and value < 150
+type Age = int64 where value >= 0 and value < 150
 type Email = string where string.contains(value, "@")
-type Port = int where value >= 1 and value <= 65535
+type Port = int64 where value >= 1 and value <= 65535
 type NonEmpty[T] = list[T] where list.length[T](value) > 0
-type Percentage = float where value >= 0.0 and value <= 100.0
+type Percentage = float64 where value >= 0.0 and value <= 100.0
 ```
 
 The `where` clause attaches a constraint to a base type. `value` refers to the value being constrained, and the clause accepts any pure expression (no capabilities, no mutation) that evaluates to `bool`. The compiler checks it wherever a value of that type is created.
@@ -435,7 +435,7 @@ This uses the same `handle error:` pattern as `result[T, E]` — no new syntax. 
 
 ```
 error at line 45: refinement type assignment requires error handling
-  assigning int to Port may fail the constraint: value >= 1
+  assigning int64 to Port may fail the constraint: value >= 1
   hint: add "handle error:" to handle the case where the value is invalid
 ```
 
@@ -444,9 +444,9 @@ error at line 45: refinement type assignment requires error handling
 ```
 type SortedList[T] = list[T] where list.is_sorted(value)
 type BoundedList[T] = list[T] where list.length[T](value) <= 100
-type PositiveFloat = float where value > 0.0
+type PositiveFloat = float64 where value > 0.0
 
-type HttpStatus = int where value >= 100 and value < 600
+type HttpStatus = int64 where value >= 100 and value < 600
 type JsonString = string where string.is_valid_json(value)
 
 function parse_config(raw: JsonString) returns result[Config, string]:
@@ -469,12 +469,12 @@ let user: User = User(name: name, email: email, age: age) handle error:
     return fail("invalid user data: {error}")
 ```
 
-**Refinement type constraints must be self-contained.** The `where` clause can only reference `value` (the value being constrained) and call pure functions with literal or constant arguments. Constraints cannot take external parameters — there is no `type Password[min: int] = string where string.char_count(value) > min`. This keeps `[]` unambiguous: it always means generics, never parameterized constraints.
+**Refinement type constraints must be self-contained.** The `where` clause can only reference `value` (the value being constrained) and call pure functions with literal or constant arguments. Constraints cannot take external parameters — there is no `type Password[min: int64] = string where string.char_count(value) > min`. This keeps `[]` unambiguous: it always means generics, never parameterized constraints.
 
 **For parameterized validation, use functions.** If validation rules depend on runtime values (e.g., a minimum password length from config), write a regular function that returns `result[T, string]`:
 
 ```
-function validate_password(input: string, min_length: int) returns result[string, string]:
+function validate_password(input: string, min_length: int64) returns result[string, string]:
     if string.char_count(input) <= min_length:
         return fail("password must be longer than {min_length} characters")
     return ok(input)
@@ -507,7 +507,7 @@ If you need the base type multiple times in one function, assign it to a local v
 ```
 function process(password: Password, view stdout: Stdout) returns nothing:
     let raw: string = coarsen password
-    let len: int = string.char_count(raw)
+    let len: int64 = string.char_count(raw)
     let upper: string = string.to_upper(raw)
     Stdout.write(view stdout, "password length: {len}")
 ```
@@ -537,17 +537,17 @@ The language enforces that **every variable, type, and function must be defined 
 
 ```
 # VALID — definition before use:
-function double(x: int) returns int:
+function double(x: int64) returns int64:
     return x * 2
 
-function quadruple(x: int) returns int:
+function quadruple(x: int64) returns int64:
     return double(double(x))
 
 # INVALID — forward reference:
-function quadruple(x: int) returns int:
+function quadruple(x: int64) returns int64:
     return double(double(x))    # COMPILE ERROR: "double" is not defined yet
 
-function double(x: int) returns int:
+function double(x: int64) returns int64:
     return x * 2
 ```
 
@@ -555,15 +555,15 @@ function double(x: int) returns int:
 
 ```
 mutual:
-    function is_even(n: int) returns bool
-    function is_odd(n: int) returns bool
+    function is_even(n: int64) returns bool
+    function is_odd(n: int64) returns bool
 
-function is_even(n: int) returns bool:
+function is_even(n: int64) returns bool:
     if n is 0:
         return true
     return is_odd(n - 1)
 
-function is_odd(n: int) returns bool:
+function is_odd(n: int64) returns bool:
     if n is 0:
         return false
     return is_even(n - 1)
@@ -607,10 +607,10 @@ function fetch_data(view net: Network, url: string) returns result[map[string, s
         return fail(HttpError.status_error(0, error))
     return ok(data)
 
-function compute_stats(values: list[float]) returns float:
+function compute_stats(values: list[float64]) returns float64:
     use math
-    let total: float = math.sum(values)
-    return total / float.from_int(list.length[float](values))
+    let total: float64 = math.sum(values)
+    return total / float64.from_int64(list.length[float64](values))
 ```
 
 **What this achieves:**
@@ -631,11 +631,11 @@ function compute_stats(values: list[float]) returns float:
 function good_example(view stdout: Stdout) returns nothing:
     use math
     use json
-    let x: float = math.sqrt(2.0)
-    Stdout.write(view stdout, json.serialize[float](view x))
+    let x: float64 = math.sqrt(2.0)
+    Stdout.write(view stdout, json.serialize[float64](view x))
 
 function bad_example(view stdout: Stdout) returns nothing:
-    let x: int = 42
+    let x: int64 = 42
     use math          # COMPILE ERROR: use statements must appear before any other code
     Stdout.write(view stdout, "value: {x}")
 ```
@@ -777,9 +777,9 @@ A function that returns anything other than `nothing` cannot be called as a stan
 # returns nothing — OK as standalone statement:
 Stdout.write(view stdout, "hello")
 
-# returns float — MUST assign:
+# returns float64 — MUST assign:
 math.sqrt(16.0)
-# COMPILE ERROR: return value of math.sqrt (float) is not consumed
+# COMPILE ERROR: return value of math.sqrt (float64) is not consumed
 # hint: assign to a variable with "let x = math.sqrt(16.0)"
 
 # returns result[T, E] — MUST assign AND handle:
@@ -919,7 +919,7 @@ When an LLM sees `user_id` anywhere in a function, it resolves to exactly one bi
 
 #### 2. No Function Overloading
 
-Having `process(string)` and `process(int)` in the same codebase splits the LLM's understanding of what `process` means. When the LLM generates a call to `process`, it must infer from argument types which overload it intends — and it may get it wrong, especially when types are similar or when the function is being called with a variable whose type was defined many lines ago.
+Having `process(string)` and `process(int64)` in the same codebase splits the LLM's understanding of what `process` means. When the LLM generates a call to `process`, it must infer from argument types which overload it intends — and it may get it wrong, especially when types are similar or when the function is being called with a variable whose type was defined many lines ago.
 
 Jett bans function overloading entirely. **Every function has a unique name.**
 
@@ -929,9 +929,9 @@ Jett bans function overloading entirely. **Every function has a unique name.**
 function process(data: string) returns string:
     return parse_text(data)
 
-function process(data: int) returns int:
+function process(data: int64) returns int64:
     # COMPILE ERROR: function "process" is already defined
-    # hint: use a distinct name, e.g. "process_int"
+    # hint: use a distinct name, e.g. "process_int64"
     return data * 2
 ```
 
@@ -941,7 +941,7 @@ function process(data: int) returns int:
 function process_text(data: string) returns string:
     return parse_text(data)
 
-function process_number(data: int) returns int:
+function process_number(data: int64) returns int64:
     return data * 2
 ```
 
@@ -995,8 +995,8 @@ function normalize_name(raw_name: string) returns string:
 **Mutable (opt-in, for when it is genuinely needed):**
 
 ```
-function sum_list(items: list[int]) returns int:
-    let mutable total: int = 0
+function sum_list(items: list[int64]) returns int64:
+    let mutable total: int64 = 0
     for item in items:
         total = total + item
     return total
@@ -1013,7 +1013,7 @@ Immutable variables eliminate this entirely. `trimmed_name` has one value, forev
 **Mutability is local only — no mutable references.** There is no way for a function to modify the caller's data. When a value is passed to a function, it is either consumed (moved) or borrowed read-only via `view`. There is no `param: mutable T` — no mutable references exist in the language. If a function needs to transform a value, it takes ownership, transforms it, and returns the new value. The caller rebinds:
 
 ```
-let mutable x: int = 5
+let mutable x: int64 = 5
 x = transform(x)    # transform consumes x, returns new value, x is rebound
 ```
 
@@ -1147,7 +1147,7 @@ Same logic, but flat. Each condition is a guard clause that skips to the next it
 
 ```
 # REJECTED — 8 parameters:
-function create_user(name: string, email: string, age: int, role: string,
+function create_user(name: string, email: string, age: int64, role: string,
                      team: string, manager: string, office: string,
                      start_date: string) returns User:
     # COMPILE ERROR: exceeds 6 parameter limit
@@ -1189,13 +1189,13 @@ let adults: list[User] = list.filter[User](users, function(u: User) returns bool
 let names: list[string] = list.map[User, string](users, function(u: User) returns string: return u.name)
 
 # Instead of writing a reduce loop:
-let total: float = list.sum[float](prices)
+let total: float64 = list.sum[float64](prices)
 
 # Instead of writing a search loop:
 let found: optional[User] = list.find(users, function(u: User) returns bool: return u.id is target_id)
 
 # Instead of writing a sort with comparator:
-let sorted: list[User] = list.sort_by(users, function(u: User) returns int: return u.age)
+let sorted: list[User] = list.sort_by(users, function(u: User) returns int64: return u.age)
 
 # Instead of writing deduplication logic:
 let unique: list[Item] = list.unique(items)
@@ -1204,7 +1204,7 @@ let unique: list[Item] = list.unique(items)
 let batches: list[list[Item]] = list.chunk(items, 100)
 
 # Instead of writing zip logic:
-let pairs: list[tuple[string, int]] = list.zip(names, scores)
+let pairs: list[tuple[string, int64]] = list.zip(names, scores)
 
 # Group by a field:
 let by_role: map[string, list[User]] = list.group_by(users, function(u: User) returns string: return u.role)
@@ -1244,7 +1244,7 @@ let diff: Duration = time.difference(start, end)
 let tomorrow: Time = time.add_days(now, 1)
 let weekday: string = time.day_of_week(now)
 let is_before: bool = time.before(start, end)
-let age: int = time.years_between(birth_date, now)
+let age: int64 = time.years_between(birth_date, now)
 ```
 
 Date logic is one of the most error-prone areas in programming. An LLM should never be computing leap years or timezone offsets — the standard library does it correctly.
@@ -1276,7 +1276,7 @@ The `net.http` module defines its own error type for HTTP operations:
 enum HttpError:
     connection_failed(message: string)
     timeout(message: string)
-    status_error(code: int, message: string)
+    status_error(code: int64, message: string)
 ```
 
 ```
@@ -1292,7 +1292,7 @@ let response: HttpResponse = http.get(view net, "https://api.example.com/users")
 
 let body: list[User] = json.parse[list[User]](response.body) handle error:
     return fail("invalid json")
-let status: int = response.status
+let status: int64 = response.status
 
 # POST with body:
 let post_response: HttpResponse = http.post(view net, "https://api.example.com/users", json.serialize[User](view new_user)) handle error:
@@ -1312,7 +1312,7 @@ let files: list[string] = Filesystem.list_dir(view fs, "./data") handle error:
     return fail("directory not found")
 
 let exists: bool = Filesystem.file_exists(view fs, "config.json")
-let size: int = Filesystem.file_size(view fs, "data.bin") handle error:
+let size: int64 = Filesystem.file_size(view fs, "data.bin") handle error:
     return fail("could not get file size")
 Filesystem.copy_file(view fs, "source.txt", "dest.txt") handle error:
     return fail("could not copy file")
@@ -1325,16 +1325,16 @@ Filesystem.delete_file(view fs, "temp.txt") handle error:
 ```
 use math
 
-let clamped: int = math.clamp(value, 0, 100)
-let rounded: float = math.round(price, 2)
-let absolute: float = math.abs(difference)
-let maximum: float = math.max(a, b)
-let minimum: float = math.min(a, b)
-let average: float = math.average(scores)
-let median: float = math.median(scores)
-let floored: float = math.floor(3.7)
-let ceiled: float = math.ceil(3.2)
-let power: float = math.pow(base, exponent)
+let clamped: int64 = math.clamp(value, 0, 100)
+let rounded: float64 = math.round(price, 2)
+let absolute: float64 = math.abs(difference)
+let maximum: float64 = math.max(a, b)
+let minimum: float64 = math.min(a, b)
+let average: float64 = math.average(scores)
+let median: float64 = math.median(scores)
+let floored: float64 = math.floor(3.7)
+let ceiled: float64 = math.ceil(3.2)
+let power: float64 = math.pow(base, exponent)
 ```
 
 **Hashing and encoding — no third-party dependencies:**
@@ -1603,10 +1603,10 @@ The LLM does not need to "remember" any of this. It defined the rules, and the l
 ```
 machine Payment:
     states:
-        pending(amount: float, currency: string)
-        authorized(amount: float, auth_code: string)
-        captured(amount: float, auth_code: string, capture_id: string)
-        refunded(original_amount: float, refund_id: string)
+        pending(amount: float64, currency: string)
+        authorized(amount: float64, auth_code: string)
+        captured(amount: float64, auth_code: string, capture_id: string)
+        refunded(original_amount: float64, refund_id: string)
         failed(reason: string)
 
     transitions:
@@ -1716,19 +1716,19 @@ Field access on a value implicitly creates a view of the parent. `self.x` is equ
 This means code like the following is valid:
 
 ```
-let dx: float = self.x - other.x
-let dy: float = self.y - other.y
+let dx: float64 = self.x - other.x
+let dy: float64 = self.y - other.y
 # Neither access consumes `self` or `other` — field access is a view operation.
 ```
 
-Both `self.x` and `self.y` work because each field access creates an implicit view rather than consuming the struct. Similarly, `dx * dx` is valid because primitive types (`int`, `float`, `bool`, `string`) are implicitly copyable — they are not linear. Linear typing only restricts compound types (structs, lists, maps, etc.) that own heap-allocated resources.
+Both `self.x` and `self.y` work because each field access creates an implicit view rather than consuming the struct. Similarly, `dx * dx` is valid because primitive types (`int64`, `float64`, `bool`, `string`) are implicitly copyable — they are not linear. Linear typing only restricts compound types (structs, lists, maps, etc.) that own heap-allocated resources.
 
 **Rebinding semantics for mutable variables:**
 
 The `mutable` keyword allows a variable name to be rebound after its previous value is consumed. This is not mutation — it is consume-and-rebind:
 
 ```
-let mutable total: int = 0
+let mutable total: int64 = 0
 for item in items:
     total = total + item
     # The old `total` is consumed by `+`, the result is rebound to `total`.
@@ -1745,13 +1745,13 @@ Without `mutable`, the compiler would reject `total = total + item` because `tot
 
 ```
 # Owned iteration (items consumed):
-let mutable sum: int = 0
+let mutable sum: int64 = 0
 for item in items:
     sum = sum + item.price
 # items is no longer available here
 
 # View iteration (items preserved):
-let mutable sum: int = 0
+let mutable sum: int64 = 0
 for item in view items:
     sum = sum + item.price
 # items is still available here
@@ -1777,12 +1777,12 @@ Jett eliminates shared memory entirely. **Threads physically cannot see each oth
 
 ```
 actor Counter(stdout: Stdout):
-    let mutable count: int = 0
+    let mutable count: int64 = 0
 
     receive increment:
         count = count + 1
 
-    receive get_count responds int:
+    receive get_count responds int64:
         respond count
 
     receive print_count:
@@ -1795,7 +1795,7 @@ function main(stdout: Stdout) returns nothing:
     send counter.increment
     send counter.increment
 
-    let total: int = ask counter.get_count
+    let total: int64 = ask counter.get_count
     Stdout.write(view stdout, string(total))   # prints "3"
 ```
 
@@ -1986,16 +1986,16 @@ Jett borrows from Zig: there are **no macros**. Instead, there is a `comptime` k
 **One syntax for everything:**
 
 ```
-comptime function generate_lookup_table(size: int) returns list[int]:
-    let mutable table: list[int] = list[int]()
-    let mutable i: int = 0
+comptime function generate_lookup_table(size: int64) returns list[int64]:
+    let mutable table: list[int64] = list[int64]()
+    let mutable i: int64 = 0
     while i < size:
-        table = list.append[int](table, i * i)
+        table = list.append[int64](table, i * i)
         i = i + 1
     return table
 
 # This runs at compile time. The result is baked into the binary.
-let squares: list[int] = comptime generate_lookup_table(256)
+let squares: list[int64] = comptime generate_lookup_table(256)
 ```
 
 The LLM writes a normal function — same syntax, same rules, same keywords. The `comptime` keyword simply tells the compiler to run it during compilation rather than at runtime. The LLM does not need to learn a separate template language, a macro syntax, or a preprocessor. **One syntax, two execution times.**
@@ -2007,7 +2007,7 @@ comptime function type_name[T]() returns string:
     return T.name
 
 comptime function is_numeric[T]() returns bool:
-    return T is int or T is float
+    return T is int64 or T is float64
 
 function print_value[T](view stdout: Stdout, val: T) returns nothing:
     if comptime is_numeric[T]():
@@ -2062,7 +2062,7 @@ function add(int a, int b) {
 
 ```
 # Jett (0 syntactic noise tokens):
-function max(a: int, b: int) returns int:
+function max(a: int64, b: int64) returns int64:
     if a > b:
         return a
     else:
@@ -2137,12 +2137,12 @@ Ambiguous whitespace (Python allows both 2 and 4 spaces, tabs, and mixes) create
 
 ```
 function example() returns nothing:
-    let x: int = 1          # 4 spaces — valid
-      let y: int = 2        # 6 spaces — COMPILE ERROR: expected 4 or 8 spaces
-  let z: int = 3            # 2 spaces — COMPILE ERROR: indent must be multiple of 4
+    let x: int64 = 1          # 4 spaces — valid
+      let y: int64 = 2        # 6 spaces — COMPILE ERROR: expected 4 or 8 spaces
+  let z: int64 = 3            # 2 spaces — COMPILE ERROR: indent must be multiple of 4
 
 function another() returns nothing:
-	let a: int = 1           # tab — COMPILE ERROR: tabs are not allowed, use 4 spaces
+	let a: int64 = 1           # tab — COMPILE ERROR: tabs are not allowed, use 4 spaces
 ```
 
 **Colon as block opener:**
@@ -2227,7 +2227,7 @@ let third: optional[string] = string.char_at("hello", 2)
 # Result: optional containing "l"
 
 # Character count (not byte count):
-let len: int = string.char_count("こんにちは")
+let len: int64 = string.char_count("こんにちは")
 # Result: 5 (not 15, which would be the byte count)
 ```
 
@@ -2348,7 +2348,7 @@ Every function can have a `verify` block immediately after its definition. The `
 **Basic example:**
 
 ```
-function calculate_discount(price: float, tier: string) returns float:
+function calculate_discount(price: float64, tier: string) returns float64:
     if tier is "gold":
         return price * 0.8
     else if tier is "silver":
@@ -2377,7 +2377,7 @@ The word `test` implies something optional — something you run separately, may
 **What happens during compilation:**
 
 ```
-function add_positive(a: int, b: int) returns int:
+function add_positive(a: int64, b: int64) returns int64:
     return a + b
 
 verify add_positive:
@@ -2407,7 +2407,7 @@ The binary is **never emitted** if a `verify` block fails. This means:
 The idiomatic Jett file follows a strict rhythm: define, verify, define, verify. Each function and its proof live together as a unit.
 
 ```
-function celsius_to_fahrenheit(c: float) returns float:
+function celsius_to_fahrenheit(c: float64) returns float64:
     return c * 1.8 + 32.0
 
 verify celsius_to_fahrenheit:
@@ -2415,7 +2415,7 @@ verify celsius_to_fahrenheit:
     assert celsius_to_fahrenheit(100.0) is 212.0
     assert celsius_to_fahrenheit(-40.0) is -40.0
 
-function fahrenheit_to_celsius(f: float) returns float:
+function fahrenheit_to_celsius(f: float64) returns float64:
     return (f - 32.0) / 1.8
 
 verify fahrenheit_to_celsius:
@@ -2423,7 +2423,7 @@ verify fahrenheit_to_celsius:
     assert fahrenheit_to_celsius(212.0) is 100.0
     assert fahrenheit_to_celsius(-40.0) is -40.0
 
-function is_boiling(c: float) returns bool:
+function is_boiling(c: float64) returns bool:
     return c >= 100.0
 
 verify is_boiling:
@@ -2439,10 +2439,10 @@ Each function is immediately followed by its contract. When the LLM generates `c
 `verify` blocks work with refinement types (Rule Set 3) to create a powerful proof chain:
 
 ```
-type Percentage = float where value >= 0.0 and value <= 100.0
+type Percentage = float64 where value >= 0.0 and value <= 100.0
 
-function calculate_grade(score: int, total: int) returns Percentage:
-    return float(score) / float(total) * 100.0
+function calculate_grade(score: int64, total: int64) returns Percentage:
+    return float64(score) / float64(total) * 100.0
 
 verify calculate_grade:
     assert calculate_grade(85, 100) is 85.0
@@ -2455,15 +2455,15 @@ The return type `Percentage` guarantees the result is between 0 and 100. The `ve
 
 **Float comparison with `is ... within`:**
 
-Nobody can reliably predict exact IEEE 754 floating point representations (e.g., `33.333333333333336`). For approximate float comparisons, Jett extends `is` with `within`:
+Nobody can reliably predict exact IEEE 754 floating-point representations (e.g., `33.333333333333336`). For approximate float64 comparisons, Jett extends `is` with `within`:
 
 ```
 assert calculate_grade(1, 3) is 33.33 within 0.01
 # Passes if the result is within 0.01 of 33.33
 ```
 
-- `is X` — exact comparison. Use for `int`, `string`, `bool`, and exact float values like `0.0` or `100.0`.
-- `is X within Y` — approximate comparison. Use for float results that involve division or irrational numbers. The tolerance `Y` is mandatory — there is no implicit epsilon.
+- `is X` — exact comparison. Use for `int64`, `string`, `bool`, and exact float64 values like `0.0` or `100.0`.
+- `is X within Y` — approximate comparison. Use for float64 results that involve division or irrational numbers. The tolerance `Y` is mandatory — there is no implicit epsilon.
 
 #### Why This Matters for LLMs
 
@@ -2875,7 +2875,7 @@ function fetch_data(url: string) returns result[string, string]:
 **A pure function guaranteed by its signature:**
 
 ```
-function calculate_tax(income: float, rate: float) returns float:
+function calculate_tax(income: float64, rate: float64) returns float64:
     return income * rate
     # No capability parameters. The compiler GUARANTEES this function:
     # - Does not read or write files
@@ -2925,7 +2925,7 @@ The presence of a capability parameter **is** the effect declaration. There is n
 | `function read(view fs: Filesystem, path: string)` | Reads/writes files |
 | `function send(view net: Network, data: string)` | Accesses the network |
 | `function log(view stdout: Stdout, msg: string)` | Writes to stdout |
-| `function compute(x: int) returns int` | Pure — no capability, no side effects |
+| `function compute(x: int64) returns int64` | Pure — no capability, no side effects |
 
 A `Filesystem` parameter tells you "this function reads/writes files specifically." A `Network` parameter tells you "this function accesses the network." The capability is the effect declaration, made concrete.
 
@@ -2980,7 +2980,7 @@ Jett's capability system (Rule Set 16) naturally solves cross-platform compilati
 **The LLM writes this — once, for all platforms:**
 
 ```
-function start_server(view net: Network, view stdout: Stdout, port: int) returns nothing:
+function start_server(view net: Network, view stdout: Stdout, port: int64) returns nothing:
     let listener: Listener = Network.listen(view net, "0.0.0.0", port) handle error:
         Stdout.write(view stdout, "failed to bind port")
         return nothing
@@ -3146,7 +3146,7 @@ struct User:
     id: string
     name: string
     email: string
-    age: int
+    age: int64
 
 # The compiler makes User compatible with:
 # json.serialize[User](view user)       → string (JSON representation)
@@ -3187,7 +3187,7 @@ The compiler uses the **comptime engine** (Rule Set 10.5) to generate serializat
 ```
 struct Product:
     name: string
-    price: float
+    price: float64
     in_stock: bool
     tags: list[string]
 
@@ -3197,7 +3197,7 @@ let json_string: string = json.serialize[Product](view p)
 # Result: {"name":"widget","price":9.99,"in_stock":true,"tags":["sale","new"]}
 ```
 
-There is no configuration. Field names in JSON match field names in the struct. The types determine the JSON types (string → JSON string, float → JSON number, bool → JSON boolean, list → JSON array). This is the only way — zero syntactic sugar, zero alternatives (Rule Set 1).
+There is no configuration. Field names in JSON match field names in the struct. The types determine the JSON types (string → JSON string, float64 → JSON number, bool → JSON boolean, list → JSON array). This is the only way — zero syntactic sugar, zero alternatives (Rule Set 1).
 
 **Binary generation — compact, deterministic layout:**
 
@@ -3268,7 +3268,7 @@ The serialized form includes the state name. Deserialization restores the correc
 Deserialization automatically validates refinement type constraints (Rule Set 3):
 
 ```
-type Age = int where value >= 0 and value < 150
+type Age = int64 where value >= 0 and value < 150
 type Email = string where string.contains(value, "@")
 
 struct ValidatedUser:
@@ -3292,7 +3292,7 @@ Sometimes external APIs use different naming conventions (camelCase, PascalCase,
 ```
 struct ApiResponse:
     user_name: string serialize "userName"
-    total_count: int serialize "totalCount"
+    total_count: int64 serialize "totalCount"
     is_active: bool serialize "isActive"
 
 # json.serialize[ApiResponse](view ...) produces: {"userName":"...","totalCount":42,"isActive":true}
@@ -3308,17 +3308,17 @@ For binary network protocols, structs can specify a precise binary layout:
 
 ```
 struct PacketHeader layout binary:
-    magic: int size 4
-    version: int size 2
-    payload_length: int size 4
-    checksum: int size 4
+    magic: int32
+    version: int16
+    payload_length: int32
+    checksum: int32
 
 # The compiler generates:
 # PacketHeader.to_bytes(header) → exactly 14 bytes, fields packed in declaration order
 # PacketHeader.from_bytes(raw)  → parses exactly 14 bytes, validates magic/checksum
 ```
 
-The `layout binary` annotation with `size` on each field gives the compiler enough information to generate a perfect binary parser. The LLM specifies *what* the format is (field names, sizes, order). The compiler generates *how* to parse it (byte offsets, endianness, boundary checks).
+The `layout binary` annotation tells the compiler to pack fields in declaration order using each field's type size. The LLM specifies *what* the format is (field names, types, order). The compiler generates *how* to parse it (byte offsets, endianness, boundary checks).
 
 #### Why This Is Perfect for LLMs
 
@@ -3332,7 +3332,7 @@ When the LLM adds a field to a struct, the serialization is automatically update
 
 **3. Validation is automatic.**
 
-Refinement types are enforced during deserialization. The LLM defines `type Age = int where value >= 0` once, and every JSON payload, binary blob, and network packet is validated against that constraint automatically.
+Refinement types are enforced during deserialization. The LLM defines `type Age = int64 where value >= 0` once, and every JSON payload, binary blob, and network packet is validated against that constraint automatically.
 
 **4. Security is automatic.**
 
@@ -3441,21 +3441,21 @@ let slug: string = title
 
 #### Type Safety Across Pipelines
 
-The compiler checks that types match at every `|>` boundary. If a function returns `string` but the next function in the pipeline expects `int`, the compiler catches it immediately.
+The compiler checks that types match at every `|>` boundary. If a function returns `string` but the next function in the pipeline expects `int64`, the compiler catches it immediately.
 
 ```
 function get_name(user: view User) returns string:
     return user.name
 
-function double(x: int) returns int:
+function double(x: int64) returns int64:
     return x * 2
 
-let result: int = user
+let result: int64 = user
     |> view get_name
     |> double
     # COMPILE ERROR at |> double:
     #   "get_name" returns string
-    #   "double" expects int as first argument
+    #   "double" expects int64 as first argument
     #   hint: the types in the pipeline do not connect
 ```
 
@@ -3628,8 +3628,8 @@ The LLM never sees a pointer. The LLM never calculates a struct offset. The LLM 
 // void SDL_Quit(void);
 
 # What the LLM sees in Jett after `use c "SDL2/SDL.h" as sdl`:
-# sdl.init(flags: int) returns result[int, string]
-# sdl.create_window(title: string, x: int, y: int, w: int, h: int, flags: int) returns result[sdl.Window, string]
+# sdl.init(flags: int64) returns result[int64, string]
+# sdl.create_window(title: string, x: int64, y: int64, w: int64, h: int64, flags: int64) returns result[sdl.Window, string]
 # sdl.destroy_window(window: sdl.Window)
 # sdl.quit()
 ```
@@ -3723,12 +3723,12 @@ C structs are automatically translated to Jett structs with correct field types 
 
 # Jett sees:
 # struct sdl.Vertex:
-#     x: float
-#     y: float
-#     z: float
-#     color: int
-#     u: float
-#     v: float
+#     x: float64
+#     y: float64
+#     z: float64
+#     color: int64
+#     u: float64
+#     v: float64
 #
 # With auto-generated to_bytes/from_bytes that match the exact C memory layout
 # (including padding and alignment for the target platform).
@@ -4254,7 +4254,7 @@ function get(view net: Network, url: string) returns result[Response, HttpToolki
 
 namespace http_toolkit.server
 
-function listen(view net: Network, port: int) returns result[Listener, HttpToolkitError]:
+function listen(view net: Network, port: int64) returns result[Listener, HttpToolkitError]:
     # ...
 
 namespace http_toolkit.errors
@@ -4262,7 +4262,7 @@ namespace http_toolkit.errors
 enum HttpToolkitError:
     connection_failed(message: string)
     timeout(message: string)
-    status_error(code: int, message: string)
+    status_error(code: int64, message: string)
 ```
 
 A consumer imports this single file and gets access to all its namespaces:
@@ -4527,8 +4527,8 @@ The LLM writes `header.version`, `header.ttl`, `header.protocol`. It never write
 ```
 function create_tcp_flags(syn: bool, ack: bool) returns TcpFlags:
     return TcpFlags(
-        fin: 0, syn: int(syn), rst: 0, psh: 0,
-        ack: int(ack), urg: 0, ece: 0, cwr: 0
+        fin: 0, syn: int64(syn), rst: 0, psh: 0,
+        ack: int64(ack), urg: 0, ece: 0, cwr: 0
     )
 ```
 
@@ -4700,11 +4700,11 @@ Jett introduces one concept: the **view**. A view is a read-only, non-owning ref
 **Passing a view:**
 
 ```
-function count_items(data: view list[Item]) returns int:
+function count_items(data: view list[Item]) returns int64:
     return list.length[Item](data)
 
-function total_price(items: view list[Item]) returns float:
-    let mutable sum: float = 0.0
+function total_price(items: view list[Item]) returns float64:
+    let mutable sum: float64 = 0.0
     for item in view items:
         sum = sum + item.price
     return sum
@@ -4717,8 +4717,8 @@ The `view` keyword before the type means: "this function can read this data but 
 ```
 function process_order(order: Order) returns nothing:
     # order.items is NOT consumed — view is explicit at the call site:
-    let count: int = count_items(view order.items)
-    let total: float = total_price(view order.items)
+    let count: int64 = count_items(view order.items)
+    let total: float64 = total_price(view order.items)
 
     # order.items is still valid here — it was never moved:
     let first: Item = list.first(view order.items) handle:
@@ -4737,15 +4737,15 @@ The `view` keyword appears in **both** declarations and call sites. The function
 **Passing to a view parameter without `view`:** When a function declares a `view` parameter, the caller can choose whether to keep the value:
 
 ```
-function count(data: view list[int]) returns int:
-    return list.length[int](data)
+function count(data: view list[int64]) returns int64:
+    return list.length[int64](data)
 
 # Keep the value — view at call site:
-let len: int = count(view items)
-let total: int = list.sum[int](items)    # items is still valid
+let len: int64 = count(view items)
+let total: int64 = list.sum[int64](items)    # items is still valid
 
 # Last use — no view at call site:
-let len: int = count(items)
+let len: int64 = count(items)
 # items is freed after the call — the function still only reads it,
 # but the caller has relinquished ownership
 ```
@@ -4766,8 +4766,8 @@ Views are governed by three rules that the compiler enforces absolutely. These r
 **Rule 1: A view cannot be mutated.**
 
 ```
-function bad_mutate(data: view list[int]) returns nothing:
-    list.append[int](data, 42)
+function bad_mutate(data: view list[int64]) returns nothing:
+    list.append[int64](data, 42)
     # COMPILE ERROR: cannot mutate a view
     # "data" is a read-only view and cannot be modified
     # hint: if mutation is needed, take ownership instead of a view
@@ -4778,7 +4778,7 @@ A view is read-only. Period. Any operation that would modify the data — append
 **Rule 2: A view cannot be sent to another thread.**
 
 ```
-function bad_send(data: view list[int]) returns nothing:
+function bad_send(data: view list[int64]) returns nothing:
     let worker: Processor = spawn Processor()
     send worker.process(data)
     # COMPILE ERROR: cannot send a view to an actor
@@ -4791,13 +4791,13 @@ Views exist only on the stack of the current thread. They cannot be sent to acto
 **Rule 3: A view cannot outlive its lexical scope.**
 
 ```
-function bad_escape(data: view list[int]) returns view list[int]:
+function bad_escape(data: view list[int64]) returns view list[int64]:
     return data
     # COMPILE ERROR: cannot return a view from a function
     # views cannot outlive the function that received them
     # hint: take ownership if the caller needs the data returned
 
-let mutable stored_view: view list[int]
+let mutable stored_view: view list[int64]
 # COMPILE ERROR: views cannot be stored in variables with broader scope
 # a view exists only within the function call or block where it was created
 ```
@@ -4823,11 +4823,11 @@ Every situation that requires lifetime annotations in Rust is structurally impos
 struct GameState:
     players: list[Player]
     world: World
-    tick: int
+    tick: int64
 
 function render_frame(state: view GameState, view stdout: Stdout) returns nothing:
     # Read any field through the view — zero copy:
-    let player_count: int = list.length[Player](state.players)
+    let player_count: int64 = list.length[Player](state.players)
     Stdout.write(view stdout, "players: {player_count}")
     Stdout.write(view stdout, "tick: {state.tick}")
 
@@ -4978,20 +4978,20 @@ Jett adds `property` blocks alongside `verify` blocks. A `property` block does n
 **Basic property test:**
 
 ```
-function sort_list(items: view list[int]) returns list[int]:
+function sort_list(items: view list[int64]) returns list[int64]:
     # ... sorting implementation ...
 
 property sort_list:
-    given items: list[int]
-    let sorted: list[int] = sort_list(items)
-    assert list.length[int](sorted) is list.length[int](items)
+    given items: list[int64]
+    let sorted: list[int64] = sort_list(items)
+    assert list.length[int64](sorted) is list.length[int64](items)
     assert list.is_sorted(sorted)
     assert list.all_elements_in(sorted, items)
 ```
 
 The `property` block declares:
 
-1. **`given`** — the randomly generated inputs. The fuzzer knows the type (`list[int]`) and generates thousands of variations: empty lists, single-element lists, already-sorted lists, reverse-sorted lists, lists with duplicates, lists with maximum/minimum integers, extremely long lists.
+1. **`given`** — the randomly generated inputs. The fuzzer knows the type (`list[int64]`) and generates thousands of variations: empty lists, single-element lists, already-sorted lists, reverse-sorted lists, lists with duplicates, lists with maximum/minimum integers, extremely long lists.
 2. **`assert`** — the properties that must hold for every generated input. The sorted list must have the same length, must be ordered, and must contain exactly the same elements.
 
 The LLM does not choose specific inputs. The LLM declares what "correct" means. The CPU does the testing.
@@ -5005,8 +5005,8 @@ When the developer or LLM runs `jett test`, the compiler:
 
 | Type | What the fuzzer generates |
 |------|--------------------------|
-| `int` | 0, 1, -1, max_int, min_int, random positive, random negative, powers of 2, boundary values |
-| `float` | 0.0, -0.0, 1.0, -1.0, very small (epsilon), very large, max_float, min_float, infinity, negative infinity, NaN |
+| `int64` | 0, 1, -1, max_int64, min_int64, random positive, random negative, powers of 2, boundary values |
+| `float64` | 0.0, -0.0, 1.0, -1.0, very small (epsilon), very large, max_float64, min_float64, infinity, negative infinity, NaN |
 | `string` | empty, single char, ASCII, unicode, multi-byte characters, very long strings, strings with null bytes, whitespace-only |
 | `list[T]` | empty, single element, two elements, many elements, duplicates, sorted, reverse-sorted, all-same |
 | `bool` | true, false |
@@ -5062,7 +5062,7 @@ The LLM receives the **minimal failing input** — the simplest case that breaks
 - **`property`** — invariant declarations, executed by the fuzzer at test time. Proves the function is correct for thousands of unknown examples. Finds the edge cases the LLM didn't imagine.
 
 ```
-function clamp(value: int, low: int, high: int) returns int:
+function clamp(value: int64, low: int64, high: int64) returns int64:
     if value < low:
         return low
     if value > high:
@@ -5077,9 +5077,9 @@ verify clamp:
     assert clamp(10, 0, 10) is 10
 
 property clamp:
-    given value: int, low: int, high: int
+    given value: int64, low: int64, high: int64
     where low <= high
-    let result: int = clamp(value, low, high)
+    let result: int64 = clamp(value, low, high)
     assert result >= low
     assert result <= high
     if value >= low and value <= high:
@@ -5094,9 +5094,9 @@ The `where` clause in a `property` block filters generated inputs to only valid 
 
 ```
 property divide:
-    given a: int, b: int
+    given a: int64, b: int64
     where b != 0
-    let result: int = a / b
+    let result: int64 = a / b
     assert result * b is a
 ```
 
@@ -5106,11 +5106,11 @@ The fuzzer only generates cases where `b` is not zero. The `where` clause expres
 
 ```
 property percentage:
-    given score: int, total: int
+    given score: int64, total: int64
     where total > 0
     where score >= 0
     where score <= total
-    let pct: float = calculate_percentage(score, total)
+    let pct: float64 = calculate_percentage(score, total)
     assert pct >= 0.0
     assert pct <= 100.0
 ```
@@ -5218,10 +5218,10 @@ In `property` blocks, `verify` blocks, and `agent_breakpoint()` evaluations, all
 
 ```
 property sort_preserves_elements:
-    given items: list[int]
-    let sorted: list[int] = sort_list(items)
+    given items: list[int64]
+    let sorted: list[int64] = sort_list(items)
     # In property blocks, sorted can be used multiple times:
-    assert list.length[int](sorted) is list.length[int](items)
+    assert list.length[int64](sorted) is list.length[int64](items)
     assert list.is_sorted(sorted)
     assert list.all_elements_in(sorted, items)
     # Without implicit views, each use of `sorted` would consume it.
@@ -5253,16 +5253,16 @@ Jett introduces a `tracked` type wrapper. When the LLM suspects a specific varia
 **Standard code:**
 
 ```
-let tax_rate: int = calculate_tax(user)
+let tax_rate: int64 = calculate_tax(user)
 ```
 
 **Debugging code — change one type:**
 
 ```
-let tax_rate: tracked[int] = calculate_tax(user)
+let tax_rate: tracked[int64] = calculate_tax(user)
 ```
 
-That's it. One word added to the type annotation. The rest of the code does not change — `tracked[int]` is assignment-compatible with `int` in all contexts. The function signatures don't change. The pipeline doesn't change. The compiler silently instruments the tracking.
+That's it. One word added to the type annotation. The rest of the code does not change — `tracked[int64]` is assignment-compatible with `int64` in all contexts. The function signatures don't change. The pipeline doesn't change. The compiler silently instruments the tracking.
 
 #### How Tracking Works Under the Hood
 
@@ -5278,11 +5278,11 @@ When a variable is typed as `tracked[T]`, the compiler:
 **The trace output:**
 
 ```
-function process_invoice(view stdout: Stdout, income: float) returns nothing:
-    let mutable tax: tracked[float] = calculate_base_tax(income)
+function process_invoice(view stdout: Stdout, income: float64) returns nothing:
+    let mutable tax: tracked[float64] = calculate_base_tax(income)
     tax = apply_state_tax(tax, "CA")
     tax = apply_discount(tax, "veteran")
-    let final_amount: tracked[float] = finalize(tax)
+    let final_amount: tracked[float64] = finalize(tax)
 
     trace(final_amount, view stdout)
 ```
@@ -5340,7 +5340,7 @@ The LLM receives just this — a few lines of JSON showing exactly how the value
 Tracking integrates naturally with pipelines (Rule Set 19):
 
 ```
-let tax_amount: tracked[float] = income
+let tax_amount: tracked[float64] = income
     |> calculate_base_tax
     |> apply_state_tax("CA")
     |> apply_discount("veteran")
@@ -5357,8 +5357,8 @@ Each `|>` step is a lineage entry. The trace output shows the value flowing left
 
 | Variable type | Runtime cost |
 |--------------|-------------|
-| `int` | Zero overhead — native speed |
-| `tracked[int]` | Small overhead — lineage recording per step |
+| `int64` | Zero overhead — native speed |
+| `tracked[int64]` | Small overhead — lineage recording per step |
 | Every other variable in the program | Zero overhead — unaffected by the tracked variable |
 
 #### Tracked Types with Error Handling
@@ -5418,8 +5418,8 @@ When a `property` block finds a failing input, the LLM can re-run with tracking 
 # Property test found: sort_list([3, 1, 2]) returned [3, 1, 2] (not sorted)
 # LLM adds tracking to debug:
 
-function sort_list_debug(items: view list[int], view stdout: Stdout) returns tracked[list[int]]:
-    let mutable result: tracked[list[int]] = clone items
+function sort_list_debug(items: view list[int64], view stdout: Stdout) returns tracked[list[int64]]:
+    let mutable result: tracked[list[int64]] = clone items
     result = partition(result)
     result = merge(result)
     trace(result, view stdout)
@@ -5440,11 +5440,11 @@ The lineage array shows input and output at every function. If step 3 takes 5325
 
 **3. One-word change to enable.**
 
-`int` → `tracked[int]`. No restructuring the code, no adding logging frameworks, no inserting print statements at 20 locations. One type annotation change activates full lineage tracking for that variable.
+`int64` → `tracked[int64]`. No restructuring the code, no adding logging frameworks, no inserting print statements at 20 locations. One type annotation change activates full lineage tracking for that variable.
 
 **4. Works with the existing type system.**
 
-`tracked[int]` is compatible with `int` everywhere. Functions that take `int` accept `tracked[int]`. Pipelines work. Error handling works. The compiler handles the instrumentation transparently.
+`tracked[int64]` is compatible with `int64` everywhere. Functions that take `int64` accept `tracked[int64]`. Pipelines work. Error handling works. The compiler handles the instrumentation transparently.
 
 **5. Structured output feeds directly into the LLM.**
 
@@ -5543,7 +5543,7 @@ The LLM sends JSON queries. The running application responds with JSON answers. 
 ```json
 {
     "expression": "validated.total",
-    "type": "float",
+    "type": "float64",
     "value": 44.97
 }
 ```
@@ -5557,7 +5557,7 @@ The LLM sends JSON queries. The running application responds with JSON answers. 
 ```json
 {
     "expression": "list.length[Item](validated.items)",
-    "type": "int",
+    "type": "int64",
     "value": 2
 }
 ```
@@ -5657,12 +5657,12 @@ The LLM explored the runtime state interactively — inspecting only what it nee
 The LLM can insert multiple breakpoints:
 
 ```
-function calculate_tax(income: float, state: string) returns float:
-    let base: float = income * 0.15
+function calculate_tax(income: float64, state: string) returns float64:
+    let base: float64 = income * 0.15
     agent_breakpoint()   # check base calculation
 
-    let state_rate: float = get_state_rate(state)
-    let state_tax: float = base * state_rate
+    let state_rate: float64 = get_state_rate(state)
+    let state_tax: float64 = base * state_rate
     agent_breakpoint()   # check state tax calculation
 
     return base + state_tax
@@ -6063,18 +6063,18 @@ The runtime provides capabilities to `main` based on its parameter list. If `mai
 
 ```
 let name: string = "jett"
-let age: int = 1
-let mutable counter: int = 0
+let age: int64 = 1
+let mutable counter: int64 = 0
 ```
 
 Variables are immutable by default. The `mutable` keyword opts into mutability. (Full word, not `mut` — see tokenizer-friendly keywords rule.)
 
-**Every `let` binding requires an explicit type annotation.** There is no type inference for variable declarations. `let x = 5` is a compile error — write `let x: int = 5`. This eliminates a decision point (the LLM never chooses between implicit and explicit typing) and ensures the type of every variable is visible at its declaration. The LLM never needs to trace through function calls to determine a variable's type.
+**Every `let` binding requires an explicit type annotation.** There is no type inference for variable declarations. `let x = 5` is a compile error — write `let x: int64 = 5`. This eliminates a decision point (the LLM never chooses between implicit and explicit typing) and ensures the type of every variable is visible at its declaration. The LLM never needs to trace through function calls to determine a variable's type.
 
 ### Functions
 
 ```
-function add(a: int, b: int) returns int:
+function add(a: int64, b: int64) returns int64:
     return a + b
 
 function greet(view stdout: Stdout, name: string) returns nothing:
@@ -6090,7 +6090,7 @@ Named arguments work in both struct construction AND function calls. Any paramet
 ### Conditionals
 
 ```
-function classify(view stdout: Stdout, x: int) returns nothing:
+function classify(view stdout: Stdout, x: int64) returns nothing:
     if x > 0:
         Stdout.write(view stdout, "positive")
     else if x is 0:
@@ -6117,7 +6117,7 @@ function run_loop(mutable running: bool) returns nothing:
 
 ```
 let names: list[string] = list("alice", "bob", "charlie")
-let scores: map[string, int] = map("alice": 10, "bob": 20)
+let scores: map[string, int64] = map("alice": 10, "bob": 20)
 ```
 
 Collections are constructed with explicit keywords. No `[]` literal for lists, no `{}` for maps. The constructor keyword *is* the type — AST-native.
@@ -6126,18 +6126,18 @@ Collections are constructed with explicit keywords. No `[]` literal for lists, n
 
 ```
 struct Point:
-    x: float
-    y: float
+    x: float64
+    y: float64
 
-    function distance(self: view Point, other: view Point) returns float:
-        let dx: float = self.x - other.x
-        let dy: float = self.y - other.y
+    function distance(self: view Point, other: view Point) returns float64:
+        let dx: float64 = self.x - other.x
+        let dy: float64 = self.y - other.y
         return math.sqrt(dx * dx + dy * dy)
 
 # Methods are called with module syntax — there is no p1.distance(p2) form:
 let p1: Point = Point(x: 0.0, y: 0.0)
 let p2: Point = Point(x: 3.0, y: 4.0)
-let d: float = Point.distance(view p1, view p2)
+let d: float64 = Point.distance(view p1, view p2)
 ```
 
 ### Error Handling
@@ -6172,7 +6172,7 @@ Every `handle` block must end with either `return` (exit function) or `default` 
 
 ### Enums (User-Defined Union Types)
 
-Enums are Jett's user-defined union types. Each variant can carry different associated data, and `match` forces exhaustive handling of all variants. There are no anonymous union types (`string | int`) — if you need a value that can be one of several types, define an enum.
+Enums are Jett's user-defined union types. Each variant can carry different associated data, and `match` forces exhaustive handling of all variants. There are no anonymous union types (`string | int64`) — if you need a value that can be one of several types, define an enum.
 
 ```
 enum Color:
@@ -6181,8 +6181,8 @@ enum Color:
     blue
 
 enum Shape:
-    circle(radius: float)
-    rect(width: float, height: float)
+    circle(radius: float64)
+    rect(width: float64, height: float64)
 ```
 
 Jett has three union-like constructs, each with its own coarsen mechanism:
@@ -6225,7 +6225,7 @@ namespace myapp
 function main(stdout: Stdout, net: Network) returns nothing:
     use math
     use net.http
-    let pi: float = math.pi
+    let pi: float64 = math.pi
     let response: HttpResponse = http.get(view net, "https://example.com") handle error:
         # error is HttpError — the module's specific error type
         Stdout.write(view stdout, "request failed: {error}")
@@ -6248,14 +6248,14 @@ let multi: string = "{a} + {b} = {a + b}"       # arbitrary expressions allowed
 **Displayable requirement:** Expressions inside `{}` must be of a type that implements the `Displayable` interface. The compiler calls `Displayable.display()` under the hood to produce the string representation. Types that do not implement `Displayable` are rejected:
 
 ```
-let count: int = 42
-let message: string = "count is {count}"        # OK — int implements Displayable
+let count: int64 = 42
+let message: string = "count is {count}"        # OK — int64 implements Displayable
 
 let user: User = User(name: "alice")
 let msg: string = "user: {user}"               # COMPILE ERROR: User does not implement Displayable
 ```
 
-**Compiler-stdlib coupling:** This is one of a small number of places where the compiler has special knowledge of a standard library interface. String interpolation depends on `Displayable`, just as `handle error:` depends on the built-in `result` type and `handle:` depends on `optional`. These are intentional, well-defined couplings — not a general implicit conversion system. Outside of string interpolation, converting to string requires an explicit `string.from_int()` or `string.from_float()` call.
+**Compiler-stdlib coupling:** This is one of a small number of places where the compiler has special knowledge of a standard library interface. String interpolation depends on `Displayable`, just as `handle error:` depends on the built-in `result` type and `handle:` depends on `optional`. These are intentional, well-defined couplings — not a general implicit conversion system. Outside of string interpolation, converting to string requires an explicit `string.from_int64()` or `string.from_float64()` call.
 
 **Literal braces:** Use `{{` and `}}` for literal `{` and `}` characters:
 
@@ -6308,8 +6308,16 @@ No special compiler rules for capabilities. They follow the same `view` semantic
 
 | Type | Description |
 |------|-------------|
-| `int` | 64-bit integer |
-| `float` | 64-bit floating point |
+| `int8` | 8-bit signed integer |
+| `int16` | 16-bit signed integer |
+| `int32` | 32-bit signed integer |
+| `int64` | 64-bit signed integer |
+| `uint8` | 8-bit unsigned integer |
+| `uint16` | 16-bit unsigned integer |
+| `uint32` | 32-bit unsigned integer |
+| `uint64` | 64-bit unsigned integer |
+| `float32` | 32-bit floating point |
+| `float64` | 64-bit floating point |
 | `string` | UTF-8 string (full word, not `str`) |
 | `bool` | `true` or `false` |
 | `list[T]` | Ordered collection |
@@ -6318,15 +6326,14 @@ No special compiler rules for capabilities. They follow the same `view` semantic
 | `optional[T]` | Either a `T` or `none` |
 | `result[T, E]` | Either `ok(T)` or `fail(E)` |
 | `nothing` | Unit type with exactly one value, also called `nothing`. Used in `result[nothing, string]` for functions that can fail but return no value on success. `ok(nothing)` is the canonical form for wrapping success in `result[nothing, E]`. |
-| `bytes` | Sequence of raw bytes (0-255). Distinct from `string` (which is UTF-8 text). Used for binary data, network packets, file I/O with binary formats. |
 
 ### Explicit Typing
 
 Every variable declaration requires a type annotation. There is no type inference for `let` bindings.
 
 ```
-let x: int = 42
-let y: float = 42.0
+let x: int64 = 42
+let y: float64 = 42.0
 let name: string = "jett"
 ```
 
@@ -6339,7 +6346,7 @@ Generics use `[T]` (square brackets) rather than `<T>` — avoids ambiguity with
 ```
 # Always explicit — no inference
 let result: string = add[string]("hello", " world")
-let items: list[int] = list.new[int]()
+let items: list[int64] = list.new[int64]()
 
 # In pipes — types stay visible without needing let bindings
 data |> json.parse[list[User]] |> process_users
@@ -6391,20 +6398,20 @@ function bad_sort[T](items: list[T]) returns list[T]:
 
 **Monomorphization — generics are resolved at compile time:**
 
-The compiler generates a separate version of each generic function for every concrete type used at call sites. If the codebase calls `sort[int](numbers)` and `sort[string](names)`, the compiler produces two functions: one for `int` and one for `string`. There is no runtime type erasure and no runtime overhead — generic code runs at the same speed as hand-written type-specific code.
+The compiler generates a separate version of each generic function for every concrete type used at call sites. If the codebase calls `sort[int64](numbers)` and `sort[string](names)`, the compiler produces two functions: one for `int64` and one for `string`. There is no runtime type erasure and no runtime overhead — generic code runs at the same speed as hand-written type-specific code.
 
 The interface constraint does not cause the compiler to pre-generate code for all implementing types. It only generates code for types **actually used**. The constraint is for type-checking the function body, not for driving code generation.
 
 **Standard library interfaces for primitives:**
 
-Primitive types (`int`, `float`, `string`, `bool`) implement standard interfaces from the standard library:
+Primitive types (`int64`, `float64`, `string`, `bool`) implement standard interfaces from the standard library:
 
 | Interface | Implemented by | Operations |
 |-----------|---------------|------------|
-| `Equatable` | `int`, `float`, `string`, `bool` | `is`, `!=` |
-| `Orderable` | `int`, `float`, `string` | `<`, `>`, `<=`, `>=` |
-| `Displayable` | `int`, `float`, `string`, `bool` | string representation (used by string interpolation) |
-| `Hashable` | `int`, `string`, `bool` | can be used as `map` keys and `set` elements |
+| `Equatable` | `int64`, `float64`, `string`, `bool` | `is`, `!=` |
+| `Orderable` | `int64`, `float64`, `string` | `<`, `>`, `<=`, `>=` |
+| `Displayable` | `int64`, `float64`, `string`, `bool` | string representation (used by string interpolation) |
+| `Hashable` | `int64`, `string`, `bool` | can be used as `map` keys and `set` elements |
 
 These are ordinary interface implementations, not compiler magic. They follow the same `implement` block pattern as any user-defined struct.
 
@@ -6478,7 +6485,7 @@ All 17 block constructs share the same shape. An LLM only needs to learn one pat
 
 Jett's keyword set uses complete, common English words that each map to a single token:
 
-`let`, `mutable`, `function`, `return`, `returns`, `if`, `else`, `for`, `in`, `while`, `struct`, `enum`, `match`, `use`, `true`, `false`, `none`, `and`, `or`, `not`, `is`, `within`, `self`, `handle`, `error`, `default`, `result`, `ok`, `fail`, `as`, `break`, `continue`, `interface`, `implement`, `assert`, `type`, `where`, `value`, `mutual`, `machine`, `states`, `transitions`, `to`, `at`, `transition`, `clone`, `actor`, `receive`, `send`, `ask`, `respond`, `spawn`, `run`, `join`, `cancel`, `comptime`, `layout`, `verify`, `secret`, `declassify`, `coarsen`, `serialize`, `namespace`, `bitfield`, `bit`, `bits`, `remaining`, `view`, `property`, `given`, `tracked`, `trace`, `agent_breakpoint`, `some`, `optional`, `nothing`, `int`, `float`, `string`, `bool`, `bytes`, `list`, `map`, `set`, `modulo`
+`let`, `mutable`, `function`, `return`, `returns`, `if`, `else`, `for`, `in`, `while`, `struct`, `enum`, `match`, `use`, `true`, `false`, `none`, `and`, `or`, `not`, `is`, `within`, `self`, `handle`, `error`, `default`, `result`, `ok`, `fail`, `as`, `break`, `continue`, `interface`, `implement`, `assert`, `type`, `where`, `value`, `mutual`, `machine`, `states`, `transitions`, `to`, `at`, `transition`, `clone`, `actor`, `receive`, `send`, `ask`, `respond`, `spawn`, `run`, `join`, `cancel`, `comptime`, `layout`, `verify`, `secret`, `declassify`, `coarsen`, `serialize`, `namespace`, `bitfield`, `bit`, `bits`, `remaining`, `view`, `property`, `given`, `tracked`, `trace`, `agent_breakpoint`, `some`, `optional`, `nothing`, `int64`, `float64`, `string`, `bool`, `bytes`, `list`, `map`, `set`, `modulo`
 
 ### JSON AST Round-Tripping
 
@@ -6572,7 +6579,7 @@ External dependencies live in the `deps/` directory as vendored `.jett` files tr
 - [ ] Active view tracking (prevent mutation of owned data while views exist)
 - [ ] `verify` blocks (co-located, comptime-executed contract tests)
 - [ ] `property` blocks (property-based testing declarations)
-- [ ] Type-aware random input generation (int, float, string, list, struct, enum)
+- [ ] Type-aware random input generation (int64, float64, string, list, struct, enum)
 - [ ] Input shrinking (minimal failing case discovery)
 - [ ] ASP integration for property failure reporting
 - [ ] Pipeline operator (`|>`) with compiler-enforced chaining rules
@@ -6587,7 +6594,7 @@ External dependencies live in the `deps/` directory as vendored `.jett` files tr
 - [ ] Compiler makes all structs compatible with `json.serialize[Type]()` / `json.parse[Type](raw)`
 - [ ] Auto-generated `to_bytes` / `from_bytes` for all structs
 - [ ] `serialize` field annotation for custom naming
-- [ ] `layout binary` with `size` for network protocol structs
+- [ ] `layout binary` for network protocol structs (sized types carry field sizes)
 - [ ] `bitfield` type with bit-level field declarations
 - [ ] Bitfield `from_bytes` / `to_bytes` with automatic bit extraction/packing
 - [ ] `layout network_order` annotation with auto byte-swap
@@ -6681,7 +6688,7 @@ External dependencies live in the `deps/` directory as vendored `.jett` files tr
 - **Comments syntax** — RESOLVED: `#` for comments.
 - **Effect system** — RESOLVED: capability-based I/O only. No `effects` keyword. All side effects declared via capability parameters.
 - **Refinement type complexity** — RESOLVED: `where` clauses accept any pure expression (no capabilities, no mutation) that evaluates to `bool`. `value` refers to the value being constrained. Expressions use normal Jett syntax — no special intrinsics. Constraints are checked at runtime type boundaries (when a value enters the refined type). This means `where string.is_valid_json(value)` and `where list.length(value) <= 100` are both valid.
-- **Dependent types** — should refinement types be able to reference other values (e.g. `type Matrix = list[list[float]] where rows is cols`)? This approaches dependent type territory and significantly increases type checker complexity.
+- **Dependent types** — should refinement types be able to reference other values (e.g. `type Matrix = list[list[float64]] where rows is cols`)? This approaches dependent type territory and significantly increases type checker complexity.
 - **Concurrency model** — RESOLVED: actor model with zero shared memory, structured concurrency with enforced join/cancel. Actors use `spawn`, concurrent tasks use `run`/`join`/`cancel` at the function level (no special blocks). Cancellation works through capabilities — `cancel` sets a flag, the next I/O operation returns `CancelledError`. No function coloring.
 - **Memory management** — RESOLVED: linear types (move-by-default, explicit `clone` keyword) with fully compiler-managed allocation. No GC, no manual `free`, no lifetime annotations, no arenas. The compiler has perfect ownership knowledge from linear types and handles all allocation/deallocation automatically.
 - **Data layout optimization** — the compiler may automatically apply SoA (Structure of Arrays) transformations as a future optimization when access patterns suggest it. No syntax is needed — this is a compiler-internal optimization like auto-vectorization.
