@@ -3157,7 +3157,7 @@ struct User:
 
 The compiler makes every struct compatible with `json.serialize[Type]()` and `json.parse[Type](raw)` automatically. There are no auto-generated `.to_json()` or `.from_json()` methods on the struct itself — the `json` module functions are the canonical API. `json.serialize` declares a `view` parameter — it reads the value without consuming it. The caller writes `json.serialize[User](view user)` with the `view` keyword explicit at the call site. `json.parse[Type](raw)` is the **only** form — the Type parameter is mandatory, not optional. It parses a JSON string into the specified type and returns `result[Type, string]`. There is no single-argument `json.parse(raw)` that returns an untyped value. For structs with `secret[T]` fields, `json.serialize_public[Type](view value)` omits those fields.
 
-The LLM does not write parsing functions. The LLM does not import a serialization library. The LLM does not annotate fields with `#[serde(rename = "...")]` or `@JsonProperty`. The compiler sees the struct definition and generates everything.
+The LLM does not write parsing functions. The LLM does not import a serialization library. The compiler sees the struct definition and generates everything. For fields that need custom naming (e.g., mapping to camelCase APIs), Jett uses an inline `serialize` keyword on the field itself (see Custom Field Naming below) — not a separate annotation syntax.
 
 **Using auto-generated serialization:**
 
