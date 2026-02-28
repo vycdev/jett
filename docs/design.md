@@ -33,7 +33,7 @@ Jett is optimized not just for LLM code generation, but also for how coding agen
 
 **Diffs are clean.** One canonical formatting style (enforced by `jett format`) means diffs only contain logical changes, never formatting noise. When an agent changes one line of logic, the diff shows one line — not 50 lines of reformatting.
 
-**The compile-fix loop is structured.** The Agent Server Protocol (Rule Set 21) outputs structured JSON errors that agents can parse and act on mechanically. The agent runs `jett build --agent`, reads the JSON error, fixes the issue, and repeats. Each error includes the file, line, column, expected type, got type, and a suggested fix.
+**The compile-fix loop is structured.** The Agent Server Protocol (Rule Set 21) outputs structured TOON errors that agents can parse and act on mechanically. The agent runs `jett build --agent`, reads the TOON error, fixes the issue, and repeats. Each error includes the file, line, column, expected type, got type, and a suggested fix.
 
 **Discovering available code is a flat query.** The ASP provides `jett query --agent --namespaces` — a flat list of all available namespaces, functions, and types. An agent does not need to traverse directory trees or class hierarchies to find what it can call.
 
@@ -41,7 +41,7 @@ Jett is optimized not just for LLM code generation, but also for how coding agen
 
 **Builds are deterministic.** Content-addressed dependencies with SHA-256 hashes mean builds are reproducible across environments. An agent will never encounter "works on my machine" issues.
 
-*Note: The `--agent` flag and the Agent Server Protocol (ASP) referenced above are defined in Rule Set 21. The ASP specifies how the compiler communicates structured JSON output to agents — including build errors, type queries, signature lookups, completions, and test results. The exact capabilities and query formats are still being refined and may evolve as the compiler is implemented. See Rule Set 21 for the current specification.*
+*Note: The `--agent` flag and the Agent Server Protocol (ASP) referenced above are defined in Rule Set 21. The ASP specifies how the compiler communicates structured TOON output to agents — including build errors, type queries, signature lookups, completions, and test results. The exact capabilities and query formats are still being refined and may evolve as the compiler is implemented. See Rule Set 21 for the current specification.*
 
 ---
 
@@ -3741,12 +3741,14 @@ LLMs are terrible at parsing them:
 
 The result: when an LLM receives compiler output, it spends tokens parsing formatting, miscounts line numbers, and often misidentifies the actual error — producing a "fix" that addresses the wrong problem.
 
-#### The Solution: The Compiler Speaks JSON to LLMs
+#### The Solution: The Compiler Speaks TOON to LLMs
 
 Jett ships with two output modes:
 
 - **Human mode** (default): beautiful, formatted terminal output for developers.
-- **Agent mode** (`--agent`): strict, deterministic JSON payloads designed for LLM consumption.
+- **Agent mode** (`--agent`): strict, deterministic TOON payloads designed for LLM consumption.
+
+TOON (Token-Oriented Object Notation) is a compact serialization format that uses ~40% fewer tokens than JSON while maintaining lossless round-trip conversion. It uses indentation for nesting and CSV-style tabular layouts for arrays of objects. See https://github.com/toon-format/toon.
 
 ```
 # Human-readable output (default):
@@ -3756,52 +3758,36 @@ jett build server.jett
 jett build server.jett --agent
 ```
 
-When `--agent` is passed, the compiler outputs **zero formatting, zero spatial art, zero color codes**. It emits a JSON object containing everything an LLM needs to understand and fix the error — structured, labeled, and unambiguous.
+When `--agent` is passed, the compiler outputs **zero formatting, zero spatial art, zero color codes**. It emits a TOON document containing everything an LLM needs to understand and fix the error — structured, labeled, and unambiguous.
 
-#### The Agent JSON Payload
+#### The Agent TOON Payload
 
 **A single error:**
 
-```json
-{
-    "status": "error",
-    "errors": [
-        {
-            "code": "E0012",
-            "severity": "error",
-            "message": "secret[string] does not implement Displayable",
-            "file": "src/handlers.jett",
-            "line": 23,
-            "column": 41,
-            "ast_node": {
-                "type": "string_interpolation",
-                "parts": [
-                    {"type": "string_literal", "value": "user: "},
-                    {"type": "field_access", "object": "user", "field": "password_hash", "field_type": "secret[string]"}
-                ]
-            },
-            "scope": {
-                "variables": [
-                    {"name": "user", "type": "User", "defined_line": 20},
-                    {"name": "request", "type": "Request", "defined_line": 18}
-                ]
-            },
-            "constraint_violated": {
-                "rule": "secret_type_exposure",
-                "expected": "string",
-                "got": "secret[string]",
-                "explanation": "secret[string] cannot be passed to functions that expose data (string interpolation, Stdout.write, log, http.respond)"
-            },
-            "suggested_fix": {
-                "action": "replace",
-                "line": 23,
-                "old_text": "\"user: {user.password_hash}\"",
-                "new_text": "\"user: {secret.redact(user.password_hash)}\"",
-                "explanation": "use secret.redact() to get a masked representation of the secret value"
-            }
-        }
-    ]
-}
+```
+status: error
+errors[1]{code,severity,message,file,line,column}:
+  E0012,error,secret[string] does not implement Displayable,src/handlers.jett,23,41
+ast_node:
+  type: string_interpolation
+  parts[2]{type,value,object,field,field_type}:
+    string_literal,user: ,,,
+    field_access,,user,password_hash,secret[string]
+scope:
+  variables[2]{name,type,defined_line}:
+    user,User,20
+    request,Request,18
+constraint_violated:
+  rule: secret_type_exposure
+  expected: string
+  got: secret[string]
+  explanation: secret[string] cannot be passed to functions that expose data (string interpolation, Stdout.write, log, http.respond)
+suggested_fix:
+  action: replace
+  line: 23
+  old_text: "user: {user.password_hash}"
+  new_text: "user: {secret.redact(user.password_hash)}"
+  explanation: use secret.redact() to get a masked representation of the secret value
 ```
 
 **What this payload contains:**
@@ -3816,7 +3802,7 @@ When `--agent` is passed, the compiler outputs **zero formatting, zero spatial a
 | `constraint_violated` | Which type rule or language rule was broken, what was expected, what was found |
 | `suggested_fix` | A concrete, apply-ready fix with the exact old text and new text |
 
-The LLM does not parse formatting. It reads structured JSON — something it is excellent at (Rule Set 1.3, AST-native syntax). Every piece of information is labeled, typed, and unambiguous.
+The LLM does not parse formatting. It reads structured TOON — compact, labeled, and unambiguous. Every piece of information is named and typed, using ~40% fewer tokens than the equivalent JSON.
 
 #### The Closed-Loop Development Cycle
 
@@ -3827,11 +3813,11 @@ The Agent Server Protocol enables a **self-healing development loop** where the 
 │             │ ──────────────────→  │              │
 │     LLM     │                      │   Compiler   │
 │             │ ←──────────────────  │  (--agent)   │
-└─────────────┘     JSON errors      └──────────────┘
+└─────────────┘     TOON errors      └──────────────┘
        │                                    │
        │  fix code                          │  if no errors
        │  based on                          │
-       │  JSON payload                      ▼
+       │  TOON payload                      ▼
        │                             ┌──────────────┐
        └─────────────────────────→   │    Binary    │
                                      └──────────────┘
@@ -3841,7 +3827,7 @@ The Agent Server Protocol enables a **self-healing development loop** where the 
 
 1. LLM generates Jett source code.
 2. Code is compiled with `jett build --agent`.
-3. If errors → the JSON payload goes directly back to the LLM's API.
+3. If errors → the TOON payload goes directly back to the LLM's API.
 4. LLM reads the structured error, applies the suggested fix (or reasons about the constraint violation to produce its own fix).
 5. Updated code is compiled again.
 6. Repeat until the build succeeds.
@@ -3850,7 +3836,7 @@ This is not a theoretical workflow — it is the **intended primary development 
 
 - Errors are precise (exact AST node, exact constraint).
 - Fixes are concrete (old text → new text replacement).
-- The LLM understands JSON natively.
+- TOON uses ~40% fewer tokens than JSON, keeping the loop cheap.
 - Each fix addresses exactly one error.
 
 #### ASP Beyond Build Errors
@@ -3863,19 +3849,16 @@ The Agent Server Protocol extends to every compiler interaction, not just build 
 jett query --agent --type-at src/server.jett:45:12
 ```
 
-```json
-{
-    "query": "type_at",
-    "file": "src/server.jett",
-    "line": 45,
-    "column": 12,
-    "result": {
-        "expression": "user.email",
-        "type": "string",
-        "refinements": ["string.contains(value, \"@\")"],
-        "defined_in": "src/models.jett:12"
-    }
-}
+```
+query: type_at
+file: src/server.jett
+line: 45
+column: 12
+result:
+  expression: user.email
+  type: string
+  refinements[1]: string.contains(value, "@")
+  defined_in: src/models.jett:12
 ```
 
 **Function signature lookup:**
@@ -3884,19 +3867,16 @@ jett query --agent --type-at src/server.jett:45:12
 jett query --agent --signature "string.split"
 ```
 
-```json
-{
-    "query": "signature",
-    "function": "string.split",
-    "params": [
-        {"name": "input", "type": "string"},
-        {"name": "delimiter", "type": "string"}
-    ],
-    "returns": "list[string]",
-    "capabilities": [],
-    "module": "string",
-    "doc": "Splits the input string at each occurrence of the delimiter"
-}
+```
+query: signature
+function: string.split
+params[2]{name,type}:
+  input,string
+  delimiter,string
+returns: list[string]
+capabilities[0]:
+module: string
+doc: Splits the input string at each occurrence of the delimiter
 ```
 
 **Available completions at a position:**
@@ -3905,23 +3885,19 @@ jett query --agent --signature "string.split"
 jett query --agent --complete-at src/server.jett:30:15
 ```
 
-```json
-{
-    "query": "complete_at",
-    "file": "src/server.jett",
-    "line": 30,
-    "column": 15,
-    "context": {
-        "in_function": "handle_request",
-        "pipe_input_type": "User",
-        "expecting": "function taking User as first argument"
-    },
-    "completions": [
-        {"name": "json.serialize_public", "signature": "(value: view User) returns string"},
-        {"name": "json.serialize", "signature": "BLOCKED — User contains secret fields"},
-        {"name": "validate_user", "signature": "(user: User) returns result[User, string]"}
-    ]
-}
+```
+query: complete_at
+file: src/server.jett
+line: 30
+column: 15
+context:
+  in_function: handle_request
+  pipe_input_type: User
+  expecting: function taking User as first argument
+completions[3]{name,signature}:
+  json.serialize_public,(value: view User) returns string
+  json.serialize,BLOCKED — User contains secret fields
+  validate_user,(user: User) returns result[User, string]
 ```
 
 **Verify/test results** (`jett test` runs all `verify` and `property` blocks):
@@ -3930,34 +3906,23 @@ jett query --agent --complete-at src/server.jett:30:15
 jett test --agent
 ```
 
-```json
-{
-    "status": "fail",
-    "total": 12,
-    "passed": 11,
-    "failed": 1,
-    "results": [
-        {
-            "name": "verify calculate_discount",
-            "status": "fail",
-            "assertion": "calculate_discount(100.0, \"gold\") is 80.0",
-            "expected": 80.0,
-            "actual": 75.0,
-            "file": "src/pricing.jett",
-            "line": 15
-        }
-    ]
-}
+```
+status: fail
+total: 12
+passed: 11
+failed: 1
+results[1]{name,status,assertion,expected,actual,file,line}:
+  verify calculate_discount,fail,calculate_discount(100.0, "gold") is 80.0,80.0,75.0,src/pricing.jett,15
 ```
 
-Every tool in the Jett toolchain — build, test, format, query — speaks JSON when asked. The LLM never has to parse human-formatted output.
+Every tool in the Jett toolchain — build, test, format, query — speaks TOON when asked. The LLM never has to parse human-formatted output.
 
 #### ASP vs LSP — Complementary, Not Competing
 
 Jett ships both:
 
 - **LSP (Language Server Protocol)** — for human developers using editors (VS Code, Neovim, etc.). Real-time diagnostics, hover information, code completion, refactoring. Standard LSP that any editor can use.
-- **ASP (Agent Server Protocol)** — for LLM agents using the compiler programmatically. Batch-oriented, JSON-based, deterministic, no streaming. Designed for the compile-fix-compile loop.
+- **ASP (Agent Server Protocol)** — for LLM agents using the compiler programmatically. Batch-oriented, TOON-based, deterministic, no streaming. Designed for the compile-fix-compile loop.
 
 LSP is optimized for interactive, keystroke-by-keystroke human development. ASP is optimized for batch, generate-compile-fix LLM development. Both share the same underlying compiler engine.
 
@@ -3965,7 +3930,7 @@ LSP is optimized for interactive, keystroke-by-keystroke human development. ASP 
 
 **1. Zero parsing overhead.**
 
-The LLM receives structured JSON, not formatted text. It doesn't spend tokens decoding arrows, colors, or spatial layout. Every token in the payload carries semantic meaning.
+The LLM receives structured TOON, not formatted text. It doesn't spend tokens decoding arrows, colors, or spatial layout. TOON uses ~40% fewer tokens than JSON, so every token carries maximum semantic meaning.
 
 **2. Exact AST node identification.**
 
@@ -4349,14 +4314,11 @@ The ASP (Rule Set 21) can provide the LLM with a flat list of available namespac
 jett query --agent --namespaces
 ```
 
-```json
-{
-    "namespaces": [
-        {"name": "auth", "file": "auth.jett", "public_functions": ["login", "logout", "validate_token"]},
-        {"name": "models", "file": "models.jett", "public_types": ["User", "Order", "Product"]},
-        {"name": "database", "file": "database.jett", "public_functions": ["query", "insert", "update"]}
-    ]
-}
+```toon
+namespaces[3]{name,file,public_functions,public_types}:
+    auth,     auth.jett,     "login,logout,validate_token",
+    models,   models.jett,   ,                              "User,Order,Product"
+    database, database.jett, "query,insert,update",
 ```
 
 The LLM receives a flat, structured list of every module in the project. No tree parsing, no directory traversal, no path construction. Just names and what they contain.
@@ -4951,23 +4913,19 @@ When the fuzzer finds a failure, the raw random input is often large and confusi
 
 The ASP output for a property failure:
 
-```json
-{
-    "status": "property_failure",
-    "property": "sort_list",
-    "file": "src/sorting.jett",
-    "line": 25,
-    "failed_assertion": "list.is_sorted(sorted)",
-    "minimal_input": {
-        "items": [1, 0]
-    },
-    "actual_output": {
-        "sorted": [1, 0]
-    },
-    "iterations_before_failure": 42,
-    "shrink_steps": 15,
-    "explanation": "sort_list([1, 0]) produced [1, 0] which is not sorted"
-}
+```toon
+status: property_failure
+property: sort_list
+file: src/sorting.jett
+line: 25
+failed_assertion: list.is_sorted(sorted)
+minimal_input:
+    items[2]: 1,0
+actual_output:
+    sorted[2]: 1,0
+iterations_before_failure: 42
+shrink_steps: 15
+explanation: "sort_list([1, 0]) produced [1, 0] which is not sorted"
 ```
 
 The LLM receives the **minimal failing input** — the simplest case that breaks the function. This is vastly more useful than "failed on a list with 847 elements." The LLM can immediately see that `sort_list([1, 0])` returns `[1, 0]` (unsorted) and fix the bug.
@@ -5090,20 +5048,29 @@ Property failures integrate with the Agent Server Protocol (Rule Set 21):
 jett test --agent
 ```
 
-```json
-{
-    "status": "property_failure",
-    "property": "json_round_trip",
-    "file": "src/models.jett",
-    "line": 45,
-    "failed_assertion": "restored is user",
-    "minimal_input": {
-        "user": {"id": "a", "name": "", "email": "x@y", "age": 0}
-    },
-    "expected": {"id": "a", "name": "", "email": "x@y", "age": 0},
-    "actual": {"id": "a", "name": null, "email": "x@y", "age": 0},
-    "explanation": "empty string \"\" was deserialized as null instead of empty string"
-}
+```toon
+status: property_failure
+property: json_round_trip
+file: src/models.jett
+line: 45
+failed_assertion: restored is user
+minimal_input:
+    user:
+        id: a
+        name: ""
+        email: x@y
+        age: 0
+expected:
+    id: a
+    name: ""
+    email: x@y
+    age: 0
+actual:
+    id: a
+    name: null
+    email: x@y
+    age: 0
+explanation: "empty string \"\" was deserialized as null instead of empty string"
 ```
 
 The LLM receives: the minimal input that breaks the code, the expected vs actual output, and a plain-English explanation. It fixes the specific bug and re-runs `jett test`. The CPU found the edge case. The LLM fixed it. Neither had to do the other's job.
@@ -5191,7 +5158,7 @@ When a variable is typed as `tracked[T]`, the compiler:
 1. Allocates a small array for the lineage log.
 2. Records the initial value and source location.
 3. At every function call or pipeline step that takes and returns the value, records: function name, file, line, value before, value after.
-4. When the LLM calls `trace()`, the accumulated lineage is emitted as structured JSON.
+4. When the LLM calls `trace()`, the accumulated lineage is emitted as structured TOON.
 
 **The trace output:**
 
@@ -5205,53 +5172,19 @@ function process_invoice(view stdout: Stdout, income: float64) returns nothing:
     trace(final_amount, view stdout)
 ```
 
-**Output — a tiny, hyper-specific JSON log for one variable:**
+**Output — a tiny, hyper-specific TOON log for one variable:**
 
-```json
-{
-    "variable": "tax",
-    "final_value": 847.30,
-    "lineage": [
-        {
-            "step": 1,
-            "function": "calculate_base_tax",
-            "file": "src/tax.jett",
-            "line": 12,
-            "input": {"income": 50000.0},
-            "output": 5000.0
-        },
-        {
-            "step": 2,
-            "function": "apply_state_tax",
-            "file": "src/tax.jett",
-            "line": 13,
-            "input": 5000.0,
-            "output": 5325.0,
-            "note": "applied CA rate: 6.5%"
-        },
-        {
-            "step": 3,
-            "function": "apply_discount",
-            "file": "src/tax.jett",
-            "line": 14,
-            "input": 5325.0,
-            "output": 4792.50,
-            "note": "applied veteran discount: 10%"
-        },
-        {
-            "step": 4,
-            "function": "finalize",
-            "file": "src/tax.jett",
-            "line": 15,
-            "input": 4792.50,
-            "output": 847.30,
-            "note": "SUSPICIOUS: large change from 4792.50 to 847.30"
-        }
-    ]
-}
+```toon
+variable: tax
+final_value: 847.30
+lineage[4]{step,function,file,line,input,output,note}:
+    1, calculate_base_tax, src/tax.jett, 12, "income: 50000.0", 5000.0,
+    2, apply_state_tax,    src/tax.jett, 13, 5000.0,            5325.0,  "applied CA rate: 6.5%"
+    3, apply_discount,     src/tax.jett, 14, 5325.0,            4792.50, "applied veteran discount: 10%"
+    4, finalize,           src/tax.jett, 15, 4792.50,           847.30,  "SUSPICIOUS: large change from 4792.50 to 847.30"
 ```
 
-The LLM receives just this — a few lines of JSON showing exactly how the value evolved. It instantly sees that `finalize` is where the math went wrong (input 4792.50, output 847.30 — an unreasonable transformation). No guessing. No massive logs. No scrolling through hundreds of print statements.
+The LLM receives just this — a few lines of TOON showing exactly how the value evolved. It instantly sees that `finalize` is where the math went wrong (input 4792.50, output 847.30 — an unreasonable transformation). No guessing. No massive logs. No scrolling through hundreds of print statements.
 
 #### `trace()` and the Pipeline Operator
 
@@ -5290,22 +5223,20 @@ let data: tracked[string] = read_config(fs, "app.conf") handle error:
 
 If the `handle` path is taken, the lineage records:
 
-```json
-{
-    "step": 1,
-    "function": "read_config",
-    "file": "src/config.jett",
-    "line": 5,
-    "input": "app.conf",
-    "output": "ERROR: file not found",
-    "error_handled": true,
-    "handler_action": "return fail(\"config not found\")"
-}
+```toon
+step: 1
+function: read_config
+file: src/config.jett
+line: 5
+input: app.conf
+output: "ERROR: file not found"
+error_handled: true
+handler_action: "return fail(\"config not found\")"
 ```
 
 The LLM can see not just the value changes but also where error paths were taken and what the error was.
 
-#### ASP Integration — Trace Output as Structured JSON
+#### ASP Integration — Trace Output as Structured TOON
 
 `trace()` outputs to the ASP (Rule Set 21) when `--agent` is active:
 
@@ -5313,7 +5244,7 @@ The LLM can see not just the value changes but also where error paths were taken
 jett run app.jett --agent --trace-var tax
 ```
 
-The trace data is part of the agent JSON payload. The LLM receives it directly in the compile-test-fix loop. No terminal parsing, no log file searching.
+The trace data is part of the agent TOON payload. The LLM receives it directly in the compile-test-fix loop. No terminal parsing, no log file searching.
 
 #### Tracked Types Are Opt-In and Temporary
 
@@ -5350,7 +5281,7 @@ The trace shows which step (partition or merge) produced the wrong intermediate 
 
 **1. Minimal context window usage.**
 
-The trace output is a tiny JSON array — typically 5-10 entries, one per transformation step. Compare this to full application logs (thousands of lines) or print-statement debugging (output for every variable at every step). The LLM's context window stays focused on the one variable that matters.
+The trace output is a tiny TOON array — typically 5-10 entries, one per transformation step. Compare this to full application logs (thousands of lines) or print-statement debugging (output for every variable at every step). The LLM's context window stays focused on the one variable that matters.
 
 **2. The LLM sees the exact step where things went wrong.**
 
@@ -5366,7 +5297,7 @@ The lineage array shows input and output at every function. If step 3 takes 5325
 
 **5. Structured output feeds directly into the LLM.**
 
-The trace JSON goes through the ASP. The LLM receives it as structured data it can parse natively. No regex on log files, no pattern matching on terminal output. Just JSON with labeled fields: `function`, `input`, `output`, `line`.
+The trace TOON goes through the ASP. The LLM receives it as structured data it can parse natively. No regex on log files, no pattern matching on terminal output. Just TOON with labeled fields: `function`, `input`, `output`, `line`.
 
 ### Rule Set 27: The Interactive Agent Breakpoint
 
@@ -5386,7 +5317,7 @@ Jett provides a built-in `agent_breakpoint()` function. When the native applicat
 2. **Opens an ASP communication channel** (lightweight HTTP server on localhost or stdin/stdout loop).
 3. **Sends a structured prompt** to the LLM describing the current execution state.
 4. **Waits for queries** from the LLM.
-5. **Responds to each query** with structured JSON.
+5. **Responds to each query** with structured TOON.
 6. **Resumes execution** when the LLM sends a `continue` command.
 
 The running application becomes a **chatbot** that the LLM can interrogate.
@@ -5408,123 +5339,107 @@ function process_order(view fs: Filesystem, order: Order) returns result[Receipt
 
 **What the LLM receives when the breakpoint is hit:**
 
-```json
-{
-    "type": "agent_breakpoint",
-    "file": "src/orders.jett",
-    "line": 6,
-    "function": "process_order",
-    "scope": {
-        "variables": [
-            {"name": "order", "type": "Order", "status": "consumed"},
-            {"name": "validated", "type": "ValidatedOrder", "status": "owned"},
-            {"name": "fs", "type": "Filesystem", "status": "owned"}
-        ]
-    },
-    "awaiting": "query"
-}
+```toon
+type: agent_breakpoint
+file: src/orders.jett
+line: 6
+function: process_order
+scope:
+    variables[3]{name,type,status}:
+        order,     Order,         consumed
+        validated, ValidatedOrder, owned
+        fs,        Filesystem,    owned
+awaiting: query
 ```
 
 The LLM now knows: execution is paused at line 6 of `process_order`, `validated` is available to inspect, `order` has been consumed (moved into `validate_order`), and `fs` is available.
 
 #### The Query Protocol
 
-The LLM sends JSON queries. The running application responds with JSON answers. Every exchange is structured — no terminal formatting, no spatial art.
+The LLM sends TOON queries. The running application responds with TOON answers. Every exchange is structured — no terminal formatting, no spatial art.
 
 **Inspect a variable:**
 
-```json
-{"query": "inspect", "variable": "validated"}
+```toon
+query: inspect
+variable: validated
 ```
 
-```json
-{
-    "variable": "validated",
-    "type": "ValidatedOrder",
-    "value": {
-        "id": "ord-123",
-        "items": [
-            {"name": "widget", "qty": 2, "price": 9.99},
-            {"name": "gadget", "qty": 1, "price": 24.99}
-        ],
-        "total": 44.97,
-        "customer_id": "cust-456"
-    }
-}
+```toon
+variable: validated
+type: ValidatedOrder
+value:
+    id: ord-123
+    items[2]{name,qty,price}:
+        widget, 2, 9.99
+        gadget, 1, 24.99
+    total: 44.97
+    customer_id: cust-456
 ```
 
 **Inspect a specific field:**
 
-```json
-{"query": "inspect", "expression": "validated.total"}
+```toon
+query: inspect
+expression: validated.total
 ```
 
-```json
-{
-    "expression": "validated.total",
-    "type": "float64",
-    "value": 44.97
-}
+```toon
+expression: validated.total
+type: float64
+value: 44.97
 ```
 
 **Evaluate an expression:**
 
-```json
-{"query": "evaluate", "expression": "list.length[Item](validated.items)"}
+```toon
+query: evaluate
+expression: list.length[Item](validated.items)
 ```
 
-```json
-{
-    "expression": "list.length[Item](validated.items)",
-    "type": "int64",
-    "value": 2
-}
+```toon
+expression: list.length[Item](validated.items)
+type: int64
+value: 2
 ```
 
 **Inspect the call stack:**
 
-```json
-{"query": "call_stack"}
+```toon
+query: call_stack
 ```
 
-```json
-{
-    "call_stack": [
-        {"function": "main", "file": "src/main.jett", "line": 15},
-        {"function": "handle_request", "file": "src/server.jett", "line": 42},
-        {"function": "process_order", "file": "src/orders.jett", "line": 6, "current": true}
-    ]
-}
+```toon
+call_stack[3]{function,file,line,current}:
+    main,           src/main.jett,   15,
+    handle_request, src/server.jett, 42,
+    process_order,  src/orders.jett, 6,  true
 ```
 
 **Inspect variables in a parent scope:**
 
-```json
-{"query": "inspect_scope", "frame": "handle_request"}
+```toon
+query: inspect_scope
+frame: handle_request
 ```
 
-```json
-{
-    "function": "handle_request",
-    "variables": [
-        {"name": "request", "type": "Request", "value": {"method": "POST", "path": "/orders"}},
-        {"name": "stdout", "type": "Stdout", "status": "capability"}
-    ]
-}
+```toon
+function: handle_request
+variables[2]{name,type,value,status}:
+    request, Request, "method: POST, path: /orders",
+    stdout,  Stdout,  ,                              capability
 ```
 
 **Continue execution:**
 
-```json
-{"query": "continue"}
+```toon
+query: continue
 ```
 
-```json
-{
-    "type": "breakpoint_resumed",
-    "file": "src/orders.jett",
-    "line": 6
-}
+```toon
+type: breakpoint_resumed
+file: src/orders.jett
+line: 6
 ```
 
 #### Conditional Breakpoints
@@ -5591,8 +5506,8 @@ Each breakpoint pauses independently. The LLM can inspect the state at two point
 
 **Step-to-next-line (single-step):**
 
-```json
-{"query": "step"}
+```toon
+query: step
 ```
 
 After hitting a breakpoint, the LLM can step forward one statement at a time, inspecting the state after each step. This simulates step-through debugging without a traditional debugger UI.
@@ -5622,7 +5537,7 @@ The agent breakpoint communicates through two modes:
 
 ```
 jett run app.jett --agent --debug
-# Breakpoint notifications and queries go through stdin/stdout as JSON lines
+# Breakpoint notifications and queries go through stdin/stdout as TOON lines
 ```
 
 **HTTP mode (for remote debugging):**
@@ -5630,7 +5545,7 @@ jett run app.jett --agent --debug
 ```
 jett run app.jett --agent --debug --breakpoint-port 9229
 # Breakpoint opens HTTP server on localhost:9229
-# LLM agent sends JSON queries via HTTP POST
+# LLM agent sends TOON queries via HTTP POST
 ```
 
 The HTTP mode allows the LLM to debug a running server or long-lived process without stopping it. The LLM connects to the breakpoint port, sends queries, and the application resumes when told to continue.
@@ -5647,11 +5562,11 @@ With print-debugging, the LLM must predict in advance which variables to inspect
 
 **3. Minimal context window usage.**
 
-Each query returns one small JSON response. The LLM only sees the data it asked for — not a flood of every variable in the program. The context window stays focused on the investigation.
+Each query returns one small TOON response. The LLM only sees the data it asked for — not a flood of every variable in the program. The context window stays focused on the investigation.
 
 **4. Works with the compile-fix loop.**
 
-Insert breakpoint → run → inspect → identify bug → remove breakpoint → fix → re-run. This fits naturally into the existing ASP compile-fix loop (Rule Set 21). The breakpoint is just another tool in the same JSON-based workflow.
+Insert breakpoint → run → inspect → identify bug → remove breakpoint → fix → re-run. This fits naturally into the existing ASP compile-fix loop (Rule Set 21). The breakpoint is just another tool in the same TOON-based workflow.
 
 **5. Conditional breakpoints save tokens.**
 
@@ -5669,7 +5584,7 @@ When an LLM writes an application and it runs slowly, the developer (or the LLM 
 2. **pprof/perf output is noisy.** Raw profiler dumps contain thousands of lines of stack frames with cryptic symbol names. Even if fed as text, the LLM wastes its entire context window parsing noise.
 3. **Humans use spatial intuition.** Flamegraphs work because a wide band *looks* big. LLMs have no spatial reasoning over rendered graphics. They need the same information as structured data.
 
-Jett solves this by making the compiler itself the profiler — and outputting **Bottleneck Summaries** in structured JSON instead of visual artifacts.
+Jett solves this by making the compiler itself the profiler — and outputting **Bottleneck Summaries** in structured TOON instead of visual artifacts.
 
 #### The Design: `jett run --agent-profile`
 
@@ -5679,62 +5594,49 @@ Jett includes a built-in CPU sampling profiler at the compiler level. It is not 
 jett run --agent-profile app.jett
 ```
 
-This runs the program normally while collecting CPU samples at a configurable frequency. When the program exits (or is interrupted), instead of generating a flamegraph, the compiler analyzes the samples and produces a **Bottleneck Summary** — a structured JSON document identifying the critical performance bottlenecks.
+This runs the program normally while collecting CPU samples at a configurable frequency. When the program exits (or is interrupted), instead of generating a flamegraph, the compiler analyzes the samples and produces a **Bottleneck Summary** — a structured TOON document identifying the critical performance bottlenecks.
 
 #### Bottleneck Summary Format
 
-The output is a JSON array of bottleneck entries, sorted by impact (highest CPU percentage first):
+The output is a TOON array of bottleneck entries, sorted by impact (highest CPU percentage first):
 
-```json
-{
-    "profile_summary": {
-        "total_samples": 48000,
-        "sample_rate_hz": 1000,
-        "wall_time_seconds": 48.0,
-        "cpu_time_seconds": 47.2
-    },
-    "bottlenecks": [
-        {
-            "rank": 1,
-            "function": "process_image",
-            "namespace": "pipeline.transform",
-            "file": "transform.jett",
-            "line": 142,
-            "cpu_percent": 34.2,
-            "self_percent": 28.1,
-            "total_samples": 16416,
-            "self_samples": 13488,
-            "hot_lines": [
-                {"line": 155, "percent": 12.4, "code": "let pixel = image.get_pixel(x, y)"},
-                {"line": 162, "percent": 9.7, "code": "let blurred = convolve(kernel, neighbors)"},
-                {"line": 170, "percent": 6.0, "code": "output.set_pixel(x, y, blurred)"}
-            ],
-            "call_chain": [
-                "main → run_pipeline → process_batch → process_image"
-            ],
-            "suggestion": "process_image accounts for 34.2% of CPU. The hot path is pixel-by-pixel iteration with per-pixel allocation. Consider using the standard library batch image operations (images.convolve_batch) which operate on the entire buffer."
-        },
-        {
-            "rank": 2,
-            "function": "parse_config",
-            "namespace": "config.loader",
-            "file": "loader.jett",
-            "line": 28,
-            "cpu_percent": 18.7,
-            "self_percent": 3.2,
-            "total_samples": 8976,
-            "self_samples": 1536,
-            "hot_lines": [
-                {"line": 45, "percent": 8.1, "code": "let parsed = json.parse[Document](raw_text) handle error: return fail(error)"},
-                {"line": 52, "percent": 7.4, "code": "let validated = schema.validate(parsed)"}
-            ],
-            "call_chain": [
-                "main → initialize → parse_config"
-            ],
-            "suggestion": "parse_config is called once at startup but accounts for 18.7% of CPU. The json.parse and schema.validate calls dominate. If the config file is static, consider parsing at comptime."
-        }
-    ]
-}
+```toon
+profile_summary:
+    total_samples: 48000
+    sample_rate_hz: 1000
+    wall_time_seconds: 48.0
+    cpu_time_seconds: 47.2
+bottlenecks[2]:
+    rank: 1
+    function: process_image
+    namespace: pipeline.transform
+    file: transform.jett
+    line: 142
+    cpu_percent: 34.2
+    self_percent: 28.1
+    total_samples: 16416
+    self_samples: 13488
+    hot_lines[3]{line,percent,code}:
+        155, 12.4, "let pixel = image.get_pixel(x, y)"
+        162,  9.7, "let blurred = convolve(kernel, neighbors)"
+        170,  6.0, "output.set_pixel(x, y, blurred)"
+    call_chain[1]: main → run_pipeline → process_batch → process_image
+    suggestion: "process_image accounts for 34.2% of CPU. The hot path is pixel-by-pixel iteration with per-pixel allocation. Consider using the standard library batch image operations (images.convolve_batch) which operate on the entire buffer."
+    ---
+    rank: 2
+    function: parse_config
+    namespace: config.loader
+    file: loader.jett
+    line: 28
+    cpu_percent: 18.7
+    self_percent: 3.2
+    total_samples: 8976
+    self_samples: 1536
+    hot_lines[2]{line,percent,code}:
+        45, 8.1, "let parsed = json.parse[Document](raw_text) handle error: return fail(error)"
+        52, 7.4, "let validated = schema.validate(parsed)"
+    call_chain[1]: main → initialize → parse_config
+    suggestion: "parse_config is called once at startup but accounts for 18.7% of CPU. The json.parse and schema.validate calls dominate. If the config file is static, consider parsing at comptime."
 ```
 
 #### Key Design Decisions
@@ -5776,7 +5678,7 @@ jett run --agent-profile --profile-threshold 2 app.jett
 
 #### Integration with the Agent Server Protocol
 
-When combined with the `--agent` flag (Rule Set 21), the profiler output is emitted as part of the standard ASP JSON stream:
+When combined with the `--agent` flag (Rule Set 21), the profiler output is emitted as part of the standard ASP TOON stream:
 
 ```
 jett run --agent --agent-profile app.jett
@@ -5787,7 +5689,7 @@ This means the profiler fits into the existing LLM-driven development loop:
 1. LLM writes the application.
 2. LLM runs it with `--agent --agent-profile`.
 3. Program executes and profile is collected.
-4. ASP returns the bottleneck summary as structured JSON.
+4. ASP returns the bottleneck summary as structured TOON.
 5. LLM reads the top bottleneck, applies the suggestion.
 6. LLM re-runs with profiling to verify the improvement.
 7. Repeat until performance is acceptable.
@@ -5804,30 +5706,23 @@ jett run --agent-profile-memory app.jett
 
 Output follows the same structure but reports allocation-heavy functions instead of CPU-heavy ones:
 
-```json
-{
-    "memory_summary": {
-        "peak_memory_bytes": 134217728,
-        "total_allocations": 2400000,
-        "total_bytes_allocated": 891289600
-    },
-    "bottlenecks": [
-        {
-            "rank": 1,
-            "function": "build_index",
-            "namespace": "search.indexer",
-            "file": "indexer.jett",
-            "line": 88,
-            "allocation_percent": 42.1,
-            "total_allocations": 1010400,
-            "total_bytes": 375272960,
-            "hot_lines": [
-                {"line": 102, "percent": 31.0, "code": "let entry: IndexEntry = IndexEntry(term: term, doc_id: doc_id, position: position)"}
-            ],
-            "suggestion": "build_index is responsible for 42.1% of all allocations. Each IndexEntry is allocated individually inside a loop. Consider restructuring to batch-create entries or pre-allocate the list with a known size."
-        }
-    ]
-}
+```toon
+memory_summary:
+    peak_memory_bytes: 134217728
+    total_allocations: 2400000
+    total_bytes_allocated: 891289600
+bottlenecks[1]:
+    rank: 1
+    function: build_index
+    namespace: search.indexer
+    file: indexer.jett
+    line: 88
+    allocation_percent: 42.1
+    total_allocations: 1010400
+    total_bytes: 375272960
+    hot_lines[1]{line,percent,code}:
+        102, 31.0, "let entry: IndexEntry = IndexEntry(term: term, doc_id: doc_id, position: position)"
+    suggestion: "build_index is responsible for 42.1% of all allocations. Each IndexEntry is allocated individually inside a loop. Consider restructuring to batch-create entries or pre-allocate the list with a known size."
 ```
 
 #### Comparison Profiling
@@ -5842,17 +5737,14 @@ jett run --agent-profile --profile-compare baseline.profile app.jett
 
 The output includes a `delta` field on each bottleneck:
 
-```json
-{
-    "rank": 1,
-    "function": "process_image",
-    "cpu_percent": 12.1,
-    "delta": {
-        "previous_cpu_percent": 34.2,
-        "change_percent": -22.1,
-        "status": "improved"
-    }
-}
+```toon
+rank: 1
+function: process_image
+cpu_percent: 12.1
+delta:
+    previous_cpu_percent: 34.2
+    change_percent: -22.1
+    status: improved
 ```
 
 This closes the optimization loop: the LLM can verify that its fix actually worked, with exact numbers, in a single structured response.
@@ -5861,7 +5753,7 @@ This closes the optimization loop: the LLM can verify that its fix actually work
 
 **1. Zero visual dependency.**
 
-The entire profiling workflow is text/JSON. No flamegraphs, no browser-based viewers, no SVG files. An LLM can consume the output directly in its context window.
+The entire profiling workflow is text/TOON. No flamegraphs, no browser-based viewers, no SVG files. An LLM can consume the output directly in its context window.
 
 **2. Actionable by default.**
 
@@ -5869,11 +5761,11 @@ Traditional profilers present raw data and expect the developer to interpret it.
 
 **3. Token-efficient.**
 
-A flamegraph for a complex application might have thousands of stack frames. The bottleneck summary distills this to 3-10 entries, each a few lines of JSON. This fits easily within any context window.
+A flamegraph for a complex application might have thousands of stack frames. The bottleneck summary distills this to 3-10 entries, each a few lines of TOON. This fits easily within any context window.
 
 **4. Fits the ASP loop.**
 
-Because the profiler output is standard ASP JSON, it slots directly into the existing compile → run → diagnose → fix cycle (Rule Set 21). The LLM doesn't need a separate tool or workflow for performance optimization — it uses the same `--agent` flag it already uses for compilation errors.
+Because the profiler output is standard ASP TOON, it slots directly into the existing compile → run → diagnose → fix cycle (Rule Set 21). The LLM doesn't need a separate tool or workflow for performance optimization — it uses the same `--agent` flag it already uses for compilation errors.
 
 **5. Comparison profiling closes the loop.**
 
@@ -6544,7 +6436,7 @@ External dependencies live in the `deps/` directory as vendored `.jett` files tr
 
 - [ ] Formatter (`jett format`)
 - [ ] Language server (LSP) for editor support
-- [ ] Agent Server Protocol (`--agent` flag, JSON error payloads)
+- [ ] Agent Server Protocol (`--agent` flag, TOON error payloads)
 - [ ] ASP type queries (`jett query --agent --type-at`)
 - [ ] ASP signature lookup (`jett query --agent --signature`)
 - [ ] ASP completion queries (`jett query --agent --complete-at`)
@@ -6564,7 +6456,7 @@ External dependencies live in the `deps/` directory as vendored `.jett` files tr
 - [ ] Memory profiler (`--agent-profile-memory`) with allocation-heavy function detection
 - [ ] Comparison profiling (`--agent-profile-compare`) with delta reporting
 - [ ] Profiler threshold configuration (`--profile-threshold`)
-- [ ] Profiler integration with Agent Server Protocol (ASP JSON output)
+- [ ] Profiler integration with Agent Server Protocol (ASP TOON output)
 - [ ] Vendored dependency resolution (`deps/` directory, `use deps.module` imports)
 - [ ] LLVM backend for native compilation
 - [ ] Jett-to-JSON and JSON-to-Jett CLI tools
@@ -6631,7 +6523,7 @@ External dependencies live in the `deps/` directory as vendored `.jett` files tr
 - **Mutable semantics** — RESOLVED: rebinding semantics. `mutable` allows consume-and-rebind to the same name.
 - **Mutual struct composition** — two structs cannot contain each other (composition is physical containment, so circular inclusion would be infinitely sized). The `mutual` block exists for functions but not for structs. Need to determine how recursive data structures (trees, linked lists, graphs) are expressed in Jett — possibly via indices or some form of indirection.
 - **Events** — RESOLVED: Jett does not have a dedicated event system. Event-driven patterns are built from existing constructs: actors with `receive` for async event handling (pub/sub, event loops), function parameters for callbacks, and state machines for state-driven events. No `event` keyword is needed — existing constructs compose to cover these use cases.
-- **TOON (Token Oriented Object Notation)** — a serialization format optimized for token efficiency, more compact than JSON. Could be added as standard library functions (`toon.serialize()`, `toon.parse()`) alongside the existing JSON support. Not a syntax change — purely a stdlib addition for LLM-friendly data interchange.
+- **TOON as a standard library module** — TOON (Token-Oriented Object Notation) is an existing standard (https://github.com/toon-format/toon) already used as the compiler's output format for the Agent Server Protocol (Rule Set 21). The open question is whether to also expose it as standard library functions (`toon.serialize()`, `toon.parse()`) for user code, alongside the existing JSON support. This would let Jett programs produce TOON output for LLM consumption — not just the compiler.
 
 ---
 
