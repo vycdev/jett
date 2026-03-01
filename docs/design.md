@@ -3932,6 +3932,34 @@ Jett ships both:
 
 LSP is optimized for interactive, keystroke-by-keystroke human development. ASP is optimized for batch, generate-compile-fix LLM development. Both share the same underlying compiler engine.
 
+#### MCP Server — Agents Connect Directly
+
+`jett mcp` starts a local MCP (Model Context Protocol) server that wraps the compiler. Any MCP-compatible agent (Claude, VS Code Copilot, Cursor, etc.) gets Jett support without a custom integration.
+
+**Tools** — the compiler's ASP commands exposed as callable tools:
+
+| Tool | Description |
+|------|-------------|
+| `jett_build` | Compile the project, returns TOON errors or success |
+| `jett_query_type` | Type at a given file and line |
+| `jett_query_signature` | Function signature lookup |
+| `jett_complete` | Completions at a given file, line, and column |
+| `jett_test` | Run all verify and property blocks |
+| `jett_profile` | Profile a run and return bottleneck summary |
+
+**Resources** — Jett documentation available for the agent to read on demand:
+
+| Resource | Description |
+|----------|-------------|
+| `jett://docs/language` | Language reference — syntax, keywords, types |
+| `jett://docs/stdlib` | Standard library — all modules, functions, signatures |
+| `jett://docs/examples` | Example programs for common patterns |
+| `jett://project/namespaces` | All namespaces and functions in the current project |
+
+The resources are critical: an LLM does not need Jett in its training data. It connects to the MCP server, reads the language reference and stdlib docs, and starts writing correct Jett code. The documentation is always up-to-date because it ships with the compiler.
+
+The ASP TOON format stays the same — MCP is purely the transport layer. Tools return TOON payloads. The agent reads structured TOON, not formatted text.
+
 #### Why This Is Perfect for LLMs
 
 **1. Zero parsing overhead.**
@@ -6465,6 +6493,7 @@ External dependencies live in the `deps/` directory as vendored `.jett` files tr
 - [ ] Comparison profiling (`--agent-profile-compare`) with delta reporting
 - [ ] Profiler threshold configuration (`--profile-threshold`)
 - [ ] Profiler integration with Agent Server Protocol (ASP TOON output)
+- [ ] MCP server (`jett mcp`) wrapping ASP tools and documentation resources
 - [ ] Vendored dependency resolution (`deps/` directory, `use deps.module` imports)
 - [ ] LLVM backend for native compilation
 - [ ] Jett-to-JSON and JSON-to-Jett CLI tools
