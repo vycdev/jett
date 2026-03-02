@@ -4398,17 +4398,14 @@ Humans can organize files into directories however they prefer for their own rea
 
 ### Rule Set 23: Token-Safe Bitwise and Hardware Operations
 
-#### The Problem: LLMs Are Mathematically Blind to Bits
+#### The Problem: Bitwise Code Is Error-Prone
 
-LLMs do not understand binary representation. Because of tokenization, an LLM has no way to know that `0x1F` and `31` are the same value, that `>> 4` divides by 16, or that `& 0x0F` extracts the low nibble. These are not semantic facts embedded in the tokens — they are mathematical relationships that require computation the neural architecture cannot perform.
+LLMs can handle simple bitwise operations, but complex bit manipulation remains a frequent source of subtle bugs:
 
-When LLMs write bitwise code, they hallucinate constantly:
-
-- **Wrong shift amounts.** `>> 4` when it should be `>> 3`. The LLM is pattern-matching from training data, not computing.
-- **Wrong masks.** `& 0xFF` when the field is only 4 bits wide (should be `& 0x0F`). Hex constants are opaque to the LLM.
-- **Wrong endianness.** Network byte order (big-endian) vs host byte order (little-endian). The LLM cannot reason about byte swapping.
-- **Conflated representations.** `0b11110000`, `0xF0`, and `240` are the same value. The LLM may generate one when it means another.
-- **Incorrect bit extraction.** Extracting bits 4-7 from a byte requires `(value >> 4) & 0x0F`. The LLM must know the shift, the mask, and the field width — three values that must be mathematically consistent. It will get at least one wrong.
+- **Wrong shift amounts.** `>> 4` when it should be `>> 3`. Easy to get wrong when fields aren't aligned to nice boundaries.
+- **Wrong masks.** `& 0xFF` when the field is only 4 bits wide (should be `& 0x0F`).
+- **Wrong endianness.** Network byte order (big-endian) vs host byte order (little-endian). Byte swapping logic is easy to forget or reverse.
+- **Incorrect bit extraction.** Extracting bits 4-7 from a byte requires `(value >> 4) & 0x0F`. The shift, mask, and field width must be mathematically consistent — a single wrong value corrupts the result silently.
 
 This matters for native-performance applications: network protocol parsing, hardware drivers, graphics programming, compression algorithms, and cryptographic operations all require precise bit manipulation.
 
