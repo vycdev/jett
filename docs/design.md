@@ -4153,6 +4153,8 @@ function main(stdout: Stdout, net: Network) returns nothing:
 
 The compiler treats each `namespace` block as a separate module. Other files can `use models`, `use auth`, or `use server` without knowing they all live in the same file. All `use` statements are inside functions, consistent with the inline-only import rule.
 
+**Declaration order matters.** Within a single file, a namespace can only `use` namespaces declared above it — consistent with the strict top-to-bottom ordering rule (Rule Set 4). In the example above, `auth` can `use models` because `models` is declared first, but `models` cannot `use auth`. This is the same no-forward-referencing rule that applies to functions, just at the namespace level.
+
 #### Single-File Libraries
 
 Multiple namespaces in one file is the foundation for distributable libraries. Since Jett uses vendored dependencies (Rule Set 14), a library that spans multiple namespaces is distributed as a single `.jett` file placed in `deps/`:
