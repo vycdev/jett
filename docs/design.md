@@ -6596,4 +6596,4 @@ External dependencies live in the `deps/` directory as vendored `.jett` files tr
 
 ## Footnotes
 
-1. Before working on the compiler, it would be valuable to have an LLM generate a non-trivial Jett program (e.g., a hashing algorithm) to see how the code looks and feels in practice. This would validate the syntax and semantics before committing to implementation.
+1. Before working on the compiler, it would be valuable to have an LLM generate non-trivial Jett programs to see how the code looks and feels in practice. This would validate the syntax and semantics before committing to implementation. Good candidates: a file compression algorithm (can benchmark against existing tools to validate performance), a hashing algorithm (exercises bitfields and binary data), and a prime number finder (simpler, but tests loops and arithmetic).
