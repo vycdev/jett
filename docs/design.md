@@ -4537,18 +4537,7 @@ function make_color(r: int64, g: int64, b: int64) returns result[ColorChannel, s
     return ok(color)
 ```
 
-Assigning to an individual field follows the same rules:
-
-```
-# Compile-time literal — checked immediately:
-color.red = 300
-# COMPILE ERROR: field "red" is 8 bits wide (range 0 to 255), but value is 300
-
-# Runtime value — returns result, must handle error:
-color.red = some_value handle error:
-    Stdout.write(view stdout, "red value out of range")
-    return nothing
-```
+There is no field-level mutation — bitfields follow the same ownership rules as structs (Rule Set 6). To change a field, construct a new bitfield value.
 
 This is consistent with refinement types (Rule Set 3) — compile-time values are checked at compile time, runtime values are checked at runtime and require error handling.
 
