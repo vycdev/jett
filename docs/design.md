@@ -4596,6 +4596,14 @@ let bytes: bytes = IpHeader.to_bytes(header)
 
 The LLM can convert between wire format (bytes), structured data (bitfield), and human-readable format (JSON) with single function calls.
 
+#### Performance Considerations
+
+For standard bitfield access — extracting fields, setting values, checking flags — the compiler emits the same shift-and-mask instructions that hand-written bitwise code would produce. There is no performance overhead for typical use cases like protocol parsing, file format headers, or hardware registers.
+
+However, some advanced bit manipulation techniques may not map cleanly to declarative bitfields: bit-parallel algorithms, population count tricks, SWAR (SIMD Within A Register), or custom bit-twiddling optimizations used in compression and cryptography. For these cases, C interop (Rule Set 20) provides an escape hatch — write the performance-critical bit manipulation in C and expose it through a binding.
+
+This is a deliberate trade-off: correctness and readability for the 95% case, with C interop for the 5% that needs hand-tuned bit operations.
+
 #### Why This Is Perfect for LLMs
 
 **1. Base-10 integers only.**
@@ -4606,7 +4614,7 @@ The LLM writes `4 bits`, `16 bits`, `32 bits` — numbers it can reason about. N
 
 `header.source_port` is self-documenting. `(raw[0] << 8) | raw[1]` is not. The LLM writes English. The compiler writes machine code.
 
-**3. The compiler computes everything the LLM can't.**
+**3. The compiler generates the bitwise operations.**
 
 Shift amounts, mask values, byte order conversion, field packing — all computed at compile time from the declarative bitfield definition. The LLM specifies *what* the layout is. The compiler handles *how* to access it.
 
