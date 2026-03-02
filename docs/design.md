@@ -1803,7 +1803,7 @@ actor Counter(stdout: Stdout):
         respond count
 
     receive print_count:
-        let count_str: string = string(count)
+        let count_str: string = string.from_int64(count)
         Stdout.write(view stdout, count_str)
 
 function main(stdout: Stdout) returns nothing:
@@ -1814,7 +1814,7 @@ function main(stdout: Stdout) returns nothing:
     send counter.increment
 
     let total: int64 = ask counter.get_count
-    let total_str: string = string(total)
+    let total_str: string = string.from_int64(total)
     Stdout.write(view stdout, total_str)   # prints "3"
 ```
 
@@ -2465,7 +2465,9 @@ Each function is immediately followed by its contract. When the LLM generates `c
 type Percentage = float64 where value >= 0.0 and value <= 100.0
 
 function calculate_grade(score: int64, total: int64) returns Percentage:
-    return float64(score) / float64(total) * 100.0
+    let score_f: float64 = float64.from_int64(score)
+    let total_f: float64 = float64.from_int64(total)
+    return score_f / total_f * 100.0
 
 verify calculate_grade:
     assert calculate_grade(85, 100) is 85.0
@@ -4472,9 +4474,11 @@ The LLM writes `header.version`, `header.ttl`, `header.protocol`. It never write
 
 ```
 function create_tcp_flags(syn: bool, ack: bool) returns TcpFlags:
+    let syn_bit: int64 = if syn: 1 else: 0
+    let ack_bit: int64 = if ack: 1 else: 0
     return TcpFlags(
-        fin: 0, syn: int64(syn), rst: 0, psh: 0,
-        ack: int64(ack), urg: 0, ece: 0, cwr: 0
+        fin: 0, syn: syn_bit, rst: 0, psh: 0,
+        ack: ack_bit, urg: 0, ece: 0, cwr: 0
     )
 ```
 
