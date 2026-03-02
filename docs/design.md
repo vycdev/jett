@@ -1061,6 +1061,8 @@ function deploy_service(caps: AppCapabilities, config: Config, target: Server) r
 
 Capability bundles are regular structs — they can be constructed, destructured, and passed around like any value. The compiler tracks the individual capabilities inside the bundle for lineage and purity analysis.
 
+`use` declarations are not counted toward the statement limit — they are imports, not executable statements.
+
 **What the compiler produces when limits are exceeded:**
 
 ```
