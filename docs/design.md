@@ -4331,6 +4331,22 @@ use auth          # COMPILE ERROR: circular import detected
 
 Circular imports are a compile error. If two namespaces need each other, extract the shared part into a third namespace that both can import. This forces a clean dependency hierarchy and fits the strict topological ordering principle — the compiler can always process namespaces in dependency order.
 
+**No unused imports:**
+
+```
+function fetch(view net: Network) returns result[string, string]:
+    use auth
+    use net.http
+    let response: HttpResponse = http.get(view net, "https://example.com") handle error:
+        return fail("request failed")
+    return ok(response.body)
+
+# COMPILE ERROR: unused import "auth" in function "fetch"
+# hint: remove the "use auth" declaration
+```
+
+Every `use` must be referenced. Unused imports are not warnings — they are compile errors. This prevents dead imports from accumulating as code evolves.
+
 #### Why This Is Perfect for LLMs
 
 **1. Zero path hallucination.**
