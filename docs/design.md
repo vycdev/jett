@@ -2554,24 +2554,23 @@ my_project/
 **Using a dependency:**
 
 ```
-use deps.json_extra
-use deps.websocket
+use json_extra
+use websocket
 ```
 
-The compiler resolves `deps.json_extra` to `deps/json_extra.jett` — a file that exists in the repository. No URL fetching, no hash checking, no registry lookup. The dependency is right there, readable by the LLM, tracked by git.
+The compiler scans all `.jett` files in the project (including `deps/`), reads their `namespace` declarations, and resolves `use json_extra` to whichever file declared `namespace json_extra`. The file path is irrelevant (Rule Set 22). No URL fetching, no hash checking, no registry lookup. The dependency is right there, readable by the LLM, tracked by git.
 
 **What happens when an LLM hallucinates a dependency:**
 
 ```
-use deps.super_fast_auth
+use super_fast_auth
 
-# COMPILE ERROR: module not found
-#   no file at "deps/super_fast_auth.jett"
-#   hint: available modules: deps.json_extra, deps.websocket
+# COMPILE ERROR: namespace not found: "super_fast_auth"
+#   hint: available namespaces: json_extra, websocket
 #   or use the standard library (use string, use json, etc.)
 ```
 
-The hallucinated library is caught instantly. The file doesn't exist. The compiler lists what IS available.
+The hallucinated library is caught instantly. No file declares that namespace. The compiler lists what IS available.
 
 #### Why Vendoring Works for LLMs
 
@@ -3676,7 +3675,7 @@ let WINDOWPOS_CENTERED: int64 = 805240832
 
 ```
 function create_game_window(view stdout: Stdout) returns result[sdl.Window, string]:
-    use deps.sdl as sdl
+    use sdl
 
     sdl.init(sdl.INIT_VIDEO) handle error:
         return fail("SDL init failed")
@@ -3712,7 +3711,7 @@ Because C pointers are wrapped in opaque linear types, the two most common FFI b
 
 ```
 function bad_example() returns nothing:
-    use deps.sdl as sdl
+    use sdl
 
     let window: sdl.Window = sdl.create_window("Test", 100, 100, 640, 480, 0) handle error:
         return nothing
@@ -4192,8 +4191,8 @@ A consumer imports this single file and gets access to all its namespaces:
 # http_toolkit.jett is in the deps/ directory
 
 function main(net: Network, stdout: Stdout) returns nothing:
-    use deps.http_toolkit.client
-    use deps.http_toolkit.errors
+    use http_toolkit.client
+    use http_toolkit.errors
     let response: Response = client.get(view net, "https://example.com") handle error:
         Stdout.write(view stdout, "failed: {error}")
         return nothing
@@ -6496,7 +6495,7 @@ External dependencies live in the `deps/` directory as vendored `.jett` files tr
 - [ ] Profiler threshold configuration (`--profile-threshold`)
 - [ ] Profiler integration with Agent Server Protocol (ASP TOON output)
 - [ ] MCP server (`jett mcp`) wrapping ASP tools and documentation resources
-- [ ] Vendored dependency resolution (`deps/` directory, `use deps.module` imports)
+- [ ] Vendored dependency resolution (`deps/` directory, namespace-based imports)
 - [ ] LLVM backend for native compilation
 - [ ] Jett-to-JSON and JSON-to-Jett CLI tools
 
