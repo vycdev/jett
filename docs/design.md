@@ -4347,6 +4347,20 @@ function fetch(view net: Network) returns result[string, string]:
 
 Every `use` must be referenced. Unused imports are not warnings — they are compile errors. This prevents dead imports from accumulating as code evolves.
 
+**No unused variables:**
+
+```
+function process(data: string) returns int64:
+    let length: int64 = string.length(data)
+    let trimmed: string = string.trim(data)
+    return length
+
+# COMPILE ERROR: unused variable "trimmed" in function "process"
+# hint: remove the declaration or use the variable
+```
+
+Every `let` binding must be referenced. Unused variables are compile errors — not warnings. Dead variables are noise that wastes tokens in an LLM's context and misleads both humans and agents about what the function actually does.
+
 #### Why This Is Perfect for LLMs
 
 **1. Zero path hallucination.**
