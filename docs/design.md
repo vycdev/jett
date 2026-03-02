@@ -4519,12 +4519,25 @@ bitfield ColorChannel:
     green: 8 bits     # auto-constrained: 0 to 255
     blue: 8 bits      # auto-constrained: 0 to 255
     alpha: 8 bits     # auto-constrained: 0 to 255
+```
 
+When values are known at compile time, the compiler catches violations immediately:
+
+```
 let color: ColorChannel = ColorChannel(red: 300, green: 128, blue: 0, alpha: 255)
 # COMPILE ERROR: field "red" is 8 bits wide (range 0 to 255), but value is 300
 ```
 
-The compiler knows that an 8-bit field cannot hold 300. The LLM doesn't need to know the range — the bitfield declaration implies it, and the compiler enforces it.
+When values come from variables or function returns, construction returns a `result` and must be handled:
+
+```
+function make_color(r: int64, g: int64, b: int64) returns result[ColorChannel, string]:
+    let color: ColorChannel = ColorChannel(red: r, green: g, blue: b, alpha: 255) handle error:
+        return fail("color value out of range")
+    return ok(color)
+```
+
+This is consistent with refinement types (Rule Set 3) — compile-time values are checked at compile time, runtime values are checked at runtime and require error handling.
 
 #### Variable-Length and Conditional Fields
 
