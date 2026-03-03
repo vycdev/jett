@@ -3344,21 +3344,21 @@ The `serialize` annotation is the only way to customize field naming. It is co-l
 
 #### Network Protocol Structs
 
-For binary network protocols, structs can specify a precise binary layout:
+For binary network protocols, bitfields (Rule Set 23) handle precise binary layouts:
 
 ```
-struct binary PacketHeader:
-    magic: int32
-    version: int16
-    payload_length: int32
-    checksum: int32
+bitfield PacketHeader:
+    magic: 32 bits
+    version: 16 bits
+    payload_length: 32 bits
+    checksum: 32 bits
 
 # The compiler generates:
 # PacketHeader.to_bytes(header) → exactly 14 bytes, fields packed in declaration order
 # PacketHeader.from_bytes(raw)  → parses exactly 14 bytes, validates magic/checksum
 ```
 
-The `binary` modifier tells the compiler to pack fields in declaration order using each field's type size. The LLM specifies *what* the format is (field names, types, order). The compiler generates *how* to parse it (byte offsets, endianness, boundary checks).
+Bitfields pack fields in declaration order using the declared bit widths. The LLM specifies *what* the format is (field names, sizes, order). The compiler generates *how* to parse it (byte offsets, endianness, boundary checks).
 
 #### Why This Is Perfect for LLMs
 
@@ -6498,7 +6498,7 @@ External dependencies live in the `deps/` directory as vendored `.jett` files tr
 - [ ] Compiler makes all structs compatible with `json.serialize[Type]()` / `json.parse[Type](raw)`
 - [ ] Auto-generated `to_bytes` / `from_bytes` for all structs
 - [ ] `serialize` field annotation for custom naming
-- [ ] `struct binary` modifier for packed binary structs (sized types carry field sizes)
+- [ ] Bitfield-based binary struct packing (replaces `struct binary`)
 - [ ] `bitfield` type with bit-level field declarations
 - [ ] Bitfield `from_bytes` / `to_bytes` with automatic bit extraction/packing
 - [ ] `bitfield network` modifier with auto byte-swap
