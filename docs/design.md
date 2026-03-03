@@ -2009,7 +2009,7 @@ Jett borrows from Zig: there are **no macros**. Instead, there is a `comptime` k
 
 ```
 comptime function generate_lookup_table(size: int64) returns list[int64]:
-    let mutable table: list[int64] = list[int64]()
+    let mutable table: list[int64] = list.new[int64]()
     let mutable i: int64 = 0
     while i < size:
         table = list.append[int64](table, i * i)
@@ -3032,6 +3032,7 @@ function start_server(view net: Network, view stdout: Stdout, port: int64) retur
             Stdout.write(view stdout, "accept failed")
             continue
         handle_connection(view net, view stdout, connection)
+    return nothing
 ```
 
 This code does not contain a single OS-specific reference. No `#ifdef`, no `cfg!()`, no `#[target_os]`. The LLM writes against the `Network` capability interface. The compiler does the rest.
@@ -4810,14 +4811,15 @@ function render_frame(state: view GameState, view stdout: Stdout) returns nothin
         render_player(view player, view stdout)
 
 function game_loop(view stdout: Stdout) returns nothing:
-    let mutable state: GameState = GameState(players: list(), world: World(), tick: 0)
+    let mutable state: GameState = GameState(players: list.new[Player](), world: World(), tick: 0)
 
     while true:
         # Pass a view for rendering (read-only, zero-copy):
         render_frame(view state, view stdout)
 
-        # Then mutate the owned state:
+        # Then rebind the owned state:
         state = update_game(state)
+    return nothing
 ```
 
 `render_frame` receives a view of the entire game state. It can read every field, iterate through players, access nested structures — all without copying a single byte. When it returns, the game loop still owns `state` and can mutate it.
