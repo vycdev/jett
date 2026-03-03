@@ -3032,7 +3032,6 @@ function start_server(view net: Network, view stdout: Stdout, port: int64) retur
             Stdout.write(view stdout, "accept failed")
             continue
         handle_connection(view net, view stdout, connection)
-    return nothing
 ```
 
 This code does not contain a single OS-specific reference. No `#ifdef`, no `cfg!()`, no `#[target_os]`. The LLM writes against the `Network` capability interface. The compiler does the rest.
@@ -4819,7 +4818,6 @@ function game_loop(view stdout: Stdout) returns nothing:
 
         # Then rebind the owned state:
         state = update_game(state)
-    return nothing
 ```
 
 `render_frame` receives a view of the entire game state. It can read every field, iterate through players, access nested structures — all without copying a single byte. When it returns, the game loop still owns `state` and can mutate it.
@@ -5985,14 +5983,13 @@ function add(a: int64, b: int64) returns int64:
 
 function greet(view stdout: Stdout, name: string) returns nothing:
     Stdout.write(view stdout, "hello {name}")
-    return nothing
 ```
 
 `function` is always spelled out. `returns` declares the return type. No `->` arrow.
 
 Every function always has a `returns` clause — functions that produce no value use `returns nothing`. This is consistent with the one-canonical-form principle: there is always exactly one pattern for function signatures, never "sometimes there's a `returns` clause, sometimes there isn't."
 
-**Every code path must end with an explicit `return`.** There is no implicit return. A function that `returns int64` must have `return <value>` on every path. A function that `returns nothing` must have `return nothing` on every path. If any code path is missing a return, the compiler rejects it. This eliminates ambiguity about whether a function "falls through" or returns a value.
+**Every code path must end with an explicit `return` — except `returns nothing` functions.** A function that `returns int64` must have `return <value>` on every code path. If any path is missing a return, the compiler rejects it. The one exception: functions that `returns nothing` may omit the final `return nothing` — the function implicitly returns when execution reaches the end. Early `return nothing` is still allowed for exiting mid-function.
 
 Named arguments work in both struct construction AND function calls. Any parameter can be passed by name for clarity. This allows `agent_breakpoint(when: condition)` and `GuiCapability.create_text_field(gui, label, width: 200, height: 30)` — mixing positional and named arguments in a single call.
 
