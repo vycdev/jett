@@ -5985,11 +5985,14 @@ function add(a: int64, b: int64) returns int64:
 
 function greet(view stdout: Stdout, name: string) returns nothing:
     Stdout.write(view stdout, "hello {name}")
+    return nothing
 ```
 
 `function` is always spelled out. `returns` declares the return type. No `->` arrow.
 
 Every function always has a `returns` clause — functions that produce no value use `returns nothing`. This is consistent with the one-canonical-form principle: there is always exactly one pattern for function signatures, never "sometimes there's a `returns` clause, sometimes there isn't."
+
+**Every code path must end with an explicit `return`.** There is no implicit return. A function that `returns int64` must have `return <value>` on every path. A function that `returns nothing` must have `return nothing` on every path. If any code path is missing a return, the compiler rejects it. This eliminates ambiguity about whether a function "falls through" or returns a value.
 
 Named arguments work in both struct construction AND function calls. Any parameter can be passed by name for clarity. This allows `agent_breakpoint(when: condition)` and `GuiCapability.create_text_field(gui, label, width: 200, height: 30)` — mixing positional and named arguments in a single call.
 
