@@ -4736,17 +4736,18 @@ The function always gets read-only access — it declared `view`, so it cannot c
 
 Views are governed by three rules that the compiler enforces absolutely. These rules are deliberately restrictive to keep the concept simple and make violations impossible.
 
-**Rule 1: A view cannot be mutated.**
+**Rule 1: A view cannot be consumed.**
 
 ```
-function bad_mutate(data: view list[int64]) returns nothing:
-    list.append[int64](data, 42)
-    # COMPILE ERROR: cannot mutate a view
-    # "data" is a read-only view and cannot be modified
-    # hint: if mutation is needed, take ownership instead of a view
+function bad_consume(data: view list[int64]) returns list[int64]:
+    let sorted: list[int64] = list.sort(data)
+    # COMPILE ERROR: cannot consume "data" — it is a view
+    # "data" is borrowed read-only and cannot be moved
+    # hint: clone the data or take ownership instead of a view
+    return sorted
 ```
 
-A view is read-only. Period. Any operation that would modify the data — append, remove, set, sort in place — is a compile error on a view parameter.
+A view is a borrow — the caller still owns the data. Any operation that would consume (move) the value is a compile error. The function can read the view and pass it as `view` to other functions, but cannot take ownership.
 
 **Rule 2: A view cannot be sent to another thread.**
 
