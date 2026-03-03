@@ -4572,7 +4572,7 @@ A `list[uint8]` field captures everything after the fixed-size fields as a raw b
 | `(value >> 4) & 0x0F` | `header.version` (4-bit field) |
 | `value \| (1 << 5)` | `TcpFlags(..., ack: 1, ...)` — construct a new TcpFlags with the modified field |
 | `value & ~(0xFF << 8)` | Direct field assignment — compiler handles masking |
-| `htons(port)` / `ntohs(port)` | Compiler handles byte order based on `layout network_order` annotation |
+| `htons(port)` / `ntohs(port)` | Compiler handles byte order based on `layout network` annotation |
 | `memcpy(&header, buffer, sizeof(header))` | `Header.from_bytes(buffer)` |
 | `0x1F`, `0b00011111`, `31` | A field width: `field: 5 bits` |
 
@@ -4583,7 +4583,7 @@ No hex literals, no binary literals, no shift operators, no mask operators. The 
 Network protocols use big-endian (network byte order). Hardware registers may use little-endian. The LLM declares the byte order once on the bitfield — not per-field:
 
 ```
-bitfield TcpHeader layout network_order:
+bitfield TcpHeader layout network:
     source_port: 16 bits
     dest_port: 16 bits
     sequence_number: 32 bits
@@ -4596,7 +4596,7 @@ bitfield TcpHeader layout network_order:
     urgent_pointer: 16 bits
 ```
 
-`layout network_order` tells the compiler that all multi-byte fields are big-endian. The compiler automatically inserts byte-swap operations when reading/writing on a little-endian host. The LLM never calls `htons()` or `ntohl()`.
+`layout network` tells the compiler that all multi-byte fields are big-endian (network byte order). The compiler automatically inserts byte-swap operations when reading/writing on a little-endian host. The LLM never calls `htons()` or `ntohl()`. Bitfields without a layout annotation default to the host's native byte order.
 
 #### Serialization Integration
 
@@ -6501,7 +6501,7 @@ External dependencies live in the `deps/` directory as vendored `.jett` files tr
 - [ ] `layout binary` for network protocol structs (sized types carry field sizes)
 - [ ] `bitfield` type with bit-level field declarations
 - [ ] Bitfield `from_bytes` / `to_bytes` with automatic bit extraction/packing
-- [ ] `layout network_order` annotation with auto byte-swap
+- [ ] `layout network` annotation with auto byte-swap
 - [ ] Bitfield enum integration (`as EnumType` on fields)
 - [ ] Bitfield range validation (bit width → value range enforcement)
 - [ ] Secret-aware serialization (`json.serialize_public`, compile error on `json.serialize` with secrets)
