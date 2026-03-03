@@ -3347,7 +3347,7 @@ The `serialize` annotation is the only way to customize field naming. It is co-l
 For binary network protocols, structs can specify a precise binary layout:
 
 ```
-struct PacketHeader layout binary:
+struct binary PacketHeader:
     magic: int32
     version: int16
     payload_length: int32
@@ -3358,7 +3358,7 @@ struct PacketHeader layout binary:
 # PacketHeader.from_bytes(raw)  → parses exactly 14 bytes, validates magic/checksum
 ```
 
-The `layout binary` annotation tells the compiler to pack fields in declaration order using each field's type size. The LLM specifies *what* the format is (field names, types, order). The compiler generates *how* to parse it (byte offsets, endianness, boundary checks).
+The `binary` modifier tells the compiler to pack fields in declaration order using each field's type size. The LLM specifies *what* the format is (field names, types, order). The compiler generates *how* to parse it (byte offsets, endianness, boundary checks).
 
 #### Why This Is Perfect for LLMs
 
@@ -4572,7 +4572,7 @@ A `list[uint8]` field captures everything after the fixed-size fields as a raw b
 | `(value >> 4) & 0x0F` | `header.version` (4-bit field) |
 | `value \| (1 << 5)` | `TcpFlags(..., ack: 1, ...)` — construct a new TcpFlags with the modified field |
 | `value & ~(0xFF << 8)` | Direct field assignment — compiler handles masking |
-| `htons(port)` / `ntohs(port)` | Compiler handles byte order based on `layout network` annotation |
+| `htons(port)` / `ntohs(port)` | Compiler handles byte order based on `network` modifier |
 | `memcpy(&header, buffer, sizeof(header))` | `Header.from_bytes(buffer)` |
 | `0x1F`, `0b00011111`, `31` | A field width: `field: 5 bits` |
 
@@ -4583,7 +4583,7 @@ No hex literals, no binary literals, no shift operators, no mask operators. The 
 Network protocols use big-endian (network byte order). Hardware registers may use little-endian. The LLM declares the byte order once on the bitfield — not per-field:
 
 ```
-bitfield TcpHeader layout network:
+bitfield network TcpHeader:
     source_port: 16 bits
     dest_port: 16 bits
     sequence_number: 32 bits
@@ -4596,7 +4596,7 @@ bitfield TcpHeader layout network:
     urgent_pointer: 16 bits
 ```
 
-`layout network` tells the compiler that all multi-byte fields are big-endian (network byte order). The compiler automatically inserts byte-swap operations when reading/writing on a little-endian host. The LLM never calls `htons()` or `ntohl()`. Bitfields without a layout annotation default to the host's native byte order.
+The `network` modifier tells the compiler that all multi-byte fields are big-endian (network byte order). The compiler automatically inserts byte-swap operations when reading/writing on a little-endian host. The LLM never calls `htons()` or `ntohl()`. Bitfields without a modifier default to the host's native byte order.
 
 #### Serialization Integration
 
@@ -6498,10 +6498,10 @@ External dependencies live in the `deps/` directory as vendored `.jett` files tr
 - [ ] Compiler makes all structs compatible with `json.serialize[Type]()` / `json.parse[Type](raw)`
 - [ ] Auto-generated `to_bytes` / `from_bytes` for all structs
 - [ ] `serialize` field annotation for custom naming
-- [ ] `layout binary` for network protocol structs (sized types carry field sizes)
+- [ ] `struct binary` modifier for packed binary structs (sized types carry field sizes)
 - [ ] `bitfield` type with bit-level field declarations
 - [ ] Bitfield `from_bytes` / `to_bytes` with automatic bit extraction/packing
-- [ ] `layout network` annotation with auto byte-swap
+- [ ] `bitfield network` modifier with auto byte-swap
 - [ ] Bitfield enum integration (`as EnumType` on fields)
 - [ ] Bitfield range validation (bit width → value range enforcement)
 - [ ] Secret-aware serialization (`json.serialize_public`, compile error on `json.serialize` with secrets)
