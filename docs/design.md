@@ -1823,7 +1823,7 @@ function main(stdout: Stdout) returns nothing:
 - An `actor` has private state that **no other code can access directly**. There is no `counter.count` from outside. State is only modified through received messages.
 - `send` delivers a message asynchronously. The sender does not wait.
 - `ask` delivers a message and waits for a response. Used when the sender needs a value back.
-- Because variables are linear (Rule Set 10.1), when a value is sent to an actor, it is consumed in the sender's scope. **No two threads can ever hold the same mutable data.** Race conditions are structurally impossible.
+- Because variables are linear (Rule Set 10), when a value is sent to an actor, it is consumed in the sender's scope. **No two threads can ever hold the same mutable data.** Race conditions are structurally impossible.
 
 **How actors receive capabilities:**
 
@@ -1919,7 +1919,7 @@ function fetch_all_data(view net: Network) returns result[DashboardData, HttpErr
 
 **Rules enforced by the compiler:**
 
-- `run` launches a function call as a concurrent task. The variable is typed with the function's return type, but the compiler tracks it as pending — it cannot be used until `join`ed. `spawn` is used separately for actors (see Rule Set 10.3).
+- `run` launches a function call as a concurrent task. The variable is typed with the function's return type, but the compiler tracks it as pending — it cannot be used until `join`ed. `spawn` is used separately for actors (see Rule Set 10).
 - `join` waits for a task to complete. It returns a `result` that must be handled.
 - Every `run` must have a matching `join` or `cancel` before the enclosing function returns. If the LLM forgets one, the compiler rejects the code.
 - No orphaned tasks. No background processes silently running after the function ends.
@@ -2395,7 +2395,7 @@ The word `test` implies something optional — something you run separately, may
 
 #### 2. Compiler-Enforced Contracts (Comptime Verification)
 
-`verify` blocks are not regular tests that run at runtime. They are executed by the **comptime engine** (Rule Set 10.5) during compilation. If any assertion in a `verify` block fails, the program **does not compile**.
+`verify` blocks are not regular tests that run at runtime. They are executed by the **comptime engine** (Rule Set 10) during compilation. If any assertion in a `verify` block fails, the program **does not compile**.
 
 **What happens during compilation:**
 
@@ -3220,7 +3220,7 @@ The LLM writes business logic — save this user, load that user. The serializat
 
 #### How the Compiler Generates Serialization
 
-The goal is for serialization to be implemented via **comptime struct introspection** (see open questions) — not compiler magic. The comptime engine (Rule Set 10.5) would inspect struct fields at compile time and generate optimal serialization code. Until comptime introspection is designed, the exact mechanism is TBD, but the usage is fixed:
+The goal is for serialization to be implemented via **comptime struct introspection** (see open questions) — not compiler magic. The comptime engine (Rule Set 10) would inspect struct fields at compile time and generate optimal serialization code. Until comptime introspection is designed, the exact mechanism is TBD, but the usage is fixed:
 
 **JSON generation — field names match struct fields exactly:**
 
@@ -4649,7 +4649,7 @@ Network protocols, file format headers, hardware registers, graphics pixel forma
 
 #### The Problem: Linear Typing Demands Cloning for Read Access
 
-Rule Set 10.1 established linear typing: when a variable is passed to a function, it is consumed (moved) and becomes invalid in the caller's scope. This is excellent for memory safety — it gives the compiler perfect knowledge of ownership with zero hidden pointers.
+Rule Set 10 established linear typing: when a variable is passed to a function, it is consumed (moved) and becomes invalid in the caller's scope. This is excellent for memory safety — it gives the compiler perfect knowledge of ownership with zero hidden pointers.
 
 But there is a performance problem. If the LLM has a 10GB data structure and wants to pass it to a function that only reads its `.length` field, linear typing forces a choice:
 
@@ -4760,7 +4760,7 @@ function bad_send(data: view list[int64]) returns nothing:
     # hint: clone the data or move ownership to the actor instead
 ```
 
-Views exist only on the stack of the current thread. They cannot be sent to actors (Rule Set 10.3), put into channels, or stored in any structure that crosses thread boundaries. The reason: actors run asynchronously — by the time the actor reads the data, the caller may have returned and freed it. The view would be a dangling reference. This is really a special case of Rule 3 (views can't outlive their scope), but called out separately because sending to an actor is the most common way this mistake happens.
+Views exist only on the stack of the current thread. They cannot be sent to actors (Rule Set 10), put into channels, or stored in any structure that crosses thread boundaries. The reason: actors run asynchronously — by the time the actor reads the data, the caller may have returned and freed it. The view would be a dangling reference. This is really a special case of Rule 3 (views can't outlive their scope), but called out separately because sending to an actor is the most common way this mistake happens.
 
 **Rule 3: A view cannot outlive its lexical scope.**
 
@@ -5245,7 +5245,7 @@ That's it. One word added to the type annotation. The rest of the code does not 
 
 #### How Tracking Works Under the Hood
 
-Because Jett uses linear typing (Rule Set 10.1), the compiler knows every function a value passes through and the exact order. There are no hidden references, no aliasing, no shared mutable state. The value moves sequentially from function to function. The compiler uses this to build a perfect lineage chain.
+Because Jett uses linear typing (Rule Set 10), the compiler knows every function a value passes through and the exact order. There are no hidden references, no aliasing, no shared mutable state. The value moves sequentially from function to function. The compiler uses this to build a perfect lineage chain.
 
 When a variable is typed as `tracked[T]`, the compiler:
 
