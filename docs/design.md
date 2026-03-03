@@ -3220,7 +3220,7 @@ The LLM writes business logic — save this user, load that user. The serializat
 
 #### How the Compiler Generates Serialization
 
-The compiler uses the **comptime engine** (Rule Set 10.5) to generate serialization functions at compile time. It inspects the struct definition and produces optimal code for each format.
+The goal is for serialization to be implemented via **comptime struct introspection** (see open questions) — not compiler magic. The comptime engine (Rule Set 10.5) would inspect struct fields at compile time and generate optimal serialization code. Until comptime introspection is designed, the exact mechanism is TBD, but the usage is fixed:
 
 **JSON generation — field names match struct fields exactly:**
 
@@ -4600,7 +4600,7 @@ The `network` modifier tells the compiler that all multi-byte fields are big-end
 
 #### Serialization Integration
 
-Bitfields get the same auto-generated serialization as regular structs (Rule Set 18):
+Bitfields should get the same serialization as regular structs (Rule Set 18). How serialization is implemented — whether via comptime struct introspection or compiler-provided primitives — is still an open question (see open questions). The usage would look the same either way:
 
 ```
 let header: IpHeader = IpHeader.from_bytes(raw_packet) handle error:
@@ -6498,7 +6498,7 @@ External dependencies live in the `deps/` directory as vendored `.jett` files tr
 - [ ] Compiler makes all structs compatible with `json.serialize[Type]()` / `json.parse[Type](raw)`
 - [ ] Auto-generated `to_bytes` / `from_bytes` for all structs
 - [ ] `serialize` field annotation for custom naming
-- [ ] Bitfield-based binary struct packing (replaces `struct binary`)
+- [ ] Bitfield-based binary struct packing
 - [ ] `bitfield` type with bit-level field declarations
 - [ ] Bitfield `from_bytes` / `to_bytes` with automatic bit extraction/packing
 - [ ] `bitfield network` modifier with auto byte-swap
