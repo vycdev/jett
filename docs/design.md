@@ -4869,7 +4869,7 @@ Under the hood, a view is a pointer to the original data. No copying, no referen
 The safety comes not from runtime checks but from the three compile-time rules. The compiler statically proves that:
 
 - The data cannot be freed while a view to it exists (because views can't outlive their scope).
-- The data cannot be mutated while a view to it exists (because views are read-only and the owner can't mutate while a view is active).
+- The owner cannot rebind the variable while a view to it exists. For example, `for item in view items:` prevents `items = new_list` inside the loop body — rebinding would free the data the view points to.
 - No data race can occur (because views can't cross thread boundaries).
 
 This is the same level of safety as Rust's borrow checker, achieved with zero annotation overhead.
