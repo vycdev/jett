@@ -4560,10 +4560,10 @@ bitfield DnsHeader:
     ancount: 16 bits
     nscount: 16 bits
     arcount: 16 bits
-    payload: remaining
+    payload: list[uint8]
 ```
 
-The `remaining` keyword captures everything after the fixed-size fields as a raw byte slice. The LLM can then parse the payload section using further bitfield declarations or standard library functions.
+A `list[uint8]` field captures everything after the fixed-size fields as a raw byte list. The LLM can then parse the payload section using further bitfield declarations or standard library functions.
 
 #### Replacing Every Bitwise Operation
 
