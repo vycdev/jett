@@ -4760,7 +4760,7 @@ function bad_send(data: view list[int64]) returns nothing:
     # hint: clone the data or move ownership to the actor instead
 ```
 
-Views exist only on the stack of the current thread. They cannot be sent to actors (Rule Set 10.3), put into channels, or stored in any structure that crosses thread boundaries. This eliminates data races without any synchronization overhead.
+Views exist only on the stack of the current thread. They cannot be sent to actors (Rule Set 10.3), put into channels, or stored in any structure that crosses thread boundaries. The reason: actors run asynchronously — by the time the actor reads the data, the caller may have returned and freed it. The view would be a dangling reference. This is really a special case of Rule 3 (views can't outlive their scope), but called out separately because sending to an actor is the most common way this mistake happens.
 
 **Rule 3: A view cannot outlive its lexical scope.**
 
