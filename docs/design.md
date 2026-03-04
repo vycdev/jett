@@ -5649,51 +5649,15 @@ bottlenecks[1]:
     suggestion: "build_index is responsible for 42.1% of all allocations. Each IndexEntry is allocated individually inside a loop. Consider restructuring to batch-create entries or pre-allocate the list with a known size."
 ```
 
-#### Comparison Profiling
-
-To measure the impact of an optimization, `--profile-compare` accepts a baseline profile:
-
-```
-jett run --profile --profile-output baseline.profile app.jett
-# ... make changes ...
-jett run --profile --profile-compare baseline.profile app.jett
-```
-
-The output includes a `delta` field on each bottleneck:
-
-```toon
-rank: 1
-function: process_image
-cpu_percent: 12.1
-delta:
-    previous_cpu_percent: 34.2
-    change_percent: -22.1
-    status: improved
-```
-
-This closes the optimization loop: the LLM can verify that its fix actually worked, with exact numbers, in a single structured response.
-
 #### Why This Is Perfect for LLMs
 
-**1. Zero visual dependency.**
+**1. Zero visual dependency.** The entire profiling workflow is text/TOON. No flamegraphs, no browser-based viewers, no SVG files. An LLM can consume the output directly in its context window.
 
-The entire profiling workflow is text/TOON. No flamegraphs, no browser-based viewers, no SVG files. An LLM can consume the output directly in its context window.
+**2. Actionable by default.** Traditional profilers present raw data and expect the developer to interpret it. Bottleneck summaries include the `suggestion` field — the compiler has already done the first-pass interpretation. The LLM can act immediately.
 
-**2. Actionable by default.**
+**3. Token-efficient.** A flamegraph for a complex application might have thousands of stack frames. The bottleneck summary distills this to 3-10 entries, each a few lines of TOON. This fits easily within any context window.
 
-Traditional profilers present raw data and expect the developer to interpret it. Bottleneck summaries include the `suggestion` field — the compiler has already done the first-pass interpretation. The LLM can act immediately.
-
-**3. Token-efficient.**
-
-A flamegraph for a complex application might have thousands of stack frames. The bottleneck summary distills this to 3-10 entries, each a few lines of TOON. This fits easily within any context window.
-
-**4. Fits the ASP loop.**
-
-Because the profiler output is standard ASP TOON, it slots directly into the existing compile → run → diagnose → fix cycle (Rule Set 21). The LLM doesn't need a separate tool or workflow for performance optimization — it uses the same `--agent` flag it already uses for compilation errors.
-
-**5. Comparison profiling closes the loop.**
-
-The `--profile-compare` flag gives the LLM a before/after diff. This is essential for auto-regressive optimization: the LLM makes a change, measures the impact, and decides whether to keep it or try something else. Without structured comparison, the LLM would have to remember the previous profile and manually compute deltas.
+**4. Fits the ASP loop.** Because the profiler output is standard ASP TOON, it slots directly into the existing compile → run → diagnose → fix cycle (Rule Set 21). The LLM doesn't need a separate tool or workflow for performance optimization — it uses the same `--agent` flag it already uses for compilation errors.
 
 ---
 
@@ -6378,7 +6342,6 @@ External dependencies live in the `deps/` directory as vendored `.jett` files tr
 - [ ] Bottleneck summary generation with ranked hotspots and suggestions
 - [ ] Hot-line analysis (per-line CPU/allocation attribution within functions)
 - [ ] Memory profiler (`--profile-memory`) with allocation-heavy function detection
-- [ ] Comparison profiling (`--profile-compare`) with delta reporting
 - [ ] Profiler threshold configuration (`--profile-threshold`)
 - [ ] Profiler integration with Agent Server Protocol (ASP TOON output)
 - [ ] MCP server (`jett mcp`) wrapping ASP tools and documentation resources
