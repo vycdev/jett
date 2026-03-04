@@ -5538,8 +5538,8 @@ bottlenecks[2]:
     total_samples: 16416
     self_samples: 13488
     hot_lines[3]{line,percent,code}:
-        155, 12.4, "let pixel = image.get_pixel(x, y)"
-        162,  9.7, "let blurred = convolve(kernel, neighbors)"
+        155, 12.4, "Pixel pixel = image.get_pixel(x, y)"
+        162,  9.7, "Pixel blurred = convolve(kernel, neighbors)"
         170,  6.0, "output.set_pixel(x, y, blurred)"
     call_chain[1]: main → run_pipeline → process_batch → process_image
     suggestion: "process_image accounts for 34.2% of CPU. The hot path is pixel-by-pixel iteration with per-pixel allocation. Consider using the standard library batch image operations (images.convolve_batch) which operate on the entire buffer."
@@ -5554,8 +5554,8 @@ bottlenecks[2]:
     total_samples: 8976
     self_samples: 1536
     hot_lines[2]{line,percent,code}:
-        45, 8.1, "let parsed = json.parse[Document](raw_text) handle error: return fail(error)"
-        52, 7.4, "let validated = schema.validate(parsed)"
+        45, 8.1, "Document parsed = json.parse[Document](raw_text) handle error: return fail(error)"
+        52, 7.4, "Document validated = schema.validate(parsed)"
     call_chain[1]: main → initialize → parse_config
     suggestion: "parse_config is called once at startup but accounts for 18.7% of CPU. The json.parse and schema.validate calls dominate. If the config file is static, consider parsing at comptime."
 ```
@@ -6180,7 +6180,7 @@ All 17 block constructs share the same shape. An LLM only needs to learn one pat
 
 Jett's keyword set uses complete, common English words that each map to a single token. Boolean and comparison operators use universal symbols (`==`, `!=`, `&&`, `||`, `!`, `<`, `>`, `<=`, `>=`):
 
-`let`, `mutable`, `function`, `return`, `returns`, `if`, `else`, `for`, `in`, `into`, `while`, `struct`, `enum`, `match`, `use`, `true`, `false`, `none`, `and`, `within`, `self`, `handle`, `error`, `default`, `result`, `ok`, `fail`, `as`, `break`, `continue`, `interface`, `implement`, `assert`, `type`, `where`, `value`, `mutual`, `machine`, `states`, `transitions`, `to`, `at`, `transition`, `clone`, `actor`, `receive`, `send`, `ask`, `respond`, `spawn`, `run`, `join`, `cancel`, `comptime`, `verify`, `secret`, `declassify`, `coarsen`, `serialize`, `namespace`, `bitfield`, `bit`, `bits`, `view`, `property`, `given`, `trace`, `breakpoint`, `some`, `optional`, `nothing`, `int64`, `float64`, `string`, `bool`, `bytes`, `list`, `map`, `set`, `modulo`
+`mutable`, `function`, `return`, `returns`, `if`, `else`, `for`, `in`, `into`, `while`, `struct`, `enum`, `match`, `use`, `true`, `false`, `none`, `and`, `within`, `self`, `handle`, `error`, `default`, `result`, `ok`, `fail`, `as`, `break`, `continue`, `interface`, `implement`, `assert`, `type`, `where`, `value`, `mutual`, `machine`, `states`, `transitions`, `to`, `at`, `transition`, `clone`, `actor`, `receive`, `send`, `ask`, `respond`, `spawn`, `run`, `join`, `cancel`, `comptime`, `verify`, `secret`, `declassify`, `coarsen`, `serialize`, `namespace`, `bitfield`, `bit`, `bits`, `view`, `property`, `given`, `trace`, `breakpoint`, `some`, `optional`, `nothing`, `int64`, `float64`, `string`, `bool`, `bytes`, `list`, `map`, `set`, `modulo`
 
 ### JSON AST Round-Tripping
 
