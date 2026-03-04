@@ -5048,44 +5048,33 @@ verify clamp:
 
 property clamp:
     given value: int64, low: int64, high: int64
-    where low <= high
     let result: int64 = clamp(value, low, high)
-    assert result >= low
-    assert result <= high
-    if value >= low and value <= high:
-        assert result is value
+    if low <= high:
+        assert result >= low
+        assert result <= high
+        if value >= low and value <= high:
+            assert result is value
 ```
 
-The `verify` block proves 5 specific cases at compile time. The `property` block proves the invariants hold for 10,000 random `(value, low, high)` triples — including integer boundaries, negative numbers, and extreme ranges the LLM would never think to test.
+The `verify` block proves 5 specific cases at compile time. The `property` block proves the invariants hold for 10,000 random `(value, low, high)` triples — including integer boundaries, negative numbers, extreme ranges, and invalid combinations like `low > high` that the LLM would never think to test.
 
-#### The `where` Clause — Preconditions for Generated Inputs
+#### No Preconditions — Test Everything
 
-The `where` clause in a `property` block filters generated inputs to only valid combinations:
+Property blocks have no `where` clause for filtering inputs. If a function should only accept certain inputs, use refinement types in the function signature (Rule Set 3) or validate inside the function. The fuzzer should hit invalid inputs too — that's how it finds bugs.
 
 ```
 property divide:
     given a: int64, b: int64
-    where b != 0
-    let result: int64 = a / b
-    assert result * b is a
+    let result: result[int64, string] = divide(a, b)
+    if b is 0:
+        assert result is fail
+    else:
+        let val: int64 = result handle error:
+            assert false "divide should succeed when b != 0"
+        assert val * b + (a modulo b) is a
 ```
 
-**Note: This is an INTENTIONAL example of property testing catching a bug.** The assertion `result * b is a` does NOT hold for integer division when `a` is not evenly divisible by `b`. For example, `7 / 2 = 3` (integer division truncates), then `3 * 2 = 6`, and `6 != 7`. The fuzzer will quickly find a counterexample like `(a=7, b=2)` and report a failure. This demonstrates a key strength of property testing: it catches mathematical assumptions that humans (and LLMs) miss. The programmer assumed division is the inverse of multiplication, but that only holds for exact division. The correct property would be `result * b + (a modulo b) is a`.
-
-The fuzzer only generates cases where `b` is not zero. The `where` clause expresses a precondition — the LLM states what inputs are valid, and the fuzzer respects it.
-
-```
-property percentage:
-    given score: int64, total: int64
-    where total > 0
-    where score >= 0
-    where score <= total
-    let pct: float64 = calculate_percentage(score, total)
-    assert pct >= 0.0
-    assert pct <= 100.0
-```
-
-Multiple `where` clauses compose. The fuzzer generates only inputs that satisfy all of them.
+The fuzzer generates all combinations including `b = 0`. The property verifies that division by zero is handled correctly *and* that valid divisions satisfy the mathematical property. No cases are hidden.
 
 #### Property Tests with State Machines
 
