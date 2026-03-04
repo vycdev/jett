@@ -11,7 +11,14 @@
       "Bash(cd:*)",
       "Bash(grep -n '```' '/c/Users/Vycto/Documents/GitHub/jett/docs/design.md')",
       "Bash(grep -n '`is`\\\\|`and`\\\\|`or`\\\\|`not`' '/c/Users/Vycto/Documents/GitHub/jett/docs/design.md')",
-      "Bash(grep -E '\\(^\\\\s+|```|if |while |assert \\)')"
+      "Bash(grep -E '\\(^\\\\s+|```|if |while |assert \\)')",
+      "Bash(python convert_let.py preview)",
+      "Bash(python find_inline_let.py)",
+      "Bash(python convert_let.py apply)",
+      "Bash(python verify_let.py)",
+      "Bash(python verify_let2.py)",
+      "Bash(python verify_let3.py)",
+      "Bash(python verify_let4.py)"
     ]
   }
 }
