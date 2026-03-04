@@ -5320,10 +5320,9 @@ line: 5
 input: app.conf
 output: "ERROR: file not found"
 error_handled: true
-handler_action: "return fail(\"config not found\")"
 ```
 
-The LLM can see not just the value changes but also where error paths were taken and what the error was.
+The LLM can see not just the value changes but also where error paths were taken. If it needs to see what the handler did, it reads the source at the reported file and line.
 
 #### ASP Integration — Trace Output as Structured TOON
 
