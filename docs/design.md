@@ -5184,7 +5184,7 @@ A `verify` block with 5 hand-picked examples might pass even if the function is 
 
 #### Implicit Views in Test and Debug Contexts
 
-In `property` blocks, `verify` blocks, and `agent_breakpoint()` evaluations, all values are **implicitly viewable** — they can be used multiple times without being consumed. This is a pragmatic relaxation of linear typing for testing and debugging contexts:
+In `property` blocks, `verify` blocks, and `breakpoint` evaluations, all values are **implicitly viewable** — they can be used multiple times without being consumed. This is a pragmatic relaxation of linear typing for testing and debugging contexts:
 
 ```
 property sort_preserves_elements:
@@ -5202,7 +5202,7 @@ property sort_preserves_elements:
 - Property and verify blocks never run in production — they execute at compile time or during `jett test`.
 - The relaxation is confined to a lexical scope (the block itself). Outside the block, normal linear rules apply.
 - The compiler still tracks types, capabilities, and refinements. Only linear consumption is relaxed.
-- `agent_breakpoint()` evaluations are debug-only (compiled out in `--release`). Expression evaluation implicitly views all variables in scope, ensuring debugging is non-destructive.
+- `breakpoint` evaluations are debug-only (compiled out in `--release`). Expression evaluation implicitly views all variables in scope, ensuring debugging is non-destructive.
 
 ### Rule Set 26: Variable Tracing
 
@@ -5397,9 +5397,9 @@ The fallback — print-statement debugging — requires the LLM to **predict in 
 
 The fundamental mismatch: debugging is inherently **interactive and exploratory**, but LLMs operate in **batch mode** (generate code → compile → read output). The LLM needs a way to explore the runtime state of a program dynamically, without predicting what to inspect before the program runs.
 
-#### The Solution: `agent_breakpoint()` — A Chatbot Inside the Running Program
+#### The Solution: `breakpoint` — A Chatbot Inside the Running Program
 
-Jett provides a built-in `agent_breakpoint()` function. When the native application hits this line during execution, it:
+Jett provides a `breakpoint` keyword. When the native application hits this statement during execution, it:
 
 1. **Pauses execution** at that exact point.
 2. **Opens an ASP communication channel** (lightweight HTTP server on localhost or stdin/stdout loop).
@@ -5417,7 +5417,7 @@ function process_order(view fs: Filesystem, order: Order) returns result[Receipt
     let validated: ValidatedOrder = validate_order(order) handle error:
         return fail("validation failed")
 
-    agent_breakpoint()   # execution pauses here
+    breakpoint   # execution pauses here
 
     let charged: ChargedOrder = charge_payment(validated) handle error:
         return fail("payment failed")
@@ -5428,7 +5428,7 @@ function process_order(view fs: Filesystem, order: Order) returns result[Receipt
 **What the LLM receives when the breakpoint is hit:**
 
 ```toon
-type: agent_breakpoint
+type: breakpoint
 file: src/orders.jett
 line: 6
 function: process_order
@@ -5538,27 +5538,20 @@ The LLM can make breakpoints conditional — they only pause when a condition is
 function process_batch(view fs: Filesystem, orders: view list[Order]) returns nothing:
     for order in view orders:
         if order.total > 1000.0:
-            agent_breakpoint()   # only pause for high-value orders
+            breakpoint   # only pause for high-value orders
         let result: result[nothing, string] = process_single_order(view fs, view order)
 ```
 
-Or using a more targeted form:
-
-```
-agent_breakpoint(when: validated.total < 0.0)
-# Only pause when the total is negative — catches the specific bug
-```
-
-The conditional form saves time: the LLM doesn't have to step through 500 normal orders to reach the one that's broken. It pauses only when the suspicious condition is met.
+The `if` block makes the breakpoint conditional. The LLM doesn't have to step through 500 normal orders to reach the one that's broken — it pauses only when the condition is met.
 
 #### The Debugging Workflow
 
-The LLM's debugging loop with `agent_breakpoint()`:
+The LLM's debugging loop with `breakpoint`:
 
 ```
 1. LLM generates code. A test or property fails.
 2. LLM reads the failure (via ASP) and suspects a function.
-3. LLM inserts agent_breakpoint() before the suspicious line.
+3. LLM inserts breakpoint before the suspicious line.
 4. Recompiles and runs: jett run app.jett --agent
 5. Program pauses. LLM receives the breakpoint notification.
 6. LLM sends inspect queries:
@@ -5568,7 +5561,7 @@ The LLM's debugging loop with `agent_breakpoint()`:
    - Aha — the total should be 44.97 but the expected was 45.97.
      The bug is in validate_order's total calculation.
 7. LLM sends "continue" to resume.
-8. LLM removes agent_breakpoint(), fixes validate_order.
+8. LLM removes breakpoint, fixes validate_order.
 9. Re-runs tests. Passes.
 ```
 
@@ -5581,11 +5574,11 @@ The LLM can insert multiple breakpoints:
 ```
 function calculate_tax(income: float64, state: string) returns float64:
     let base: float64 = income * 0.15
-    agent_breakpoint()   # check base calculation
+    breakpoint   # check base calculation
 
     let state_rate: float64 = get_state_rate(state)
     let state_tax: float64 = base * state_rate
-    agent_breakpoint()   # check state tax calculation
+    breakpoint   # check state tax calculation
 
     return base + state_tax
 ```
@@ -5602,7 +5595,7 @@ After hitting a breakpoint, the LLM can step forward one statement at a time, in
 
 #### Security: Agent Breakpoints Are Debug-Only
 
-`agent_breakpoint()` only compiles in debug mode:
+`breakpoint` only compiles in debug mode:
 
 ```
 # Debug mode — breakpoints are active:
@@ -5610,12 +5603,12 @@ jett run app.jett --agent --debug
 
 # Release mode — breakpoints are compiled out:
 jett build app.jett --release
-# agent_breakpoint() calls are silently removed. Zero overhead.
+# breakpoint statements are silently removed. Zero overhead.
 ```
 
-In release builds, `agent_breakpoint()` does not exist — it compiles to nothing. There is no performance cost and no security risk of leaving a breakpoint in production. The compiler can optionally warn about `agent_breakpoint()` calls in release builds.
+In release builds, `breakpoint` does not exist — it compiles to nothing. There is no performance cost and no security risk of leaving a breakpoint in production. The compiler can optionally warn about `breakpoint` statements left in release builds.
 
-`agent_breakpoint()` is a compiler primitive exempt from the capability system. It only exists in debug mode and is compiled out in release builds. No capability parameter is required.
+`breakpoint` is a compiler keyword exempt from the capability system. It only exists in debug mode and is compiled out in release builds. No capability parameter is required.
 
 #### ASP Communication Modes
 
@@ -5646,7 +5639,7 @@ The running program is a chatbot. The LLM asks questions ("what is `validated.to
 
 **2. No prediction required.**
 
-With print-debugging, the LLM must predict in advance which variables to inspect. With `agent_breakpoint()`, it decides at runtime based on what it sees. This eliminates wasted round-trips where the LLM printed the wrong variable.
+With print-debugging, the LLM must predict in advance which variables to inspect. With `breakpoint`, it decides at runtime based on what it sees. This eliminates wasted round-trips where the LLM printed the wrong variable.
 
 **3. Minimal context window usage.**
 
@@ -5658,7 +5651,7 @@ Insert breakpoint → run → inspect → identify bug → remove breakpoint →
 
 **5. Conditional breakpoints save tokens.**
 
-`agent_breakpoint(when: total < 0.0)` skips thousands of normal executions and pauses only on the suspicious case. The LLM doesn't waste context on irrelevant iterations.
+Conditional breakpoints (using `if`) skip thousands of normal executions and pause only on the suspicious case. The LLM doesn't waste context on irrelevant iterations.
 
 ---
 
@@ -5985,7 +5978,7 @@ Every function always has a `returns` clause — functions that produce no value
 
 **Every code path must end with an explicit `return` — except `returns nothing` functions.** A function that `returns int64` must have `return <value>` on every code path. If any path is missing a return, the compiler rejects it. The one exception: functions that `returns nothing` may omit the final `return nothing` — the function implicitly returns when execution reaches the end. Early `return nothing` is still allowed for exiting mid-function.
 
-Named arguments work in both struct construction AND function calls. Any parameter can be passed by name for clarity. This allows `agent_breakpoint(when: condition)` and `GuiCapability.create_text_field(gui, label, width: 200, height: 30)` — mixing positional and named arguments in a single call.
+Named arguments work in both struct construction AND function calls. Any parameter can be passed by name for clarity. This allows `GuiCapability.create_text_field(gui, label, width: 200, height: 30)` — mixing positional and named arguments in a single call.
 
 ### Conditionals
 
@@ -6386,7 +6379,7 @@ All 17 block constructs share the same shape. An LLM only needs to learn one pat
 
 Jett's keyword set uses complete, common English words that each map to a single token:
 
-`let`, `mutable`, `function`, `return`, `returns`, `if`, `else`, `for`, `in`, `into`, `while`, `struct`, `enum`, `match`, `use`, `true`, `false`, `none`, `and`, `or`, `not`, `is`, `within`, `self`, `handle`, `error`, `default`, `result`, `ok`, `fail`, `as`, `break`, `continue`, `interface`, `implement`, `assert`, `type`, `where`, `value`, `mutual`, `machine`, `states`, `transitions`, `to`, `at`, `transition`, `clone`, `actor`, `receive`, `send`, `ask`, `respond`, `spawn`, `run`, `join`, `cancel`, `comptime`, `verify`, `secret`, `declassify`, `coarsen`, `serialize`, `namespace`, `bitfield`, `bit`, `bits`, `view`, `property`, `given`, `trace`, `agent_breakpoint`, `some`, `optional`, `nothing`, `int64`, `float64`, `string`, `bool`, `bytes`, `list`, `map`, `set`, `modulo`
+`let`, `mutable`, `function`, `return`, `returns`, `if`, `else`, `for`, `in`, `into`, `while`, `struct`, `enum`, `match`, `use`, `true`, `false`, `none`, `and`, `or`, `not`, `is`, `within`, `self`, `handle`, `error`, `default`, `result`, `ok`, `fail`, `as`, `break`, `continue`, `interface`, `implement`, `assert`, `type`, `where`, `value`, `mutual`, `machine`, `states`, `transitions`, `to`, `at`, `transition`, `clone`, `actor`, `receive`, `send`, `ask`, `respond`, `spawn`, `run`, `join`, `cancel`, `comptime`, `verify`, `secret`, `declassify`, `coarsen`, `serialize`, `namespace`, `bitfield`, `bit`, `bits`, `view`, `property`, `given`, `trace`, `breakpoint`, `some`, `optional`, `nothing`, `int64`, `float64`, `string`, `bool`, `bytes`, `list`, `map`, `set`, `modulo`
 
 ### JSON AST Round-Tripping
 
@@ -6534,8 +6527,7 @@ External dependencies live in the `deps/` directory as vendored `.jett` files tr
 - [ ] ASP test results (`jett test --agent`)
 - [ ] `trace` keyword statement with compiler-instrumented lineage recording
 - [ ] Trace output as structured TOON through ASP
-- [ ] `agent_breakpoint()` with ASP query protocol
-- [ ] Conditional breakpoints (`agent_breakpoint(when: ...)`)
+- [ ] `breakpoint` keyword with ASP query protocol
 - [ ] Breakpoint communication: stdin/stdout mode and HTTP mode
 - [ ] Single-step execution from breakpoint (`step` query)
 - [ ] Debug-only compilation (breakpoints compiled out in `--release`)
