@@ -5479,11 +5479,10 @@ The LLM doesn't have to step through 500 normal orders to reach the one that's b
 
 #### The Problem with Traditional Profiling
 
-When an LLM writes an application and it runs slowly, the developer (or the LLM itself) needs to understand *why*. Traditional profilers produce visual flamegraphs — interactive SVG or HTML graphics that a human navigates by hovering, zooming, and scanning colored bands. This output is completely useless to an LLM:
+When an LLM writes an application and it runs slowly, the developer (or the LLM itself) needs to understand *why*. Traditional profilers produce visual flamegraphs — interactive SVG or HTML graphics that a human navigates by hovering, zooming, and scanning colored bands. This is a bad way to communicate profiling data to an LLM:
 
-1. **Flamegraphs are images.** LLMs cannot see pixels. An SVG flamegraph is an opaque blob.
+1. **Flamegraphs are designed for human spatial intuition.** A wide band *looks* big to a human. An LLM can process the image, but extracting precise percentages and function names from a visual representation is lossy and error-prone compared to structured data.
 2. **pprof/perf output is noisy.** Raw profiler dumps contain thousands of lines of stack frames with cryptic symbol names. Even if fed as text, the LLM wastes its entire context window parsing noise.
-3. **Humans use spatial intuition.** Flamegraphs work because a wide band *looks* big. LLMs have no spatial reasoning over rendered graphics. They need the same information as structured data.
 
 Jett solves this by making the compiler itself the profiler — and outputting **Bottleneck Summaries** in structured TOON instead of visual artifacts.
 
