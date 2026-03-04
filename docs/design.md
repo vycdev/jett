@@ -59,7 +59,7 @@ There must be exactly **one way** to express any given logic. No shortcuts, no a
 - No shorthand lambdas alongside named functions. There is only `function`.
 - No implicit returns. Always use `return`.
 - No optional parentheses. If a construct uses parentheses, it always uses them.
-- No operator aliases (`&&` vs `and`, `||` vs `or`). Pick one. Jett uses `and`, `or`, `not`, `is`, `!=`.
+- No operator aliases. Jett uses `==`, `!=`, `&&`, `||`, `!` — universal symbols, each a single token.
 - No multiple import styles. One `use` syntax, always.
 - No string concatenation with `+` alongside interpolation. Pick one mechanism.
 
@@ -73,8 +73,7 @@ Jett uses **common English words** as keywords, not symbols or abbreviations. Ev
 
 - Use `function` not `fn`, `func`, `def`, or `λ`.
 - Use `if`, `else`, `for`, `while`, `return` — universally recognized words.
-- Use `and`, `or`, `not` instead of `&&`, `||`, `!`.
-- Use `is` instead of `===` or `==` for equality. Use `!=` for inequality (a symbol exception, like the comparison operators).
+- Use `==` for equality, `!=` for inequality, `&&`, `||`, `!` for boolean logic — all single tokens and universal across languages.
 - Use `let` for variable binding — short, common, single-token.
 - Avoid abbreviations that may tokenize into subwords (e.g. `fmt` might become `f` + `mt`).
 
@@ -85,9 +84,7 @@ Language-specific symbols like `$`, `<=>`, `:=`, `>>=` are problematic because:
 2. LLMs may confuse similar-looking symbol sequences (e.g. `->` vs `=>` vs `<-`).
 3. Obscure symbols carry no inherent semantic meaning — a model must memorize what `<>` means in each language, whereas `not equal` is self-documenting.
 
-**Universal symbol exceptions:** Arithmetic (`+`, `-`, `*`, `/`), comparison (`>`, `<`, `>=`, `<=`), and inequality (`!=`) operators are universal across virtually all programming languages. Every LLM has seen them millions of times and every tokenizer handles them as 1-2 tokens. These are kept as symbols. All other operators use English keywords (`and`, `or`, `not`, `is`, `modulo`).
-
-**Why `!=` is a symbol but `is` is a keyword:** `is not` was Jett's only two-word operator, creating parsing ambiguity (is `is` followed by `not x` or `is not` as a unit?) and breaking the rule that every keyword is a single token. `!=` eliminates this problem — it is universal across languages, every tokenizer handles it cleanly, and it is consistent with the existing symbol comparison operators. `is` stays as a keyword because it is a clean single token with no ambiguity. This pragmatic mix (keyword equality + symbol inequality) mirrors Python, the most common language in LLM training data.
+**Universal symbol exceptions:** Arithmetic (`+`, `-`, `*`, `/`), comparison (`>`, `<`, `>=`, `<=`), equality (`==`, `!=`), and boolean (`&&`, `||`, `!`) operators are universal across virtually all programming languages. Every LLM has seen them millions of times and every tokenizer handles them as single tokens. These are kept as symbols. The only keyword operator is `modulo`.
 
 #### 3. AST-Native Syntax
 
@@ -218,17 +215,17 @@ This is a dramatic reduction in the context an LLM needs per task.
 
 ```
 function calculate_discount(price: float64, tier: string) returns float64:
-    if tier is "gold":
+    if tier == "gold":
         return price * 0.8
-    else if tier is "silver":
+    else if tier == "silver":
         return price * 0.9
     else:
         return price
 
 verify calculate_discount:
-    assert calculate_discount(100.0, "gold") is 80.0
-    assert calculate_discount(100.0, "silver") is 90.0
-    assert calculate_discount(100.0, "basic") is 100.0
+    assert calculate_discount(100.0, "gold") == 80.0
+    assert calculate_discount(100.0, "silver") == 90.0
+    assert calculate_discount(100.0, "basic") == 100.0
 ```
 
 The tests need nothing beyond the function itself. No database connection, no user session, no application state.
@@ -394,11 +391,11 @@ This is where Jett's type system becomes truly LLM-native. Standard types descri
 
 ```
 type Password = string where string.char_count(value) > 8
-type Age = int64 where value >= 0 and value < 150
+type Age = int64 where value >= 0 && value < 150
 type Email = string where string.contains(value, "@")
-type Port = int64 where value >= 1 and value <= 65535
+type Port = int64 where value >= 1 && value <= 65535
 type NonEmpty[T] = list[T] where list.length[T](value) > 0
-type Percentage = float64 where value >= 0.0 and value <= 100.0
+type Percentage = float64 where value >= 0.0 && value <= 100.0
 ```
 
 The `where` clause attaches a constraint to a base type. `value` refers to the value being constrained, and the clause accepts any pure expression (no capabilities, no mutation) that evaluates to `bool`. The compiler checks it wherever a value of that type is created.
@@ -446,7 +443,7 @@ type SortedList[T] = list[T] where list.is_sorted(value)
 type BoundedList[T] = list[T] where list.length[T](value) <= 100
 type PositiveFloat = float64 where value > 0.0
 
-type HttpStatus = int64 where value >= 100 and value < 600
+type HttpStatus = int64 where value >= 100 && value < 600
 type JsonString = string where string.is_valid_json(value)
 
 function parse_config(raw: JsonString) returns result[Config, string]:
@@ -560,12 +557,12 @@ mutual:
     function is_odd(n: int64) returns bool
 
 function is_even(n: int64) returns bool:
-    if n is 0:
+    if n == 0:
         return true
     return is_odd(n - 1)
 
 function is_odd(n: int64) returns bool:
-    if n is 0:
+    if n == 0:
         return false
     return is_even(n - 1)
 ```
@@ -1125,7 +1122,7 @@ Linter warnings are suggestions — LLMs (and humans) ignore them. A compile err
 function find_active_user(users: list[User], role: string) returns optional[User]:
     for user in users:
         if user.active:
-            if user.role is role:
+            if user.role == role:
                 if user.verified:
                     if user.age > 18:    # depth 5 — COMPILE ERROR
                         return some(user)
@@ -2372,19 +2369,19 @@ Every function can have a `verify` block immediately after its definition. The `
 
 ```
 function calculate_discount(price: float64, tier: string) returns float64:
-    if tier is "gold":
+    if tier == "gold":
         return price * 0.8
-    else if tier is "silver":
+    else if tier == "silver":
         return price * 0.9
     else:
         return price
 
 verify calculate_discount:
-    assert calculate_discount(100.0, "gold") is 80.0
-    assert calculate_discount(100.0, "silver") is 90.0
-    assert calculate_discount(100.0, "bronze") is 100.0
-    assert calculate_discount(0.0, "gold") is 0.0
-    assert calculate_discount(50.0, "silver") is 45.0
+    assert calculate_discount(100.0, "gold") == 80.0
+    assert calculate_discount(100.0, "silver") == 90.0
+    assert calculate_discount(100.0, "bronze") == 100.0
+    assert calculate_discount(0.0, "gold") == 0.0
+    assert calculate_discount(50.0, "silver") == 45.0
 ```
 
 The `verify` block is attached to `calculate_discount` by name. It **must** appear directly below the function it verifies — the compiler rejects `verify` blocks placed anywhere else. This is not a convention, it is enforced. Zero distance between implementation and tests. When the LLM generates the `verify` block, it just wrote the function body. Every branch, every edge case, every constant is fresh in its context.
@@ -2404,12 +2401,12 @@ function add_positive(a: int64, b: int64) returns int64:
     return a + b
 
 verify add_positive:
-    assert add_positive(2, 3) is 5       # passes at compile time
-    assert add_positive(0, 0) is 0       # passes at compile time
-    assert add_positive(-1, 1) is 0      # passes at compile time
-    assert add_positive(1, 1) is 3       # COMPILE ERROR:
+    assert add_positive(2, 3) == 5       # passes at compile time
+    assert add_positive(0, 0) == 0       # passes at compile time
+    assert add_positive(-1, 1) == 0      # passes at compile time
+    assert add_positive(1, 1) == 3       # COMPILE ERROR:
     # verify add_positive failed:
-    #   assert add_positive(1, 1) is 3
+    #   assert add_positive(1, 1) == 3
     #   left:  2
     #   right: 3
     #   hint: the function returned 2 but the assertion expected 3
@@ -2434,25 +2431,25 @@ function celsius_to_fahrenheit(c: float64) returns float64:
     return c * 1.8 + 32.0
 
 verify celsius_to_fahrenheit:
-    assert celsius_to_fahrenheit(0.0) is 32.0
-    assert celsius_to_fahrenheit(100.0) is 212.0
-    assert celsius_to_fahrenheit(-40.0) is -40.0
+    assert celsius_to_fahrenheit(0.0) == 32.0
+    assert celsius_to_fahrenheit(100.0) == 212.0
+    assert celsius_to_fahrenheit(-40.0) == -40.0
 
 function fahrenheit_to_celsius(f: float64) returns float64:
     return (f - 32.0) / 1.8
 
 verify fahrenheit_to_celsius:
-    assert fahrenheit_to_celsius(32.0) is 0.0
-    assert fahrenheit_to_celsius(212.0) is 100.0
-    assert fahrenheit_to_celsius(-40.0) is -40.0
+    assert fahrenheit_to_celsius(32.0) == 0.0
+    assert fahrenheit_to_celsius(212.0) == 100.0
+    assert fahrenheit_to_celsius(-40.0) == -40.0
 
 function is_boiling(c: float64) returns bool:
     return c >= 100.0
 
 verify is_boiling:
-    assert is_boiling(100.0) is true
-    assert is_boiling(99.9) is false
-    assert is_boiling(200.0) is true
+    assert is_boiling(100.0) == true
+    assert is_boiling(99.9) == false
+    assert is_boiling(200.0) == true
 ```
 
 Each function is immediately followed by its contract. When the LLM generates `celsius_to_fahrenheit`, it writes the verify block while the formula `c * 1.8 + 32.0` is still the most recent thing in its context. By the time it moves on to `fahrenheit_to_celsius`, the previous function is fully verified and can be trusted.
@@ -2462,7 +2459,7 @@ Each function is immediately followed by its contract. When the LLM generates `c
 `verify` blocks work with refinement types (Rule Set 3) to create a powerful proof chain:
 
 ```
-type Percentage = float64 where value >= 0.0 and value <= 100.0
+type Percentage = float64 where value >= 0.0 && value <= 100.0
 
 function calculate_grade(score: int64, total: int64) returns Percentage:
     let score_f: float64 = float64.from_int64(score)
@@ -2470,25 +2467,25 @@ function calculate_grade(score: int64, total: int64) returns Percentage:
     return score_f / total_f * 100.0
 
 verify calculate_grade:
-    assert calculate_grade(85, 100) is 85.0
-    assert calculate_grade(0, 100) is 0.0
-    assert calculate_grade(50, 50) is 100.0
-    assert calculate_grade(1, 3) is 33.33 within 0.01
+    assert calculate_grade(85, 100) == 85.0
+    assert calculate_grade(0, 100) == 0.0
+    assert calculate_grade(50, 50) == 100.0
+    assert calculate_grade(1, 3) == 33.33 within 0.01
 ```
 
 The return type `Percentage` guarantees the result is between 0 and 100. The `verify` block proves specific input/output pairs. Together, the type system and the verification contracts provide two layers of correctness: the type constrains the range, the verify proves specific behaviors.
 
-**Float comparison with `is ... within`:**
+**Float comparison with `== ... within`:**
 
-Nobody can reliably predict exact IEEE 754 floating-point representations (e.g., `33.333333333333336`). For approximate float64 comparisons, Jett extends `is` with `within`:
+Nobody can reliably predict exact IEEE 754 floating-point representations (e.g., `33.333333333333336`). For approximate float64 comparisons, Jett extends `==` with `within`:
 
 ```
-assert calculate_grade(1, 3) is 33.33 within 0.01
+assert calculate_grade(1, 3) == 33.33 within 0.01
 # Passes if the result is within 0.01 of 33.33
 ```
 
-- `is X` — exact comparison. Use for `int64`, `string`, `bool`, and exact float64 values like `0.0` or `100.0`.
-- `is X within Y` — approximate comparison. Use for float64 results that involve division or irrational numbers. The tolerance `Y` is mandatory — there is no implicit epsilon.
+- `== X` — exact comparison. Use for `int64`, `string`, `bool`, and exact float64 values like `0.0` or `100.0`.
+- `== X within Y` — approximate comparison. Use for float64 results that involve division or irrational numbers. The tolerance `Y` is mandatory — there is no implicit epsilon.
 
 #### Why This Matters for LLMs
 
@@ -2747,9 +2744,9 @@ let match: bool = secret.compare(stored_hash, computed_hash)
 Secret types compose with refinement types (Rule Set 3) for validated, secure data:
 
 ```
-type ApiKey = secret[string] where string.char_count(value) is 40
+type ApiKey = secret[string] where string.char_count(value) == 40
 type PasswordHash = secret[string] where string.starts_with(value, "$2b$")
-type Ssn = secret[string] where string.char_count(value) is 11 and string.char_at(value, 3) is "-"
+type Ssn = secret[string] where string.char_count(value) == 11 && string.char_at(value, 3) == "-"
 ```
 
 The type system enforces both the security constraint (cannot be leaked) and the format constraint (must match the expected pattern). An `ApiKey` is guaranteed to be exactly 40 characters long AND is guaranteed to never appear in logs, responses, or error messages.
@@ -3332,7 +3329,7 @@ The serialized form includes the state name. Deserialization restores the correc
 Deserialization automatically validates refinement type constraints (Rule Set 3):
 
 ```
-type Age = int64 where value >= 0 and value < 150
+type Age = int64 where value >= 0 && value < 150
 type Email = string where string.contains(value, "@")
 
 struct ValidatedUser:
@@ -4486,7 +4483,7 @@ function parse_ip_packet(raw: bytes) returns result[IpHeader, string]:
     if header.version != 4:
         return fail("not IPv4")
 
-    if header.ttl is 0:
+    if header.ttl == 0:
         return fail("TTL expired")
 
     return ok(header)
@@ -4954,9 +4951,9 @@ When an LLM writes unit tests (or `verify` blocks from Rule Set 13), it writes t
 
 ```
 verify add_positive:
-    assert add_positive(2, 3) is 5
-    assert add_positive(0, 0) is 0
-    assert add_positive(-1, 1) is 0
+    assert add_positive(2, 3) == 5
+    assert add_positive(0, 0) == 0
+    assert add_positive(-1, 1) == 0
 ```
 
 These are correct — but they are exclusively "normal" inputs. The LLM will not think to test:
@@ -4984,7 +4981,7 @@ function sort_list(items: view list[int64]) returns list[int64]:
 property sort_list:
     given items: list[int64]
     let sorted: list[int64] = sort_list(items)
-    assert list.length[int64](sorted) is list.length[int64](items)
+    assert list.length[int64](sorted) == list.length[int64](items)
     assert list.is_sorted(sorted)
     assert list.all_elements_in(sorted, items)
 ```
@@ -5066,11 +5063,11 @@ function clamp(value: int64, low: int64, high: int64) returns int64:
     return value
 
 verify clamp:
-    assert clamp(5, 0, 10) is 5
-    assert clamp(-1, 0, 10) is 0
-    assert clamp(15, 0, 10) is 10
-    assert clamp(0, 0, 10) is 0
-    assert clamp(10, 0, 10) is 10
+    assert clamp(5, 0, 10) == 5
+    assert clamp(-1, 0, 10) == 0
+    assert clamp(15, 0, 10) == 10
+    assert clamp(0, 0, 10) == 0
+    assert clamp(10, 0, 10) == 10
 
 property clamp:
     given value: int64, low: int64, high: int64
@@ -5078,8 +5075,8 @@ property clamp:
     if low <= high:
         assert result >= low
         assert result <= high
-        if value >= low and value <= high:
-            assert result is value
+        if value >= low && value <= high:
+            assert result == value
 ```
 
 The `verify` block proves 5 specific cases at compile time. The `property` block proves the invariants hold for 10,000 random `(value, low, high)` triples — including integer boundaries, negative numbers, extreme ranges, and invalid combinations like `low > high` that the LLM would never think to test.
@@ -5092,12 +5089,12 @@ Property blocks have no `where` clause for filtering inputs. If a function shoul
 property divide:
     given a: int64, b: int64
     let result: result[int64, string] = divide(a, b)
-    if b is 0:
-        assert result is fail
+    if b == 0:
+        assert result == fail
     else:
         let val: int64 = result handle error:
             assert false "divide should succeed when b != 0"
-        assert val * b + (a modulo b) is a
+        assert val * b + (a modulo b) == a
 ```
 
 The fuzzer generates all combinations including `b = 0`. The property verifies that division by zero is handled correctly *and* that valid divisions satisfy the mathematical property. No cases are hidden.
@@ -5129,7 +5126,7 @@ property user_auth_lifecycle:
     for action in actions:
         session = apply_auth_action(session, action, user_id)
     # After any sequence of actions, the session is in a valid state:
-    assert session at guest or session at authenticating or session at logged_in or session at banned
+    assert session at guest || session at authenticating || session at logged_in || session at banned
 ```
 
 The fuzzer generates random sequences of actions and verifies that the state machine never reaches an invalid state.
@@ -5144,7 +5141,7 @@ property json_round_trip:
     let json_string: string = json.serialize[User](user)
     let restored: User = json.parse[User](json_string) handle error:
         assert false "round-trip failed: json.parse returned error"
-    assert restored is user
+    assert restored == user
 ```
 
 The fuzzer generates thousands of random `User` structs with random field values, serializes each to JSON, deserializes it back, and verifies perfect equality. This catches encoding bugs, missing fields, and type conversion errors that no LLM-written unit test would find.
@@ -5162,7 +5159,7 @@ status: property_failure
 property: json_round_trip
 file: src/models.jett
 line: 45
-failed_assertion: restored is user
+failed_assertion: restored == user
 minimal_input:
     user:
         id: a
@@ -5215,7 +5212,7 @@ property sort_preserves_elements:
     given items: list[int64]
     let sorted: list[int64] = sort_list(items)
     # In property blocks, sorted can be used multiple times:
-    assert list.length[int64](sorted) is list.length[int64](items)
+    assert list.length[int64](sorted) == list.length[int64](items)
     assert list.is_sorted(sorted)
     assert list.all_elements_in(sorted, items)
     # Without implicit views, each use of `sorted` would consume it.
@@ -5699,10 +5696,7 @@ The `view` keyword is explicit at both call sites and declarations. When passing
 
 | Instead of | Jett uses |
 |------------|-----------|
-| `==`, `===` | `is` |
-| `&&` | `and` |
-| `\|\|` | `or` |
-| `!` | `not` |
+| `===` | `==` |
 | `->`, `=>` | `returns` |
 | `{ }` | indentation |
 | `;` | newline |
@@ -5793,7 +5787,7 @@ Named arguments work in both struct construction AND function calls. Any paramet
 function classify(view stdout: Stdout, x: int64) returns nothing:
     if x > 0:
         Stdout.write(view stdout, "positive")
-    else if x is 0:
+    else if x == 0:
         Stdout.write(view stdout, "zero")
     else:
         Stdout.write(view stdout, "negative")
@@ -5974,11 +5968,11 @@ Jett uses symbolic comparison operators alongside keyword operators for equality
 | `<` | Less than |
 | `>=` | Greater than or equal |
 | `<=` | Less than or equal |
-| `is` | Equality |
+| `==` | Equality |
 | `!=` | Inequality |
-| `and` | Logical and |
-| `or` | Logical or |
-| `not` | Logical not |
+| `&&` | Logical and |
+| `\|\|` | Logical or |
+| `!` | Logical not |
 
 Arithmetic: `+`, `-`, `*`, `/`, `modulo`.
 
@@ -6109,7 +6103,7 @@ Primitive types (`int64`, `float64`, `string`, `bool`) implement standard interf
 
 | Interface | Implemented by | Operations |
 |-----------|---------------|------------|
-| `Equatable` | `int64`, `float64`, `string`, `bool` | `is`, `!=` |
+| `Equatable` | `int64`, `float64`, `string`, `bool` | `==`, `!=` |
 | `Orderable` | `int64`, `float64`, `string` | `<`, `>`, `<=`, `>=` |
 | `Displayable` | `int64`, `float64`, `string`, `bool` | string representation (used by string interpolation) |
 | `Hashable` | `int64`, `string`, `bool` | can be used as `map` keys and `set` elements |
@@ -6182,11 +6176,11 @@ bitfield ...:
 
 All 17 block constructs share the same shape. An LLM only needs to learn one pattern.
 
-### Full English Keywords
+### Keywords
 
-Jett's keyword set uses complete, common English words that each map to a single token:
+Jett's keyword set uses complete, common English words that each map to a single token. Boolean and comparison operators use universal symbols (`==`, `!=`, `&&`, `||`, `!`, `<`, `>`, `<=`, `>=`):
 
-`let`, `mutable`, `function`, `return`, `returns`, `if`, `else`, `for`, `in`, `into`, `while`, `struct`, `enum`, `match`, `use`, `true`, `false`, `none`, `and`, `or`, `not`, `is`, `within`, `self`, `handle`, `error`, `default`, `result`, `ok`, `fail`, `as`, `break`, `continue`, `interface`, `implement`, `assert`, `type`, `where`, `value`, `mutual`, `machine`, `states`, `transitions`, `to`, `at`, `transition`, `clone`, `actor`, `receive`, `send`, `ask`, `respond`, `spawn`, `run`, `join`, `cancel`, `comptime`, `verify`, `secret`, `declassify`, `coarsen`, `serialize`, `namespace`, `bitfield`, `bit`, `bits`, `view`, `property`, `given`, `trace`, `breakpoint`, `some`, `optional`, `nothing`, `int64`, `float64`, `string`, `bool`, `bytes`, `list`, `map`, `set`, `modulo`
+`let`, `mutable`, `function`, `return`, `returns`, `if`, `else`, `for`, `in`, `into`, `while`, `struct`, `enum`, `match`, `use`, `true`, `false`, `none`, `and`, `within`, `self`, `handle`, `error`, `default`, `result`, `ok`, `fail`, `as`, `break`, `continue`, `interface`, `implement`, `assert`, `type`, `where`, `value`, `mutual`, `machine`, `states`, `transitions`, `to`, `at`, `transition`, `clone`, `actor`, `receive`, `send`, `ask`, `respond`, `spawn`, `run`, `join`, `cancel`, `comptime`, `verify`, `secret`, `declassify`, `coarsen`, `serialize`, `namespace`, `bitfield`, `bit`, `bits`, `view`, `property`, `given`, `trace`, `breakpoint`, `some`, `optional`, `nothing`, `int64`, `float64`, `string`, `bool`, `bytes`, `list`, `map`, `set`, `modulo`
 
 ### JSON AST Round-Tripping
 
@@ -6388,7 +6382,7 @@ External dependencies live in the `deps/` directory as vendored `.jett` files tr
 - **Comments syntax** — RESOLVED: `#` for comments.
 - **Effect system** — RESOLVED: capability-based I/O only. No `effects` keyword. All side effects declared via capability parameters.
 - **Refinement type complexity** — RESOLVED: `where` clauses accept any pure expression (no capabilities, no mutation) that evaluates to `bool`. `value` refers to the value being constrained. Expressions use normal Jett syntax — no special intrinsics. Constraints are checked at runtime type boundaries (when a value enters the refined type). This means `where string.is_valid_json(value)` and `where list.length(value) <= 100` are both valid.
-- **Dependent types** — should refinement types be able to reference other values (e.g. `type Matrix = list[list[float64]] where rows is cols`)? This approaches dependent type territory and significantly increases type checker complexity.
+- **Dependent types** — should refinement types be able to reference other values (e.g. `type Matrix = list[list[float64]] where rows == cols`)? This approaches dependent type territory and significantly increases type checker complexity.
 - **Concurrency model** — RESOLVED: actor model with zero shared memory, structured concurrency with enforced join/cancel. Actors use `spawn`, concurrent tasks use `run`/`join`/`cancel` at the function level (no special blocks). Cancellation works through capabilities — `cancel` sets a flag, the next I/O operation returns `CancelledError`. No function coloring.
 - **Memory management** — RESOLVED: linear types (move-by-default, explicit `clone` keyword) with fully compiler-managed allocation. No GC, no manual `free`, no lifetime annotations, no arenas. The compiler has perfect ownership knowledge from linear types and handles all allocation/deallocation automatically.
 - **Data layout optimization** — the compiler may automatically apply SoA (Structure of Arrays) transformations as a future optimization when access patterns suggest it. No syntax is needed — this is a compiler-internal optimization like auto-vectorization.
