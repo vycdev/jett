@@ -5444,17 +5444,16 @@ The LLM now knows: execution is paused at line 6 of `process_order`, `validated`
 
 #### Conditional Breakpoints
 
-Breakpoints can be made conditional using regular `if` blocks:
+`breakpoint` optionally takes a condition expression. It only pauses when the condition is true:
 
 ```
 function process_batch(view fs: Filesystem, orders: view list[Order]) returns nothing:
     for order in view orders:
-        if order.total > 1000.0:
-            breakpoint   # only pause for high-value orders
+        breakpoint order.total > 1000.0   # only pause for high-value orders
         let result: result[nothing, string] = process_single_order(view fs, view order)
 ```
 
-The LLM doesn't have to step through 500 normal orders to reach the one that's broken — it pauses only when the condition is met.
+The LLM doesn't have to step through 500 normal orders to reach the one that's broken — it pauses only when the condition is met. A bare `breakpoint` with no condition always pauses.
 
 #### Security: Breakpoints Are Debug-Only
 
