@@ -5761,7 +5761,7 @@ mutable int64 counter = 0
 
 Variables are immutable by default. The `mutable` keyword before the type opts into mutability. (Full word, not `mut` — see tokenizer-friendly keywords rule.)
 
-**Every variable declaration requires an explicit type.** There is no type inference. `x = 5` without a type is a compile error — write `int64 x = 5`. This eliminates a decision point (the LLM never chooses between implicit and explicit typing) and ensures the type of every variable is visible at its declaration. The LLM never needs to trace through function calls to determine a variable's type.
+**Every variable declaration requires an explicit type and an initial value.** There is no type inference and no uninitialized variables. `x = 5` without a type is a compile error — write `int64 x = 5`. `int64 x` without a value is also a compile error — every variable must have a value from the moment it exists. There is no null, no zero-default, no undefined state.
 
 ### Functions
 
