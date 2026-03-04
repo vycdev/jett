@@ -5486,12 +5486,12 @@ When an LLM writes an application and it runs slowly, the developer (or the LLM 
 
 Jett solves this by making the compiler itself the profiler — and outputting **Bottleneck Summaries** in structured TOON instead of visual artifacts.
 
-#### The Design: `jett run --agent-profile`
+#### The Design: `jett run --profile`
 
 Jett includes a built-in CPU sampling profiler at the compiler level. It is not a separate tool, not a third-party library, and not a visual application. It is a compiler flag:
 
 ```
-jett run --agent-profile app.jett
+jett run --profile app.jett
 ```
 
 This runs the program normally while collecting CPU samples at a configurable frequency. When the program exits (or is interrupted), instead of generating a flamegraph, the compiler analyzes the samples and produces a **Bottleneck Summary** — a structured TOON document identifying the critical performance bottlenecks.
@@ -5570,10 +5570,10 @@ Only bottlenecks above a configurable threshold (default: 5% of CPU time) are in
 
 ```
 # Only show bottlenecks above 10% CPU
-jett run --agent-profile --profile-threshold 10 app.jett
+jett run --profile --profile-threshold 10 app.jett
 
 # Show more detail (lower threshold)
-jett run --agent-profile --profile-threshold 2 app.jett
+jett run --profile --profile-threshold 2 app.jett
 ```
 
 #### Integration with the Agent Server Protocol
@@ -5581,13 +5581,13 @@ jett run --agent-profile --profile-threshold 2 app.jett
 When combined with the `--agent` flag (Rule Set 21), the profiler output is emitted as part of the standard ASP TOON stream:
 
 ```
-jett run --agent --agent-profile app.jett
+jett run --agent --profile app.jett
 ```
 
 This means the profiler fits into the existing LLM-driven development loop:
 
 1. LLM writes the application.
-2. LLM runs it with `--agent --agent-profile`.
+2. LLM runs it with `--agent --profile`.
 3. Program executes and profile is collected.
 4. ASP returns the bottleneck summary as structured TOON.
 5. LLM reads the top bottleneck, applies the suggestion.
@@ -5598,10 +5598,10 @@ No human intervention required. No visual tools. No copy-pasting flamegraph scre
 
 #### Memory Profiling
 
-The same approach extends to memory profiling with `--agent-profile-memory`:
+The same approach extends to memory profiling with `--profile-memory`:
 
 ```
-jett run --agent-profile-memory app.jett
+jett run --profile-memory app.jett
 ```
 
 Output follows the same structure but reports allocation-heavy functions instead of CPU-heavy ones:
@@ -5627,12 +5627,12 @@ bottlenecks[1]:
 
 #### Comparison Profiling
 
-To measure the impact of an optimization, `--agent-profile-compare` accepts a baseline profile:
+To measure the impact of an optimization, `--profile-compare` accepts a baseline profile:
 
 ```
-jett run --agent-profile --profile-output baseline.profile app.jett
+jett run --profile --profile-output baseline.profile app.jett
 # ... make changes ...
-jett run --agent-profile --profile-compare baseline.profile app.jett
+jett run --profile --profile-compare baseline.profile app.jett
 ```
 
 The output includes a `delta` field on each bottleneck:
@@ -6350,11 +6350,11 @@ External dependencies live in the `deps/` directory as vendored `.jett` files tr
 - [ ] Breakpoint communication: stdin/stdout mode and HTTP mode
 - [ ] Single-step execution from breakpoint (`step` query)
 - [ ] Debug-only compilation (breakpoints compiled out in `--release`)
-- [ ] Built-in CPU sampling profiler (`--agent-profile`)
+- [ ] Built-in CPU sampling profiler (`--profile`)
 - [ ] Bottleneck summary generation with ranked hotspots and suggestions
 - [ ] Hot-line analysis (per-line CPU/allocation attribution within functions)
-- [ ] Memory profiler (`--agent-profile-memory`) with allocation-heavy function detection
-- [ ] Comparison profiling (`--agent-profile-compare`) with delta reporting
+- [ ] Memory profiler (`--profile-memory`) with allocation-heavy function detection
+- [ ] Comparison profiling (`--profile-compare`) with delta reporting
 - [ ] Profiler threshold configuration (`--profile-threshold`)
 - [ ] Profiler integration with Agent Server Protocol (ASP TOON output)
 - [ ] MCP server (`jett mcp`) wrapping ASP tools and documentation resources
