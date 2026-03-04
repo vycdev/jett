@@ -4949,6 +4949,8 @@ LLMs are bad at edge cases because edge cases are rare in training data. The neu
 
 Jett adds `property` blocks alongside `verify` blocks. A `property` block does not specify individual inputs and expected outputs. Instead, the LLM declares **the rules that must always hold** — the invariants, the relationships, the properties of the function's behavior. The compiler's built-in fuzzer then bombards the function with thousands of random, edge-case, and adversarial inputs to find violations.
 
+Unlike `verify` blocks (which are named after the function they test), `property` blocks are **standalone** — they have their own name, their own `given` inputs, and can call any combination of functions. A property block must appear after the functions it references (top-to-bottom rule, Rule Set 4), but it is not tied to any single function.
+
 **Basic property test:**
 
 ```
