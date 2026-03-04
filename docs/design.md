@@ -5738,7 +5738,7 @@ Clever shortcuts and implicit behavior are where LLMs make mistakes. Jett favors
 
 ### Program Entry Point
 
-Every Jett program starts with a `main` function. There are no top-level statements — not even in the main file. Every file consists only of struct definitions, function definitions, and namespace declarations.
+Executable Jett programs start with a `main` function. Libraries do not need one — a library is just namespaces with structs and functions, consumed by other projects via `use`. There are no top-level statements in any file. Every file consists only of struct definitions, function definitions, and namespace declarations.
 
 ```
 namespace app
