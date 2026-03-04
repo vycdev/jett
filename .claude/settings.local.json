@@ -8,7 +8,10 @@
       "Bash(git -C \"C:/Users/Vycto/Documents/GitHub/jett\" status docs/design.md)",
       "Bash(awk:*)",
       "Bash(cd \"C:/Users/Vycto/Documents/GitHub/jett\")",
-      "Bash(cd:*)"
+      "Bash(cd:*)",
+      "Bash(grep -n '```' '/c/Users/Vycto/Documents/GitHub/jett/docs/design.md')",
+      "Bash(grep -n '`is`\\\\|`and`\\\\|`or`\\\\|`not`' '/c/Users/Vycto/Documents/GitHub/jett/docs/design.md')",
+      "Bash(grep -E '\\(^\\\\s+|```|if |while |assert \\)')"
     ]
   }
 }
