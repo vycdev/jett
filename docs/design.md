@@ -2857,6 +2857,30 @@ function main(stdout: Stdout, stderr: Stderr, fs: Filesystem, net: Network, env:
     Stdout.write(view stdout, "server stopped")
 ```
 
+**Command-line arguments** are accessed through the same `Environment` capability via `Environment.args()`:
+
+```
+function main(stdout: Stdout, env: Environment, fs: Filesystem) returns nothing:
+    let args: list[string] = Environment.args(view env)
+    # args contains: list("compress", "input.txt", "--output", "output.gz")
+
+    if list.length[string](args) < 2:
+        Stdout.write(view stdout, "usage: compress <input> [--output <path>]")
+        return nothing
+
+    let input_path: string = list.get[string](args, 0) handle error:
+        return nothing
+    let data: bytes = Filesystem.read_bytes(view fs, input_path) handle error:
+        Stdout.write(view stdout, "failed to read file")
+        return nothing
+
+    let compressed: bytes = compress(data)
+    Filesystem.write_bytes(view fs, "output.gz", compressed) handle error:
+        Stdout.write(view stdout, "failed to write output")
+```
+
+`Environment.args()` returns `list[string]` — the raw arguments passed to the program, excluding the program name. Arguments are read-only data from the OS, so they belong with `Environment.get()` for environment variables.
+
 `main()` is the **only** function that receives capabilities from the runtime. Every other function in the program gets its capabilities by having them passed in as parameters. If a function doesn't have a `Filesystem` parameter, it **cannot** touch the file system. Period. The compiler enforces this.
 
 #### Capabilities Use `view` — Ownership Stays in `main()`
