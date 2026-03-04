@@ -5178,7 +5178,7 @@ The fuzzer shrinks failing cases to the simplest reproduction. `sort_list(list(1
 
 **5. Catches hallucinated logic that verify blocks miss.**
 
-A `verify` block with 5 hand-picked examples might pass even if the function is completely wrong for edge cases. A `property` block with 10,000 random inputs will almost certainly catch it. The combination of both — `verify` for compile-time proof of known cases, `property` for fuzz-time proof of unknown cases — provides the strongest correctness guarantee an LLM-generated function can have.
+A `verify` block with 5 hand-picked examples might pass even if the function is completely wrong for edge cases. A `property` block with 10,000 random inputs will almost certainly catch it. The combination of both — `verify` for compile-time proof of known cases, `property` for test-time proof of unknown cases — provides the strongest correctness guarantee an LLM-generated function can have.
 
 #### Implicit Views in Test and Debug Contexts
 
