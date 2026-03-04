@@ -335,7 +335,7 @@ function add_to_price(price: string, tax: int64) returns string:
 
 In a dynamically typed language, type mismatches would silently produce garbage or crash at runtime. In Jett, the LLM gets an immediate, actionable error.
 
-Jett uses string interpolation `"text {expr}"` as the single canonical mechanism for building strings. Expressions inside `{}` must implement the `Displayable` interface — the compiler calls `Displayable.display()` to produce the string representation. There is no `+` operator for strings and no `string.concat()` function.
+Jett uses string interpolation `"text {expr}"` as the single canonical mechanism for building strings. Expressions inside `{}` must implement the `Displayable` interface — the compiler calls the type's `display()` function (e.g., `int64.display()`, `MyStruct.display()`) to produce the string representation. There is no `+` operator for strings and no `string.concat()` function.
 
 #### Explicit Type Conversions
 
@@ -5945,7 +5945,7 @@ let result: string = "total: {order.total}"     # expressions inside {} are eval
 let multi: string = "{a} + {b} = {a + b}"       # arbitrary expressions allowed
 ```
 
-**Displayable requirement:** Expressions inside `{}` must be of a type that implements the `Displayable` interface. The compiler calls `Displayable.display()` under the hood to produce the string representation. Types that do not implement `Displayable` are rejected:
+**Displayable requirement:** Expressions inside `{}` must be of a type that implements the `Displayable` interface. The compiler calls the type's `display()` function under the hood (e.g., `int64.display(count)` for an `int64`). Types that do not implement `Displayable` are rejected:
 
 ```
 let count: int64 = 42
@@ -6072,7 +6072,7 @@ function display_sorted[T implements Orderable and Displayable](items: list[T], 
     # T must implement both Orderable and Displayable
     let sorted: list[T] = sort[T](items)
     for item in sorted:
-        let displayed: string = Displayable.display(item)
+        let displayed: string = T.display(item)
         Stdout.write(view stdout, displayed)
 
 # Multiple type parameters — comma separates parameters, and separates interfaces:
