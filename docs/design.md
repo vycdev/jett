@@ -6107,8 +6107,9 @@ Primitive types (`int64`, `float64`, `string`, `bool`) implement standard interf
 | `Orderable` | `int64`, `float64`, `string` | `<`, `>`, `<=`, `>=` |
 | `Displayable` | `int64`, `float64`, `string`, `bool` | string representation (used by string interpolation) |
 | `Hashable` | `int64`, `string`, `bool` | can be used as `map` keys and `set` elements |
+| `Serializable` | all structs, all primitives | `json.serialize[T]()`, `json.parse[T]()` |
 
-These are ordinary interface implementations, not compiler magic. They follow the same `implement` block pattern as any user-defined struct.
+Primitive interface implementations are ordinary `implement` blocks, not compiler magic. `Serializable` is automatically implemented for all structs — since structs are plain data with known fields, the compiler can generate serialization code without any user input.
 
 ---
 
