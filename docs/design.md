@@ -5271,11 +5271,11 @@ function process_invoice(income: float64) returns nothing:
 ```toon
 variable: final_amount
 final_value: 847.30
-lineage[4]{step,function,file,line,input,output,note}:
-    1, calculate_base_tax, src/tax.jett, 12, "income: 50000.0", 5000.0,
-    2, apply_state_tax,    src/tax.jett, 13, 5000.0,            5325.0,  "applied CA rate: 6.5%"
-    3, apply_discount,     src/tax.jett, 14, 5325.0,            4792.50, "applied veteran discount: 10%"
-    4, finalize,           src/tax.jett, 15, 4792.50,           847.30,  "SUSPICIOUS: large change from 4792.50 to 847.30"
+lineage[4]{step,function,file,line,input,output}:
+    1, calculate_base_tax, src/tax.jett, 12, "income: 50000.0", 5000.0
+    2, apply_state_tax,    src/tax.jett, 13, 5000.0,            5325.0
+    3, apply_discount,     src/tax.jett, 14, 5325.0,            4792.50
+    4, finalize,           src/tax.jett, 15, 4792.50,           847.30
 ```
 
 The LLM receives just this — a few lines of TOON showing exactly how the value evolved. It instantly sees that `finalize` is where the math went wrong (input 4792.50, output 847.30 — an unreasonable transformation). No guessing. No massive logs. No scrolling through hundreds of print statements.
