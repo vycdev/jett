@@ -6418,8 +6418,8 @@ Jett compiles to native code via an **LLVM backend** (primary target) for perfor
 ### Modes
 
 - **`jett run file.jett`** — interpret and run immediately
-- **`jett build file.jett`** — compile to native binary
-- **`jett test`** — run all `verify` and `property` blocks in the project (Jett has no `test` keyword; `verify` blocks run at compile time for pure functions, and `property` blocks run fuzz-based tests at test time)
+- **`jett build file.jett`** — compile to native binary. Runs `verify` blocks during compilation (they are compile-time checks). Does NOT run `property` blocks — those are test-time only.
+- **`jett test`** — run all `verify` and `property` blocks in the project. `verify` blocks execute at compile time for pure functions. `property` blocks run fuzz-based tests at test time (10,000 random inputs by default).
 - **`jett format`** — format source code (single canonical style, no configuration)
 
 ### Project Structure
