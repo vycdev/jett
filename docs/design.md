@@ -5000,9 +5000,9 @@ When the developer or LLM runs `jett test`, the compiler:
 When the fuzzer finds a failure, the raw random input is often large and confusing (e.g., a list with 847 elements). The fuzzer automatically **shrinks** the input to the smallest example that still triggers the failure:
 
 ```
-# Fuzzer found failure with: [483, -2, 0, 17, -99, 42, 0, 8, ...]  (847 elements)
+# Fuzzer found failure with: list(483, -2, 0, 17, -99, 42, 0, 8, ...)  (847 elements)
 # Shrinking...
-# Minimal failing input: [1, 0]
+# Minimal failing input: list(1, 0)
 ```
 
 The ASP output for a property failure:
@@ -5019,10 +5019,10 @@ actual_output:
     sorted[2]: 1,0
 iterations_before_failure: 42
 shrink_steps: 15
-explanation: "sort_list([1, 0]) produced [1, 0] which is not sorted"
+explanation: "sort_list(list(1, 0)) produced list(1, 0) which is not sorted"
 ```
 
-The LLM receives the **minimal failing input** — the simplest case that breaks the function. This is vastly more useful than "failed on a list with 847 elements." The LLM can immediately see that `sort_list([1, 0])` returns `[1, 0]` (unsorted) and fix the bug.
+The LLM receives the **minimal failing input** — the simplest case that breaks the function. This is vastly more useful than "failed on a list with 847 elements." The LLM can immediately see that `sort_list(list(1, 0))` returns `list(1, 0)` (unsorted) and fix the bug.
 
 #### Property Tests + Verify Blocks — Two Layers of Correctness
 
@@ -5170,7 +5170,7 @@ The LLM is bad at imagining adversarial inputs. The CPU is perfect at generating
 
 **3. Minimal failing inputs are LLM-readable.**
 
-The fuzzer shrinks failing cases to the simplest reproduction. `sort_list([1, 0]) returned [1, 0]` is trivially debuggable. The LLM doesn't waste tokens analyzing a 847-element list.
+The fuzzer shrinks failing cases to the simplest reproduction. `sort_list(list(1, 0)) returned list(1, 0)` is trivially debuggable. The LLM doesn't waste tokens analyzing a 847-element list.
 
 **4. Native speed makes fuzzing practical.**
 
@@ -5347,7 +5347,7 @@ The `tracked` annotation is meant to be temporary. `jett format` can optionally 
 When a `property` block finds a failing input, the LLM can re-run with tracking to see exactly where the logic broke:
 
 ```
-# Property test found: sort_list([3, 1, 2]) returned [3, 1, 2] (not sorted)
+# Property test found: sort_list(list(3, 1, 2)) returned list(3, 1, 2) (not sorted)
 # LLM adds tracking to debug:
 
 function sort_list_debug(items: view list[int64], view stdout: Stdout) returns tracked[list[int64]]:
