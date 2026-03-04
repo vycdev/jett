@@ -5204,7 +5204,7 @@ property sort_preserves_elements:
 - The compiler still tracks types, capabilities, and refinements. Only linear consumption is relaxed.
 - `agent_breakpoint()` evaluations are debug-only (compiled out in `--release`). Expression evaluation implicitly views all variables in scope, ensuring debugging is non-destructive.
 
-### Rule Set 26: Type-Level Data Lineage (Tracked)
+### Rule Set 26: Variable Tracing
 
 #### The Problem: Debugging Requires Tracing, and Tracing Floods Context
 
@@ -5216,51 +5216,60 @@ When an LLM-generated function produces a wrong result, debugging traditionally 
 
 Both approaches share the same flaw: they generate **far more information than needed**. If `tax_rate` is wrong, the LLM doesn't need to see the history of every variable in the program — it only needs the history of `tax_rate`.
 
-#### The Solution: `tracked[T]` — Per-Variable Lineage at the Type Level
+#### The Solution: `trace` — A Keyword Statement for Per-Variable Lineage
 
-Jett introduces a `tracked` type wrapper. When the LLM suspects a specific variable is wrong, it changes the type from `T` to `tracked[T]`. The compiler then secretly attaches a lightweight history log to that variable. Every time the value passes through a function or is transformed in a pipeline, the compiler records the file name, line number, function name, and the before/after state.
+Jett provides a `trace` keyword that takes a variable name. When the compiler encounters `trace variable_name`, it instruments the compiled output to record the complete history of that variable — every assignment, every function it passed through, every transformation — from the point the variable was declared up to the `trace` statement. No type changes. No function signature changes. No capability parameters. Just one line added.
 
 **Standard code:**
 
 ```
-let tax_rate: int64 = calculate_tax(user)
+function process_invoice(income: float64) returns nothing:
+    let mutable tax: float64 = calculate_base_tax(income)
+    tax = apply_state_tax(tax, "CA")
+    tax = apply_discount(tax, "veteran")
+    let final_amount: float64 = finalize(tax)
+    # something is wrong with final_amount...
 ```
 
-**Debugging code — change one type:**
+**Debugging code — add one line:**
 
 ```
-let tax_rate: tracked[int64] = calculate_tax(user)
+function process_invoice(income: float64) returns nothing:
+    let mutable tax: float64 = calculate_base_tax(income)
+    tax = apply_state_tax(tax, "CA")
+    tax = apply_discount(tax, "veteran")
+    let final_amount: float64 = finalize(tax)
+    trace final_amount
 ```
 
-That's it. One word added to the type annotation. The rest of the code does not change — `tracked[int64]` is assignment-compatible with `int64` in all contexts. The function signatures don't change. The pipeline doesn't change. The compiler silently instruments the tracking.
+That's it. One statement added. The variable types stay the same. The function signature stays the same. No `view stdout` parameter, no special return types. The compiler handles all instrumentation internally.
 
-#### How Tracking Works Under the Hood
+#### How Tracing Works Under the Hood
 
 Because Jett uses linear typing (Rule Set 10), the compiler knows every function a value passes through and the exact order. There are no hidden references, no aliasing, no shared mutable state. The value moves sequentially from function to function. The compiler uses this to build a perfect lineage chain.
 
-When a variable is typed as `tracked[T]`, the compiler:
+When the compiler encounters `trace variable_name`, it:
 
-1. Allocates a small array for the lineage log.
-2. Records the initial value and source location.
-3. At every function call or pipeline step that takes and returns the value, records: function name, file, line, value before, value after.
-4. When the LLM calls `trace()`, the accumulated lineage is emitted as structured TOON.
+1. Walks backward through the code from the `trace` statement to the variable's declaration.
+2. Identifies every assignment, function call, and pipeline step that touched the variable.
+3. Instruments each of those points to record: function name, file, line, value before, value after.
+4. At the `trace` statement, emits the accumulated lineage as structured TOON output.
 
-**The trace output:**
+**Example with output:**
 
 ```
-function process_invoice(view stdout: Stdout, income: float64) returns nothing:
-    let mutable tax: tracked[float64] = calculate_base_tax(income)
+function process_invoice(income: float64) returns nothing:
+    let mutable tax: float64 = calculate_base_tax(income)
     tax = apply_state_tax(tax, "CA")
     tax = apply_discount(tax, "veteran")
-    let final_amount: tracked[float64] = finalize(tax)
-
-    trace(final_amount, view stdout)
+    let final_amount: float64 = finalize(tax)
+    trace final_amount
 ```
 
 **Output — a tiny, hyper-specific TOON log for one variable:**
 
 ```toon
-variable: tax
+variable: final_amount
 final_value: 847.30
 lineage[4]{step,function,file,line,input,output,note}:
     1, calculate_base_tax, src/tax.jett, 12, "income: 50000.0", 5000.0,
@@ -5271,39 +5280,34 @@ lineage[4]{step,function,file,line,input,output,note}:
 
 The LLM receives just this — a few lines of TOON showing exactly how the value evolved. It instantly sees that `finalize` is where the math went wrong (input 4792.50, output 847.30 — an unreasonable transformation). No guessing. No massive logs. No scrolling through hundreds of print statements.
 
-#### `trace()` and the Pipeline Operator
+#### `trace` and the Pipeline Operator
 
-Tracking integrates naturally with pipelines (Rule Set 19):
+Tracing integrates naturally with pipelines (Rule Set 19):
 
 ```
-let tax_amount: tracked[float64] = income
+let tax_amount: float64 = income
     into calculate_base_tax
     into apply_state_tax("CA")
     into apply_discount("veteran")
     into finalize
 
-trace(tax_amount, stdout)
+trace tax_amount
 ```
 
 Each `into` step is a lineage entry. The trace output shows the value flowing left-to-right through the pipeline, with before/after at every step. The pipeline structure maps 1:1 to the lineage array.
 
-#### Zero Performance Impact on Untracked Variables
+#### Zero Performance Impact on Untraced Variables
 
-`tracked[T]` only instruments the specific variable it is applied to. Every other variable in the program runs at full native speed with zero overhead. This is critical for debugging in production-like conditions — the LLM can track one suspicious variable without slowing down the rest of the application.
+`trace` only instruments the specific variable it names. Every other variable in the program runs at full native speed with zero overhead. This is critical for debugging in production-like conditions — the LLM can trace one suspicious variable without slowing down the rest of the application.
 
-| Variable type | Runtime cost |
-|--------------|-------------|
-| `int64` | Zero overhead — native speed |
-| `tracked[int64]` | Small overhead — lineage recording per step |
-| Every other variable in the program | Zero overhead — unaffected by the tracked variable |
+#### Tracing with Error Handling
 
-#### Tracked Types with Error Handling
-
-When a tracked value passes through a `handle` block, the lineage records the error path:
+When a traced variable passes through a `handle` block, the lineage records the error path:
 
 ```
-let data: tracked[string] = read_config(fs, "app.conf") handle error:
+let data: string = read_config(fs, "app.conf") handle error:
     return fail("config not found")
+trace data
 ```
 
 If the `handle` path is taken, the lineage records:
@@ -5323,44 +5327,44 @@ The LLM can see not just the value changes but also where error paths were taken
 
 #### ASP Integration — Trace Output as Structured TOON
 
-`trace()` outputs to the ASP (Rule Set 21) when `--agent` is active:
+When `--agent` is active, trace output goes through the ASP (Rule Set 21):
 
 ```
-jett run app.jett --agent --trace-var tax
+jett run app.jett --agent
 ```
 
 The trace data is part of the agent TOON payload. The LLM receives it directly in the compile-test-fix loop. No terminal parsing, no log file searching.
 
-#### Tracked Types Are Opt-In and Temporary
+#### `trace` Is a Debugging Tool, Not a Permanent Statement
 
-`tracked[T]` is a **debugging tool**, not a permanent annotation. The workflow:
+`trace` is meant to be **temporary**. The workflow:
 
 1. LLM generates code. A test or property fails.
-2. LLM changes the suspicious variable from `T` to `tracked[T]`.
+2. LLM adds `trace suspicious_variable` to narrow down the problem.
 3. Runs the program. Reads the trace output.
 4. Identifies the broken function from the lineage.
 5. Fixes the function.
-6. Removes `tracked` — changes back to `T`.
+6. Removes the `trace` statement.
 
-The `tracked` annotation is meant to be temporary. `jett format` can optionally warn about tracked types left in production code.
+The compiler can optionally warn about `trace` statements left in code during release builds. `trace` statements are compiled out entirely in `--release` mode — they produce no runtime overhead and no output in production.
 
-#### Combining Tracked with Property Testing
+#### Combining Trace with Property Testing
 
-When a `property` block finds a failing input, the LLM can re-run with tracking to see exactly where the logic broke:
+When a `property` block finds a failing input, the LLM can add a trace to see exactly where the logic broke:
 
 ```
 # Property test found: sort_list(list(3, 1, 2)) returned list(3, 1, 2) (not sorted)
-# LLM adds tracking to debug:
+# LLM adds trace to debug:
 
-function sort_list_debug(items: view list[int64], view stdout: Stdout) returns tracked[list[int64]]:
-    let mutable result: tracked[list[int64]] = clone items
+function sort_list(items: view list[int64]) returns list[int64]:
+    let mutable result: list[int64] = clone items
     result = partition(result)
     result = merge(result)
-    trace(result, view stdout)
+    trace result
     return result
 ```
 
-The trace shows which step (partition or merge) produced the wrong intermediate result.
+The trace shows which step (partition or merge) produced the wrong intermediate result. No function signature changes, no new debug-specific function — just one `trace` line added to the existing code.
 
 #### Why This Is Perfect for LLMs
 
@@ -5372,13 +5376,13 @@ The trace output is a tiny TOON array — typically 5-10 entries, one per transf
 
 The lineage array shows input and output at every function. If step 3 takes 5325.0 as input and produces 847.30 as output, the bug is in step 3. The LLM doesn't need to reason about the whole program — it reads the lineage and pinpoints the broken function.
 
-**3. One-word change to enable.**
+**3. Zero code changes to enable.**
 
-`int64` → `tracked[int64]`. No restructuring the code, no adding logging frameworks, no inserting print statements at 20 locations. One type annotation change activates full lineage tracking for that variable.
+No type changes, no function signature changes, no capability parameters. Just add `trace variable_name` where you want to inspect. Remove it when done. The surrounding code is completely unaffected.
 
-**4. Works with the existing type system.**
+**4. Clear semantics.**
 
-`tracked[int64]` is compatible with `int64` everywhere. Functions that take `int64` accept `tracked[int64]`. Pipelines work. Error handling works. The compiler handles the instrumentation transparently.
+`trace variable_name` traces everything that happened to `variable_name` from its declaration up to the `trace` statement. No ambiguity about what is being traced or from when.
 
 **5. Structured output feeds directly into the LLM.**
 
@@ -6383,7 +6387,7 @@ All 17 block constructs share the same shape. An LLM only needs to learn one pat
 
 Jett's keyword set uses complete, common English words that each map to a single token:
 
-`let`, `mutable`, `function`, `return`, `returns`, `if`, `else`, `for`, `in`, `into`, `while`, `struct`, `enum`, `match`, `use`, `true`, `false`, `none`, `and`, `or`, `not`, `is`, `within`, `self`, `handle`, `error`, `default`, `result`, `ok`, `fail`, `as`, `break`, `continue`, `interface`, `implement`, `assert`, `type`, `where`, `value`, `mutual`, `machine`, `states`, `transitions`, `to`, `at`, `transition`, `clone`, `actor`, `receive`, `send`, `ask`, `respond`, `spawn`, `run`, `join`, `cancel`, `comptime`, `layout`, `verify`, `secret`, `declassify`, `coarsen`, `serialize`, `namespace`, `bitfield`, `bit`, `bits`, `remaining`, `view`, `property`, `given`, `tracked`, `trace`, `agent_breakpoint`, `some`, `optional`, `nothing`, `int64`, `float64`, `string`, `bool`, `bytes`, `list`, `map`, `set`, `modulo`
+`let`, `mutable`, `function`, `return`, `returns`, `if`, `else`, `for`, `in`, `into`, `while`, `struct`, `enum`, `match`, `use`, `true`, `false`, `none`, `and`, `or`, `not`, `is`, `within`, `self`, `handle`, `error`, `default`, `result`, `ok`, `fail`, `as`, `break`, `continue`, `interface`, `implement`, `assert`, `type`, `where`, `value`, `mutual`, `machine`, `states`, `transitions`, `to`, `at`, `transition`, `clone`, `actor`, `receive`, `send`, `ask`, `respond`, `spawn`, `run`, `join`, `cancel`, `comptime`, `verify`, `secret`, `declassify`, `coarsen`, `serialize`, `namespace`, `bitfield`, `bit`, `bits`, `view`, `property`, `given`, `trace`, `agent_breakpoint`, `some`, `optional`, `nothing`, `int64`, `float64`, `string`, `bool`, `bytes`, `list`, `map`, `set`, `modulo`
 
 ### JSON AST Round-Tripping
 
@@ -6529,9 +6533,8 @@ External dependencies live in the `deps/` directory as vendored `.jett` files tr
 - [ ] ASP completion queries (`jett query --agent --complete-at`)
 - [ ] ASP namespace listing (`jett query --agent --namespaces`)
 - [ ] ASP test results (`jett test --agent`)
-- [ ] ASP trace output (`jett run --agent --trace-var`)
-- [ ] `tracked[T]` type wrapper with lineage recording
-- [ ] `trace()` function for lineage output
+- [ ] `trace` keyword statement with compiler-instrumented lineage recording
+- [ ] Trace output as structured TOON through ASP
 - [ ] `agent_breakpoint()` with ASP query protocol
 - [ ] Conditional breakpoints (`agent_breakpoint(when: ...)`)
 - [ ] Breakpoint communication: stdin/stdout mode and HTTP mode
