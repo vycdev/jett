@@ -5440,99 +5440,11 @@ scope:
 awaiting: query
 ```
 
-The LLM now knows: execution is paused at line 6 of `process_order`, `validated` is available to inspect, `order` has been consumed (moved into `validate_order`), and `fs` is available.
-
-#### The Query Protocol
-
-The LLM sends TOON queries. The running application responds with TOON answers. Every exchange is structured — no terminal formatting, no spatial art.
-
-**Inspect a variable:**
-
-```toon
-query: inspect
-variable: validated
-```
-
-```toon
-variable: validated
-type: ValidatedOrder
-value:
-    id: ord-123
-    items[2]{name,qty,price}:
-        widget, 2, 9.99
-        gadget, 1, 24.99
-    total: 44.97
-    customer_id: cust-456
-```
-
-**Inspect a specific field:**
-
-```toon
-query: inspect
-expression: validated.total
-```
-
-```toon
-expression: validated.total
-type: float64
-value: 44.97
-```
-
-**Evaluate an expression:**
-
-```toon
-query: evaluate
-expression: list.length[Item](validated.items)
-```
-
-```toon
-expression: list.length[Item](validated.items)
-type: int64
-value: 2
-```
-
-**Inspect the call stack:**
-
-```toon
-query: call_stack
-```
-
-```toon
-call_stack[3]{function,file,line,current}:
-    main,           src/main.jett,   15,
-    handle_request, src/server.jett, 42,
-    process_order,  src/orders.jett, 6,  true
-```
-
-**Inspect variables in a parent scope:**
-
-```toon
-query: inspect_scope
-frame: handle_request
-```
-
-```toon
-function: handle_request
-variables[2]{name,type,value,status}:
-    request, Request, "method: POST, path: /orders",
-    stdout,  Stdout,  ,                              capability
-```
-
-**Continue execution:**
-
-```toon
-query: continue
-```
-
-```toon
-type: breakpoint_resumed
-file: src/orders.jett
-line: 6
-```
+The LLM now knows: execution is paused at line 6 of `process_order`, `validated` is available to inspect, `order` has been consumed (moved into `validate_order`), and `fs` is available. The LLM can then query the paused program — inspect variables, evaluate expressions, view the call stack — and send a `continue` command when done.
 
 #### Conditional Breakpoints
 
-The LLM can make breakpoints conditional — they only pause when a condition is true:
+Breakpoints can be made conditional using regular `if` blocks:
 
 ```
 function process_batch(view fs: Filesystem, orders: view list[Order]) returns nothing:
@@ -5542,116 +5454,25 @@ function process_batch(view fs: Filesystem, orders: view list[Order]) returns no
         let result: result[nothing, string] = process_single_order(view fs, view order)
 ```
 
-The `if` block makes the breakpoint conditional. The LLM doesn't have to step through 500 normal orders to reach the one that's broken — it pauses only when the condition is met.
+The LLM doesn't have to step through 500 normal orders to reach the one that's broken — it pauses only when the condition is met.
 
-#### The Debugging Workflow
+#### Security: Breakpoints Are Debug-Only
 
-The LLM's debugging loop with `breakpoint`:
+`breakpoint` only compiles in debug mode. In release builds, `breakpoint` compiles to nothing — zero performance cost and no security risk of leaving one in production. The compiler can optionally warn about `breakpoint` statements left in release builds.
 
-```
-1. LLM generates code. A test or property fails.
-2. LLM reads the failure (via ASP) and suspects a function.
-3. LLM inserts breakpoint before the suspicious line.
-4. Recompiles and runs: jett run app.jett --agent
-5. Program pauses. LLM receives the breakpoint notification.
-6. LLM sends inspect queries:
-   - "What is validated.total?" → 44.97
-   - "What is validated.items?" → [{widget, 2}, {gadget, 1}]
-   - "What does list.length[Item](validated.items) give?" → 2
-   - Aha — the total should be 44.97 but the expected was 45.97.
-     The bug is in validate_order's total calculation.
-7. LLM sends "continue" to resume.
-8. LLM removes breakpoint, fixes validate_order.
-9. Re-runs tests. Passes.
-```
-
-The LLM explored the runtime state interactively — inspecting only what it needed, one query at a time. No pre-planned print statements. No flooded context window. Just targeted questions and precise answers.
-
-#### Multiple Breakpoints and Stepping
-
-The LLM can insert multiple breakpoints:
-
-```
-function calculate_tax(income: float64, state: string) returns float64:
-    let base: float64 = income * 0.15
-    breakpoint   # check base calculation
-
-    let state_rate: float64 = get_state_rate(state)
-    let state_tax: float64 = base * state_rate
-    breakpoint   # check state tax calculation
-
-    return base + state_tax
-```
-
-Each breakpoint pauses independently. The LLM can inspect the state at two points in the same function without needing to understand the entire execution flow between them.
-
-**Step-to-next-line (single-step):**
-
-```toon
-query: step
-```
-
-After hitting a breakpoint, the LLM can step forward one statement at a time, inspecting the state after each step. This simulates step-through debugging without a traditional debugger UI.
-
-#### Security: Agent Breakpoints Are Debug-Only
-
-`breakpoint` only compiles in debug mode:
-
-```
-# Debug mode — breakpoints are active:
-jett run app.jett --agent --debug
-
-# Release mode — breakpoints are compiled out:
-jett build app.jett --release
-# breakpoint statements are silently removed. Zero overhead.
-```
-
-In release builds, `breakpoint` does not exist — it compiles to nothing. There is no performance cost and no security risk of leaving a breakpoint in production. The compiler can optionally warn about `breakpoint` statements left in release builds.
-
-`breakpoint` is a compiler keyword exempt from the capability system. It only exists in debug mode and is compiled out in release builds. No capability parameter is required.
-
-#### ASP Communication Modes
-
-The agent breakpoint communicates through two modes:
-
-**Stdin/stdout mode (default for CLI):**
-
-```
-jett run app.jett --agent --debug
-# Breakpoint notifications and queries go through stdin/stdout as TOON lines
-```
-
-**HTTP mode (for remote debugging):**
-
-```
-jett run app.jett --agent --debug --breakpoint-port 9229
-# Breakpoint opens HTTP server on localhost:9229
-# LLM agent sends TOON queries via HTTP POST
-```
-
-The HTTP mode allows the LLM to debug a running server or long-lived process without stopping it. The LLM connects to the breakpoint port, sends queries, and the application resumes when told to continue.
+`breakpoint` is a compiler keyword exempt from the capability system. No capability parameter is required.
 
 #### Why This Is Perfect for LLMs
 
-**1. Debugging becomes conversational.**
+**1. Debugging becomes conversational.** The running program is a chatbot. The LLM asks questions, gets answers, and asks follow-ups. This matches the LLM's natural interaction model.
 
-The running program is a chatbot. The LLM asks questions ("what is `validated.total`?"), gets answers (44.97), and asks follow-up questions. This matches the LLM's natural interaction model perfectly — it's what LLMs are built to do.
+**2. No prediction required.** With print-debugging, the LLM must predict in advance which variables to inspect. With `breakpoint`, it decides at runtime based on what it sees.
 
-**2. No prediction required.**
+**3. Minimal context window usage.** Each query returns one small TOON response. The LLM only sees the data it asked for — not a flood of every variable in the program.
 
-With print-debugging, the LLM must predict in advance which variables to inspect. With `breakpoint`, it decides at runtime based on what it sees. This eliminates wasted round-trips where the LLM printed the wrong variable.
+**4. Works with the compile-fix loop.** Insert breakpoint → run → inspect → identify bug → remove breakpoint → fix → re-run. This fits naturally into the existing ASP compile-fix loop (Rule Set 21).
 
-**3. Minimal context window usage.**
-
-Each query returns one small TOON response. The LLM only sees the data it asked for — not a flood of every variable in the program. The context window stays focused on the investigation.
-
-**4. Works with the compile-fix loop.**
-
-Insert breakpoint → run → inspect → identify bug → remove breakpoint → fix → re-run. This fits naturally into the existing ASP compile-fix loop (Rule Set 21). The breakpoint is just another tool in the same TOON-based workflow.
-
-**5. Conditional breakpoints save tokens.**
-
-Conditional breakpoints (using `if`) skip thousands of normal executions and pause only on the suspicious case. The LLM doesn't waste context on irrelevant iterations.
+> **Open question:** The exact query protocol (how the LLM sends queries to the paused program, the set of available queries, the TOON format of responses, communication modes) needs to be designed. The concept is clear — the LLM interrogates a paused program via structured TOON — but the wire protocol is not yet specified.
 
 ---
 
