@@ -169,7 +169,7 @@ There must be **no spooky action at a distance**. A variable must never be silen
 - No global mutable variables. Global constants are allowed (they never change), but mutable global state is forbidden.
 - No module-level side effects on import. `use math` loads definitions — it does not execute code, register handlers, or modify state.
 - Side effects must be declared in the function signature via **capability parameters** (see Rule Set 16). If a function writes to a file, it receives a `Filesystem` capability. If it accesses the network, it receives a `Network` capability. The signature is the contract.
-- All inputs to a function come through its parameters. No reading from ambient scope, no closures over mutable state, no thread-local storage. Anonymous functions can capture **immutable** values from the enclosing scope. Captured values are implicitly viewed — they are not consumed by the closure. Closures over **mutable** state are banned. This allows patterns like `list.find(users, function(u: User) returns bool: return u.id is target_id)` where `target_id` is an immutable value from the outer scope.
+- All inputs to a function come through its parameters. No reading from ambient scope, no closures over mutable state, no thread-local storage. Anonymous functions can capture **immutable** values from the enclosing scope. Captured values are implicitly viewed — they are not consumed by the closure. Closures over **mutable** state are banned. This allows patterns like `list.find(users, function(u: User) returns bool: return u.id == target_id)` where `target_id` is an immutable value from the outer scope.
 
 **Example — side effects are declared, not hidden:**
 
@@ -251,7 +251,7 @@ An interface is just a contract — a list of function signatures. It carries no
 struct EmailSender:
     config: SmtpConfig
 
-    function send(self: EmailSender, view stdout: Stdout, view net: Network, message: Message) returns nothing:
+    function send(self: view EmailSender, view stdout: Stdout, view net: Network, message: Message) returns nothing:
         Stdout.write(view stdout, "sending email")
         smtp.deliver(view net, self.config, message)
         return nothing
@@ -290,7 +290,7 @@ implement Speaker for Dog:
 
 # Calling a method — module syntax only:
 Dog my_dog = Dog(name: "Rex", breed: "labrador")
-string sound = Dog.speak(my_dog)
+string sound = Dog.speak(view my_dog)
 ```
 
 Structs define methods with `self` as the first parameter. Methods are called with module syntax: `Dog.speak(my_dog)`, `Point.distance(p1, p2)`. There is no `my_dog.speak()` form. This rule applies uniformly to ALL types, including capability types — `Stdout.write(view stdout, msg)`, `Filesystem.read_file(view fs, path)`, `Network.listen(view net, addr, port)`. Capabilities are not an exception.
@@ -1194,7 +1194,7 @@ list[string] names = list.map[User, string](users, function(u: User) returns str
 float64 total = list.sum[float64](prices)
 
 # Instead of writing a search loop:
-optional[User] found = list.find(users, function(u: User) returns bool: return u.id is target_id)
+optional[User] found = list.find(users, function(u: User) returns bool: return u.id == target_id)
 
 # Instead of writing a sort with comparator:
 list[User] sorted = list.sort_by(users, function(u: User) returns int64: return u.age)
