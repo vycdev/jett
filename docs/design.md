@@ -543,7 +543,8 @@ function quadruple(x: int64) returns int64:
 
 # INVALID — forward reference:
 function quadruple(x: int64) returns int64:
-    return double(double(x))    # COMPILE ERROR: "double" is not defined yet
+    int64 doubled = double(x)    # COMPILE ERROR: "double" is not defined yet
+    return double(doubled)
 
 function double(x: int64) returns int64:
     return x * 2
@@ -573,7 +574,7 @@ The `mutual` block puts both signatures into context before either body is writt
 
 **Why this matters for LLMs:**
 
-This perfectly mirrors the auto-regressive generation process. When the LLM writes `return double(double(x))`, the definition of `double` is already in its past context — it knows the exact signature, parameter types, and return type. It is not guessing. The code generation order *is* the dependency order.
+This perfectly mirrors the auto-regressive generation process. When the LLM writes `int64 doubled = double(x)`, the definition of `double` is already in its past context — it knows the exact signature, parameter types, and return type. It is not guessing. The code generation order *is* the dependency order.
 
 #### 2. Inline Dependency Declarations — Context Where Attention Is
 
@@ -609,7 +610,9 @@ function fetch_data(view net: Network, url: string) returns result[map[string, s
 function compute_stats(values: list[float64]) returns float64:
     use math
     float64 total = math.sum(values)
-    return total / float64.from_int64(list.length[float64](values))
+    int64 count = list.length[float64](values)
+    float64 count_f = float64.from_int64(count)
+    return total / count_f
 ```
 
 **What this achieves:**
