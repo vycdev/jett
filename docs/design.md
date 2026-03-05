@@ -309,7 +309,7 @@ Every value in Jett has a known type at compile time. There is no `any`, no unty
 
 - No implicit conversions. An `int64` is not a `float64` unless explicitly converted.
 - No union types without exhaustive matching. All enums require exhaustive `match`, and all `result` types require `handle`.
-- No null. Values are either present (`T`) or explicitly optional (`optional[T]`), and optionals must be coarsenped before use.
+- No null. Values are either present (`T`) or explicitly optional (`optional[T]`), and optionals must be coarsened before use.
 - No duck typing. A struct satisfies an interface only if it has an explicit `implement` block — accidental structural matches do not count.
 - Function signatures are complete contracts. The parameter types, return type, and capability parameters fully describe what the function does. The compiler enforces this.
 
@@ -722,9 +722,9 @@ list[Row] rows = query(view net, "select * from users") handle error:
 
 **The `handle` keyword — the only way to coarsen a result or optional:**
 
-The `handle` keyword is the **single canonical form** for coarsenping `result` and `optional` values. There is no alternative. You cannot use `match` on a `result` type — `match` is reserved for user-defined enums only.
+The `handle` keyword is the **single canonical form** for coarsening `result` and `optional` values. There is no alternative. You cannot use `match` on a `result` type — `match` is reserved for user-defined enums only.
 
-The syntax form is **mandatory** and encodes the type being coarsenped:
+The syntax form is **mandatory** and encodes the type being coarsened:
 
 - **`result[T, E]` MUST use `handle error:`** — the error variable is always bound. The `error` keyword is required because results carry error information, and the caller must have access to it.
 - **`optional[T]` MUST use bare `handle:`** — no error variable, because there is no error. The value is simply absent.
@@ -744,7 +744,7 @@ Config config = read_config(view fs, "app.conf") handle error:
     default Config(port: 8080)
 ```
 
-The `handle error:` block executes only when the result is `fail`. If the result is `ok`, the coarsenped value is bound to the variable on the left (`config`). The error variable is always available inside the block.
+The `handle error:` block executes only when the result is `fail`. If the result is `ok`, the coarsened value is bound to the variable on the left (`config`). The error variable is always available inside the block.
 
 **Every handle block must end with either `return` or `default`** — there is no implicit value. This rule applies to both `handle error:` (for `result`) and bare `handle:` (for `optional`). A handle block that does neither is a compile error:
 
@@ -807,7 +807,7 @@ User user = db.find_user(users, id) handle:
 
 This means `handle` is the single canonical coarsen mechanism for both `result[T, E]` and `optional[T]`. The distinction between the two is encoded in the syntax form.
 
-**The form of `handle` tells you what you're coarsenping -- and the form is mandatory:**
+**The form of `handle` tells you what you're coarsening -- and the form is mandatory:**
 
 - **`result[T, E]` MUST use `handle error:`** -- the `error` keyword is required. The error variable is always bound inside the block:
   ```
@@ -821,7 +821,7 @@ This means `handle` is the single canonical coarsen mechanism for both `result[T
       return fail("user not found")
   ```
 
-This distinction is mandatory -- using the wrong form is a **compile error**. `handle:` on a `result[T, E]` is rejected. `handle error:` on an `optional[T]` is rejected. The syntax form encodes the type being coarsenped, and the compiler enforces it. When an LLM sees `handle error:`, it knows the expression returns `result[T, E]`. When it sees `handle:`, it knows the expression returns `optional[T]`.
+This distinction is mandatory -- using the wrong form is a **compile error**. `handle:` on a `result[T, E]` is rejected. `handle error:` on an `optional[T]` is rejected. The syntax form encodes the type being coarsened, and the compiler enforces it. When an LLM sees `handle error:`, it knows the expression returns `result[T, E]`. When it sees `handle:`, it knows the expression returns `optional[T]`.
 
 #### 2. No Global Exits — Control Flow Goes Down, Never Sideways
 
@@ -2783,7 +2783,7 @@ In traditional languages, everything is public by default and security is added 
 
 **3. `declassify` is a searchable audit point.**
 
-Every place where a secret is coarsenped is marked with the `declassify` keyword. Security reviewers can `grep declassify` across the entire codebase to find every secret access point. This is trivially automatable.
+Every place where a secret is coarsened is marked with the `declassify` keyword. Security reviewers can `grep declassify` across the entire codebase to find every secret access point. This is trivially automatable.
 
 **4. Safe alternatives are easier to use than unsafe ones.**
 
@@ -3536,13 +3536,13 @@ Each `handle` block applies to the pipeline step immediately before it. The erro
 **Pipeline + handle semantics:**
 
 - `into function_call handle: ...` is a **single pipeline step**. The `handle` is attached to the function call, not to the pipeline itself.
-- On success: `handle` coarsens the `result` (or `optional`), and the coarsenped success value flows to the next `into` step.
+- On success: `handle` coarsens the `result` (or `optional`), and the coarsened success value flows to the next `into` step.
 - On failure: the `handle` block executes. There are **two valid forms**:
   1. **Default form:** `handle error: default Config(port: 8080)` — the `default` keyword provides a fallback value and execution continues normally.
   2. **Return form:** `handle error: return fail(...)` — early exit from the enclosing function. The pipeline (and function) terminates immediately.
 - The pipeline only continues to the next `into` if every preceding step either succeeded or provided a fallback via `default`.
 
-In the example above, if `validate_auth` returns `fail(...)`, the `handle` block runs `return fail("auth failed")` and the entire pipeline (and enclosing function) returns immediately. If `validate_auth` returns `ok(auth_token)`, the coarsenped `auth_token` flows into `extract_user_id` as the first argument.
+In the example above, if `validate_auth` returns `fail(...)`, the `handle` block runs `return fail("auth failed")` and the entire pipeline (and enclosing function) returns immediately. If `validate_auth` returns `ok(auth_token)`, the coarsened `auth_token` flows into `extract_user_id` as the first argument.
 
 #### Pipelines with Capabilities
 
