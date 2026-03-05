@@ -381,7 +381,7 @@ int64 y = 3.14
 # hint: use int64.from_float64(3.14) and handle the possible error
 ```
 
-**These are standard library functions, not language magic.** Primitive types (`int64`, `float64`, `string`, `bool`) serve as their own modules, exactly like structs do. When you define `struct Dog`, you call `Dog.speak(my_dog)` — `Dog` is both the type and the module. Primitive types work the same way: `int64` is both the type (in `x: int64`) and the module (in `int64.from_string("42")`). The context disambiguates — type position vs expression position. There is no special compiler treatment for conversion functions; they are ordinary standard library functions that anyone could reimplement in a custom module.
+**These are standard library functions, not language magic.** Primitive types (`int64`, `float64`, `string`, `bool`) serve as their own modules, exactly like structs do. When you define `struct Dog`, you call `Dog.speak(view my_dog)` — `Dog` is both the type and the module. Primitive types work the same way: `int64` is both the type (in `x: int64`) and the module (in `int64.from_string("42")`). The context disambiguates — type position vs expression position. There is no special compiler treatment for conversion functions; they are ordinary standard library functions that anyone could reimplement in a custom module.
 
 #### 2. Intent-Based Refinement Types — Constraints in Plain Text
 
