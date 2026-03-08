@@ -6246,7 +6246,6 @@ External dependencies live in the `deps/` directory as vendored `.jett` files tr
 
 ## Open Questions
 
-- **Data layout optimization** — the compiler may automatically apply SoA (Structure of Arrays) transformations as a future optimization when access patterns suggest it. No syntax is needed — this is a compiler-internal optimization like auto-vectorization.
 - **Comptime boundaries** — what standard library functions are available at comptime? All pure functions? Only a subset? File I/O at comptime (for code generation from schemas)?
 - **Comptime struct introspection** — `json.serialize[T]()` and `json.parse[T]()` currently require compiler magic to inspect struct fields. The goal is to make both implementable via comptime introspection (e.g., `type.fields[T]()` returning field metadata) so users can write their own serialization and deserialization formats. This requires comptime type dispatching (branching on field types), recursive handling of nested structs, lists, optionals, etc., and for deserialization, comptime struct construction from field values. Field metadata must include `serialize` annotations when present, so comptime code can read custom field names. Syntax TBD.
 - **Function types** — anonymous functions are passed to `list.filter`, `list.map`, etc., but there is no syntax for declaring a function type as a parameter or variable type. Needed for callbacks, higher-order functions, and patterns like `http.listen` taking a handler. Possible syntax: `function(Request) returns Response` in type position, or a `type Handler = function(Request) returns Response` alias.
@@ -6269,3 +6268,4 @@ External dependencies live in the `deps/` directory as vendored `.jett` files tr
 ## Footnotes
 
 1. Before working on the compiler, it would be valuable to have an LLM generate non-trivial Jett programs to see how the code looks and feels in practice. This would validate the syntax and semantics before committing to implementation. Good candidates: a file compression algorithm (can benchmark against existing tools to validate performance), a hashing algorithm (exercises bitfields and binary data), and a prime number finder (simpler, but tests loops and arithmetic).
+2. The compiler may automatically apply SoA (Structure of Arrays) transformations as a future optimization when access patterns suggest it. No syntax is needed — this is a compiler-internal optimization like auto-vectorization.
