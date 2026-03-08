@@ -6023,6 +6023,27 @@ No special compiler rules for capabilities. They follow the same `view` semantic
 | `optional[T]` | Either a `T` or `none` |
 | `result[T, E]` | Either `ok(T)` or `fail(E)` |
 | `nothing` | Unit type with exactly one value, also called `nothing`. Used in `result[nothing, string]` for functions that can fail but return no value on success. `ok(nothing)` is the canonical form for wrapping success in `result[nothing, E]`. |
+| `function(T) returns U` | Function type. Used for callbacks and higher-order functions. |
+
+**Function types** describe the signature of a function value — its parameter types and return type. They reuse the existing `function` and `returns` keywords in type position:
+
+```
+# Function type in a parameter — accepts any function matching the signature:
+function apply(value: int64, transform: function(int64) returns int64) returns int64:
+    return transform(value)
+
+# Function type alias:
+type Handler = function(Request) returns Response
+
+# Using a function type alias in a parameter:
+function serve(view net: Network, handler: Handler) returns nothing:
+    # ...
+
+# Passing an anonymous function:
+int64 doubled = apply(5, function(x: int64) returns int64: return x * 2)
+```
+
+Anonymous functions can capture **immutable** values from the enclosing scope. Captured values are implicitly viewed — they are not consumed by the closure. Closures over **mutable** state are banned.
 
 ### Explicit Typing
 
