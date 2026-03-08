@@ -6246,7 +6246,6 @@ External dependencies live in the `deps/` directory as vendored `.jett` files tr
 
 ## Open Questions
 
-- **Dependent types** — should refinement types be able to reference other values (e.g. `type Matrix = list[list[float64]] where rows == cols`)? This approaches dependent type territory and significantly increases type checker complexity.
 - **Data layout optimization** — the compiler may automatically apply SoA (Structure of Arrays) transformations as a future optimization when access patterns suggest it. No syntax is needed — this is a compiler-internal optimization like auto-vectorization.
 - **Comptime boundaries** — what standard library functions are available at comptime? All pure functions? Only a subset? File I/O at comptime (for code generation from schemas)?
 - **Comptime struct introspection** — `json.serialize[T]()` and `json.parse[T]()` currently require compiler magic to inspect struct fields. The goal is to make both implementable via comptime introspection (e.g., `type.fields[T]()` returning field metadata) so users can write their own serialization and deserialization formats. This requires comptime type dispatching (branching on field types), recursive handling of nested structs, lists, optionals, etc., and for deserialization, comptime struct construction from field values. Field metadata must include `serialize` annotations when present, so comptime code can read custom field names. Syntax TBD.
