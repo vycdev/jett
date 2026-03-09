@@ -1,0 +1,161 @@
+namespace prime_finder
+
+# --- Pure functions (no capabilities, defined before use) ---
+
+# Check if a single number is prime using trial division
+function is_prime(n: int64) returns bool:
+    if n < 2:
+        return false
+    if n == 2:
+        return true
+    if n modulo 2 == 0:
+        return false
+    mutable int64 i = 3
+    while i * i <= n:
+        if n modulo i == 0:
+            return false
+        i = i + 2
+    return true
+
+# Find all primes up to a given limit using trial division
+function find_primes(limit: int64) returns list[int64]:
+    mutable list[int64] primes = list.new[int64]()
+    mutable int64 n = 2
+    while n <= limit:
+        if is_prime(n):
+            primes = list.append[int64](primes, n)
+        n = n + 1
+    return primes
+
+# Count twin prime pairs — pairs where both p and p+2 are prime
+function count_twin_primes(primes: view list[int64]) returns int64:
+    int64 len = list.length[int64](view primes)
+    if len < 2:
+        return 0
+    mutable int64 count = 0
+    mutable int64 i = 0
+    while i < len - 1:
+        int64 current = list.get[int64](view primes, i) handle:
+            return count
+        int64 next_val = list.get[int64](view primes, i + 1) handle:
+            return count
+        if next_val - current == 2:
+            count = count + 1
+        i = i + 1
+    return count
+
+# Find the largest gap between consecutive primes
+function largest_gap(primes: view list[int64]) returns int64:
+    int64 len = list.length[int64](view primes)
+    if len < 2:
+        return 0
+    mutable int64 max_gap = 0
+    mutable int64 i = 0
+    while i < len - 1:
+        int64 current = list.get[int64](view primes, i) handle:
+            return max_gap
+        int64 next_val = list.get[int64](view primes, i + 1) handle:
+            return max_gap
+        int64 gap = next_val - current
+        if gap > max_gap:
+            max_gap = gap
+        i = i + 1
+    return max_gap
+
+# Sum all primes in the list
+function sum_primes(primes: view list[int64]) returns int64:
+    mutable int64 total = 0
+    for p in view primes:
+        total = total + p
+    return total
+
+# Get the nth prime from the list (0-indexed)
+function nth_prime(primes: view list[int64], n: int64) returns optional[int64]:
+    return list.get[int64](view primes, n)
+
+# Parse the limit from command line arguments
+# Returns 100 as default if no argument is provided
+function parse_limit(args: view list[string]) returns result[int64, string]:
+    int64 arg_count = list.length[string](view args)
+    if arg_count == 0:
+        return ok(100)
+    string arg = list.get[string](view args, 0) handle:
+        return ok(100)
+    int64 parsed = int64.from_string(arg) handle error:
+        return fail("'{arg}' is not a valid number")
+    if parsed < 2:
+        return fail("limit must be at least 2")
+    return ok(parsed)
+
+# Print each prime on its own line
+function print_primes(view stdout: Stdout, primes: view list[int64]) returns nothing:
+    for p in view primes:
+        Stdout.write(view stdout, "  {p}")
+
+# Print a summary of prime statistics
+function print_summary(view stdout: Stdout, primes: view list[int64], limit: int64) returns nothing:
+    int64 count = list.length[int64](view primes)
+    int64 twins = count_twin_primes(view primes)
+    int64 gap = largest_gap(view primes)
+    int64 total = sum_primes(view primes)
+
+    Stdout.write(view stdout, "prime numbers up to {limit}")
+    Stdout.write(view stdout, "found {count} primes")
+    Stdout.write(view stdout, "sum of all primes: {total}")
+    Stdout.write(view stdout, "twin prime pairs: {twins}")
+    Stdout.write(view stdout, "largest gap between consecutive primes: {gap}")
+
+    int64 tenth = nth_prime(view primes, 9) handle:
+        Stdout.write(view stdout, "fewer than 10 primes found")
+        return nothing
+    Stdout.write(view stdout, "10th prime: {tenth}")
+
+# --- Verify blocks (comptime, pure functions only) ---
+
+verify is_prime:
+    assert is_prime(0) == false
+    assert is_prime(1) == false
+    assert is_prime(2) == true
+    assert is_prime(3) == true
+    assert is_prime(4) == false
+    assert is_prime(5) == true
+    assert is_prime(17) == true
+    assert is_prime(18) == false
+    assert is_prime(97) == true
+    assert is_prime(100) == false
+
+verify find_primes:
+    list[int64] small = find_primes(10)
+    assert list.length[int64](view small) == 4
+
+    list[int64] medium = find_primes(30)
+    assert list.length[int64](view medium) == 10
+
+verify count_twin_primes:
+    list[int64] primes = find_primes(20)
+    int64 twins = count_twin_primes(view primes)
+    assert twins == 4
+
+verify largest_gap:
+    list[int64] primes = find_primes(30)
+    int64 gap = largest_gap(view primes)
+    assert gap == 4
+
+verify sum_primes:
+    list[int64] primes = find_primes(10)
+    int64 total = sum_primes(view primes)
+    assert total == 17
+
+# --- Entry point ---
+
+function main(stdout: Stdout, env: Environment) returns nothing:
+    list[string] args = Environment.args(view env)
+    int64 limit = parse_limit(view args) handle error:
+        Stdout.write(view stdout, "error: {error}")
+        return nothing
+
+    Stdout.write(view stdout, "finding primes up to {limit}...")
+    list[int64] primes = find_primes(limit)
+
+    print_primes(view stdout, view primes)
+    print_summary(view stdout, view primes, limit)
