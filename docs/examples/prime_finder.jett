@@ -1,7 +1,5 @@
 namespace prime_finder
 
-# --- Pure functions (no capabilities, defined before use) ---
-
 # Check if a single number is prime using trial division
 function is_prime(n: int64) returns bool:
     if n < 2:
@@ -17,6 +15,18 @@ function is_prime(n: int64) returns bool:
         i = i + 2
     return true
 
+verify is_prime:
+    assert is_prime(0) == false
+    assert is_prime(1) == false
+    assert is_prime(2) == true
+    assert is_prime(3) == true
+    assert is_prime(4) == false
+    assert is_prime(5) == true
+    assert is_prime(17) == true
+    assert is_prime(18) == false
+    assert is_prime(97) == true
+    assert is_prime(100) == false
+
 # Find all primes up to a given limit using trial division
 function find_primes(limit: int64) returns list[int64]:
     mutable list[int64] primes = list.new[int64]()
@@ -26,6 +36,13 @@ function find_primes(limit: int64) returns list[int64]:
             primes = list.append[int64](primes, n)
         n = n + 1
     return primes
+
+verify find_primes:
+    list[int64] small = find_primes(10)
+    assert list.length[int64](view small) == 4
+
+    list[int64] medium = find_primes(30)
+    assert list.length[int64](view medium) == 10
 
 # Count twin prime pairs — pairs where both p and p+2 are prime
 function count_twin_primes(primes: view list[int64]) returns int64:
@@ -43,6 +60,11 @@ function count_twin_primes(primes: view list[int64]) returns int64:
             count = count + 1
         i = i + 1
     return count
+
+verify count_twin_primes:
+    list[int64] primes = find_primes(20)
+    int64 twins = count_twin_primes(view primes)
+    assert twins == 4
 
 # Find the largest gap between consecutive primes
 function largest_gap(primes: view list[int64]) returns int64:
@@ -62,12 +84,22 @@ function largest_gap(primes: view list[int64]) returns int64:
         i = i + 1
     return max_gap
 
+verify largest_gap:
+    list[int64] primes = find_primes(30)
+    int64 gap = largest_gap(view primes)
+    assert gap == 4
+
 # Sum all primes in the list
 function sum_primes(primes: view list[int64]) returns int64:
     mutable int64 total = 0
     for p in view primes:
         total = total + p
     return total
+
+verify sum_primes:
+    list[int64] primes = find_primes(10)
+    int64 total = sum_primes(view primes)
+    assert total == 17
 
 # Get the nth prime from the list (0-indexed)
 function nth_prime(primes: view list[int64], n: int64) returns optional[int64]:
@@ -110,44 +142,7 @@ function print_summary(view stdout: Stdout, primes: view list[int64], limit: int
         return nothing
     Stdout.write(view stdout, "10th prime: {tenth}")
 
-# --- Verify blocks (comptime, pure functions only) ---
-
-verify is_prime:
-    assert is_prime(0) == false
-    assert is_prime(1) == false
-    assert is_prime(2) == true
-    assert is_prime(3) == true
-    assert is_prime(4) == false
-    assert is_prime(5) == true
-    assert is_prime(17) == true
-    assert is_prime(18) == false
-    assert is_prime(97) == true
-    assert is_prime(100) == false
-
-verify find_primes:
-    list[int64] small = find_primes(10)
-    assert list.length[int64](view small) == 4
-
-    list[int64] medium = find_primes(30)
-    assert list.length[int64](view medium) == 10
-
-verify count_twin_primes:
-    list[int64] primes = find_primes(20)
-    int64 twins = count_twin_primes(view primes)
-    assert twins == 4
-
-verify largest_gap:
-    list[int64] primes = find_primes(30)
-    int64 gap = largest_gap(view primes)
-    assert gap == 4
-
-verify sum_primes:
-    list[int64] primes = find_primes(10)
-    int64 total = sum_primes(view primes)
-    assert total == 17
-
-# --- Entry point ---
-
+# Entry point
 function main(stdout: Stdout, env: Environment) returns nothing:
     list[string] args = Environment.args(view env)
     int64 limit = parse_limit(view args) handle error:
