@@ -174,7 +174,7 @@ There must be **no spooky action at a distance**. A variable must never be silen
 **Example — side effects are declared, not hidden:**
 
 ```
-function save_user(view fs: Filesystem, user: view User) returns result[nothing, string]:
+function save_user(view fs: Filesystem, view user: User) returns result[nothing, string]:
     string data = json.serialize[User](view user)
     Filesystem.write_file(view fs, "users.json", data) handle error:
         return fail("could not save user")
@@ -240,7 +240,7 @@ Instead, Jett uses two mechanisms that keep relationships **flat and local**:
 
 ```
 interface Displayable:
-    function display(self: view Displayable) returns string
+    function display(view self: Displayable) returns string
 ```
 
 An interface is just a contract — a list of function signatures. It carries no implementation, no state, no hidden behavior.
@@ -251,7 +251,7 @@ An interface is just a contract — a list of function signatures. It carries no
 struct EmailSender:
     config: SmtpConfig
 
-    function send(self: view EmailSender, view stdout: Stdout, view net: Network, message: Message) returns nothing:
+    function send(view self: EmailSender, view stdout: Stdout, view net: Network, message: Message) returns nothing:
         Stdout.write(view stdout, "sending email")
         smtp.deliver(view net, self.config, message)
         return nothing
@@ -278,14 +278,14 @@ struct EmailSender:
 
 # In Jett (flat, local, complete):
 interface Speaker:
-    function speak(self: view Speaker) returns string
+    function speak(view self: Speaker) returns string
 
 struct Dog:
     name: string
     breed: string
 
 implement Speaker for Dog:
-    function speak(self: view Dog) returns string:
+    function speak(view self: Dog) returns string:
         return "woof"
 
 # Calling a method — module syntax only:
@@ -952,15 +952,15 @@ function process_number(data: int64) returns int64:
 ```
 struct Parser:
     # NOT allowed:
-    # function parse(self: view Parser, input: string) returns Ast
-    # function parse(self: view Parser, input: list[Token]) returns Ast
+    # function parse(view self: Parser, input: string) returns Ast
+    # function parse(view self: Parser, input: list[Token]) returns Ast
 
     # Required — distinct names:
-    function parse_text(self: view Parser, input: string) returns Ast:
+    function parse_text(view self: Parser, input: string) returns Ast:
         list[Token] tokens = tokenize(input)
         return Parser.parse_tokens(self, tokens)
 
-    function parse_tokens(self: view Parser, input: list[Token]) returns Ast:
+    function parse_tokens(view self: Parser, input: list[Token]) returns Ast:
         return build_ast(input)
 ```
 
@@ -3226,7 +3226,7 @@ The LLM does not write parsing functions. The LLM does not import a serializatio
 **Using auto-generated serialization:**
 
 ```
-function save_user(view fs: Filesystem, user: view User) returns result[nothing, string]:
+function save_user(view fs: Filesystem, view user: User) returns result[nothing, string]:
     string json_data = json.serialize[User](view user)
     Filesystem.write_file(view fs, "users/{user.id}.json", json_data) handle error:
         return fail("could not save user")
@@ -3502,7 +3502,7 @@ string slug = title
 The compiler checks that types match at every `into` boundary. If a function returns `string` but the next function in the pipeline expects `int64`, the compiler catches it immediately.
 
 ```
-function get_name(user: view User) returns string:
+function get_name(view user: User) returns string:
     return user.name
 
 function double(x: int64) returns int64:
@@ -3928,7 +3928,7 @@ context:
   pipe_input_type: User
   expecting: function taking User as first argument
 completions[3]{name,signature}:
-  json.serialize_public,(value: view User) returns string
+  json.serialize_public,(view value: User) returns string
   json.serialize,BLOCKED — User contains secret fields
   validate_user,(user: User) returns result[User, string]
 ```
@@ -4527,7 +4527,7 @@ bitfield IpHeader:
 ```
 
 ```
-function is_tcp(header: view IpHeader) returns bool:
+function is_tcp(view header: IpHeader) returns bool:
     return header.protocol is IpProtocol.tcp
 ```
 
@@ -4697,10 +4697,10 @@ Jett introduces one concept: the **view**. A view is a read-only, non-owning ref
 **Passing a view:**
 
 ```
-function count_items(data: view list[Item]) returns int64:
+function count_items(view data: list[Item]) returns int64:
     return list.length[Item](data)
 
-function total_price(items: view list[Item]) returns float64:
+function total_price(view items: list[Item]) returns float64:
     mutable float64 sum = 0.0
     for item in view items:
         sum = sum + item.price
@@ -4734,7 +4734,7 @@ The `view` keyword appears in **both** declarations and call sites. The function
 **Passing to a view parameter without `view`:** When a function declares a `view` parameter, the caller can choose whether to keep the value:
 
 ```
-function count(data: view list[int64]) returns int64:
+function count(view data: list[int64]) returns int64:
     return list.length[int64](data)
 
 # Keep the value — view at call site:
@@ -4763,7 +4763,7 @@ Views are governed by three rules that the compiler enforces absolutely. These r
 **Rule 1: A view cannot be consumed.**
 
 ```
-function bad_consume(data: view list[int64]) returns list[int64]:
+function bad_consume(view data: list[int64]) returns list[int64]:
     list[int64] sorted = list.sort(data)
     # COMPILE ERROR: cannot consume "data" — it is a view
     # "data" is borrowed read-only and cannot be moved
@@ -4776,7 +4776,7 @@ A view is a borrow — the caller still owns the data. Any operation that would 
 **Rule 2: A view cannot be sent to another thread.**
 
 ```
-function bad_send(data: view list[int64]) returns nothing:
+function bad_send(view data: list[int64]) returns nothing:
     Processor worker = spawn Processor()
     send worker.process(data)
     # COMPILE ERROR: cannot send a view to an actor
@@ -4789,7 +4789,7 @@ Views exist only on the stack of the current thread. They cannot be sent to acto
 **Rule 3: A view cannot outlive its lexical scope.**
 
 ```
-function bad_escape(data: view list[int64]) returns view list[int64]:
+function bad_escape(view data: list[int64]) returns view list[int64]:
     return data
     # COMPILE ERROR: cannot return a view from a function
     # views cannot outlive the function that received them
@@ -4823,7 +4823,7 @@ struct GameState:
     world: World
     tick: int64
 
-function render_frame(state: view GameState, view stdout: Stdout) returns nothing:
+function render_frame(view state: GameState, view stdout: Stdout) returns nothing:
     # Read any field through the view — zero copy:
     int64 player_count = list.length[Player](state.players)
     Stdout.write(view stdout, "players: {player_count}")
@@ -4849,7 +4849,7 @@ function game_loop(view stdout: Stdout) returns nothing:
 > **Note:** Views propagate through access. If you have a `view list[T]`, accessing any element gives you a `view T`, not an owned copy. The same applies to struct fields, nested lists, and any sub-structure. To get an owned value from a view, you must explicitly clone with `clone`.
 >
 > ```
-> function example(data: view list[Item], view stdout: Stdout) returns nothing:
+> function example(view data: list[Item], view stdout: Stdout) returns nothing:
 >     for item in view data:
 >         # item is view Item — read-only, not copied
 >         Stdout.write(view stdout, item.name)    # OK — reading a field
@@ -4879,7 +4879,7 @@ Transform functions like `filter_active_records` consume their input and produce
 View parameters work alongside capability parameters:
 
 ```
-function log_stats(view stdout: Stdout, state: view GameState) returns nothing:
+function log_stats(view stdout: Stdout, view state: GameState) returns nothing:
     Stdout.write(view stdout, "players: {list.length[Player](state.players)}")
     Stdout.write(view stdout, "world size: {state.world.size}")
     # stdout is viewed (capability), state is viewed (read-only)
@@ -4930,7 +4930,7 @@ The LLM gets C-level performance (pointer dereference, no copying) without writi
 
 **4. Views are explicit everywhere.**
 
-`count_items(view data)` at the call site and `data: view list[Item]` in the parameter — the `view` keyword appears on both sides. The LLM writing the call sees that `data` survives. The LLM writing the function sees it can only read. There is no implicit borrowing, no hidden reference creation.
+`count_items(view data)` at the call site and `view data: list[Item]` in the parameter — the `view` keyword appears on both sides. The LLM writing the call sees that `data` survives. The LLM writing the function sees it can only read. There is no implicit borrowing, no hidden reference creation.
 
 **5. No lifetime errors — the most common Rust stumbling block eliminated.**
 
@@ -4978,7 +4978,7 @@ Unlike `verify` blocks (which are named after the function they test), `property
 **Basic property test:**
 
 ```
-function sort_list(items: view list[int64]) returns list[int64]:
+function sort_list(view items: list[int64]) returns list[int64]:
     # ... sorting implementation ...
 
 property sort_list:
@@ -5379,7 +5379,7 @@ When a `property` block finds a failing input, the LLM can add a trace to see ex
 # Property test found: sort_list(list(3, 1, 2)) returned list(3, 1, 2) (not sorted)
 # LLM adds trace to debug:
 
-function sort_list(items: view list[int64]) returns list[int64]:
+function sort_list(view items: list[int64]) returns list[int64]:
     mutable list[int64] result = clone items
     result = partition(result)
     result = merge(result)
@@ -5471,7 +5471,7 @@ The LLM now knows: execution is paused at line 6 of `process_order`, `validated`
 `breakpoint` optionally takes a condition expression. It only pauses when the condition is true:
 
 ```
-function process_batch(view fs: Filesystem, orders: view list[Order]) returns nothing:
+function process_batch(view fs: Filesystem, view orders: list[Order]) returns nothing:
     for order in view orders:
         breakpoint order.total > 1000.0   # only pause for high-value orders
         result[nothing, string] result = process_single_order(view fs, view order)
@@ -5826,7 +5826,7 @@ struct Point:
     x: float64
     y: float64
 
-    function distance(self: view Point, other: view Point) returns float64:
+    function distance(view self: Point, view other: Point) returns float64:
         float64 dx = self.x - other.x
         float64 dy = self.y - other.y
         return math.sqrt(dx * dx + dy * dy)
@@ -6073,7 +6073,7 @@ data into json.parse[list[User]] into process_users
 **Basic generic function:**
 
 ```
-function first[T](items: view list[T]) returns optional[T]:
+function first[T](view items: list[T]) returns optional[T]:
     return list.get[T](items, 0)
 ```
 

@@ -45,7 +45,7 @@ verify find_primes:
     assert list.length[int64](view medium) == 10
 
 # Count twin prime pairs — pairs where both p and p+2 are prime
-function count_twin_primes(primes: view list[int64]) returns int64:
+function count_twin_primes(view primes: list[int64]) returns int64:
     int64 len = list.length[int64](view primes)
     if len < 2:
         return 0
@@ -67,7 +67,7 @@ verify count_twin_primes:
     assert twins == 4
 
 # Find the largest gap between consecutive primes
-function largest_gap(primes: view list[int64]) returns int64:
+function largest_gap(view primes: list[int64]) returns int64:
     int64 len = list.length[int64](view primes)
     if len < 2:
         return 0
@@ -90,7 +90,7 @@ verify largest_gap:
     assert gap == 4
 
 # Sum all primes in the list
-function sum_primes(primes: view list[int64]) returns int64:
+function sum_primes(view primes: list[int64]) returns int64:
     mutable int64 total = 0
     for p in view primes:
         total = total + p
@@ -102,12 +102,12 @@ verify sum_primes:
     assert total == 17
 
 # Get the nth prime from the list (0-indexed)
-function nth_prime(primes: view list[int64], n: int64) returns optional[int64]:
+function nth_prime(view primes: list[int64], n: int64) returns optional[int64]:
     return list.get[int64](view primes, n)
 
 # Parse the limit from command line arguments
 # Returns 100 as default if no argument is provided
-function parse_limit(args: view list[string]) returns result[int64, string]:
+function parse_limit(view args: list[string]) returns result[int64, string]:
     int64 arg_count = list.length[string](view args)
     if arg_count == 0:
         return ok(100)
@@ -120,12 +120,12 @@ function parse_limit(args: view list[string]) returns result[int64, string]:
     return ok(parsed)
 
 # Print each prime on its own line
-function print_primes(view stdout: Stdout, primes: view list[int64]) returns nothing:
+function print_primes(view stdout: Stdout, view primes: list[int64]) returns nothing:
     for p in view primes:
         Stdout.write(view stdout, "  {p}")
 
 # Print a summary of prime statistics
-function print_summary(view stdout: Stdout, primes: view list[int64], limit: int64) returns nothing:
+function print_summary(view stdout: Stdout, view primes: list[int64], limit: int64) returns nothing:
     int64 count = list.length[int64](view primes)
     int64 twins = count_twin_primes(view primes)
     int64 gap = largest_gap(view primes)
