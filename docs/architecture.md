@@ -201,6 +201,7 @@ Span {
 
 `TokenKind` is an enum covering:
 - **Keywords:** `Function`, `Return`, `Returns`, `If`, `Else`, `For`, `In`, `Into`, `While`, `Struct`, `Enum`, `Match`, `Use`, `Mutable`, `Handle`, `Error`, `Default`, `Result`, `Ok`, `Fail`, `Clone`, `View`, `Type`, `Where`, `Machine`, `States`, `Transitions`, `To`, `At`, `Actor`, `Receive`, `Send`, `Ask`, `Respond`, `Spawn`, `Run`, `Join`, `Cancel`, `Comptime`, `Verify`, `Property`, `Given`, `Trace`, `Breakpoint`, `Secret`, `Declassify`, `Coarsen`, `Serialize`, `Namespace`, `Bitfield`, `Bit`, `Bits`, `Network` (bitfield byte-order modifier), `Implement`, `Interface`, `Mutual`, `Assert`, `Some`, `None`, `Nothing`, `True`, `False`, `Modulo`, `As`, `Break`, `Continue`, `And`, `Within`, `Self_`, `Value`, `Transition`, `Optional`, `Other` (match catch-all), `Not` (for `!` prefix)
+- **Type keywords:** `Int8`, `Int16`, `Int32`, `Int64`, `Uint8`, `Uint16`, `Uint32`, `Uint64`, `Float32`, `Float64`, `String_`, `Bool_`, `Bytes_`, `List_`, `Map_`, `Set_`. These are reserved keywords, not identifiers — they are tokenized distinctly so the parser can recognize type annotations unambiguously.
 - **Literals:** `IntLiteral`, `FloatLiteral`, `StringLiteral` (with interpolation segments), `BoolLiteral`
 - **Symbols:** `Eq`, `EqEq`, `NotEq`, `Lt`, `Gt`, `LtEq`, `GtEq`, `Plus`, `Minus`, `Star`, `Slash`, `AmpAmp`, `PipePipe`, `Bang`, `Dot`, `Comma`, `Colon`, `LParen`, `RParen`, `LBracket`, `RBracket`, `Hash`
 - **Structural:** `Newline`, `Indent`, `Dedent`, `Eof`
@@ -278,11 +279,11 @@ MatchArm        → Pattern ':' Block      // Pattern includes variant destructu
 Statement       → VarDecl | Assignment | ExprStmt | ReturnStmt |
                   IfStmt | ForStmt | WhileStmt | MatchStmt |
                   UseDecl | TraceStmt | BreakpointStmt | BreakStmt |
-                  ContinueStmt | SendStmt | AssertStmt
+                  ContinueStmt | SendStmt | RespondStmt | AssertStmt
 
 Expression      → Literal | Ident | BinaryExpr | UnaryExpr |
                   FunctionCall | FieldAccess | PipelineExpr |
-                  StructConstruction | ListConstruction | MapConstruction |
+                  StructConstruction | ListConstruction | MapConstruction | SetConstruction |
                   StringInterpolation | HandleExpr | CloneExpr |
                   CoarsenExpr | DeclassifyExpr | RunExpr | JoinExpr |
                   CancelExpr | SpawnExpr | AskExpr | IfExpr |
@@ -674,6 +675,7 @@ Uses the `inkwell` crate for safe Rust bindings to the LLVM C API.
 | State machines | Same as enums (state tag + state-specific data) |
 | `list[T]` | Pointer to heap-allocated `{ length: i64, capacity: i64, data: T* }` |
 | `map[K, V]` | Pointer to heap-allocated hash table |
+| `set[T]` | Pointer to heap-allocated hash set (keys only, no values) |
 | `string` | Pointer to heap-allocated `{ length: i64, data: u8* }` (UTF-8) |
 | `bytes` | Pointer to heap-allocated `{ length: i64, data: u8* }` (raw bytes, no UTF-8 guarantee) |
 | `optional[T]` | Tagged union: `{ present: i1, value: T }` (or pointer + null for heap types) |
@@ -687,6 +689,7 @@ Uses the `inkwell` crate for safe Rust bindings to the LLVM C API.
 | `trace` | Conditional instrumentation code (compiled out in release) |
 | `breakpoint` | Conditional pause + IPC server (compiled out in release). Supports optional condition expression (`breakpoint expr`) — only pauses when condition is true |
 | Bitfields | Packed integer types with shift/mask accessors |
+| `function(T) returns U` | Function pointer. Closures capturing immutable values use a fat pointer: `{ fn_ptr, env_ptr }` |
 | Capabilities | Regular struct parameters — no special runtime representation |
 
 #### Platform-Specific Capability Lowering
