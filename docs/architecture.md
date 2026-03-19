@@ -65,6 +65,7 @@ jett/
 │   ├── jett_profiler/          # Built-in CPU/memory profiler
 │   ├── jett_fuzz/              # Property-based test runner and fuzzer
 │   ├── jett_bind/              # C header → .jett binding generator
+│   ├── jett_bundle/            # Bundle multi-file projects into single distributable .jett
 │   ├── jett_project/           # Project file (jett.proj) parsing, file discovery
 │   ├── jett_driver/            # Orchestrates the full pipeline, CLI argument parsing
 │   └── jett_cli/               # Binary entry point, subcommand dispatch
@@ -110,16 +111,17 @@ flowchart TD
     PRF["jett_profiler"]
     FUZ["jett_fuzz"]
     BND["jett_bind"]
+    BDL["jett_bundle"]
 
     CLI --> DRV
     DRV --> PRJ
     DRV --> LEX & PAR & AST & RES & TCK & HIR & MIR
     DRV --> CMP & OPT & CGL & CGI & INT
-    DRV --> FMT & QRY & LSP & ASP & MCP & PRF & FUZ & BND
+    DRV --> FMT & QRY & LSP & ASP & MCP & PRF & FUZ & BND & BDL
 
     LEX & PAR & AST & RES & TCK & HIR & MIR --> CMN & DGN
     CMP & OPT & CGL & CGI & INT --> CMN & DGN
-    FMT & QRY & LSP & ASP & MCP & PRF & FUZ & BND --> CMN & DGN
+    FMT & QRY & LSP & ASP & MCP & PRF & FUZ & BND & BDL --> CMN & DGN
 
     TCK & HIR & MIR & CMP & CGL & CGI --> TYP
     TYP --> CMN
@@ -159,15 +161,20 @@ Project {
 SourceFile {
     id: FileId,
     path: PathBuf,
-    content: String,              // Owned source text
-    namespace: Option<Symbol>,    // Filled in during Phase 2 (quick scan)
+    content: String,                    // Owned source text
+    namespaces: Vec<NamespaceSpan>,     // All namespace declarations in this file
+}
+
+NamespaceSpan {
+    name: Symbol,           // e.g. "auth" or "net.http.server"
+    byte_offset: u32,       // Where in the file this namespace block starts
 }
 ```
 
 ### Design Decisions
 
 - **File contents are loaded once and stored in an arena.** All subsequent phases reference file content by `FileId` + byte offset (`Span`). No re-reading.
-- **Namespace pre-scan.** Before full lexing, the discovery phase does a lightweight scan of each file to extract `namespace` declarations. This builds the namespace registry needed for two-pass resolution (Rule Set 22).
+- **Namespace pre-scan.** Before full lexing, the discovery phase does a lightweight scan of each file to extract all `namespace` declarations. A single file can contain multiple namespaces (Rule Set 22). This builds the namespace registry needed for two-pass resolution.
 
 ---
 
@@ -193,7 +200,7 @@ Span {
 ```
 
 `TokenKind` is an enum covering:
-- **Keywords:** `Function`, `Return`, `Returns`, `If`, `Else`, `For`, `In`, `Into`, `While`, `Struct`, `Enum`, `Match`, `Use`, `Mutable`, `Handle`, `Error`, `Default`, `Result`, `Ok`, `Fail`, `Clone`, `View`, `Type`, `Where`, `Machine`, `States`, `Transitions`, `To`, `At`, `Actor`, `Receive`, `Send`, `Ask`, `Respond`, `Spawn`, `Run`, `Join`, `Cancel`, `Comptime`, `Verify`, `Property`, `Given`, `Trace`, `Breakpoint`, `Secret`, `Declassify`, `Coarsen`, `Serialize`, `Namespace`, `Bitfield`, `Bit`, `Bits`, `Implement`, `Interface`, `Mutual`, `Assert`, `Some`, `None`, `Nothing`, `True`, `False`, `Modulo`, `As`, `Break`, `Continue`, `And`, `Within`, `Self_`, `Value`, `Transition`, `Optional`, `Not` (for `!` in keyword context)
+- **Keywords:** `Function`, `Return`, `Returns`, `If`, `Else`, `For`, `In`, `Into`, `While`, `Struct`, `Enum`, `Match`, `Use`, `Mutable`, `Handle`, `Error`, `Default`, `Result`, `Ok`, `Fail`, `Clone`, `View`, `Type`, `Where`, `Machine`, `States`, `Transitions`, `To`, `At`, `Actor`, `Receive`, `Send`, `Ask`, `Respond`, `Spawn`, `Run`, `Join`, `Cancel`, `Comptime`, `Verify`, `Property`, `Given`, `Trace`, `Breakpoint`, `Secret`, `Declassify`, `Coarsen`, `Serialize`, `Namespace`, `Bitfield`, `Bit`, `Bits`, `Network` (bitfield byte-order modifier), `Implement`, `Interface`, `Mutual`, `Assert`, `Some`, `None`, `Nothing`, `True`, `False`, `Modulo`, `As`, `Break`, `Continue`, `And`, `Within`, `Self_`, `Value`, `Transition`, `Optional`, `Other` (match catch-all), `Not` (for `!` prefix)
 - **Literals:** `IntLiteral`, `FloatLiteral`, `StringLiteral` (with interpolation segments), `BoolLiteral`
 - **Symbols:** `Eq`, `EqEq`, `NotEq`, `Lt`, `Gt`, `LtEq`, `GtEq`, `Plus`, `Minus`, `Star`, `Slash`, `AmpAmp`, `PipePipe`, `Bang`, `Dot`, `Comma`, `Colon`, `LParen`, `RParen`, `LBracket`, `RBracket`, `Hash`
 - **Structural:** `Newline`, `Indent`, `Dedent`, `Eof`
@@ -266,6 +273,8 @@ InterfaceDef    → 'interface' Name ':' FunctionSignature*
 ImplementBlock  → 'implement' Name 'for' Name ':' FunctionDef*
 MutualBlock     → 'mutual' ':' FunctionSignature*
 
+MatchArm        → Pattern ':' Block      // Pattern includes variant destructure or 'other' catch-all
+
 Statement       → VarDecl | Assignment | ExprStmt | ReturnStmt |
                   IfStmt | ForStmt | WhileStmt | MatchStmt |
                   UseDecl | TraceStmt | BreakpointStmt | BreakStmt |
@@ -290,11 +299,12 @@ Expression      → Literal | Ident | BinaryExpr | UnaryExpr |
 
 ### Desugaring Performed
 
-1. **Pipeline desugaring:** `x into f(y)` → `f(x, y)`. Multi-step pipelines become nested calls or sequential let-bindings.
-2. **String interpolation:** `"hello {name}"` → series of `Displayable.display()` calls joined together.
+1. **Pipeline desugaring:** `x into f(y)` → `f(x, y)`. Multi-step pipelines become sequential let-bindings. Pipeline steps with `handle error:` / `handle:` are desugared to handle blocks on the intermediate call. Pipeline steps with `view` (e.g., `into view json.serialize[T]`) are desugared to pass the piped value as a view argument.
+2. **String interpolation:** `"hello {name}"` → series of `Displayable.display()` calls joined together. This is a compiler-stdlib coupling — the compiler has hardcoded knowledge of the `Displayable` interface.
 3. **`else if` chains:** Lowered to nested `if/else` in the AST.
 4. **`for item in view items:`** → loop with explicit view semantics annotated.
 5. **Named arguments:** Reordered to match parameter declaration order with source mapping preserved.
+6. **`== X within Y`:** Approximate float comparison in verify/property blocks is desugared to `math.abs(left - right) <= Y`.
 
 ### AST Design Principles
 
@@ -328,7 +338,7 @@ Expression      → Literal | Ident | BinaryExpr | UnaryExpr |
 ```
 NamespaceRegistry {
     namespaces: HashMap<Symbol, NamespaceId>,
-    namespace_to_file: HashMap<NamespaceId, FileId>,
+    namespace_to_file: HashMap<NamespaceId, (FileId, u32)>,  // FileId + byte offset (multiple namespaces per file)
 }
 
 SymbolTable {
@@ -352,8 +362,11 @@ ResolveResult {
 - **No variable shadowing** — a binding in an inner scope cannot reuse a name from an outer scope.
 - **No unused imports** — every `use` must be referenced.
 - **No unused variables** — every variable declaration must be referenced.
-- **`use` statements must appear before any other code in a function.**
-- **Duplicate namespace detection** — two files declaring the same namespace is an error.
+- **Inline-only imports** — `use` statements are only allowed inside functions/blocks, never at file level. Within a function, `use` must appear before any other code.
+- **Duplicate namespace detection** — two files declaring the same namespace is an error. One namespace, one declaration.
+- **Global constants** — registered as top-level declarations (global mutable variables are forbidden).
+- **No circular imports** — if namespace A uses namespace B and B uses A, it's a compile error.
+- **Import aliasing** — `use net.http as net_http` binds the alias in local scope. Conflicting last-segment names require `as`.
 
 ---
 
@@ -381,6 +394,18 @@ Walk all type declarations and build the type registry:
 
 Types are interned for O(1) comparison: each unique type gets a `TypeId`. The type interner deduplicates structurally equal types.
 
+**Standard library interfaces** are registered as built-in types during this phase:
+
+| Interface | Implemented by | Used for |
+|---|---|---|
+| `Equatable` | `int64`, `float64`, `string`, `bool` | `==`, `!=` |
+| `Orderable` | `int64`, `float64`, `string` | `<`, `>`, `<=`, `>=` |
+| `Displayable` | `int64`, `float64`, `string`, `bool` | String interpolation `{expr}` (compiler-stdlib coupling) |
+| `Hashable` | `int64`, `string`, `bool` | `map` keys, `set` elements |
+| `Serializable` | All structs, all primitives | `json.serialize[T]()`, `json.parse[T]()` |
+
+These are ordinary `implement` blocks in the standard library, but the compiler has hardcoded knowledge of `Displayable` (for string interpolation) and `Serializable` (for auto-generated serialization).
+
 #### 6b. Interface Verification
 
 For every `implement Interface for Type` block:
@@ -396,10 +421,11 @@ Bottom-up type checking of every expression:
 - **Variable references:** look up the type from the variable's declaration.
 - **Function calls:** verify argument types match parameter types, verify generic type parameters, verify return type.
 - **No implicit conversions** — `int64` is not `float64`. Every mismatch is an error with a hint.
-- **No function calls as arguments** — `f(g(x))` is a type error; bind `g(x)` first (Rule Set 19).
+- **No nested function calls as arguments** — `f(g(x))` is rejected during AST lowering (Rule Set 19). The caller must bind `g(x)` to a variable first. String interpolation is the only exception.
 - **Refinement type assignments:** wrapping a base type in a refinement type is fallible → must have `handle error:`.
 - **Handle blocks:** verify that `handle error:` is used on `result[T, E]` and `handle:` on `optional[T]`. Verify handle blocks end with `return` or `default`.
 - **Match exhaustiveness:** verify all enum variants are covered.
+- **Constrained generics:** For `function sort[T implements Orderable](...)`, verify that type arguments at call sites implement the required interfaces. Multiple constraints use `and` (e.g., `T implements Orderable and Displayable`). Unconstrained `T` can only be stored and passed around — no operations.
 - **Generic monomorphization:** record all concrete type parameter instantiations for later HIR generation.
 
 #### 6d. Ownership Analysis (Linear Type Checking)
@@ -649,6 +675,7 @@ Uses the `inkwell` crate for safe Rust bindings to the LLVM C API.
 | `list[T]` | Pointer to heap-allocated `{ length: i64, capacity: i64, data: T* }` |
 | `map[K, V]` | Pointer to heap-allocated hash table |
 | `string` | Pointer to heap-allocated `{ length: i64, data: u8* }` (UTF-8) |
+| `bytes` | Pointer to heap-allocated `{ length: i64, data: u8* }` (raw bytes, no UTF-8 guarantee) |
 | `optional[T]` | Tagged union: `{ present: i1, value: T }` (or pointer + null for heap types) |
 | `result[T, E]` | Tagged union: `{ ok: i1, payload: union { T, E } }` |
 | `secret[T]` | Same representation as `T` — security is compile-time only |
@@ -656,8 +683,9 @@ Uses the `inkwell` crate for safe Rust bindings to the LLVM C API.
 | `clone` | Deep copy via generated clone functions |
 | Actors | OS threads with message queues |
 | `run`/`join` | Thread spawn + join (or task pool) |
+| `assert` | Condition check + halt with message (two forms: bare and with message string) |
 | `trace` | Conditional instrumentation code (compiled out in release) |
-| `breakpoint` | Conditional pause + IPC server (compiled out in release) |
+| `breakpoint` | Conditional pause + IPC server (compiled out in release). Supports optional condition expression (`breakpoint expr`) — only pauses when condition is true |
 | Bitfields | Packed integer types with shift/mask accessors |
 | Capabilities | Regular struct parameters — no special runtime representation |
 
@@ -690,6 +718,10 @@ Path normalization (forward slashes → backslashes on Windows) is handled in th
 For `jett run`, the MIR is compiled to a simple bytecode format and executed by a stack-based interpreter. This provides instant startup without the LLVM compilation overhead.
 
 The interpreter is not optimized for performance — it's for rapid prototyping and debugging. The native compiler is for production use.
+
+### Future: C Transpilation Backend
+
+The design document specifies a future secondary target: **transpilation to C**. This would provide portability to platforms LLVM does not cover well (niche embedded targets), enable building without an LLVM installation, and produce inspectable intermediate output. When implemented, this would be a `jett_codegen_c` crate that emits C source from MIR, following the same phase structure as `jett_codegen_llvm`.
 
 ---
 
@@ -799,6 +831,7 @@ The Agent Server Protocol is not a persistent server — it's the `--agent` flag
 | `jett query --agent --complete-at ...` | Completions |
 | `jett query --agent --namespaces` | Namespace registry |
 | `jett run --agent --profile` | Profiling bottleneck summary |
+| `jett bundle --output lib.jett` | Bundle all project files into a single distributable `.jett` file |
 
 The ASP module formats `Diagnostic` structs and query results into TOON. It shares all data with the human-mode output — only the rendering differs.
 
@@ -1049,16 +1082,17 @@ The compiler should be built incrementally, with each phase producing a usable (
 
 **Milestone:** Full testing and debugging workflow available.
 
-### Phase J: Cross-Compilation and C Interop
+### Phase J: Cross-Compilation, C Interop, and Bundling
 
-**Goal:** Multi-platform support and C bindings.
+**Goal:** Multi-platform support, C bindings, and library distribution.
 
 1. Platform-specific capability lowering in codegen (Linux, Windows, macOS, WASM).
 2. Cross-compilation support in the CLI (`--target` flag).
 3. `jett_bind` — C header binding generator.
-4. `jett_cli` — `jett bind` command.
+4. `jett_bundle` — Concatenate all project files into a single distributable `.jett` file, preserving namespace declarations.
+5. `jett_cli` — `jett bind` and `jett bundle` commands.
 
-**Milestone:** Cross-compile for all supported platforms, call C libraries from Jett.
+**Milestone:** Cross-compile for all supported platforms, call C libraries from Jett, distribute libraries as single files.
 
 ### Phase K: Incremental Compilation and Polish
 
@@ -1067,7 +1101,13 @@ The compiler should be built incrementally, with each phase producing a usable (
 1. Demand-driven query system with caching and invalidation.
 2. Parallel compilation of independent namespaces.
 3. Content-addressed caching of compilation artifacts.
-4. Standard library implementation (all modules from Rule Set 8).
+4. Standard library implementation — all modules from Rule Set 8:
+   - **Core:** `string`, `math`, `list`, `map`, `set`
+   - **I/O:** `net.http`, `net.socket`, `json`, `csv`
+   - **Time:** `time`
+   - **Security:** `crypto`, `encoding`, `validate`
+   - **Utilities:** `regex`, `random`, `uuid`, `log`, `format`
+   - **Testing:** `test.mock` (mock capabilities for property-based testing)
 5. Comprehensive test suite.
 
 **Milestone:** Production-ready compiler with fast iteration cycles.
@@ -1109,3 +1149,7 @@ Error codes are organized by phase and category:
 | E0800–E0899 | Complexity limit errors (too many statements, too deep) |
 | E0900–E0999 | Concurrency errors (orphaned task, view sent to actor) |
 | E1000–E1099 | Verify/property errors (assertion failed, impure verify) |
+| E1100–E1199 | Bitfield errors (invalid bit width, out-of-range value, missing `network` modifier) |
+| E1200–E1299 | Serialization errors (secret field in `json.serialize`, missing field mapping) |
+| E1300–E1399 | Pipeline errors (type mismatch at `into` boundary) |
+| E1400–E1499 | Import errors (circular import, file-level `use`, `use` after code in function) |
