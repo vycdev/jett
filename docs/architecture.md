@@ -1,0 +1,1122 @@
+# Jett Compiler Architecture
+
+## Overview
+
+The Jett compiler (`jettc`) is a multi-pass, ahead-of-time compiler written in Rust that translates Jett source code into native machine code via LLVM. It also supports an interpreter mode for rapid prototyping (`jett run`). The architecture is designed around four goals:
+
+1. **Correctness** — The type system is the most critical component. Linear types, capabilities, refinement types, state machines, and secret tracking must all be enforced with zero false negatives.
+2. **Incremental compilation** — Sub-second recompilation for typical changes (Footnote 5 of the design doc). The architecture supports fine-grained caching at every phase.
+3. **Dual output modes** — Human-readable terminal output and structured TOON output for LLM agents (ASP, Rule Set 21).
+4. **Testability** — Every compiler phase is independently testable with clear input/output boundaries.
+
+---
+
+## High-Level Pipeline
+
+```
+Source Files (.jett)
+        │
+        ▼
+┌─────────────────┐
+│  1. Discovery    │  Scan project, find all .jett files, read namespace declarations
+└────────┬────────┘
+         ▼
+┌─────────────────┐
+│  2. Lexer        │  Source text → Token stream (per file)
+└────────┬────────┘
+         ▼
+┌─────────────────┐
+│  3. Parser       │  Token stream → CST (Concrete Syntax Tree)
+└────────┬────────┘
+         ▼
+┌─────────────────┐
+│  4. AST Lowering │  CST → AST (Abstract Syntax Tree) with desugaring
+└────────┬────────┘
+         ▼
+┌─────────────────┐
+│  5. Name Res.    │  Resolve all names: namespaces, types, functions, variables
+└────────┬────────┘
+         ▼
+┌─────────────────┐
+│  6. Type Check   │  Full type checking, ownership analysis, capability tracking
+└────────┬────────┘
+         ▼
+┌─────────────────┐
+│  7. HIR          │  High-level IR: typed, ownership-annotated, monomorphized
+└────────┬────────┘
+         ▼
+┌─────────────────┐
+│  8. MIR          │  Mid-level IR: control flow graph, linear type verification
+└────────┬────────┘
+         ▼
+┌─────────────────┐
+│  9. Comptime     │  Execute verify blocks, comptime functions, evaluate constants
+└────────┬────────┘
+         ▼
+┌─────────────────┐
+│ 10. Optimization │  Jett-level optimizations (in-place reuse, SoA, etc.)
+└────────┬────────┘
+         ▼
+┌─────────────────┐
+│ 11. Codegen      │  MIR → LLVM IR → native code (or interpreter bytecode)
+└────────┬────────┘
+         ▼
+     Native Binary
+```
+
+---
+
+## Crate Organization
+
+The compiler is organized as a Cargo workspace with one crate per major phase. Crates have strict dependency ordering — no cycles, no upward dependencies. Shared types live in foundational crates.
+
+```
+jett/
+├── Cargo.toml                  # Workspace root
+├── crates/
+│   ├── jett_common/            # Shared types: Span, FileId, Symbol, diagnostics
+│   ├── jett_diagnostics/       # Error/warning types, TOON + human formatting
+│   ├── jett_lexer/             # Tokenizer
+│   ├── jett_parser/            # Parser → CST
+│   ├── jett_ast/               # AST data structures and lowering from CST
+│   ├── jett_resolve/           # Name resolution, namespace registry, import resolution
+│   ├── jett_types/             # Type representations, type interning, type relationships
+│   ├── jett_typecheck/         # Type checking, ownership analysis, capability tracking
+│   ├── jett_hir/               # High-level IR: typed + monomorphized
+│   ├── jett_mir/               # Mid-level IR: CFG-based, linear type verification
+│   ├── jett_comptime/          # Compile-time interpreter (verify blocks, comptime fns)
+│   ├── jett_optimize/          # Jett-level optimizations before codegen
+│   ├── jett_codegen_llvm/      # LLVM IR generation via inkwell
+│   ├── jett_codegen_interp/    # Bytecode generation for interpreter mode
+│   ├── jett_interp/            # Bytecode interpreter for `jett run`
+│   ├── jett_fmt/               # Code formatter (`jett format`)
+│   ├── jett_query/             # Query engine for ASP/LSP (type-at, signature, completions)
+│   ├── jett_lsp/               # Language Server Protocol implementation
+│   ├── jett_asp/               # Agent Server Protocol (TOON output formatting)
+│   ├── jett_mcp/               # MCP server wrapping ASP
+│   ├── jett_profiler/          # Built-in CPU/memory profiler
+│   ├── jett_fuzz/              # Property-based test runner and fuzzer
+│   ├── jett_bind/              # C header → .jett binding generator
+│   ├── jett_project/           # Project file (jett.proj) parsing, file discovery
+│   ├── jett_driver/            # Orchestrates the full pipeline, CLI argument parsing
+│   └── jett_cli/               # Binary entry point, subcommand dispatch
+├── stdlib/                     # Standard library .jett files
+├── tests/                      # Integration tests
+│   ├── compile_pass/           # Programs that should compile successfully
+│   ├── compile_fail/           # Programs that should produce specific errors
+│   ├── run_pass/               # Programs that should compile and produce expected output
+│   └── snapshots/              # Snapshot tests for AST, HIR, MIR, LLVM IR
+└── docs/
+    ├── design.md
+    └── architecture.md
+```
+
+### Crate Dependency Graph
+
+```
+jett_cli
+  └── jett_driver
+        ├── jett_project
+        ├── jett_lexer ─────────────┐
+        ├── jett_parser ────────────┤
+        ├── jett_ast ───────────────┤
+        ├── jett_resolve ───────────┤
+        ├── jett_typecheck ─────────┤── all depend on jett_common
+        ├── jett_hir ───────────────┤   and jett_diagnostics
+        ├── jett_mir ───────────────┤
+        ├── jett_comptime ──────────┤
+        ├── jett_optimize ──────────┤
+        ├── jett_codegen_llvm ──────┤
+        ├── jett_codegen_interp ────┤
+        ├── jett_interp ────────────┤
+        ├── jett_fmt ───────────────┤
+        ├── jett_query ─────────────┤
+        ├── jett_lsp ───────────────┤
+        ├── jett_asp ───────────────┤
+        ├── jett_mcp ───────────────┤
+        ├── jett_profiler ──────────┤
+        ├── jett_fuzz ──────────────┤
+        └── jett_bind ──────────────┘
+
+jett_types (used by jett_typecheck, jett_hir, jett_mir, jett_codegen_*, jett_comptime)
+```
+
+---
+
+## Phase 1: Project Discovery (`jett_project`)
+
+**Input:** A path to a `.jett` file or a directory containing `jett.proj`.
+
+**Output:** A `Project` struct containing all source files, their paths, and basic metadata.
+
+### Responsibilities
+
+1. Locate `jett.proj` by walking up from the given path.
+2. Parse the TOON-format project file (name, version, entry point).
+3. Recursively discover all `.jett` files in the project directory.
+4. Assign each file a unique `FileId` (integer handle for source tracking).
+5. Read file contents into an arena-allocated string store for zero-copy access.
+
+### Key Data Structures
+
+```
+Project {
+    name: String,
+    version: String,
+    entry_file: FileId,
+    files: Vec<SourceFile>,
+}
+
+SourceFile {
+    id: FileId,
+    path: PathBuf,
+    content: String,              // Owned source text
+    namespace: Option<Symbol>,    // Filled in during Phase 2 (quick scan)
+}
+```
+
+### Design Decisions
+
+- **File contents are loaded once and stored in an arena.** All subsequent phases reference file content by `FileId` + byte offset (`Span`). No re-reading.
+- **Namespace pre-scan.** Before full lexing, the discovery phase does a lightweight scan of each file to extract `namespace` declarations. This builds the namespace registry needed for two-pass resolution (Rule Set 22).
+
+---
+
+## Phase 2: Lexer (`jett_lexer`)
+
+**Input:** Source text (referenced by `FileId`).
+
+**Output:** `Vec<Token>` — a flat array of tokens with spans.
+
+### Token Design
+
+```
+Token {
+    kind: TokenKind,
+    span: Span,
+}
+
+Span {
+    file: FileId,
+    start: u32,      // Byte offset into source
+    end: u32,        // Byte offset into source
+}
+```
+
+`TokenKind` is an enum covering:
+- **Keywords:** `Function`, `Return`, `Returns`, `If`, `Else`, `For`, `In`, `Into`, `While`, `Struct`, `Enum`, `Match`, `Use`, `Mutable`, `Handle`, `Error`, `Default`, `Result`, `Ok`, `Fail`, `Clone`, `View`, `Type`, `Where`, `Machine`, `States`, `Transitions`, `To`, `At`, `Actor`, `Receive`, `Send`, `Ask`, `Respond`, `Spawn`, `Run`, `Join`, `Cancel`, `Comptime`, `Verify`, `Property`, `Given`, `Trace`, `Breakpoint`, `Secret`, `Declassify`, `Coarsen`, `Serialize`, `Namespace`, `Bitfield`, `Bit`, `Bits`, `Implement`, `Interface`, `Mutual`, `Assert`, `Some`, `None`, `Nothing`, `True`, `False`, `Modulo`, `As`, `Break`, `Continue`, `And`, `Within`, `Self_`, `Value`, `Transition`, `Optional`, `Not` (for `!` in keyword context)
+- **Literals:** `IntLiteral`, `FloatLiteral`, `StringLiteral` (with interpolation segments), `BoolLiteral`
+- **Symbols:** `Eq`, `EqEq`, `NotEq`, `Lt`, `Gt`, `LtEq`, `GtEq`, `Plus`, `Minus`, `Star`, `Slash`, `AmpAmp`, `PipePipe`, `Bang`, `Dot`, `Comma`, `Colon`, `LParen`, `RParen`, `LBracket`, `RBracket`, `Hash`
+- **Structural:** `Newline`, `Indent`, `Dedent`, `Eof`
+
+### Indentation Handling
+
+The lexer tracks indentation levels using a stack. At each line start:
+1. Count leading spaces (must be a multiple of 4 — emit error otherwise).
+2. Compare to the current indentation level.
+3. If deeper: push level, emit `Indent` token.
+4. If shallower: pop levels until matching, emit one `Dedent` per level popped.
+5. If same: no structural token needed.
+
+This converts Python-style whitespace into explicit `Indent`/`Dedent` tokens that the parser consumes like braces. Tabs, trailing whitespace, and non-multiple-of-4 indentation are lexer errors.
+
+### String Interpolation
+
+String literals with `{expr}` are tokenized as a sequence:
+`StringStart`, tokens for the expression, `StringMid` (for text between expressions), ..., `StringEnd`.
+
+This lets the parser handle interpolated expressions using the same expression parsing logic.
+
+### Design Decisions
+
+- **No multi-pass lexing.** The lexer is single-pass, streaming tokens. It does not need the full file in memory beyond what's currently being tokenized.
+- **All errors are recoverable.** The lexer emits an `Error` token and continues. This allows the parser to report multiple errors per file.
+- **Spans are byte offsets, not line/column.** Line/column computation is deferred to diagnostics rendering. This is cheaper and allows lazy line-table computation.
+
+---
+
+## Phase 3: Parser (`jett_parser`)
+
+**Input:** `Vec<Token>` from the lexer.
+
+**Output:** CST (Concrete Syntax Tree) — a lossless, fully-faithful representation of the source.
+
+### Parser Strategy: Recursive Descent with Pratt Parsing
+
+- **Recursive descent** for statements and declarations (function, struct, enum, etc.).
+- **Pratt parsing** (precedence climbing) for expressions — handles arithmetic operators, comparisons, boolean operators, and `modulo` with correct precedence.
+- **Error recovery:** On a parse error, the parser skips to the next `Dedent` at the current level or `Newline`, emitting an error node. This allows reporting multiple errors per file.
+
+### CST vs AST
+
+The CST preserves every token including whitespace, comments, and exact formatting. This is needed for:
+- **`jett format`** — the formatter works on the CST to preserve/restructure whitespace.
+- **LSP** — syntax highlighting, goto-definition, etc. need exact source positions.
+- **JSON AST round-tripping** (Rule Set 3) — lossless source ↔ AST conversion.
+
+The CST uses a flat arena-allocated representation (like `rowan` in rust-analyzer) for memory efficiency.
+
+### Key CST Node Types
+
+```
+File            → NamespaceDecl?, (TopLevelItem)*
+TopLevelItem    → FunctionDef | StructDef | EnumDef | InterfaceDef |
+                  ImplementBlock | MachineDef | ActorDef | TypeAlias |
+                  VerifyBlock | PropertyBlock | MutualBlock | BitfieldDef |
+                  ConstDecl
+FunctionDef     → 'function' Name GenericParams? '(' ParamList ')' 'returns' Type ':' Block
+StructDef       → 'struct' Name ':' FieldList FunctionDef*
+EnumDef         → 'enum' Name ':' VariantList
+MachineDef      → 'machine' Name ':' StatesBlock TransitionsBlock
+ActorDef        → 'actor' Name '(' ParamList ')' ':' (ReceiveHandler)*
+BitfieldDef     → ('network')? 'bitfield' Name ':' BitfieldList
+TypeAlias       → 'type' Name GenericParams? '=' Type ('where' Expr)?
+VerifyBlock     → 'verify' Name ':' Block
+PropertyBlock   → 'property' Name ':' GivenDecls Block
+InterfaceDef    → 'interface' Name ':' FunctionSignature*
+ImplementBlock  → 'implement' Name 'for' Name ':' FunctionDef*
+MutualBlock     → 'mutual' ':' FunctionSignature*
+
+Statement       → VarDecl | Assignment | ExprStmt | ReturnStmt |
+                  IfStmt | ForStmt | WhileStmt | MatchStmt |
+                  UseDecl | TraceStmt | BreakpointStmt | BreakStmt |
+                  ContinueStmt | SendStmt | AssertStmt
+
+Expression      → Literal | Ident | BinaryExpr | UnaryExpr |
+                  FunctionCall | FieldAccess | PipelineExpr |
+                  StructConstruction | ListConstruction | MapConstruction |
+                  StringInterpolation | HandleExpr | CloneExpr |
+                  CoarsenExpr | DeclassifyExpr | RunExpr | JoinExpr |
+                  CancelExpr | SpawnExpr | AskExpr | IfExpr |
+                  ViewExpr | ComptimeExpr | TransitionExpr
+```
+
+---
+
+## Phase 4: AST Lowering (`jett_ast`)
+
+**Input:** CST.
+
+**Output:** AST — a cleaner, desugared representation dropping trivia (whitespace, comments).
+
+### Desugaring Performed
+
+1. **Pipeline desugaring:** `x into f(y)` → `f(x, y)`. Multi-step pipelines become nested calls or sequential let-bindings.
+2. **String interpolation:** `"hello {name}"` → series of `Displayable.display()` calls joined together.
+3. **`else if` chains:** Lowered to nested `if/else` in the AST.
+4. **`for item in view items:`** → loop with explicit view semantics annotated.
+5. **Named arguments:** Reordered to match parameter declaration order with source mapping preserved.
+
+### AST Design Principles
+
+- **Every node has a `Span`** for error reporting.
+- **Every node has a unique `NodeId`** for incremental compilation cache keys.
+- **The AST is immutable** once constructed. Subsequent phases annotate it via side-tables (HashMap<NodeId, T>), not by mutating AST nodes.
+- **Interned strings.** All identifiers are interned as `Symbol` (integer handle into a global string interner). Comparisons are O(1).
+
+---
+
+## Phase 5: Name Resolution (`jett_resolve`)
+
+**Input:** AST + Namespace registry from discovery.
+
+**Output:** A `ResolveResult` mapping every name reference to its definition.
+
+### Two-Pass Resolution
+
+1. **Declaration pass (top-down per file):**
+   - Register all top-level declarations (functions, structs, enums, machines, actors, interfaces, type aliases, bitfields) into a per-namespace symbol table.
+   - Respect strict top-to-bottom ordering (Rule Set 4): a declaration is only visible to code that follows it.
+   - Handle `mutual` blocks: register all signatures in the mutual block before processing their bodies.
+
+2. **Reference pass:**
+   - Walk all expressions and resolve identifiers to their declarations.
+   - Resolve `use` statements: look up the namespace registry, bind the last segment (or `as` alias) in the function's local scope.
+   - Enforce: no forward references, no circular imports, no unused imports, no unused variables, no variable shadowing.
+
+### Key Data Structures
+
+```
+NamespaceRegistry {
+    namespaces: HashMap<Symbol, NamespaceId>,
+    namespace_to_file: HashMap<NamespaceId, FileId>,
+}
+
+SymbolTable {
+    scopes: Vec<Scope>,       // Stack of scopes (function, block, etc.)
+}
+
+Scope {
+    bindings: HashMap<Symbol, DefId>,
+    parent: Option<ScopeId>,
+}
+
+ResolveResult {
+    references: HashMap<NodeId, DefId>,    // Maps usage → definition
+    definitions: HashMap<DefId, DefInfo>,  // Maps DefId → definition metadata
+}
+```
+
+### Enforcement at This Phase
+
+- **No forward references** (except within `mutual` blocks).
+- **No variable shadowing** — a binding in an inner scope cannot reuse a name from an outer scope.
+- **No unused imports** — every `use` must be referenced.
+- **No unused variables** — every variable declaration must be referenced.
+- **`use` statements must appear before any other code in a function.**
+- **Duplicate namespace detection** — two files declaring the same namespace is an error.
+
+---
+
+## Phase 6: Type Checking (`jett_typecheck`)
+
+This is the most complex phase of the compiler. It enforces the majority of Jett's semantic rules.
+
+**Input:** AST + `ResolveResult`.
+
+**Output:** `TypedTree` — an annotated AST with type information on every expression, plus ownership and capability annotations.
+
+### Sub-Phases (executed in order)
+
+#### 6a. Type Collection
+
+Walk all type declarations and build the type registry:
+
+- **Primitive types:** `int8`..`int64`, `uint8`..`uint64`, `float32`, `float64`, `string`, `bool`, `bytes`, `nothing`.
+- **Built-in generic types:** `list[T]`, `map[K, V]`, `set[T]`, `optional[T]`, `result[T, E]`.
+- **User-defined types:** structs, enums, machines, actors, bitfields, interfaces, type aliases (including refinement types).
+- **Function types:** `function(T) returns U`.
+- **Capability types:** `Filesystem`, `Network`, `Stdout`, `Stderr`, `Stdin`, `Clock`, `Random`, `Process`, `Environment`.
+- **Secret wrapper:** `secret[T]`.
+- **State-qualified types:** `Machine at state`.
+
+Types are interned for O(1) comparison: each unique type gets a `TypeId`. The type interner deduplicates structurally equal types.
+
+#### 6b. Interface Verification
+
+For every `implement Interface for Type` block:
+- Verify that every function in the interface is implemented.
+- Verify that the implemented function signatures match the interface signatures exactly.
+- Register the implementation for later trait constraint checking.
+
+#### 6c. Expression Type Checking
+
+Bottom-up type checking of every expression:
+
+- **Literal inference:** `42` → `int64`, `3.14` → `float64`, `"hello"` → `string`, `true`/`false` → `bool`.
+- **Variable references:** look up the type from the variable's declaration.
+- **Function calls:** verify argument types match parameter types, verify generic type parameters, verify return type.
+- **No implicit conversions** — `int64` is not `float64`. Every mismatch is an error with a hint.
+- **No function calls as arguments** — `f(g(x))` is a type error; bind `g(x)` first (Rule Set 19).
+- **Refinement type assignments:** wrapping a base type in a refinement type is fallible → must have `handle error:`.
+- **Handle blocks:** verify that `handle error:` is used on `result[T, E]` and `handle:` on `optional[T]`. Verify handle blocks end with `return` or `default`.
+- **Match exhaustiveness:** verify all enum variants are covered.
+- **Generic monomorphization:** record all concrete type parameter instantiations for later HIR generation.
+
+#### 6d. Ownership Analysis (Linear Type Checking)
+
+This sub-phase tracks the ownership state of every variable through the control flow:
+
+**Variable states:**
+- `Owned` — the variable holds an owned value.
+- `Viewed` — the variable is a `view` (read-only borrow).
+- `Consumed` — the variable has been moved/consumed and is no longer valid.
+- `Uninitialized` — before first assignment.
+
+**Rules enforced:**
+- A variable can only be used once unless it is a `view` or a primitive (primitives are implicitly copyable).
+- After a variable is passed to a non-`view` parameter, it becomes `Consumed`.
+- Using a `Consumed` variable is a compile error.
+- `view` parameters can read but not consume.
+- `view` values cannot be returned, stored in structs, or sent to actors.
+- `clone` creates an owned copy from an owned or viewed value.
+- `mutable` variables can be rebound after their value is consumed.
+- **For loops:** `for item in items` consumes `items`; `for item in view items` borrows `items`.
+- **Run/join:** `run` marks a value as pending; it cannot be used until `join`ed.
+- **No orphaned tasks:** every `run` must have a matching `join` or `cancel` before the function returns.
+
+**Implementation strategy:** Abstract interpretation over the control flow graph. At each program point, maintain a mapping from variable → ownership state. At control flow joins (if/else merge points, loop entries), states must be compatible:
+
+```
+OwnershipEnv {
+    states: HashMap<DefId, OwnershipState>,
+}
+
+// At merge points:
+// - If both branches consume a variable → consumed
+// - If one branch consumes and the other doesn't → error (variable may or may not be valid)
+// - If both branches leave it owned → owned
+```
+
+#### 6e. Capability Analysis
+
+Track which capabilities flow through the program:
+
+- A function with no capability parameters is **pure** — the compiler guarantees it.
+- A function that calls another function requiring a capability must itself accept that capability.
+- Capability narrowing (`Filesystem.read_only(fs)`) consumes the original and produces a restricted version.
+- Actors receive capabilities at spawn time.
+- **Verify blocks** can only call pure functions (no capabilities).
+
+**Implementation:** For each function, compute the set of capabilities it transitively requires. Compare against its declared parameters. If a function's body requires a capability not in its parameters → compile error.
+
+#### 6f. Secret Taint Analysis
+
+Track `secret[T]` values through the program:
+
+- Any operation on a `secret[T]` produces a `secret[T]`.
+- `secret[T]` cannot be passed to `Stdout.write`, `json.serialize`, string interpolation, or any output function.
+- `declassify` is the only way to extract the inner value.
+- `secret.redact()` and `secret.compare()` are safe operations that don't declassify.
+- `json.serialize` on a struct with secret fields is a compile error → use `json.serialize_public`.
+
+#### 6g. State Machine Validation
+
+For each `machine` type:
+- Validate that all transitions reference declared states.
+- At each `transition()` call, verify:
+  - The source state matches the machine's current state type.
+  - The transition is declared in the machine's `transitions` block.
+  - All state-specific data fields are provided.
+- Function parameters with `Machine at state` are only callable when the machine is in that state.
+
+#### 6h. Complexity Limits Enforcement
+
+At the end of type checking each function:
+- Count statements (excluding `use` declarations) — max 50.
+- Compute nesting depth — max 4 levels.
+- Count parameters — max 6.
+- Compute cyclomatic complexity — max 10.
+
+These are compile errors, not warnings.
+
+---
+
+## Phase 7: High-Level IR (`jett_hir`)
+
+**Input:** Typed AST.
+
+**Output:** HIR — a typed, monomorphized intermediate representation.
+
+### Purpose
+
+The HIR is the first representation where generic functions are fully expanded. Each call to `sort[int64]` and `sort[string]` produces a separate HIR function. The HIR is also where desugaring is complete — no more syntax sugar, just core operations.
+
+### Key Transformations
+
+1. **Monomorphization:** Generate concrete versions of all generic functions for each type parameter combination used in the program.
+2. **Method resolution:** `Dog.speak(view my_dog)` is resolved to the specific `implement Speaker for Dog` function.
+3. **Auto-view for field access:** `self.x` is annotated as an implicit view operation.
+4. **Primitive copyability:** Primitive types (`int64`, `float64`, `bool`, `string`) are marked as implicitly copyable — they don't follow linear consumption rules.
+5. **Serialization generation:** For each struct used with `json.serialize[T]` or `json.parse[T]`, generate the serialization/deserialization HIR functions. Respect `serialize` annotations for field name mapping, `secret` fields for `serialize_public`, and refinement type validation during parsing.
+
+---
+
+## Phase 8: Mid-Level IR (`jett_mir`)
+
+**Input:** HIR.
+
+**Output:** MIR — a control-flow-graph-based representation.
+
+### Purpose
+
+The MIR decomposes functions into basic blocks connected by control flow edges. This representation is ideal for:
+
+- **Linear type verification** — definitive ownership analysis on the CFG.
+- **Comptime evaluation** — the comptime interpreter operates on MIR.
+- **Optimization** — dead code elimination, constant folding, in-place reuse detection.
+- **Codegen** — LLVM IR maps naturally from CFG-based MIR.
+
+### MIR Structure
+
+```
+MirFunction {
+    name: Symbol,
+    params: Vec<MirParam>,
+    return_type: TypeId,
+    blocks: Vec<BasicBlock>,
+    entry: BlockId,
+}
+
+BasicBlock {
+    id: BlockId,
+    statements: Vec<MirStatement>,
+    terminator: Terminator,
+}
+
+Terminator {
+    Return(MirOperand),
+    Branch { condition: MirOperand, true_block: BlockId, false_block: BlockId },
+    Jump(BlockId),
+    Unreachable,
+}
+
+MirStatement {
+    Assign { dest: MirPlace, value: MirRvalue },
+    Drop(MirPlace),                              // Linear type: value freed here
+    Call { dest: MirPlace, func: FuncId, args: Vec<MirOperand> },
+    ViewBorrow { dest: MirPlace, source: MirPlace },
+    ViewRelease(MirPlace),
+    Clone { dest: MirPlace, source: MirPlace },
+    Trace(MirPlace),                             // Instrumentation for trace keyword
+    Nop,
+}
+```
+
+### Definitive Ownership Verification
+
+The MIR phase performs a final, CFG-based ownership check to catch issues that the AST-level analysis might miss at complex control flow joins. This is the last line of defense before codegen.
+
+---
+
+## Phase 9: Comptime Evaluation (`jett_comptime`)
+
+**Input:** MIR (for comptime-marked functions and verify blocks).
+
+**Output:** Evaluated constant values, verify pass/fail results.
+
+### Comptime Interpreter
+
+The comptime interpreter is a MIR interpreter that executes functions at compile time. It operates on a virtual memory model:
+
+```
+ComptimeVM {
+    memory: HashMap<Address, ComptimeValue>,
+    call_stack: Vec<ComptimeFrame>,
+    constants: Vec<(DefId, ComptimeValue)>,    // Results cached here
+}
+
+ComptimeValue {
+    Int64(i64),
+    Float64(f64),
+    String(String),
+    Bool(bool),
+    List(Vec<ComptimeValue>),
+    Map(BTreeMap<ComptimeValue, ComptimeValue>),
+    Struct { type_id: TypeId, fields: Vec<ComptimeValue> },
+    Nothing,
+}
+```
+
+### What Runs at Comptime
+
+1. **`verify` blocks** — All assertions are evaluated. Any failure stops compilation.
+2. **`comptime` functions** — Called from runtime code, results are baked into the binary as constants.
+3. **`comptime` expressions** — `if comptime is_numeric[T]()` branches are resolved, dead branches are eliminated.
+4. **Refinement type constraints on literals** — `Port p = 80` validates `80 >= 1 && 80 <= 65535` at compile time.
+5. **Bitfield literal validation** — `ColorChannel(red: 300, ...)` catches the out-of-range value at compile time.
+
+### Capability Restriction
+
+The comptime interpreter refuses to execute any function that takes capability parameters. If a `verify` block tries to call an impure function, it's a compile error. This is checked before interpretation begins.
+
+---
+
+## Phase 10: Optimization (`jett_optimize`)
+
+**Input:** MIR.
+
+**Output:** Optimized MIR.
+
+### Jett-Specific Optimizations
+
+These optimizations leverage Jett's unique ownership semantics:
+
+1. **In-place reuse:** When a value is consumed and immediately transformed (`x = transform(x)`), the compiler detects that the old value has no other references and can be mutated in-place. This turns `list.append(old_list, item)` into a genuine in-place append.
+
+2. **View elision:** When a `view` borrow's lifetime is entirely within a single expression, the compiler can skip the borrow tracking overhead.
+
+3. **Dead view elimination:** If a `view` is created but never read, eliminate it.
+
+4. **Constant folding:** Propagate known constants and evaluate pure expressions at compile time.
+
+5. **Dead code elimination:** Remove unreachable blocks (especially after comptime branch resolution).
+
+6. **Move coalescing:** When a value is moved through a chain of single-use variables, eliminate intermediate allocations.
+
+### Standard Optimizations (Delegated to LLVM)
+
+Heavy optimizations (inlining, vectorization, loop unrolling, register allocation) are handled by the LLVM optimization pipeline. The Jett optimizer focuses on ownership-aware transformations that LLVM cannot perform because it lacks ownership information.
+
+---
+
+## Phase 11: Code Generation
+
+### LLVM Backend (`jett_codegen_llvm`)
+
+**Input:** Optimized MIR.
+
+**Output:** LLVM IR → native object files → linked binary.
+
+Uses the `inkwell` crate for safe Rust bindings to the LLVM C API.
+
+#### Key Mapping Decisions
+
+| Jett Concept | LLVM Representation |
+|---|---|
+| Structs | LLVM struct types with fields in declaration order |
+| Enums | Tagged union: i8 discriminant + union of variant payloads |
+| State machines | Same as enums (state tag + state-specific data) |
+| `list[T]` | Pointer to heap-allocated `{ length: i64, capacity: i64, data: T* }` |
+| `map[K, V]` | Pointer to heap-allocated hash table |
+| `string` | Pointer to heap-allocated `{ length: i64, data: u8* }` (UTF-8) |
+| `optional[T]` | Tagged union: `{ present: i1, value: T }` (or pointer + null for heap types) |
+| `result[T, E]` | Tagged union: `{ ok: i1, payload: union { T, E } }` |
+| `secret[T]` | Same representation as `T` — security is compile-time only |
+| `view` | Raw pointer (no reference counting, safety is compile-time) |
+| `clone` | Deep copy via generated clone functions |
+| Actors | OS threads with message queues |
+| `run`/`join` | Thread spawn + join (or task pool) |
+| `trace` | Conditional instrumentation code (compiled out in release) |
+| `breakpoint` | Conditional pause + IPC server (compiled out in release) |
+| Bitfields | Packed integer types with shift/mask accessors |
+| Capabilities | Regular struct parameters — no special runtime representation |
+
+#### Platform-Specific Capability Lowering
+
+The codegen phase maps capability method calls to platform-specific system calls based on the `--target` flag:
+
+```
+Filesystem.read_file(fs, path)
+  → Linux:   open() + read()
+  → Windows: CreateFileW() + ReadFile()
+  → macOS:   open() + read() (BSD variant)
+  → WASM:    WASI fd_read()
+```
+
+Each capability type has a platform-specific implementation module within `jett_codegen_llvm`. The correct module is selected at codegen time based on the target triple.
+
+#### Cross-Compilation
+
+The LLVM target triple is set based on `--target`:
+- `linux-x86_64` → `x86_64-unknown-linux-gnu`
+- `windows-x86_64` → `x86_64-pc-windows-msvc`
+- `macos-arm64` → `aarch64-apple-darwin`
+- `wasm` → `wasm32-wasi`
+
+Path normalization (forward slashes → backslashes on Windows) is handled in the capability lowering layer.
+
+### Interpreter Backend (`jett_codegen_interp` + `jett_interp`)
+
+For `jett run`, the MIR is compiled to a simple bytecode format and executed by a stack-based interpreter. This provides instant startup without the LLVM compilation overhead.
+
+The interpreter is not optimized for performance — it's for rapid prototyping and debugging. The native compiler is for production use.
+
+---
+
+## Diagnostics System (`jett_diagnostics`)
+
+All compiler errors flow through a unified diagnostics system that supports dual output modes.
+
+### Diagnostic Structure
+
+```
+Diagnostic {
+    severity: Severity,              // Error, Warning, Info
+    code: DiagnosticCode,            // E0001, E0002, ... — stable, greppable
+    message: String,                 // Plain-English description
+    span: Span,                      // Primary location
+    labels: Vec<Label>,              // Secondary locations with messages
+    ast_node: Option<AstNodeInfo>,   // AST context for ASP
+    scope: Option<ScopeInfo>,        // Variables in scope for ASP
+    constraint: Option<ConstraintInfo>, // Which rule was violated
+    suggested_fix: Option<SuggestedFix>, // Apply-ready fix
+}
+
+SuggestedFix {
+    action: FixAction,               // Replace, Insert, Delete
+    span: Span,
+    old_text: String,
+    new_text: String,
+    explanation: String,
+}
+```
+
+### Dual Output
+
+- **Human mode (default):** Uses `ariadne`-style rendering with colored output, source snippets, arrows pointing to the error location.
+- **Agent mode (`--agent`):** Emits a TOON document with all diagnostic fields structured and labeled. Zero formatting, zero color codes.
+
+The same `Diagnostic` struct feeds both renderers. The rendering choice is made at the final output stage, not during diagnostic construction.
+
+### Error Codes
+
+Every error has a stable code (e.g., `E0012` for secret type exposure, `E0045` for statement limit exceeded). These codes are deterministic and machine-parseable. The ASP TOON output includes the code for every error.
+
+---
+
+## Query Engine (`jett_query`)
+
+The query engine powers both LSP and ASP interactive queries. It provides:
+
+| Query | Description | Used by |
+|---|---|---|
+| `type_at(file, line, col)` | Type of the expression at a position | LSP hover, ASP |
+| `signature(function_name)` | Full function signature | ASP |
+| `complete_at(file, line, col)` | Completion candidates | LSP, ASP |
+| `namespaces()` | All namespaces with their public functions/types | ASP |
+| `definition(name)` | Go-to-definition | LSP |
+| `references(name)` | Find all references | LSP |
+| `diagnostics(file)` | All errors/warnings for a file | LSP |
+
+### Demand-Driven Computation
+
+The query engine uses a **demand-driven (salsa-style) architecture**: queries are computed lazily and cached. When a file changes, only the queries that depend on the changed file are recomputed.
+
+This is critical for LSP responsiveness and incremental compilation:
+
+```
+// Pseudocode for the query system:
+fn type_of(expr: NodeId) -> TypeId {
+    // Check cache first
+    if let Some(cached) = cache.get(expr) { return cached; }
+    // Compute: may recursively call other queries
+    let result = compute_type(expr);
+    cache.set(expr, result);
+    result
+}
+```
+
+The dependency tracking records which queries each computation reads, so invalidation cascades precisely through the dependency graph.
+
+---
+
+## LSP Server (`jett_lsp`)
+
+Standard LSP implementation using the `tower-lsp` crate. Provides:
+
+- Real-time diagnostics (errors/warnings as you type).
+- Hover information (type at cursor).
+- Go-to-definition.
+- Find all references.
+- Code completion.
+- Rename symbol.
+- Code formatting (via `jett_fmt`).
+
+The LSP server wraps the query engine and reacts to `textDocument/didChange` events by incrementally recomputing affected queries.
+
+---
+
+## ASP Server (`jett_asp`)
+
+The Agent Server Protocol is not a persistent server — it's the `--agent` flag on CLI commands. Each invocation produces a TOON document on stdout:
+
+| Command | TOON Output |
+|---|---|
+| `jett build --agent` | Build errors or success |
+| `jett test --agent` | Verify + property test results |
+| `jett query --agent --type-at ...` | Type information |
+| `jett query --agent --signature ...` | Function signature |
+| `jett query --agent --complete-at ...` | Completions |
+| `jett query --agent --namespaces` | Namespace registry |
+| `jett run --agent --profile` | Profiling bottleneck summary |
+
+The ASP module formats `Diagnostic` structs and query results into TOON. It shares all data with the human-mode output — only the rendering differs.
+
+---
+
+## MCP Server (`jett_mcp`)
+
+`jett mcp` starts a local MCP server (HTTP on localhost) that wraps ASP commands as MCP tools. Any MCP-compatible agent connects and calls tools like `jett_build`, `jett_query_type`, `jett_test`, etc.
+
+MCP is purely a transport layer — tools return the same TOON payloads as the ASP CLI commands.
+
+---
+
+## Formatter (`jett_fmt`)
+
+**Input:** CST.
+
+**Output:** Formatted source text.
+
+The formatter enforces the single canonical style:
+- 4-space indentation.
+- No trailing whitespace.
+- Blank lines between top-level declarations.
+- Consistent spacing around operators.
+- Canonical ordering of modifiers (`mutable`, `view`, etc.).
+
+Since Jett has one canonical form for everything, the formatter is relatively simple — it's mostly about consistent whitespace, not code restructuring.
+
+---
+
+## Property-Based Test Runner (`jett_fuzz`)
+
+The `jett test` command runs both `verify` blocks (at compile time, via the comptime interpreter) and `property` blocks (at test time, via the fuzzer).
+
+### Fuzzer Architecture
+
+1. **Type-aware generation:** For each `given` parameter, generate random values based on the type:
+   - `int64`: 0, 1, -1, max, min, random, powers of 2, boundary values.
+   - `string`: empty, single char, ASCII, unicode, long strings, null bytes.
+   - `list[T]`: empty, single, many, duplicates, sorted, reverse-sorted.
+   - Refinement types: values at constraint boundaries.
+   - Custom structs: all fields generated recursively.
+
+2. **Execution:** Run the property block body with each generated input. All values are implicitly viewable in property/verify contexts (relaxed linear typing).
+
+3. **Shrinking:** When a failure is found, iteratively simplify the input while maintaining the failure. Binary search on list lengths, individual element simplification, etc.
+
+4. **Reporting:** Output the minimal failing case via the diagnostics system (TOON for `--agent`, human-readable otherwise).
+
+Default: 10,000 iterations per property block. Configurable via CLI flag.
+
+---
+
+## Profiler (`jett_profiler`)
+
+Built-in CPU and memory sampling profiler.
+
+### CPU Profiling
+
+When `--profile` is active:
+1. Compile with instrumentation hooks at function entry/exit.
+2. Run the program with a sampling timer (default 1000 Hz).
+3. At each sample, record the current call stack.
+4. After execution, aggregate samples into per-function and per-line counts.
+5. Generate the bottleneck summary: top functions by CPU %, hot lines, call chains, suggestions.
+
+### Memory Profiling
+
+When `--profile-memory` is active:
+1. Wrap the allocator to record allocation size and call site at each `alloc`.
+2. After execution, aggregate into per-function allocation counts and bytes.
+3. Generate the memory bottleneck summary.
+
+Both profilers output via the diagnostics system in either human or TOON format.
+
+---
+
+## C Binding Generator (`jett_bind`)
+
+`jett bind "header.h" --output deps/binding.jett`
+
+### Architecture
+
+1. **Parse C headers** using `libclang` (via the `clang-sys` crate) to get the full AST.
+2. **Extract declarations:** functions, structs, enums, constants, typedefs.
+3. **Map C types to Jett types:**
+   - `int` → `int32`, `long` → `int64`, `char*` → `string`, etc.
+   - Pointers to structs → opaque linear handle types.
+   - `void` return → `returns nothing`.
+4. **Wrap error patterns:** Functions returning `NULL` or negative values → `result[T, string]`.
+5. **Convert names:** `SDL_CreateWindow` → `create_window` (strip prefix, snake_case).
+6. **Emit a `.jett` file** with the generated bindings.
+
+The generated file is plain Jett source — the LLM can read it, the compiler compiles it normally. FFI calls are annotated with a special attribute that the codegen phase recognizes.
+
+---
+
+## Incremental Compilation Strategy
+
+Fast recompilation is critical for the LLM compile-fix loop (Footnote 5).
+
+### File-Level Granularity
+
+1. **Content hashing:** Each file's content is hashed. If the hash hasn't changed, the file's compilation results are reused from cache.
+2. **Dependency tracking:** The compilation of file A depends on the public interface (signatures, types) of files A imports. If file B changes but its public interface doesn't, file A is not recompiled.
+3. **Per-phase caching:** Each phase caches its output keyed by the hash of its input. If the AST hasn't changed, type checking results are reused.
+
+### Query-Based Architecture
+
+The demand-driven query system (see Query Engine above) naturally supports incrementality. When a file changes:
+1. Invalidate all queries that read that file's content.
+2. Recompute only the invalidated queries.
+3. Cascade invalidation only if the recomputed result differs from the cached result.
+
+This means: if you change a comment, nothing is recomputed beyond re-lexing. If you change a function body but not its signature, only that function and its `verify` block are rechecked.
+
+---
+
+## Testing Strategy
+
+### Unit Tests (per crate)
+
+Each crate has its own unit tests:
+- **Lexer:** token sequence tests for each language construct, error recovery tests.
+- **Parser:** CST structure tests, error recovery tests, round-trip tests (source → CST → source).
+- **Type checker:** type inference tests, error message tests, ownership analysis tests.
+- **Comptime:** interpreter correctness tests, verify block tests.
+- **Codegen:** LLVM IR snapshot tests.
+
+### Integration Tests (`tests/`)
+
+- **`compile_pass/`** — Jett programs that should compile without errors. Tests run `jett build` and assert exit code 0.
+- **`compile_fail/`** — Jett programs with intentional errors. Tests assert specific error codes and messages. Each test file has a comment annotation like `# ERROR: E0012 secret type exposure`.
+- **`run_pass/`** — Jett programs that should compile and produce specific output. Tests run the compiled binary and compare stdout to expected output.
+- **`snapshots/`** — Snapshot tests for intermediate representations. Source → AST, source → HIR, source → MIR, source → LLVM IR. Uses `insta` for snapshot management.
+
+### Property-Based Compiler Tests
+
+The compiler itself is tested with property-based testing:
+- **Lexer properties:** tokenize(source) → detokenize(tokens) == source.
+- **Parser properties:** parse(lex(source)) never panics (even on random input).
+- **Type checker properties:** if type checking succeeds, codegen never encounters a type error.
+- **Round-trip properties:** source → CST → source is identity for formatted source.
+
+---
+
+## Implementation Phases
+
+The compiler should be built incrementally, with each phase producing a usable (if incomplete) tool.
+
+### Phase A: Foundation
+
+**Goal:** Parse a minimal Jett subset and produce a formatted AST.
+
+1. `jett_common` — Span, FileId, Symbol interner, diagnostics infrastructure.
+2. `jett_diagnostics` — Error types, human-readable rendering.
+3. `jett_lexer` — Full tokenizer including indentation handling.
+4. `jett_parser` — Parse functions, structs, basic expressions, if/else, for/while.
+5. `jett_ast` — AST data structures and CST → AST lowering.
+6. `jett_fmt` — Basic formatter.
+7. `jett_cli` — `jett format` command.
+
+**Milestone:** `jett format` works on basic Jett files.
+
+### Phase B: Type System Core
+
+**Goal:** Type check a meaningful subset of Jett.
+
+1. `jett_resolve` — Name resolution, namespace registry.
+2. `jett_types` — Type interning, type representations.
+3. `jett_typecheck` — Basic type checking (no ownership yet): expression types, function calls, generics, enums, match exhaustiveness.
+
+**Milestone:** The compiler rejects type errors and produces useful error messages.
+
+### Phase C: Ownership and Capabilities
+
+**Goal:** Enforce linear types and capability-based purity.
+
+1. Ownership analysis in `jett_typecheck` — move semantics, view borrowing, consume tracking.
+2. Capability analysis — purity enforcement, capability threading.
+3. Secret taint analysis.
+
+**Milestone:** The compiler enforces ownership, purity, and secret safety.
+
+### Phase D: Code Generation
+
+**Goal:** Produce running binaries.
+
+1. `jett_hir` — Monomorphization, method resolution.
+2. `jett_mir` — CFG-based IR, definitive ownership verification.
+3. `jett_codegen_llvm` — LLVM IR generation for the host platform.
+4. `jett_cli` — `jett build` command.
+
+**Milestone:** `jett build` produces a working native binary for basic programs.
+
+### Phase E: Comptime and Verification
+
+**Goal:** Execute verify blocks at compile time.
+
+1. `jett_comptime` — MIR interpreter.
+2. Wire `verify` blocks through the comptime interpreter during `jett build`.
+
+**Milestone:** `verify` block failures prevent compilation.
+
+### Phase F: Interpreter
+
+**Goal:** `jett run` for rapid prototyping.
+
+1. `jett_codegen_interp` — Bytecode generation from MIR.
+2. `jett_interp` — Bytecode interpreter.
+3. `jett_cli` — `jett run` command.
+
+**Milestone:** `jett run file.jett` executes programs without LLVM compilation.
+
+### Phase G: Advanced Type Features
+
+**Goal:** State machines, refinement types, bitfields, actors.
+
+1. State machine validation in type checker.
+2. Refinement type checking (compile-time for literals, runtime `handle` for variables).
+3. Bitfield parsing, validation, and codegen.
+4. Actor model: spawn, send, ask, receive codegen.
+5. Structured concurrency: run, join, cancel codegen.
+
+**Milestone:** All 28 rule sets are enforced.
+
+### Phase H: Agent Tooling
+
+**Goal:** Full ASP, LSP, MCP support.
+
+1. `jett_asp` — TOON output formatting for all commands.
+2. `jett_query` — Query engine with demand-driven caching.
+3. `jett_lsp` — LSP server.
+4. `jett_mcp` — MCP server.
+5. `jett_cli` — `--agent` flag on all commands.
+
+**Milestone:** LLM agents can use the full compile-fix loop via ASP/MCP.
+
+### Phase I: Testing and Profiling
+
+**Goal:** Property testing, profiling, tracing, breakpoints.
+
+1. `jett_fuzz` — Property-based test runner with shrinking.
+2. `jett_profiler` — CPU and memory profiling with bottleneck summaries.
+3. Trace instrumentation in codegen.
+4. Breakpoint instrumentation in codegen (debug mode only).
+5. `jett_cli` — `jett test`, `--profile`, `--profile-memory` commands.
+
+**Milestone:** Full testing and debugging workflow available.
+
+### Phase J: Cross-Compilation and C Interop
+
+**Goal:** Multi-platform support and C bindings.
+
+1. Platform-specific capability lowering in codegen (Linux, Windows, macOS, WASM).
+2. Cross-compilation support in the CLI (`--target` flag).
+3. `jett_bind` — C header binding generator.
+4. `jett_cli` — `jett bind` command.
+
+**Milestone:** Cross-compile for all supported platforms, call C libraries from Jett.
+
+### Phase K: Incremental Compilation and Polish
+
+**Goal:** Sub-second recompilation, production readiness.
+
+1. Demand-driven query system with caching and invalidation.
+2. Parallel compilation of independent namespaces.
+3. Content-addressed caching of compilation artifacts.
+4. Standard library implementation (all modules from Rule Set 8).
+5. Comprehensive test suite.
+
+**Milestone:** Production-ready compiler with fast iteration cycles.
+
+---
+
+## Key Rust Crates (Dependencies)
+
+| Crate | Purpose |
+|---|---|
+| `inkwell` | Safe LLVM bindings for code generation |
+| `ariadne` | Beautiful human-readable error rendering |
+| `logos` | Fast lexer generation (or hand-written for more control) |
+| `rowan` | Lossless CST representation (like rust-analyzer) |
+| `salsa` | Demand-driven incremental computation framework |
+| `tower-lsp` | LSP server framework |
+| `clang-sys` | libclang bindings for C header parsing |
+| `insta` | Snapshot testing |
+| `proptest` | Property-based testing for the compiler itself |
+| `clap` | CLI argument parsing |
+| `serde` | Serialization (for TOON output, caching) |
+
+---
+
+## Appendix: Error Code Registry
+
+Error codes are organized by phase and category:
+
+| Range | Category |
+|---|---|
+| E0001–E0099 | Lexer errors (bad indentation, invalid tokens) |
+| E0100–E0199 | Parser errors (unexpected token, malformed construct) |
+| E0200–E0299 | Name resolution errors (undefined, shadowing, unused) |
+| E0300–E0399 | Type errors (mismatch, missing conversion, failed constraint) |
+| E0400–E0499 | Ownership errors (use-after-move, view escape, missing clone) |
+| E0500–E0599 | Capability errors (missing capability, impure in pure context) |
+| E0600–E0699 | Secret errors (secret exposure, missing declassify) |
+| E0700–E0799 | State machine errors (invalid transition, wrong state) |
+| E0800–E0899 | Complexity limit errors (too many statements, too deep) |
+| E0900–E0999 | Concurrency errors (orphaned task, view sent to actor) |
+| E1000–E1099 | Verify/property errors (assertion failed, impure verify) |
