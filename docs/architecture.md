@@ -13,55 +13,23 @@ The Jett compiler (`jettc`) is a multi-pass, ahead-of-time compiler written in R
 
 ## High-Level Pipeline
 
-```
-Source Files (.jett)
-        │
-        ▼
-┌─────────────────┐
-│  1. Discovery    │  Scan project, find all .jett files, read namespace declarations
-└────────┬────────┘
-         ▼
-┌─────────────────┐
-│  2. Lexer        │  Source text → Token stream (per file)
-└────────┬────────┘
-         ▼
-┌─────────────────┐
-│  3. Parser       │  Token stream → CST (Concrete Syntax Tree)
-└────────┬────────┘
-         ▼
-┌─────────────────┐
-│  4. AST Lowering │  CST → AST (Abstract Syntax Tree) with desugaring
-└────────┬────────┘
-         ▼
-┌─────────────────┐
-│  5. Name Res.    │  Resolve all names: namespaces, types, functions, variables
-└────────┬────────┘
-         ▼
-┌─────────────────┐
-│  6. Type Check   │  Full type checking, ownership analysis, capability tracking
-└────────┬────────┘
-         ▼
-┌─────────────────┐
-│  7. HIR          │  High-level IR: typed, ownership-annotated, monomorphized
-└────────┬────────┘
-         ▼
-┌─────────────────┐
-│  8. MIR          │  Mid-level IR: control flow graph, linear type verification
-└────────┬────────┘
-         ▼
-┌─────────────────┐
-│  9. Comptime     │  Execute verify blocks, comptime functions, evaluate constants
-└────────┬────────┘
-         ▼
-┌─────────────────┐
-│ 10. Optimization │  Jett-level optimizations (in-place reuse, SoA, etc.)
-└────────┬────────┘
-         ▼
-┌─────────────────┐
-│ 11. Codegen      │  MIR → LLVM IR → native code (or interpreter bytecode)
-└────────┬────────┘
-         ▼
-     Native Binary
+```mermaid
+flowchart TD
+    SRC["Source Files (.jett)"]
+    P1["1. Discovery<br/><small>Scan project, find .jett files, read namespace declarations</small>"]
+    P2["2. Lexer<br/><small>Source text → Token stream (per file)</small>"]
+    P3["3. Parser<br/><small>Token stream → CST (Concrete Syntax Tree)</small>"]
+    P4["4. AST Lowering<br/><small>CST → AST with desugaring</small>"]
+    P5["5. Name Resolution<br/><small>Resolve namespaces, types, functions, variables</small>"]
+    P6["6. Type Check<br/><small>Full type checking, ownership analysis, capability tracking</small>"]
+    P7["7. HIR<br/><small>Typed, ownership-annotated, monomorphized</small>"]
+    P8["8. MIR<br/><small>Control flow graph, linear type verification</small>"]
+    P9["9. Comptime<br/><small>Execute verify blocks, comptime functions, evaluate constants</small>"]
+    P10["10. Optimization<br/><small>In-place reuse, view elision, move coalescing, etc.</small>"]
+    P11["11. Codegen<br/><small>MIR → LLVM IR → native code (or interpreter bytecode)</small>"]
+    BIN["Native Binary"]
+
+    SRC --> P1 --> P2 --> P3 --> P4 --> P5 --> P6 --> P7 --> P8 --> P9 --> P10 --> P11 --> BIN
 ```
 
 ---
@@ -113,32 +81,53 @@ jett/
 
 ### Crate Dependency Graph
 
-```
-jett_cli
-  └── jett_driver
-        ├── jett_project
-        ├── jett_lexer ─────────────┐
-        ├── jett_parser ────────────┤
-        ├── jett_ast ───────────────┤
-        ├── jett_resolve ───────────┤
-        ├── jett_typecheck ─────────┤── all depend on jett_common
-        ├── jett_hir ───────────────┤   and jett_diagnostics
-        ├── jett_mir ───────────────┤
-        ├── jett_comptime ──────────┤
-        ├── jett_optimize ──────────┤
-        ├── jett_codegen_llvm ──────┤
-        ├── jett_codegen_interp ────┤
-        ├── jett_interp ────────────┤
-        ├── jett_fmt ───────────────┤
-        ├── jett_query ─────────────┤
-        ├── jett_lsp ───────────────┤
-        ├── jett_asp ───────────────┤
-        ├── jett_mcp ───────────────┤
-        ├── jett_profiler ──────────┤
-        ├── jett_fuzz ──────────────┤
-        └── jett_bind ──────────────┘
+```mermaid
+flowchart TD
+    CLI["jett_cli"]
+    DRV["jett_driver"]
+    PRJ["jett_project"]
+    CMN["jett_common"]
+    DGN["jett_diagnostics"]
+    TYP["jett_types"]
 
-jett_types (used by jett_typecheck, jett_hir, jett_mir, jett_codegen_*, jett_comptime)
+    LEX["jett_lexer"]
+    PAR["jett_parser"]
+    AST["jett_ast"]
+    RES["jett_resolve"]
+    TCK["jett_typecheck"]
+    HIR["jett_hir"]
+    MIR["jett_mir"]
+    CMP["jett_comptime"]
+    OPT["jett_optimize"]
+    CGL["jett_codegen_llvm"]
+    CGI["jett_codegen_interp"]
+    INT["jett_interp"]
+    FMT["jett_fmt"]
+    QRY["jett_query"]
+    LSP["jett_lsp"]
+    ASP["jett_asp"]
+    MCP["jett_mcp"]
+    PRF["jett_profiler"]
+    FUZ["jett_fuzz"]
+    BND["jett_bind"]
+
+    CLI --> DRV
+    DRV --> PRJ
+    DRV --> LEX & PAR & AST & RES & TCK & HIR & MIR
+    DRV --> CMP & OPT & CGL & CGI & INT
+    DRV --> FMT & QRY & LSP & ASP & MCP & PRF & FUZ & BND
+
+    LEX & PAR & AST & RES & TCK & HIR & MIR --> CMN & DGN
+    CMP & OPT & CGL & CGI & INT --> CMN & DGN
+    FMT & QRY & LSP & ASP & MCP & PRF & FUZ & BND --> CMN & DGN
+
+    TCK & HIR & MIR & CMP & CGL & CGI --> TYP
+    TYP --> CMN
+
+    QRY --> TCK
+    LSP --> QRY
+    MCP --> ASP
+    ASP --> DGN
 ```
 
 ---
