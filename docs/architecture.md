@@ -123,9 +123,12 @@ flowchart TD
     CMP & OPT & CGL & CGI & INT --> CMN & DGN
     FMT & QRY & LSP & ASP & MCP & PRF & FUZ & BND & BDL --> CMN & DGN
 
-    TCK & HIR & MIR & CMP & CGL & CGI --> TYP
+    TCK & HIR & MIR & CMP & OPT & CGL & CGI --> TYP
+    FUZ --> TYP
     TYP --> CMN
 
+    FMT --> PAR
+    BDL --> PRJ
     QRY --> TCK
     LSP --> QRY
     MCP --> ASP
@@ -256,7 +259,7 @@ The CST uses a flat arena-allocated representation (like `rowan` in rust-analyze
 ### Key CST Node Types
 
 ```
-File            → NamespaceDecl?, (TopLevelItem)*
+File            → (NamespaceDecl (TopLevelItem)*)+    // One or more namespace blocks per file
 TopLevelItem    → FunctionDef | StructDef | EnumDef | InterfaceDef |
                   ImplementBlock | MachineDef | ActorDef | TypeAlias |
                   VerifyBlock | PropertyBlock | MutualBlock | BitfieldDef |
@@ -306,6 +309,7 @@ Expression      → Literal | Ident | BinaryExpr | UnaryExpr |
 4. **`for item in view items:`** → loop with explicit view semantics annotated.
 5. **Named arguments:** Reordered to match parameter declaration order with source mapping preserved.
 6. **`== X within Y`:** Approximate float comparison in verify/property blocks is desugared to `math.abs(left - right) <= Y`.
+7. **No nested function calls as arguments:** `f(g(x))` is rejected at this phase (Rule Set 19). The caller must bind `g(x)` to a variable first. String interpolation is the only exception — inline expressions like `"hello {string.upper(name)}"` are allowed.
 
 ### AST Design Principles
 
@@ -422,7 +426,6 @@ Bottom-up type checking of every expression:
 - **Variable references:** look up the type from the variable's declaration.
 - **Function calls:** verify argument types match parameter types, verify generic type parameters, verify return type.
 - **No implicit conversions** — `int64` is not `float64`. Every mismatch is an error with a hint.
-- **No nested function calls as arguments** — `f(g(x))` is rejected during AST lowering (Rule Set 19). The caller must bind `g(x)` to a variable first. String interpolation is the only exception.
 - **Refinement type assignments:** wrapping a base type in a refinement type is fallible → must have `handle error:`.
 - **Handle blocks:** verify that `handle error:` is used on `result[T, E]` and `handle:` on `optional[T]`. Verify handle blocks end with `return` or `default`.
 - **Match exhaustiveness:** verify all enum variants are covered.
@@ -450,6 +453,9 @@ This sub-phase tracks the ownership state of every variable through the control 
 - **For loops:** `for item in items` consumes `items`; `for item in view items` borrows `items`.
 - **Run/join:** `run` marks a value as pending; it cannot be used until `join`ed.
 - **No orphaned tasks:** every `run` must have a matching `join` or `cancel` before the function returns.
+- **No rebinding while viewed:** The owner of a variable cannot rebind it while a `view` to it exists. This prevents `items = new_list` inside a `for item in view items:` loop body, and prevents rebinding a variable that was passed as `view` to a `run` task until the task is `join`ed or `cancel`led.
+- **Cancellation semantics:** `cancel task` sets a cancellation flag. The task is not killed immediately — the next capability use (I/O operation) inside the cancelled task returns a `CancelledError`. The task handle remains live and must still be `join`ed.
+- **View propagation:** Views propagate through field access and collection element access. `view list[T]` element access yields `view T`, not an owned copy. `clone` is required to get an owned value from a view.
 
 **Implementation strategy:** Abstract interpretation over the control flow graph. At each program point, maintain a mapping from variable → ownership state. At control flow joins (if/else merge points, loop entries), states must be compatible:
 
@@ -546,6 +552,12 @@ The MIR decomposes functions into basic blocks connected by control flow edges. 
 ### MIR Structure
 
 ```
+MirParam {
+    name: Symbol,
+    type_id: TypeId,
+    ownership: OwnershipMode,    // Owned or View
+}
+
 MirFunction {
     name: Symbol,
     params: Vec<MirParam>,
@@ -607,9 +619,14 @@ ComptimeValue {
     Float64(f64),
     String(String),
     Bool(bool),
+    Bytes(Vec<u8>),
     List(Vec<ComptimeValue>),
     Map(BTreeMap<ComptimeValue, ComptimeValue>),
+    Set(BTreeSet<ComptimeValue>),
     Struct { type_id: TypeId, fields: Vec<ComptimeValue> },
+    Enum { type_id: TypeId, variant: Symbol, fields: Vec<ComptimeValue> },
+    Optional(Option<Box<ComptimeValue>>),           // none or some(value)
+    Result { ok: bool, value: Box<ComptimeValue> }, // ok(value) or fail(error)
     Nothing,
 }
 ```
@@ -765,7 +782,7 @@ The same `Diagnostic` struct feeds both renderers. The rendering choice is made 
 
 ### Error Codes
 
-Every error has a stable code (e.g., `E0012` for secret type exposure, `E0045` for statement limit exceeded). These codes are deterministic and machine-parseable. The ASP TOON output includes the code for every error.
+Every error has a stable code (e.g., `E0601` for secret type exposure, `E0801` for statement limit exceeded). These codes are deterministic and machine-parseable. The ASP TOON output includes the code for every error.
 
 ---
 
@@ -878,7 +895,7 @@ The `jett test` command runs both `verify` blocks (at compile time, via the comp
    - Refinement types: values at constraint boundaries.
    - Custom structs: all fields generated recursively.
 
-2. **Execution:** Run the property block body with each generated input. All values are implicitly viewable in property/verify contexts (relaxed linear typing).
+2. **Execution:** Run the property block body with each generated input. All values are implicitly viewable in property/verify/breakpoint contexts (relaxed linear typing — values can be used multiple times without being consumed).
 
 3. **Shrinking:** When a failure is found, iteratively simplify the input while maintaining the failure. Binary search on list lengths, individual element simplification, etc.
 
@@ -967,7 +984,7 @@ Each crate has its own unit tests:
 ### Integration Tests (`tests/`)
 
 - **`compile_pass/`** — Jett programs that should compile without errors. Tests run `jett build` and assert exit code 0.
-- **`compile_fail/`** — Jett programs with intentional errors. Tests assert specific error codes and messages. Each test file has a comment annotation like `# ERROR: E0012 secret type exposure`.
+- **`compile_fail/`** — Jett programs with intentional errors. Tests assert specific error codes and messages. Each test file has a comment annotation like `# ERROR: E0601 secret type exposure`.
 - **`run_pass/`** — Jett programs that should compile and produce specific output. Tests run the compiled binary and compare stdout to expected output.
 - **`snapshots/`** — Snapshot tests for intermediate representations. Source → AST, source → HIR, source → MIR, source → LLVM IR. Uses `insta` for snapshot management.
 
