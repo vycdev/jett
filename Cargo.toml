@@ -27,3 +27,6 @@ jett_parser = { path = "crates/jett_parser" }
 jett_ast = { path = "crates/jett_ast" }
 jett_fmt = { path = "crates/jett_fmt" }
 jett_driver = { path = "crates/jett_driver" }
+
+# External crates
+clap = { version = "4", features = ["derive"] }

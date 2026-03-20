@@ -7,4 +7,4 @@ license.workspace = true
 
 [dependencies]
 jett_common.workspace = true
-jett_parser.workspace = true
+jett_lexer.workspace = true
