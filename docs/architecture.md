@@ -319,7 +319,8 @@ Expression      → Literal | Ident | BinaryExpr | UnaryExpr |
 - **Every node has a `Span`** for error reporting.
 - **Every node has a unique `NodeId`** for incremental compilation cache keys.
 - **The AST is immutable** once constructed. Subsequent phases annotate it via side-tables (HashMap<NodeId, T>), not by mutating AST nodes.
-- **Interned strings.** All identifiers are interned as `Symbol` (integer handle into a global string interner). Comparisons are O(1).
+- **Interned strings.** All identifiers are interned via salsa's `#[salsa::interned]` as `Symbol` (integer handle). Comparisons are O(1).
+- **Top-level items are salsa tracked structs.** Each function, struct, enum, etc. is a salsa tracked struct with identity fields. This enables item-level incremental recomputation. Function bodies are stored in local arenas within the tracked struct, not in a global arena.
 
 ---
 
@@ -941,23 +942,9 @@ The query engine powers both LSP and ASP interactive queries. It provides:
 
 ### Demand-Driven Computation
 
-The query engine uses a **demand-driven (salsa-style) architecture**: queries are computed lazily and cached. When a file changes, only the queries that depend on the changed file are recomputed.
+The query engine is built on **salsa** — the same demand-driven incremental framework used by rust-analyzer. Queries are pure functions that are memoized and automatically invalidated when their inputs change.
 
-This is critical for LSP responsiveness and incremental compilation:
-
-```
-// Pseudocode for the query system:
-fn type_of(expr: NodeId) -> TypeId {
-    // Check cache first
-    if let Some(cached) = cache.get(expr) { return cached; }
-    // Compute: may recursively call other queries
-    let result = compute_type(expr);
-    cache.set(expr, result);
-    result
-}
-```
-
-The dependency tracking records which queries each computation reads, so invalidation cascades precisely through the dependency graph.
+The query engine does not "run phases in order." Instead, the caller asks for a result (e.g., "give me diagnostics for this file"), and salsa pulls through only the computations needed, reusing cached results wherever possible. See the Incremental Compilation Strategy section for details on granularity, arena strategy, and cancellation.
 
 ---
 
@@ -1090,22 +1077,63 @@ The generated file is plain Jett source — the LLM can read it, the compiler co
 
 ## Incremental Compilation Strategy
 
-Fast recompilation is critical for the LLM compile-fix loop (Footnote 5).
+Fast recompilation is critical for the LLM compile-fix loop (Footnote 5). The architecture uses a **salsa-style demand-driven query system** where every compiler operation is a memoized pure function from inputs to outputs.
 
-### File-Level Granularity
+### Core Principle: Separate Signatures from Bodies
 
-1. **Content hashing:** Each file's content is hashed. If the hash hasn't changed, the file's compilation results are reused from cache.
-2. **Dependency tracking:** The compilation of file A depends on the public interface (signatures, types) of files A imports. If file B changes but its public interface doesn't, file A is not recompiled.
-3. **Per-phase caching:** Each phase caches its output keyed by the hash of its input. If the AST hasn't changed, type checking results are reused.
+This is the single most impactful decision for incremental performance. When a function body changes but its signature doesn't, callers of that function do not need to be re-checked.
 
-### Query-Based Architecture
+The compiler splits each file into two levels of granularity:
 
-The demand-driven query system (see Query Engine above) naturally supports incrementality. When a file changes:
-1. Invalidate all queries that read that file's content.
-2. Recompute only the invalidated queries.
-3. Cascade invalidation only if the recomputed result differs from the cached result.
+1. **Item-level signatures** — extracted from the parse tree as lightweight tracked structs (function name, parameter types, return type, capability parameters). These are the "public interface" of each item. Name resolution and cross-function type checking depend on signatures only.
 
-This means: if you change a comment, nothing is recomputed beyond re-lexing. If you change a function body but not its signature, only that function and its `verify` block are rechecked.
+2. **Item-level bodies** — the full function body AST, lowered lazily (only when needed). Type checking a function's body depends on the signatures of functions it calls, not their bodies.
+
+**What this means in practice:**
+- Change a function body → only that function and its `verify` block are re-checked.
+- Change a function signature → all callers are re-checked (but only their type checking, not their bodies recursively).
+- Change a comment or whitespace → nothing is recomputed beyond re-lexing.
+- Add a new function at the end of a file → nothing above it is affected (strict top-to-bottom ordering).
+
+### Query Granularity
+
+| Query level | Memoization unit | Example |
+|---|---|---|
+| File-level | One result per file | `parse(file)` → CST |
+| Item-level | One result per top-level declaration | `type_of(function)` → Type, `check_body(function)` → Diagnostics |
+| Expression-level | Not memoized | Individual expression type inference runs within an item-level query |
+
+The sweet spot is **item-level granularity** for type checking and downstream phases. File-level is too coarse (a change to one function invalidates the entire file). Expression-level is too fine (the overhead of memoization exceeds the cost of recomputation).
+
+### Salsa Integration Details
+
+**Inputs (ground truth):**
+- Source file text — `#[salsa::input]` per file
+- Project configuration — separate input so config changes don't invalidate parsing
+
+**Tracked structs (intermediate identities):**
+- Each top-level declaration (function, struct, enum, machine, etc.) is a salsa tracked struct with identity fields (name, namespace)
+- When a file is re-parsed, salsa correlates new items with old ones by identity. If an item's fields haven't changed, downstream queries are not invalidated.
+
+**Derived queries (computed lazily):**
+- `parse(file)` → CST
+- `file_items(file)` → `Vec<TrackedItem>` (extracts top-level items with signatures)
+- `resolve_names(namespace)` → NamespaceScope
+- `type_of(item)` → TypeId (from signature only)
+- `check_body(item)` → Diagnostics (full body type checking)
+- `lower_to_mir(item)` → MirFunction
+
+**Accumulated diagnostics:** Diagnostics are collected via salsa accumulators — each phase pushes diagnostics as it encounters errors, and they're automatically aggregated. No need to thread `Vec<Diagnostic>` through return values.
+
+**Cycle handling:** Mutual recursion between type definitions (e.g., through `mutual` blocks) creates query cycles. Salsa detects these and invokes a recovery function that returns an "error" type, allowing compilation to continue and report the cycle.
+
+**Cancellation:** For LSP responsiveness, when the user types a new character, in-progress salsa computations are cancelled cooperatively. The LSP server applies the new input and re-invokes queries, which restart from the point of divergence.
+
+### Arena Strategy
+
+**Salsa is the top-level arena.** Top-level items (functions, structs, types) are salsa tracked structs. Salsa manages their lifetime and identity across revisions. There is no separate global AST arena.
+
+**Local arenas for bodies.** Function bodies are allocated into a local arena owned by the query result. The body is stored as `Body { arena: Arena, root: ExprIdx }` and memoized as a unit. Arena indices are only valid within that single Body — they never cross query boundaries.
 
 ---
 
