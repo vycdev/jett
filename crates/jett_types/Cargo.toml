@@ -1,0 +1,9 @@
+[package]
+name = "jett_types"
+description = "Type representations, type interning, type relationships"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+jett_common.workspace = true

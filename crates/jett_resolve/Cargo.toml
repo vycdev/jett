@@ -1,0 +1,12 @@
+[package]
+name = "jett_resolve"
+description = "Name resolution, namespace registry, import resolution"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+jett_common.workspace = true
+jett_diagnostics.workspace = true
+jett_parser.workspace = true
+jett_types.workspace = true
