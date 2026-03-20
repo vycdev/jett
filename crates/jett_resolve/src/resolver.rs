@@ -4,7 +4,8 @@ use jett_common::Span;
 use jett_diagnostics::{Diagnostic, DiagnosticSink};
 use jett_parser::ast::{
     AssertStmt, AssignStmt, Block, CallArg, Expr, ExprStmt, ForStmt, FunctionDef, IfStmt, Item,
-    MatchStmt, Module, Pattern, ReturnStmt, Stmt, TypeExpr, UseDecl, VarDecl, WhileStmt,
+    MatchStmt, Module, Pattern, ReturnStmt, Stmt, StringPart, TypeExpr, UseDecl, VarDecl,
+    WhileStmt,
 };
 
 use crate::errors;
@@ -473,6 +474,13 @@ impl Resolver {
             Expr::EnumVariant(type_name, _, _) => {
                 // Resolve the type name; variant name is checked during type checking.
                 self.resolve_name(&type_name.name, type_name.span, item_index);
+            }
+            Expr::StringInterpolation(parts, _) => {
+                for part in parts {
+                    if let StringPart::Expr(expr) = part {
+                        self.resolve_expr(expr, item_index);
+                    }
+                }
             }
             // Literals and nothing — no names to resolve.
             Expr::IntLiteral(_, _)

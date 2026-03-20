@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use jett_parser::ast::{BinOp, Block, Expr, FunctionDef, Pattern, Stmt, UnaryOp};
+use jett_parser::ast::{BinOp, Block, Expr, FunctionDef, Pattern, Stmt, StringPart, UnaryOp};
 
 use crate::value::Value;
 
@@ -138,6 +138,19 @@ impl Interpreter {
             Expr::IntLiteral(n, _) => Ok(Value::Int64(*n)),
             Expr::FloatLiteral(n, _) => Ok(Value::Float64(*n)),
             Expr::StringLiteral(s, _) => Ok(Value::String(s.clone())),
+            Expr::StringInterpolation(parts, _) => {
+                let mut result = String::new();
+                for part in parts {
+                    match part {
+                        StringPart::Literal(s) => result.push_str(s),
+                        StringPart::Expr(expr) => {
+                            let val = self.eval_expr(expr)?;
+                            result.push_str(&val.to_string());
+                        }
+                    }
+                }
+                Ok(Value::String(result))
+            }
             Expr::BoolLiteral(b, _) => Ok(Value::Bool(*b)),
             Expr::Nothing(_) => Ok(Value::Nothing),
 
@@ -1211,6 +1224,91 @@ mod tests {
         assert_eq!(
             interp.eval_expr(&expr).unwrap(),
             Value::String("hello world".to_string())
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // String interpolation
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn string_interpolation_simple() {
+        // "hello {name}" with name = "world"
+        let mut interp = Interpreter::new();
+        interp.exec_stmt(&var_decl("name", string("world"))).unwrap();
+        let expr = Expr::StringInterpolation(
+            vec![
+                StringPart::Literal("hello ".to_string()),
+                StringPart::Expr(Box::new(var("name"))),
+            ],
+            sp(),
+        );
+        assert_eq!(
+            interp.eval_expr(&expr).unwrap(),
+            Value::String("hello world".to_string())
+        );
+    }
+
+    #[test]
+    fn string_interpolation_multiple() {
+        // "{a} + {b} = {c}" with a=2, b=3, c=5
+        let mut interp = Interpreter::new();
+        interp.exec_stmt(&var_decl("a", int(2))).unwrap();
+        interp.exec_stmt(&var_decl("b", int(3))).unwrap();
+        interp.exec_stmt(&var_decl("c", int(5))).unwrap();
+        let expr = Expr::StringInterpolation(
+            vec![
+                StringPart::Expr(Box::new(var("a"))),
+                StringPart::Literal(" + ".to_string()),
+                StringPart::Expr(Box::new(var("b"))),
+                StringPart::Literal(" = ".to_string()),
+                StringPart::Expr(Box::new(var("c"))),
+            ],
+            sp(),
+        );
+        assert_eq!(
+            interp.eval_expr(&expr).unwrap(),
+            Value::String("2 + 3 = 5".to_string())
+        );
+    }
+
+    #[test]
+    fn string_interpolation_with_function_call() {
+        // "result: {add(2, 3)}" with a function add(a, b) returns a + b
+        let mut interp = Interpreter::new();
+        let add_fn = func_def(
+            "add",
+            vec![("a", "int64"), ("b", "int64")],
+            Block {
+                stmts: vec![Stmt::Return(ReturnStmt {
+                    value: Some(binary(var("a"), BinOp::Add, var("b"))),
+                    span: sp(),
+                })],
+                span: sp(),
+            },
+        );
+        interp.register_function(&add_fn);
+        let expr = Expr::StringInterpolation(
+            vec![
+                StringPart::Literal("result: ".to_string()),
+                StringPart::Expr(Box::new(call("add", vec![int(2), int(3)]))),
+            ],
+            sp(),
+        );
+        assert_eq!(
+            interp.eval_expr(&expr).unwrap(),
+            Value::String("result: 5".to_string())
+        );
+    }
+
+    #[test]
+    fn string_interpolation_plain_string_still_works() {
+        // "plain string" with no interpolation should still work as StringLiteral
+        let mut interp = Interpreter::new();
+        let expr = string("plain string");
+        assert_eq!(
+            interp.eval_expr(&expr).unwrap(),
+            Value::String("plain string".to_string())
         );
     }
 

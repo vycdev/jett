@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use jett_common::Span;
 use jett_diagnostics::{Diagnostic, DiagnosticSink};
 use jett_parser::ast::{
-    self, BinOp, Block, Expr, FunctionDef, Item, Module, Stmt, TypeExpr, UnaryOp,
+    self, BinOp, Block, Expr, FunctionDef, Item, Module, Stmt, StringPart, TypeExpr, UnaryOp,
 };
 use jett_resolve::resolver::ResolveResult;
 use jett_resolve::scope::DefId;
@@ -425,6 +425,15 @@ impl<'a> TypeChecker<'a> {
             }
             Expr::Default(inner, _span) => self.check_expr(inner),
 
+            Expr::StringInterpolation(parts, _) => {
+                // Each interpolated expression is checked; the overall result is string.
+                for part in parts {
+                    if let StringPart::Expr(expr) = part {
+                        self.check_expr(expr);
+                    }
+                }
+                TypeInterner::STRING
+            }
             Expr::Error(_) => TypeInterner::ERROR,
             Expr::EnumVariant(_, _, _) => {
                 // TODO: resolve enum variant type

@@ -969,32 +969,62 @@ impl<'src> Parser<'src> {
                 Expr::StringLiteral(inner, tok.span)
             }
             TokenKind::StringStart => {
-                // String interpolation: StringStart, tokens..., StringMid/StringEnd
-                // For simplicity, represent as a single string literal with placeholders
+                // String interpolation: StringStart expr (StringMid expr)* StringEnd
                 self.advance();
-                let text = self.token_text(&tok);
                 let start_span = tok.span;
-                let mut full = text.to_string();
-                // Consume tokens until StringEnd
+                let start_text = self.token_text(&tok);
+                let mut parts = Vec::new();
+
+                // StringStart includes the opening quote — strip it
+                let literal = if start_text.len() >= 1 {
+                    &start_text[1..]
+                } else {
+                    start_text
+                };
+                if !literal.is_empty() {
+                    parts.push(StringPart::Literal(literal.to_string()));
+                }
+
+                // Parse interpolated expression
+                let expr = self.parse_expr();
+                parts.push(StringPart::Expr(Box::new(expr)));
+
+                // Consume StringMid/StringEnd segments
                 loop {
                     match self.peek() {
                         TokenKind::StringEnd => {
-                            let end_tok = self.advance();
-                            full.push_str(self.token_text(&end_tok));
+                            let end_tok = self.peek_token().clone();
+                            self.advance();
+                            let end_text = self.token_text(&end_tok);
+                            // StringEnd includes the closing quote — strip it
+                            let literal = if end_text.len() >= 1 {
+                                &end_text[..end_text.len() - 1]
+                            } else {
+                                end_text
+                            };
+                            if !literal.is_empty() {
+                                parts.push(StringPart::Literal(literal.to_string()));
+                            }
                             let span = start_span.merge(end_tok.span);
-                            return Expr::StringLiteral(full, span);
+                            return Expr::StringInterpolation(parts, span);
                         }
                         TokenKind::StringMid => {
-                            let mid_tok = self.advance();
-                            full.push_str(self.token_text(&mid_tok));
+                            let mid_tok = self.peek_token().clone();
+                            self.advance();
+                            let mid_text = self.token_text(&mid_tok);
+                            if !mid_text.is_empty() {
+                                parts.push(StringPart::Literal(mid_text.to_string()));
+                            }
+                            // Parse the next interpolated expression
+                            let expr = self.parse_expr();
+                            parts.push(StringPart::Expr(Box::new(expr)));
                         }
                         TokenKind::Eof => {
-                            return Expr::StringLiteral(full, start_span);
+                            return Expr::StringInterpolation(parts, start_span);
                         }
                         _ => {
-                            // Interpolated expression token — skip for now
-                            let inner_tok = self.advance();
-                            full.push_str(self.token_text(&inner_tok));
+                            // Unexpected token — error recovery
+                            self.advance();
                         }
                     }
                 }
@@ -2130,6 +2160,114 @@ verify add:
                 assert!(matches!(&vb.body.stmts[1], Stmt::Assert(_)));
             }
             other => panic!("expected Verify, got {:?}", other),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // String interpolation parsing
+    // -----------------------------------------------------------------------
+
+    /// Helper: extract the expression from a single-statement function body.
+    fn extract_expr_from_return(result: &ParseResult) -> &Expr {
+        match &result.module.items[0] {
+            Item::Function(f) => match &f.body.stmts[0] {
+                Stmt::Return(r) => r.value.as_ref().unwrap(),
+                other => panic!("expected Return, got {:?}", other),
+            },
+            other => panic!("expected Function, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_string_interpolation_simple() {
+        let src = "\
+function greet(name: string) returns string:
+    return \"hello {name}\"
+";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        let expr = extract_expr_from_return(&result);
+        match expr {
+            Expr::StringInterpolation(parts, _) => {
+                assert_eq!(parts.len(), 2);
+                match &parts[0] {
+                    StringPart::Literal(s) => assert_eq!(s, "hello "),
+                    other => panic!("expected Literal, got {:?}", other),
+                }
+                match &parts[1] {
+                    StringPart::Expr(e) => match e.as_ref() {
+                        Expr::Ident(ident) => assert_eq!(ident.name, "name"),
+                        other => panic!("expected Ident, got {:?}", other),
+                    },
+                    other => panic!("expected Expr, got {:?}", other),
+                }
+            }
+            other => panic!("expected StringInterpolation, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_string_interpolation_multiple() {
+        let src = "\
+function fmt(a: int64, b: int64, c: int64) returns string:
+    return \"{a} + {b} = {c}\"
+";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        let expr = extract_expr_from_return(&result);
+        match expr {
+            Expr::StringInterpolation(parts, _) => {
+                // {a} then " + " then {b} then " = " then {c}
+                assert_eq!(parts.len(), 5);
+                assert!(matches!(&parts[0], StringPart::Expr(_)));
+                assert!(matches!(&parts[1], StringPart::Literal(s) if s == " + "));
+                assert!(matches!(&parts[2], StringPart::Expr(_)));
+                assert!(matches!(&parts[3], StringPart::Literal(s) if s == " = "));
+                assert!(matches!(&parts[4], StringPart::Expr(_)));
+            }
+            other => panic!("expected StringInterpolation, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_string_interpolation_with_expression() {
+        let src = "\
+function fmt(a: int64, b: int64) returns string:
+    return \"result: {a + b}\"
+";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        let expr = extract_expr_from_return(&result);
+        match expr {
+            Expr::StringInterpolation(parts, _) => {
+                assert_eq!(parts.len(), 2);
+                match &parts[0] {
+                    StringPart::Literal(s) => assert_eq!(s, "result: "),
+                    other => panic!("expected Literal, got {:?}", other),
+                }
+                match &parts[1] {
+                    StringPart::Expr(e) => {
+                        assert!(matches!(e.as_ref(), Expr::Binary(_, BinOp::Add, _, _)));
+                    }
+                    other => panic!("expected Expr, got {:?}", other),
+                }
+            }
+            other => panic!("expected StringInterpolation, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_plain_string_no_interpolation() {
+        let src = "\
+function greet() returns string:
+    return \"plain string\"
+";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        let expr = extract_expr_from_return(&result);
+        match expr {
+            Expr::StringLiteral(s, _) => assert_eq!(s, "plain string"),
+            other => panic!("expected StringLiteral, got {:?}", other),
         }
     }
 }

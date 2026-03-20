@@ -284,6 +284,8 @@ pub enum Expr {
     Default(Box<Expr>, Span),
     /// Enum variant reference: `Color.red` (Type.variant)
     EnumVariant(Ident, Ident, Span),
+    /// String interpolation: `"hello {name}, you are {age} years old"`
+    StringInterpolation(Vec<StringPart>, Span),
     /// Error node for recovery
     Error(Span),
 }
@@ -312,10 +314,20 @@ impl Expr {
             | Expr::None(s)
             | Expr::Default(_, s)
             | Expr::EnumVariant(_, _, s)
+            | Expr::StringInterpolation(_, s)
             | Expr::Error(s) => *s,
             Expr::Ident(ident) => ident.span,
         }
     }
+}
+
+/// A part of a string interpolation expression.
+#[derive(Debug, Clone)]
+pub enum StringPart {
+    /// A literal string segment.
+    Literal(String),
+    /// An interpolated expression: `{expr}`.
+    Expr(Box<Expr>),
 }
 
 /// A call argument, optionally named: `foo(x: 10, 20)`
