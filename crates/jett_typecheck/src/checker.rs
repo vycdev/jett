@@ -26,8 +26,16 @@ pub struct CheckResult {
 pub fn check(module: &Module, resolve: &ResolveResult) -> CheckResult {
     let mut checker = TypeChecker::new(resolve);
     checker.check_module(module);
+
+    // Run ownership analysis (linear type checking) after type checking.
+    let ownership_diagnostics =
+        crate::ownership::check_ownership(module, &checker.interner);
+
+    let mut diagnostics = checker.sink.into_diagnostics();
+    diagnostics.extend(ownership_diagnostics);
+
     CheckResult {
-        diagnostics: checker.sink.into_diagnostics(),
+        diagnostics,
         type_map: checker.type_map,
         interner: checker.interner,
     }
@@ -99,6 +107,7 @@ impl<'a> TypeChecker<'a> {
                     self.type_name(*return_type)
                 )
             }
+            Type::Refinement { name, .. } => name.clone(),
             Type::Error => "<error>".to_string(),
         }
     }
@@ -433,6 +442,31 @@ impl<'a> TypeChecker<'a> {
                     }
                 }
                 TypeInterner::STRING
+            }
+            Expr::Coarsen(inner, _) => {
+                // coarsen strips a refinement type back to its base type.
+                // For now just check the inner expression.
+                self.check_expr(inner)
+            }
+            Expr::Pipeline(initial, steps, _) => {
+                // Check the initial expression and each step; return the type
+                // of the last step (or the initial expression if there are no steps).
+                let mut current_ty = self.check_expr(initial);
+                for step in steps {
+                    // Check the function and extra args but return Error for now
+                    // since full pipeline type inference is not yet implemented.
+                    self.check_expr(&step.function);
+                    for arg in &step.extra_args {
+                        self.check_expr(&arg.value);
+                    }
+                    current_ty = TypeInterner::ERROR;
+                }
+                current_ty
+            }
+            Expr::At(inner, _state, _) => {
+                // `expr at state` returns a bool.
+                self.check_expr(inner);
+                TypeInterner::BOOL
             }
             Expr::Error(_) => TypeInterner::ERROR,
             Expr::EnumVariant(_, _, _) => {
