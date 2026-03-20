@@ -65,6 +65,7 @@ jett/
 │   ├── jett_profiler/          # Built-in CPU/memory profiler
 │   ├── jett_fuzz/              # Property-based test runner and fuzzer
 │   ├── jett_bind/              # C header → .jett binding generator
+│   ├── jett_runtime/           # Runtime library linked into every binary (allocator, actors, strings)
 │   ├── jett_bundle/            # Bundle multi-file projects into single distributable .jett
 │   ├── jett_project/           # Project file (jett.proj) parsing, file discovery
 │   ├── jett_driver/            # Orchestrates the full pipeline, CLI argument parsing
@@ -112,12 +113,13 @@ flowchart TD
     FUZ["jett_fuzz"]
     BND["jett_bind"]
     BDL["jett_bundle"]
+    RTM["jett_runtime"]
 
     CLI --> DRV
     DRV --> PRJ
     DRV --> LEX & PAR & AST & RES & TCK & HIR & MIR
     DRV --> CMP & OPT & CGL & CGI & INT
-    DRV --> FMT & QRY & LSP & ASP & MCP & PRF & FUZ & BND & BDL
+    DRV --> FMT & QRY & LSP & ASP & MCP & PRF & FUZ & BND & BDL & RTM
 
     LEX & PAR & AST & RES & TCK & HIR & MIR --> CMN & DGN
     CMP & OPT & CGL & CGI & INT --> CMN & DGN
@@ -203,7 +205,7 @@ Span {
 ```
 
 `TokenKind` is an enum covering:
-- **Keywords:** `Function`, `Return`, `Returns`, `If`, `Else`, `For`, `In`, `Into`, `While`, `Struct`, `Enum`, `Match`, `Use`, `Mutable`, `Handle`, `Error`, `Default`, `Result`, `Ok`, `Fail`, `Clone`, `View`, `Type`, `Where`, `Machine`, `States`, `Transitions`, `To`, `At`, `Actor`, `Receive`, `Send`, `Ask`, `Respond`, `Spawn`, `Run`, `Join`, `Cancel`, `Comptime`, `Verify`, `Property`, `Given`, `Trace`, `Breakpoint`, `Secret`, `Declassify`, `Coarsen`, `Serialize`, `Namespace`, `Bitfield`, `Bit`, `Bits`, `Network` (bitfield byte-order modifier), `Implement`, `Interface`, `Mutual`, `Assert`, `Some`, `None`, `Nothing`, `True`, `False`, `Modulo`, `As`, `Break`, `Continue`, `And`, `Within`, `Self_`, `Value`, `Transition`, `Optional`, `Other` (match catch-all), `Not` (for `!` prefix)
+- **Keywords:** `Function`, `Return`, `Returns`, `If`, `Else`, `For`, `In`, `Into`, `While`, `Struct`, `Enum`, `Match`, `Use`, `Mutable`, `Handle`, `Error`, `Default`, `Result`, `Ok`, `Fail`, `Clone`, `View`, `Type`, `Where`, `Machine`, `States`, `Transitions`, `To`, `At`, `Is`, `Actor`, `Receive`, `Send`, `Ask`, `Respond`, `Spawn`, `Run`, `Join`, `Cancel`, `Comptime`, `Verify`, `Property`, `Given`, `Trace`, `Breakpoint`, `Secret`, `Declassify`, `Coarsen`, `Serialize`, `Namespace`, `Bitfield`, `Bit`, `Bits`, `Network` (bitfield byte-order modifier), `Implement`, `Interface`, `Mutual`, `Assert`, `Some`, `None`, `Nothing`, `True`, `False`, `Modulo`, `As`, `Break`, `Continue`, `And`, `Within`, `Self_`, `Value`, `Transition`, `Optional`, `Other` (match catch-all), `Not` (for `!` prefix)
 - **Type keywords:** `Int8`, `Int16`, `Int32`, `Int64`, `Uint8`, `Uint16`, `Uint32`, `Uint64`, `Float32`, `Float64`, `String_`, `Bool_`, `Bytes_`, `List_`, `Map_`, `Set_`. These are reserved keywords, not identifiers — they are tokenized distinctly so the parser can recognize type annotations unambiguously.
 - **Literals:** `IntLiteral`, `FloatLiteral`, `StringLiteral` (with interpolation segments), `BoolLiteral`
 - **Symbols:** `Eq`, `EqEq`, `NotEq`, `Lt`, `Gt`, `LtEq`, `GtEq`, `Plus`, `Minus`, `Star`, `Slash`, `AmpAmp`, `PipePipe`, `Bang`, `Dot`, `Comma`, `Colon`, `LParen`, `RParen`, `LBracket`, `RBracket`, `Hash`
@@ -266,7 +268,7 @@ TopLevelItem    → FunctionDef | StructDef | EnumDef | InterfaceDef |
                   ConstDecl
 FunctionDef     → 'function' Name GenericParams? '(' ParamList ')' 'returns' Type ':' Block
 StructDef       → 'struct' Name ':' FieldList FunctionDef*
-EnumDef         → 'enum' Name ':' VariantList
+EnumDef         → 'enum' Name ':' VariantList      // Variants may have data fields or integer values (e.g., tcp = 6)
 MachineDef      → 'machine' Name ':' StatesBlock TransitionsBlock
 ActorDef        → 'actor' Name '(' ParamList ')' ':' (ReceiveHandler)*
 BitfieldDef     → ('network')? 'bitfield' Name ':' BitfieldList
@@ -290,7 +292,8 @@ Expression      → Literal | Ident | BinaryExpr | UnaryExpr |
                   StringInterpolation | HandleExpr | CloneExpr |
                   CoarsenExpr | DeclassifyExpr | RunExpr | JoinExpr |
                   CancelExpr | SpawnExpr | AskExpr | IfExpr |
-                  ViewExpr | ComptimeExpr | TransitionExpr
+                  ViewExpr | ComptimeExpr | TransitionExpr |
+                  IsExpr | AtExpr
 ```
 
 ---
@@ -430,6 +433,10 @@ Bottom-up type checking of every expression:
 - **Handle blocks:** verify that `handle error:` is used on `result[T, E]` and `handle:` on `optional[T]`. Verify handle blocks end with `return` or `default`.
 - **Match exhaustiveness:** verify all enum variants are covered.
 - **Constrained generics:** For `function sort[T implements Orderable](...)`, verify that type arguments at call sites implement the required interfaces. Multiple constraints use `and` (e.g., `T implements Orderable and Displayable`). Unconstrained `T` can only be stored and passed around — no operations.
+- **`is` expressions:** In comptime context, `T is int64` checks if a generic type parameter matches a concrete type (resolved at compile time). In runtime context, `value is Variant` checks enum discriminant (compiled to integer comparison).
+- **`at` expressions:** `machine_var at state_name` checks if a state machine is in a specific state. Compiled to state tag comparison.
+- **Valued enums:** Enums with explicit integer values (e.g., `tcp = 6`) use the specified integers as discriminants instead of auto-assigned values. These integrate with bitfield `as EnumType` annotations — the codegen maps between the integer value in the bitfield and the enum variant.
+- **Return value consumption:** A function call that returns anything other than `nothing` cannot appear as a standalone `ExprStmt`. The return value must be bound to a variable. This is enforced here for all types (not just linear ones — even `int64` returns must be consumed).
 - **Generic monomorphization:** record all concrete type parameter instantiations for later HIR generation.
 
 #### 6d. Ownership Analysis (Linear Type Checking)
@@ -440,6 +447,7 @@ This sub-phase tracks the ownership state of every variable through the control 
 - `Owned` — the variable holds an owned value.
 - `Viewed` — the variable is a `view` (read-only borrow).
 - `Consumed` — the variable has been moved/consumed and is no longer valid.
+- `Pending` — the variable was produced by `run` and cannot be used until `join`ed or `cancel`led.
 - `Uninitialized` — before first assignment.
 
 **Rules enforced:**
@@ -745,6 +753,137 @@ The design document specifies a future secondary target: **transpilation to C**.
 
 ---
 
+## Runtime Library (`jett_runtime`)
+
+Every compiled Jett binary links against the runtime library. The runtime is written in Rust (later self-hosted in Jett) and provides the services that cannot be inlined by the compiler.
+
+### What the Runtime Contains
+
+| Component | Purpose |
+|---|---|
+| **Allocator** | General-purpose memory allocator. The compiler emits `alloc`/`dealloc` calls when linear values are created/dropped. The runtime provides the backing allocator (e.g., `mimalloc` or a custom bump allocator). |
+| **String representation** | Strings are heap-allocated `{ length: i64, data: *u8 }` (UTF-8). The runtime provides grapheme cluster iteration (via the `unicode-segmentation` crate internally), character counting, and all string operations from the `string` stdlib module. |
+| **Actor scheduler** | Thread pool + per-actor message queues. See Actor Runtime section below. |
+| **Task scheduler** | For `run`/`join`/`cancel` structured concurrency. Manages a task pool and cancellation flags. |
+| **Capability constructors** | Functions that create capability values at program startup, called by the generated `main` wrapper. |
+| **Platform abstraction** | The platform-specific implementations of capability methods (filesystem, network, stdout, etc.). The compiler emits calls to runtime functions like `jett_rt_fs_read_file()` which handle the OS-specific syscalls. |
+| **Panic handler** | For `assert` failures and unrecoverable errors. Prints the message and aborts. |
+
+### How the Compiler Uses the Runtime
+
+The compiler does **not** inline platform-specific code. Instead, codegen emits calls to runtime functions:
+
+```
+// Jett source:
+Filesystem.read_file(view fs, "config.json")
+
+// LLVM IR generated by codegen:
+%result = call %Result @jett_rt_fs_read_file(%Filesystem* %fs, %String* @str_config_json)
+```
+
+The runtime library is compiled as a static library (`.a` / `.lib`) and linked into the final binary. This keeps the codegen phase platform-agnostic — it always emits the same `jett_rt_*` calls regardless of target. The runtime library is compiled per-target when cross-compiling.
+
+### Entry Point and Capability Injection
+
+The compiler generates a thin wrapper around the user's `main()` that constructs capability values based on the declared parameters:
+
+```
+// User writes:
+function main(stdout: Stdout, fs: Filesystem) returns nothing:
+    ...
+
+// Compiler generates (pseudocode):
+fn _jett_entry() {
+    let stdout = jett_rt_create_stdout();      // Creates Stdout capability
+    let fs = jett_rt_create_filesystem();      // Creates Filesystem capability
+    // Network is NOT created — main() didn't request it
+    user_main(stdout, fs);
+    jett_rt_drop_filesystem(fs);               // Cleanup
+    jett_rt_drop_stdout(stdout);
+}
+```
+
+Capability values are opaque structs containing OS-level handles (file descriptors, socket handles, etc.). `Filesystem.read_only(fs)` creates a new capability with a restricted permission flag — the runtime checks this flag before executing write operations.
+
+---
+
+## Actor Runtime
+
+The actor system is built on the runtime library's thread pool and message queue infrastructure.
+
+### Architecture
+
+```mermaid
+flowchart LR
+    MAIN["main thread"]
+    Q1["Actor A<br/>message queue"]
+    Q2["Actor B<br/>message queue"]
+    TP["Thread Pool"]
+
+    MAIN -- "send / ask" --> Q1 & Q2
+    Q1 -- "dequeue" --> TP
+    Q2 -- "dequeue" --> TP
+    TP -- "respond" --> MAIN
+```
+
+### Components
+
+**Message queues:** Each actor has a bounded MPSC (multi-producer, single-consumer) channel. `send` enqueues a message and returns immediately. If the queue is full, `send` blocks until space is available (backpressure).
+
+**Thread pool:** Actors are multiplexed onto a thread pool (sized to CPU core count by default). An actor's receive handler runs on a pool thread. Only one message is processed at a time per actor — no concurrent access to the actor's state.
+
+**`send` semantics:** Fire-and-forget. The message (including consumed linear values) is moved into the queue. The sender does not wait.
+
+**`ask` semantics:** The caller sends the message with a one-shot response channel attached. The caller blocks until the actor's `respond` statement sends a value back through the channel. `ask` returns a `result` to handle the case where the actor has been terminated.
+
+**`spawn` codegen:**
+1. Allocate the actor's state struct (fields + captured capabilities).
+2. Create a bounded MPSC channel.
+3. Register the actor with the thread pool.
+4. Return an `ActorRef` containing the channel sender endpoint.
+
+**Actor lifecycle:** An actor runs until its message queue is empty and all `ActorRef` handles to it have been dropped (no more possible senders). The thread pool detects this and deallocates the actor's state. If `main()` returns while actors are still running, the runtime drops all `ActorRef` handles and waits for actors to drain their queues before exiting.
+
+**Linear type safety across actors:** When a value is `send`/`ask`'d to an actor, it is serialized (deep-copied) into the message queue. This is necessary because actors run on different threads, and the linear type system cannot track ownership across thread boundaries. The copy cost is the price of thread safety without shared memory.
+
+---
+
+## Compiler Intrinsics vs Standard Library
+
+The boundary between compiler-generated code and stdlib-implemented code is a critical architectural decision.
+
+### Three Categories
+
+**1. Compiler intrinsics** — code the compiler synthesizes at HIR generation time:
+
+| Intrinsic | Trigger | What the compiler generates |
+|---|---|---|
+| `json.serialize[T]()` | Any use of `json.serialize` with a user-defined struct | Field-by-field JSON string builder based on struct definition |
+| `json.parse[T]()` | Any use of `json.parse` with a user-defined struct | Field-by-field JSON parser with error handling |
+| `json.serialize_public[T]()` | Struct with `secret` fields | Same as `serialize` but skips `secret` fields |
+| `T.to_bytes()` / `T.from_bytes()` | Binary serialization | Field-by-field binary packing/unpacking |
+| `Displayable.display()` for structs | Struct implementing `Displayable` | Field-by-field string representation |
+| `clone` for structs | `clone value` on a struct | Field-by-field recursive deep copy |
+| Refinement type constraint functions | `type Port = int64 where ...` | Synthesized boolean check function |
+
+These are not `.jett` files — the compiler generates the HIR directly from type metadata. The `jett_hir` crate contains the generation logic.
+
+**2. Stdlib functions** — normal Jett code shipped in `stdlib/`:
+
+Functions like `list.filter`, `string.trim`, `math.sqrt`, `time.format`, `crypto.sha256`, etc. These are regular `.jett` files that use the same language features as user code. The compiler discovers them via the namespace system (they declare namespaces like `namespace string`, `namespace math`, etc.).
+
+The compiler does not have hardcoded knowledge of these functions. They are resolved by name during name resolution like any other `use` import.
+
+**3. Runtime-backed stdlib** — Jett functions that call into the runtime:
+
+Functions like `Filesystem.read_file`, `Network.listen`, `Stdout.write`, `Clock.now` are Jett function signatures that the compiler maps to runtime calls. These exist as `.jett` signature stubs in `stdlib/` with bodies that call `jett_rt_*` runtime functions.
+
+### How the Compiler Locates the Stdlib
+
+The stdlib is a set of `.jett` files bundled with the compiler installation. At build time, the compiler adds the stdlib directory to the set of source files before discovery. Stdlib namespaces (e.g., `namespace string`, `namespace math`) are resolved exactly like user namespaces — the namespace system makes no distinction between stdlib and user code.
+
+---
+
 ## Diagnostics System (`jett_diagnostics`)
 
 All compiler errors flow through a unified diagnostics system that supports dual output modes.
@@ -1036,16 +1175,18 @@ The compiler should be built incrementally, with each phase producing a usable (
 
 **Milestone:** The compiler enforces ownership, purity, and secret safety.
 
-### Phase D: Code Generation
+### Phase D: Code Generation + Core Stdlib
 
-**Goal:** Produce running binaries.
+**Goal:** Produce running binaries with basic standard library support.
 
-1. `jett_hir` — Monomorphization, method resolution.
+1. `jett_hir` — Monomorphization, method resolution, compiler intrinsic generation (serialization, clone, display).
 2. `jett_mir` — CFG-based IR, definitive ownership verification.
-3. `jett_codegen_llvm` — LLVM IR generation for the host platform.
-4. `jett_cli` — `jett build` command.
+3. `jett_runtime` — Core runtime: allocator, string representation, panic handler, capability constructors, platform-specific I/O for the host platform.
+4. `jett_codegen_llvm` — LLVM IR generation for the host platform.
+5. Core stdlib `.jett` files — `Displayable` implementations for primitives, basic `string`, `list`, `math` operations, `json` module. These are needed for verify blocks and string interpolation to work.
+6. `jett_cli` — `jett build` command.
 
-**Milestone:** `jett build` produces a working native binary for basic programs.
+**Milestone:** `jett build` produces a working native binary. String interpolation, basic collections, and `json.serialize` work.
 
 ### Phase E: Comptime and Verification
 
@@ -1114,21 +1255,28 @@ The compiler should be built incrementally, with each phase producing a usable (
 
 **Milestone:** Cross-compile for all supported platforms, call C libraries from Jett, distribute libraries as single files.
 
-### Phase K: Incremental Compilation and Polish
+### Phase K: Full Standard Library
+
+**Goal:** Complete the stdlib to cover all modules from Rule Set 8.
+
+Core stdlib (string, list, math, json) is implemented in Phase D. This phase completes the remaining modules:
+
+- **I/O:** `net.http`, `net.socket`, `csv`
+- **Time:** `time`
+- **Security:** `crypto`, `encoding`, `validate`
+- **Utilities:** `regex`, `random`, `uuid`, `log`, `format`
+- **Testing:** `test.mock` (mock capabilities for property-based testing)
+
+**Milestone:** The standard library covers virtually every common operation. LLMs write orchestration code, not algorithms.
+
+### Phase L: Incremental Compilation and Polish
 
 **Goal:** Sub-second recompilation, production readiness.
 
-1. Demand-driven query system with caching and invalidation.
+1. Demand-driven query system with caching and invalidation (salsa integration).
 2. Parallel compilation of independent namespaces.
 3. Content-addressed caching of compilation artifacts.
-4. Standard library implementation — all modules from Rule Set 8:
-   - **Core:** `string`, `math`, `list`, `map`, `set`
-   - **I/O:** `net.http`, `net.socket`, `json`, `csv`
-   - **Time:** `time`
-   - **Security:** `crypto`, `encoding`, `validate`
-   - **Utilities:** `regex`, `random`, `uuid`, `log`, `format`
-   - **Testing:** `test.mock` (mock capabilities for property-based testing)
-5. Comprehensive test suite.
+4. Comprehensive test suite.
 
 **Milestone:** Production-ready compiler with fast iteration cycles.
 
