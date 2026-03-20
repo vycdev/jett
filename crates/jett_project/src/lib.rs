@@ -1,5 +1,9 @@
+mod discover;
+
 use jett_common::{FileId, Symbol};
 use std::path::PathBuf;
+
+pub use discover::discover_project;
 
 /// A namespace declaration found during pre-scan.
 #[derive(Debug, Clone)]

@@ -1,0 +1,4 @@
+namespace app
+
+function main(stdout: Stdout) returns nothing:
+    Stdout.write(view stdout, "hello world")

@@ -1,0 +1,24 @@
+namespace math
+
+function add(a: int64, b: int64) returns int64:
+    return a + b
+
+function max(a: int64, b: int64) returns int64:
+    if a > b:
+        return a
+    return b
+
+function sum_list(items: list[int64]) returns int64:
+    mutable int64 total = 0
+    for item in items:
+        total = total + item
+    return total
+
+struct Point:
+    x: float64
+    y: float64
+
+enum Color:
+    red
+    green
+    blue
