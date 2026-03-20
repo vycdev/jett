@@ -21,6 +21,12 @@ pub enum Value {
         variant: String,
         fields: Vec<Value>,
     },
+    /// A state machine instance: `UserAuth` in state `guest` with fields.
+    Machine {
+        type_name: String,
+        state: String,
+        fields: Vec<Value>,
+    },
     /// A runtime error value.
     Error(String),
 }
@@ -49,6 +55,24 @@ impl fmt::Display for Value {
                 fields,
             } => {
                 write!(f, "{type_name}.{variant}")?;
+                if !fields.is_empty() {
+                    write!(f, "(")?;
+                    for (i, field) in fields.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{field}")?;
+                    }
+                    write!(f, ")")?;
+                }
+                Ok(())
+            }
+            Value::Machine {
+                type_name,
+                state,
+                fields,
+            } => {
+                write!(f, "{type_name}@{state}")?;
                 if !fields.is_empty() {
                     write!(f, "(")?;
                     for (i, field) in fields.iter().enumerate() {

@@ -169,14 +169,16 @@ impl<'src> Parser<'src> {
             TokenKind::Function => Some(Item::Function(self.parse_function())),
             TokenKind::Struct => Some(Item::Struct(self.parse_struct())),
             TokenKind::Enum => Some(Item::Enum(self.parse_enum())),
+            TokenKind::Machine => Some(Item::Machine(self.parse_machine())),
             TokenKind::Verify => Some(Item::Verify(self.parse_verify_block())),
+            TokenKind::Type => Some(Item::TypeAlias(self.parse_type_alias())),
             TokenKind::Mutable => Some(Item::VarDecl(self.parse_var_decl())),
             // Could be a variable declaration: `Type name = expr`
             _ if self.looks_like_var_decl() => Some(Item::VarDecl(self.parse_var_decl())),
             _ => {
                 let tok = self.peek_token().clone();
                 self.error(
-                    format!("expected item (namespace, function, struct, enum, or variable), found {:?}", tok.kind),
+                    format!("expected item (namespace, function, struct, enum, machine, type, or variable), found {:?}", tok.kind),
                     tok.span,
                 );
                 None
@@ -203,6 +205,30 @@ impl<'src> Parser<'src> {
             span: kw.span.merge(end_span),
             name,
             body,
+        }
+    }
+
+    fn parse_type_alias(&mut self) -> TypeAlias {
+        let kw = self.expect(TokenKind::Type);
+        let name = self.parse_ident();
+        self.expect(TokenKind::Eq);
+        let base_type = self.parse_type();
+
+        let constraint = if self.eat(TokenKind::Where).is_some() {
+            Some(self.parse_expr())
+        } else {
+            None
+        };
+
+        let end_span = constraint
+            .as_ref()
+            .map_or(base_type.span(), |c| c.span());
+
+        TypeAlias {
+            span: kw.span.merge(end_span),
+            name,
+            base_type,
+            constraint,
         }
     }
 
@@ -363,6 +389,114 @@ impl<'src> Parser<'src> {
             span: name.span.merge(end_span),
             name,
             fields,
+        }
+    }
+
+    // =======================================================================
+    // State machines
+    // =======================================================================
+
+    fn parse_machine(&mut self) -> MachineDef {
+        let kw = self.expect(TokenKind::Machine);
+        let name = self.parse_ident();
+        self.expect(TokenKind::Colon);
+
+        // Outer indent for the machine body
+        self.skip_newlines();
+        let indent_tok = self.expect(TokenKind::Indent);
+        let mut states = Vec::new();
+        let mut transitions = Vec::new();
+        let mut last_span = indent_tok.span;
+
+        // Parse `states:` block
+        self.skip_newlines();
+        if self.peek() == TokenKind::States {
+            self.advance(); // consume `states`
+            self.expect(TokenKind::Colon);
+
+            self.skip_newlines();
+            self.expect(TokenKind::Indent);
+            self.skip_newlines();
+            while self.peek() != TokenKind::Dedent && self.peek() != TokenKind::Eof {
+                let state = self.parse_machine_state();
+                last_span = state.span;
+                states.push(state);
+                self.skip_newlines();
+            }
+            if self.peek() == TokenKind::Dedent {
+                last_span = self.advance().span;
+            }
+        }
+
+        // Parse `transitions:` block
+        self.skip_newlines();
+        if self.peek() == TokenKind::Transitions {
+            self.advance(); // consume `transitions`
+            self.expect(TokenKind::Colon);
+
+            self.skip_newlines();
+            self.expect(TokenKind::Indent);
+            self.skip_newlines();
+            while self.peek() != TokenKind::Dedent && self.peek() != TokenKind::Eof {
+                let transition = self.parse_machine_transition();
+                last_span = transition.span;
+                transitions.push(transition);
+                self.skip_newlines();
+            }
+            if self.peek() == TokenKind::Dedent {
+                last_span = self.advance().span;
+            }
+        }
+
+        // Outer dedent
+        self.skip_newlines();
+        if self.peek() == TokenKind::Dedent {
+            last_span = self.advance().span;
+        }
+
+        MachineDef {
+            span: kw.span.merge(last_span),
+            name,
+            states,
+            transitions,
+        }
+    }
+
+    /// Parse a single state: `guest` or `logged_in(user_id: string)`.
+    fn parse_machine_state(&mut self) -> MachineState {
+        let name = self.parse_ident();
+        let mut fields = Vec::new();
+        let mut end_span = name.span;
+
+        if self.eat(TokenKind::LParen).is_some() {
+            if self.peek() != TokenKind::RParen {
+                fields.push(self.parse_field_def());
+                while self.eat(TokenKind::Comma).is_some() {
+                    if self.peek() == TokenKind::RParen {
+                        break;
+                    }
+                    fields.push(self.parse_field_def());
+                }
+            }
+            end_span = self.expect(TokenKind::RParen).span;
+        }
+
+        MachineState {
+            span: name.span.merge(end_span),
+            name,
+            fields,
+        }
+    }
+
+    /// Parse a single transition: `guest to logged_in`.
+    fn parse_machine_transition(&mut self) -> MachineTransition {
+        let from = self.parse_ident();
+        self.expect(TokenKind::To);
+        let to = self.parse_ident();
+        MachineTransition {
+            span: from.span.merge(to.span),
+            from,
+            to,
         }
     }
 
@@ -859,7 +993,69 @@ impl<'src> Parser<'src> {
     // =======================================================================
 
     fn parse_expr(&mut self) -> Expr {
-        self.parse_expr_bp(0)
+        let expr = self.parse_expr_bp(0);
+        // Check for pipeline: `expr into f into g(...)`
+        if self.peek() == TokenKind::Into {
+            self.parse_pipeline(expr)
+        } else {
+            expr
+        }
+    }
+
+    /// Parse a pipeline starting after the initial expression.
+    /// Collects one or more `into <step>` clauses.
+    fn parse_pipeline(&mut self, initial: Expr) -> Expr {
+        let start = initial.span();
+        let mut steps = Vec::new();
+
+        while self.eat(TokenKind::Into).is_some() {
+            let step_start = self.peek_token().span;
+            // Parse the function reference (identifier, possibly dotted like `string.trim`)
+            let func = self.parse_prefix();
+            // Allow postfix field access to form dotted names like `string.trim`
+            let func = self.parse_postfix_chain(func);
+
+            // Check for extra arguments: `into f(extra1, extra2)`
+            let (extra_args, step_end) = if self.peek() == TokenKind::LParen {
+                self.advance(); // consume `(`
+                let mut args = Vec::new();
+                if self.peek() != TokenKind::RParen {
+                    args.push(self.parse_call_arg());
+                    while self.eat(TokenKind::Comma).is_some() {
+                        if self.peek() == TokenKind::RParen {
+                            break;
+                        }
+                        args.push(self.parse_call_arg());
+                    }
+                }
+                let close = self.expect(TokenKind::RParen);
+                (args, close.span)
+            } else {
+                (Vec::new(), func.span())
+            };
+
+            let span = step_start.merge(step_end);
+            steps.push(PipelineStep {
+                function: func,
+                extra_args,
+                span,
+            });
+        }
+
+        let end = steps.last().map_or(start, |s| s.span);
+        Expr::Pipeline(Box::new(initial), steps, start.merge(end))
+    }
+
+    /// Parse postfix field-access chain (`.field`) without call args.
+    /// Used by pipeline parsing to build dotted names like `string.trim`.
+    fn parse_postfix_chain(&mut self, mut expr: Expr) -> Expr {
+        while self.peek() == TokenKind::Dot {
+            self.advance(); // consume `.`
+            let field = self.parse_ident();
+            let span = expr.span().merge(field.span);
+            expr = Expr::FieldAccess(Box::new(expr), field, span);
+        }
+        expr
     }
 
     /// Pratt parser: parse expression with minimum binding power.
@@ -920,6 +1116,19 @@ impl<'src> Parser<'src> {
                     break;
                 }
                 lhs = self.maybe_parse_handle(lhs);
+                continue;
+            }
+
+            // `expr at state_name` — machine state check (postfix keyword)
+            if kind == TokenKind::At {
+                let (l_bp, _) = (7, 8); // same precedence as comparisons
+                if l_bp < min_bp {
+                    break;
+                }
+                self.advance(); // consume `at`
+                let state_name = self.parse_ident();
+                let span = lhs.span().merge(state_name.span);
+                lhs = Expr::At(Box::new(lhs), state_name, span);
                 continue;
             }
 
@@ -1069,6 +1278,12 @@ impl<'src> Parser<'src> {
                 let span = tok.span.merge(inner.span());
                 Expr::View(Box::new(inner), span)
             }
+            TokenKind::Coarsen => {
+                self.advance();
+                let inner = self.parse_expr_bp(13);
+                let span = tok.span.merge(inner.span());
+                Expr::Coarsen(Box::new(inner), span)
+            }
             TokenKind::Ok => {
                 self.advance();
                 self.expect(TokenKind::LParen);
@@ -1138,6 +1353,13 @@ impl<'src> Parser<'src> {
                 self.advance();
                 Expr::Ident(Ident {
                     name: "self".to_string(),
+                    span: tok.span,
+                })
+            }
+            TokenKind::Value => {
+                self.advance();
+                Expr::Ident(Ident {
+                    name: "value".to_string(),
                     span: tok.span,
                 })
             }
@@ -2268,6 +2490,245 @@ function greet() returns string:
         match expr {
             Expr::StringLiteral(s, _) => assert_eq!(s, "plain string"),
             other => panic!("expected StringLiteral, got {:?}", other),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Pipeline parsing
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_simple_pipeline() {
+        // `x into f into g` should parse as Pipeline(x, [f, g])
+        let src = "\
+function transform(x: string) returns string:
+    return x into f into g
+";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        let expr = extract_expr_from_return(&result);
+        match expr {
+            Expr::Pipeline(initial, steps, _) => {
+                assert!(matches!(initial.as_ref(), Expr::Ident(i) if i.name == "x"));
+                assert_eq!(steps.len(), 2);
+                assert!(matches!(&steps[0].function, Expr::Ident(i) if i.name == "f"));
+                assert!(steps[0].extra_args.is_empty());
+                assert!(matches!(&steps[1].function, Expr::Ident(i) if i.name == "g"));
+                assert!(steps[1].extra_args.is_empty());
+            }
+            other => panic!("expected Pipeline, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_pipeline_with_extra_args() {
+        // `x into f(y)` should parse as Pipeline(x, [f with extra_args=[y]])
+        let src = "\
+function transform(x: string, y: string) returns string:
+    return x into f(y)
+";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        let expr = extract_expr_from_return(&result);
+        match expr {
+            Expr::Pipeline(initial, steps, _) => {
+                assert!(matches!(initial.as_ref(), Expr::Ident(i) if i.name == "x"));
+                assert_eq!(steps.len(), 1);
+                assert!(matches!(&steps[0].function, Expr::Ident(i) if i.name == "f"));
+                assert_eq!(steps[0].extra_args.len(), 1);
+            }
+            other => panic!("expected Pipeline, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_pipeline_with_dotted_function() {
+        // `x into string.trim into string.upper`
+        let src = "\
+function transform(x: string) returns string:
+    return x into string.trim into string.upper
+";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        let expr = extract_expr_from_return(&result);
+        match expr {
+            Expr::Pipeline(initial, steps, _) => {
+                assert!(matches!(initial.as_ref(), Expr::Ident(i) if i.name == "x"));
+                assert_eq!(steps.len(), 2);
+                // First step should be string.trim (FieldAccess)
+                assert!(matches!(&steps[0].function, Expr::FieldAccess(_, field, _) if field.name == "trim"));
+                assert!(steps[0].extra_args.is_empty());
+                // Second step should be string.upper (FieldAccess)
+                assert!(matches!(&steps[1].function, Expr::FieldAccess(_, field, _) if field.name == "upper"));
+                assert!(steps[1].extra_args.is_empty());
+            }
+            other => panic!("expected Pipeline, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_pipeline_dotted_with_extra_args() {
+        // `x into string.replace("old", "new")`
+        let src = "\
+function transform(x: string) returns string:
+    return x into string.replace(\"old\", \"new\")
+";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        let expr = extract_expr_from_return(&result);
+        match expr {
+            Expr::Pipeline(initial, steps, _) => {
+                assert!(matches!(initial.as_ref(), Expr::Ident(i) if i.name == "x"));
+                assert_eq!(steps.len(), 1);
+                assert!(matches!(&steps[0].function, Expr::FieldAccess(_, field, _) if field.name == "replace"));
+                assert_eq!(steps[0].extra_args.len(), 2);
+            }
+            other => panic!("expected Pipeline, got {:?}", other),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Refinement type declarations
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_refinement_type_simple() {
+        let src = "type Port = int64 where value >= 1 && value <= 65535\n";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        assert_eq!(result.module.items.len(), 1);
+        match &result.module.items[0] {
+            Item::TypeAlias(ta) => {
+                assert_eq!(ta.name.name, "Port");
+                match &ta.base_type {
+                    TypeExpr::Named(ident) => assert_eq!(ident.name, "int64"),
+                    other => panic!("expected Named type, got {:?}", other),
+                }
+                assert!(ta.constraint.is_some(), "expected a where constraint");
+            }
+            other => panic!("expected TypeAlias, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_type_alias_no_constraint() {
+        let src = "type UserId = int64\n";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        match &result.module.items[0] {
+            Item::TypeAlias(ta) => {
+                assert_eq!(ta.name.name, "UserId");
+                assert!(ta.constraint.is_none(), "expected no where constraint");
+            }
+            other => panic!("expected TypeAlias, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_refinement_type_with_function_call() {
+        // type Email = string where string.contains(value, "@")
+        let src = "type Email = string where string.contains(value, \"@\")\n";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        match &result.module.items[0] {
+            Item::TypeAlias(ta) => {
+                assert_eq!(ta.name.name, "Email");
+                assert!(ta.constraint.is_some());
+            }
+            other => panic!("expected TypeAlias, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_coarsen_expression() {
+        let src = "\
+function process(p: Port) returns nothing:
+    int64 raw = coarsen p
+";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        match &result.module.items[0] {
+            Item::Function(f) => match &f.body.stmts[0] {
+                Stmt::VarDecl(v) => match &v.value {
+                    Expr::Coarsen(inner, _) => {
+                        assert!(matches!(inner.as_ref(), Expr::Ident(i) if i.name == "p"));
+                    }
+                    other => panic!("expected Coarsen expression, got {:?}", other),
+                },
+                other => panic!("expected VarDecl, got {:?}", other),
+            },
+            other => panic!("expected Function, got {:?}", other),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // State machine declarations
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_machine_declaration() {
+        let src = "\
+machine UserAuth:
+    states:
+        guest
+        logged_in(user_id: string)
+        banned(user_id: string)
+
+    transitions:
+        guest to logged_in
+        logged_in to guest
+        logged_in to banned
+";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        assert_eq!(result.module.items.len(), 1);
+        match &result.module.items[0] {
+            Item::Machine(m) => {
+                assert_eq!(m.name.name, "UserAuth");
+
+                // States
+                assert_eq!(m.states.len(), 3);
+                assert_eq!(m.states[0].name.name, "guest");
+                assert!(m.states[0].fields.is_empty());
+                assert_eq!(m.states[1].name.name, "logged_in");
+                assert_eq!(m.states[1].fields.len(), 1);
+                assert_eq!(m.states[1].fields[0].name.name, "user_id");
+                assert_eq!(m.states[2].name.name, "banned");
+                assert_eq!(m.states[2].fields.len(), 1);
+
+                // Transitions
+                assert_eq!(m.transitions.len(), 3);
+                assert_eq!(m.transitions[0].from.name, "guest");
+                assert_eq!(m.transitions[0].to.name, "logged_in");
+                assert_eq!(m.transitions[1].from.name, "logged_in");
+                assert_eq!(m.transitions[1].to.name, "guest");
+                assert_eq!(m.transitions[2].from.name, "logged_in");
+                assert_eq!(m.transitions[2].to.name, "banned");
+            }
+            other => panic!("expected Machine, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_at_expression() {
+        let src = "\
+function f(session: UserAuth) returns bool:
+    return session at guest
+";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        match &result.module.items[0] {
+            Item::Function(f) => match &f.body.stmts[0] {
+                Stmt::Return(r) => match r.value.as_ref().unwrap() {
+                    Expr::At(expr, state_name, _) => {
+                        assert!(matches!(expr.as_ref(), Expr::Ident(i) if i.name == "session"));
+                        assert_eq!(state_name.name, "guest");
+                    }
+                    other => panic!("expected At expression, got {:?}", other),
+                },
+                other => panic!("expected Return, got {:?}", other),
+            },
+            other => panic!("expected Function, got {:?}", other),
         }
     }
 }

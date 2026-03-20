@@ -78,7 +78,8 @@ pub fn run_verify_blocks_detailed(module: &Module) -> Vec<VerifyResult> {
     let mut interp = Interpreter::new();
     let mut results = Vec::new();
 
-    // First pass: register all functions so verify blocks can call them.
+    // First pass: register all functions and type aliases so verify blocks
+    // can call them and use refinement types.
     let mut legacy_verify_functions: Vec<FunctionDef> = Vec::new();
     let mut verify_blocks: Vec<VerifyBlock> = Vec::new();
     for item in &module.items {
@@ -91,6 +92,12 @@ pub fn run_verify_blocks_detailed(module: &Module) -> Vec<VerifyResult> {
             }
             Item::Verify(vb) => {
                 verify_blocks.push(vb.clone());
+            }
+            Item::TypeAlias(alias) => {
+                interp.register_type_alias(alias);
+            }
+            Item::Machine(machine) => {
+                interp.register_machine(machine);
             }
             _ => {}
         }
@@ -462,5 +469,457 @@ mod tests {
         assert!(!results[0].passed, "expected verify block to fail");
         assert_eq!(results[0].name, "add");
         assert!(results[0].error.is_some());
+    }
+
+    // -----------------------------------------------------------------------
+    // Refinement type tests
+    // -----------------------------------------------------------------------
+
+    fn type_alias(name: &str, base: &str, constraint: Option<Expr>) -> TypeAlias {
+        TypeAlias {
+            name: ident(name),
+            base_type: type_named(base),
+            constraint,
+            span: sp(),
+        }
+    }
+
+    fn var_decl_stmt(ty_name: &str, var_name: &str, value: Expr) -> Stmt {
+        Stmt::VarDecl(VarDecl {
+            mutable: false,
+            ty: type_named(ty_name),
+            name: ident(var_name),
+            value,
+            span: sp(),
+        })
+    }
+
+    #[test]
+    fn refinement_type_valid_port() {
+        // type Port = int64 where value >= 1 && value <= 65535
+        // verify port_test:
+        //     Port p = 8080
+        //     assert p == 8080
+        let constraint = binary(
+            binary(var("value"), BinOp::GtEq, int(1)),
+            BinOp::And,
+            binary(var("value"), BinOp::LtEq, int(65535)),
+        );
+        let port_alias = type_alias("Port", "int64", Some(constraint));
+
+        let vb = verify_block_item(
+            "port_test",
+            block(vec![
+                var_decl_stmt("Port", "p", int(8080)),
+                assert_stmt_ast(binary(var("p"), BinOp::Eq, int(8080))),
+            ]),
+        );
+
+        let module = Module {
+            items: vec![Item::TypeAlias(port_alias), Item::Verify(vb)],
+            span: sp(),
+        };
+        let results = run_verify_blocks_detailed(&module);
+        assert_eq!(results.len(), 1);
+        assert!(results[0].passed, "expected verify block to pass: {:?}", results[0].error);
+    }
+
+    #[test]
+    fn refinement_type_invalid_port() {
+        // type Port = int64 where value >= 1 && value <= 65535
+        // verify port_test:
+        //     Port p = 0     # should fail — 0 is not >= 1
+        let constraint = binary(
+            binary(var("value"), BinOp::GtEq, int(1)),
+            BinOp::And,
+            binary(var("value"), BinOp::LtEq, int(65535)),
+        );
+        let port_alias = type_alias("Port", "int64", Some(constraint));
+
+        let vb = verify_block_item(
+            "port_test",
+            block(vec![
+                var_decl_stmt("Port", "p", int(0)),
+            ]),
+        );
+
+        let module = Module {
+            items: vec![Item::TypeAlias(port_alias), Item::Verify(vb)],
+            span: sp(),
+        };
+        let results = run_verify_blocks_detailed(&module);
+        assert_eq!(results.len(), 1);
+        assert!(!results[0].passed, "expected verify block to fail for invalid port");
+        assert!(
+            results[0].error.as_ref().unwrap().contains("refinement"),
+            "error should mention refinement: {:?}",
+            results[0].error,
+        );
+    }
+
+    #[test]
+    fn refinement_type_boundary_valid() {
+        // Port p = 1 should pass (boundary value)
+        let constraint = binary(
+            binary(var("value"), BinOp::GtEq, int(1)),
+            BinOp::And,
+            binary(var("value"), BinOp::LtEq, int(65535)),
+        );
+        let port_alias = type_alias("Port", "int64", Some(constraint));
+
+        let vb = verify_block_item(
+            "port_boundary",
+            block(vec![
+                var_decl_stmt("Port", "p", int(1)),
+                assert_stmt_ast(binary(var("p"), BinOp::Eq, int(1))),
+            ]),
+        );
+
+        let module = Module {
+            items: vec![Item::TypeAlias(port_alias), Item::Verify(vb)],
+            span: sp(),
+        };
+        let results = run_verify_blocks_detailed(&module);
+        assert_eq!(results.len(), 1);
+        assert!(results[0].passed, "expected boundary value 1 to pass");
+    }
+
+    #[test]
+    fn coarsen_strips_refinement() {
+        // type Port = int64 where value >= 1 && value <= 65535
+        // verify coarsen_test:
+        //     Port p = 8080
+        //     int64 raw = coarsen p
+        //     assert raw == 8080
+        let constraint = binary(
+            binary(var("value"), BinOp::GtEq, int(1)),
+            BinOp::And,
+            binary(var("value"), BinOp::LtEq, int(65535)),
+        );
+        let port_alias = type_alias("Port", "int64", Some(constraint));
+
+        let coarsen_expr = Expr::Coarsen(Box::new(var("p")), sp());
+
+        let vb = verify_block_item(
+            "coarsen_test",
+            block(vec![
+                var_decl_stmt("Port", "p", int(8080)),
+                var_decl_stmt("int64", "raw", coarsen_expr),
+                assert_stmt_ast(binary(var("raw"), BinOp::Eq, int(8080))),
+            ]),
+        );
+
+        let module = Module {
+            items: vec![Item::TypeAlias(port_alias), Item::Verify(vb)],
+            span: sp(),
+        };
+        let results = run_verify_blocks_detailed(&module);
+        assert_eq!(results.len(), 1);
+        assert!(results[0].passed, "expected coarsen test to pass: {:?}", results[0].error);
+    }
+
+    #[test]
+    fn simple_type_alias_no_constraint() {
+        // type UserId = int64
+        // verify alias_test:
+        //     UserId id = 42
+        //     assert id == 42
+        let alias = type_alias("UserId", "int64", None);
+
+        let vb = verify_block_item(
+            "alias_test",
+            block(vec![
+                var_decl_stmt("UserId", "id", int(42)),
+                assert_stmt_ast(binary(var("id"), BinOp::Eq, int(42))),
+            ]),
+        );
+
+        let module = Module {
+            items: vec![Item::TypeAlias(alias), Item::Verify(vb)],
+            span: sp(),
+        };
+        let results = run_verify_blocks_detailed(&module);
+        assert_eq!(results.len(), 1);
+        assert!(results[0].passed, "expected simple alias to pass: {:?}", results[0].error);
+    }
+
+    // -----------------------------------------------------------------------
+    // State machine tests
+    // -----------------------------------------------------------------------
+
+    fn machine_def() -> MachineDef {
+        MachineDef {
+            name: ident("UserAuth"),
+            states: vec![
+                MachineState {
+                    name: ident("guest"),
+                    fields: vec![],
+                    span: sp(),
+                },
+                MachineState {
+                    name: ident("logged_in"),
+                    fields: vec![FieldDef {
+                        name: ident("user_id"),
+                        ty: type_named("string"),
+                        span: sp(),
+                    }],
+                    span: sp(),
+                },
+                MachineState {
+                    name: ident("banned"),
+                    fields: vec![FieldDef {
+                        name: ident("user_id"),
+                        ty: type_named("string"),
+                        span: sp(),
+                    }],
+                    span: sp(),
+                },
+            ],
+            transitions: vec![
+                MachineTransition {
+                    from: ident("guest"),
+                    to: ident("logged_in"),
+                    span: sp(),
+                },
+                MachineTransition {
+                    from: ident("logged_in"),
+                    to: ident("guest"),
+                    span: sp(),
+                },
+                MachineTransition {
+                    from: ident("logged_in"),
+                    to: ident("banned"),
+                    span: sp(),
+                },
+            ],
+            span: sp(),
+        }
+    }
+
+    #[test]
+    #[ignore] // state name resolution not yet wired
+    fn machine_construct_and_check_state() {
+        // machine UserAuth: ...
+        // verify machine_test:
+        //     UserAuth session = UserAuth(guest)
+        //     assert session at guest
+
+        let construct = Expr::Call(
+            Box::new(var("UserAuth")),
+            vec![CallArg {
+                name: None,
+                value: var("guest"),
+                span: sp(),
+            }],
+            sp(),
+        );
+
+        let at_check = Expr::At(Box::new(var("session")), ident("guest"), sp());
+
+        let vb = verify_block_item(
+            "machine_test",
+            block(vec![
+                var_decl_stmt("UserAuth", "session", construct),
+                assert_stmt_ast(at_check),
+            ]),
+        );
+
+        let module = Module {
+            items: vec![Item::Machine(machine_def()), Item::Verify(vb)],
+            span: sp(),
+        };
+        let results = run_verify_blocks_detailed(&module);
+        assert_eq!(results.len(), 1);
+        assert!(
+            results[0].passed,
+            "expected machine construct + at check to pass: {:?}",
+            results[0].error
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn machine_transition_valid() {
+        // machine UserAuth: ...
+        // verify transition_test:
+        //     UserAuth session = UserAuth(guest)
+        //     UserAuth session2 = UserAuth.transition(session, logged_in, "user_123")
+        //     assert session2 at logged_in
+
+        let construct = Expr::Call(
+            Box::new(var("UserAuth")),
+            vec![CallArg {
+                name: None,
+                value: var("guest"),
+                span: sp(),
+            }],
+            sp(),
+        );
+
+        let transition_call = Expr::Call(
+            Box::new(Expr::FieldAccess(
+                Box::new(var("UserAuth")),
+                ident("transition"),
+                sp(),
+            )),
+            vec![
+                CallArg {
+                    name: None,
+                    value: var("session"),
+                    span: sp(),
+                },
+                CallArg {
+                    name: None,
+                    value: var("logged_in"),
+                    span: sp(),
+                },
+                CallArg {
+                    name: None,
+                    value: Expr::StringLiteral("user_123".to_string(), sp()),
+                    span: sp(),
+                },
+            ],
+            sp(),
+        );
+
+        let at_check = Expr::At(Box::new(var("session2")), ident("logged_in"), sp());
+
+        let vb = verify_block_item(
+            "transition_test",
+            block(vec![
+                var_decl_stmt("UserAuth", "session", construct),
+                var_decl_stmt("UserAuth", "session2", transition_call),
+                assert_stmt_ast(at_check),
+            ]),
+        );
+
+        let module = Module {
+            items: vec![Item::Machine(machine_def()), Item::Verify(vb)],
+            span: sp(),
+        };
+        let results = run_verify_blocks_detailed(&module);
+        assert_eq!(results.len(), 1);
+        assert!(
+            results[0].passed,
+            "expected valid transition to pass: {:?}",
+            results[0].error
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn machine_transition_invalid_rejected() {
+        // machine UserAuth: ...
+        // verify invalid_transition_test:
+        //     UserAuth session = UserAuth(guest)
+        //     UserAuth session2 = UserAuth.transition(session, banned, "user_123")
+        //     ^^ This should fail because guest -> banned is not an allowed transition.
+
+        let construct = Expr::Call(
+            Box::new(var("UserAuth")),
+            vec![CallArg {
+                name: None,
+                value: var("guest"),
+                span: sp(),
+            }],
+            sp(),
+        );
+
+        let transition_call = Expr::Call(
+            Box::new(Expr::FieldAccess(
+                Box::new(var("UserAuth")),
+                ident("transition"),
+                sp(),
+            )),
+            vec![
+                CallArg {
+                    name: None,
+                    value: var("session"),
+                    span: sp(),
+                },
+                CallArg {
+                    name: None,
+                    value: var("banned"),
+                    span: sp(),
+                },
+                CallArg {
+                    name: None,
+                    value: Expr::StringLiteral("user_123".to_string(), sp()),
+                    span: sp(),
+                },
+            ],
+            sp(),
+        );
+
+        let vb = verify_block_item(
+            "invalid_transition_test",
+            block(vec![
+                var_decl_stmt("UserAuth", "session", construct),
+                var_decl_stmt("UserAuth", "session2", transition_call),
+            ]),
+        );
+
+        let module = Module {
+            items: vec![Item::Machine(machine_def()), Item::Verify(vb)],
+            span: sp(),
+        };
+        let results = run_verify_blocks_detailed(&module);
+        assert_eq!(results.len(), 1);
+        assert!(
+            !results[0].passed,
+            "expected invalid transition to fail"
+        );
+        let err = results[0].error.as_ref().unwrap();
+        assert!(
+            err.contains("not allowed"),
+            "expected 'not allowed' in error message, got: {err}"
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn machine_at_check_wrong_state() {
+        // machine UserAuth: ...
+        // verify at_wrong_state:
+        //     UserAuth session = UserAuth(guest)
+        //     assert session at logged_in  <-- should be false
+
+        let construct = Expr::Call(
+            Box::new(var("UserAuth")),
+            vec![CallArg {
+                name: None,
+                value: var("guest"),
+                span: sp(),
+            }],
+            sp(),
+        );
+
+        // `session at logged_in` should evaluate to false
+        let at_check = Expr::At(Box::new(var("session")), ident("logged_in"), sp());
+
+        let vb = verify_block_item(
+            "at_wrong_state",
+            block(vec![
+                var_decl_stmt("UserAuth", "session", construct),
+                // assert NOT(session at logged_in)
+                assert_stmt_ast(Expr::Unary(
+                    UnaryOp::Not,
+                    Box::new(at_check),
+                    sp(),
+                )),
+            ]),
+        );
+
+        let module = Module {
+            items: vec![Item::Machine(machine_def()), Item::Verify(vb)],
+            span: sp(),
+        };
+        let results = run_verify_blocks_detailed(&module);
+        assert_eq!(results.len(), 1);
+        assert!(
+            results[0].passed,
+            "expected at-check for wrong state to pass (not at logged_in): {:?}",
+            results[0].error
+        );
     }
 }

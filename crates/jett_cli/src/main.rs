@@ -51,6 +51,9 @@ enum Command {
         /// Path to a .jett file (if omitted, finds jett.proj and tests all files)
         file: Option<String>,
     },
+
+    /// Start the Language Server Protocol server (for editor integration)
+    Lsp,
 }
 
 fn main() {
@@ -144,6 +147,10 @@ fn main() {
                     process::exit(1);
                 }
             }
+        }
+        Command::Lsp => {
+            let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
+            rt.block_on(jett_lsp::run_server());
         }
         Command::Test { file } => {
             if let Some(f) = file {

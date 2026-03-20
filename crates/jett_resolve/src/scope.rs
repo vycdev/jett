@@ -35,6 +35,7 @@ pub enum DefKind {
     Function,
     Struct,
     Enum,
+    Machine,
     Variable,
     Param,
     Constant,

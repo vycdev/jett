@@ -18,6 +18,76 @@ pub struct BuildResult {
     pub file_path: String,
 }
 
+/// Run the full compilation pipeline on in-memory source text.
+/// Used by the LSP server to validate documents without touching the filesystem.
+pub fn build_source(source: &str, file_path: &str) -> BuildResult {
+    let file_id = FileId::new(0);
+    let mut all_diagnostics = Vec::new();
+
+    // Phase 1+2: Lex + Parse
+    let parse_result = parse(source, file_id);
+    all_diagnostics.extend(parse_result.errors.clone());
+
+    let has_parse_errors = all_diagnostics
+        .iter()
+        .any(|d| d.severity == jett_diagnostics::Severity::Error);
+    if has_parse_errors {
+        return BuildResult {
+            has_errors: true,
+            diagnostics: all_diagnostics,
+            source: source.to_string(),
+            file_path: file_path.to_string(),
+        };
+    }
+
+    // Phase 3: Resolve names
+    let resolve_result = resolve(&parse_result.module);
+    all_diagnostics.extend(resolve_result.diagnostics.clone());
+
+    let has_resolve_errors = all_diagnostics
+        .iter()
+        .any(|d| d.severity == jett_diagnostics::Severity::Error);
+    if has_resolve_errors {
+        return BuildResult {
+            has_errors: true,
+            diagnostics: all_diagnostics,
+            source: source.to_string(),
+            file_path: file_path.to_string(),
+        };
+    }
+
+    // Phase 4: Type check
+    let check_result = check(&parse_result.module, &resolve_result);
+    all_diagnostics.extend(check_result.diagnostics.clone());
+
+    let has_typecheck_errors = all_diagnostics
+        .iter()
+        .any(|d| d.severity == jett_diagnostics::Severity::Error);
+    if has_typecheck_errors {
+        return BuildResult {
+            has_errors: true,
+            diagnostics: all_diagnostics,
+            source: source.to_string(),
+            file_path: file_path.to_string(),
+        };
+    }
+
+    // Phase 5: Execute verify blocks at compile time
+    let verify_diagnostics = run_verify_blocks(&parse_result.module);
+    all_diagnostics.extend(verify_diagnostics);
+
+    let has_errors = all_diagnostics
+        .iter()
+        .any(|d| d.severity == jett_diagnostics::Severity::Error);
+
+    BuildResult {
+        has_errors,
+        diagnostics: all_diagnostics,
+        source: source.to_string(),
+        file_path: file_path.to_string(),
+    }
+}
+
 /// Run the full compilation pipeline on a single file: lex → parse → resolve → typecheck.
 /// Does not produce executable output yet — just validates the source.
 pub fn build_file(path: &Path) -> BuildResult {

@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 
-use jett_parser::ast::{BinOp, Block, Expr, FunctionDef, Pattern, Stmt, StringPart, UnaryOp};
+use jett_parser::ast::{
+    BinOp, Block, CallArg, Expr, FunctionDef, MachineDef, Pattern, PipelineStep, Stmt,
+    StringPart, TypeAlias, TypeExpr, UnaryOp,
+};
 
 use crate::value::Value;
 
@@ -62,11 +65,23 @@ enum Signal {
 /// of user-defined functions.  It is intentionally simple: no heap, no GC,
 /// no closures — just enough to execute `verify` blocks and `comptime`
 /// expressions.
+/// A registered refinement type alias with its base type name and constraint.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+struct RefinementDef {
+    base_type_name: String,
+    constraint: Expr,
+}
+
 pub struct Interpreter {
     /// Stack of lexical scopes. The last element is the innermost scope.
     scopes: Vec<Environment>,
     /// User-defined functions available for calling.
     functions: HashMap<String, FunctionDef>,
+    /// Registered type aliases: name -> (base_type_name, optional constraint).
+    type_aliases: HashMap<String, Option<RefinementDef>>,
+    /// Registered state machine definitions: name -> MachineDef.
+    machines: HashMap<String, MachineDef>,
 }
 
 impl Interpreter {
@@ -75,6 +90,8 @@ impl Interpreter {
         Self {
             scopes: vec![HashMap::new()],
             functions: HashMap::new(),
+            type_aliases: HashMap::new(),
+            machines: HashMap::new(),
         }
     }
 
@@ -121,6 +138,52 @@ impl Interpreter {
     pub fn register_function(&mut self, func: &FunctionDef) {
         self.functions
             .insert(func.name.name.clone(), func.clone());
+    }
+
+    /// Register a state machine definition so it can be used for construction
+    /// and transitions.
+    pub fn register_machine(&mut self, machine: &MachineDef) {
+        self.machines
+            .insert(machine.name.name.clone(), machine.clone());
+    }
+
+    /// Register a type alias so the interpreter can validate refinement
+    /// constraints when values are assigned to the type.
+    pub fn register_type_alias(&mut self, alias: &TypeAlias) {
+        let base_name = type_expr_name(&alias.base_type);
+        let def = alias.constraint.as_ref().map(|c| RefinementDef {
+            base_type_name: base_name,
+            constraint: c.clone(),
+        });
+        self.type_aliases.insert(alias.name.name.clone(), def);
+    }
+
+    /// Check a value against a refinement type's constraint.
+    /// Returns `Ok(())` if valid, or `Err(message)` if the constraint fails.
+    fn check_refinement(&mut self, type_name: &str, value: &Value) -> Result<(), String> {
+        let def = match self.type_aliases.get(type_name) {
+            Some(Some(def)) => def.clone(),
+            Some(None) => return Ok(()), // simple alias, no constraint
+            None => return Ok(()),       // not a known type alias
+        };
+
+        self.push_scope();
+        self.set_variable("value", value.clone());
+        let result = self.eval_expr(&def.constraint);
+        self.pop_scope();
+
+        match result {
+            Ok(Value::Bool(true)) => Ok(()),
+            Ok(Value::Bool(false)) => Err(format!(
+                "refinement type constraint failed for '{type_name}'"
+            )),
+            Ok(other) => Err(format!(
+                "refinement constraint for '{type_name}' must return bool, got {other}"
+            )),
+            Err(e) => Err(format!(
+                "error evaluating refinement constraint for '{type_name}': {e}"
+            )),
+        }
     }
 
     /// Return an immutable reference to the current (flat) environment.
@@ -206,13 +269,32 @@ impl Interpreter {
 
             // Function / method calls
             Expr::Call(callee, args, _) => {
+                // Check for machine construction/transition BEFORE evaluating
+                // args, since state-name arguments are bare identifiers (not
+                // variables) and would fail evaluation.
+                match callee.as_ref() {
+                    Expr::Ident(ident) if self.machines.contains_key(&ident.name) => {
+                        return self.construct_machine(&ident.name, args);
+                    }
+                    Expr::FieldAccess(obj, field, _) => {
+                        if let Expr::Ident(ident) = obj.as_ref() {
+                            if field.name == "transition" && self.machines.contains_key(&ident.name) {
+                                return self.machine_transition(&ident.name, args);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+
                 let arg_values: Vec<Value> = args
                     .iter()
                     .map(|a| self.eval_expr(&a.value))
                     .collect::<Result<_, _>>()?;
 
                 match callee.as_ref() {
-                    Expr::Ident(ident) => self.call_function(&ident.name, arg_values),
+                    Expr::Ident(ident) => {
+                        self.call_function(&ident.name, arg_values)
+                    }
                     // Handle enum variant construction: Type.variant(args)
                     Expr::EnumVariant(type_name, variant, _) => Ok(Value::Enum {
                         type_name: type_name.name.clone(),
@@ -290,11 +372,79 @@ impl Interpreter {
                 }
             }
 
+            // Coarsen: strip refinement type, returning the underlying value.
+            // In the interpreter, the value is already the base type at
+            // runtime, so coarsen is a no-op.
+            Expr::Coarsen(inner, _) => self.eval_expr(inner),
+
+            // Pipeline: `expr into f into g(extra)`
+            // Evaluate the initial expression, then for each step, call the
+            // function with the accumulated value as the first argument plus
+            // any extra args.
+            Expr::Pipeline(initial, steps, _) => {
+                let mut value = self.eval_expr(initial)?;
+                for step in steps {
+                    value = self.eval_pipeline_step(&step, value)?;
+                }
+                Ok(value)
+            }
+
+            // State check: `expr at state_name`
+            Expr::At(expr, state_name, _) => {
+                let val = self.eval_expr(expr)?;
+                match val {
+                    Value::Machine { state, .. } => {
+                        Ok(Value::Bool(state == state_name.name))
+                    }
+                    _ => Err(format!(
+                        "'at' requires a machine value, got {val}"
+                    )),
+                }
+            }
+
             // Unsupported expressions produce a clear error.
             _ => Err(format!(
                 "unsupported expression in comptime: {:?}",
                 std::mem::discriminant(expr)
             )),
+        }
+    }
+
+    /// Evaluate a single pipeline step: call the step's function with the
+    /// accumulated `piped_value` as the first argument, followed by any
+    /// extra arguments.
+    fn eval_pipeline_step(
+        &mut self,
+        step: &PipelineStep,
+        piped_value: Value,
+    ) -> Result<Value, String> {
+        // Build argument list: piped value first, then extra args.
+        let mut arg_values = vec![piped_value];
+        for arg in &step.extra_args {
+            arg_values.push(self.eval_expr(&arg.value)?);
+        }
+
+        // Resolve the function name from the expression.
+        match &step.function {
+            Expr::Ident(ident) => self.call_function(&ident.name, arg_values),
+            Expr::FieldAccess(obj, field, _) => {
+                let dotted = Self::extract_dotted_name(obj, &field.name);
+                if let Some(ref name) = dotted {
+                    if let Some(result) = self.call_builtin(name, &arg_values) {
+                        return result;
+                    }
+                    if self.functions.contains_key(name.as_str()) {
+                        return self.call_function(name, arg_values);
+                    }
+                }
+                match dotted {
+                    Some(name) => self.call_function(&name, arg_values),
+                    None => Err(
+                        "only named function calls are supported in pipeline steps".to_string(),
+                    ),
+                }
+            }
+            _ => Err("only named function calls are supported in pipeline steps".to_string()),
         }
     }
 
@@ -306,6 +456,10 @@ impl Interpreter {
         match stmt {
             Stmt::VarDecl(decl) => {
                 let val = self.eval_expr(&decl.value)?;
+                // Check refinement type constraint if the declared type is a
+                // known type alias with a constraint.
+                let type_name = type_expr_name(&decl.ty);
+                self.check_refinement(&type_name, &val)?;
                 self.set_variable(&decl.name.name, val);
                 Ok(None)
             }
@@ -584,6 +738,16 @@ impl Interpreter {
                 }
             }
 
+            "string.replace" => {
+                require_args!(name, 3, args);
+                match (&args[0], &args[1], &args[2]) {
+                    (Value::String(s), Value::String(from), Value::String(to)) => {
+                        Some(Ok(Value::String(s.replace(from.as_str(), to.as_str()))))
+                    }
+                    _ => Some(Err(format!("{name} expects three string arguments"))),
+                }
+            }
+
             "string.split" => {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
@@ -842,6 +1006,131 @@ impl Interpreter {
             _ => Ok(Value::Nothing),
         }
     }
+
+    // -- Machine operations -------------------------------------------------
+
+    /// Construct a machine value: `MachineName(state_name, fields...)`
+    /// The first argument is a bare identifier naming the initial state (NOT
+    /// evaluated).  Remaining arguments are evaluated as field values.
+    fn construct_machine(
+        &mut self,
+        machine_name: &str,
+        args: &[CallArg],
+    ) -> Result<Value, String> {
+        if args.is_empty() {
+            return Err(format!(
+                "machine '{machine_name}' construction requires at least a state name"
+            ));
+        }
+
+        // The first argument should be an identifier naming the state.
+        let state_name = match &args[0].value {
+            Expr::Ident(ident) => ident.name.clone(),
+            _ => {
+                return Err(format!(
+                    "machine '{machine_name}' construction: first argument must be a state name"
+                ));
+            }
+        };
+
+        let machine_def = self.machines.get(machine_name).unwrap().clone();
+
+        // Validate that the state exists.
+        if !machine_def.states.iter().any(|s| s.name.name == state_name) {
+            return Err(format!(
+                "machine '{machine_name}' has no state '{state_name}'"
+            ));
+        }
+
+        // Evaluate field arguments (args[1..]).
+        let mut fields = Vec::new();
+        for arg in &args[1..] {
+            fields.push(self.eval_expr(&arg.value)?);
+        }
+
+        Ok(Value::Machine {
+            type_name: machine_name.to_string(),
+            state: state_name,
+            fields,
+        })
+    }
+
+    /// Perform a machine transition: `MachineName.transition(value, target_state, fields...)`
+    /// - arg 0: the current machine value (evaluated)
+    /// - arg 1: a bare identifier naming the target state (NOT evaluated)
+    /// - args 2..: fields for the target state (evaluated)
+    fn machine_transition(
+        &mut self,
+        machine_name: &str,
+        args: &[CallArg],
+    ) -> Result<Value, String> {
+        if args.len() < 2 {
+            return Err(format!(
+                "{machine_name}.transition requires at least 2 arguments (value, target_state)"
+            ));
+        }
+
+        // arg 0 is evaluated — it should be the current machine value
+        let current_value = self.eval_expr(&args[0].value)?;
+        let current_state = match &current_value {
+            Value::Machine {
+                type_name, state, ..
+            } => {
+                if type_name != machine_name {
+                    return Err(format!(
+                        "{machine_name}.transition: expected a {machine_name} value, got {type_name}"
+                    ));
+                }
+                state.clone()
+            }
+            _ => {
+                return Err(format!(
+                    "{machine_name}.transition: first argument must be a machine value"
+                ));
+            }
+        };
+
+        // arg 1 should be a bare identifier naming the target state
+        let target_state = match &args[1].value {
+            Expr::Ident(ident) => ident.name.clone(),
+            _ => {
+                return Err(format!(
+                    "{machine_name}.transition: second argument must be a state name"
+                ));
+            }
+        };
+
+        let machine_def = self.machines.get(machine_name).unwrap().clone();
+
+        // Validate that the target state exists.
+        if !machine_def.states.iter().any(|s| s.name.name == target_state) {
+            return Err(format!(
+                "machine '{machine_name}' has no state '{target_state}'"
+            ));
+        }
+
+        // Validate that the transition is allowed.
+        let transition_allowed = machine_def.transitions.iter().any(|t| {
+            t.from.name == current_state && t.to.name == target_state
+        });
+        if !transition_allowed {
+            return Err(format!(
+                "machine '{machine_name}': transition from '{current_state}' to '{target_state}' is not allowed"
+            ));
+        }
+
+        // Evaluate field arguments (args[2..]).
+        let mut fields = Vec::new();
+        for arg in &args[2..] {
+            fields.push(self.eval_expr(&arg.value)?);
+        }
+
+        Ok(Value::Machine {
+            type_name: machine_name.to_string(),
+            state: target_state,
+            fields,
+        })
+    }
 }
 
 impl Default for Interpreter {
@@ -925,6 +1214,15 @@ fn eval_binary_op(left: &Value, op: BinOp, right: &Value) -> Result<Value, Strin
         _ => Err(format!(
             "unsupported binary operation: {left} {op:?} {right}"
         )),
+    }
+}
+
+/// Extract the simple name from a `TypeExpr` (e.g. `"int64"`, `"Port"`, `"list"`).
+fn type_expr_name(ty: &TypeExpr) -> String {
+    match ty {
+        TypeExpr::Named(ident) => ident.name.clone(),
+        TypeExpr::Generic(ident, _, _) => ident.name.clone(),
+        TypeExpr::View(inner, _) => type_expr_name(inner),
     }
 }
 
@@ -2190,5 +2488,65 @@ mod builtin_tests {
         let mut interp = Interpreter::new();
         let expr = dotted_call("string", "trim", vec![string("a"), string("b")]);
         assert!(interp.eval_expr(&expr).is_err());
+    }
+
+    #[test]
+    fn pipeline_string_trim_and_upper() {
+        // "  hello  " into string.trim into string.upper => "HELLO"
+        let mut interp = Interpreter::new();
+        let initial = string("  hello  ");
+        let steps = vec![
+            PipelineStep {
+                function: Expr::FieldAccess(
+                    Box::new(var("string")),
+                    ident("trim"),
+                    sp(),
+                ),
+                extra_args: vec![],
+                span: sp(),
+            },
+            PipelineStep {
+                function: Expr::FieldAccess(
+                    Box::new(var("string")),
+                    ident("upper"),
+                    sp(),
+                ),
+                extra_args: vec![],
+                span: sp(),
+            },
+        ];
+        let expr = Expr::Pipeline(Box::new(initial), steps, sp());
+        let result = interp.eval_expr(&expr).unwrap();
+        assert_eq!(result, Value::String("HELLO".to_string()));
+    }
+
+    #[test]
+    fn pipeline_string_replace_with_extra_args() {
+        // "hello world" into string.replace("world", "jett") => "hello jett"
+        let mut interp = Interpreter::new();
+        let initial = string("hello world");
+        let steps = vec![PipelineStep {
+            function: Expr::FieldAccess(
+                Box::new(var("string")),
+                ident("replace"),
+                sp(),
+            ),
+            extra_args: vec![
+                CallArg {
+                    name: None,
+                    value: string("world"),
+                    span: sp(),
+                },
+                CallArg {
+                    name: None,
+                    value: string("jett"),
+                    span: sp(),
+                },
+            ],
+            span: sp(),
+        }];
+        let expr = Expr::Pipeline(Box::new(initial), steps, sp());
+        let result = interp.eval_expr(&expr).unwrap();
+        assert_eq!(result, Value::String("hello jett".to_string()));
     }
 }

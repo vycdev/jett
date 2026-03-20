@@ -18,8 +18,26 @@ pub enum Item {
     Function(FunctionDef),
     Struct(StructDef),
     Enum(EnumDef),
+    Machine(MachineDef),
     VarDecl(VarDecl),
     Verify(VerifyBlock),
+    TypeAlias(TypeAlias),
+}
+
+// ---------------------------------------------------------------------------
+// Type alias (refinement types)
+// ---------------------------------------------------------------------------
+
+/// A type alias, optionally with a refinement constraint:
+/// `type Port = int64 where value >= 1 && value <= 65535`
+#[derive(Debug, Clone)]
+pub struct TypeAlias {
+    pub name: Ident,
+    pub base_type: TypeExpr,
+    /// The `where` clause expression.  Uses `value` to refer to the value
+    /// being constrained.  `None` for simple aliases without a constraint.
+    pub constraint: Option<Expr>,
+    pub span: Span,
 }
 
 // ---------------------------------------------------------------------------
@@ -89,6 +107,36 @@ pub struct EnumDef {
 pub struct Variant {
     pub name: Ident,
     pub fields: Vec<FieldDef>,
+    pub span: Span,
+}
+
+// ---------------------------------------------------------------------------
+// State machines
+// ---------------------------------------------------------------------------
+
+/// A state machine declaration: `machine Name:` with `states:` and
+/// `transitions:` blocks.
+#[derive(Debug, Clone)]
+pub struct MachineDef {
+    pub name: Ident,
+    pub states: Vec<MachineState>,
+    pub transitions: Vec<MachineTransition>,
+    pub span: Span,
+}
+
+/// A single state in a machine: `guest` or `logged_in(user_id: string)`.
+#[derive(Debug, Clone)]
+pub struct MachineState {
+    pub name: Ident,
+    pub fields: Vec<FieldDef>,
+    pub span: Span,
+}
+
+/// An allowed transition between two states: `guest to logged_in`.
+#[derive(Debug, Clone)]
+pub struct MachineTransition {
+    pub from: Ident,
+    pub to: Ident,
     pub span: Span,
 }
 
@@ -286,6 +334,12 @@ pub enum Expr {
     EnumVariant(Ident, Ident, Span),
     /// String interpolation: `"hello {name}, you are {age} years old"`
     StringInterpolation(Vec<StringPart>, Span),
+    /// `coarsen expr` — strip refinement, returning the base type value
+    Coarsen(Box<Expr>, Span),
+    /// Pipeline: `expr into f into g(extra)` — left-to-right function chaining
+    Pipeline(Box<Expr>, Vec<PipelineStep>, Span),
+    /// State check: `expr at state_name` — returns true if machine is in the given state
+    At(Box<Expr>, Ident, Span),
     /// Error node for recovery
     Error(Span),
 }
@@ -315,6 +369,9 @@ impl Expr {
             | Expr::Default(_, s)
             | Expr::EnumVariant(_, _, s)
             | Expr::StringInterpolation(_, s)
+            | Expr::Coarsen(_, s)
+            | Expr::Pipeline(_, _, s)
+            | Expr::At(_, _, s)
             | Expr::Error(s) => *s,
             Expr::Ident(ident) => ident.span,
         }
@@ -335,6 +392,16 @@ pub enum StringPart {
 pub struct CallArg {
     pub name: Option<Ident>,
     pub value: Expr,
+    pub span: Span,
+}
+
+/// A single step in a pipeline: `into function` or `into function(extra_args)`.
+#[derive(Debug, Clone)]
+pub struct PipelineStep {
+    /// The function being called in this step.
+    pub function: Expr,
+    /// Extra arguments beyond the piped value (empty for `into f`, non-empty for `into f(a, b)`).
+    pub extra_args: Vec<CallArg>,
     pub span: Span,
 }
 

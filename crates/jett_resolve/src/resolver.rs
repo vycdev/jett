@@ -157,6 +157,22 @@ impl Resolver {
                         self.var_defs.insert(id);
                     }
                 }
+                Item::Machine(m) => {
+                    self.declare_top_level(
+                        &m.name.name,
+                        DefKind::Machine,
+                        m.name.span,
+                        index,
+                    );
+                }
+                Item::TypeAlias(ta) => {
+                    self.declare_top_level(
+                        &ta.name.name,
+                        DefKind::Struct, // treat type aliases like types for now
+                        ta.name.span,
+                        index,
+                    );
+                }
                 // Verify blocks don't declare new names in the module scope.
                 Item::Verify(_) => {}
             }
@@ -481,6 +497,21 @@ impl Resolver {
                         self.resolve_expr(expr, item_index);
                     }
                 }
+            }
+            Expr::Coarsen(inner, _) => {
+                self.resolve_expr(inner, item_index);
+            }
+            Expr::Pipeline(initial, steps, _) => {
+                self.resolve_expr(initial, item_index);
+                for step in steps {
+                    self.resolve_expr(&step.function, item_index);
+                    for arg in &step.extra_args {
+                        self.resolve_call_arg(arg, item_index);
+                    }
+                }
+            }
+            Expr::At(expr, _state_name, _) => {
+                self.resolve_expr(expr, item_index);
             }
             // Literals and nothing — no names to resolve.
             Expr::IntLiteral(_, _)

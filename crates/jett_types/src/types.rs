@@ -65,6 +65,16 @@ pub enum Type {
         return_type: TypeId,
     },
 
+    // -- Refinement types ----------------------------------------------------
+    /// A refinement type: a base type with a constraint expression.
+    /// The `String` holds the name of the type alias (e.g. "Port").
+    /// The `TypeId` is the base type.  The constraint is stored externally
+    /// (in the AST or a side table) since `Type` must be `Hash + Eq`.
+    Refinement {
+        name: String,
+        base: TypeId,
+    },
+
     // -- Error sentinel ------------------------------------------------------
     /// Placeholder for type-check errors so compilation can continue.
     Error,
