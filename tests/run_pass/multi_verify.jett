@@ -1,0 +1,27 @@
+namespace math
+
+function add(a: int64, b: int64) returns int64:
+    return a + b
+
+verify add:
+    assert add(1, 2) == 3
+    assert add(0, 0) == 0
+    assert add(-5, 5) == 0
+
+function square(x: int64) returns int64:
+    return x * x
+
+verify square:
+    assert square(0) == 0
+    assert square(3) == 9
+    assert square(-4) == 16
+
+function max(a: int64, b: int64) returns int64:
+    if a > b:
+        return a
+    return b
+
+verify max:
+    assert max(1, 2) == 2
+    assert max(5, 3) == 5
+    assert max(7, 7) == 7

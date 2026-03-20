@@ -146,103 +146,63 @@ fn main() {
             }
         }
         Command::Test { file } => {
-            let files: Vec<String> = if let Some(f) = file {
-                vec![f]
+            if let Some(f) = file {
+                // Test a single file
+                let path = Path::new(&f);
+                match jett_driver::test_file(path) {
+                    Ok(result) => {
+                        print_file_results(&result);
+                        println!(
+                            "\n{} verify block(s), {} passed, {} failed",
+                            result.total, result.passed, result.failed
+                        );
+                        if result.failed > 0 {
+                            process::exit(1);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("error testing {f}: {e}");
+                        process::exit(1);
+                    }
+                }
             } else {
-                // Look for jett.proj and collect all .jett files
-                match find_project_files() {
-                    Ok(f) => f,
+                // Discover project and test all files
+                let cwd = std::env::current_dir().unwrap_or_default();
+                match jett_driver::test_project(&cwd) {
+                    Ok(result) => {
+                        for file_result in &result.file_results {
+                            println!("--- {} ---", file_result.file_path);
+                            print_file_results(file_result);
+                            println!();
+                        }
+                        println!(
+                            "{} file(s), {} verify block(s), {} passed, {} failed",
+                            result.total_files,
+                            result.total_blocks,
+                            result.total_passed,
+                            result.total_failed
+                        );
+                        if result.total_failed > 0 {
+                            process::exit(1);
+                        }
+                    }
                     Err(e) => {
                         eprintln!("error: {e}");
                         process::exit(1);
                     }
                 }
-            };
-
-            let mut total_blocks = 0usize;
-            let mut total_passed = 0usize;
-            let mut total_failed = 0usize;
-
-            for f in &files {
-                let path = Path::new(f);
-                match jett_driver::test_file(path) {
-                    Ok(result) => {
-                        for (name, passed, err) in &result.blocks {
-                            if *passed {
-                                println!("verify {}: ok", name);
-                            } else {
-                                let msg = err.as_deref().unwrap_or("unknown error");
-                                println!("verify {}: FAILED ({})", name, msg);
-                            }
-                        }
-                        total_blocks += result.total;
-                        total_passed += result.passed;
-                        total_failed += result.failed;
-                    }
-                    Err(e) => {
-                        eprintln!("error testing {}: {e}", f);
-                        process::exit(1);
-                    }
-                }
-            }
-
-            println!(
-                "\n{} verify blocks, {} passed, {} failed",
-                total_blocks, total_passed, total_failed
-            );
-
-            if total_failed > 0 {
-                process::exit(1);
             }
         }
     }
 }
 
-/// Find all .jett files in the project by looking for jett.proj in the
-/// current directory or its ancestors, then collecting all .jett files in
-/// the `src/` directory.
-fn find_project_files() -> Result<Vec<String>, String> {
-    let cwd = std::env::current_dir().map_err(|e| format!("cannot determine cwd: {e}"))?;
-    let mut dir = cwd.as_path();
-
-    loop {
-        let proj = dir.join("jett.proj");
-        if proj.exists() {
-            let src_dir = dir.join("src");
-            if src_dir.is_dir() {
-                let mut files = Vec::new();
-                collect_jett_files(&src_dir, &mut files)
-                    .map_err(|e| format!("error scanning src/: {e}"))?;
-                if files.is_empty() {
-                    return Err("no .jett files found in src/".to_string());
-                }
-                return Ok(files);
-            }
-            return Err(format!(
-                "found jett.proj at {} but no src/ directory",
-                dir.display()
-            ));
-        }
-        match dir.parent() {
-            Some(p) => dir = p,
-            None => {
-                return Err(
-                    "no jett.proj found in current directory or any parent".to_string(),
-                )
-            }
+fn print_file_results(result: &jett_driver::TestResult) {
+    for (name, passed, err) in &result.blocks {
+        if *passed {
+            println!("  verify {name}: ok");
+        } else {
+            let msg = err.as_deref().unwrap_or("unknown error");
+            println!("  verify {name}: FAILED ({msg})");
         }
     }
-}
-
-fn collect_jett_files(dir: &Path, out: &mut Vec<String>) -> std::io::Result<()> {
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_dir() {
-            collect_jett_files(&path, out)?;
-        } else if path.extension().and_then(|e| e.to_str()) == Some("jett") {
-            out.push(path.display().to_string());
-        }
-    }
-    Ok(())
 }

@@ -174,8 +174,20 @@ pub struct TestResult {
     pub total: usize,
     pub passed: usize,
     pub failed: usize,
+    /// The file that was tested.
+    pub file_path: String,
     /// Per-block results: (name, passed, optional error message).
     pub blocks: Vec<(String, bool, Option<String>)>,
+}
+
+/// Result of running `jett test` across an entire project.
+pub struct ProjectTestResult {
+    pub total_files: usize,
+    pub total_blocks: usize,
+    pub total_passed: usize,
+    pub total_failed: usize,
+    /// Per-file results.
+    pub file_results: Vec<TestResult>,
 }
 
 /// Parse a .jett file and run all verify blocks, reporting per-block results.
@@ -216,6 +228,93 @@ pub fn test_file(path: &Path) -> Result<TestResult, String> {
         total,
         passed,
         failed,
+        file_path: path.display().to_string(),
         blocks,
     })
+}
+
+/// Discover all `.jett` files under a project root (walks up from `start_dir`
+/// to find `jett.proj`, then collects all `.jett` files in the project) and
+/// run verify blocks in each one.
+pub fn test_project(start_dir: &Path) -> Result<ProjectTestResult, String> {
+    let project_dir = find_project_root(start_dir)?;
+    let mut files = Vec::new();
+    collect_jett_files(&project_dir, &mut files)
+        .map_err(|e| format!("error scanning project: {e}"))?;
+
+    if files.is_empty() {
+        return Err(format!(
+            "no .jett files found in project at {}",
+            project_dir.display()
+        ));
+    }
+
+    files.sort();
+
+    let mut file_results = Vec::new();
+    for file_path in &files {
+        file_results.push(test_file(file_path)?);
+    }
+
+    let total_files = file_results.len();
+    let total_blocks: usize = file_results.iter().map(|r| r.total).sum();
+    let total_passed: usize = file_results.iter().map(|r| r.passed).sum();
+    let total_failed: usize = file_results.iter().map(|r| r.failed).sum();
+
+    Ok(ProjectTestResult {
+        total_files,
+        total_blocks,
+        total_passed,
+        total_failed,
+        file_results,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Helpers — project file discovery for `jett test`
+// ---------------------------------------------------------------------------
+
+/// Walk up from `start_dir` to find a directory containing `jett.proj`.
+fn find_project_root(start_dir: &Path) -> Result<std::path::PathBuf, String> {
+    let start = if start_dir.is_file() {
+        start_dir
+            .parent()
+            .unwrap_or(start_dir)
+            .to_path_buf()
+    } else {
+        start_dir.to_path_buf()
+    };
+
+    let mut current = start.as_path();
+    loop {
+        if current.join("jett.proj").exists() {
+            return Ok(current.to_path_buf());
+        }
+        match current.parent() {
+            Some(parent) => current = parent,
+            None => {
+                return Err(
+                    "no jett.proj found in current directory or any parent".to_string(),
+                );
+            }
+        }
+    }
+}
+
+/// Recursively collect all `.jett` files in a directory, skipping hidden dirs
+/// and `target/`.
+fn collect_jett_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) -> std::io::Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            let dir_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if !dir_name.starts_with('.') && dir_name != "target" {
+                collect_jett_files(&path, out)?;
+            }
+        } else if path.extension().and_then(|e| e.to_str()) == Some("jett") {
+            out.push(path);
+        }
+    }
+    Ok(())
 }

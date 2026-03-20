@@ -1,0 +1,9 @@
+namespace app
+
+function greet(name: string) returns string:
+    return "Hello, {name}!"
+
+function main() returns nothing:
+    string msg = greet("World")
+    Stdout.write(nothing, msg)
+    Stdout.write(nothing, "2 + 3 = {2 + 3}")
