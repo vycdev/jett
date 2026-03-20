@@ -59,6 +59,29 @@ impl Resolver {
     fn new() -> Self {
         let mut scope_table = ScopeTable::new();
         let root = scope_table.new_scope(None);
+
+        let dummy_span = Span::new(jett_common::FileId::new(0), 0, 0);
+
+        // Pre-register built-in type names so they don't trigger "undefined" errors.
+        let builtins = [
+            // Primitive types
+            "int8", "int16", "int32", "int64",
+            "uint8", "uint16", "uint32", "uint64",
+            "float32", "float64",
+            "string", "bool", "bytes", "nothing",
+            // Built-in generic types (used as identifiers in type annotations)
+            "list", "map", "set", "optional", "result", "secret",
+            // Capability types
+            "Stdout", "Stderr", "Stdin", "Filesystem", "Network",
+            "Clock", "Random", "Process", "Environment",
+            // Common built-in functions/values
+            "true", "false", "none",
+        ];
+        for name in builtins {
+            let def = scope_table.new_def(name.to_string(), DefKind::Constant, dummy_span);
+            scope_table.bind(root, name.to_string(), def);
+        }
+
         Self {
             scope_table,
             resolutions: HashMap::new(),

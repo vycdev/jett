@@ -15,4 +15,5 @@ jett_ast.workspace = true
 jett_resolve.workspace = true
 jett_types.workspace = true
 jett_typecheck.workspace = true
+jett_comptime.workspace = true
 jett_fmt.workspace = true

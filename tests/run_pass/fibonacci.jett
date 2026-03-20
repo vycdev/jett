@@ -1,0 +1,14 @@
+namespace math
+
+function fibonacci(n: int64) returns int64:
+    if n <= 1:
+        return n
+    int64 a = fibonacci(n - 1)
+    int64 b = fibonacci(n - 2)
+    return a + b
+
+function main() returns nothing:
+    assert fibonacci(0) == 0
+    assert fibonacci(1) == 1
+    assert fibonacci(5) == 5
+    assert fibonacci(10) == 55

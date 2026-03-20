@@ -115,9 +115,14 @@ fn main() {
             }
         }
         Command::Run { file } => {
-            println!("running {file}");
-            eprintln!("error: jett run is not yet implemented");
-            process::exit(1);
+            let path = Path::new(&file);
+            match jett_driver::run_file(path) {
+                Ok(()) => {}
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    process::exit(1);
+                }
+            }
         }
     }
 }

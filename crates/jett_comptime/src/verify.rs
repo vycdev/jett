@@ -44,7 +44,7 @@ pub fn run_verify_blocks(module: &Module) -> Vec<Diagnostic> {
     for item in &module.items {
         if let Item::Function(func) = item {
             interp.register_function(func);
-            if has_assert_stmts(func) && func.params.is_empty() {
+            if has_assert_stmts(func) && func.params.is_empty() && func.name.name != "main" {
                 verify_functions.push(func.clone());
             }
         }

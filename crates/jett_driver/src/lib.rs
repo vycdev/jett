@@ -1,4 +1,5 @@
 use jett_common::FileId;
+use jett_comptime::verify::run_verify_blocks;
 use jett_diagnostics::Diagnostic;
 use jett_fmt::{format_source, FormatResult};
 use jett_parser::parse;
@@ -62,11 +63,62 @@ pub fn build_file(path: &Path) -> BuildResult {
     let check_result = check(&parse_result.module, &resolve_result);
     all_diagnostics.extend(check_result.diagnostics.clone());
 
+    let has_typecheck_errors = all_diagnostics.iter().any(|d| d.severity == jett_diagnostics::Severity::Error);
+    if has_typecheck_errors {
+        return BuildResult {
+            has_errors: true,
+            diagnostics: all_diagnostics,
+        };
+    }
+
+    // Phase 5: Execute verify blocks at compile time
+    let verify_diagnostics = run_verify_blocks(&parse_result.module);
+    all_diagnostics.extend(verify_diagnostics);
+
     let has_errors = all_diagnostics.iter().any(|d| d.severity == jett_diagnostics::Severity::Error);
 
     BuildResult {
         has_errors,
         diagnostics: all_diagnostics,
+    }
+}
+
+/// Run a .jett file using the tree-walking interpreter.
+/// First validates (lex → parse → resolve → typecheck → verify), then executes main().
+pub fn run_file(path: &Path) -> Result<(), String> {
+    let build = build_file(path);
+
+    if build.has_errors {
+        let errors: Vec<String> = build
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == jett_diagnostics::Severity::Error)
+            .map(|d| format!("{}: {}", d.code, d.message))
+            .collect();
+        return Err(format!("cannot run — compilation errors:\n{}", errors.join("\n")));
+    }
+
+    // Parse again to get the module for interpretation
+    let source = fs::read_to_string(path)
+        .map_err(|e| format!("failed to read {}: {}", path.display(), e))?;
+    let file_id = FileId::new(0);
+    let parse_result = parse(&source, file_id);
+
+    // Find and execute main()
+    use jett_comptime::interpreter::Interpreter;
+    let mut interp = Interpreter::new();
+
+    // Register all functions
+    for item in &parse_result.module.items {
+        if let jett_parser::ast::Item::Function(func) = item {
+            interp.register_function(func);
+        }
+    }
+
+    // Call main()
+    match interp.call_function("main", vec![]) {
+        Ok(_) => Ok(()),
+        Err(e) => Err(format!("runtime error: {}", e)),
     }
 }
 

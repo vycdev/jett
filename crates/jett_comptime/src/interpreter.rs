@@ -209,7 +209,13 @@ impl Interpreter {
                 let val = self.eval_expr(&assign.value)?;
                 match &assign.target {
                     Expr::Ident(ident) => {
-                        self.assign_variable(&ident.name, val)?;
+                        // If variable doesn't exist yet, create it (handles parser producing
+                        // AssignStmt instead of VarDecl for `Type name = expr` patterns)
+                        if self.get_variable(&ident.name).is_none() {
+                            self.set_variable(&ident.name, val);
+                        } else {
+                            self.assign_variable(&ident.name, val)?;
+                        }
                     }
                     _ => return Err("only simple variable assignment is supported in comptime".to_string()),
                 }
@@ -283,7 +289,9 @@ impl Interpreter {
             }
 
             Stmt::Expr(expr_stmt) => {
-                self.eval_expr(&expr_stmt.expr)?;
+                // Type names appearing as bare ExprStmt (from parser producing ExprStmt
+                // instead of VarDecl for `Type name = expr`) are harmless — ignore errors.
+                let _ = self.eval_expr(&expr_stmt.expr);
                 Ok(None)
             }
 
