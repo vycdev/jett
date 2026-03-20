@@ -702,7 +702,7 @@ Uses the `inkwell` crate for safe Rust bindings to the LLVM C API.
 | `list[T]` | Pointer to heap-allocated `{ length: i64, capacity: i64, data: T* }` |
 | `map[K, V]` | Pointer to heap-allocated hash table |
 | `set[T]` | Pointer to heap-allocated hash set (keys only, no values) |
-| `string` | Pointer to heap-allocated `{ length: i64, data: u8* }` (UTF-8) |
+| `string` | 3-word struct with small string optimization (SSO): strings up to ~23 bytes inline, larger strings heap-allocated `{ length: i64, capacity: i64, data: u8* }` (UTF-8) |
 | `bytes` | Pointer to heap-allocated `{ length: i64, data: u8* }` (raw bytes, no UTF-8 guarantee) |
 | `optional[T]` | Tagged union: `{ present: i1, value: T }` (or pointer + null for heap types) |
 | `result[T, E]` | Tagged union: `{ ok: i1, payload: union { T, E } }` |
@@ -758,17 +758,22 @@ The design document specifies a future secondary target: **transpilation to C**.
 
 Every compiled Jett binary links against the runtime library. The runtime is written in Rust (later self-hosted in Jett) and provides the services that cannot be inlined by the compiler.
 
+### Runtime Size
+
+The runtime sits between Rust (~2K lines, no scheduler) and Pony (~15-20K lines, full actor system). Linear types eliminate the need for GC, but the actor scheduler is irreducible complexity. Estimated ~5K-10K lines of Rust.
+
 ### What the Runtime Contains
 
-| Component | Purpose |
-|---|---|
-| **Allocator** | General-purpose memory allocator. The compiler emits `alloc`/`dealloc` calls when linear values are created/dropped. The runtime provides the backing allocator (e.g., `mimalloc` or a custom bump allocator). |
-| **String representation** | Strings are heap-allocated `{ length: i64, data: *u8 }` (UTF-8). The runtime provides grapheme cluster iteration (via the `unicode-segmentation` crate internally), character counting, and all string operations from the `string` stdlib module. |
-| **Actor scheduler** | Thread pool + per-actor message queues. See Actor Runtime section below. |
-| **Task scheduler** | For `run`/`join`/`cancel` structured concurrency. Manages a task pool and cancellation flags. |
-| **Capability constructors** | Functions that create capability values at program startup, called by the generated `main` wrapper. |
-| **Platform abstraction** | The platform-specific implementations of capability methods (filesystem, network, stdout, etc.). The compiler emits calls to runtime functions like `jett_rt_fs_read_file()` which handle the OS-specific syscalls. |
-| **Panic handler** | For `assert` failures and unrecoverable errors. Prints the message and aborts. |
+| Component | Size estimate | Purpose |
+|---|---|---|
+| **Allocator** | ~200 lines | Thin wrapper around the system allocator (`malloc`/`free`). The compiler emits `alloc`/`dealloc` calls at the exact points where linear values are created/dropped — no GC or reference counting. |
+| **String representation** | ~500 lines + Unicode tables | UTF-8 byte buffer with **small string optimization** (SSO): strings up to ~23 bytes are stored inline in the String struct, avoiding heap allocation. Larger strings use `{ length: i64, capacity: i64, data: *u8 }`. Unicode grapheme cluster segmentation tables (~50-100KB of static data) are bundled for `string.chars()` and `string.char_count()` (required by Rule Set 12). |
+| **Actor scheduler** | ~3K-5K lines | Thread pool (one thread per CPU core) + per-actor bounded MPSC message queues + work-stealing. See Actor Runtime section below. |
+| **Async I/O event loop** | ~1K-3K lines | Integrates with the actor scheduler to avoid blocking thread pool threads on I/O. Uses `epoll` (Linux), `kqueue` (macOS), `IOCP` (Windows). When a capability method performs I/O, it submits the operation to the event loop and yields the actor, freeing the thread for other work. |
+| **Task scheduler** | ~500 lines | For `run`/`join`/`cancel` structured concurrency. Built on top of the actor scheduler — a spawned task is a lightweight actor. |
+| **Capability constructors** | ~200 lines | Functions that create capability values at program startup. Called by the generated `main` wrapper. |
+| **Panic handler** | ~100 lines | For `assert` failures and unrecoverable errors. Prints the message and aborts. |
+| **Entry point** | ~100 lines | `_jett_entry` initializes the runtime (thread pool, event loop), constructs capabilities, calls user's `main()`, and shuts down cleanly. |
 
 ### How the Compiler Uses the Runtime
 
@@ -829,9 +834,11 @@ flowchart LR
 
 ### Components
 
-**Message queues:** Each actor has a bounded MPSC (multi-producer, single-consumer) channel. `send` enqueues a message and returns immediately. If the queue is full, `send` blocks until space is available (backpressure).
+**Message queues:** Each actor has a bounded MPSC (multi-producer, single-consumer) lock-free queue. `send` enqueues a message and returns immediately. If the queue is full, `send` blocks until space is available (backpressure).
 
-**Thread pool:** Actors are multiplexed onto a thread pool (sized to CPU core count by default). An actor's receive handler runs on a pool thread. Only one message is processed at a time per actor — no concurrent access to the actor's state.
+**Thread pool with work-stealing:** Actors are multiplexed onto a thread pool (one thread per CPU core by default). Each thread has a local run queue of ready actors. When a thread's queue is empty, it steals from other threads. Only one message is processed at a time per actor — no concurrent access to the actor's state.
+
+**Non-blocking I/O integration:** When an actor's receive handler performs I/O (through a capability method), the operation is submitted to the async I/O event loop (`epoll`/`kqueue`/`IOCP`) and the actor yields its thread. When the I/O completes, the actor is re-enqueued as ready. This prevents blocking syscalls from stalling the thread pool — a critical design for systems with many actors performing I/O.
 
 **`send` semantics:** Fire-and-forget. The message (including consumed linear values) is moved into the queue. The sender does not wait.
 
@@ -845,7 +852,7 @@ flowchart LR
 
 **Actor lifecycle:** An actor runs until its message queue is empty and all `ActorRef` handles to it have been dropped (no more possible senders). The thread pool detects this and deallocates the actor's state. If `main()` returns while actors are still running, the runtime drops all `ActorRef` handles and waits for actors to drain their queues before exiting.
 
-**Linear type safety across actors:** When a value is `send`/`ask`'d to an actor, it is serialized (deep-copied) into the message queue. This is necessary because actors run on different threads, and the linear type system cannot track ownership across thread boundaries. The copy cost is the price of thread safety without shared memory.
+**Linear type safety across actors:** When a value is `send`/`ask`'d to an actor, ownership is transferred into the message queue. For small values (primitives, small structs), this is a bitwise copy into the queue slot. For heap-allocated values (lists, maps, large structs), the pointer is moved — the sender's handle becomes invalid (enforced by the linear type checker at compile time). No deep copy is needed because single ownership guarantees no aliasing. This is the key advantage of linear types for actor message passing — zero-copy transfer with compile-time safety.
 
 ---
 
@@ -1325,6 +1332,8 @@ Core stdlib (string, list, math, json) is implemented in Phase D. This phase com
 | `proptest` | Property-based testing for the compiler itself |
 | `clap` | CLI argument parsing |
 | `serde` | Serialization (for TOON output, caching) |
+| `unicode-segmentation` | UAX #29 grapheme cluster segmentation for string operations |
+| `mimalloc` | High-performance allocator (or system allocator as default) |
 
 ---
 
