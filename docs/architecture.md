@@ -123,7 +123,7 @@ flowchart TD
 
     LEX & PAR & AST & RES & TCK & HIR & MIR --> CMN & DGN
     CMP & OPT & CGL & CGI & INT --> CMN & DGN
-    FMT & QRY & LSP & ASP & MCP & PRF & FUZ & BND & BDL --> CMN & DGN
+    FMT & QRY & LSP & ASP & MCP & PRF & FUZ & BND & BDL & RTM & PRJ --> CMN & DGN
 
     TCK & HIR & MIR & CMP & OPT & CGL & CGI --> TYP
     FUZ --> TYP
@@ -149,7 +149,7 @@ flowchart TD
 
 1. Locate `jett.proj` by walking up from the given path.
 2. Parse the TOON-format project file (name, version, entry point).
-3. Recursively discover all `.jett` files in the project directory.
+3. Recursively discover all `.jett` files in the project directory, including vendored dependencies in `deps/` (Rule Set 14). Dependencies are `.jett` source files tracked in git — no package registry, no lock file.
 4. Assign each file a unique `FileId` (integer handle for source tracking).
 5. Read file contents into an arena-allocated string store for zero-copy access.
 
@@ -525,9 +525,9 @@ These are compile errors, not warnings.
 
 ## Phase 7: High-Level IR (`jett_hir`)
 
-**Input:** Typed AST.
+**Input:** TypedTree from Phase 6.
 
-**Output:** HIR — a typed, monomorphized intermediate representation.
+**Output:** HIR — a fully monomorphized intermediate representation.
 
 ### Purpose
 
@@ -571,6 +571,7 @@ MirFunction {
     name: Symbol,
     params: Vec<MirParam>,
     return_type: TypeId,
+    is_pure: bool,            // No capability parameters — safe for comptime, memoization
     blocks: Vec<BasicBlock>,
     entry: BlockId,
 }
@@ -1391,7 +1392,8 @@ The compiler should be built incrementally, with each phase producing a usable (
 4. `jett_parser` — Parse functions, structs, basic expressions, if/else, for/while.
 5. `jett_ast` — AST data structures and CST → AST lowering.
 6. `jett_fmt` — Basic formatter.
-7. `jett_cli` — `jett format` command.
+7. `jett_driver` — Pipeline orchestration, wiring phases together.
+8. `jett_cli` — `jett format` command.
 
 **Milestone:** `jett format` works on basic Jett files.
 
@@ -1421,8 +1423,9 @@ The compiler should be built incrementally, with each phase producing a usable (
 
 1. `jett_hir` — Monomorphization, method resolution, compiler intrinsic generation (serialization, clone, display).
 2. `jett_mir` — CFG-based IR, definitive ownership verification.
-3. `jett_runtime` — Core runtime: allocator, string representation, panic handler, capability constructors, platform-specific I/O for the host platform.
-4. `jett_codegen_llvm` — LLVM IR generation for the host platform.
+3. `jett_optimize` — Jett MIR optimizations (in-place reuse, move coalescing, pure function optimizations).
+4. `jett_runtime` — Core runtime: allocator, string representation, panic handler, capability constructors, platform-specific I/O for the host platform.
+5. `jett_codegen_llvm` — LLVM IR generation for the host platform.
 5. Core stdlib `.jett` files — `Displayable` implementations for primitives, basic `string`, `list`, `math` operations, `json` module. These are needed for verify blocks and string interpolation to work.
 6. `jett_cli` — `jett build` command.
 
@@ -1504,6 +1507,7 @@ Core stdlib (string, list, math, json) is implemented in Phase D. This phase com
 - **I/O:** `net.http`, `net.socket`, `csv`
 - **Time:** `time`
 - **Security:** `crypto`, `encoding`, `validate`
+- **OS:** `os` (environment variables, process management, argv — wraps `Environment` and `Process` capabilities)
 - **Utilities:** `regex`, `random`, `uuid`, `log`, `format`
 - **Testing:** `test.mock` (mock capabilities for property-based testing)
 

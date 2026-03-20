@@ -6029,6 +6029,7 @@ No special compiler rules for capabilities. They follow the same `view` semantic
 | `float64` | 64-bit floating point |
 | `string` | UTF-8 string (full word, not `str`) |
 | `bool` | `true` or `false` |
+| `bytes` | Raw byte buffer (no UTF-8 guarantee). Used for binary I/O (`Filesystem.read_bytes`, `Filesystem.write_bytes`). |
 | `list[T]` | Ordered collection |
 | `map[K, V]` | Key-value collection |
 | `set[T]` | Unique collection |
@@ -6261,7 +6262,7 @@ Jett compiles to native code via an **LLVM backend** (primary target) for perfor
 ```
 project/
     jett.proj
-    source/
+    src/
         main.jett
         utils.jett
 ```
