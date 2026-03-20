@@ -1,2 +1,4 @@
-// CST parser for Jett.
-// Produces a lossless concrete syntax tree from a token stream.
+pub mod ast;
+mod parser;
+
+pub use parser::{parse, Parser, ParseResult};
