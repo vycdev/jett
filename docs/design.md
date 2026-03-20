@@ -4377,7 +4377,7 @@ Every `use` must be referenced. Unused imports are not warnings — they are com
 
 ```
 function process(data: string) returns int64:
-    int64 length = string.length(data)
+    int64 length = string.char_count(data)
     string trimmed = string.trim(data)
     return length
 
@@ -5766,6 +5766,18 @@ Variables are immutable by default. The `mutable` keyword before the type opts i
 
 **Every variable declaration requires an explicit type and an initial value.** There is no type inference and no uninitialized variables. `x = 5` without a type is a compile error — write `int64 x = 5`. `int64 x` without a value is also a compile error — every variable must have a value from the moment it exists. There is no null, no zero-default, no undefined state.
 
+**Global constants** can be declared at the top level of a namespace. They use the same syntax as local variables but must be immutable and initialized with a compile-time constant expression:
+
+```
+namespace config
+
+int64 MAX_RETRIES = 5
+string DEFAULT_HOST = "localhost"
+float64 PI = 3.14159265358979
+```
+
+Global mutable variables are forbidden (Rule Set 2). Global constants are allowed because they never change — they are baked into the binary at compile time.
+
 ### Functions
 
 ```
@@ -6254,11 +6266,12 @@ project/
         utils.jett
 ```
 
-The `.proj` file is minimal:
+The `.proj` file is minimal (TOON format):
 
-```
-name = "myproject"
-version = "0.1.0"
+```toon
+name: myproject
+version: 0.1.0
+entry: src/main.jett
 ```
 
 External dependencies live in the `deps/` directory as vendored `.jett` files tracked in git (see Rule Set 14).
@@ -6275,7 +6288,7 @@ External dependencies live in the `deps/` directory as vendored `.jett` files tr
 - **Mutual struct composition** — two structs cannot contain each other (composition is physical containment, so circular inclusion would be infinitely sized). The `mutual` block exists for functions but not for structs. Need to determine how recursive data structures (trees, linked lists, graphs) are expressed in Jett — possibly via indices or some form of indirection.
 - **Fixed-size vs dynamic lists** — `list[T]` is currently used as a dynamic/growable collection throughout the design. For performance-critical code (bitfield payloads, buffer management, numerical computing), a fixed-size array type may be needed. Options: a separate `array[T, N]` type with compile-time-known size, or a refinement type like `type FixedBuffer = list[uint8] where list.length(value) == 1024`. A separate type gives the compiler more optimization opportunities (stack allocation, no bounds growth), but adds another collection type for the LLM to choose between.
 - **Struct equality and hashing** — `set[T]` and `map[K, V]` require elements/keys to implement `Hashable` and `Equatable`. Currently only primitives implement these. How do user-defined structs become usable in sets and as map keys? Options: auto-derive `Hashable`/`Equatable` when all fields implement them, require manual `implement` blocks, or some hybrid. This also affects `==` on structs — is structural equality automatic, or must it be explicitly implemented?
-- **Generic structs** — generics are currently supported on functions (`function sort[T](...)`) and refinement types (`type NonEmpty[T] = list[T]`), but not on user-defined structs. Should Jett allow `struct Pair[T, U]: first: T, second: U`? Built-in types like `result[T, E]`, `optional[T]`, and `list[T]` are already generic, so the concept exists — the question is whether user-defined structs can also be parameterized. This also raises: can generic variables exist (`Pair[int64, string] p = ...`)? How do generic structs interact with interfaces?
+- **Generic structs and tuple types** — generics are currently supported on functions (`function sort[T](...)`) and refinement types (`type NonEmpty[T] = list[T]`), but not on user-defined structs. Should Jett allow `struct Pair[T, U]: first: T, second: U`? Built-in types like `result[T, E]`, `optional[T]`, and `list[T]` are already generic, so the concept exists — the question is whether user-defined structs can also be parameterized. This also raises: can generic variables exist (`Pair[int64, string] p = ...`)? How do generic structs interact with interfaces? Related: `list.zip` uses a `tuple[T, U]` type that is not yet defined — this depends on generic structs being resolved.
 - **Type naming convention** — the design currently mixes lowercase for built-in types (`int64`, `string`, `list[T]`, `optional[T]`, `result[T, E]`) and PascalCase for user-defined types and capabilities (`User`, `Config`, `Stdout`, `Filesystem`). Is this distinction intentional and worth keeping, or should all types use a single convention? Lowercase is more token-efficient and consistent with Jett's keyword style. PascalCase visually distinguishes types from variables and functions. A unified convention reduces rules the LLM must learn, but the current split may help LLMs distinguish built-in vs user-defined types.
 
 ---

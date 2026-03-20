@@ -393,7 +393,7 @@ This is the most complex phase of the compiler. It enforces the majority of Jett
 
 Walk all type declarations and build the type registry:
 
-- **Primitive types:** `int8`..`int64`, `uint8`..`uint64`, `float32`, `float64`, `string`, `bool`, `bytes`, `nothing`.
+- **Primitive types:** `int8`..`int64`, `uint8`..`uint64`, `float32`, `float64`, `string`, `bool`, `bytes`, `nothing`. (`bytes` is a raw byte buffer with no UTF-8 guarantee, distinct from `string`.)
 - **Built-in generic types:** `list[T]`, `map[K, V]`, `set[T]`, `optional[T]`, `result[T, E]`.
 - **User-defined types:** structs, enums, machines, actors, bitfields, interfaces, type aliases (including refinement types).
 - **Function types:** `function(T) returns U`.
@@ -1386,7 +1386,8 @@ The compiler should be built incrementally, with each phase producing a usable (
 
 1. `jett_common` — Span, FileId, Symbol interner, diagnostics infrastructure.
 2. `jett_diagnostics` — Error types, human-readable rendering.
-3. `jett_lexer` — Full tokenizer including indentation handling.
+3. `jett_project` — Project file (`jett.proj`) parsing, file discovery, namespace pre-scan.
+4. `jett_lexer` — Full tokenizer including indentation handling.
 4. `jett_parser` — Parse functions, structs, basic expressions, if/else, for/while.
 5. `jett_ast` — AST data structures and CST → AST lowering.
 6. `jett_fmt` — Basic formatter.
