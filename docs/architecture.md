@@ -654,31 +654,176 @@ The comptime interpreter refuses to execute any function that takes capability p
 
 ---
 
-## Phase 10: Optimization (`jett_optimize`)
+## Phase 10: Optimization
+
+Optimization in Jett happens at **three levels**: Jett-level MIR optimizations that leverage ownership knowledge LLVM cannot have, LLVM IR annotations that guide LLVM's optimizer, and compilation speed optimizations that keep the build-fix loop fast.
+
+### 10a. Jett MIR Optimizer (`jett_optimize`)
 
 **Input:** MIR.
 
 **Output:** Optimized MIR.
 
-### Jett-Specific Optimizations
+These optimizations exploit Jett's linear type system — the compiler has **perfect alias information** (no value is ever aliased) and **perfect lifetime information** (every value's last use is statically known). LLVM cannot derive this information from the IR alone.
 
-These optimizations leverage Jett's unique ownership semantics:
+#### Ownership-Aware Optimizations
 
-1. **In-place reuse:** When a value is consumed and immediately transformed (`x = transform(x)`), the compiler detects that the old value has no other references and can be mutated in-place. This turns `list.append(old_list, item)` into a genuine in-place append.
+1. **In-place reuse (consume-transform pattern):** When a value is consumed and immediately transformed (`x = transform(x)`), the compiler detects that the old value has no other references and mutates the underlying memory in-place. This turns `list.append(old_list, item)` into a genuine in-place buffer append (no copy), and `struct.with_field(old_struct, new_value)` into a field write on the existing allocation. This is the single highest-impact Jett-specific optimization — it turns what looks like immutable functional code into zero-copy imperative code.
 
-2. **View elision:** When a `view` borrow's lifetime is entirely within a single expression, the compiler can skip the borrow tracking overhead.
+2. **Move coalescing:** When a value is moved through a chain of single-use variables (`a` → `b` → `c` → `f(c)`), the intermediate names are eliminated and the value stays in the same memory location. No intermediate allocations or copies.
 
-3. **Dead view elimination:** If a `view` is created but never read, eliminate it.
+3. **Last-use drop sinking:** The compiler knows the exact last use of every value. Instead of dropping a value at scope exit, it inserts the `Drop` immediately after the last use. This frees memory earlier, reducing peak memory usage.
 
-4. **Constant folding:** Propagate known constants and evaluate pure expressions at compile time.
+4. **View elimination:** Views are raw pointers with zero runtime overhead. When a view's lifetime is entirely within a single statement, the compiler can pass the pointed-to value directly without materializing a pointer.
 
-5. **Dead code elimination:** Remove unreachable blocks (especially after comptime branch resolution).
+5. **Dead allocation elimination:** If a value is allocated and then consumed by a function that doesn't actually read all of its fields, the unused fields were never needed. The compiler can skip allocating them (partial allocation).
 
-6. **Move coalescing:** When a value is moved through a chain of single-use variables, eliminate intermediate allocations.
+6. **Struct field reuse across calls:** When a function takes a struct by ownership, modifies one field, and returns it, the compiler detects that the input and output share the same allocation and skips the copy for unchanged fields.
 
-### Standard Optimizations (Delegated to LLVM)
+#### Pure Function Optimizations
 
-Heavy optimizations (inlining, vectorization, loop unrolling, register allocation) are handled by the LLVM optimization pipeline. The Jett optimizer focuses on ownership-aware transformations that LLVM cannot perform because it lacks ownership information.
+Because the capability system provably identifies pure functions (Rule Set 2), the compiler can:
+
+7. **Pure function memoization:** If a pure function is called multiple times with the same arguments within a function body, the compiler can cache the result. This is safe because pure functions have no side effects.
+
+8. **Pure function reordering:** Pure function calls can be reordered freely for better instruction scheduling or memory locality. Calls that don't depend on each other can be interleaved.
+
+9. **Dead pure call elimination:** A pure function call whose result is never used can be eliminated entirely (it has no side effects, so removing it changes nothing). Note: this cannot apply to impure functions — even if the result is unused, the side effect must occur.
+
+10. **Constant propagation through pure functions:** If all arguments to a pure function are known at compile time, the call can be evaluated at compile time (folded into a constant). This extends the comptime engine's reach — even functions not explicitly marked `comptime` can be folded if their inputs are known.
+
+#### Control Flow Optimizations
+
+11. **Comptime branch elimination:** After comptime evaluation resolves `if comptime ...` branches, the dead branches are removed entirely from the MIR. This eliminates unreachable code before it reaches LLVM.
+
+12. **State machine transition devirtualization:** When a state machine's current state is known at a call site (e.g., immediately after a transition), `match` expressions on that state can be resolved to the single matching arm.
+
+13. **Refinement range propagation:** When a value has a refinement type (e.g., `Port` with `value >= 1 && value <= 65535`), the range information is propagated through arithmetic operations, enabling bounds check elimination and narrower integer representations.
+
+### 10b. LLVM IR Annotations (`jett_codegen_llvm`)
+
+When generating LLVM IR, the codegen phase emits metadata and attributes that tell LLVM what Jett's type system has proven. This enables LLVM optimizations that would be impossible without this information.
+
+#### Function Attributes
+
+Every Jett function gets these LLVM attributes:
+
+| Attribute | Condition | Effect |
+|---|---|---|
+| `nounwind` | All functions (Jett has no exceptions) | Eliminates unwind tables and landing pads. Simpler CFG enables better optimization. |
+| `willreturn` | All functions (no infinite loops without capabilities) | LLVM can assume the function terminates. Enables dead code elimination after calls. |
+| `mustprogress` | All functions | Required by LLVM to optimize assuming forward progress. |
+
+Pure functions additionally get:
+
+| Attribute | Condition | Effect |
+|---|---|---|
+| `readnone` | Pure function with no view parameters | The function reads no memory at all. LLVM can freely reorder, eliminate, or hoist it. |
+| `readonly` | Pure function with view parameters | The function only reads memory through its view parameters. No writes. |
+| `nosync` | Pure functions | No synchronization operations. Safe to parallelize. |
+| `nofree` | Pure functions | Does not free memory. LLVM can be more aggressive with aliasing assumptions. |
+
+#### Pointer Annotations
+
+Linear types give Jett something most languages cannot provide — **universal `noalias`**:
+
+| Annotation | Where applied | Effect |
+|---|---|---|
+| `noalias` | Every owned pointer parameter | Guarantees the pointer does not alias any other pointer accessible to the function. LLVM can assume stores through this pointer don't affect loads through other pointers. This is Jett's most powerful optimization enabler — most languages can only apply `noalias` to restricted cases. |
+| `nonnull` | Every non-optional pointer | The pointer is never null. Eliminates null checks and enables folding. |
+| `dereferenceable(N)` | Pointers to known-size types | The pointer points to at least N bytes of valid memory. Enables speculative loads. |
+| `align(N)` | All pointers | Alignment guarantee for the pointed-to type. Enables aligned loads/stores and vectorization. |
+| `!range` metadata | Refinement-typed integers | Tells LLVM the value is within a specific range (e.g., `Port` is 1–65535). Enables branch folding and narrowing. |
+| `!nonnull` metadata | Loads of non-optional pointers | The loaded value is never null. |
+
+#### Memory Access Annotations
+
+| Annotation | Where applied | Effect |
+|---|---|---|
+| `llvm.lifetime.start` / `end` | Every local value | Precise lifetime boundaries from linear type analysis. LLVM can reuse stack slots more aggressively. |
+| `!tbaa` (Type-Based Alias Analysis) | Every load/store | Jett's type system guarantees that an `int64*` and a `string*` never alias. TBAA metadata lets LLVM prove this at the IR level. |
+| `!invariant.load` | Loads through `view` parameters | Views are read-only — the pointed-to memory cannot change during the view's lifetime. LLVM can cache the loaded value. |
+
+#### The `noalias` Advantage
+
+This deserves emphasis. In C, `restrict` is a programmer promise that's rarely used and often wrong. In Rust, `noalias` is emitted on `&mut T` references but not on shared `&T` references (because multiple `&T` can alias). In Jett, **every owned parameter is `noalias`** because linear types guarantee single ownership — no other pointer in the entire program points to the same data. This gives LLVM more optimization freedom than it gets from virtually any other language.
+
+### 10c. Build Modes and Optimization Levels
+
+The compiler supports two primary build modes with distinct optimization strategies:
+
+#### Debug Mode (`jett build` default, `jett run`)
+
+**Goal:** Fastest possible compilation. Minimal runtime performance.
+
+- **No Jett MIR optimizations** — skip Phase 10a entirely.
+- **LLVM optimization level: O0** — no LLVM optimization passes. Just codegen.
+- **Full debug info** — DWARF debug info emitted for all variables, functions, and types.
+- **`trace` and `breakpoint` instrumentation** — compiled in (stripped in release).
+- **Interpreter mode** (`jett run`) — skip LLVM entirely, execute MIR via the bytecode interpreter for instant startup.
+
+#### Release Mode (`jett build --release`)
+
+**Goal:** Maximum runtime performance. Compilation time is secondary.
+
+- **Full Jett MIR optimizations** — all 13 optimizations in Phase 10a.
+- **LLVM optimization level: O2** — full optimization pipeline (O3 is available but rarely worth the extra compile time for the marginal benefit).
+- **LTO (Link-Time Optimization):** ThinLTO by default — optimizes across compilation units with moderate compile time cost. Full LTO available via `--lto=full` for maximum performance at the cost of longer link times.
+- **`trace` and `breakpoint` stripped** — compiled out entirely, zero overhead.
+- **Debug info: stripped** by default, available with `--release --debug-info`.
+
+### 10d. Compilation Speed Optimizations
+
+Fast compilation is a design goal (Footnote 5: sub-second recompilation). These strategies minimize compilation time:
+
+#### Parallel Compilation
+
+```mermaid
+flowchart LR
+    subgraph "Sequential (dependency order)"
+        DISC["Discovery"]
+        LEX["Lex all files"]
+        PARSE["Parse all files"]
+        RESOLVE["Name Resolution"]
+    end
+    subgraph "Parallel (per namespace)"
+        TC1["Type Check\nnamespace A"]
+        TC2["Type Check\nnamespace B"]
+        TC3["Type Check\nnamespace C"]
+    end
+    subgraph "Parallel (per function)"
+        CG1["Codegen\nfunc 1"]
+        CG2["Codegen\nfunc 2"]
+        CG3["Codegen\nfunc 3"]
+        CG4["Codegen\nfunc 4"]
+    end
+    LINK["Link"]
+
+    DISC --> LEX --> PARSE --> RESOLVE
+    RESOLVE --> TC1 & TC2 & TC3
+    TC1 & TC2 & TC3 --> CG1 & CG2 & CG3 & CG4
+    CG1 & CG2 & CG3 & CG4 --> LINK
+```
+
+- **Lexing and parsing** are parallelized per-file (each file is independent).
+- **Name resolution** must be sequential across namespaces (it builds the global namespace registry), but is fast.
+- **Type checking** is parallelized per-namespace after name resolution completes. Namespaces that don't depend on each other can be checked simultaneously. Within a namespace, items are checked in dependency order.
+- **Codegen** is the most parallelizable phase — each function generates LLVM IR independently. This is where most compilation time is spent, and where parallelism has the biggest impact.
+- **Linking** is single-threaded but fast with `mold` (Linux) or `lld` (cross-platform).
+
+#### LLVM Speed Strategies
+
+LLVM is the compilation bottleneck. Strategies to minimize its impact:
+
+1. **Per-function LLVM modules:** Each function is compiled as a separate LLVM module. This enables maximum parallelism (one thread per function) and fine-grained caching (only recompile functions whose MIR changed).
+2. **ThinLTO for cross-module optimization:** ThinLTO imports callee summaries into each module, enabling inlining and devirtualization across modules without the full cost of monolithic LTO.
+3. **Future: Cranelift for debug builds.** The `cranelift` backend compiles ~5-10x faster than LLVM but produces ~20-30% slower code. For debug builds where runtime performance doesn't matter, this is a significant win. This would be a `jett_codegen_cranelift` crate following the same MIR → IR interface.
+
+#### Linking
+
+- **Default linker:** `mold` on Linux (fastest), `lld` on other platforms, system linker as fallback.
+- **Incremental linking:** In debug mode, use incremental linking to avoid re-linking the entire binary when only one function changed. This requires the per-function LLVM module strategy.
+- **Static linking by default:** The runtime library and stdlib are statically linked. No dynamic library resolution overhead at startup.
 
 ---
 
