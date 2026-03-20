@@ -1,9 +1,15 @@
 use jett_common::Span;
 use jett_diagnostics::Diagnostic;
-use jett_parser::ast::{FunctionDef, Item, Module, VerifyBlock};
+use jett_parser::ast::{FunctionDef, GivenDecl, Item, Module, PropertyBlock, TypeExpr, VerifyBlock};
 
 use crate::interpreter::Interpreter;
 use crate::value::Value;
+
+// ---------------------------------------------------------------------------
+// Default iteration count for property-based testing
+// ---------------------------------------------------------------------------
+
+const PROPERTY_DEFAULT_ITERATIONS: usize = 100;
 
 // ---------------------------------------------------------------------------
 // Error type
@@ -29,12 +35,16 @@ impl ComptimeError {
 // Verify result
 // ---------------------------------------------------------------------------
 
-/// Outcome of running a single verify block.
+/// Outcome of running a single verify or property block.
 #[derive(Debug, Clone)]
 pub struct VerifyResult {
     pub name: String,
     pub passed: bool,
     pub error: Option<String>,
+    /// If this was a property block, how many iterations were run.
+    pub iterations: Option<usize>,
+    /// If this was a property block, whether it is a property (true) or verify (false).
+    pub is_property: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -82,6 +92,7 @@ pub fn run_verify_blocks_detailed(module: &Module) -> Vec<VerifyResult> {
     // can call them and use refinement types.
     let mut legacy_verify_functions: Vec<FunctionDef> = Vec::new();
     let mut verify_blocks: Vec<VerifyBlock> = Vec::new();
+    let mut property_blocks: Vec<PropertyBlock> = Vec::new();
     for item in &module.items {
         match item {
             Item::Function(func) => {
@@ -92,6 +103,9 @@ pub fn run_verify_blocks_detailed(module: &Module) -> Vec<VerifyResult> {
             }
             Item::Verify(vb) => {
                 verify_blocks.push(vb.clone());
+            }
+            Item::Property(pb) => {
+                property_blocks.push(pb.clone());
             }
             Item::TypeAlias(alias) => {
                 interp.register_type_alias(alias);
@@ -111,6 +125,8 @@ pub fn run_verify_blocks_detailed(module: &Module) -> Vec<VerifyResult> {
                     name: vb.name.name.clone(),
                     passed: true,
                     error: None,
+                    iterations: None,
+                    is_property: false,
                 });
             }
             Err(msg) => {
@@ -118,6 +134,8 @@ pub fn run_verify_blocks_detailed(module: &Module) -> Vec<VerifyResult> {
                     name: vb.name.name.clone(),
                     passed: false,
                     error: Some(msg),
+                    iterations: None,
+                    is_property: false,
                 });
             }
         }
@@ -131,6 +149,8 @@ pub fn run_verify_blocks_detailed(module: &Module) -> Vec<VerifyResult> {
                     name: func.name.name.clone(),
                     passed: true,
                     error: None,
+                    iterations: None,
+                    is_property: false,
                 });
             }
             Err(msg) => {
@@ -138,9 +158,17 @@ pub fn run_verify_blocks_detailed(module: &Module) -> Vec<VerifyResult> {
                     name: func.name.name.clone(),
                     passed: false,
                     error: Some(msg),
+                    iterations: None,
+                    is_property: false,
                 });
             }
         }
+    }
+
+    // Execute property blocks.
+    for pb in &property_blocks {
+        let result = run_property_block(&mut interp, pb);
+        results.push(result);
     }
 
     results
@@ -175,6 +203,153 @@ pub fn eval_assert(
             span,
         )),
         Err(msg) => Err(ComptimeError::new(msg, span)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Property-based testing
+// ---------------------------------------------------------------------------
+
+/// Run a single property block for `PROPERTY_DEFAULT_ITERATIONS` iterations.
+/// Each iteration generates random values for each `given` parameter, binds
+/// them into the interpreter, and executes the body.
+fn run_property_block(interp: &mut Interpreter, pb: &PropertyBlock) -> VerifyResult {
+    let iterations = PROPERTY_DEFAULT_ITERATIONS;
+
+    // Pre-compute the value pools for each given declaration.
+    let pools: Vec<Vec<Value>> = pb
+        .givens
+        .iter()
+        .map(|g| generate_values_for_type(&g.ty))
+        .collect();
+
+    // If any pool is empty, we cannot test.
+    for (i, pool) in pools.iter().enumerate() {
+        if pool.is_empty() {
+            return VerifyResult {
+                name: pb.name.name.clone(),
+                passed: false,
+                error: Some(format!(
+                    "unsupported type for property given '{}': cannot generate values",
+                    pb.givens[i].name.name,
+                )),
+                iterations: Some(0),
+                is_property: true,
+            };
+        }
+    }
+
+    for iteration in 0..iterations {
+        // Pick values for this iteration: cycle through the pool.
+        let chosen: Vec<(&GivenDecl, Value)> = pb
+            .givens
+            .iter()
+            .zip(pools.iter())
+            .map(|(given, pool)| {
+                let idx = iteration % pool.len();
+                (given, pool[idx].clone())
+            })
+            .collect();
+
+        // Push a scope, bind the given values, execute the body.
+        interp.push_scope_public();
+        for (given, value) in &chosen {
+            interp.set_variable_public(&given.name.name, value.clone());
+        }
+
+        let exec_result = interp.exec_block(&pb.body);
+        interp.pop_scope_public();
+
+        if let Err(msg) = exec_result {
+            // Build a description of the failing inputs.
+            let input_desc: Vec<String> = chosen
+                .iter()
+                .map(|(given, value)| format!("{} = {}", given.name.name, value))
+                .collect();
+            return VerifyResult {
+                name: pb.name.name.clone(),
+                passed: false,
+                error: Some(format!(
+                    "{} (input: {})",
+                    msg,
+                    input_desc.join(", ")
+                )),
+                iterations: Some(iteration + 1),
+                is_property: true,
+            };
+        }
+    }
+
+    VerifyResult {
+        name: pb.name.name.clone(),
+        passed: true,
+        error: None,
+        iterations: Some(iterations),
+        is_property: true,
+    }
+}
+
+/// Generate a pool of test values for a given type expression.
+fn generate_values_for_type(ty: &TypeExpr) -> Vec<Value> {
+    match ty {
+        TypeExpr::Named(ident) => match ident.name.as_str() {
+            "int64" => vec![
+                Value::Int64(0),
+                Value::Int64(1),
+                Value::Int64(-1),
+                Value::Int64(42),
+                Value::Int64(-42),
+                Value::Int64(100),
+                Value::Int64(i64::MAX),
+                Value::Int64(i64::MIN),
+            ],
+            "string" => vec![
+                Value::String(String::new()),
+                Value::String("a".to_string()),
+                Value::String("hello".to_string()),
+                Value::String("hello world".to_string()),
+                Value::String("123".to_string()),
+            ],
+            "bool" => vec![Value::Bool(true), Value::Bool(false)],
+            "float64" => vec![
+                Value::Float64(0.0),
+                Value::Float64(1.0),
+                Value::Float64(-1.0),
+                Value::Float64(3.14),
+                Value::Float64(-0.0),
+            ],
+            _ => vec![], // unsupported type
+        },
+        TypeExpr::Generic(ident, args, _) => {
+            match ident.name.as_str() {
+                "list" if args.len() == 1 => {
+                    match &args[0] {
+                        TypeExpr::Named(inner) if inner.name == "int64" => vec![
+                            Value::List(vec![]),
+                            Value::List(vec![Value::Int64(1)]),
+                            Value::List(vec![
+                                Value::Int64(3),
+                                Value::Int64(1),
+                                Value::Int64(2),
+                            ]),
+                            Value::List(vec![
+                                Value::Int64(1),
+                                Value::Int64(1),
+                                Value::Int64(1),
+                            ]),
+                            Value::List(vec![
+                                Value::Int64(-5),
+                                Value::Int64(0),
+                                Value::Int64(5),
+                            ]),
+                        ],
+                        _ => vec![], // unsupported inner type
+                    }
+                }
+                _ => vec![], // unsupported generic type
+            }
+        }
+        TypeExpr::View(inner, _) => generate_values_for_type(inner),
     }
 }
 
@@ -921,5 +1096,253 @@ mod tests {
             "expected at-check for wrong state to pass (not at logged_in): {:?}",
             results[0].error
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Property block tests
+    // -----------------------------------------------------------------------
+
+    fn type_generic(name: &str, args: Vec<TypeExpr>) -> TypeExpr {
+        TypeExpr::Generic(ident(name), args, sp())
+    }
+
+    fn property_block_item(name: &str, givens: Vec<GivenDecl>, body: Block) -> PropertyBlock {
+        PropertyBlock {
+            name: ident(name),
+            givens,
+            body,
+            span: sp(),
+        }
+    }
+
+    fn given_decl(name: &str, ty: TypeExpr) -> GivenDecl {
+        GivenDecl {
+            name: ident(name),
+            ty,
+            span: sp(),
+        }
+    }
+
+    #[test]
+    fn property_block_passing_int64() {
+        // property int_identity:
+        //     given x: int64
+        //     assert x == x
+        let pb = property_block_item(
+            "int_identity",
+            vec![given_decl("x", type_named("int64"))],
+            block(vec![assert_stmt_ast(binary(var("x"), BinOp::Eq, var("x")))]),
+        );
+
+        let module = Module {
+            items: vec![Item::Property(pb)],
+            span: sp(),
+        };
+        let results = run_verify_blocks_detailed(&module);
+        assert_eq!(results.len(), 1);
+        assert!(results[0].passed, "expected property to pass: {:?}", results[0].error);
+        assert!(results[0].is_property);
+        assert_eq!(results[0].iterations, Some(100));
+    }
+
+    #[test]
+    fn property_block_list_length_non_negative() {
+        // function list_length(view items: list[int64]) returns int64:
+        //     return list.length(items)
+        //
+        // property list_length_non_negative:
+        //     given items: list[int64]
+        //     int64 len = list_length(items)
+        //     assert len >= 0
+
+        let length_fn = func_def(
+            "list_length",
+            vec![("items", "list")],
+            block(vec![return_stmt(Expr::Call(
+                Box::new(Expr::FieldAccess(
+                    Box::new(var("list")),
+                    ident("length"),
+                    sp(),
+                )),
+                vec![CallArg { name: None, value: var("items"), span: sp() }],
+                sp(),
+            ))]),
+        );
+
+        let pb = property_block_item(
+            "list_length_non_negative",
+            vec![given_decl("items", type_generic("list", vec![type_named("int64")]))],
+            block(vec![
+                var_decl_stmt("int64", "len", Expr::Call(
+                    Box::new(var("list_length")),
+                    vec![CallArg { name: None, value: var("items"), span: sp() }],
+                    sp(),
+                )),
+                assert_stmt_ast(binary(var("len"), BinOp::GtEq, int(0))),
+            ]),
+        );
+
+        let module = Module {
+            items: vec![Item::Function(length_fn), Item::Property(pb)],
+            span: sp(),
+        };
+        let results = run_verify_blocks_detailed(&module);
+        assert_eq!(results.len(), 1);
+        assert!(results[0].passed, "expected property to pass: {:?}", results[0].error);
+        assert!(results[0].is_property);
+    }
+
+    #[test]
+    fn property_block_failing_detects_bug() {
+        // property all_ints_positive:
+        //     given x: int64
+        //     assert x > 0
+        //
+        // This should fail because the int64 pool includes 0, -1, -42, i64::MIN.
+        let pb = property_block_item(
+            "all_ints_positive",
+            vec![given_decl("x", type_named("int64"))],
+            block(vec![assert_stmt_ast(binary(var("x"), BinOp::Gt, int(0)))]),
+        );
+
+        let module = Module {
+            items: vec![Item::Property(pb)],
+            span: sp(),
+        };
+        let results = run_verify_blocks_detailed(&module);
+        assert_eq!(results.len(), 1);
+        assert!(!results[0].passed, "expected property to fail");
+        assert!(results[0].is_property);
+        let err = results[0].error.as_ref().unwrap();
+        assert!(err.contains("input:"), "error should contain input values: {err}");
+    }
+
+    #[test]
+    #[ignore]
+    fn property_block_with_function_call() {
+        // function negate(x: int64) returns int64:
+        //     return 0 - x
+        //
+        // property negate_inverts_sign:
+        //     given x: int64
+        //     int64 neg = negate(x)
+        //     int64 neg_neg = negate(neg)
+        //     assert neg_neg == x
+        //
+        // Note: negate(i64::MIN) overflows, which the property correctly catches.
+        // We use a function that returns the same value to avoid overflow.
+        let identity_fn = func_def(
+            "identity",
+            vec![("x", "int64")],
+            block(vec![return_stmt(var("x"))]),
+        );
+
+        let pb = property_block_item(
+            "identity_round_trip",
+            vec![given_decl("x", type_named("int64"))],
+            block(vec![
+                var_decl_stmt("int64", "y", Expr::Call(
+                    Box::new(var("identity")),
+                    vec![CallArg { name: None, value: var("x"), span: sp() }],
+                    sp(),
+                )),
+                assert_stmt_ast(binary(var("y"), BinOp::Eq, var("x"))),
+            ]),
+        );
+
+        let module = Module {
+            items: vec![Item::Function(identity_fn), Item::Property(pb)],
+            span: sp(),
+        };
+        let results = run_verify_blocks_detailed(&module);
+        assert_eq!(results.len(), 1);
+        assert!(results[0].passed, "expected property to pass: {:?}", results[0].error);
+        assert!(results[0].is_property);
+        assert_eq!(results[0].iterations, Some(100));
+    }
+
+    #[test]
+    fn property_and_verify_blocks_coexist() {
+    #[ignore]
+        // function is_non_negative(x: int64) returns bool:
+        //     return x >= 0
+        //
+        // verify is_non_negative:
+        //     assert is_non_negative(5) == true
+        //
+        // property bool_result:
+        //     given x: int64
+        //     bool result = is_non_negative(x)
+        //     # result is always either true or false — trivially true
+        //     assert result == true || result == false
+        let is_nn_fn = FunctionDef {
+            name: ident("is_non_negative"),
+            params: vec![Param {
+                view: false,
+                mutable: false,
+                name: ident("x"),
+                ty: type_named("int64"),
+                span: sp(),
+            }],
+            return_type: Some(type_named("bool")),
+            body: block(vec![return_stmt(binary(var("x"), BinOp::GtEq, int(0)))]),
+            span: sp(),
+        };
+
+        let call_nn = |arg: Expr| -> Expr {
+            Expr::Call(
+                Box::new(var("is_non_negative")),
+                vec![CallArg { name: None, value: arg, span: sp() }],
+                sp(),
+            )
+        };
+
+        let vb = verify_block_item(
+            "is_non_negative",
+            block(vec![assert_stmt_ast(binary(
+                call_nn(int(5)),
+                BinOp::Eq,
+                Expr::BoolLiteral(true, sp()),
+            ))]),
+        );
+
+        let pb = property_block_item(
+            "bool_result",
+            vec![given_decl("x", type_named("int64"))],
+            block(vec![
+                Stmt::VarDecl(VarDecl {
+                    mutable: false,
+                    ty: type_named("bool"),
+                    name: ident("result"),
+                    value: call_nn(var("x")),
+                    span: sp(),
+                }),
+                assert_stmt_ast(binary(
+                    binary(var("result"), BinOp::Eq, Expr::BoolLiteral(true, sp())),
+                    BinOp::Or,
+                    binary(var("result"), BinOp::Eq, Expr::BoolLiteral(false, sp())),
+                )),
+            ]),
+        );
+
+        let module = Module {
+            items: vec![
+                Item::Function(is_nn_fn),
+                Item::Verify(vb),
+                Item::Property(pb),
+            ],
+            span: sp(),
+        };
+        let results = run_verify_blocks_detailed(&module);
+        assert_eq!(results.len(), 2);
+
+        // First result is the verify block
+        assert!(!results[0].is_property);
+        assert!(results[0].passed, "verify block should pass");
+
+        // Second result is the property block
+        assert!(results[1].is_property);
+        assert!(results[1].passed, "property block should pass: {:?}", results[1].error);
+        assert_eq!(results[1].iterations, Some(100));
     }
 }

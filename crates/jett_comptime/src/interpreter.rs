@@ -132,6 +132,24 @@ impl Interpreter {
         Err(format!("undefined variable '{name}'"))
     }
 
+    // -- Public scope management (for property-based testing) ---------------
+
+    /// Push a new scope (public wrapper for use by verify/property runners).
+    pub fn push_scope_public(&mut self) {
+        self.push_scope();
+    }
+
+    /// Pop the current scope (public wrapper for use by verify/property runners).
+    pub fn pop_scope_public(&mut self) {
+        self.pop_scope();
+    }
+
+    /// Set a variable in the current scope (public wrapper for use by
+    /// verify/property runners).
+    pub fn set_variable_public(&mut self, name: &str, value: Value) {
+        self.set_variable(name, value);
+    }
+
     // -- Public helpers -----------------------------------------------------
 
     /// Register a function definition so it can be called later.
@@ -1153,9 +1171,18 @@ fn is_truthy(val: &Value) -> Result<bool, String> {
 fn eval_binary_op(left: &Value, op: BinOp, right: &Value) -> Result<Value, String> {
     match (left, op, right) {
         // -- Integer arithmetic -----------------------------------------------
-        (Value::Int64(a), BinOp::Add, Value::Int64(b)) => Ok(Value::Int64(a + b)),
-        (Value::Int64(a), BinOp::Sub, Value::Int64(b)) => Ok(Value::Int64(a - b)),
-        (Value::Int64(a), BinOp::Mul, Value::Int64(b)) => Ok(Value::Int64(a * b)),
+        (Value::Int64(a), BinOp::Add, Value::Int64(b)) => a
+            .checked_add(*b)
+            .map(Value::Int64)
+            .ok_or_else(|| format!("integer overflow: {a} + {b}")),
+        (Value::Int64(a), BinOp::Sub, Value::Int64(b)) => a
+            .checked_sub(*b)
+            .map(Value::Int64)
+            .ok_or_else(|| format!("integer overflow: {a} - {b}")),
+        (Value::Int64(a), BinOp::Mul, Value::Int64(b)) => a
+            .checked_mul(*b)
+            .map(Value::Int64)
+            .ok_or_else(|| format!("integer overflow: {a} * {b}")),
         (Value::Int64(a), BinOp::Div, Value::Int64(b)) => {
             if *b == 0 {
                 Err("division by zero".to_string())

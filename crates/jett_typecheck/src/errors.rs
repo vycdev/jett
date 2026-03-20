@@ -156,3 +156,37 @@ pub fn assert_condition_not_bool(got: &str, span: Span) -> Diagnostic {
         span,
     )
 }
+
+// Diagnostic codes E0500–E0599 are reserved for capability / purity checking.
+
+/// E0500: Pure function calls impure function.
+pub fn pure_calls_impure(
+    caller: &str,
+    callee: &str,
+    span: Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        500,
+        format!(
+            "pure function `{caller}` cannot call impure function `{callee}`; \
+             add the required capability parameters to `{caller}` or remove the call"
+        ),
+        span,
+    )
+}
+
+/// E0501: Verify block calls impure function.
+pub fn verify_calls_impure(
+    verify_name: &str,
+    callee: &str,
+    span: Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        501,
+        format!(
+            "verify block `{verify_name}` cannot call impure function `{callee}`; \
+             verify blocks may only call pure functions"
+        ),
+        span,
+    )
+}

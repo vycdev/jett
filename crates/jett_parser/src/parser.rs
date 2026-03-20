@@ -171,6 +171,7 @@ impl<'src> Parser<'src> {
             TokenKind::Enum => Some(Item::Enum(self.parse_enum())),
             TokenKind::Machine => Some(Item::Machine(self.parse_machine())),
             TokenKind::Verify => Some(Item::Verify(self.parse_verify_block())),
+            TokenKind::Property => Some(Item::Property(self.parse_property_block())),
             TokenKind::Type => Some(Item::TypeAlias(self.parse_type_alias())),
             TokenKind::Mutable => Some(Item::VarDecl(self.parse_var_decl())),
             // Could be a variable declaration: `Type name = expr`
@@ -178,7 +179,7 @@ impl<'src> Parser<'src> {
             _ => {
                 let tok = self.peek_token().clone();
                 self.error(
-                    format!("expected item (namespace, function, struct, enum, machine, type, or variable), found {:?}", tok.kind),
+                    format!("expected item (namespace, function, struct, enum, machine, type, property, or variable), found {:?}", tok.kind),
                     tok.span,
                 );
                 None
@@ -204,6 +205,66 @@ impl<'src> Parser<'src> {
         VerifyBlock {
             span: kw.span.merge(end_span),
             name,
+            body,
+        }
+    }
+
+    fn parse_property_block(&mut self) -> PropertyBlock {
+        let kw = self.expect(TokenKind::Property);
+        let name = self.parse_ident();
+        self.expect(TokenKind::Colon);
+
+        // Expect an indented block containing `given` declarations followed by body statements.
+        self.skip_newlines();
+        let indent_tok = self.expect(TokenKind::Indent);
+        let mut givens = Vec::new();
+        let mut stmts = Vec::new();
+        let mut last_span = indent_tok.span;
+
+        self.skip_newlines();
+
+        // Parse `given` declarations first.
+        while self.peek() == TokenKind::Given {
+            let given_kw = self.advance();
+            let given_name = self.parse_ident();
+            self.expect(TokenKind::Colon);
+            let given_ty = self.parse_type();
+            let end = given_ty.span();
+            givens.push(GivenDecl {
+                span: given_kw.span.merge(end),
+                name: given_name,
+                ty: given_ty,
+            });
+            last_span = givens.last().unwrap().span;
+            self.skip_newlines();
+        }
+
+        // Parse remaining statements as the body.
+        while self.peek() != TokenKind::Dedent && self.peek() != TokenKind::Eof {
+            match self.parse_stmt() {
+                Some(stmt) => {
+                    last_span = stmt_span(&stmt);
+                    stmts.push(stmt);
+                }
+                None => {
+                    self.synchronize();
+                }
+            }
+            self.skip_newlines();
+        }
+        if self.peek() == TokenKind::Dedent {
+            last_span = self.advance().span;
+        }
+
+        let body = Block {
+            stmts,
+            span: indent_tok.span.merge(last_span),
+        };
+
+        PropertyBlock {
+            span: kw.span.merge(last_span),
+            name,
+            givens,
             body,
         }
     }
@@ -2729,6 +2790,103 @@ function f(session: UserAuth) returns bool:
                 other => panic!("expected Return, got {:?}", other),
             },
             other => panic!("expected Function, got {:?}", other),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Property blocks
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_property_block_with_givens() {
+        let src = "\
+function identity(x: int64) returns int64:
+    return x
+
+property identity_preserves_value:
+    given x: int64
+    assert identity(x) == x
+";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        assert_eq!(result.module.items.len(), 2);
+
+        // First item is the function
+        match &result.module.items[0] {
+            Item::Function(f) => {
+                assert_eq!(f.name.name, "identity");
+            }
+            other => panic!("expected Function, got {:?}", other),
+        }
+
+        // Second item is the property block
+        match &result.module.items[1] {
+            Item::Property(pb) => {
+                assert_eq!(pb.name.name, "identity_preserves_value");
+                assert_eq!(pb.givens.len(), 1);
+                assert_eq!(pb.givens[0].name.name, "x");
+                match &pb.givens[0].ty {
+                    TypeExpr::Named(ident) => assert_eq!(ident.name, "int64"),
+                    other => panic!("expected Named type, got {:?}", other),
+                }
+                assert_eq!(pb.body.stmts.len(), 1);
+                assert!(matches!(&pb.body.stmts[0], Stmt::Assert(_)));
+            }
+            other => panic!("expected Property, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_property_block_multiple_givens() {
+        let src = "\
+property multi_given:
+    given a: int64
+    given b: string
+    given c: bool
+    assert a == a
+";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        assert_eq!(result.module.items.len(), 1);
+
+        match &result.module.items[0] {
+            Item::Property(pb) => {
+                assert_eq!(pb.name.name, "multi_given");
+                assert_eq!(pb.givens.len(), 3);
+                assert_eq!(pb.givens[0].name.name, "a");
+                assert_eq!(pb.givens[1].name.name, "b");
+                assert_eq!(pb.givens[2].name.name, "c");
+                assert_eq!(pb.body.stmts.len(), 1);
+            }
+            other => panic!("expected Property, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_property_block_with_generic_given() {
+        let src = "\
+property list_property:
+    given items: list[int64]
+    assert items == items
+";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        assert_eq!(result.module.items.len(), 1);
+
+        match &result.module.items[0] {
+            Item::Property(pb) => {
+                assert_eq!(pb.name.name, "list_property");
+                assert_eq!(pb.givens.len(), 1);
+                assert_eq!(pb.givens[0].name.name, "items");
+                match &pb.givens[0].ty {
+                    TypeExpr::Generic(ident, args, _) => {
+                        assert_eq!(ident.name, "list");
+                        assert_eq!(args.len(), 1);
+                    }
+                    other => panic!("expected Generic type, got {:?}", other),
+                }
+            }
+            other => panic!("expected Property, got {:?}", other),
         }
     }
 }

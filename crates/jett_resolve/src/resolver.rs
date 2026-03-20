@@ -173,8 +173,8 @@ impl Resolver {
                         index,
                     );
                 }
-                // Verify blocks don't declare new names in the module scope.
-                Item::Verify(_) => {}
+                // Verify and property blocks don't declare new names in the module scope.
+                Item::Verify(_) | Item::Property(_) => {}
             }
         }
     }

@@ -21,6 +21,7 @@ pub enum Item {
     Machine(MachineDef),
     VarDecl(VarDecl),
     Verify(VerifyBlock),
+    Property(PropertyBlock),
     TypeAlias(TypeAlias),
 }
 
@@ -50,6 +51,29 @@ pub struct TypeAlias {
 pub struct VerifyBlock {
     pub name: Ident,
     pub body: Block,
+    pub span: Span,
+}
+
+// ---------------------------------------------------------------------------
+// Property blocks (property-based testing)
+// ---------------------------------------------------------------------------
+
+/// A `property` block: `property <name>:` followed by an indented block of
+/// `given` declarations and then assert/body statements.  Executed at test time
+/// by the built-in fuzzer.
+#[derive(Debug, Clone)]
+pub struct PropertyBlock {
+    pub name: Ident,
+    pub givens: Vec<GivenDecl>,
+    pub body: Block,
+    pub span: Span,
+}
+
+/// A `given` declaration inside a `property` block: `given name: Type`.
+#[derive(Debug, Clone)]
+pub struct GivenDecl {
+    pub name: Ident,
+    pub ty: TypeExpr,
     pub span: Span,
 }
 

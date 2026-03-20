@@ -239,6 +239,15 @@ pub fn format_file_in_place(path: &Path) -> Result<(), String> {
 // Test
 // ---------------------------------------------------------------------------
 
+/// A single block result in a test run.
+pub struct TestBlockResult {
+    pub name: String,
+    pub passed: bool,
+    pub error: Option<String>,
+    pub is_property: bool,
+    pub iterations: Option<usize>,
+}
+
 /// Result of running `jett test` on a single file.
 pub struct TestResult {
     pub total: usize,
@@ -246,8 +255,8 @@ pub struct TestResult {
     pub failed: usize,
     /// The file that was tested.
     pub file_path: String,
-    /// Per-block results: (name, passed, optional error message).
-    pub blocks: Vec<(String, bool, Option<String>)>,
+    /// Per-block results.
+    pub blocks: Vec<TestBlockResult>,
 }
 
 /// Result of running `jett test` across an entire project.
@@ -291,7 +300,13 @@ pub fn test_file(path: &Path) -> Result<TestResult, String> {
 
     let blocks = results
         .into_iter()
-        .map(|r| (r.name, r.passed, r.error))
+        .map(|r| TestBlockResult {
+            name: r.name,
+            passed: r.passed,
+            error: r.error,
+            is_property: r.is_property,
+            iterations: r.iterations,
+        })
         .collect();
 
     Ok(TestResult {

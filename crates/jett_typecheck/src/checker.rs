@@ -4,11 +4,13 @@ use jett_common::Span;
 use jett_diagnostics::{Diagnostic, DiagnosticSink};
 use jett_parser::ast::{
     self, BinOp, Block, Expr, FunctionDef, Item, Module, Stmt, StringPart, TypeExpr, UnaryOp,
+    VerifyBlock,
 };
 use jett_resolve::resolver::ResolveResult;
 use jett_resolve::scope::DefId;
 use jett_types::{Type, TypeId, TypeInterner};
 
+use crate::capability;
 use crate::errors;
 
 /// The result of type checking.
@@ -55,6 +57,19 @@ struct TypeChecker<'a> {
     type_map: HashMap<Span, TypeId>,
     /// The expected return type for the function currently being checked.
     current_return_type: Option<TypeId>,
+
+    // -- Capability / purity tracking --
+
+    /// Function name → is_pure.  Built during the first pass over the module.
+    purity_map: HashMap<String, bool>,
+    /// Name of the function currently being type-checked (None outside functions).
+    current_function_name: Option<String>,
+    /// Whether the function currently being type-checked is pure.
+    current_function_pure: bool,
+    /// Whether we are inside a verify block.
+    in_verify_block: bool,
+    /// The name of the verify block currently being checked (for error messages).
+    current_verify_name: Option<String>,
 }
 
 impl<'a> TypeChecker<'a> {
@@ -66,6 +81,11 @@ impl<'a> TypeChecker<'a> {
             type_env: HashMap::new(),
             type_map: HashMap::new(),
             current_return_type: None,
+            purity_map: HashMap::new(),
+            current_function_name: None,
+            current_function_pure: false,
+            in_verify_block: false,
+            current_verify_name: None,
         }
     }
 
@@ -134,23 +154,32 @@ impl<'a> TypeChecker<'a> {
     // ------------------------------------------------------------------
 
     fn check_module(&mut self, module: &Module) {
-        // First pass: register all top-level function signatures into the type env.
+        // First pass: register all top-level function signatures into the type env
+        // and build the purity map.
         for item in &module.items {
             if let Item::Function(func) = item {
                 self.register_function_sig(func);
+                let is_pure = Self::function_is_pure(func);
+                self.purity_map.insert(func.name.name.clone(), is_pure);
             }
         }
 
-        // Second pass: type-check function bodies.
+        // Second pass: type-check function bodies and verify blocks.
         for item in &module.items {
             match item {
                 Item::Function(func) => self.check_function(func),
                 Item::VarDecl(decl) => self.check_var_decl(decl),
+                Item::Verify(verify) => self.check_verify_block(verify),
                 // Struct/Enum/Namespace declarations are handled during
                 // registration; nothing to type-check in their bodies yet.
                 _ => {}
             }
         }
+    }
+
+    /// Returns true if a function has no capability-type parameters (i.e. is pure).
+    fn function_is_pure(func: &FunctionDef) -> bool {
+        !func.params.iter().any(|p| capability::type_expr_is_capability(&p.ty))
     }
 
     // ------------------------------------------------------------------
@@ -194,6 +223,11 @@ impl<'a> TypeChecker<'a> {
 
         self.current_return_type = Some(return_type);
 
+        // Set the purity context for this function.
+        let is_pure = Self::function_is_pure(func);
+        self.current_function_name = Some(func.name.name.clone());
+        self.current_function_pure = is_pure;
+
         // Bind parameter types into the type environment.
         for param in &func.params {
             let param_type = self.resolve_type_expr(&param.ty);
@@ -205,6 +239,16 @@ impl<'a> TypeChecker<'a> {
         self.check_block(&func.body);
 
         self.current_return_type = None;
+        self.current_function_name = None;
+        self.current_function_pure = false;
+    }
+
+    fn check_verify_block(&mut self, verify: &VerifyBlock) {
+        self.in_verify_block = true;
+        self.current_verify_name = Some(verify.name.name.clone());
+        self.check_block(&verify.body);
+        self.in_verify_block = false;
+        self.current_verify_name = None;
     }
 
     // ------------------------------------------------------------------
@@ -579,6 +623,36 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn check_call(&mut self, callee: &Expr, args: &[ast::CallArg], span: Span) -> TypeId {
+        // -- Capability / purity check --
+        // Extract the callee name so we can look it up in the purity map.
+        if let Expr::Ident(callee_ident) = callee {
+            let callee_name = &callee_ident.name;
+            let callee_is_pure = self.purity_map.get(callee_name).copied().unwrap_or(true);
+
+            if !callee_is_pure {
+                // E0500: pure function calls impure function
+                if self.current_function_pure {
+                    if let Some(caller_name) = &self.current_function_name {
+                        self.sink.emit(errors::pure_calls_impure(
+                            caller_name,
+                            callee_name,
+                            span,
+                        ));
+                    }
+                }
+                // E0501: verify block calls impure function
+                if self.in_verify_block {
+                    if let Some(verify_name) = &self.current_verify_name {
+                        self.sink.emit(errors::verify_calls_impure(
+                            verify_name,
+                            callee_name,
+                            span,
+                        ));
+                    }
+                }
+            }
+        }
+
         let callee_ty = self.check_expr(callee);
 
         if callee_ty == TypeInterner::ERROR {
@@ -750,6 +824,9 @@ impl<'a> TypeChecker<'a> {
             "bool" => TypeInterner::BOOL,
             "bytes" => TypeInterner::BYTES,
             "nothing" => TypeInterner::NOTHING,
+            // Capability types are recognised but opaque — no further type
+            // checking is performed on values of these types.
+            _ if capability::is_capability_type(name) => TypeInterner::ERROR,
             _ => {
                 self.sink.emit(errors::unknown_type(name, span));
                 TypeInterner::ERROR
@@ -1917,6 +1994,492 @@ mod tests {
         assert_eq!(
             *checker.interner.resolve(result_type),
             Type::Result(TypeInterner::STRING, TypeInterner::INT64)
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Test: capability-based purity enforcement
+    // ---------------------------------------------------------------
+
+    /// Helper: create a minimal function definition.
+    fn make_function(
+        name: &str,
+        name_span: Span,
+        params: Vec<Param>,
+        body: Block,
+    ) -> FunctionDef {
+        FunctionDef {
+            name: ident(name, name_span),
+            params,
+            return_type: Some(TypeExpr::Named(ident("nothing", sp(200, 207)))),
+            body,
+            span: Span::new(name_span.file, name_span.start, name_span.start + 50),
+        }
+    }
+
+    #[test]
+    fn pure_function_calling_pure_function_ok() {
+        // function helper() returns nothing:
+        //     return nothing
+        // function caller() returns nothing:
+        //     helper()
+        let helper_name_span = sp(0, 6);
+        let caller_name_span = sp(100, 106);
+        let call_ref_span = sp(110, 116);
+        let call_span = sp(110, 118);
+
+        let mut env = TestEnv::new();
+        let helper_def = env.def_func("helper", helper_name_span);
+        let _caller_def = env.def_func("caller", caller_name_span);
+        env.reference(helper_name_span, helper_def);
+        env.reference(caller_name_span, _caller_def);
+        env.reference(call_ref_span, helper_def);
+
+        let module = Module {
+            items: vec![
+                Item::Function(make_function(
+                    "helper",
+                    helper_name_span,
+                    vec![],
+                    Block {
+                        stmts: vec![],
+                        span: sp(10, 20),
+                    },
+                )),
+                Item::Function(make_function(
+                    "caller",
+                    caller_name_span,
+                    vec![],
+                    Block {
+                        stmts: vec![Stmt::Expr(ExprStmt {
+                            expr: Expr::Call(
+                                Box::new(Expr::Ident(ident("helper", call_ref_span))),
+                                vec![],
+                                call_span,
+                            ),
+                            span: call_span,
+                        })],
+                        span: sp(107, 120),
+                    },
+                )),
+            ],
+            span: sp(0, 200),
+        };
+
+        let resolve = env.into_resolve_result();
+        let result = check(&module, &resolve);
+
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == jett_diagnostics::Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+    }
+
+    #[test]
+    fn pure_function_calling_impure_function_error() {
+        // function writer(view out: Stdout) returns nothing:
+        //     return nothing
+        // function caller() returns nothing:
+        //     writer()          ← E0500
+        let writer_name_span = sp(0, 6);
+        let writer_param_span = sp(7, 10);
+        let caller_name_span = sp(100, 106);
+        let call_ref_span = sp(110, 116);
+        let call_span = sp(110, 118);
+
+        let mut env = TestEnv::new();
+        let writer_def = env.def_func("writer", writer_name_span);
+        let _caller_def = env.def_func("caller", caller_name_span);
+        env.def_param("out", writer_param_span);
+        env.reference(writer_name_span, writer_def);
+        env.reference(caller_name_span, _caller_def);
+        env.reference(call_ref_span, writer_def);
+
+        let module = Module {
+            items: vec![
+                Item::Function(make_function(
+                    "writer",
+                    writer_name_span,
+                    vec![Param {
+                        view: true,
+                        mutable: false,
+                        name: ident("out", writer_param_span),
+                        ty: TypeExpr::View(
+                            Box::new(TypeExpr::Named(ident("Stdout", sp(11, 17)))),
+                            sp(7, 17),
+                        ),
+                        span: writer_param_span,
+                    }],
+                    Block {
+                        stmts: vec![],
+                        span: sp(20, 30),
+                    },
+                )),
+                Item::Function(make_function(
+                    "caller",
+                    caller_name_span,
+                    vec![],
+                    Block {
+                        stmts: vec![Stmt::Expr(ExprStmt {
+                            expr: Expr::Call(
+                                Box::new(Expr::Ident(ident("writer", call_ref_span))),
+                                vec![],
+                                call_span,
+                            ),
+                            span: call_span,
+                        })],
+                        span: sp(107, 120),
+                    },
+                )),
+            ],
+            span: sp(0, 200),
+        };
+
+        let resolve = env.into_resolve_result();
+        let result = check(&module, &resolve);
+
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == jett_diagnostics::Severity::Error)
+            .collect();
+        // Expect E0500 (pure calls impure) and E0303 (arg count mismatch — caller
+        // passes 0 args but writer expects 1).  We only assert E0500 exists.
+        let purity_errors: Vec<_> = errors.iter().filter(|d| d.code.code() == 500).collect();
+        assert_eq!(
+            purity_errors.len(),
+            1,
+            "expected 1 purity error (E0500), got: {:?}",
+            purity_errors
+        );
+        assert!(purity_errors[0].message.contains("caller"));
+        assert!(purity_errors[0].message.contains("writer"));
+    }
+
+    #[test]
+    fn impure_function_calling_impure_function_ok() {
+        // function writer(view out: Stdout) returns nothing:
+        //     return nothing
+        // function caller(view out: Stdout) returns nothing:
+        //     writer()          ← ok, caller is also impure
+        let writer_name_span = sp(0, 6);
+        let writer_param_span = sp(7, 10);
+        let caller_name_span = sp(100, 106);
+        let caller_param_span = sp(107, 110);
+        let call_ref_span = sp(150, 156);
+        let call_span = sp(150, 158);
+
+        let mut env = TestEnv::new();
+        let writer_def = env.def_func("writer", writer_name_span);
+        let _caller_def = env.def_func("caller", caller_name_span);
+        env.def_param("out", writer_param_span);
+        env.def_param("out2", caller_param_span);
+        env.reference(writer_name_span, writer_def);
+        env.reference(caller_name_span, _caller_def);
+        env.reference(call_ref_span, writer_def);
+
+        let module = Module {
+            items: vec![
+                Item::Function(make_function(
+                    "writer",
+                    writer_name_span,
+                    vec![Param {
+                        view: true,
+                        mutable: false,
+                        name: ident("out", writer_param_span),
+                        ty: TypeExpr::View(
+                            Box::new(TypeExpr::Named(ident("Stdout", sp(11, 17)))),
+                            sp(7, 17),
+                        ),
+                        span: writer_param_span,
+                    }],
+                    Block {
+                        stmts: vec![],
+                        span: sp(20, 30),
+                    },
+                )),
+                Item::Function(make_function(
+                    "caller",
+                    caller_name_span,
+                    vec![Param {
+                        view: true,
+                        mutable: false,
+                        name: ident("out2", caller_param_span),
+                        ty: TypeExpr::View(
+                            Box::new(TypeExpr::Named(ident("Stdout", sp(111, 117)))),
+                            sp(107, 117),
+                        ),
+                        span: caller_param_span,
+                    }],
+                    Block {
+                        stmts: vec![Stmt::Expr(ExprStmt {
+                            expr: Expr::Call(
+                                Box::new(Expr::Ident(ident("writer", call_ref_span))),
+                                vec![],
+                                call_span,
+                            ),
+                            span: call_span,
+                        })],
+                        span: sp(140, 160),
+                    },
+                )),
+            ],
+            span: sp(0, 300),
+        };
+
+        let resolve = env.into_resolve_result();
+        let result = check(&module, &resolve);
+
+        // No purity errors expected (E0500).
+        let purity_errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.code.code() == 500)
+            .collect();
+        assert!(
+            purity_errors.is_empty(),
+            "unexpected purity errors: {:?}",
+            purity_errors
+        );
+    }
+
+    #[test]
+    fn function_with_stdout_param_is_impure() {
+        // function printer(view out: Stdout) returns nothing
+        // This is a unit-level check: the purity map marks this function as impure.
+        let fn_name_span = sp(0, 7);
+        let param_span = sp(8, 11);
+
+        let mut env = TestEnv::new();
+        let fn_def = env.def_func("printer", fn_name_span);
+        env.def_param("out", param_span);
+        env.reference(fn_name_span, fn_def);
+
+        let func = make_function(
+            "printer",
+            fn_name_span,
+            vec![Param {
+                view: true,
+                mutable: false,
+                name: ident("out", param_span),
+                ty: TypeExpr::View(
+                    Box::new(TypeExpr::Named(ident("Stdout", sp(12, 18)))),
+                    sp(8, 18),
+                ),
+                span: param_span,
+            }],
+            Block {
+                stmts: vec![],
+                span: sp(20, 30),
+            },
+        );
+
+        let module = Module {
+            items: vec![Item::Function(func)],
+            span: sp(0, 100),
+        };
+
+        let resolve = env.into_resolve_result();
+        let mut checker = TypeChecker::new(&resolve);
+        checker.check_module(&module);
+
+        // The purity map should mark "printer" as impure.
+        assert_eq!(
+            checker.purity_map.get("printer").copied(),
+            Some(false),
+            "function with Stdout param should be impure"
+        );
+    }
+
+    #[test]
+    fn function_without_capability_params_is_pure() {
+        // function add(a: int64, b: int64) returns nothing
+        let fn_name_span = sp(0, 3);
+        let param_a_span = sp(4, 5);
+        let param_b_span = sp(6, 7);
+
+        let mut env = TestEnv::new();
+        let fn_def = env.def_func("add", fn_name_span);
+        env.def_param("a", param_a_span);
+        env.def_param("b", param_b_span);
+        env.reference(fn_name_span, fn_def);
+
+        let func = make_function(
+            "add",
+            fn_name_span,
+            vec![
+                Param {
+                    view: false,
+                    mutable: false,
+                    name: ident("a", param_a_span),
+                    ty: TypeExpr::Named(ident("int64", sp(100, 105))),
+                    span: param_a_span,
+                },
+                Param {
+                    view: false,
+                    mutable: false,
+                    name: ident("b", param_b_span),
+                    ty: TypeExpr::Named(ident("int64", sp(106, 111))),
+                    span: param_b_span,
+                },
+            ],
+            Block {
+                stmts: vec![],
+                span: sp(10, 20),
+            },
+        );
+
+        let module = Module {
+            items: vec![Item::Function(func)],
+            span: sp(0, 100),
+        };
+
+        let resolve = env.into_resolve_result();
+        let mut checker = TypeChecker::new(&resolve);
+        checker.check_module(&module);
+
+        assert_eq!(
+            checker.purity_map.get("add").copied(),
+            Some(true),
+            "function without capability params should be pure"
+        );
+    }
+
+    #[test]
+    fn verify_block_calling_impure_function_error() {
+        // function writer(view out: Stdout) returns nothing:
+        //     return nothing
+        // verify test_writer:
+        //     writer()          ← E0501
+        let writer_name_span = sp(0, 6);
+        let writer_param_span = sp(7, 10);
+        let call_ref_span = sp(110, 116);
+        let call_span = sp(110, 118);
+        let verify_span = sp(100, 130);
+
+        let mut env = TestEnv::new();
+        let writer_def = env.def_func("writer", writer_name_span);
+        env.def_param("out", writer_param_span);
+        env.reference(writer_name_span, writer_def);
+        env.reference(call_ref_span, writer_def);
+
+        let module = Module {
+            items: vec![
+                Item::Function(make_function(
+                    "writer",
+                    writer_name_span,
+                    vec![Param {
+                        view: true,
+                        mutable: false,
+                        name: ident("out", writer_param_span),
+                        ty: TypeExpr::View(
+                            Box::new(TypeExpr::Named(ident("Stdout", sp(11, 17)))),
+                            sp(7, 17),
+                        ),
+                        span: writer_param_span,
+                    }],
+                    Block {
+                        stmts: vec![],
+                        span: sp(20, 30),
+                    },
+                )),
+                Item::Verify(VerifyBlock {
+                    name: ident("test_writer", sp(100, 111)),
+                    body: Block {
+                        stmts: vec![Stmt::Expr(ExprStmt {
+                            expr: Expr::Call(
+                                Box::new(Expr::Ident(ident("writer", call_ref_span))),
+                                vec![],
+                                call_span,
+                            ),
+                            span: call_span,
+                        })],
+                        span: sp(112, 130),
+                    },
+                    span: verify_span,
+                }),
+            ],
+            span: sp(0, 200),
+        };
+
+        let resolve = env.into_resolve_result();
+        let result = check(&module, &resolve);
+
+        let verify_errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.code.code() == 501)
+            .collect();
+        assert_eq!(
+            verify_errors.len(),
+            1,
+            "expected 1 verify purity error (E0501), got: {:?}",
+            verify_errors
+        );
+        assert!(verify_errors[0].message.contains("test_writer"));
+        assert!(verify_errors[0].message.contains("writer"));
+    }
+
+    #[test]
+    fn verify_block_calling_pure_function_ok() {
+        // function helper() returns nothing:
+        //     return nothing
+        // verify test_helper:
+        //     helper()          ← ok
+        let helper_name_span = sp(0, 6);
+        let call_ref_span = sp(110, 116);
+        let call_span = sp(110, 118);
+        let verify_span = sp(100, 130);
+
+        let mut env = TestEnv::new();
+        let helper_def = env.def_func("helper", helper_name_span);
+        env.reference(helper_name_span, helper_def);
+        env.reference(call_ref_span, helper_def);
+
+        let module = Module {
+            items: vec![
+                Item::Function(make_function(
+                    "helper",
+                    helper_name_span,
+                    vec![],
+                    Block {
+                        stmts: vec![],
+                        span: sp(10, 20),
+                    },
+                )),
+                Item::Verify(VerifyBlock {
+                    name: ident("test_helper", sp(100, 111)),
+                    body: Block {
+                        stmts: vec![Stmt::Expr(ExprStmt {
+                            expr: Expr::Call(
+                                Box::new(Expr::Ident(ident("helper", call_ref_span))),
+                                vec![],
+                                call_span,
+                            ),
+                            span: call_span,
+                        })],
+                        span: sp(112, 130),
+                    },
+                    span: verify_span,
+                }),
+            ],
+            span: sp(0, 200),
+        };
+
+        let resolve = env.into_resolve_result();
+        let result = check(&module, &resolve);
+
+        let purity_errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.code.code() == 500 || d.code.code() == 501)
+            .collect();
+        assert!(
+            purity_errors.is_empty(),
+            "unexpected purity errors: {:?}",
+            purity_errors
         );
     }
 }

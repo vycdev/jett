@@ -160,7 +160,7 @@ fn main() {
                     Ok(result) => {
                         print_file_results(&result);
                         println!(
-                            "\n{} verify block(s), {} passed, {} failed",
+                            "\n{} block(s), {} passed, {} failed",
                             result.total, result.passed, result.failed
                         );
                         if result.failed > 0 {
@@ -183,7 +183,7 @@ fn main() {
                             println!();
                         }
                         println!(
-                            "{} file(s), {} verify block(s), {} passed, {} failed",
+                            "{} file(s), {} block(s), {} passed, {} failed",
                             result.total_files,
                             result.total_blocks,
                             result.total_passed,
@@ -204,11 +204,20 @@ fn main() {
 }
 
 fn print_file_results(result: &jett_driver::TestResult) {
-    for (name, passed, err) in &result.blocks {
-        if *passed {
+    for block in &result.blocks {
+        let name = &block.name;
+        if block.is_property {
+            if block.passed {
+                let iters = block.iterations.unwrap_or(0);
+                println!("  property {name}: ok ({iters} iterations)");
+            } else {
+                let msg = block.error.as_deref().unwrap_or("unknown error");
+                println!("  property {name}: FAILED ({msg})");
+            }
+        } else if block.passed {
             println!("  verify {name}: ok");
         } else {
-            let msg = err.as_deref().unwrap_or("unknown error");
+            let msg = block.error.as_deref().unwrap_or("unknown error");
             println!("  verify {name}: FAILED ({msg})");
         }
     }
