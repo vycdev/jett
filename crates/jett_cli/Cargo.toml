@@ -11,4 +11,5 @@ path = "src/main.rs"
 
 [dependencies]
 jett_driver.workspace = true
+jett_diagnostics.workspace = true
 clap.workspace = true

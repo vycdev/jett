@@ -12,4 +12,7 @@ jett_project.workspace = true
 jett_lexer.workspace = true
 jett_parser.workspace = true
 jett_ast.workspace = true
+jett_resolve.workspace = true
+jett_types.workspace = true
+jett_typecheck.workspace = true
 jett_fmt.workspace = true

@@ -88,21 +88,31 @@ fn main() {
         }
         Command::Build {
             file,
-            release,
-            agent,
-            target,
+            release: _,
+            agent: _,
+            target: _,
         } => {
-            let mode = if release { "release" } else { "debug" };
-            print!("building {file} ({mode})");
-            if agent {
-                print!(" [agent/TOON]");
+            let path = Path::new(&file);
+            let result = jett_driver::build_file(path);
+
+            for diag in &result.diagnostics {
+                let prefix = match diag.severity {
+                    jett_diagnostics::Severity::Error => "error",
+                    jett_diagnostics::Severity::Warning => "warning",
+                    jett_diagnostics::Severity::Info => "info",
+                };
+                eprintln!("{prefix}[{}]: {}", diag.code, diag.message);
             }
-            if let Some(ref t) = target {
-                print!(" for {t}");
+
+            if result.has_errors {
+                let error_count = result.diagnostics.iter()
+                    .filter(|d| d.severity == jett_diagnostics::Severity::Error)
+                    .count();
+                eprintln!("build failed: {error_count} error(s)");
+                process::exit(1);
+            } else {
+                println!("build ok: {file} (type checked, no codegen yet)");
             }
-            println!();
-            eprintln!("error: jett build is not yet implemented");
-            process::exit(1);
         }
         Command::Run { file } => {
             println!("running {file}");

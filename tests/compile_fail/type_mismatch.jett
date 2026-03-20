@@ -1,0 +1,4 @@
+namespace test
+
+function bad_add(a: int64, b: string) returns int64:
+    return a + b
