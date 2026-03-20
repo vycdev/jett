@@ -854,14 +854,34 @@ flowchart LR
 
 LLVM is the compilation bottleneck. Strategies to minimize its impact:
 
-1. **Per-function LLVM modules:** Each function is compiled as a separate LLVM module. This enables maximum parallelism (one thread per function) and fine-grained caching (only recompile functions whose MIR changed).
-2. **ThinLTO for cross-module optimization:** ThinLTO imports callee summaries into each module, enabling inlining and devirtualization across modules without the full cost of monolithic LTO.
-3. **Future: Cranelift for debug builds.** The `cranelift` backend compiles ~5-10x faster than LLVM but produces ~20-30% slower code. For debug builds where runtime performance doesn't matter, this is a significant win. This would be a `jett_codegen_cranelift` crate following the same MIR → IR interface.
+1. **Codegen unit splitting:** Functions are distributed across N LLVM modules (codegen units). Each unit is compiled in parallel. Debug builds use many units (~256) for maximum parallelism. Release builds use fewer (~16) to give LLVM more optimization context per unit.
+
+2. **LLVM optimization level selection:**
+
+   | Level | Compile time | Code quality | Use case |
+   |---|---|---|---|
+   | O0 | 1x baseline | Poor (redundant loads/stores) | Debug builds |
+   | O1 | ~1.5-2x | Decent (removes obvious waste) | Fast development builds |
+   | O2 | ~3-5x | Production-quality | Release builds |
+   | O3 | ~4-6x | Marginally better than O2, sometimes worse due to bloat | Almost never worth it |
+
+   The jump from O0 to O1 is large in code quality but modest in compile time. O2 to O3 adds significant compile time for marginal benefit. The compiler uses O0 for debug, O2 for release.
+
+3. **ThinLTO for release:** ThinLTO imports callee summaries into each module, enabling cross-module inlining and devirtualization without merging everything into one module. Achieves ~90-95% of full LTO's performance at much lower compile time. Each module is re-optimized in parallel.
+
+4. **Future: Cranelift for debug builds.** Cranelift compiles ~5-10x faster than LLVM O0 by avoiding LLVM's inherent overhead (IR construction, verifier, pass infrastructure). Code runs ~20-30% slower, acceptable for debug. Supports x86-64, AArch64, RISC-V. This would be a `jett_codegen_cranelift` crate following the same MIR → IR interface.
 
 #### Linking
 
-- **Default linker:** `mold` on Linux (fastest), `lld` on other platforms, system linker as fallback.
-- **Incremental linking:** In debug mode, use incremental linking to avoid re-linking the entire binary when only one function changed. This requires the per-function LLVM module strategy.
+| Platform | Debug linker | Release linker |
+|---|---|---|
+| Linux | `mold` (~5-10x faster than `lld`) | `lld` (handles LTO) |
+| macOS | `lld` or Apple's linker | `lld` or Apple's linker |
+| Windows | `lld-link` | `lld-link` |
+
+Additional linking optimizations:
+- **Split DWARF** (`-gsplit-dwarf`): Moves debug info into separate `.dwo` files that the linker does not process. Reduces link time by 30-50% for debug builds with large debug info. The debugger reads `.dwo` files directly.
+- **Hidden symbol visibility by default:** Only export symbols that are part of the public API. Fewer symbols = faster symbol resolution in the linker.
 - **Static linking by default:** The runtime library and stdlib are statically linked. No dynamic library resolution overhead at startup.
 
 ---
