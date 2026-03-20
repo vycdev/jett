@@ -710,9 +710,10 @@ Every Jett function gets these LLVM attributes:
 
 | Attribute | Condition | Effect |
 |---|---|---|
-| `nounwind` | All functions (Jett has no exceptions) | Eliminates unwind tables and landing pads. Simpler CFG enables better optimization. |
-| `willreturn` | All functions (no infinite loops without capabilities) | LLVM can assume the function terminates. Enables dead code elimination after calls. |
+| `nounwind` | All functions (Jett has no exceptions) | Eliminates unwind tables and landing pads. Simpler CFG enables better optimization. Uses `call` instead of `invoke` everywhere. |
+| `willreturn` | All non-looping functions | LLVM can assume the function terminates. Enables dead code elimination after calls. |
 | `mustprogress` | All functions | Required by LLVM to optimize assuming forward progress. |
+| `noundef` | All parameters | The value is never `undef` or `poison`. Jett has no uninitialized variables. |
 
 Pure functions additionally get:
 
@@ -720,8 +721,18 @@ Pure functions additionally get:
 |---|---|---|
 | `readnone` | Pure function with no view parameters | The function reads no memory at all. LLVM can freely reorder, eliminate, or hoist it. |
 | `readonly` | Pure function with view parameters | The function only reads memory through its view parameters. No writes. |
+| `memory(argmem: read)` | Pure function that only reads through argument pointers | Modern LLVM syntax (15+). More precise than `readonly` — tells LLVM no global memory is accessed. |
+| `memory(argmem: readwrite)` | Impure function that only accesses argument memory | Tells LLVM the function cannot affect global state — only the memory reachable through its parameters. |
 | `nosync` | Pure functions | No synchronization operations. Safe to parallelize. |
-| `nofree` | Pure functions | Does not free memory. LLVM can be more aggressive with aliasing assumptions. |
+| `nofree` | Pure functions | Does not free memory. LLVM can assume pointers remain valid across the call. |
+| `speculatable` | Pure functions with no view parameters | The function can be speculatively executed with no side effects regardless of inputs. Enables hoisting calls out of conditional branches. |
+
+Error handling and panic paths get:
+
+| Attribute | Condition | Effect |
+|---|---|---|
+| `cold` | Panic handler, assert failure handler | Tells LLVM this code is rarely executed. Prevents inlining cold code into hot paths. Improves instruction cache locality. |
+| `noinline` | Panic handler, assert failure handler | Prevents LLVM from inlining error handling code, keeping the hot path compact. |
 
 #### Pointer Annotations
 
@@ -730,23 +741,51 @@ Linear types give Jett something most languages cannot provide — **universal `
 | Annotation | Where applied | Effect |
 |---|---|---|
 | `noalias` | Every owned pointer parameter | Guarantees the pointer does not alias any other pointer accessible to the function. LLVM can assume stores through this pointer don't affect loads through other pointers. This is Jett's most powerful optimization enabler — most languages can only apply `noalias` to restricted cases. |
+| `noalias` | Return values of allocation functions | The returned pointer doesn't alias anything in the caller's scope. Emitted on every function that returns a newly allocated value. |
 | `nonnull` | Every non-optional pointer | The pointer is never null. Eliminates null checks and enables folding. |
-| `dereferenceable(N)` | Pointers to known-size types | The pointer points to at least N bytes of valid memory. Enables speculative loads. |
+| `dereferenceable(N)` | Pointers to known-size types | The pointer points to at least N bytes of valid memory. Enables speculative loads and load hoisting. |
 | `align(N)` | All pointers | Alignment guarantee for the pointed-to type. Enables aligned loads/stores and vectorization. |
-| `!range` metadata | Refinement-typed integers | Tells LLVM the value is within a specific range (e.g., `Port` is 1–65535). Enables branch folding and narrowing. |
-| `!nonnull` metadata | Loads of non-optional pointers | The loaded value is never null. |
+| `!range` metadata | Refinement-typed integers, enum discriminants, booleans | Tells LLVM the value is within a specific range (e.g., `Port` is 1–65535, `bool` is 0–1). Enables branch folding and narrowing. |
 
 #### Memory Access Annotations
 
 | Annotation | Where applied | Effect |
 |---|---|---|
-| `llvm.lifetime.start` / `end` | Every local value | Precise lifetime boundaries from linear type analysis. LLVM can reuse stack slots more aggressively. |
-| `!tbaa` (Type-Based Alias Analysis) | Every load/store | Jett's type system guarantees that an `int64*` and a `string*` never alias. TBAA metadata lets LLVM prove this at the IR level. |
-| `!invariant.load` | Loads through `view` parameters | Views are read-only — the pointed-to memory cannot change during the view's lifetime. LLVM can cache the loaded value. |
+| `llvm.lifetime.start` / `end` | Every local value | Precise lifetime boundaries from linear type analysis. The compiler knows the exact point of last use — more precise than C/C++ where lifetimes extend to scope exit. LLVM reuses stack slots more aggressively. |
+| `!tbaa` (Type-Based Alias Analysis) | Every load/store | One TBAA node per primitive type and per struct type. Tells LLVM that an `int64*` and a `string*` never alias, even without `noalias`. |
+| `!invariant.load` | Loads through `view` parameters | Views are read-only — the pointed-to memory cannot change during the view's lifetime. LLVM can cache the loaded value and eliminate redundant loads. |
+| `!prof` (branch weights) | `handle error:` / `handle:` branches | Error paths are marked as unlikely (`!prof !{"branch_weights", i32 1, i32 2000}`). LLVM lays out the hot path linearly for instruction cache locality. |
+
+#### Data Layout Optimizations
+
+**Struct field reordering:** LLVM does **not** reorder struct fields — the frontend must handle this. The codegen sorts struct fields by alignment (descending) to minimize internal padding. An `int64` (8-byte aligned) followed by an `int8` wastes 7 bytes of padding; sorting by alignment eliminates this waste. The source-level field order is preserved in debug info, but the memory layout is optimized.
+
+**Enum niche optimization:** For `optional[T]` where `T` is a pointer type (non-nullable), the compiler can represent the optional as a nullable pointer — `none` is null, `some(value)` is the pointer itself. This eliminates the discriminant byte entirely. Similarly, `optional[bool]` can use a three-state byte (0 = false, 1 = true, 2 = none). The `!range` metadata communicates valid values to LLVM.
+
+**Tail call optimization:** For functions in tail position (the call immediately precedes `return`), the compiler emits the `tail` LLVM attribute. When the linear type system can prove that all owned values have been consumed before the tail call (no destructors to run after), the compiler emits `musttail` for guaranteed tail call elimination. This is particularly useful for state machine dispatch and recursive algorithms.
 
 #### The `noalias` Advantage
 
 This deserves emphasis. In C, `restrict` is a programmer promise that's rarely used and often wrong. In Rust, `noalias` is emitted on `&mut T` references but not on shared `&T` references (because multiple `&T` can alias). In Jett, **every owned parameter is `noalias`** because linear types guarantee single ownership — no other pointer in the entire program points to the same data. This gives LLVM more optimization freedom than it gets from virtually any other language.
+
+The compound effect is significant: `nounwind` + `noalias` + `memory(argmem: readwrite)` + `nofree` together make function calls nearly transparent to LLVM — loads can be hoisted above calls, stores can be sunk below them, and redundant operations can be eliminated across call boundaries. Each attribute makes the others more effective.
+
+#### Implementation Priority
+
+When building the codegen, implement LLVM annotations in this order (highest impact first):
+
+1. `nounwind` on every function — trivial to implement, universal benefit
+2. `noalias` on every owned pointer parameter — second highest impact
+3. `nonnull`, `dereferenceable(N)`, `align(N)` on pointers — enables speculation
+4. `willreturn`, `mustprogress` — enables dead call elimination
+5. `memory(argmem: ...)` on functions — enables load/store reordering across calls
+6. Lifetime markers — enables stack slot reuse
+7. `cold` + `noinline` on error/panic paths, `!prof` branch weights — improves code layout
+8. Basic TBAA tree — helps with remaining alias analysis gaps
+9. Struct field reordering — reduces memory footprint
+10. Enum niche optimization — reduces memory for optional types
+11. `!range` metadata for refinements — enables narrowing
+12. Tail call attributes — enables TCO for recursive patterns
 
 ### 10c. Build Modes and Optimization Levels
 
