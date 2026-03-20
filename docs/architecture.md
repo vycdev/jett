@@ -292,8 +292,8 @@ Expression      → Literal | Ident | BinaryExpr | UnaryExpr |
                   StringInterpolation | HandleExpr | CloneExpr |
                   CoarsenExpr | DeclassifyExpr | RunExpr | JoinExpr |
                   CancelExpr | SpawnExpr | AskExpr | IfExpr |
-                  ViewExpr | ComptimeExpr | TransitionExpr |
-                  IsExpr | AtExpr
+                  AnonymousFunctionExpr | ViewExpr | ComptimeExpr |
+                  TransitionExpr | IsExpr | AtExpr
 ```
 
 ---
@@ -400,6 +400,8 @@ Walk all type declarations and build the type registry:
 - **Capability types:** `Filesystem`, `Network`, `Stdout`, `Stderr`, `Stdin`, `Clock`, `Random`, `Process`, `Environment`.
 - **Secret wrapper:** `secret[T]`.
 - **State-qualified types:** `Machine at state`.
+- **Built-in error types:** `CancelledError` (returned when a cancelled task's next I/O operation executes).
+- **Built-in utility types:** `StringPosition` (opaque iterator position returned by `string.find`, not a byte offset).
 
 Types are interned for O(1) comparison: each unique type gets a `TypeId`. The type interner deduplicates structurally equal types.
 
@@ -431,7 +433,8 @@ Bottom-up type checking of every expression:
 - **Function calls:** verify argument types match parameter types, verify generic type parameters, verify return type.
 - **No implicit conversions** — `int64` is not `float64`. Every mismatch is an error with a hint.
 - **Refinement type assignments:** wrapping a base type in a refinement type is fallible → must have `handle error:`.
-- **Handle blocks:** verify that `handle error:` is used on `result[T, E]` and `handle:` on `optional[T]`. Verify handle blocks end with `return` or `default`.
+- **Handle blocks:** verify that `handle error:` is used on `result[T, E]` and `handle:` on `optional[T]`. Verify handle blocks end with `return` or `default`. The `default` keyword inside a handle block is part of the `HandleExpr` structure — it provides a fallback value and resumes normal execution.
+- **Coarsen expressions:** `coarsen value` converts a refinement type to an ancestor type. The target type is determined by the variable declaration's type annotation on the left side. The type checker walks the refinement chain to verify the target is a valid ancestor.
 - **Match exhaustiveness:** verify all enum variants are covered.
 - **Constrained generics:** For `function sort[T implements Orderable](...)`, verify that type arguments at call sites implement the required interfaces. Multiple constraints use `and` (e.g., `T implements Orderable and Displayable`). Unconstrained `T` can only be stored and passed around — no operations.
 - **`is` expressions:** In comptime context, `T is int64` checks if a generic type parameter matches a concrete type (resolved at compile time). In runtime context, `value is Variant` checks enum discriminant (compiled to integer comparison).
@@ -465,6 +468,7 @@ This sub-phase tracks the ownership state of every variable through the control 
 - **No rebinding while viewed:** The owner of a variable cannot rebind it while a `view` to it exists. This prevents `items = new_list` inside a `for item in view items:` loop body, and prevents rebinding a variable that was passed as `view` to a `run` task until the task is `join`ed or `cancel`led.
 - **Cancellation semantics:** `cancel task` sets a cancellation flag. The task is not killed immediately — the next capability use (I/O operation) inside the cancelled task returns a `CancelledError`. The task handle remains live and must still be `join`ed.
 - **View propagation:** Views propagate through field access and collection element access. `view list[T]` element access yields `view T`, not an owned copy. `clone` is required to get an owned value from a view.
+- **Closure capture analysis:** Anonymous functions can capture **immutable** values from the enclosing scope. Captured values are implicitly viewed — they are not consumed by the closure. Closures over **mutable** state are a compile error. The ownership analyzer verifies that all captured variables are either immutable bindings or primitives.
 
 **Implementation strategy:** Abstract interpretation over the control flow graph. At each program point, maintain a mapping from variable → ownership state. At control flow joins (if/else merge points, loop entries), states must be compatible:
 
@@ -648,6 +652,14 @@ ComptimeValue {
 3. **`comptime` expressions** — `if comptime is_numeric[T]()` branches are resolved, dead branches are eliminated.
 4. **Refinement type constraints on literals** — `Port p = 80` validates `80 >= 1 && 80 <= 65535` at compile time.
 5. **Bitfield literal validation** — `ColorChannel(red: 300, ...)` catches the out-of-range value at compile time.
+
+### Comptime Type Reflection
+
+The comptime interpreter supports basic type-level reflection for generic type parameters:
+- `T is int64` — checks if a type parameter matches a concrete type (returns `bool`).
+- `T.name` — returns the type's name as a string (e.g., `"int64"`, `"User"`).
+
+These are built-in operations of the comptime interpreter that query the compiler's type table. They enable `if comptime` branching on type properties.
 
 ### Capability Restriction
 
@@ -935,7 +947,7 @@ Filesystem.read_file(fs, path)
   → WASM:    WASI fd_read()
 ```
 
-Each capability type has a platform-specific implementation module within `jett_codegen_llvm`. The correct module is selected at codegen time based on the target triple.
+Each capability type has a platform-specific implementation module within `jett_codegen_llvm`. The correct module is selected at codegen time based on the target triple. This covers all capability operations including byte-level variants (`Filesystem.read_bytes`, `Filesystem.write_bytes`).
 
 #### Cross-Compilation
 
@@ -1540,7 +1552,8 @@ Core stdlib (string, list, math, json) is implemented in Phase D. This phase com
 | `insta` | Snapshot testing |
 | `proptest` | Property-based testing for the compiler itself |
 | `clap` | CLI argument parsing |
-| `serde` | Serialization (for TOON output, caching) |
+| `serde` | Serialization (for caching) |
+| `toon` | TOON format parsing/serialization (for `jett.proj`, ASP output). Custom crate or integrated into `jett_common` if no existing crate is available. |
 | `unicode-segmentation` | UAX #29 grapheme cluster segmentation for string operations |
 | `mimalloc` | High-performance allocator (or system allocator as default) |
 

@@ -5817,9 +5817,10 @@ function process_items(view stdout: Stdout, items: list[string]) returns nothing
     for item in items:
         Stdout.write(view stdout, item)
 
-function run_loop(mutable running: bool) returns nothing:
-    while running:
-        running = false
+function countdown(view stdout: Stdout, mutable count: int64) returns nothing:
+    while count > 0:
+        Stdout.write(view stdout, "count: {count}")
+        count = count - 1
 ```
 
 ### Collections
