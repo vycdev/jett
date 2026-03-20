@@ -1,0 +1,29 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/jett_common",
+    "crates/jett_diagnostics",
+    "crates/jett_project",
+    "crates/jett_lexer",
+    "crates/jett_parser",
+    "crates/jett_ast",
+    "crates/jett_fmt",
+    "crates/jett_driver",
+    "crates/jett_cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+# Internal crates
+jett_common = { path = "crates/jett_common" }
+jett_diagnostics = { path = "crates/jett_diagnostics" }
+jett_project = { path = "crates/jett_project" }
+jett_lexer = { path = "crates/jett_lexer" }
+jett_parser = { path = "crates/jett_parser" }
+jett_ast = { path = "crates/jett_ast" }
+jett_fmt = { path = "crates/jett_fmt" }
+jett_driver = { path = "crates/jett_driver" }

@@ -1,0 +1,9 @@
+[package]
+name = "jett_diagnostics"
+description = "Error and warning types, human-readable and TOON rendering"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+jett_common.workspace = true

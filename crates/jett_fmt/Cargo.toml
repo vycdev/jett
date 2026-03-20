@@ -1,0 +1,10 @@
+[package]
+name = "jett_fmt"
+description = "Code formatter enforcing the single canonical style"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+jett_common.workspace = true
+jett_parser.workspace = true

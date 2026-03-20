@@ -1,0 +1,6 @@
+[package]
+name = "jett_common"
+description = "Shared types for the Jett compiler: Span, FileId, Symbol interning"
+version.workspace = true
+edition.workspace = true
+license.workspace = true

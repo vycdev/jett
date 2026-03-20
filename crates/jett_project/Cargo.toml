@@ -1,0 +1,10 @@
+[package]
+name = "jett_project"
+description = "Project file (jett.proj) parsing, file discovery, namespace pre-scan"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+jett_common.workspace = true
+jett_diagnostics.workspace = true

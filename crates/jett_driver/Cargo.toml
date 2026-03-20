@@ -1,0 +1,15 @@
+[package]
+name = "jett_driver"
+description = "Pipeline orchestration, wiring compiler phases together"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+jett_common.workspace = true
+jett_diagnostics.workspace = true
+jett_project.workspace = true
+jett_lexer.workspace = true
+jett_parser.workspace = true
+jett_ast.workspace = true
+jett_fmt.workspace = true

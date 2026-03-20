@@ -1,0 +1,10 @@
+[package]
+name = "jett_lexer"
+description = "Tokenizer for the Jett language"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+jett_common.workspace = true
+jett_diagnostics.workspace = true

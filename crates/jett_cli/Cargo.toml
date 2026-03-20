@@ -1,0 +1,13 @@
+[package]
+name = "jett_cli"
+description = "Jett compiler CLI — binary entry point"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "jett"
+path = "src/main.rs"
+
+[dependencies]
+jett_driver.workspace = true
