@@ -1,8 +1,36 @@
 use std::collections::HashMap;
 
-use jett_parser::ast::{BinOp, Block, Expr, FunctionDef, Stmt, UnaryOp};
+use jett_parser::ast::{BinOp, Block, Expr, FunctionDef, Pattern, Stmt, UnaryOp};
 
 use crate::value::Value;
+
+// ---------------------------------------------------------------------------
+// Built-in argument checking (must be defined before call_builtin uses it)
+// ---------------------------------------------------------------------------
+
+/// Check that a built-in function received the expected number of arguments.
+/// Returns `Some(Err(...))` on mismatch (suitable for early-return from
+/// `call_builtin` via `if let`), or `None` if the count is correct.
+fn check_args(name: &str, expected: usize, args: &[Value]) -> Option<Result<Value, String>> {
+    if args.len() != expected {
+        Some(Err(format!(
+            "{name} expects {expected} argument(s), got {}",
+            args.len()
+        )))
+    } else {
+        None
+    }
+}
+
+/// Convenience macro: invoke `check_args` and, if the count is wrong,
+/// immediately return the error wrapped in `Some`.
+macro_rules! require_args {
+    ($name:expr, $expected:expr, $args:expr) => {
+        if let Some(err) = check_args($name, $expected, $args) {
+            return Some(err);
+        }
+    };
+}
 
 // ---------------------------------------------------------------------------
 // Environment
@@ -172,6 +200,40 @@ impl Interpreter {
 
                 match callee.as_ref() {
                     Expr::Ident(ident) => self.call_function(&ident.name, arg_values),
+                    // Handle enum variant construction: Type.variant(args)
+                    Expr::EnumVariant(type_name, variant, _) => Ok(Value::Enum {
+                        type_name: type_name.name.clone(),
+                        variant: variant.name.clone(),
+                        fields: arg_values,
+                    }),
+                    // Handle dotted names: string.trim(...), Stdout.write(...), etc.
+                    // Also handles enum variant construction: Shape.circle(5.0)
+                    Expr::FieldAccess(obj, field, _) => {
+                        let dotted = Self::extract_dotted_name(obj, &field.name);
+                        if let Some(ref name) = dotted {
+                            // Try built-in functions first.
+                            if let Some(result) = self.call_builtin(name, &arg_values) {
+                                return result;
+                            }
+                            // Try user-defined dotted functions.
+                            if self.functions.contains_key(name.as_str()) {
+                                return self.call_function(name, arg_values);
+                            }
+                        }
+                        // Fall through to enum variant construction if no
+                        // built-in or user function matched.
+                        if let Expr::Ident(ident) = obj.as_ref() {
+                            return Ok(Value::Enum {
+                                type_name: ident.name.clone(),
+                                variant: field.name.clone(),
+                                fields: arg_values,
+                            });
+                        }
+                        match dotted {
+                            Some(name) => self.call_function(&name, arg_values),
+                            None => Err("only named function calls are supported in comptime".to_string()),
+                        }
+                    }
                     _ => Err("only named function calls are supported in comptime".to_string()),
                 }
             }
@@ -183,6 +245,36 @@ impl Interpreter {
                     .map(|e| self.eval_expr(e))
                     .collect::<Result<_, _>>()?;
                 Ok(Value::List(vals))
+            }
+
+            // Enum variant reference: `Color.red`
+            Expr::EnumVariant(type_name, variant, _) => Ok(Value::Enum {
+                type_name: type_name.name.clone(),
+                variant: variant.name.clone(),
+                fields: vec![],
+            }),
+
+            // Field access: may be enum variant like `Color.red`
+            Expr::FieldAccess(obj, field, _) => {
+                // Try to evaluate as a variable first; if that fails and the
+                // object is an identifier, treat it as an enum type reference.
+                match obj.as_ref() {
+                    Expr::Ident(ident) => {
+                        if self.get_variable(&ident.name).is_some() {
+                            Err(format!(
+                                "field access on values is not supported in comptime"
+                            ))
+                        } else {
+                            // Treat as enum variant: Type.variant
+                            Ok(Value::Enum {
+                                type_name: ident.name.clone(),
+                                variant: field.name.clone(),
+                                fields: vec![],
+                            })
+                        }
+                    }
+                    _ => Err("field access is not supported in comptime".to_string()),
+                }
             }
 
             // Unsupported expressions produce a clear error.
@@ -288,6 +380,46 @@ impl Interpreter {
                 Ok(None)
             }
 
+            Stmt::Match(match_stmt) => {
+                let val = self.eval_expr(&match_stmt.expr)?;
+                let (variant_name, fields) = match &val {
+                    Value::Enum {
+                        variant, fields, ..
+                    } => (variant.clone(), fields.clone()),
+                    _ => return Err(format!("match requires an enum value, got {val}")),
+                };
+
+                for arm in &match_stmt.arms {
+                    match &arm.pattern {
+                        Pattern::Ident(ident) => {
+                            if ident.name == variant_name {
+                                return self.exec_block_inner(&arm.body);
+                            }
+                        }
+                        Pattern::Variant(name, bindings) => {
+                            if name.name == variant_name {
+                                self.push_scope();
+                                for (binding, field_val) in
+                                    bindings.iter().zip(fields.iter())
+                                {
+                                    self.set_variable(
+                                        &binding.name,
+                                        field_val.clone(),
+                                    );
+                                }
+                                let result = self.exec_block_inner(&arm.body);
+                                self.pop_scope();
+                                return result;
+                            }
+                        }
+                        Pattern::Other(_) => {
+                            return self.exec_block_inner(&arm.body);
+                        }
+                    }
+                }
+                Ok(None)
+            }
+
             Stmt::Expr(expr_stmt) => {
                 // Type names appearing as bare ExprStmt (from parser producing ExprStmt
                 // instead of VarDecl for `Type name = expr`) are harmless — ignore errors.
@@ -358,10 +490,315 @@ impl Interpreter {
         }
     }
 
+    // -- Dotted name extraction -----------------------------------------------
+
+    /// Recursively extract a dotted name from nested FieldAccess nodes.
+    /// e.g. `Expr::FieldAccess(Expr::Ident("Stdout"), "write")` → `"Stdout.write"`
+    fn extract_dotted_name(expr: &Expr, suffix: &str) -> Option<String> {
+        match expr {
+            Expr::Ident(ident) => Some(format!("{}.{}", ident.name, suffix)),
+            Expr::FieldAccess(inner, field, _) => {
+                let inner_name = Self::extract_dotted_name(inner, &field.name)?;
+                Some(format!("{inner_name}.{suffix}"))
+            }
+            _ => None,
+        }
+    }
+
+    // -- Built-in standard library functions ----------------------------------
+
+    /// Try to call a built-in standard library function.  Returns `None` if
+    /// the name does not match any built-in, allowing the caller to fall
+    /// through to user-defined function lookup.
+    fn call_builtin(&self, name: &str, args: &[Value]) -> Option<Result<Value, String>> {
+        match name {
+            // -- I/O (capability-simulated) -----------------------------------
+
+            "Stdout.write" => {
+                // Stdout.write(stdout, message) — ignore capability, print message
+                if args.len() < 2 {
+                    return Some(Err(format!(
+                        "Stdout.write expects 2 arguments, got {}",
+                        args.len()
+                    )));
+                }
+                // The first arg is the capability (ignored), second is the message.
+                print!("{}", args[1]);
+                Some(Ok(Value::Nothing))
+            }
+
+            // -- String operations --------------------------------------------
+
+            "string.length" | "string.char_count" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::String(s) => Some(Ok(Value::Int64(s.chars().count() as i64))),
+                    _ => Some(Err(format!("{name} expects a string argument"))),
+                }
+            }
+
+            "string.contains" => {
+                require_args!(name, 2, args);
+                match (&args[0], &args[1]) {
+                    (Value::String(s), Value::String(substr)) => {
+                        Some(Ok(Value::Bool(s.contains(substr.as_str()))))
+                    }
+                    _ => Some(Err(format!("{name} expects two string arguments"))),
+                }
+            }
+
+            "string.trim" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::String(s) => Some(Ok(Value::String(s.trim().to_string()))),
+                    _ => Some(Err(format!("{name} expects a string argument"))),
+                }
+            }
+
+            "string.upper" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::String(s) => Some(Ok(Value::String(s.to_uppercase()))),
+                    _ => Some(Err(format!("{name} expects a string argument"))),
+                }
+            }
+
+            "string.lower" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::String(s) => Some(Ok(Value::String(s.to_lowercase()))),
+                    _ => Some(Err(format!("{name} expects a string argument"))),
+                }
+            }
+
+            "string.split" => {
+                require_args!(name, 2, args);
+                match (&args[0], &args[1]) {
+                    (Value::String(s), Value::String(delim)) => {
+                        let parts: Vec<Value> = s
+                            .split(delim.as_str())
+                            .map(|p| Value::String(p.to_string()))
+                            .collect();
+                        Some(Ok(Value::List(parts)))
+                    }
+                    _ => Some(Err(format!("{name} expects two string arguments"))),
+                }
+            }
+
+            "string.join" => {
+                require_args!(name, 2, args);
+                match (&args[0], &args[1]) {
+                    (Value::List(items), Value::String(sep)) => {
+                        let strs: Result<Vec<String>, String> = items
+                            .iter()
+                            .map(|v| match v {
+                                Value::String(s) => Ok(s.clone()),
+                                _ => Err(format!(
+                                    "{name} requires a list of strings, found {v}"
+                                )),
+                            })
+                            .collect();
+                        match strs {
+                            Ok(parts) => Some(Ok(Value::String(parts.join(sep)))),
+                            Err(e) => Some(Err(e)),
+                        }
+                    }
+                    _ => Some(Err(format!(
+                        "{name} expects a list and a string separator"
+                    ))),
+                }
+            }
+
+            "string.starts_with" => {
+                require_args!(name, 2, args);
+                match (&args[0], &args[1]) {
+                    (Value::String(s), Value::String(prefix)) => {
+                        Some(Ok(Value::Bool(s.starts_with(prefix.as_str()))))
+                    }
+                    _ => Some(Err(format!("{name} expects two string arguments"))),
+                }
+            }
+
+            "string.ends_with" => {
+                require_args!(name, 2, args);
+                match (&args[0], &args[1]) {
+                    (Value::String(s), Value::String(suffix)) => {
+                        Some(Ok(Value::Bool(s.ends_with(suffix.as_str()))))
+                    }
+                    _ => Some(Err(format!("{name} expects two string arguments"))),
+                }
+            }
+
+            // -- String conversions -------------------------------------------
+
+            "string.from_int64" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::Int64(n) => Some(Ok(Value::String(n.to_string()))),
+                    _ => Some(Err(format!("{name} expects an int64 argument"))),
+                }
+            }
+
+            // -- Int64 conversions --------------------------------------------
+
+            "int64.from_string" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::String(s) => match s.parse::<i64>() {
+                        Ok(n) => Some(Ok(Value::Int64(n))),
+                        Err(_) => Some(Err(format!(
+                            "int64.from_string: cannot parse '{s}' as int64"
+                        ))),
+                    },
+                    _ => Some(Err(format!("{name} expects a string argument"))),
+                }
+            }
+
+            // -- Float64 conversions ------------------------------------------
+
+            "float64.from_int64" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::Int64(n) => Some(Ok(Value::Float64(*n as f64))),
+                    _ => Some(Err(format!("{name} expects an int64 argument"))),
+                }
+            }
+
+            // -- List operations ----------------------------------------------
+
+            "list.length" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::List(items) => Some(Ok(Value::Int64(items.len() as i64))),
+                    _ => Some(Err(format!("{name} expects a list argument"))),
+                }
+            }
+
+            "list.append" => {
+                require_args!(name, 2, args);
+                match &args[0] {
+                    Value::List(items) => {
+                        let mut new_list = items.clone();
+                        new_list.push(args[1].clone());
+                        Some(Ok(Value::List(new_list)))
+                    }
+                    _ => Some(Err(format!("{name} expects a list as first argument"))),
+                }
+            }
+
+            "list.get" => {
+                require_args!(name, 2, args);
+                match (&args[0], &args[1]) {
+                    (Value::List(items), Value::Int64(index)) => {
+                        let idx = *index as usize;
+                        if idx < items.len() {
+                            Some(Ok(items[idx].clone()))
+                        } else {
+                            Some(Err(format!(
+                                "list.get: index {index} out of bounds (length {})",
+                                items.len()
+                            )))
+                        }
+                    }
+                    _ => Some(Err(format!(
+                        "{name} expects a list and an int64 index"
+                    ))),
+                }
+            }
+
+            "list.first" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::List(items) => {
+                        if items.is_empty() {
+                            Some(Err("list.first: empty list".to_string()))
+                        } else {
+                            Some(Ok(items[0].clone()))
+                        }
+                    }
+                    _ => Some(Err(format!("{name} expects a list argument"))),
+                }
+            }
+
+            "list.last" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::List(items) => {
+                        if items.is_empty() {
+                            Some(Err("list.last: empty list".to_string()))
+                        } else {
+                            Some(Ok(items[items.len() - 1].clone()))
+                        }
+                    }
+                    _ => Some(Err(format!("{name} expects a list argument"))),
+                }
+            }
+
+            "list.is_empty" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::List(items) => Some(Ok(Value::Bool(items.is_empty()))),
+                    _ => Some(Err(format!("{name} expects a list argument"))),
+                }
+            }
+
+            // -- Math operations ----------------------------------------------
+
+            "math.abs" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::Int64(n) => Some(Ok(Value::Int64(n.abs()))),
+                    Value::Float64(n) => Some(Ok(Value::Float64(n.abs()))),
+                    _ => Some(Err(format!("{name} expects a numeric argument"))),
+                }
+            }
+
+            "math.min" => {
+                require_args!(name, 2, args);
+                match (&args[0], &args[1]) {
+                    (Value::Int64(a), Value::Int64(b)) => {
+                        Some(Ok(Value::Int64(*a.min(b))))
+                    }
+                    (Value::Float64(a), Value::Float64(b)) => {
+                        Some(Ok(Value::Float64(a.min(*b))))
+                    }
+                    _ => Some(Err(format!(
+                        "{name} expects two arguments of the same numeric type"
+                    ))),
+                }
+            }
+
+            "math.max" => {
+                require_args!(name, 2, args);
+                match (&args[0], &args[1]) {
+                    (Value::Int64(a), Value::Int64(b)) => {
+                        Some(Ok(Value::Int64(*a.max(b))))
+                    }
+                    (Value::Float64(a), Value::Float64(b)) => {
+                        Some(Ok(Value::Float64(a.max(*b))))
+                    }
+                    _ => Some(Err(format!(
+                        "{name} expects two arguments of the same numeric type"
+                    ))),
+                }
+            }
+
+            // Not a built-in
+            _ => None,
+        }
+    }
+
     // -- Function calls -----------------------------------------------------
 
     /// Call a registered function by name with the given arguments.
+    /// Built-in standard library functions are checked first; if the name
+    /// does not match a built-in, user-defined functions are consulted.
     pub fn call_function(&mut self, name: &str, args: Vec<Value>) -> Result<Value, String> {
+        // Check built-in functions first.
+        if let Some(result) = self.call_builtin(name, &args) {
+            return result;
+        }
+
         // Look up the function definition.
         let func = self
             .functions
@@ -1107,5 +1544,553 @@ mod tests {
         let b = block(vec![var_decl("x", int(10))]);
         let result = interp.exec_block(&b).unwrap();
         assert_eq!(result, None);
+    }
+
+    // -----------------------------------------------------------------------
+    // Match statement
+    // -----------------------------------------------------------------------
+
+    /// Helper: create an enum value expression (via EnumVariant AST node).
+    fn enum_variant(type_name: &str, variant_name: &str) -> Expr {
+        Expr::EnumVariant(ident(type_name), ident(variant_name), sp())
+    }
+
+    /// Helper: create a match statement.
+    fn match_stmt(expr: Expr, arms: Vec<(Pattern, Vec<Stmt>)>) -> Stmt {
+        Stmt::Match(MatchStmt {
+            expr,
+            arms: arms
+                .into_iter()
+                .map(|(pattern, stmts)| MatchArm {
+                    pattern,
+                    body: block(stmts),
+                    span: sp(),
+                })
+                .collect(),
+            span: sp(),
+        })
+    }
+
+    #[test]
+    fn match_simple_enum_variant() {
+        // match Color.green:
+        //     red:  result = "red"
+        //     green: result = "green"
+        //     blue:  result = "blue"
+        let mut interp = Interpreter::new();
+        interp
+            .exec_stmt(&var_decl("result", string("none")))
+            .unwrap();
+
+        let m = match_stmt(
+            enum_variant("Color", "green"),
+            vec![
+                (
+                    Pattern::Ident(ident("red")),
+                    vec![assign("result", string("red"))],
+                ),
+                (
+                    Pattern::Ident(ident("green")),
+                    vec![assign("result", string("green"))],
+                ),
+                (
+                    Pattern::Ident(ident("blue")),
+                    vec![assign("result", string("blue"))],
+                ),
+            ],
+        );
+        interp.exec_stmt(&m).unwrap();
+        assert_eq!(
+            interp.eval_expr(&var("result")).unwrap(),
+            Value::String("green".to_string())
+        );
+    }
+
+    #[test]
+    fn match_destructuring_binds_variables() {
+        // shape = Shape.circle(5)
+        // match shape:
+        //     circle(r):
+        //         result = r
+        //     rect(w, h):
+        //         result = w + h
+        let mut interp = Interpreter::new();
+        interp
+            .exec_stmt(&var_decl("result", int(0)))
+            .unwrap();
+        interp.set_variable(
+            "shape",
+            Value::Enum {
+                type_name: "Shape".to_string(),
+                variant: "circle".to_string(),
+                fields: vec![Value::Int64(5)],
+            },
+        );
+
+        let m = match_stmt(
+            var("shape"),
+            vec![
+                (
+                    Pattern::Variant(ident("circle"), vec![ident("r")]),
+                    vec![assign("result", var("r"))],
+                ),
+                (
+                    Pattern::Variant(
+                        ident("rect"),
+                        vec![ident("w"), ident("h")],
+                    ),
+                    vec![assign("result", binary(var("w"), BinOp::Add, var("h")))],
+                ),
+            ],
+        );
+        interp.exec_stmt(&m).unwrap();
+        assert_eq!(interp.eval_expr(&var("result")).unwrap(), Value::Int64(5));
+    }
+
+    #[test]
+    fn match_destructuring_rect_variant() {
+        // shape = Shape.rect(3, 4)
+        // match shape:
+        //     circle(r):
+        //         result = r
+        //     rect(w, h):
+        //         result = w + h
+        let mut interp = Interpreter::new();
+        interp
+            .exec_stmt(&var_decl("result", int(0)))
+            .unwrap();
+        interp.set_variable(
+            "shape",
+            Value::Enum {
+                type_name: "Shape".to_string(),
+                variant: "rect".to_string(),
+                fields: vec![Value::Int64(3), Value::Int64(4)],
+            },
+        );
+
+        let m = match_stmt(
+            var("shape"),
+            vec![
+                (
+                    Pattern::Variant(ident("circle"), vec![ident("r")]),
+                    vec![assign("result", var("r"))],
+                ),
+                (
+                    Pattern::Variant(
+                        ident("rect"),
+                        vec![ident("w"), ident("h")],
+                    ),
+                    vec![assign("result", binary(var("w"), BinOp::Add, var("h")))],
+                ),
+            ],
+        );
+        interp.exec_stmt(&m).unwrap();
+        assert_eq!(interp.eval_expr(&var("result")).unwrap(), Value::Int64(7));
+    }
+
+    #[test]
+    fn match_other_catch_all() {
+        // match Color.blue:
+        //     red: result = "red"
+        //     other: result = "other"
+        let mut interp = Interpreter::new();
+        interp
+            .exec_stmt(&var_decl("result", string("none")))
+            .unwrap();
+
+        let m = match_stmt(
+            enum_variant("Color", "blue"),
+            vec![
+                (
+                    Pattern::Ident(ident("red")),
+                    vec![assign("result", string("red"))],
+                ),
+                (
+                    Pattern::Other(sp()),
+                    vec![assign("result", string("other"))],
+                ),
+            ],
+        );
+        interp.exec_stmt(&m).unwrap();
+        assert_eq!(
+            interp.eval_expr(&var("result")).unwrap(),
+            Value::String("other".to_string())
+        );
+    }
+
+    #[test]
+    fn match_with_return_signal() {
+        // Test that return inside a match arm propagates correctly.
+        let mut interp = Interpreter::new();
+
+        // function pick(color: ?) returns string:
+        //     match color:
+        //         red: return "red"
+        //         other: return "unknown"
+        let b = block(vec![match_stmt(
+            var("color"),
+            vec![
+                (
+                    Pattern::Ident(ident("red")),
+                    vec![return_stmt(string("red"))],
+                ),
+                (
+                    Pattern::Other(sp()),
+                    vec![return_stmt(string("unknown"))],
+                ),
+            ],
+        )]);
+
+        // Execute as a block with a variable set up.
+        interp.set_variable(
+            "color",
+            Value::Enum {
+                type_name: "Color".to_string(),
+                variant: "red".to_string(),
+                fields: vec![],
+            },
+        );
+        let result = interp.exec_block(&b).unwrap();
+        assert_eq!(result, Some(Value::String("red".to_string())));
+    }
+}
+
+#[cfg(test)]
+mod builtin_tests {
+    use jett_common::{FileId, Span};
+    use jett_parser::ast::*;
+
+    use super::*;
+
+    fn sp() -> Span {
+        Span::new(FileId::new(0), 0, 0)
+    }
+
+    fn ident(name: &str) -> Ident {
+        Ident {
+            name: name.to_string(),
+            span: sp(),
+        }
+    }
+
+    fn int(n: i64) -> Expr {
+        Expr::IntLiteral(n, sp())
+    }
+
+    fn float(n: f64) -> Expr {
+        Expr::FloatLiteral(n, sp())
+    }
+
+    fn string(s: &str) -> Expr {
+        Expr::StringLiteral(s.to_string(), sp())
+    }
+
+    fn var(name: &str) -> Expr {
+        Expr::Ident(ident(name))
+    }
+
+    fn dotted_call(module: &str, func_name: &str, args: Vec<Expr>) -> Expr {
+        let callee = Expr::FieldAccess(Box::new(var(module)), ident(func_name), sp());
+        Expr::Call(
+            Box::new(callee),
+            args.into_iter()
+                .map(|value| CallArg {
+                    name: None,
+                    value,
+                    span: sp(),
+                })
+                .collect(),
+            sp(),
+        )
+    }
+
+    #[test]
+    fn builtin_stdout_write() {
+        let mut interp = Interpreter::new();
+        let expr = dotted_call(
+            "Stdout",
+            "write",
+            vec![string("fake_cap"), string("hello")],
+        );
+        let result = interp.eval_expr(&expr).unwrap();
+        assert_eq!(result, Value::Nothing);
+    }
+
+    #[test]
+    fn builtin_string_char_count() {
+        let mut interp = Interpreter::new();
+        let expr = dotted_call("string", "char_count", vec![string("hello")]);
+        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(5));
+    }
+
+    #[test]
+    fn builtin_string_char_count_unicode() {
+        let mut interp = Interpreter::new();
+        let expr = dotted_call(
+            "string",
+            "char_count",
+            vec![string("\u{00e9}\u{00e9}\u{00e9}")],
+        );
+        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(3));
+    }
+
+    #[test]
+    fn builtin_string_length() {
+        let mut interp = Interpreter::new();
+        let expr = dotted_call("string", "length", vec![string("test")]);
+        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(4));
+    }
+
+    #[test]
+    fn builtin_string_contains_true() {
+        let mut interp = Interpreter::new();
+        let expr = dotted_call(
+            "string",
+            "contains",
+            vec![string("hello world"), string("world")],
+        );
+        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Bool(true));
+    }
+
+    #[test]
+    fn builtin_string_contains_false() {
+        let mut interp = Interpreter::new();
+        let expr = dotted_call(
+            "string",
+            "contains",
+            vec![string("hello world"), string("xyz")],
+        );
+        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Bool(false));
+    }
+
+    #[test]
+    fn builtin_string_trim() {
+        let mut interp = Interpreter::new();
+        let expr = dotted_call("string", "trim", vec![string("  hello  ")]);
+        assert_eq!(
+            interp.eval_expr(&expr).unwrap(),
+            Value::String("hello".to_string())
+        );
+    }
+
+    #[test]
+    fn builtin_string_upper() {
+        let mut interp = Interpreter::new();
+        let expr = dotted_call("string", "upper", vec![string("hello")]);
+        assert_eq!(
+            interp.eval_expr(&expr).unwrap(),
+            Value::String("HELLO".to_string())
+        );
+    }
+
+    #[test]
+    fn builtin_string_lower() {
+        let mut interp = Interpreter::new();
+        let expr = dotted_call("string", "lower", vec![string("HELLO")]);
+        assert_eq!(
+            interp.eval_expr(&expr).unwrap(),
+            Value::String("hello".to_string())
+        );
+    }
+
+    #[test]
+    fn builtin_string_split() {
+        let mut interp = Interpreter::new();
+        let expr = dotted_call("string", "split", vec![string("a,b,c"), string(",")]);
+        assert_eq!(
+            interp.eval_expr(&expr).unwrap(),
+            Value::List(vec![
+                Value::String("a".to_string()),
+                Value::String("b".to_string()),
+                Value::String("c".to_string()),
+            ])
+        );
+    }
+
+    #[test]
+    fn builtin_string_join() {
+        let mut interp = Interpreter::new();
+        let list_expr = Expr::ListConstruct(vec![string("a"), string("b"), string("c")], sp());
+        let expr = dotted_call("string", "join", vec![list_expr, string(", ")]);
+        assert_eq!(
+            interp.eval_expr(&expr).unwrap(),
+            Value::String("a, b, c".to_string())
+        );
+    }
+
+    #[test]
+    fn builtin_string_starts_with() {
+        let mut interp = Interpreter::new();
+        let expr = dotted_call(
+            "string",
+            "starts_with",
+            vec![string("hello world"), string("hello")],
+        );
+        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Bool(true));
+    }
+
+    #[test]
+    fn builtin_string_ends_with() {
+        let mut interp = Interpreter::new();
+        let expr = dotted_call(
+            "string",
+            "ends_with",
+            vec![string("hello world"), string("world")],
+        );
+        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Bool(true));
+    }
+
+    #[test]
+    fn builtin_string_from_int64() {
+        let mut interp = Interpreter::new();
+        let expr = dotted_call("string", "from_int64", vec![int(42)]);
+        assert_eq!(
+            interp.eval_expr(&expr).unwrap(),
+            Value::String("42".to_string())
+        );
+    }
+
+    #[test]
+    fn builtin_list_length() {
+        let mut interp = Interpreter::new();
+        let list_expr = Expr::ListConstruct(vec![int(1), int(2), int(3)], sp());
+        let expr = dotted_call("list", "length", vec![list_expr]);
+        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(3));
+    }
+
+    #[test]
+    fn builtin_list_append() {
+        let mut interp = Interpreter::new();
+        let list_expr = Expr::ListConstruct(vec![int(1), int(2)], sp());
+        let expr = dotted_call("list", "append", vec![list_expr, int(3)]);
+        assert_eq!(
+            interp.eval_expr(&expr).unwrap(),
+            Value::List(vec![Value::Int64(1), Value::Int64(2), Value::Int64(3)])
+        );
+    }
+
+    #[test]
+    fn builtin_list_get() {
+        let mut interp = Interpreter::new();
+        let list_expr = Expr::ListConstruct(vec![int(10), int(20), int(30)], sp());
+        let expr = dotted_call("list", "get", vec![list_expr, int(1)]);
+        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(20));
+    }
+
+    #[test]
+    fn builtin_list_get_out_of_bounds() {
+        let mut interp = Interpreter::new();
+        let list_expr = Expr::ListConstruct(vec![int(10)], sp());
+        let expr = dotted_call("list", "get", vec![list_expr, int(5)]);
+        assert!(interp.eval_expr(&expr).is_err());
+    }
+
+    #[test]
+    fn builtin_list_first() {
+        let mut interp = Interpreter::new();
+        let list_expr = Expr::ListConstruct(vec![int(10), int(20)], sp());
+        let expr = dotted_call("list", "first", vec![list_expr]);
+        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(10));
+    }
+
+    #[test]
+    fn builtin_list_last() {
+        let mut interp = Interpreter::new();
+        let list_expr = Expr::ListConstruct(vec![int(10), int(20)], sp());
+        let expr = dotted_call("list", "last", vec![list_expr]);
+        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(20));
+    }
+
+    #[test]
+    fn builtin_list_is_empty_true() {
+        let mut interp = Interpreter::new();
+        let list_expr = Expr::ListConstruct(vec![], sp());
+        let expr = dotted_call("list", "is_empty", vec![list_expr]);
+        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Bool(true));
+    }
+
+    #[test]
+    fn builtin_list_is_empty_false() {
+        let mut interp = Interpreter::new();
+        let list_expr = Expr::ListConstruct(vec![int(1)], sp());
+        let expr = dotted_call("list", "is_empty", vec![list_expr]);
+        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Bool(false));
+    }
+
+    #[test]
+    fn builtin_math_abs_positive() {
+        let mut interp = Interpreter::new();
+        let expr = dotted_call("math", "abs", vec![int(5)]);
+        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(5));
+    }
+
+    #[test]
+    fn builtin_math_abs_negative() {
+        let mut interp = Interpreter::new();
+        let expr = dotted_call("math", "abs", vec![int(-7)]);
+        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(7));
+    }
+
+    #[test]
+    fn builtin_math_abs_float() {
+        let mut interp = Interpreter::new();
+        let expr = dotted_call("math", "abs", vec![float(-3.5)]);
+        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Float64(3.5));
+    }
+
+    #[test]
+    fn builtin_math_min_int() {
+        let mut interp = Interpreter::new();
+        let expr = dotted_call("math", "min", vec![int(3), int(7)]);
+        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(3));
+    }
+
+    #[test]
+    fn builtin_math_max_int() {
+        let mut interp = Interpreter::new();
+        let expr = dotted_call("math", "max", vec![int(3), int(7)]);
+        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(7));
+    }
+
+    #[test]
+    fn builtin_math_min_float() {
+        let mut interp = Interpreter::new();
+        let expr = dotted_call("math", "min", vec![float(1.5), float(2.5)]);
+        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Float64(1.5));
+    }
+
+    #[test]
+    fn builtin_math_max_float() {
+        let mut interp = Interpreter::new();
+        let expr = dotted_call("math", "max", vec![float(1.5), float(2.5)]);
+        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Float64(2.5));
+    }
+
+    #[test]
+    fn builtin_int64_from_string() {
+        let mut interp = Interpreter::new();
+        let expr = dotted_call("int64", "from_string", vec![string("123")]);
+        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(123));
+    }
+
+    #[test]
+    fn builtin_int64_from_string_error() {
+        let mut interp = Interpreter::new();
+        let expr = dotted_call("int64", "from_string", vec![string("abc")]);
+        assert!(interp.eval_expr(&expr).is_err());
+    }
+
+    #[test]
+    fn builtin_float64_from_int64() {
+        let mut interp = Interpreter::new();
+        let expr = dotted_call("float64", "from_int64", vec![int(42)]);
+        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Float64(42.0));
+    }
+
+    #[test]
+    fn builtin_wrong_arg_count() {
+        let mut interp = Interpreter::new();
+        let expr = dotted_call("string", "trim", vec![string("a"), string("b")]);
+        assert!(interp.eval_expr(&expr).is_err());
     }
 }

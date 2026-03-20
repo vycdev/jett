@@ -169,6 +169,7 @@ impl<'src> Parser<'src> {
             TokenKind::Function => Some(Item::Function(self.parse_function())),
             TokenKind::Struct => Some(Item::Struct(self.parse_struct())),
             TokenKind::Enum => Some(Item::Enum(self.parse_enum())),
+            TokenKind::Verify => Some(Item::Verify(self.parse_verify_block())),
             TokenKind::Mutable => Some(Item::VarDecl(self.parse_var_decl())),
             // Could be a variable declaration: `Type name = expr`
             _ if self.looks_like_var_decl() => Some(Item::VarDecl(self.parse_var_decl())),
@@ -189,6 +190,19 @@ impl<'src> Parser<'src> {
         NamespaceDecl {
             span: kw.span.merge(name.span),
             name,
+        }
+    }
+
+    fn parse_verify_block(&mut self) -> VerifyBlock {
+        let kw = self.expect(TokenKind::Verify);
+        let name = self.parse_ident();
+        self.expect(TokenKind::Colon);
+        let body = self.parse_block();
+        let end_span = body.span;
+        VerifyBlock {
+            span: kw.span.merge(end_span),
+            name,
+            body,
         }
     }
 
@@ -467,6 +481,7 @@ impl<'src> Parser<'src> {
             TokenKind::If => Some(self.parse_if_stmt()),
             TokenKind::For => Some(self.parse_for_stmt()),
             TokenKind::While => Some(self.parse_while_stmt()),
+            TokenKind::Match => Some(self.parse_match_stmt()),
             TokenKind::Use => Some(self.parse_use_stmt()),
             TokenKind::Assert => Some(self.parse_assert_stmt()),
             TokenKind::Break => {
@@ -591,6 +606,97 @@ impl<'src> Parser<'src> {
             body: body.clone(),
             span: kw.span.merge(body.span),
         })
+    }
+
+    fn parse_match_stmt(&mut self) -> Stmt {
+        let kw = self.expect(TokenKind::Match);
+        let expr = self.parse_expr();
+        self.expect(TokenKind::Colon);
+
+        self.skip_newlines();
+        let indent_tok = self.expect(TokenKind::Indent);
+        let mut arms = Vec::new();
+        let mut last_span = indent_tok.span;
+
+        self.skip_newlines();
+        while self.peek() != TokenKind::Dedent && self.peek() != TokenKind::Eof {
+            let arm = self.parse_match_arm();
+            last_span = arm.span;
+            arms.push(arm);
+            self.skip_newlines();
+        }
+        if self.peek() == TokenKind::Dedent {
+            last_span = self.advance().span;
+        }
+
+        Stmt::Match(MatchStmt {
+            expr,
+            arms,
+            span: kw.span.merge(last_span),
+        })
+    }
+
+    fn parse_match_arm(&mut self) -> MatchArm {
+        let start = self.peek_token().span;
+
+        let pattern = if self.peek() == TokenKind::Other {
+            let tok = self.advance();
+            // Check if this is `other` as catch-all (followed by `:`) or
+            // `other` as an identifier pattern
+            if self.peek() == TokenKind::Colon {
+                Pattern::Other(tok.span)
+            } else if self.peek() == TokenKind::LParen {
+                // other(bindings) — destructuring with name "other"
+                let name = Ident {
+                    name: self.token_text(&tok).to_string(),
+                    span: tok.span,
+                };
+                self.advance(); // consume `(`
+                let mut bindings = Vec::new();
+                if self.peek() != TokenKind::RParen {
+                    bindings.push(self.parse_ident());
+                    while self.eat(TokenKind::Comma).is_some() {
+                        if self.peek() == TokenKind::RParen {
+                            break;
+                        }
+                        bindings.push(self.parse_ident());
+                    }
+                }
+                self.expect(TokenKind::RParen);
+                Pattern::Variant(name, bindings)
+            } else {
+                Pattern::Other(tok.span)
+            }
+        } else {
+            let name = self.parse_ident();
+            if self.peek() == TokenKind::LParen {
+                // Destructuring: `variant(a, b)`
+                self.advance(); // consume `(`
+                let mut bindings = Vec::new();
+                if self.peek() != TokenKind::RParen {
+                    bindings.push(self.parse_ident());
+                    while self.eat(TokenKind::Comma).is_some() {
+                        if self.peek() == TokenKind::RParen {
+                            break;
+                        }
+                        bindings.push(self.parse_ident());
+                    }
+                }
+                self.expect(TokenKind::RParen);
+                Pattern::Variant(name, bindings)
+            } else {
+                Pattern::Ident(name)
+            }
+        };
+
+        self.expect(TokenKind::Colon);
+        let body = self.parse_block();
+
+        MatchArm {
+            span: start.merge(body.span),
+            pattern,
+            body,
+        }
     }
 
     fn parse_use_stmt(&mut self) -> Stmt {
@@ -1220,6 +1326,7 @@ fn stmt_span(stmt: &Stmt) -> Span {
         Stmt::If(i) => i.span,
         Stmt::For(f) => f.span,
         Stmt::While(w) => w.span,
+        Stmt::Match(m) => m.span,
         Stmt::Expr(e) => e.span,
         Stmt::Use(u) => u.span,
         Stmt::Assert(a) => a.span,
@@ -1907,6 +2014,122 @@ function f(mutable x: int64) returns nothing:
                 other => panic!("expected Assign, got {:?}", other),
             },
             other => panic!("expected Function, got {:?}", other),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Match statements
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_match_simple_patterns() {
+        let src = "\
+function f(color: Color) returns string:
+    match color:
+        red:
+            return \"red\"
+        green:
+            return \"green\"
+        blue:
+            return \"blue\"
+";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        match &result.module.items[0] {
+            Item::Function(f) => {
+                assert_eq!(f.body.stmts.len(), 1);
+                match &f.body.stmts[0] {
+                    Stmt::Match(m) => {
+                        assert_eq!(m.arms.len(), 3);
+                        assert!(matches!(&m.arms[0].pattern, Pattern::Ident(id) if id.name == "red"));
+                        assert!(matches!(&m.arms[1].pattern, Pattern::Ident(id) if id.name == "green"));
+                        assert!(matches!(&m.arms[2].pattern, Pattern::Ident(id) if id.name == "blue"));
+                        // Each arm body has one return statement
+                        assert_eq!(m.arms[0].body.stmts.len(), 1);
+                    }
+                    other => panic!("expected Match, got {:?}", other),
+                }
+            }
+            other => panic!("expected Function, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_match_with_destructuring() {
+        let src = "\
+function f(shape: Shape) returns nothing:
+    match shape:
+        circle(r):
+            return r
+        rect(w, h):
+            return w
+";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        match &result.module.items[0] {
+            Item::Function(f) => match &f.body.stmts[0] {
+                Stmt::Match(m) => {
+                    assert_eq!(m.arms.len(), 2);
+                    match &m.arms[0].pattern {
+                        Pattern::Variant(name, bindings) => {
+                            assert_eq!(name.name, "circle");
+                            assert_eq!(bindings.len(), 1);
+                            assert_eq!(bindings[0].name, "r");
+                        }
+                        other => panic!("expected Variant pattern, got {:?}", other),
+                    }
+                    match &m.arms[1].pattern {
+                        Pattern::Variant(name, bindings) => {
+                            assert_eq!(name.name, "rect");
+                            assert_eq!(bindings.len(), 2);
+                            assert_eq!(bindings[0].name, "w");
+                            assert_eq!(bindings[1].name, "h");
+                        }
+                        other => panic!("expected Variant pattern, got {:?}", other),
+                    }
+                }
+                other => panic!("expected Match, got {:?}", other),
+            },
+            other => panic!("expected Function, got {:?}", other),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Verify blocks
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_function_with_verify_block() {
+        let src = "\
+function add(a: int64, b: int64) returns int64:
+    return a + b
+
+verify add:
+    assert add(2, 3) == 5
+    assert add(0, 0) == 0
+";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        assert_eq!(result.module.items.len(), 2);
+
+        // First item is the function
+        match &result.module.items[0] {
+            Item::Function(f) => {
+                assert_eq!(f.name.name, "add");
+                assert_eq!(f.params.len(), 2);
+            }
+            other => panic!("expected Function, got {:?}", other),
+        }
+
+        // Second item is the verify block
+        match &result.module.items[1] {
+            Item::Verify(vb) => {
+                assert_eq!(vb.name.name, "add");
+                assert_eq!(vb.body.stmts.len(), 2);
+                assert!(matches!(&vb.body.stmts[0], Stmt::Assert(_)));
+                assert!(matches!(&vb.body.stmts[1], Stmt::Assert(_)));
+            }
+            other => panic!("expected Verify, got {:?}", other),
         }
     }
 }

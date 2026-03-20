@@ -1,0 +1,17 @@
+namespace math
+
+function add(a: int64, b: int64) returns int64:
+    return a + b
+
+verify add:
+    assert add(2, 3) == 5
+    assert add(0, 0) == 0
+    assert add(-1, 1) == 0
+
+function multiply(a: int64, b: int64) returns int64:
+    return a * b
+
+verify multiply:
+    assert multiply(3, 4) == 12
+    assert multiply(0, 5) == 0
+    assert multiply(-2, 3) == -6

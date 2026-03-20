@@ -1,5 +1,5 @@
 use jett_common::FileId;
-use jett_comptime::verify::run_verify_blocks;
+use jett_comptime::verify::{run_verify_blocks, run_verify_blocks_detailed};
 use jett_diagnostics::Diagnostic;
 use jett_fmt::{format_source, FormatResult};
 use jett_parser::parse;
@@ -12,11 +12,17 @@ use std::path::Path;
 pub struct BuildResult {
     pub diagnostics: Vec<Diagnostic>,
     pub has_errors: bool,
+    /// The source text that was compiled (for diagnostic rendering).
+    pub source: String,
+    /// The file path that was compiled (for diagnostic rendering).
+    pub file_path: String,
 }
 
 /// Run the full compilation pipeline on a single file: lex → parse → resolve → typecheck.
 /// Does not produce executable output yet — just validates the source.
 pub fn build_file(path: &Path) -> BuildResult {
+    let file_path_str = path.display().to_string();
+
     let source = match fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) => {
@@ -27,6 +33,8 @@ pub fn build_file(path: &Path) -> BuildResult {
                     jett_common::Span::new(FileId::new(0), 0, 0),
                 )],
                 has_errors: true,
+                source: String::new(),
+                file_path: file_path_str,
             };
         }
     };
@@ -44,6 +52,8 @@ pub fn build_file(path: &Path) -> BuildResult {
         return BuildResult {
             has_errors: true,
             diagnostics: all_diagnostics,
+            source,
+            file_path: file_path_str,
         };
     }
 
@@ -56,6 +66,8 @@ pub fn build_file(path: &Path) -> BuildResult {
         return BuildResult {
             has_errors: true,
             diagnostics: all_diagnostics,
+            source,
+            file_path: file_path_str,
         };
     }
 
@@ -68,6 +80,8 @@ pub fn build_file(path: &Path) -> BuildResult {
         return BuildResult {
             has_errors: true,
             diagnostics: all_diagnostics,
+            source,
+            file_path: file_path_str,
         };
     }
 
@@ -80,6 +94,8 @@ pub fn build_file(path: &Path) -> BuildResult {
     BuildResult {
         has_errors,
         diagnostics: all_diagnostics,
+        source,
+        file_path: file_path_str,
     }
 }
 
@@ -147,4 +163,59 @@ pub fn format_file_in_place(path: &Path) -> Result<(), String> {
         .map_err(|e| format!("failed to write {}: {}", path.display(), e))?;
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Test
+// ---------------------------------------------------------------------------
+
+/// Result of running `jett test` on a single file.
+pub struct TestResult {
+    pub total: usize,
+    pub passed: usize,
+    pub failed: usize,
+    /// Per-block results: (name, passed, optional error message).
+    pub blocks: Vec<(String, bool, Option<String>)>,
+}
+
+/// Parse a .jett file and run all verify blocks, reporting per-block results.
+pub fn test_file(path: &Path) -> Result<TestResult, String> {
+    let source = fs::read_to_string(path)
+        .map_err(|e| format!("failed to read {}: {}", path.display(), e))?;
+
+    let file_id = FileId::new(0);
+    let parse_result = parse(&source, file_id);
+
+    // If there are parse errors, report and bail.
+    let has_parse_errors = parse_result
+        .errors
+        .iter()
+        .any(|d| d.severity == jett_diagnostics::Severity::Error);
+    if has_parse_errors {
+        let msgs: Vec<String> = parse_result
+            .errors
+            .iter()
+            .filter(|d| d.severity == jett_diagnostics::Severity::Error)
+            .map(|d| format!("{}: {}", d.code, d.message))
+            .collect();
+        return Err(format!("parse errors:\n{}", msgs.join("\n")));
+    }
+
+    let results = run_verify_blocks_detailed(&parse_result.module);
+
+    let total = results.len();
+    let passed = results.iter().filter(|r| r.passed).count();
+    let failed = total - passed;
+
+    let blocks = results
+        .into_iter()
+        .map(|r| (r.name, r.passed, r.error))
+        .collect();
+
+    Ok(TestResult {
+        total,
+        passed,
+        failed,
+        blocks,
+    })
 }

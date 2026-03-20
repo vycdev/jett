@@ -4,7 +4,7 @@ use jett_common::Span;
 use jett_diagnostics::{Diagnostic, DiagnosticSink};
 use jett_parser::ast::{
     AssertStmt, AssignStmt, Block, CallArg, Expr, ExprStmt, ForStmt, FunctionDef, IfStmt, Item,
-    Module, ReturnStmt, Stmt, TypeExpr, UseDecl, VarDecl, WhileStmt,
+    MatchStmt, Module, Pattern, ReturnStmt, Stmt, TypeExpr, UseDecl, VarDecl, WhileStmt,
 };
 
 use crate::errors;
@@ -156,6 +156,8 @@ impl Resolver {
                         self.var_defs.insert(id);
                     }
                 }
+                // Verify blocks don't declare new names in the module scope.
+                Item::Verify(_) => {}
             }
         }
     }
@@ -268,6 +270,7 @@ impl Resolver {
             Stmt::Expr(e) => self.resolve_expr_stmt(e, item_index),
             Stmt::Use(u) => self.resolve_use(u),
             Stmt::Assert(a) => self.resolve_assert(a, item_index),
+            Stmt::Match(m) => self.resolve_match(m, item_index),
             Stmt::Break(_) | Stmt::Continue(_) => {}
         }
     }
@@ -349,6 +352,26 @@ impl Resolver {
         self.resolve_expr(&a.condition, item_index);
         if let Some(ref msg) = a.message {
             self.resolve_expr(msg, item_index);
+        }
+    }
+
+    fn resolve_match(&mut self, m: &MatchStmt, item_index: usize) {
+        self.resolve_expr(&m.expr, item_index);
+        for arm in &m.arms {
+            let scope = self.push_scope();
+            // Declare bindings introduced by destructuring patterns.
+            match &arm.pattern {
+                Pattern::Variant(_, bindings) => {
+                    for binding in bindings {
+                        self.declare_local(&binding.name, DefKind::Variable, binding.span);
+                    }
+                }
+                Pattern::Ident(_) | Pattern::Other(_) => {}
+            }
+            for stmt in &arm.body.stmts {
+                self.resolve_stmt(stmt, item_index);
+            }
+            self.pop_scope(scope);
         }
     }
 
@@ -446,6 +469,10 @@ impl Resolver {
             }
             Expr::Default(inner, _) => {
                 self.resolve_expr(inner, item_index);
+            }
+            Expr::EnumVariant(type_name, _, _) => {
+                // Resolve the type name; variant name is checked during type checking.
+                self.resolve_name(&type_name.name, type_name.span, item_index);
             }
             // Literals and nothing — no names to resolve.
             Expr::IntLiteral(_, _)
@@ -609,6 +636,7 @@ fn stmt_span(stmt: &Stmt) -> Span {
         Stmt::If(i) => i.span,
         Stmt::For(f) => f.span,
         Stmt::While(w) => w.span,
+        Stmt::Match(m) => m.span,
         Stmt::Expr(e) => e.span,
         Stmt::Use(u) => u.span,
         Stmt::Assert(a) => a.span,

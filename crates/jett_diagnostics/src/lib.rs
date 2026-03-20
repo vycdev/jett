@@ -1,3 +1,6 @@
+pub mod render;
+pub mod toon;
+
 use jett_common::Span;
 
 /// Severity level of a diagnostic.

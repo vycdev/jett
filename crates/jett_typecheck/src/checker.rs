@@ -224,8 +224,8 @@ impl<'a> TypeChecker<'a> {
                 self.check_expr(&expr_stmt.expr);
             }
             Stmt::Assert(assert_stmt) => self.check_assert(assert_stmt),
-            Stmt::Use(_) | Stmt::Break(_) | Stmt::Continue(_) => {
-                // Nothing to type-check for these.
+            Stmt::Match(_) | Stmt::Use(_) | Stmt::Break(_) | Stmt::Continue(_) => {
+                // Nothing to type-check for these (match type-checking is TODO).
             }
         }
     }
@@ -426,6 +426,10 @@ impl<'a> TypeChecker<'a> {
             Expr::Default(inner, _span) => self.check_expr(inner),
 
             Expr::Error(_) => TypeInterner::ERROR,
+            Expr::EnumVariant(_, _, _) => {
+                // TODO: resolve enum variant type
+                TypeInterner::ERROR
+            }
         };
 
         // Record the type for this expression span.

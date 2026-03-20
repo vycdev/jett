@@ -1,6 +1,6 @@
 use jett_common::Span;
 use jett_diagnostics::Diagnostic;
-use jett_parser::ast::{FunctionDef, Item, Module};
+use jett_parser::ast::{FunctionDef, Item, Module, VerifyBlock};
 
 use crate::interpreter::Interpreter;
 use crate::value::Value;
@@ -26,45 +26,117 @@ impl ComptimeError {
 }
 
 // ---------------------------------------------------------------------------
+// Verify result
+// ---------------------------------------------------------------------------
+
+/// Outcome of running a single verify block.
+#[derive(Debug, Clone)]
+pub struct VerifyResult {
+    pub name: String,
+    pub passed: bool,
+    pub error: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
-/// Run all verify blocks / assert-bearing functions in the module and return
-/// any diagnostics produced by assertion failures.
+/// Run all verify blocks in the module and return any diagnostics produced by
+/// assertion failures.
 ///
-/// Since `verify` blocks are not yet in the AST, this implementation scans
-/// for top-level functions whose bodies contain at least one `assert`
-/// statement and executes them as zero-argument verify functions.
+/// This looks for:
+/// 1. `Item::Verify` blocks (the primary mechanism).
+/// 2. Legacy fallback: top-level zero-argument functions whose bodies contain
+///    `assert` statements (kept for backward compatibility).
 pub fn run_verify_blocks(module: &Module) -> Vec<Diagnostic> {
-    let mut interp = Interpreter::new();
-    let mut diagnostics = Vec::new();
-
-    // First pass: register all functions so they can call each other.
-    let mut verify_functions: Vec<FunctionDef> = Vec::new();
-    for item in &module.items {
-        if let Item::Function(func) = item {
-            interp.register_function(func);
-            if has_assert_stmts(func) && func.params.is_empty() && func.name.name != "main" {
-                verify_functions.push(func.clone());
-            }
-        }
-    }
-
-    // Second pass: execute the verify functions.
-    for func in &verify_functions {
-        match interp.call_function(&func.name.name, vec![]) {
-            Ok(_) => {} // all assertions passed
-            Err(msg) => {
-                diagnostics.push(Diagnostic::error(
+    let results = run_verify_blocks_detailed(module);
+    results
+        .into_iter()
+        .filter_map(|r| {
+            if r.passed {
+                None
+            } else {
+                Some(Diagnostic::error(
                     9000,
-                    format!("comptime verify failed in '{}': {}", func.name.name, msg),
-                    func.span,
-                ));
+                    format!(
+                        "comptime verify failed in '{}': {}",
+                        r.name,
+                        r.error.unwrap_or_default()
+                    ),
+                    // We don't have the span here; use a dummy.  The
+                    // caller (build_file) already has the module.
+                    Span::new(jett_common::FileId::new(0), 0, 0),
+                ))
+            }
+        })
+        .collect()
+}
+
+/// Run all verify blocks and return structured results.  Used by the
+/// `jett test` command for per-block reporting.
+pub fn run_verify_blocks_detailed(module: &Module) -> Vec<VerifyResult> {
+    let mut interp = Interpreter::new();
+    let mut results = Vec::new();
+
+    // First pass: register all functions so verify blocks can call them.
+    let mut legacy_verify_functions: Vec<FunctionDef> = Vec::new();
+    let mut verify_blocks: Vec<VerifyBlock> = Vec::new();
+    for item in &module.items {
+        match item {
+            Item::Function(func) => {
+                interp.register_function(func);
+                if has_assert_stmts(func) && func.params.is_empty() && func.name.name != "main" {
+                    legacy_verify_functions.push(func.clone());
+                }
+            }
+            Item::Verify(vb) => {
+                verify_blocks.push(vb.clone());
+            }
+            _ => {}
+        }
+    }
+
+    // Execute proper verify blocks.
+    for vb in &verify_blocks {
+        match interp.exec_block(&vb.body) {
+            Ok(_) => {
+                results.push(VerifyResult {
+                    name: vb.name.name.clone(),
+                    passed: true,
+                    error: None,
+                });
+            }
+            Err(msg) => {
+                results.push(VerifyResult {
+                    name: vb.name.name.clone(),
+                    passed: false,
+                    error: Some(msg),
+                });
             }
         }
     }
 
-    diagnostics
+    // Execute legacy verify functions (zero-arg functions with asserts).
+    for func in &legacy_verify_functions {
+        match interp.call_function(&func.name.name, vec![]) {
+            Ok(_) => {
+                results.push(VerifyResult {
+                    name: func.name.name.clone(),
+                    passed: true,
+                    error: None,
+                });
+            }
+            Err(msg) => {
+                results.push(VerifyResult {
+                    name: func.name.name.clone(),
+                    passed: false,
+                    error: Some(msg),
+                });
+            }
+        }
+    }
+
+    results
 }
 
 /// Evaluate a single pure function at compile time with the given arguments.
@@ -307,5 +379,88 @@ mod tests {
         fn pipe_eq(self, other: Expr) -> Expr {
             Expr::Binary(Box::new(self), BinOp::Eq, Box::new(other), sp())
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Item::Verify block tests
+    // -----------------------------------------------------------------------
+
+    fn verify_block_item(name: &str, body: Block) -> VerifyBlock {
+        VerifyBlock {
+            name: ident(name),
+            body,
+            span: sp(),
+        }
+    }
+
+    #[test]
+    fn verify_block_passing() {
+        // function add(a: int64, b: int64) returns int64:
+        //     return a + b
+        let add_fn = func_def(
+            "add",
+            vec![("a", "int64"), ("b", "int64")],
+            block(vec![return_stmt(binary(var("a"), BinOp::Add, var("b")))]),
+        );
+
+        // verify add:
+        //     assert add(2, 3) == 5
+        let call_add = Expr::Call(
+            Box::new(var("add")),
+            vec![
+                CallArg { name: None, value: int(2), span: sp() },
+                CallArg { name: None, value: int(3), span: sp() },
+            ],
+            sp(),
+        );
+        let vb = verify_block_item(
+            "add",
+            block(vec![assert_stmt_ast(binary(call_add, BinOp::Eq, int(5)))]),
+        );
+
+        let module = Module {
+            items: vec![Item::Function(add_fn), Item::Verify(vb)],
+            span: sp(),
+        };
+        let results = run_verify_blocks_detailed(&module);
+        assert_eq!(results.len(), 1);
+        assert!(results[0].passed, "expected verify block to pass");
+        assert_eq!(results[0].name, "add");
+    }
+
+    #[test]
+    fn verify_block_failing() {
+        // function add(a: int64, b: int64) returns int64:
+        //     return a + b
+        let add_fn = func_def(
+            "add",
+            vec![("a", "int64"), ("b", "int64")],
+            block(vec![return_stmt(binary(var("a"), BinOp::Add, var("b")))]),
+        );
+
+        // verify add:
+        //     assert add(2, 3) == 99   <-- wrong!
+        let call_add = Expr::Call(
+            Box::new(var("add")),
+            vec![
+                CallArg { name: None, value: int(2), span: sp() },
+                CallArg { name: None, value: int(3), span: sp() },
+            ],
+            sp(),
+        );
+        let vb = verify_block_item(
+            "add",
+            block(vec![assert_stmt_ast(binary(call_add, BinOp::Eq, int(99)))]),
+        );
+
+        let module = Module {
+            items: vec![Item::Function(add_fn), Item::Verify(vb)],
+            span: sp(),
+        };
+        let results = run_verify_blocks_detailed(&module);
+        assert_eq!(results.len(), 1);
+        assert!(!results[0].passed, "expected verify block to fail");
+        assert_eq!(results[0].name, "add");
+        assert!(results[0].error.is_some());
     }
 }

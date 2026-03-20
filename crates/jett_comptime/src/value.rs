@@ -15,6 +15,12 @@ pub enum Value {
     List(Vec<Value>),
     /// The `nothing` value (Jett's unit type).
     Nothing,
+    /// An enum instance: `Color.red` or `Shape.circle(5.0)`.
+    Enum {
+        type_name: String,
+        variant: String,
+        fields: Vec<Value>,
+    },
     /// A runtime error value.
     Error(String),
 }
@@ -37,6 +43,24 @@ impl fmt::Display for Value {
                 write!(f, ")")
             }
             Value::Nothing => write!(f, "nothing"),
+            Value::Enum {
+                type_name,
+                variant,
+                fields,
+            } => {
+                write!(f, "{type_name}.{variant}")?;
+                if !fields.is_empty() {
+                    write!(f, "(")?;
+                    for (i, field) in fields.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{field}")?;
+                    }
+                    write!(f, ")")?;
+                }
+                Ok(())
+            }
             Value::Error(msg) => write!(f, "error: {msg}"),
         }
     }

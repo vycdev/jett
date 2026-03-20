@@ -19,6 +19,20 @@ pub enum Item {
     Struct(StructDef),
     Enum(EnumDef),
     VarDecl(VarDecl),
+    Verify(VerifyBlock),
+}
+
+// ---------------------------------------------------------------------------
+// Verify blocks
+// ---------------------------------------------------------------------------
+
+/// A `verify` block: `verify <name>:` followed by an indented block of
+/// assert statements.  Executed at compile time by the comptime engine.
+#[derive(Debug, Clone)]
+pub struct VerifyBlock {
+    pub name: Ident,
+    pub body: Block,
+    pub span: Span,
 }
 
 // ---------------------------------------------------------------------------
@@ -96,6 +110,7 @@ pub enum Stmt {
     If(IfStmt),
     For(ForStmt),
     While(WhileStmt),
+    Match(MatchStmt),
     Expr(ExprStmt),
     Use(UseDecl),
     Assert(AssertStmt),
@@ -170,6 +185,31 @@ pub struct AssertStmt {
     pub span: Span,
 }
 
+#[derive(Debug, Clone)]
+pub struct MatchStmt {
+    pub expr: Expr,
+    pub arms: Vec<MatchArm>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct MatchArm {
+    pub pattern: Pattern,
+    pub body: Block,
+    pub span: Span,
+}
+
+/// A pattern in a `match` arm.
+#[derive(Debug, Clone)]
+pub enum Pattern {
+    /// Simple name match: `red`, `green`
+    Ident(Ident),
+    /// Destructuring variant: `circle(r)`, `rect(w, h)`
+    Variant(Ident, Vec<Ident>),
+    /// Catch-all: `other`
+    Other(Span),
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -242,6 +282,8 @@ pub enum Expr {
     None(Span),
     /// `default expr` (inside handle block)
     Default(Box<Expr>, Span),
+    /// Enum variant reference: `Color.red` (Type.variant)
+    EnumVariant(Ident, Ident, Span),
     /// Error node for recovery
     Error(Span),
 }
@@ -269,6 +311,7 @@ impl Expr {
             | Expr::Some(_, s)
             | Expr::None(s)
             | Expr::Default(_, s)
+            | Expr::EnumVariant(_, _, s)
             | Expr::Error(s) => *s,
             Expr::Ident(ident) => ident.span,
         }
