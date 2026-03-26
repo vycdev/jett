@@ -1254,19 +1254,28 @@ impl Interpreter {
         // Create a new scope and bind parameters.
         self.push_scope();
         for (param, arg) in func.params.iter().zip(args) {
+            let type_name = type_expr_name(&param.ty);
+            self.check_refinement(&type_name, &arg)?;
             self.set_variable(&param.name.name, arg);
         }
 
         let result = self.exec_block_inner(&func.body)?;
         self.pop_scope();
 
-        match result {
-            Some(Signal::Return(v)) => Ok(v),
+        let value = match result {
+            Some(Signal::Return(v)) => v,
             Some(Signal::Default(_)) => {
-                Err("`default` can only be used inside a `handle` block".to_string())
+                return Err("`default` can only be used inside a `handle` block".to_string());
             }
-            _ => Ok(Value::Nothing),
+            _ => Value::Nothing,
+        };
+
+        if let Some(return_type) = &func.return_type {
+            let type_name = type_expr_name(return_type);
+            self.check_refinement(&type_name, &value)?;
         }
+
+        Ok(value)
     }
 
     fn resolve_interface_dispatch(&self, name: &str, args: &[Value]) -> Option<String> {
@@ -2400,6 +2409,81 @@ mod tests {
             Value::ResultFail(Box::new(Value::String(
                 "refinement type constraint failed for 'Age'".to_string(),
             )))
+        );
+    }
+
+    #[test]
+    fn function_parameter_refinement_rejects_invalid_argument() {
+        let mut interp = Interpreter::new();
+        interp.register_type_alias(&type_alias(
+            "Age",
+            "int64",
+            Some(binary(
+                binary(var("value"), BinOp::GtEq, int(0)),
+                BinOp::And,
+                binary(var("value"), BinOp::Lt, int(150)),
+            )),
+        ));
+
+        let mut accept_age = func_def(
+            "accept_age",
+            vec![("age", "Age")],
+            block(vec![return_stmt(var("age"))]),
+        );
+        accept_age.return_type = Some(type_named("int64"));
+        interp.register_function(&accept_age);
+
+        assert_eq!(
+            interp
+                .call_function("accept_age", vec![Value::Int64(200)])
+                .unwrap_err(),
+            "refinement type constraint failed for 'Age'".to_string()
+        );
+    }
+
+    #[test]
+    fn function_with_refinement_return_accepts_valid_value() {
+        let mut interp = Interpreter::new();
+        interp.register_type_alias(&type_alias(
+            "Port",
+            "int64",
+            Some(binary(
+                binary(var("value"), BinOp::GtEq, int(1)),
+                BinOp::And,
+                binary(var("value"), BinOp::LtEq, int(65535)),
+            )),
+        ));
+
+        let mut default_port = func_def("default_port", vec![], block(vec![return_stmt(int(8080))]));
+        default_port.return_type = Some(type_named("Port"));
+        interp.register_function(&default_port);
+
+        assert_eq!(
+            interp.call_function("default_port", vec![]).unwrap(),
+            Value::Int64(8080)
+        );
+    }
+
+    #[test]
+    fn function_with_refinement_return_rejects_invalid_value() {
+        let mut interp = Interpreter::new();
+        interp.register_type_alias(&type_alias(
+            "Port",
+            "int64",
+            Some(binary(
+                binary(var("value"), BinOp::GtEq, int(1)),
+                BinOp::And,
+                binary(var("value"), BinOp::LtEq, int(65535)),
+            )),
+        ));
+
+        let mut invalid_port = func_def("invalid_port", vec![], block(vec![return_stmt(int(70000))]));
+        invalid_port.return_type = Some(type_named("Port"));
+        interp.register_function(&invalid_port);
+
+        assert_eq!(
+            interp.call_function("invalid_port", vec![]).unwrap_err(),
+            "refinement type constraint failed for 'Port'".to_string()
         );
     }
 

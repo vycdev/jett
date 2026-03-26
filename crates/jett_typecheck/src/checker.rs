@@ -252,6 +252,11 @@ impl<'a> TypeChecker<'a> {
         false
     }
 
+    fn satisfies_expected_type(&self, expected: TypeId, got: TypeId) -> bool {
+        self.types_compatible(expected, got)
+            || (self.is_refinement_type(expected) && self.can_refine_from(got, expected))
+    }
+
     fn type_requires_handle_error(&self, expected: TypeId, got: TypeId) -> bool {
         if matches!(
             self.interner.resolve(expected),
@@ -260,7 +265,7 @@ impl<'a> TypeChecker<'a> {
             return false;
         }
         match self.interner.resolve(got) {
-            Type::Result(ok_ty, _) => self.types_compatible(expected, *ok_ty),
+            Type::Result(ok_ty, _) => self.satisfies_expected_type(expected, *ok_ty),
             _ => false,
         }
     }
@@ -273,7 +278,7 @@ impl<'a> TypeChecker<'a> {
             return false;
         }
         match self.interner.resolve(got) {
-            Type::Optional(inner_ty) => self.types_compatible(expected, *inner_ty),
+            Type::Optional(inner_ty) => self.satisfies_expected_type(expected, *inner_ty),
             _ => false,
         }
     }
@@ -1311,14 +1316,12 @@ impl<'a> TypeChecker<'a> {
             _ => {
                 let actual_ty = self.check_expr(expr);
                 if actual_ty != TypeInterner::ERROR
-                    && !self.is_refinement_type(expected_ty)
                     && self.type_requires_handle_error(expected_ty, actual_ty)
                 {
                     self.sink
                         .emit(errors::result_requires_handle_error(expr.span()));
                     expected_ty
                 } else if actual_ty != TypeInterner::ERROR
-                    && !self.is_refinement_type(expected_ty)
                     && self.type_requires_bare_handle(expected_ty, actual_ty)
                 {
                     self.sink
@@ -1433,7 +1436,7 @@ impl<'a> TypeChecker<'a> {
         };
 
         if let Some(expected) = self.current_return_type {
-            if !self.types_compatible(expected, ret_type) {
+            if !self.satisfies_expected_type(expected, ret_type) {
                 self.sink.emit(errors::return_type_mismatch(
                     &self.type_name(expected),
                     &self.type_name(ret_type),
@@ -1979,6 +1982,18 @@ impl<'a> TypeChecker<'a> {
             let param_ty = param_types[i];
             let arg_ty = self.check_expr_for_expected(&arg.value, param_ty, false);
             checked_arg_types.push(arg_ty);
+
+            if self.is_refinement_type(param_ty)
+                && arg_ty != TypeInterner::ERROR
+                && self.can_refine_from(arg_ty, param_ty)
+            {
+                self.sink.emit(errors::refinement_requires_handle_error(
+                    &self.type_name(param_ty),
+                    &self.type_name(arg_ty),
+                    arg.value.span(),
+                ));
+                continue;
+            }
 
             if let Some(callee_name) = callee_name.as_deref() {
                 if Self::is_secret_output_boundary(callee_name) && self.is_secret_type(arg_ty) {
@@ -5260,5 +5275,66 @@ function main() returns nothing:
             .filter(|d| d.severity == jett_diagnostics::Severity::Error)
             .collect();
         assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+    }
+
+    #[test]
+    fn refined_return_type_accepts_base_expression() {
+        let result = check_source_result(
+            "\
+type Percentage = float64 where value >= 0.0 && value <= 100.0
+
+function calculate_grade(score: int64, total: int64) returns Percentage:
+    float64 score_f = float64.from_int64(score)
+    float64 total_f = float64.from_int64(total)
+    return score_f / total_f * 100.0
+",
+        );
+
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == jett_diagnostics::Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+    }
+
+    #[test]
+    fn refined_return_type_still_requires_handle_for_result_values() {
+        let errors = check_source_errors(
+            "\
+type Port = int64 where value >= 1 && value <= 65535
+
+function parse_port(raw: string) returns Port:
+    return int64.from_string(raw)
+",
+        );
+
+        assert!(
+            errors.iter().any(|d| d.code.code() == 316),
+            "expected E0316, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn function_call_into_refinement_parameter_reports_boundary_error() {
+        let errors = check_source_errors(
+            "\
+type Password = string where string.char_count(value) > 8
+
+function create_user(password: Password) returns nothing:
+    return nothing
+
+function main() returns nothing:
+    create_user(\"hunter42!\")
+    return nothing
+",
+        );
+
+        assert!(
+            errors.iter().any(|d| d.code.code() == 333),
+            "expected E0333, got: {:?}",
+            errors
+        );
     }
 }
