@@ -93,6 +93,10 @@ struct TypeChecker<'a> {
     monomorphized_structs: HashMap<(String, Vec<TypeId>), TypeId>,
     /// Active type variable substitution during monomorphization (type_param_name → TypeId).
     type_var_subst: HashMap<String, TypeId>,
+
+    // -- Generic function support --
+    /// AST templates for user-defined generic functions (have type_params).
+    generic_function_templates: HashMap<String, FunctionDef>,
 }
 
 impl<'a> TypeChecker<'a> {
@@ -126,6 +130,7 @@ impl<'a> TypeChecker<'a> {
             generic_struct_templates: HashMap::new(),
             monomorphized_structs: HashMap::new(),
             type_var_subst: HashMap::new(),
+            generic_function_templates: HashMap::new(),
         }
     }
 
@@ -720,7 +725,13 @@ impl<'a> TypeChecker<'a> {
                     }
                 }
                 Item::Function(func) => {
-                    self.register_function_sig(func);
+                    if func.type_params.is_empty() {
+                        self.register_function_sig(func);
+                    } else {
+                        // Generic function — store the template; type checking happens at call sites.
+                        self.generic_function_templates
+                            .insert(func.name.name.clone(), func.clone());
+                    }
                     let is_pure = Self::function_is_pure(func);
                     self.purity_map.insert(func.name.name.clone(), is_pure);
                 }
@@ -751,7 +762,12 @@ impl<'a> TypeChecker<'a> {
         for item in &module.items {
             match item {
                 Item::TypeAlias(alias) => self.check_type_alias(alias),
-                Item::Function(func) => self.check_function(func),
+                Item::Function(func) => {
+                    if func.type_params.is_empty() {
+                        self.check_function(func);
+                    }
+                    // Generic function bodies are checked at each call site.
+                }
                 Item::Implement(block) => self.check_implement_block(block),
                 Item::Struct(def) => {
                     for method in &def.methods {
@@ -2181,6 +2197,79 @@ impl<'a> TypeChecker<'a> {
             }
         }
 
+        // Check for generic function call: `name[T](args...)`.
+        if !type_args.is_empty() {
+            if let Expr::Ident(ident) = callee {
+                if self.generic_function_templates.contains_key(&ident.name) {
+                    let template = self.generic_function_templates[&ident.name].clone();
+                    let concrete_args: Vec<TypeId> = type_args
+                        .iter()
+                        .map(|a| self.resolve_type_expr(a))
+                        .collect();
+
+                    if template.type_params.len() != concrete_args.len() {
+                        self.sink.emit(errors::unknown_type(
+                            &format!(
+                                "{} (expected {} type argument(s), got {})",
+                                ident.name,
+                                template.type_params.len(),
+                                concrete_args.len()
+                            ),
+                            span,
+                        ));
+                        return TypeInterner::ERROR;
+                    }
+
+                    let subst: HashMap<String, TypeId> = template
+                        .type_params
+                        .iter()
+                        .zip(concrete_args.iter())
+                        .map(|(p, &ty)| (p.name.clone(), ty))
+                        .collect();
+
+                    let old_subst = std::mem::replace(&mut self.type_var_subst, subst);
+
+                    let param_types: Vec<TypeId> = template
+                        .params
+                        .iter()
+                        .map(|p| self.resolve_type_expr(&p.ty))
+                        .collect();
+                    let return_type = template
+                        .return_type
+                        .as_ref()
+                        .map(|t| self.resolve_type_expr(t))
+                        .unwrap_or(TypeInterner::NOTHING);
+
+                    self.type_var_subst = old_subst;
+
+                    // Check argument count and types.
+                    if args.len() != param_types.len() {
+                        self.sink.emit(errors::argument_count_mismatch(
+                            &ident.name,
+                            param_types.len(),
+                            args.len(),
+                            span,
+                        ));
+                        for arg in args {
+                            self.check_expr(&arg.value);
+                        }
+                        return TypeInterner::ERROR;
+                    }
+                    for (arg, &expected) in args.iter().zip(param_types.iter()) {
+                        let got = self.check_expr(&arg.value);
+                        if !self.types_compatible(got, expected) {
+                            self.sink.emit(errors::type_mismatch(
+                                &self.type_name(expected),
+                                &self.type_name(got),
+                                arg.value.span(),
+                            ));
+                        }
+                    }
+                    return return_type;
+                }
+            }
+        }
+
         // Check for generic struct construction: `Name[T, U](fields...)`.
         if !type_args.is_empty() {
             if let Expr::Ident(ident) = callee {
@@ -3415,6 +3504,7 @@ mod tests {
         let module = Module {
             items: vec![Item::Function(FunctionDef {
                 name: ident("add", fn_name_span),
+            type_params: vec![],
                 params: vec![
                     Param {
                         view: false,
@@ -3491,6 +3581,7 @@ mod tests {
         let module = Module {
             items: vec![Item::Function(FunctionDef {
                 name: ident("bad", fn_name_span),
+            type_params: vec![],
                 params: vec![
                     Param {
                         view: false,
@@ -3552,6 +3643,7 @@ mod tests {
         let module = Module {
             items: vec![Item::Function(FunctionDef {
                 name: ident("test", sp(50, 54)),
+            type_params: vec![],
                 params: vec![],
                 return_type: Some(TypeExpr::Named(ident("nothing", sp(55, 62)))),
                 body: Block {
@@ -3594,6 +3686,7 @@ mod tests {
         let module = Module {
             items: vec![Item::Function(FunctionDef {
                 name: ident("test", sp(50, 54)),
+            type_params: vec![],
                 params: vec![],
                 return_type: Some(TypeExpr::Named(ident("nothing", sp(55, 62)))),
                 body: Block {
@@ -3636,6 +3729,7 @@ mod tests {
         let module = Module {
             items: vec![Item::Function(FunctionDef {
                 name: ident("test", sp(50, 54)),
+            type_params: vec![],
                 params: vec![],
                 return_type: Some(TypeExpr::Named(ident("nothing", sp(55, 62)))),
                 body: Block {
@@ -3678,6 +3772,7 @@ mod tests {
         let module = Module {
             items: vec![Item::Function(FunctionDef {
                 name: ident("test", sp(50, 54)),
+            type_params: vec![],
                 params: vec![],
                 return_type: Some(TypeExpr::Named(ident("nothing", sp(55, 62)))),
                 body: Block {
@@ -3725,6 +3820,7 @@ mod tests {
         let module = Module {
             items: vec![Item::Function(FunctionDef {
                 name: ident("test", sp(50, 54)),
+            type_params: vec![],
                 params: vec![],
                 return_type: Some(TypeExpr::Named(ident("nothing", sp(55, 62)))),
                 body: Block {
@@ -3765,6 +3861,7 @@ mod tests {
         let module = Module {
             items: vec![Item::Function(FunctionDef {
                 name: ident("test", sp(50, 54)),
+            type_params: vec![],
                 params: vec![],
                 return_type: Some(TypeExpr::Named(ident("nothing", sp(55, 62)))),
                 body: Block {
@@ -3819,6 +3916,7 @@ mod tests {
         let module = Module {
             items: vec![Item::Function(FunctionDef {
                 name: ident("add", fn_name_span),
+            type_params: vec![],
                 params: vec![
                     Param {
                         view: false,
@@ -3895,6 +3993,7 @@ mod tests {
         let module = Module {
             items: vec![Item::Function(FunctionDef {
                 name: ident("add", fn_name_span),
+            type_params: vec![],
                 params: vec![
                     Param {
                         view: false,
@@ -3972,6 +4071,7 @@ mod tests {
         let module = Module {
             items: vec![Item::Function(FunctionDef {
                 name: ident("add", fn_name_span),
+            type_params: vec![],
                 params: vec![
                     Param {
                         view: false,
@@ -4035,6 +4135,7 @@ mod tests {
         let module = Module {
             items: vec![Item::Function(FunctionDef {
                 name: ident("test", sp(50, 54)),
+            type_params: vec![],
                 params: vec![],
                 return_type: Some(TypeExpr::Named(ident("nothing", sp(55, 62)))),
                 body: Block {
@@ -4077,6 +4178,7 @@ mod tests {
         let module = Module {
             items: vec![Item::Function(FunctionDef {
                 name: ident("test", sp(50, 54)),
+            type_params: vec![],
                 params: vec![],
                 return_type: Some(TypeExpr::Named(ident("nothing", sp(55, 62)))),
                 body: Block {
@@ -4127,6 +4229,7 @@ mod tests {
         let module = Module {
             items: vec![Item::Function(FunctionDef {
                 name: ident("foo", fn_name_span),
+            type_params: vec![],
                 params: vec![],
                 return_type: Some(TypeExpr::Named(ident("int64", sp(100, 105)))),
                 body: Block {
@@ -4168,6 +4271,7 @@ mod tests {
         let module = Module {
             items: vec![Item::Function(FunctionDef {
                 name: ident("foo", fn_name_span),
+            type_params: vec![],
                 params: vec![],
                 return_type: Some(TypeExpr::Named(ident("int64", sp(100, 105)))),
                 body: Block {
@@ -4206,6 +4310,7 @@ mod tests {
         let module = Module {
             items: vec![Item::Function(FunctionDef {
                 name: ident("test", sp(50, 54)),
+            type_params: vec![],
                 params: vec![],
                 return_type: Some(TypeExpr::Named(ident("nothing", sp(55, 62)))),
                 body: Block {
@@ -4253,6 +4358,7 @@ mod tests {
         let module = Module {
             items: vec![Item::Function(FunctionDef {
                 name: ident("test", sp(50, 54)),
+            type_params: vec![],
                 params: vec![],
                 return_type: Some(TypeExpr::Named(ident("nothing", sp(55, 62)))),
                 body: Block {
@@ -4305,6 +4411,7 @@ mod tests {
         let module = Module {
             items: vec![Item::Function(FunctionDef {
                 name: ident("test", sp(50, 54)),
+            type_params: vec![],
                 params: vec![],
                 return_type: Some(TypeExpr::Named(ident("nothing", sp(55, 62)))),
                 body: Block {
@@ -4384,6 +4491,7 @@ mod tests {
     fn make_function(name: &str, name_span: Span, params: Vec<Param>, body: Block) -> FunctionDef {
         FunctionDef {
             name: ident(name, name_span),
+            type_params: vec![],
             params,
             return_type: Some(TypeExpr::Named(ident("nothing", sp(200, 207)))),
             body,

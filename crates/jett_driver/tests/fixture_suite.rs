@@ -188,3 +188,4 @@ run_pass_fixture!(
 );
 run_pass_fixture!(run_pass_bitfield_roundtrip, "bitfield_roundtrip.jett");
 run_pass_fixture!(run_pass_generic_struct, "generic_struct.jett");
+run_pass_fixture!(run_pass_generic_function, "generic_function.jett");

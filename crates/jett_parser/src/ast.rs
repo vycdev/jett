@@ -94,6 +94,9 @@ pub struct NamespaceDecl {
 #[derive(Debug, Clone)]
 pub struct FunctionDef {
     pub name: Ident,
+    /// Generic type parameters, e.g. `[T, U]` in `function foo[T, U](...)`.
+    /// Empty for non-generic functions.
+    pub type_params: Vec<Ident>,
     pub params: Vec<Param>,
     pub return_type: Option<TypeExpr>,
     pub body: Block,
@@ -109,6 +112,8 @@ pub struct MutualBlock {
 #[derive(Debug, Clone)]
 pub struct FunctionDecl {
     pub name: Ident,
+    /// Generic type parameters (mirrors `FunctionDef`).
+    pub type_params: Vec<Ident>,
     pub params: Vec<Param>,
     pub return_type: Option<TypeExpr>,
     pub span: Span,

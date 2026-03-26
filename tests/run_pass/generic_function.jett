@@ -1,0 +1,22 @@
+namespace test
+
+struct Pair[T, U]:
+    first: T
+    second: U
+
+function swap[T, U](p: Pair[T, U]) returns Pair[U, T]:
+    return Pair[U, T](first: p.second, second: p.first)
+
+function identity[T](value: T) returns T:
+    return value
+
+function main() returns nothing:
+    Pair[int64, string] p = Pair[int64, string](first: 1, second: "hello")
+    Pair[string, int64] swapped = swap[int64, string](p)
+    assert swapped.first == "hello"
+    assert swapped.second == 1
+    int64 x = identity[int64](42)
+    assert x == 42
+    string s = identity[string]("world")
+    assert s == "world"
+    return nothing

@@ -582,6 +582,7 @@ mod tests {
 
         let func = FunctionDef {
             name: ident("example", sp(0, 7)),
+            type_params: vec![],
             params: vec![],
             return_type: Some(TypeExpr::Named(ident("nothing", sp(8, 15)))),
             body: Block {
@@ -646,6 +647,7 @@ mod tests {
 
         let func = FunctionDef {
             name: ident("example", sp(0, 7)),
+            type_params: vec![],
             params: vec![],
             return_type: Some(TypeExpr::Named(ident("nothing", sp(8, 15)))),
             body: Block {
@@ -720,6 +722,7 @@ mod tests {
 
         let func = FunctionDef {
             name: ident("example", sp(0, 7)),
+            type_params: vec![],
             params: vec![],
             return_type: Some(TypeExpr::Named(ident("nothing", sp(8, 15)))),
             body: Block {
@@ -802,6 +805,7 @@ mod tests {
 
         let func = FunctionDef {
             name: ident("example", sp(0, 7)),
+            type_params: vec![],
             params: vec![],
             return_type: Some(TypeExpr::Named(ident("nothing", sp(8, 15)))),
             body: Block {
@@ -871,6 +875,7 @@ mod tests {
 
         let func = FunctionDef {
             name: ident("example", sp(0, 7)),
+            type_params: vec![],
             params: vec![],
             return_type: Some(TypeExpr::Named(ident("nothing", sp(8, 15)))),
             body: Block {
@@ -963,6 +968,7 @@ mod tests {
 
         let func = FunctionDef {
             name: ident("example", sp(0, 7)),
+            type_params: vec![],
             params: vec![],
             return_type: Some(TypeExpr::Named(ident("nothing", sp(8, 15)))),
             body: Block {
@@ -1045,6 +1051,7 @@ mod tests {
 
         let func = FunctionDef {
             name: ident("example", sp(0, 7)),
+            type_params: vec![],
             params: vec![],
             return_type: Some(TypeExpr::Named(ident("nothing", sp(8, 15)))),
             body: Block {
@@ -1112,6 +1119,7 @@ mod tests {
 
         let func = FunctionDef {
             name: ident("example", sp(0, 7)),
+            type_params: vec![],
             params: vec![Param {
                 view: true,
                 mutable: false,
@@ -1168,6 +1176,7 @@ mod tests {
 
         let func = FunctionDef {
             name: ident("example", sp(0, 7)),
+            type_params: vec![],
             params: vec![Param {
                 view: false,
                 mutable: false,
@@ -1213,6 +1222,7 @@ mod tests {
 
         let func = FunctionDef {
             name: ident("example", sp(0, 7)),
+            type_params: vec![],
             params: vec![Param {
                 view: true,
                 mutable: false,

@@ -2308,6 +2308,7 @@ mod tests {
     fn func_def(name: &str, params: Vec<(&str, &str)>, body: Block) -> FunctionDef {
         FunctionDef {
             name: ident(name),
+            type_params: vec![],
             params: params
                 .into_iter()
                 .map(|(pname, ptype)| Param {
@@ -2418,6 +2419,7 @@ mod tests {
                 .into_iter()
                 .map(|(method_name, params, return_type)| FunctionDecl {
                     name: ident(method_name),
+                    type_params: vec![],
                     params: params
                         .into_iter()
                         .map(|(param_name, param_ty, view)| Param {
@@ -3945,6 +3947,7 @@ mod builtin_tests {
     fn func_def(name: &str, body: Block) -> FunctionDef {
         FunctionDef {
             name: ident(name),
+            type_params: vec![],
             params: vec![],
             return_type: None,
             body,

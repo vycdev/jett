@@ -307,6 +307,7 @@ impl<'src> Parser<'src> {
         FunctionDef {
             span: kw.span.merge(end_span),
             name: decl.name,
+            type_params: decl.type_params,
             params: decl.params,
             return_type: decl.return_type,
             body,
@@ -315,6 +316,23 @@ impl<'src> Parser<'src> {
 
     fn parse_function_decl_rest(&mut self, start_span: Span) -> FunctionDecl {
         let name = self.parse_ident();
+
+        // Optional generic type parameters: `[T, U, ...]`
+        let type_params = if self.peek() == TokenKind::LBracket {
+            self.advance(); // consume `[`
+            let mut params = Vec::new();
+            if self.peek() != TokenKind::RBracket {
+                params.push(self.parse_ident());
+                while self.eat(TokenKind::Comma).is_some() {
+                    params.push(self.parse_ident());
+                }
+            }
+            self.expect(TokenKind::RBracket);
+            params
+        } else {
+            vec![]
+        };
+
         self.expect(TokenKind::LParen);
         let params = self.parse_params();
         self.expect(TokenKind::RParen);
@@ -330,6 +348,7 @@ impl<'src> Parser<'src> {
         FunctionDecl {
             span: start_span.merge(end_span),
             name,
+            type_params,
             params,
             return_type,
         }
