@@ -125,6 +125,37 @@ pub fn hover_type(source: &str, line: u32, col: u32) -> Option<String> {
     best.map(|(_, ty_id)| check_result.interner.type_name(ty_id))
 }
 
+/// Return the byte span of the definition of the symbol at the given (1-based)
+/// line and column in `source`.  Returns `None` if no definition is found.
+pub fn goto_definition(source: &str, line: u32, col: u32) -> Option<(u32, u32)> {
+    let file_id = FileId::new(0);
+
+    let offset = line_col_to_offset(source, line, col)?;
+
+    let parse_result = parse(source, file_id);
+    if parse_result.errors.iter().any(|d| d.severity == jett_diagnostics::Severity::Error) {
+        return None;
+    }
+
+    let resolve_result = resolve(&parse_result.module);
+
+    // Find the reference span that covers `offset`.
+    let mut best_def: Option<(u32, jett_resolve::scope::DefId)> = None;
+    for (span, def_id) in &resolve_result.resolutions {
+        if span.start <= offset && offset <= span.end {
+            let len = span.end - span.start;
+            if best_def.is_none() || len < best_def.unwrap().0 {
+                best_def = Some((len, *def_id));
+            }
+        }
+    }
+
+    best_def.map(|(_, def_id)| {
+        let def_info = resolve_result.scope_table.def(def_id);
+        (def_info.span.start, def_info.span.end)
+    })
+}
+
 /// Convert a 1-based line+column to a byte offset in `source`.
 fn line_col_to_offset(source: &str, line: u32, col: u32) -> Option<u32> {
     if line == 0 || col == 0 {

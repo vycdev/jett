@@ -75,6 +75,7 @@ impl LanguageServer for JettBackend {
                     TextDocumentSyncKind::FULL,
                 )),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
+                definition_provider: Some(OneOf::Left(true)),
                 ..ServerCapabilities::default()
             },
             ..InitializeResult::default()
@@ -138,6 +139,39 @@ impl LanguageServer for JettBackend {
             }),
             range: None,
         }))
+    }
+
+    async fn goto_definition(
+        &self,
+        params: GotoDefinitionParams,
+    ) -> Result<Option<GotoDefinitionResponse>> {
+        let uri = &params.text_document_position_params.text_document.uri;
+        let position = params.text_document_position_params.position;
+
+        let docs = self.documents.read().await;
+        let Some(source) = docs.get(uri) else {
+            return Ok(None);
+        };
+
+        let line = position.line + 1;
+        let col = position.character + 1;
+
+        let Some((start, end)) = jett_driver::goto_definition(source, line, col) else {
+            return Ok(None);
+        };
+
+        let (start_line, start_col) = jett_diagnostics::render::line_col(source, start);
+        let (end_line, end_col) = jett_diagnostics::render::line_col(source, end);
+
+        let range = Range::new(
+            Position::new(start_line as u32 - 1, start_col as u32 - 1),
+            Position::new(end_line as u32 - 1, end_col as u32 - 1),
+        );
+
+        Ok(Some(GotoDefinitionResponse::Scalar(Location {
+            uri: uri.clone(),
+            range,
+        })))
     }
 }
 
