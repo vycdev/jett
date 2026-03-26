@@ -483,6 +483,8 @@ pub enum Expr {
     Join(Box<Expr>, Span),
     /// `cancel task_expr` — cancel a pending task
     Cancel(Box<Expr>, Span),
+    /// Inline function expression: `function(x: int64) returns bool: return x > 0`
+    InlineFn(Vec<Param>, Option<TypeExpr>, Block, Span),
     /// Error node for recovery
     Error(Span),
 }
@@ -523,6 +525,7 @@ impl Expr {
             | Expr::Run(_, s)
             | Expr::Join(_, s)
             | Expr::Cancel(_, s)
+            | Expr::InlineFn(_, _, _, s)
             | Expr::Error(s) => *s,
             Expr::Ident(ident) => ident.span,
         }

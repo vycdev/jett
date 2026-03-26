@@ -402,6 +402,12 @@ impl<'a> OwnershipChecker<'a> {
             | Expr::Cancel(inner, _) => {
                 self.check_expr_ownership(inner);
             }
+            Expr::InlineFn(_, _, body, _) => {
+                // The inline function body is checked in its own scope; it
+                // captures variables by reference (view), so we just check the
+                // body without consuming any outer variables.
+                self.check_block(body);
+            }
             // Literals and other leaves have no ownership effects.
             Expr::IntLiteral(_, _)
             | Expr::FloatLiteral(_, _)
@@ -452,6 +458,15 @@ impl<'a> OwnershipChecker<'a> {
             "list.flatten",
             "list.unique",
             "list.zip",
+            "list.filter",
+            "list.map",
+            "list.find",
+            "list.sort_by",
+            "list.all",
+            "list.any",
+            "list.count",
+            "list.sum",
+            "list.group_by",
             "random.choice",
             "random.shuffle",
         ];

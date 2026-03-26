@@ -885,6 +885,112 @@ impl<'a> TypeChecker<'a> {
                 let map_ty = self.interner.intern(Type::Map(k, v));
                 Some((vec![map_ty], self.interner.intern(Type::List(v))))
             }
+            // list.first / list.last — no fn arg
+            "list.first" | "list.last" => {
+                let inner = if type_args.len() == 1 {
+                    self.resolve_type_expr(&type_args[0])
+                } else {
+                    TypeInterner::ERROR
+                };
+                let list_ty = self.interner.intern(Type::List(inner));
+                Some((
+                    vec![list_ty],
+                    self.interner.intern(Type::Optional(inner)),
+                ))
+            }
+            // higher-order: list.filter[T](list, fn) -> list[T]
+            "list.filter" => {
+                let inner = if type_args.len() >= 1 {
+                    self.resolve_type_expr(&type_args[0])
+                } else {
+                    TypeInterner::ERROR
+                };
+                let list_ty = self.interner.intern(Type::List(inner));
+                Some((vec![list_ty, TypeInterner::ERROR], list_ty))
+            }
+            // higher-order: list.map[T, U](list, fn) -> list[U]
+            "list.map" => {
+                let inner_u = if type_args.len() >= 2 {
+                    self.resolve_type_expr(&type_args[1])
+                } else {
+                    TypeInterner::ERROR
+                };
+                let inner_t = if type_args.len() >= 1 {
+                    self.resolve_type_expr(&type_args[0])
+                } else {
+                    TypeInterner::ERROR
+                };
+                let list_t = self.interner.intern(Type::List(inner_t));
+                let list_u = self.interner.intern(Type::List(inner_u));
+                Some((vec![list_t, TypeInterner::ERROR], list_u))
+            }
+            // higher-order: list.find[T](list, fn) -> optional[T]
+            "list.find" => {
+                let inner = if type_args.len() >= 1 {
+                    self.resolve_type_expr(&type_args[0])
+                } else {
+                    TypeInterner::ERROR
+                };
+                let list_ty = self.interner.intern(Type::List(inner));
+                Some((
+                    vec![list_ty, TypeInterner::ERROR],
+                    self.interner.intern(Type::Optional(inner)),
+                ))
+            }
+            // higher-order: list.sort_by[T](list, fn) -> list[T]
+            "list.sort_by" => {
+                let inner = if type_args.len() >= 1 {
+                    self.resolve_type_expr(&type_args[0])
+                } else {
+                    TypeInterner::ERROR
+                };
+                let list_ty = self.interner.intern(Type::List(inner));
+                Some((vec![list_ty, TypeInterner::ERROR], list_ty))
+            }
+            // higher-order: list.all / list.any [T](list, fn) -> bool
+            "list.all" | "list.any" => {
+                let inner = if type_args.len() >= 1 {
+                    self.resolve_type_expr(&type_args[0])
+                } else {
+                    TypeInterner::ERROR
+                };
+                let list_ty = self.interner.intern(Type::List(inner));
+                Some((vec![list_ty, TypeInterner::ERROR], TypeInterner::BOOL))
+            }
+            // higher-order: list.count[T](list, fn) -> int64
+            "list.count" => {
+                let inner = if type_args.len() >= 1 {
+                    self.resolve_type_expr(&type_args[0])
+                } else {
+                    TypeInterner::ERROR
+                };
+                let list_ty = self.interner.intern(Type::List(inner));
+                Some((vec![list_ty, TypeInterner::ERROR], TypeInterner::INT64))
+            }
+            // list.sum[T](list) -> T (numeric)
+            "list.sum" => {
+                let inner = if type_args.len() >= 1 {
+                    self.resolve_type_expr(&type_args[0])
+                } else {
+                    TypeInterner::ERROR
+                };
+                let list_ty = self.interner.intern(Type::List(inner));
+                Some((vec![list_ty], inner))
+            }
+            // list.group_by[T](list, fn) -> map[string, list[T]]
+            "list.group_by" => {
+                let inner = if type_args.len() >= 1 {
+                    self.resolve_type_expr(&type_args[0])
+                } else {
+                    TypeInterner::ERROR
+                };
+                let list_ty = self.interner.intern(Type::List(inner));
+                let group_map_ty = self.interner.intern(Type::Map(
+                    TypeInterner::STRING,
+                    list_ty,
+                ));
+                Some((vec![list_ty, TypeInterner::ERROR], group_map_ty))
+            }
             _ => None,
         }
     }
@@ -2422,6 +2528,36 @@ impl<'a> TypeChecker<'a> {
             Expr::Error(_) => TypeInterner::ERROR,
             Expr::EnumVariant(type_name, variant, span) => {
                 self.check_enum_variant(type_name, variant, &[], *span)
+            }
+            Expr::InlineFn(params, return_type, body, _) => {
+                // Type-check the inline function body with parameters bound.
+                let saved_return_type = self.current_return_type;
+                let saved_fn_name = self.current_function_name.take();
+                let saved_pure = self.current_function_pure;
+
+                let ret = return_type
+                    .as_ref()
+                    .map(|t| self.resolve_type_expr(t))
+                    .unwrap_or(TypeInterner::NOTHING);
+                self.current_return_type = Some(ret);
+                self.current_function_pure = false;
+
+                for param in params {
+                    let param_type = self.resolve_type_expr(&param.ty);
+                    if let Some(def_id) = self.declaration_def_id(param.name.span) {
+                        self.type_env.insert(def_id, param_type);
+                    }
+                }
+
+                self.check_block(body);
+
+                self.current_return_type = saved_return_type;
+                self.current_function_name = saved_fn_name;
+                self.current_function_pure = saved_pure;
+
+                // Inline functions have no first-class type in Jett's type system yet;
+                // use ERROR as an "any" placeholder so they pass type-checking.
+                TypeInterner::ERROR
             }
         };
 

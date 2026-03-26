@@ -1,0 +1,33 @@
+namespace app
+
+function main(view stdout: Stdout) returns nothing:
+    list[int64] nums = list(1, 2, 3, 4, 5)
+
+    # filter with inline function (single-line body)
+    list[int64] big = list.filter[int64](nums, function(n: int64) returns bool: return n > 2)
+    assert list.length[int64](big) == 3
+
+    # map with inline function
+    list[int64] doubled = list.map[int64, int64](nums, function(n: int64) returns int64: return n * 2)
+    int64 first = list.get[int64](doubled, 0) handle:
+        return nothing
+    assert first == 2
+    int64 last = list.get[int64](doubled, 4) handle:
+        return nothing
+    assert last == 10
+
+    # find with inline function
+    optional[int64] maybe = list.find[int64](nums, function(n: int64) returns bool: return n == 3)
+    int64 found = maybe handle:
+        return nothing
+    assert found == 3
+
+    # all with inline function
+    bool all_pos = list.all[int64](nums, function(n: int64) returns bool: return n > 0)
+    assert all_pos == true
+
+    # any with inline function (false case)
+    bool any_neg = list.any[int64](nums, function(n: int64) returns bool: return n < 0)
+    assert any_neg == false
+
+    Stdout.write(view stdout, "ok")

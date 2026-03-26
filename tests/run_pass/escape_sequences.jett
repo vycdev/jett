@@ -1,0 +1,13 @@
+namespace app
+
+function main(view stdout: Stdout) returns nothing:
+    string tab = "a\tb"
+    string newline = "line1\nline2"
+    string quoted = "say \"hello\""
+    string backslash = "back\\slash"
+    Stdout.write(view stdout, tab)
+    Stdout.write(view stdout, newline)
+    Stdout.write(view stdout, quoted)
+    Stdout.write(view stdout, backslash)
+    string name = "world"
+    Stdout.write(view stdout, "hello\t{name}")

@@ -715,6 +715,14 @@ impl Resolver {
             | Expr::Cancel(inner, _) => {
                 self.resolve_expr(inner, item_index);
             }
+            Expr::InlineFn(params, _return_type, body, _) => {
+                let scope = self.push_scope();
+                for param in params {
+                    self.declare_local(&param.name.name, DefKind::Param, param.name.span);
+                }
+                self.resolve_block(body, item_index);
+                self.pop_scope(scope);
+            }
             // Literals and nothing — no names to resolve.
             Expr::IntLiteral(_, _)
             | Expr::FloatLiteral(_, _)

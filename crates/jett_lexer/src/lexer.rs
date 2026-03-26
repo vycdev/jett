@@ -362,6 +362,11 @@ impl<'src> Lexer<'src> {
                 if b == b'\n' || b == b'\r' {
                     break; // unterminated
                 }
+                // Skip escape sequences so \" doesn't prematurely end the string.
+                if b == b'\\' && scan + 1 < self.source.len() {
+                    scan += 2;
+                    continue;
+                }
                 if b == b'{' {
                     // Check for escaped brace {{
                     if scan + 1 < self.source.len() && self.source.as_bytes()[scan + 1] == b'{' {
@@ -411,6 +416,11 @@ impl<'src> Lexer<'src> {
                 self.emitted_content = true;
                 return;
             }
+            // Skip escape sequences (e.g., \", \\, \n, \t)
+            if b == b'\\' && self.peek_byte(1).is_some() {
+                self.pos += 2;
+                continue;
+            }
             // Handle {{ and }} as literal braces (just skip past them)
             if b == b'{' && self.peek_byte(1) == Some(b'{') {
                 self.pos += 2;
@@ -441,9 +451,27 @@ impl<'src> Lexer<'src> {
         let seg_start = self.pos;
         while !self.at_end() {
             let b = self.current_byte();
-            if b == b'"' || b == b'\n' || b == b'\r' {
+            if b == b'\n' || b == b'\r' {
                 // No interpolation found after all — shouldn't happen since we pre-scanned,
                 // but handle it gracefully.
+                self.pos += 1;
+                self.emit(TokenKind::StringLiteral, quote_start, self.pos);
+                self.emitted_content = true;
+                return;
+            }
+            // Skip escape sequences so \" doesn't end the string
+            if b == b'\\' && self.peek_byte(1).is_some() {
+                let next = self.peek_byte(1).unwrap();
+                if next == b'"' {
+                    // \\" is an escaped quote — skip both
+                    self.pos += 2;
+                    continue;
+                }
+                self.pos += 2;
+                continue;
+            }
+            if b == b'"' {
+                // Unescaped closing quote
                 self.pos += 1;
                 self.emit(TokenKind::StringLiteral, quote_start, self.pos);
                 self.emitted_content = true;
@@ -552,6 +580,11 @@ impl<'src> Lexer<'src> {
             let mut found_interp = false;
             while !self.at_end() {
                 let b = self.current_byte();
+                // Skip escape sequences
+                if b == b'\\' && self.peek_byte(1).is_some() {
+                    self.pos += 2;
+                    continue;
+                }
                 if b == b'"' {
                     // End of string — emit StringEnd
                     self.pos += 1; // consume closing quote

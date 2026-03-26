@@ -2,8 +2,8 @@
 
 ## Statistics
 
-- **Lines of Rust:** ~20,500
-- **Tests:** 445 passing
+- **Lines of Rust:** ~27,800
+- **Tests:** 448 passing
 - **Crates:** 15
 - **VS Code extension:** Yes
 
@@ -19,7 +19,7 @@
 | Lexer (indentation, interpolation, 90+ tokens) | `jett_lexer` | 62 | Done |
 | Parser (recursive descent + Pratt) | `jett_parser` | 58 | Done |
 | Formatter (canonical whitespace) | `jett_fmt` | 3 | Done |
-| Pipeline orchestration | `jett_driver` | 15 | Done |
+| Pipeline orchestration | `jett_driver` | 27 | Done |
 | CLI (format, build, run, test, lsp) | `jett_cli` | 0 | Done |
 
 ### Phase B: Type System Core — COMPLETE
@@ -83,6 +83,10 @@
 | Handle blocks (`handle error:`, `handle:`, `default`) | Done |
 | Generic structs | Done |
 | Generic functions | Done |
+| String escape sequences (`\"`, `\\`, `\n`, `\t`, `\r`) | Done |
+| Inline function expressions (`function(x: T) returns U: body`) | Done |
+| Higher-order list functions (`filter`, `map`, `find`, `sort_by`, `all`, `any`, `count`, `sum`, `group_by`) | Done |
+| Single-line `handle:` blocks | Done |
 
 ### Phase H: Agent Tooling — PARTIAL
 
@@ -120,7 +124,7 @@
 | Module | Status |
 |---|---|
 | `string` (basic ops in interpreter) | Partial (18 builtins) |
-| `list` (basic ops in interpreter) | Partial (19 builtins) |
+| `list` (basic ops in interpreter) | Partial (28 builtins: 19 basic + filter, map, find, sort_by, all, any, count, sum, group_by) |
 | `map` (basic ops in interpreter) | Partial (9 builtins: new, length, has, get, insert, remove, keys, values, is_empty) |
 | `math` (basic ops in interpreter) | Partial (12 builtins) |
 | `json` (serialize) | Partial (json.serialize, json.serialize_public) |

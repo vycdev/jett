@@ -994,6 +994,30 @@ impl<'src> Parser<'src> {
     // Blocks and Statements
     // =======================================================================
 
+    /// Parse a block that may be either indented (multi-line) or a single
+    /// statement on the same line (used for inline function bodies).
+    ///
+    /// - If the next non-newline token is `Indent`, delegates to `parse_block`.
+    /// - Otherwise, parses exactly one statement as the body.
+    fn parse_block_or_single_stmt(&mut self) -> Block {
+        self.skip_newlines();
+        if self.peek() == TokenKind::Indent {
+            return self.parse_block();
+        }
+        // Single-statement body (no indentation change).
+        let start = self.peek_token().span;
+        let stmts = if let Some(stmt) = self.parse_stmt() {
+            let end = stmt_span(&stmt);
+            return Block {
+                stmts: vec![stmt],
+                span: start.merge(end),
+            };
+        } else {
+            vec![]
+        };
+        Block { stmts, span: start }
+    }
+
     fn parse_block(&mut self) -> Block {
         self.skip_newlines();
         let indent_tok = self.expect(TokenKind::Indent);
@@ -1405,7 +1429,7 @@ impl<'src> Parser<'src> {
         };
 
         self.expect(TokenKind::Colon);
-        let block = self.parse_block();
+        let block = self.parse_block_or_single_stmt();
         let span = expr.span().merge(block.span);
         Expr::Handle(Box::new(expr), error_name, block, span)
     }
@@ -1597,11 +1621,12 @@ impl<'src> Parser<'src> {
                 self.advance();
                 let text = self.token_text(&tok);
                 // Strip the surrounding quotes
-                let inner = if text.len() >= 2 {
-                    text[1..text.len() - 1].to_string()
+                let raw = if text.len() >= 2 {
+                    &text[1..text.len() - 1]
                 } else {
-                    text.to_string()
+                    text
                 };
+                let inner = unescape_string(raw);
                 Expr::StringLiteral(inner, tok.span)
             }
             TokenKind::StringStart => {
@@ -1618,7 +1643,7 @@ impl<'src> Parser<'src> {
                     start_text
                 };
                 if !literal.is_empty() {
-                    parts.push(StringPart::Literal(literal.to_string()));
+                    parts.push(StringPart::Literal(unescape_string(literal)));
                 }
 
                 // Parse interpolated expression
@@ -1639,7 +1664,7 @@ impl<'src> Parser<'src> {
                                 end_text
                             };
                             if !literal.is_empty() {
-                                parts.push(StringPart::Literal(literal.to_string()));
+                                parts.push(StringPart::Literal(unescape_string(literal)));
                             }
                             let span = start_span.merge(end_tok.span);
                             return Expr::StringInterpolation(parts, span);
@@ -1649,7 +1674,7 @@ impl<'src> Parser<'src> {
                             self.advance();
                             let mid_text = self.token_text(&mid_tok);
                             if !mid_text.is_empty() {
-                                parts.push(StringPart::Literal(mid_text.to_string()));
+                                parts.push(StringPart::Literal(unescape_string(mid_text)));
                             }
                             // Parse the next interpolated expression
                             let expr = self.parse_expr();
@@ -1840,6 +1865,24 @@ impl<'src> Parser<'src> {
                     })
                 }
             }
+            TokenKind::Function => {
+                // Inline function expression (anonymous, no name).
+                // Syntax: `function(params) returns Type: body`
+                //   - body may be indented (multi-line) or on the same line (single statement)
+                self.advance(); // consume `function`
+                self.expect(TokenKind::LParen);
+                let params = self.parse_params();
+                self.expect(TokenKind::RParen);
+                let return_type = if self.eat(TokenKind::Returns).is_some() {
+                    Some(self.parse_type())
+                } else {
+                    None
+                };
+                self.expect(TokenKind::Colon);
+                let body = self.parse_block_or_single_stmt();
+                let span = tok.span.merge(body.span);
+                Expr::InlineFn(params, return_type, body, span)
+            }
             TokenKind::Self_ => {
                 self.advance();
                 Expr::Ident(Ident {
@@ -2026,6 +2069,8 @@ impl<'src> Parser<'src> {
                 | TokenKind::Bit
                 | TokenKind::Bits
                 | TokenKind::States
+                | TokenKind::Map_
+                | TokenKind::List_
         )
     }
 }
@@ -2036,6 +2081,32 @@ impl<'src> Parser<'src> {
 
 /// Returns (left_binding_power, right_binding_power) for infix operators.
 /// Higher numbers = tighter binding.
+/// Process escape sequences in a raw string (after the surrounding quotes are stripped).
+fn unescape_string(raw: &str) -> String {
+    let mut result = String::with_capacity(raw.len());
+    let mut chars = raw.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('n') => result.push('\n'),
+                Some('t') => result.push('\t'),
+                Some('r') => result.push('\r'),
+                Some('"') => result.push('"'),
+                Some('\\') => result.push('\\'),
+                Some('0') => result.push('\0'),
+                Some(other) => {
+                    result.push('\\');
+                    result.push(other);
+                }
+                None => result.push('\\'),
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
 fn infix_binding_power(kind: TokenKind) -> Option<(u8, u8)> {
     match kind {
         TokenKind::PipePipe => Some((1, 2)),
@@ -3599,4 +3670,5 @@ property list_property:
             other => panic!("expected Property, got {:?}", other),
         }
     }
+
 }

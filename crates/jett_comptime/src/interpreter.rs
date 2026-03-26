@@ -413,11 +413,19 @@ impl Interpreter {
             }
 
             // Variables
-            Expr::Ident(ident) => self
-                .get_variable(&ident.name)
-                .cloned()
-                .map(ExprFlow::Value)
-                .ok_or_else(|| format!("undefined variable '{}'", ident.name)),
+            Expr::Ident(ident) => {
+                if let Some(val) = self.get_variable(&ident.name).cloned() {
+                    Ok(ExprFlow::Value(val))
+                } else if let Some(func) = self.functions.get(&ident.name).cloned() {
+                    // Named function reference — wrap as a function value.
+                    Ok(ExprFlow::Value(Value::Function {
+                        params: func.params.clone(),
+                        body: func.body.clone(),
+                    }))
+                } else {
+                    Err(format!("undefined variable '{}'", ident.name))
+                }
+            }
 
             // Parenthesized
             Expr::Paren(inner, _) => self.eval_expr_flow(inner),
@@ -514,6 +522,10 @@ impl Interpreter {
                     Expr::FieldAccess(obj, field, _) => {
                         let dotted = Self::extract_dotted_name(obj, &field.name);
                         if let Some(ref name) = dotted {
+                            // Try higher-order built-ins first (require &mut self).
+                            if let Some(result) = self.call_higher_order_builtin(name, arg_values.clone()) {
+                                return Ok(ExprFlow::Value(result?));
+                            }
                             // Try built-in functions first.
                             if let Some(result) = self.call_builtin(name, &arg_values) {
                                 return Ok(ExprFlow::Value(result?));
@@ -740,6 +752,13 @@ impl Interpreter {
             Expr::Cancel(inner, _) => {
                 value_or_signal!(self, inner);
                 Ok(ExprFlow::Value(Value::Nothing))
+            }
+
+            Expr::InlineFn(params, _return_type, body, _) => {
+                Ok(ExprFlow::Value(Value::Function {
+                    params: params.clone(),
+                    body: body.clone(),
+                }))
             }
 
             // Unsupported expressions produce a clear error.
@@ -2396,6 +2415,10 @@ impl Interpreter {
     /// Built-in standard library functions are checked first; if the name
     /// does not match a built-in, user-defined functions are consulted.
     pub fn call_function(&mut self, name: &str, args: Vec<Value>) -> Result<Value, String> {
+        // Check higher-order built-ins first (require &mut self).
+        if let Some(result) = self.call_higher_order_builtin(name, args.clone()) {
+            return result;
+        }
         // Check built-in functions first.
         if let Some(result) = self.call_builtin(name, &args) {
             return result;
@@ -2446,6 +2469,296 @@ impl Interpreter {
         }
 
         Ok(value)
+    }
+
+    /// Try to call a higher-order built-in that requires `&mut self` (because
+    /// it needs to invoke a user-supplied function value).  Returns `None` if
+    /// the name is not a higher-order built-in.
+    fn call_higher_order_builtin(
+        &mut self,
+        name: &str,
+        args: Vec<Value>,
+    ) -> Option<Result<Value, String>> {
+        match name {
+            "list.filter" => {
+                if args.len() != 2 {
+                    return Some(Err(format!(
+                        "list.filter expects 2 arguments, got {}",
+                        args.len()
+                    )));
+                }
+                let items = match &args[0] {
+                    Value::List(v) => v.clone(),
+                    _ => return Some(Err("list.filter: first argument must be a list".into())),
+                };
+                let fn_val = args[1].clone();
+                let mut result = Vec::new();
+                for item in items {
+                    match self.call_fn_value(fn_val.clone(), vec![item.clone()]) {
+                        Ok(Value::Bool(true)) => result.push(item),
+                        Ok(Value::Bool(false)) => {}
+                        Ok(other) => {
+                            return Some(Err(format!(
+                                "list.filter: predicate returned {other}, expected bool"
+                            )))
+                        }
+                        Err(e) => return Some(Err(e)),
+                    }
+                }
+                Some(Ok(Value::List(result)))
+            }
+            "list.map" => {
+                if args.len() != 2 {
+                    return Some(Err(format!(
+                        "list.map expects 2 arguments, got {}",
+                        args.len()
+                    )));
+                }
+                let items = match &args[0] {
+                    Value::List(v) => v.clone(),
+                    _ => return Some(Err("list.map: first argument must be a list".into())),
+                };
+                let fn_val = args[1].clone();
+                let mut result = Vec::new();
+                for item in items {
+                    match self.call_fn_value(fn_val.clone(), vec![item]) {
+                        Ok(v) => result.push(v),
+                        Err(e) => return Some(Err(e)),
+                    }
+                }
+                Some(Ok(Value::List(result)))
+            }
+            "list.find" => {
+                if args.len() != 2 {
+                    return Some(Err(format!(
+                        "list.find expects 2 arguments, got {}",
+                        args.len()
+                    )));
+                }
+                let items = match &args[0] {
+                    Value::List(v) => v.clone(),
+                    _ => return Some(Err("list.find: first argument must be a list".into())),
+                };
+                let fn_val = args[1].clone();
+                for item in items {
+                    match self.call_fn_value(fn_val.clone(), vec![item.clone()]) {
+                        Ok(Value::Bool(true)) => {
+                            return Some(Ok(Value::OptionalSome(Box::new(item))))
+                        }
+                        Ok(Value::Bool(false)) => {}
+                        Ok(other) => {
+                            return Some(Err(format!(
+                                "list.find: predicate returned {other}, expected bool"
+                            )))
+                        }
+                        Err(e) => return Some(Err(e)),
+                    }
+                }
+                Some(Ok(Value::OptionalNone))
+            }
+            "list.sort_by" => {
+                if args.len() != 2 {
+                    return Some(Err(format!(
+                        "list.sort_by expects 2 arguments, got {}",
+                        args.len()
+                    )));
+                }
+                let items = match &args[0] {
+                    Value::List(v) => v.clone(),
+                    _ => return Some(Err("list.sort_by: first argument must be a list".into())),
+                };
+                let fn_val = args[1].clone();
+                // Compute keys for each item.
+                let mut keyed: Vec<(i64, Value)> = Vec::new();
+                for item in items {
+                    match self.call_fn_value(fn_val.clone(), vec![item.clone()]) {
+                        Ok(Value::Int64(k)) => keyed.push((k, item)),
+                        Ok(other) => {
+                            return Some(Err(format!(
+                                "list.sort_by: key function returned {other}, expected int64"
+                            )))
+                        }
+                        Err(e) => return Some(Err(e)),
+                    }
+                }
+                keyed.sort_by_key(|(k, _)| *k);
+                Some(Ok(Value::List(keyed.into_iter().map(|(_, v)| v).collect())))
+            }
+            "list.all" => {
+                if args.len() != 2 {
+                    return Some(Err(format!(
+                        "list.all expects 2 arguments, got {}",
+                        args.len()
+                    )));
+                }
+                let items = match &args[0] {
+                    Value::List(v) => v.clone(),
+                    _ => return Some(Err("list.all: first argument must be a list".into())),
+                };
+                let fn_val = args[1].clone();
+                for item in items {
+                    match self.call_fn_value(fn_val.clone(), vec![item]) {
+                        Ok(Value::Bool(false)) => return Some(Ok(Value::Bool(false))),
+                        Ok(Value::Bool(true)) => {}
+                        Ok(other) => {
+                            return Some(Err(format!(
+                                "list.all: predicate returned {other}, expected bool"
+                            )))
+                        }
+                        Err(e) => return Some(Err(e)),
+                    }
+                }
+                Some(Ok(Value::Bool(true)))
+            }
+            "list.any" => {
+                if args.len() != 2 {
+                    return Some(Err(format!(
+                        "list.any expects 2 arguments, got {}",
+                        args.len()
+                    )));
+                }
+                let items = match &args[0] {
+                    Value::List(v) => v.clone(),
+                    _ => return Some(Err("list.any: first argument must be a list".into())),
+                };
+                let fn_val = args[1].clone();
+                for item in items {
+                    match self.call_fn_value(fn_val.clone(), vec![item]) {
+                        Ok(Value::Bool(true)) => return Some(Ok(Value::Bool(true))),
+                        Ok(Value::Bool(false)) => {}
+                        Ok(other) => {
+                            return Some(Err(format!(
+                                "list.any: predicate returned {other}, expected bool"
+                            )))
+                        }
+                        Err(e) => return Some(Err(e)),
+                    }
+                }
+                Some(Ok(Value::Bool(false)))
+            }
+            "list.count" => {
+                if args.len() != 2 {
+                    return Some(Err(format!(
+                        "list.count expects 2 arguments, got {}",
+                        args.len()
+                    )));
+                }
+                let items = match &args[0] {
+                    Value::List(v) => v.clone(),
+                    _ => return Some(Err("list.count: first argument must be a list".into())),
+                };
+                let fn_val = args[1].clone();
+                let mut count = 0i64;
+                for item in items {
+                    match self.call_fn_value(fn_val.clone(), vec![item]) {
+                        Ok(Value::Bool(true)) => count += 1,
+                        Ok(Value::Bool(false)) => {}
+                        Ok(other) => {
+                            return Some(Err(format!(
+                                "list.count: predicate returned {other}, expected bool"
+                            )))
+                        }
+                        Err(e) => return Some(Err(e)),
+                    }
+                }
+                Some(Ok(Value::Int64(count)))
+            }
+            "list.sum" => {
+                if args.len() != 1 {
+                    return Some(Err(format!(
+                        "list.sum expects 1 argument, got {}",
+                        args.len()
+                    )));
+                }
+                match &args[0] {
+                    Value::List(items) => {
+                        if items.is_empty() {
+                            return Some(Ok(Value::Int64(0)));
+                        }
+                        // Detect int64 vs float64 from first element.
+                        match &items[0] {
+                            Value::Int64(_) => {
+                                let mut total = 0i64;
+                                for item in items {
+                                    match item {
+                                        Value::Int64(n) => total += n,
+                                        _ => return Some(Err("list.sum: mixed types".into())),
+                                    }
+                                }
+                                Some(Ok(Value::Int64(total)))
+                            }
+                            Value::Float64(_) => {
+                                let mut total = 0.0f64;
+                                for item in items {
+                                    match item {
+                                        Value::Float64(n) => total += n,
+                                        _ => return Some(Err("list.sum: mixed types".into())),
+                                    }
+                                }
+                                Some(Ok(Value::Float64(total)))
+                            }
+                            _ => Some(Err("list.sum: list elements must be int64 or float64".into())),
+                        }
+                    }
+                    _ => Some(Err("list.sum: argument must be a list".into())),
+                }
+            }
+            "list.group_by" => {
+                if args.len() != 2 {
+                    return Some(Err(format!(
+                        "list.group_by expects 2 arguments, got {}",
+                        args.len()
+                    )));
+                }
+                let items = match &args[0] {
+                    Value::List(v) => v.clone(),
+                    _ => return Some(Err("list.group_by: first argument must be a list".into())),
+                };
+                let fn_val = args[1].clone();
+                let mut groups: Vec<(Value, Value)> = Vec::new();
+                for item in items {
+                    let key = match self.call_fn_value(fn_val.clone(), vec![item.clone()]) {
+                        Ok(k) => k,
+                        Err(e) => return Some(Err(e)),
+                    };
+                    if let Some((_, group)) = groups.iter_mut().find(|(k, _)| k == &key) {
+                        if let Value::List(v) = group {
+                            v.push(item);
+                        }
+                    } else {
+                        groups.push((key, Value::List(vec![item])));
+                    }
+                }
+                Some(Ok(Value::Map(groups)))
+            }
+            _ => None,
+        }
+    }
+
+    /// Call a `Value::Function` (inline function) with the given arguments.
+    fn call_fn_value(&mut self, fn_val: Value, args: Vec<Value>) -> Result<Value, String> {
+        match fn_val {
+            Value::Function { params, body } => {
+                if args.len() != params.len() {
+                    return Err(format!(
+                        "inline function expects {} argument(s), got {}",
+                        params.len(),
+                        args.len()
+                    ));
+                }
+                self.push_scope();
+                for (param, arg) in params.iter().zip(args) {
+                    self.set_variable(&param.name.name, arg);
+                }
+                let result = self.exec_block_inner(&body)?;
+                self.pop_scope();
+                Ok(match result {
+                    Some(Signal::Return(v)) => v,
+                    _ => Value::Nothing,
+                })
+            }
+            other => Err(format!("expected function value, got {other}")),
+        }
     }
 
     fn resolve_interface_dispatch(&self, name: &str, args: &[Value]) -> Option<String> {
@@ -2992,6 +3305,7 @@ fn runtime_type_name(value: &Value) -> Option<String> {
         Value::Actor(_) => Some("actor".to_string()),
         Value::Pending(_) => Some("pending".to_string()),
         Value::Map(_) => Some("map".to_string()),
+        Value::Function { .. } => Some("function".to_string()),
     }
 }
 
