@@ -76,6 +76,7 @@ impl LanguageServer for JettBackend {
                 )),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 definition_provider: Some(OneOf::Left(true)),
+                completion_provider: Some(CompletionOptions::default()),
                 ..ServerCapabilities::default()
             },
             ..InitializeResult::default()
@@ -172,6 +173,46 @@ impl LanguageServer for JettBackend {
             uri: uri.clone(),
             range,
         })))
+    }
+
+    async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
+        let uri = &params.text_document_position.text_document.uri;
+
+        let docs = self.documents.read().await;
+        let Some(source) = docs.get(uri) else {
+            return Ok(None);
+        };
+
+        let candidates = jett_driver::completions(source);
+        if candidates.is_empty() {
+            return Ok(None);
+        }
+
+        use jett_resolve::scope::DefKind;
+        let items: Vec<CompletionItem> = candidates
+            .into_iter()
+            .map(|(name, kind)| {
+                let kind = match kind {
+                    DefKind::Function => CompletionItemKind::FUNCTION,
+                    DefKind::Struct => CompletionItemKind::STRUCT,
+                    DefKind::Enum => CompletionItemKind::ENUM,
+                    DefKind::Interface => CompletionItemKind::INTERFACE,
+                    DefKind::Machine => CompletionItemKind::CLASS,
+                    DefKind::Actor => CompletionItemKind::CLASS,
+                    DefKind::Variable | DefKind::Param => CompletionItemKind::VARIABLE,
+                    DefKind::Constant => CompletionItemKind::CONSTANT,
+                    DefKind::Namespace => CompletionItemKind::MODULE,
+                    DefKind::Bitfield => CompletionItemKind::STRUCT,
+                };
+                CompletionItem {
+                    label: name,
+                    kind: Some(kind),
+                    ..CompletionItem::default()
+                }
+            })
+            .collect();
+
+        Ok(Some(CompletionResponse::Array(items)))
     }
 }
 

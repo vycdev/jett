@@ -92,7 +92,7 @@
 | LSP server (diagnostics on save) | Done |
 | LSP hover (type at cursor) | Done |
 | LSP go-to-definition | Done |
-| LSP completions | Not started |
+| LSP completions | Done |
 | MCP server | Not started |
 | ASP query system (type-at, signature, completions) | Not started |
 

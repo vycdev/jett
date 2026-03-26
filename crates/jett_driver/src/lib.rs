@@ -125,6 +125,23 @@ pub fn hover_type(source: &str, line: u32, col: u32) -> Option<String> {
     best.map(|(_, ty_id)| check_result.interner.type_name(ty_id))
 }
 
+/// Return a list of (name, kind) completion candidates visible in `source`.
+/// Runs parse + resolve and collects all definitions from the scope table.
+pub fn completions(source: &str) -> Vec<(String, jett_resolve::scope::DefKind)> {
+    let file_id = FileId::new(0);
+    let parse_result = parse(source, file_id);
+    if parse_result.errors.iter().any(|d| d.severity == jett_diagnostics::Severity::Error) {
+        return Vec::new();
+    }
+    let resolve_result = resolve(&parse_result.module);
+    resolve_result
+        .scope_table
+        .definitions
+        .iter()
+        .map(|def| (def.name.clone(), def.kind))
+        .collect()
+}
+
 /// Return the byte span of the definition of the symbol at the given (1-based)
 /// line and column in `source`.  Returns `None` if no definition is found.
 pub fn goto_definition(source: &str, line: u32, col: u32) -> Option<(u32, u32)> {
