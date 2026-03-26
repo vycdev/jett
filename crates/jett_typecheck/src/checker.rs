@@ -1765,6 +1765,19 @@ impl<'a> TypeChecker<'a> {
             let (matches, lifted_secret) = self.secret_argument_matches_param(param_ty, arg_ty);
             if matches {
                 if lifted_secret {
+                    let allows_secret_lifting = callee_name
+                        .as_deref()
+                        .map(|name| Self::is_secret_liftable_call(name, callee_is_pure))
+                        .unwrap_or(callee_is_pure);
+
+                    if !allows_secret_lifting {
+                        self.sink.emit(errors::secret_exposure(
+                            callee_name.as_deref().unwrap_or("<call>"),
+                            &self.type_name(arg_ty),
+                            arg.value.span(),
+                        ));
+                        continue;
+                    }
                     tainted_return = true;
                 }
                 continue;
@@ -4728,6 +4741,73 @@ function main(view fs: Filesystem) returns string:
     string raw = Filesystem.read_file(view fs, \"config.json\") handle error:
         default \"\"
     return raw
+",
+        );
+
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == jett_diagnostics::Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+    }
+
+    #[test]
+    fn pure_function_lifts_secret_argument() {
+        let result = check_source_result(
+            "\
+function upper(value: string) returns string:
+    return string.upper(value)
+
+function main() returns secret[string]:
+    secret[string] api_key = \"abc\"
+    return upper(api_key)
+",
+        );
+
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == jett_diagnostics::Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+    }
+
+    #[test]
+    fn impure_function_rejects_secret_argument_without_secret_param() {
+        let errors = check_source_errors(
+            "\
+function emit(view stdout: Stdout, value: string) returns nothing:
+    Stdout.write(view stdout, value)
+    return nothing
+
+function main(view stdout: Stdout) returns nothing:
+    secret[string] api_key = \"abc\"
+    emit(view stdout, api_key)
+    return nothing
+",
+        );
+
+        assert!(
+            errors.iter().any(|d| d.code.code() == 600),
+            "expected E0600, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn impure_function_accepts_explicit_secret_param() {
+        let result = check_source_result(
+            "\
+function send_secret(view stdout: Stdout, value: secret[string]) returns nothing:
+    string redacted = secret.redact(value)
+    Stdout.write(view stdout, redacted)
+    return nothing
+
+function main(view stdout: Stdout) returns nothing:
+    secret[string] api_key = \"abc\"
+    send_secret(view stdout, api_key)
+    return nothing
 ",
         );
 

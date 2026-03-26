@@ -3,7 +3,7 @@
 ## Statistics
 
 - **Lines of Rust:** ~17,500
-- **Tests:** 370 passing
+- **Tests:** 373 passing
 - **Crates:** 15
 - **VS Code extension:** Yes
 
@@ -28,7 +28,7 @@
 |---|---|---|---|
 | Type interning, struct/enum/interface defs | `jett_types` | 17 | Done |
 | Name resolution, scoping | `jett_resolve` | 14 | Done |
-| Type checking (expressions, operators, generics) | `jett_typecheck` | 74 | Done |
+| Type checking (expressions, operators, generics) | `jett_typecheck` | 77 | Done |
 
 ### Phase C: Ownership and Capabilities — COMPLETE
 
