@@ -152,6 +152,29 @@ impl<'a> TypeChecker<'a> {
         )
     }
 
+    fn types_compatible(&self, expected: TypeId, got: TypeId) -> bool {
+        if expected == got || expected == TypeInterner::ERROR || got == TypeInterner::ERROR {
+            return true;
+        }
+
+        match (self.interner.resolve(expected), self.interner.resolve(got)) {
+            (Type::List(expected_inner), Type::List(got_inner))
+            | (Type::Optional(expected_inner), Type::Optional(got_inner))
+            | (Type::Secret(expected_inner), Type::Secret(got_inner)) => {
+                self.types_compatible(*expected_inner, *got_inner)
+            }
+            (Type::Set(expected_inner), Type::Set(got_inner)) => {
+                self.types_compatible(*expected_inner, *got_inner)
+            }
+            (Type::Map(expected_key, expected_val), Type::Map(got_key, got_val))
+            | (Type::Result(expected_key, expected_val), Type::Result(got_key, got_val)) => {
+                self.types_compatible(*expected_key, *got_key)
+                    && self.types_compatible(*expected_val, *got_val)
+            }
+            _ => false,
+        }
+    }
+
     fn extract_dotted_name(expr: &Expr) -> Option<String> {
         match expr {
             Expr::Ident(ident) => Some(ident.name.clone()),
@@ -163,7 +186,12 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
-    fn builtin_signature(&mut self, callee: &Expr) -> Option<(Vec<TypeId>, TypeId)> {
+    fn builtin_signature(
+        &mut self,
+        callee: &Expr,
+        type_args: &[TypeExpr],
+        span: Span,
+    ) -> Option<(Vec<TypeId>, TypeId)> {
         let name = Self::extract_dotted_name(callee)?;
         match name.as_str() {
             "int64.from_string" => Some((
@@ -173,6 +201,68 @@ impl<'a> TypeChecker<'a> {
             )),
             "string.from_int64" => Some((vec![TypeInterner::INT64], TypeInterner::STRING)),
             "string.from_float64" => Some((vec![TypeInterner::FLOAT64], TypeInterner::STRING)),
+            "Environment.args" => Some((
+                vec![TypeInterner::ERROR],
+                self.interner.intern(Type::List(TypeInterner::STRING)),
+            )),
+            "Stdout.write" => Some((
+                vec![TypeInterner::ERROR, TypeInterner::STRING],
+                TypeInterner::NOTHING,
+            )),
+            "list.new" => {
+                if type_args.len() != 1 {
+                    self.sink.emit(errors::unknown_type(
+                        &format!("list.new (expected 1 type argument, got {})", type_args.len()),
+                        span,
+                    ));
+                    return Some((vec![], TypeInterner::ERROR));
+                }
+                let inner = self.resolve_type_expr(&type_args[0]);
+                Some((vec![], self.interner.intern(Type::List(inner))))
+            }
+            "list.append" => {
+                if type_args.len() != 1 {
+                    self.sink.emit(errors::unknown_type(
+                        &format!(
+                            "list.append (expected 1 type argument, got {})",
+                            type_args.len()
+                        ),
+                        span,
+                    ));
+                    return Some((vec![TypeInterner::ERROR, TypeInterner::ERROR], TypeInterner::ERROR));
+                }
+                let inner = self.resolve_type_expr(&type_args[0]);
+                let list_ty = self.interner.intern(Type::List(inner));
+                Some((vec![list_ty, inner], list_ty))
+            }
+            "list.length" => {
+                if type_args.len() != 1 {
+                    self.sink.emit(errors::unknown_type(
+                        &format!(
+                            "list.length (expected 1 type argument, got {})",
+                            type_args.len()
+                        ),
+                        span,
+                    ));
+                    return Some((vec![TypeInterner::ERROR], TypeInterner::ERROR));
+                }
+                let inner = self.resolve_type_expr(&type_args[0]);
+                Some((vec![self.interner.intern(Type::List(inner))], TypeInterner::INT64))
+            }
+            "list.get" => {
+                if type_args.len() != 1 {
+                    self.sink.emit(errors::unknown_type(
+                        &format!("list.get (expected 1 type argument, got {})", type_args.len()),
+                        span,
+                    ));
+                    return Some((vec![TypeInterner::ERROR, TypeInterner::INT64], TypeInterner::ERROR));
+                }
+                let inner = self.resolve_type_expr(&type_args[0]);
+                Some((
+                    vec![self.interner.intern(Type::List(inner)), TypeInterner::INT64],
+                    self.interner.intern(Type::Optional(inner)),
+                ))
+            }
             _ => None,
         }
     }
@@ -321,10 +411,7 @@ impl<'a> TypeChecker<'a> {
         }
 
         // Check that the initializer type matches the declared type (skip if Error).
-        if declared_type != TypeInterner::ERROR
-            && init_type != TypeInterner::ERROR
-            && declared_type != init_type
-        {
+        if !self.types_compatible(declared_type, init_type) {
             self.sink.emit(errors::var_decl_type_mismatch(
                 &decl.name.name,
                 &self.type_name(declared_type),
@@ -338,10 +425,7 @@ impl<'a> TypeChecker<'a> {
         let target_type = self.check_expr(&assign.target);
         let value_type = self.check_expr(&assign.value);
 
-        if target_type != TypeInterner::ERROR
-            && value_type != TypeInterner::ERROR
-            && target_type != value_type
-        {
+        if !self.types_compatible(target_type, value_type) {
             self.sink.emit(errors::assign_type_mismatch(
                 &self.type_name(target_type),
                 &self.type_name(value_type),
@@ -357,10 +441,7 @@ impl<'a> TypeChecker<'a> {
         };
 
         if let Some(expected) = self.current_return_type {
-            if expected != TypeInterner::ERROR
-                && ret_type != TypeInterner::ERROR
-                && expected != ret_type
-            {
+            if !self.types_compatible(expected, ret_type) {
                 self.sink.emit(errors::return_type_mismatch(
                     &self.type_name(expected),
                     &self.type_name(ret_type),
@@ -460,10 +541,9 @@ impl<'a> TypeChecker<'a> {
             Expr::Ident(ident) => self.check_ident(ident),
             Expr::Binary(lhs, op, rhs, span) => self.check_binary(lhs, *op, rhs, *span),
             Expr::Unary(op, operand, span) => self.check_unary(*op, operand, *span),
-            Expr::Call(callee, args, span) => self.check_call(callee, args, *span),
-            Expr::GenericCall(callee, _type_args, args, span) => {
-                // For now, treat generic calls the same as normal calls.
-                self.check_call(callee, args, *span)
+            Expr::Call(callee, args, span) => self.check_call(callee, &[], args, *span),
+            Expr::GenericCall(callee, type_args, args, span) => {
+                self.check_call(callee, type_args, args, *span)
             }
             Expr::Paren(inner, _) => self.check_expr(inner),
             Expr::FieldAccess(_, _, _) => {
@@ -488,7 +568,7 @@ impl<'a> TypeChecker<'a> {
                 // ok(T) → result[T, <error>] — the error type is unknown without context.
                 // For now, produce result[T, nothing].
                 self.interner
-                    .intern(Type::Result(inner_ty, TypeInterner::NOTHING))
+                    .intern(Type::Result(inner_ty, TypeInterner::ERROR))
             }
             Expr::Fail(inner, _span) => {
                 let inner_ty = self.check_expr(inner);
@@ -655,7 +735,13 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
-    fn check_call(&mut self, callee: &Expr, args: &[ast::CallArg], span: Span) -> TypeId {
+    fn check_call(
+        &mut self,
+        callee: &Expr,
+        type_args: &[TypeExpr],
+        args: &[ast::CallArg],
+        span: Span,
+    ) -> TypeId {
         // -- Capability / purity check --
         // Extract the callee name so we can look it up in the purity map.
         if let Expr::Ident(callee_ident) = callee {
@@ -686,7 +772,7 @@ impl<'a> TypeChecker<'a> {
             }
         }
 
-        let builtin_signature = self.builtin_signature(callee);
+        let builtin_signature = self.builtin_signature(callee, type_args, span);
 
         let (param_types, return_type) = if let Some(signature) = builtin_signature {
             signature
@@ -740,10 +826,7 @@ impl<'a> TypeChecker<'a> {
             let arg_ty = self.check_expr(&arg.value);
             let param_ty = param_types[i];
 
-            if arg_ty != TypeInterner::ERROR
-                && param_ty != TypeInterner::ERROR
-                && arg_ty != param_ty
-            {
+            if !self.types_compatible(param_ty, arg_ty) {
                 let param_name = format!("#{}", i + 1);
                 self.sink.emit(errors::argument_type_mismatch(
                     &param_name,
@@ -766,10 +849,7 @@ impl<'a> TypeChecker<'a> {
         let first_ty = self.check_expr(&elems[0]);
         for elem in &elems[1..] {
             let elem_ty = self.check_expr(elem);
-            if first_ty != TypeInterner::ERROR
-                && elem_ty != TypeInterner::ERROR
-                && first_ty != elem_ty
-            {
+            if !self.types_compatible(first_ty, elem_ty) {
                 self.sink.emit(errors::type_mismatch(
                     &self.type_name(first_ty),
                     &self.type_name(elem_ty),
@@ -853,7 +933,7 @@ impl<'a> TypeChecker<'a> {
                             .get(&expr_stmt.expr.span())
                             .copied()
                             .unwrap_or(TypeInterner::ERROR);
-                        if default_ty != TypeInterner::ERROR && default_ty != success_ty {
+                        if !self.types_compatible(success_ty, default_ty) {
                             self.sink.emit(errors::type_mismatch(
                                 &self.type_name(success_ty),
                                 &self.type_name(default_ty),

@@ -87,7 +87,7 @@ function largest_gap(view primes: list[int64]) returns int64:
 verify largest_gap:
     list[int64] primes = find_primes(30)
     int64 gap = largest_gap(view primes)
-    assert gap == 4
+    assert gap == 6
 
 # Sum all primes in the list
 function sum_primes(view primes: list[int64]) returns int64:

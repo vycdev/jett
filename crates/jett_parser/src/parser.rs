@@ -1110,14 +1110,17 @@ impl<'src> Parser<'src> {
     /// Parse postfix field-access chain (`.field`) without call args.
     /// Used by pipeline parsing to build dotted names like `string.trim`.
     fn parse_postfix_chain(&mut self, mut expr: Expr) -> Expr {
-        while self.peek() == TokenKind::Dot {
-            self.advance(); // consume `.`
-            let field = self.parse_ident();
-            let span = expr.span().merge(field.span);
-            expr = Expr::FieldAccess(Box::new(expr), field, span);
-        }
-        expr
-    }
+                while self.peek() == TokenKind::Dot {
+                    self.advance(); // consume `.`
+                    let field = self.parse_ident();
+                    let span = expr.span().merge(field.span);
+                    expr = Expr::FieldAccess(Box::new(expr), field, span);
+                    if self.peek() == TokenKind::LBracket && self.looks_like_generic_args() {
+                        expr = self.parse_generic_call(expr);
+                    }
+                }
+                expr
+            }
 
     /// Pratt parser: parse expression with minimum binding power.
     fn parse_expr_bp(&mut self, min_bp: u8) -> Expr {
@@ -1138,8 +1141,10 @@ impl<'src> Parser<'src> {
                     let field = self.parse_ident();
                     let span = lhs.span().merge(field.span);
                     lhs = Expr::FieldAccess(Box::new(lhs), field, span);
-                    // Check for method call: `expr.method(args)`
-                    if self.peek() == TokenKind::LParen {
+                    // Check for generic/method call: `expr.method[T](args)` / `expr.method(args)`
+                    if self.peek() == TokenKind::LBracket && self.looks_like_generic_args() {
+                        lhs = self.parse_generic_call(lhs);
+                    } else if self.peek() == TokenKind::LParen {
                         lhs = self.parse_call_args(lhs);
                     }
                     continue;
@@ -1374,41 +1379,55 @@ impl<'src> Parser<'src> {
             }
             TokenKind::List_ => {
                 self.advance();
-                self.expect(TokenKind::LParen);
-                let mut items = Vec::new();
-                if self.peek() != TokenKind::RParen {
-                    items.push(self.parse_expr());
-                    while self.eat(TokenKind::Comma).is_some() {
-                        if self.peek() == TokenKind::RParen {
-                            break;
-                        }
+                if self.peek() == TokenKind::LParen {
+                    self.expect(TokenKind::LParen);
+                    let mut items = Vec::new();
+                    if self.peek() != TokenKind::RParen {
                         items.push(self.parse_expr());
+                        while self.eat(TokenKind::Comma).is_some() {
+                            if self.peek() == TokenKind::RParen {
+                                break;
+                            }
+                            items.push(self.parse_expr());
+                        }
                     }
+                    let close = self.expect(TokenKind::RParen);
+                    Expr::ListConstruct(items, tok.span.merge(close.span))
+                } else {
+                    Expr::Ident(Ident {
+                        name: self.token_text(&tok).to_string(),
+                        span: tok.span,
+                    })
                 }
-                let close = self.expect(TokenKind::RParen);
-                Expr::ListConstruct(items, tok.span.merge(close.span))
             }
             TokenKind::Map_ => {
                 self.advance();
-                self.expect(TokenKind::LParen);
-                let mut pairs = Vec::new();
-                if self.peek() != TokenKind::RParen {
-                    let key = self.parse_expr();
-                    self.expect(TokenKind::Colon);
-                    let val = self.parse_expr();
-                    pairs.push((key, val));
-                    while self.eat(TokenKind::Comma).is_some() {
-                        if self.peek() == TokenKind::RParen {
-                            break;
-                        }
+                if self.peek() == TokenKind::LParen {
+                    self.expect(TokenKind::LParen);
+                    let mut pairs = Vec::new();
+                    if self.peek() != TokenKind::RParen {
                         let key = self.parse_expr();
                         self.expect(TokenKind::Colon);
                         let val = self.parse_expr();
                         pairs.push((key, val));
+                        while self.eat(TokenKind::Comma).is_some() {
+                            if self.peek() == TokenKind::RParen {
+                                break;
+                            }
+                            let key = self.parse_expr();
+                            self.expect(TokenKind::Colon);
+                            let val = self.parse_expr();
+                            pairs.push((key, val));
+                        }
                     }
+                    let close = self.expect(TokenKind::RParen);
+                    Expr::MapConstruct(pairs, tok.span.merge(close.span))
+                } else {
+                    Expr::Ident(Ident {
+                        name: self.token_text(&tok).to_string(),
+                        span: tok.span,
+                    })
                 }
-                let close = self.expect(TokenKind::RParen);
-                Expr::MapConstruct(pairs, tok.span.merge(close.span))
             }
             TokenKind::Self_ => {
                 self.advance();
@@ -1425,6 +1444,10 @@ impl<'src> Parser<'src> {
                 })
             }
             TokenKind::Ident => {
+                let ident = self.parse_ident();
+                Expr::Ident(ident)
+            }
+            kind if self.is_contextual_ident(kind) => {
                 let ident = self.parse_ident();
                 Expr::Ident(ident)
             }
@@ -2540,6 +2563,29 @@ function fmt(a: int64, b: int64) returns string:
     }
 
     #[test]
+    fn parse_string_interpolation_with_contextual_identifier() {
+        let src = "\
+function f() returns string:
+    return \"error: {error}\"
+";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        let expr = extract_expr_from_return(&result);
+        match expr {
+            Expr::StringInterpolation(parts, _) => {
+                assert_eq!(parts.len(), 2);
+                match &parts[1] {
+                    StringPart::Expr(e) => {
+                        assert!(matches!(e.as_ref(), Expr::Ident(id) if id.name == "error"));
+                    }
+                    other => panic!("expected Expr, got {:?}", other),
+                }
+            }
+            other => panic!("expected StringInterpolation, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn parse_plain_string_no_interpolation() {
         let src = "\
 function greet() returns string:
@@ -2645,6 +2691,30 @@ function transform(x: string) returns string:
                 assert_eq!(steps[0].extra_args.len(), 2);
             }
             other => panic!("expected Pipeline, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_dotted_generic_call() {
+        let src = "\
+function first(view items: list[int64]) returns optional[int64]:
+    return list.get[int64](view items, 0)
+";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        let expr = extract_expr_from_return(&result);
+        match expr {
+            Expr::GenericCall(callee, type_args, args, _) => {
+                assert!(matches!(
+                    callee.as_ref(),
+                    Expr::FieldAccess(inner, field, _)
+                        if matches!(inner.as_ref(), Expr::Ident(id) if id.name == "list")
+                        && field.name == "get"
+                ));
+                assert_eq!(type_args.len(), 1);
+                assert_eq!(args.len(), 2);
+            }
+            other => panic!("expected GenericCall, got {:?}", other),
         }
     }
 

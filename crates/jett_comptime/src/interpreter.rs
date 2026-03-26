@@ -295,6 +295,7 @@ impl Interpreter {
 
             // Parenthesized
             Expr::Paren(inner, _) => self.eval_expr_flow(inner),
+            Expr::View(inner, _) => self.eval_expr_flow(inner),
 
             // Binary operations
             Expr::Binary(lhs, op, rhs, _) => {
@@ -338,7 +339,7 @@ impl Interpreter {
             }
 
             // Function / method calls
-            Expr::Call(callee, args, _) => {
+            Expr::Call(callee, args, _) | Expr::GenericCall(callee, _, args, _) => {
                 // Check for machine construction/transition BEFORE evaluating
                 // args, since state-name arguments are bare identifiers (not
                 // variables) and would fail evaluation.
@@ -992,6 +993,11 @@ impl Interpreter {
 
             // -- List operations ----------------------------------------------
 
+            "list.new" => {
+                require_args!(name, 0, args);
+                Some(Ok(Value::List(vec![])))
+            }
+
             "list.length" => {
                 require_args!(name, 1, args);
                 match &args[0] {
@@ -1018,12 +1024,9 @@ impl Interpreter {
                     (Value::List(items), Value::Int64(index)) => {
                         let idx = *index as usize;
                         if idx < items.len() {
-                            Some(Ok(items[idx].clone()))
+                            Some(Ok(Value::OptionalSome(Box::new(items[idx].clone()))))
                         } else {
-                            Some(Err(format!(
-                                "list.get: index {index} out of bounds (length {})",
-                                items.len()
-                            )))
+                            Some(Ok(Value::OptionalNone))
                         }
                     }
                     _ => Some(Err(format!(
@@ -1037,9 +1040,9 @@ impl Interpreter {
                 match &args[0] {
                     Value::List(items) => {
                         if items.is_empty() {
-                            Some(Err("list.first: empty list".to_string()))
+                            Some(Ok(Value::OptionalNone))
                         } else {
-                            Some(Ok(items[0].clone()))
+                            Some(Ok(Value::OptionalSome(Box::new(items[0].clone()))))
                         }
                     }
                     _ => Some(Err(format!("{name} expects a list argument"))),
@@ -1051,9 +1054,11 @@ impl Interpreter {
                 match &args[0] {
                     Value::List(items) => {
                         if items.is_empty() {
-                            Some(Err("list.last: empty list".to_string()))
+                            Some(Ok(Value::OptionalNone))
                         } else {
-                            Some(Ok(items[items.len() - 1].clone()))
+                            Some(Ok(Value::OptionalSome(Box::new(
+                                items[items.len() - 1].clone(),
+                            ))))
                         }
                     }
                     _ => Some(Err(format!("{name} expects a list argument"))),
@@ -2559,7 +2564,10 @@ mod builtin_tests {
         let mut interp = Interpreter::new();
         let list_expr = Expr::ListConstruct(vec![int(10), int(20), int(30)], sp());
         let expr = dotted_call("list", "get", vec![list_expr, int(1)]);
-        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(20));
+        assert_eq!(
+            interp.eval_expr(&expr).unwrap(),
+            Value::OptionalSome(Box::new(Value::Int64(20)))
+        );
     }
 
     #[test]
@@ -2567,7 +2575,7 @@ mod builtin_tests {
         let mut interp = Interpreter::new();
         let list_expr = Expr::ListConstruct(vec![int(10)], sp());
         let expr = dotted_call("list", "get", vec![list_expr, int(5)]);
-        assert!(interp.eval_expr(&expr).is_err());
+        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::OptionalNone);
     }
 
     #[test]
@@ -2575,7 +2583,10 @@ mod builtin_tests {
         let mut interp = Interpreter::new();
         let list_expr = Expr::ListConstruct(vec![int(10), int(20)], sp());
         let expr = dotted_call("list", "first", vec![list_expr]);
-        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(10));
+        assert_eq!(
+            interp.eval_expr(&expr).unwrap(),
+            Value::OptionalSome(Box::new(Value::Int64(10)))
+        );
     }
 
     #[test]
@@ -2583,7 +2594,22 @@ mod builtin_tests {
         let mut interp = Interpreter::new();
         let list_expr = Expr::ListConstruct(vec![int(10), int(20)], sp());
         let expr = dotted_call("list", "last", vec![list_expr]);
-        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(20));
+        assert_eq!(
+            interp.eval_expr(&expr).unwrap(),
+            Value::OptionalSome(Box::new(Value::Int64(20)))
+        );
+    }
+
+    #[test]
+    fn builtin_list_new() {
+        let mut interp = Interpreter::new();
+        let expr = Expr::GenericCall(
+            Box::new(Expr::FieldAccess(Box::new(var("list")), ident("new"), sp())),
+            vec![TypeExpr::Named(ident("int64"))],
+            vec![],
+            sp(),
+        );
+        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::List(vec![]));
     }
 
     #[test]

@@ -3,7 +3,7 @@
 ## Statistics
 
 - **Lines of Rust:** ~17,500
-- **Tests:** 304 passing
+- **Tests:** 315 passing
 - **Crates:** 15
 - **VS Code extension:** Yes
 
@@ -79,7 +79,7 @@
 | Interface/implement blocks | Not started |
 | `mutual` blocks | Not started |
 | Secret types (`secret[T]`, `declassify`) | Not started |
-| Handle blocks (`handle error:`, `handle:`, `default`) | Parsed but not fully wired in type checker |
+| Handle blocks (`handle error:`, `handle:`, `default`) | Done |
 | Generic structs | Not started |
 
 ### Phase H: Agent Tooling — PARTIAL
