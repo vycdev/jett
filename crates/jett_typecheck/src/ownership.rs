@@ -2,9 +2,7 @@ use std::collections::HashMap;
 
 use jett_common::Span;
 use jett_diagnostics::Diagnostic;
-use jett_parser::ast::{
-    self, Block, CallArg, Expr, FunctionDef, Item, Module, Stmt, StringPart,
-};
+use jett_parser::ast::{self, Block, CallArg, Expr, FunctionDef, Item, Module, Stmt, StringPart};
 use jett_types::{Type, TypeId, TypeInterner};
 
 // ---------------------------------------------------------------------------
@@ -374,6 +372,9 @@ impl<'a> OwnershipChecker<'a> {
                     }
                 }
             }
+            Expr::Declassify(inner, _) => {
+                self.check_expr_ownership(inner);
+            }
             Expr::Coarsen(inner, _) => {
                 self.check_expr_ownership(inner);
             }
@@ -462,8 +463,7 @@ impl<'a> OwnershipChecker<'a> {
                 }
                 OwnershipState::Viewed => {
                     // View parameter — cannot be consumed.
-                    self.diagnostics
-                        .push(cannot_consume_view(name, name_span));
+                    self.diagnostics.push(cannot_consume_view(name, name_span));
                 }
                 OwnershipState::Owned => {
                     // Consume it.
@@ -1237,6 +1237,10 @@ mod tests {
 
         let errs = errors(&diagnostics);
         assert!(errs.is_empty(), "unexpected errors: {:?}", errs);
-        assert!(diagnostics.is_empty(), "unexpected diagnostics: {:?}", diagnostics);
+        assert!(
+            diagnostics.is_empty(),
+            "unexpected diagnostics: {:?}",
+            diagnostics
+        );
     }
 }

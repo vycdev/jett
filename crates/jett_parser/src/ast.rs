@@ -390,6 +390,8 @@ pub enum Expr {
     EnumVariant(Ident, Ident, Span),
     /// String interpolation: `"hello {name}, you are {age} years old"`
     StringInterpolation(Vec<StringPart>, Span),
+    /// `declassify expr` — explicitly unwrap `secret[T]` to `T`
+    Declassify(Box<Expr>, Span),
     /// `coarsen expr` — strip refinement, returning the base type value
     Coarsen(Box<Expr>, Span),
     /// Pipeline: `expr into f into g(extra)` — left-to-right function chaining
@@ -425,6 +427,7 @@ impl Expr {
             | Expr::Default(_, s)
             | Expr::EnumVariant(_, _, s)
             | Expr::StringInterpolation(_, s)
+            | Expr::Declassify(_, s)
             | Expr::Coarsen(_, s)
             | Expr::Pipeline(_, _, s)
             | Expr::At(_, _, s)

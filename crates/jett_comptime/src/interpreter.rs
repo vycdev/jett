@@ -337,6 +337,7 @@ impl Interpreter {
             // Parenthesized
             Expr::Paren(inner, _) => self.eval_expr_flow(inner),
             Expr::View(inner, _) => self.eval_expr_flow(inner),
+            Expr::Declassify(inner, _) => self.eval_expr_flow(inner),
 
             // Binary operations
             Expr::Binary(lhs, op, rhs, _) => {
@@ -2011,6 +2012,18 @@ mod tests {
         assert_eq!(
             interp.eval_expr(&expr).unwrap(),
             Value::String("plain string".to_string())
+        );
+    }
+
+    #[test]
+    fn declassify_is_a_runtime_no_op() {
+        let mut interp = Interpreter::new();
+        interp.set_variable_public("api_key", Value::String("abc".to_string()));
+
+        let expr = Expr::Declassify(Box::new(var("api_key")), sp());
+        assert_eq!(
+            interp.eval_expr(&expr).unwrap(),
+            Value::String("abc".to_string())
         );
     }
 

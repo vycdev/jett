@@ -201,6 +201,21 @@ impl<'a> TypeChecker<'a> {
         )
     }
 
+    fn is_secret_type(&self, id: TypeId) -> bool {
+        matches!(self.interner.resolve(id), Type::Secret(_))
+    }
+
+    fn secret_inner_type(&self, id: TypeId) -> Option<TypeId> {
+        match self.interner.resolve(id) {
+            Type::Secret(inner) => Some(*inner),
+            _ => None,
+        }
+    }
+
+    fn is_secret_output_boundary(name: &str) -> bool {
+        matches!(name, "Stdout.write")
+    }
+
     fn types_compatible(&self, expected: TypeId, got: TypeId) -> bool {
         if expected == got || expected == TypeInterner::ERROR || got == TypeInterner::ERROR {
             return true;
@@ -209,9 +224,12 @@ impl<'a> TypeChecker<'a> {
         match (self.interner.resolve(expected), self.interner.resolve(got)) {
             (Type::Interface(_), Type::Interface(_)) => expected == got,
             (Type::Interface(_), _) => self.interface_impls.contains_key(&(expected, got)),
+            (Type::Secret(expected_inner), Type::Secret(got_inner)) => {
+                self.types_compatible(*expected_inner, *got_inner)
+            }
+            (Type::Secret(expected_inner), _) => self.types_compatible(*expected_inner, got),
             (Type::List(expected_inner), Type::List(got_inner))
-            | (Type::Optional(expected_inner), Type::Optional(got_inner))
-            | (Type::Secret(expected_inner), Type::Secret(got_inner)) => {
+            | (Type::Optional(expected_inner), Type::Optional(got_inner)) => {
                 self.types_compatible(*expected_inner, *got_inner)
             }
             (Type::Set(expected_inner), Type::Set(got_inner)) => {
@@ -1258,6 +1276,18 @@ impl<'a> TypeChecker<'a> {
                 }
                 TypeInterner::STRING
             }
+            Expr::Declassify(inner, span) => {
+                let inner_ty = self.check_expr(inner);
+                if let Some(unwrapped) = self.secret_inner_type(inner_ty) {
+                    unwrapped
+                } else {
+                    self.sink.emit(errors::declassify_requires_secret(
+                        &self.type_name(inner_ty),
+                        *span,
+                    ));
+                    TypeInterner::ERROR
+                }
+            }
             Expr::Coarsen(inner, _) => {
                 // coarsen strips a refinement type back to its base type.
                 // For now just check the inner expression.
@@ -1430,10 +1460,12 @@ impl<'a> TypeChecker<'a> {
         args: &[ast::CallArg],
         span: Span,
     ) -> TypeId {
+        let callee_name = Self::extract_dotted_name(callee);
+
         // -- Capability / purity check --
         // Extract the callee name so we can look it up in the purity map.
-        if let Some(callee_name) = Self::extract_dotted_name(callee) {
-            let callee_is_pure = self.purity_map.get(&callee_name).copied().unwrap_or(true);
+        if let Some(callee_name) = callee_name.as_deref() {
+            let callee_is_pure = self.purity_map.get(callee_name).copied().unwrap_or(true);
 
             if !callee_is_pure {
                 // E0500: pure function calls impure function
@@ -1493,8 +1525,9 @@ impl<'a> TypeChecker<'a> {
 
         // Check argument count.
         if args.len() != param_types.len() {
-            let func_name =
-                Self::extract_dotted_name(callee).unwrap_or_else(|| "<anonymous>".to_string());
+            let func_name = callee_name
+                .clone()
+                .unwrap_or_else(|| "<anonymous>".to_string());
             self.sink.emit(errors::argument_count_mismatch(
                 &func_name,
                 param_types.len(),
@@ -1512,6 +1545,17 @@ impl<'a> TypeChecker<'a> {
         for (i, arg) in args.iter().enumerate() {
             let arg_ty = self.check_expr(&arg.value);
             let param_ty = param_types[i];
+
+            if let Some(callee_name) = callee_name.as_deref() {
+                if Self::is_secret_output_boundary(callee_name) && self.is_secret_type(arg_ty) {
+                    self.sink.emit(errors::secret_exposure(
+                        callee_name,
+                        &self.type_name(arg_ty),
+                        arg.value.span(),
+                    ));
+                    continue;
+                }
+            }
 
             if !self.types_compatible(param_ty, arg_ty) {
                 let param_name = format!("#{}", i + 1);
@@ -4069,5 +4113,76 @@ function main() returns string:
             .filter(|d| d.severity == jett_diagnostics::Severity::Error)
             .collect();
         assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+    }
+
+    #[test]
+    fn secret_value_can_be_declassified() {
+        let result = check_source_result(
+            "\
+function reveal(key: secret[string]) returns string:
+    return declassify key
+
+function main() returns string:
+    secret[string] api_key = \"abc\"
+    return reveal(api_key)
+",
+        );
+
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == jett_diagnostics::Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+    }
+
+    #[test]
+    fn declassify_requires_secret_type() {
+        let errors = check_source_errors(
+            "\
+function main() returns string:
+    return declassify \"abc\"
+",
+        );
+
+        assert!(
+            errors.iter().any(|d| d.code.code() == 601),
+            "expected E0601, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn stdout_write_rejects_secret_values() {
+        let errors = check_source_errors(
+            "\
+function main(view stdout: Stdout) returns nothing:
+    secret[string] api_key = \"abc\"
+    Stdout.write(view stdout, api_key)
+",
+        );
+
+        assert!(
+            errors.iter().any(|d| d.code.code() == 600),
+            "expected E0600, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn secret_values_are_not_displayable() {
+        let errors = check_source_errors(
+            "\
+function main() returns string:
+    secret[string] api_key = \"abc\"
+    return \"api key: {api_key}\"
+",
+        );
+
+        assert!(
+            errors.iter().any(|d| d.code.code() == 332),
+            "expected E0332, got: {:?}",
+            errors
+        );
     }
 }

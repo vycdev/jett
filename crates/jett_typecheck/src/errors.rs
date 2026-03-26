@@ -340,3 +340,25 @@ pub fn verify_calls_impure(verify_name: &str, callee: &str, span: Span) -> Diagn
         span,
     )
 }
+
+// Diagnostic codes E0600-E0699 are reserved for secret-type checking.
+
+/// E0600: Secret value reaches an output boundary without declassification.
+pub fn secret_exposure(boundary: &str, type_name: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        600,
+        format!(
+            "cannot pass `{type_name}` to `{boundary}`; use `declassify` to make the exposure explicit"
+        ),
+        span,
+    )
+}
+
+/// E0601: `declassify` requires a secret value.
+pub fn declassify_requires_secret(got: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        601,
+        format!("`declassify` requires `secret[T]`, got `{got}`"),
+        span,
+    )
+}

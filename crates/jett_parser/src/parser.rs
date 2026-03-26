@@ -715,7 +715,8 @@ impl<'src> Parser<'src> {
             | TokenKind::Set_
             | TokenKind::Nothing
             | TokenKind::Result
-            | TokenKind::Optional => {
+            | TokenKind::Optional
+            | TokenKind::Secret => {
                 self.advance();
                 Ident {
                     name: self.token_text(&tok).to_string(),
@@ -1114,6 +1115,7 @@ impl<'src> Parser<'src> {
                 | TokenKind::Nothing
                 | TokenKind::Result
                 | TokenKind::Optional
+                | TokenKind::Secret
                 | TokenKind::Ident
         )
     }
@@ -1439,6 +1441,12 @@ impl<'src> Parser<'src> {
                 let inner = self.parse_expr_bp(13);
                 let span = tok.span.merge(inner.span());
                 Expr::View(Box::new(inner), span)
+            }
+            TokenKind::Declassify => {
+                self.advance();
+                let inner = self.parse_expr_bp(13);
+                let span = tok.span.merge(inner.span());
+                Expr::Declassify(Box::new(inner), span)
             }
             TokenKind::Coarsen => {
                 self.advance();
@@ -2964,6 +2972,54 @@ function process(p: Port) returns nothing:
                     other => panic!("expected Coarsen expression, got {:?}", other),
                 },
                 other => panic!("expected VarDecl, got {:?}", other),
+            },
+            other => panic!("expected Function, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_secret_type_in_var_decl() {
+        let src = "\
+function main() returns nothing:
+    secret[string] api_key = \"abc\"
+";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        match &result.module.items[0] {
+            Item::Function(f) => match &f.body.stmts[0] {
+                Stmt::VarDecl(v) => match &v.ty {
+                    TypeExpr::Generic(name, args, _) => {
+                        assert_eq!(name.name, "secret");
+                        assert_eq!(args.len(), 1);
+                        assert!(
+                            matches!(&args[0], TypeExpr::Named(inner) if inner.name == "string")
+                        );
+                    }
+                    other => panic!("expected Generic type, got {:?}", other),
+                },
+                other => panic!("expected VarDecl, got {:?}", other),
+            },
+            other => panic!("expected Function, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_declassify_expression() {
+        let src = "\
+function reveal(key: secret[string]) returns string:
+    return declassify key
+";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        match &result.module.items[0] {
+            Item::Function(f) => match &f.body.stmts[0] {
+                Stmt::Return(ret) => match ret.value.as_ref() {
+                    Some(Expr::Declassify(inner, _)) => {
+                        assert!(matches!(inner.as_ref(), Expr::Ident(i) if i.name == "key"));
+                    }
+                    other => panic!("expected Declassify expression, got {:?}", other),
+                },
+                other => panic!("expected Return, got {:?}", other),
             },
             other => panic!("expected Function, got {:?}", other),
         }

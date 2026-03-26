@@ -572,6 +572,9 @@ impl Resolver {
                     }
                 }
             }
+            Expr::Declassify(inner, _) => {
+                self.resolve_expr(inner, item_index);
+            }
             Expr::Coarsen(inner, _) => {
                 self.resolve_expr(inner, item_index);
             }
