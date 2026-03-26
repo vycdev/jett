@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use crate::defs::{EnumDef, EnumId, InterfaceDef, InterfaceId, StructDef, StructId};
+use crate::defs::{
+    BitfieldDef, BitfieldId, EnumDef, EnumId, InterfaceDef, InterfaceId, StructDef, StructId,
+};
 use crate::types::{Type, TypeId};
 
 /// Type interner that deduplicates types and provides stable [`TypeId`] handles.
@@ -15,6 +17,8 @@ pub struct TypeInterner {
     types: Vec<Type>,
     /// User-defined struct definitions.
     structs: Vec<StructDef>,
+    /// User-defined bitfield definitions.
+    bitfields: Vec<BitfieldDef>,
     /// User-defined enum definitions.
     enums: Vec<EnumDef>,
     /// User-defined interface definitions.
@@ -71,6 +75,7 @@ impl TypeInterner {
             types: primitives,
             map,
             structs: Vec::new(),
+            bitfields: Vec::new(),
             enums: Vec::new(),
             interfaces: Vec::new(),
         }
@@ -116,6 +121,23 @@ impl TypeInterner {
     /// Replace an existing struct definition.
     pub fn update_struct(&mut self, id: StructId, def: StructDef) {
         self.structs[id.0 as usize] = def;
+    }
+
+    /// Register a new bitfield definition and return its [`BitfieldId`].
+    pub fn add_bitfield(&mut self, def: BitfieldDef) -> BitfieldId {
+        let id = BitfieldId(self.bitfields.len() as u32);
+        self.bitfields.push(def);
+        id
+    }
+
+    /// Look up a bitfield definition by its [`BitfieldId`].
+    pub fn resolve_bitfield(&self, id: BitfieldId) -> &BitfieldDef {
+        &self.bitfields[id.0 as usize]
+    }
+
+    /// Replace an existing bitfield definition.
+    pub fn update_bitfield(&mut self, id: BitfieldId, def: BitfieldDef) {
+        self.bitfields[id.0 as usize] = def;
     }
 
     /// Register a new enum definition and return its [`EnumId`].
@@ -340,6 +362,40 @@ mod tests {
         // Intern the struct type and check round-trip
         let struct_type_id = interner.intern(Type::Struct(sid));
         assert_eq!(*interner.resolve(struct_type_id), Type::Struct(sid));
+    }
+
+    #[test]
+    fn bitfield_definition_storage() {
+        let mut interner = TypeInterner::new();
+
+        let bitfield_def = BitfieldDef {
+            name: "TcpFlags".to_string(),
+            network_order: false,
+            fields: vec![
+                crate::defs::BitfieldFieldDef {
+                    name: "syn".to_string(),
+                    ty: TypeInterner::INT64,
+                    kind: crate::defs::BitfieldFieldKind::Bits { width: 1 },
+                },
+                crate::defs::BitfieldFieldDef {
+                    name: "payload".to_string(),
+                    ty: interner.intern(Type::List(TypeInterner::UINT8)),
+                    kind: crate::defs::BitfieldFieldKind::Payload,
+                },
+            ],
+        };
+
+        let bid = interner.add_bitfield(bitfield_def);
+        let resolved = interner.resolve_bitfield(bid);
+        assert_eq!(resolved.name, "TcpFlags");
+        assert_eq!(resolved.fields.len(), 2);
+        assert!(matches!(
+            resolved.fields[0].kind,
+            crate::defs::BitfieldFieldKind::Bits { width: 1 }
+        ));
+
+        let bitfield_type_id = interner.intern(Type::Bitfield(bid));
+        assert_eq!(*interner.resolve(bitfield_type_id), Type::Bitfield(bid));
     }
 
     #[test]

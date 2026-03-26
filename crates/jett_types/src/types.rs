@@ -1,4 +1,4 @@
-use crate::defs::{EnumId, InterfaceId, StructId};
+use crate::defs::{BitfieldId, EnumId, InterfaceId, StructId};
 
 /// A unique handle to an interned type. Cheap to copy and compare.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -55,6 +55,8 @@ pub enum Type {
     // -- User-defined types --------------------------------------------------
     /// A user-defined struct.
     Struct(StructId),
+    /// A user-defined bitfield.
+    Bitfield(BitfieldId),
     /// A user-defined enum.
     Enum(EnumId),
     /// A user-defined interface.

@@ -350,6 +350,37 @@ pub fn refinement_constraint_not_bool(refinement_name: &str, got: &str, span: Sp
     )
 }
 
+/// E0336: Invalid bitfield field declaration.
+pub fn invalid_bitfield_field(
+    bitfield_name: &str,
+    field_name: &str,
+    reason: &str,
+    span: Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        336,
+        format!("bitfield `{bitfield_name}` field `{field_name}` is invalid: {reason}"),
+        span,
+    )
+}
+
+/// E0337: Bitfield literal value exceeds the declared bit width.
+pub fn bitfield_literal_out_of_range(
+    bitfield_name: &str,
+    field_name: &str,
+    width: u16,
+    value: i64,
+    span: Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        337,
+        format!(
+            "bitfield `{bitfield_name}` field `{field_name}` is {width} bit(s) wide and cannot hold `{value}`"
+        ),
+        span,
+    )
+}
+
 /// E0500: Pure function calls impure function.
 pub fn pure_calls_impure(caller: &str, callee: &str, span: Span) -> Diagnostic {
     Diagnostic::error(

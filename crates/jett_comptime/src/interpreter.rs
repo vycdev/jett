@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 
 use jett_parser::ast::{
-    BinOp, Block, CallArg, Expr, FunctionDef, Ident, ImplementBlock, InterfaceDecl, MachineDef,
-    Pattern, PipelineStep, Stmt, StringPart, StructDef, TypeAlias, TypeExpr, UnaryOp,
+    BinOp, BitfieldDef, BitfieldFieldKind, Block, CallArg, Expr, FunctionDef, Ident,
+    ImplementBlock, InterfaceDecl, MachineDef, Pattern, PipelineStep, Stmt, StringPart, StructDef,
+    TypeAlias, TypeExpr, UnaryOp,
 };
 
 use crate::value::Value;
@@ -96,6 +97,8 @@ pub struct Interpreter {
     functions: HashMap<String, FunctionDef>,
     /// Registered user-defined structs available for construction and field access.
     structs: HashMap<String, StructDef>,
+    /// Registered user-defined bitfields available for construction and field access.
+    bitfields: HashMap<String, BitfieldDef>,
     /// Interface dotted name -> concrete runtime type -> concrete dotted function name.
     interface_methods: HashMap<String, HashMap<String, String>>,
     /// Registered type alias base names.
@@ -113,6 +116,7 @@ impl Interpreter {
             scopes: vec![HashMap::new()],
             functions: HashMap::new(),
             structs: HashMap::new(),
+            bitfields: HashMap::new(),
             interface_methods: HashMap::new(),
             type_alias_bases: HashMap::new(),
             type_aliases: HashMap::new(),
@@ -194,6 +198,13 @@ impl Interpreter {
                 method.clone(),
             );
         }
+    }
+
+    /// Register a user-defined bitfield so it can be constructed and its
+    /// fields can be read like a struct value.
+    pub fn register_bitfield(&mut self, bitfield: &BitfieldDef) {
+        self.bitfields
+            .insert(bitfield.name.name.clone(), bitfield.clone());
     }
 
     /// Register an interface declaration. Interfaces carry no runtime state,
@@ -445,6 +456,9 @@ impl Interpreter {
                 match callee.as_ref() {
                     Expr::Ident(ident) if self.structs.contains_key(&ident.name) => Ok(
                         ExprFlow::Value(self.construct_struct(&ident.name, args, arg_values)?),
+                    ),
+                    Expr::Ident(ident) if self.bitfields.contains_key(&ident.name) => Ok(
+                        ExprFlow::Value(self.construct_bitfield(&ident.name, args, arg_values)?),
                     ),
                     Expr::Ident(ident) => Ok(ExprFlow::Value(
                         self.call_function(&ident.name, arg_values)?,
@@ -1380,6 +1394,125 @@ impl Interpreter {
         }
     }
 
+    fn construct_bitfield(
+        &mut self,
+        bitfield_name: &str,
+        args: &[CallArg],
+        arg_values: Vec<Value>,
+    ) -> Result<Value, String> {
+        let bitfield = self
+            .bitfields
+            .get(bitfield_name)
+            .ok_or_else(|| format!("undefined bitfield '{bitfield_name}'"))?
+            .clone();
+
+        if args.len() > bitfield.fields.len() {
+            return Err(format!(
+                "bitfield '{}' expects {} field argument(s), got {}",
+                bitfield_name,
+                bitfield.fields.len(),
+                args.len()
+            ));
+        }
+
+        let mut fields: Vec<Option<Value>> = vec![None; bitfield.fields.len()];
+        let mut requires_runtime_validation = false;
+        for (arg, value) in args.iter().zip(arg_values) {
+            let field_index = if let Some(name) = &arg.name {
+                bitfield
+                    .fields
+                    .iter()
+                    .position(|field| field.name.name == name.name)
+                    .ok_or_else(|| format!("bitfield '{bitfield_name}' has no field '{}'", name.name))?
+            } else {
+                let Some(index) = fields.iter().position(|value| value.is_none()) else {
+                    return Err(format!(
+                        "bitfield '{}' expects {} field argument(s), got {}",
+                        bitfield_name,
+                        bitfield.fields.len(),
+                        args.len()
+                    ));
+                };
+                index
+            };
+
+            if fields[field_index].is_some() {
+                return Err(format!(
+                    "bitfield '{}' received field '{}' more than once",
+                    bitfield_name, bitfield.fields[field_index].name.name
+                ));
+            }
+
+            if let BitfieldFieldKind::Bits { width, as_type } = &bitfield.fields[field_index].kind {
+                if as_type.is_none() {
+                    let Value::Int64(int_value) = value else {
+                        return Err(format!(
+                            "bitfield '{}' field '{}' expects int64",
+                            bitfield_name, bitfield.fields[field_index].name.name
+                        ));
+                    };
+
+                    let max_value = if *width >= 63 {
+                        i64::MAX
+                    } else {
+                        (1_i64 << width) - 1
+                    };
+                    let in_range = int_value >= 0 && int_value <= max_value;
+                    let literal_input = matches!(arg.value, Expr::IntLiteral(_, _));
+
+                    if literal_input {
+                        if !in_range {
+                            return Err(format!(
+                                "bitfield '{bitfield_name}' field '{}' is {} bit(s) wide and cannot hold '{int_value}'",
+                                bitfield.fields[field_index].name.name,
+                                width,
+                            ));
+                        }
+                    } else {
+                        requires_runtime_validation = true;
+                        if !in_range {
+                            return Ok(Value::ResultFail(Box::new(Value::String(format!(
+                                "bitfield '{bitfield_name}' field '{}' is {} bit(s) wide and cannot hold '{int_value}'",
+                                bitfield.fields[field_index].name.name,
+                                width,
+                            )))));
+                        }
+                    }
+
+                    fields[field_index] = Some(Value::Int64(int_value));
+                    continue;
+                }
+            }
+
+            fields[field_index] = Some(value);
+        }
+
+        for (index, field) in bitfield.fields.iter().enumerate() {
+            if fields[index].is_none() {
+                return Err(format!(
+                    "bitfield '{}' is missing required field '{}'",
+                    bitfield_name, field.name.name
+                ));
+            }
+        }
+
+        let value = Value::Struct {
+            type_name: bitfield_name.to_string(),
+            fields: bitfield
+                .fields
+                .iter()
+                .zip(fields.into_iter())
+                .map(|(field, value)| (field.name.name.clone(), value.unwrap()))
+                .collect(),
+        };
+
+        if requires_runtime_validation {
+            Ok(Value::ResultOk(Box::new(value)))
+        } else {
+            Ok(value)
+        }
+    }
+
     fn eval_value_field_access(&self, value: Value, field_name: &str) -> Result<ExprFlow, String> {
         match value {
             Value::Struct { type_name, fields } => fields
@@ -1822,6 +1955,27 @@ mod tests {
                 })
                 .collect(),
             methods,
+            span: sp(),
+        }
+    }
+
+    /// Helper: create a simple bitfield definition.
+    fn bitfield_def(
+        name: &str,
+        fields: Vec<(&str, BitfieldFieldKind)>,
+        network_order: bool,
+    ) -> BitfieldDef {
+        BitfieldDef {
+            name: ident(name),
+            network_order,
+            fields: fields
+                .into_iter()
+                .map(|(field_name, kind)| jett_parser::ast::BitfieldFieldDef {
+                    name: ident(field_name),
+                    kind,
+                    span: sp(),
+                })
+                .collect(),
             span: sp(),
         }
     }
@@ -2410,6 +2564,131 @@ mod tests {
                 "refinement type constraint failed for 'Age'".to_string(),
             )))
         );
+    }
+
+    #[test]
+    fn bitfield_constructor_with_literals_returns_value() {
+        let mut interp = Interpreter::new();
+        interp.register_bitfield(&bitfield_def(
+            "TcpFlags",
+            vec![
+                ("syn", BitfieldFieldKind::Bits { width: 1, as_type: None }),
+                ("ack", BitfieldFieldKind::Bits { width: 1, as_type: None }),
+            ],
+            false,
+        ));
+
+        let expr = Expr::Call(
+            Box::new(var("TcpFlags")),
+            vec![named_arg("syn", int(0)), named_arg("ack", int(1))],
+            sp(),
+        );
+
+        assert_eq!(
+            interp.eval_expr(&expr).unwrap(),
+            Value::Struct {
+                type_name: "TcpFlags".to_string(),
+                fields: vec![
+                    ("syn".to_string(), Value::Int64(0)),
+                    ("ack".to_string(), Value::Int64(1)),
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn bitfield_constructor_with_dynamic_field_returns_result_ok() {
+        let mut interp = Interpreter::new();
+        interp.register_bitfield(&bitfield_def(
+            "TcpFlags",
+            vec![
+                ("syn", BitfieldFieldKind::Bits { width: 1, as_type: None }),
+                ("ack", BitfieldFieldKind::Bits { width: 1, as_type: None }),
+            ],
+            false,
+        ));
+        interp.set_variable("bit", Value::Int64(1));
+
+        let expr = Expr::Call(
+            Box::new(var("TcpFlags")),
+            vec![named_arg("syn", var("bit")), named_arg("ack", int(0))],
+            sp(),
+        );
+
+        assert_eq!(
+            interp.eval_expr(&expr).unwrap(),
+            Value::ResultOk(Box::new(Value::Struct {
+                type_name: "TcpFlags".to_string(),
+                fields: vec![
+                    ("syn".to_string(), Value::Int64(1)),
+                    ("ack".to_string(), Value::Int64(0)),
+                ],
+            }))
+        );
+    }
+
+    #[test]
+    fn bitfield_constructor_with_dynamic_field_returns_result_fail() {
+        let mut interp = Interpreter::new();
+        interp.register_bitfield(&bitfield_def(
+            "TcpFlags",
+            vec![
+                ("syn", BitfieldFieldKind::Bits { width: 1, as_type: None }),
+                ("ack", BitfieldFieldKind::Bits { width: 1, as_type: None }),
+            ],
+            false,
+        ));
+        interp.set_variable("bit", Value::Int64(2));
+
+        let expr = Expr::Call(
+            Box::new(var("TcpFlags")),
+            vec![named_arg("syn", var("bit")), named_arg("ack", int(0))],
+            sp(),
+        );
+
+        assert_eq!(
+            interp.eval_expr(&expr).unwrap(),
+            Value::ResultFail(Box::new(Value::String(
+                "bitfield 'TcpFlags' field 'syn' is 1 bit(s) wide and cannot hold '2'"
+                    .to_string(),
+            )))
+        );
+    }
+
+    #[test]
+    fn bitfield_field_access_reads_registered_field() {
+        let mut interp = Interpreter::new();
+        interp.register_bitfield(&bitfield_def(
+            "TcpFlags",
+            vec![
+                ("syn", BitfieldFieldKind::Bits { width: 1, as_type: None }),
+                ("ack", BitfieldFieldKind::Bits { width: 1, as_type: None }),
+                (
+                    "payload",
+                    BitfieldFieldKind::Payload(TypeExpr::Generic(
+                        ident("list"),
+                        vec![type_named("uint8")],
+                        sp(),
+                    )),
+                ),
+            ],
+            false,
+        ));
+
+        let expr = field_access(
+            Expr::Call(
+                Box::new(var("TcpFlags")),
+                vec![
+                    named_arg("syn", int(1)),
+                    named_arg("ack", int(0)),
+                    named_arg("payload", Expr::ListConstruct(vec![int(1), int(2)], sp())),
+                ],
+                sp(),
+            ),
+            "ack",
+        );
+
+        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(0));
     }
 
     #[test]

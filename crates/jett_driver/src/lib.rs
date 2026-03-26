@@ -213,6 +213,7 @@ pub fn run_file(path: &Path) -> Result<(), String> {
             jett_parser::ast::Item::Interface(interface) => interp.register_interface(interface),
             jett_parser::ast::Item::Implement(block) => interp.register_implement_block(block),
             jett_parser::ast::Item::Struct(strukt) => interp.register_struct(strukt),
+            jett_parser::ast::Item::Bitfield(bitfield) => interp.register_bitfield(bitfield),
             _ => {}
         }
     }

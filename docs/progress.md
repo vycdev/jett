@@ -3,7 +3,7 @@
 ## Statistics
 
 - **Lines of Rust:** ~17,500
-- **Tests:** 389 passing
+- **Tests:** 399 passing
 - **Crates:** 15
 - **VS Code extension:** Yes
 
@@ -17,7 +17,7 @@
 | Diagnostics, error rendering, TOON output | `jett_diagnostics` | 12 | Done |
 | Project discovery, jett.proj parsing | `jett_project` | 7 | Done |
 | Lexer (indentation, interpolation, 90+ tokens) | `jett_lexer` | 62 | Done |
-| Parser (recursive descent + Pratt) | `jett_parser` | 55 | Done |
+| Parser (recursive descent + Pratt) | `jett_parser` | 57 | Done |
 | Formatter (canonical whitespace) | `jett_fmt` | 3 | Done |
 | Pipeline orchestration | `jett_driver` | 0 | Done |
 | CLI (format, build, run, test, lsp) | `jett_cli` | 0 | Done |
@@ -28,7 +28,7 @@
 |---|---|---|---|
 | Type interning, struct/enum/interface defs | `jett_types` | 17 | Done |
 | Name resolution, scoping | `jett_resolve` | 15 | Done |
-| Type checking (expressions, operators, generics) | `jett_typecheck` | 87 | Done |
+| Type checking (expressions, operators, generics) | `jett_typecheck` | 91 | Done |
 
 ### Phase C: Ownership and Capabilities — COMPLETE
 
@@ -52,7 +52,7 @@
 
 | Component | Crate | Tests | Status |
 |---|---|---|---|
-| Comptime interpreter | `jett_comptime` | 126 | Done |
+| Comptime interpreter | `jett_comptime` | 130 | Done |
 | Verify blocks (compile-time) | `jett_comptime/verify` | — | Done |
 | 25+ stdlib builtins in interpreter | `jett_comptime` | — | Done |
 
@@ -74,7 +74,7 @@
 | String interpolation | Done |
 | Verify blocks (parsing + execution) | Done |
 | Property-based testing (`property` blocks) | Done |
-| Bitfield declarations | Not started |
+| Bitfield declarations | Partial |
 | Actor model (`actor`, `spawn`, `send`, `ask`) | Not started |
 | Structured concurrency (`run`, `join`, `cancel`) | Not started |
 | Interface/implement blocks | Done |

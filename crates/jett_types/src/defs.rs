@@ -10,6 +10,16 @@ impl StructId {
     }
 }
 
+/// Handle to a bitfield definition in the type registry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct BitfieldId(pub(crate) u32);
+
+impl BitfieldId {
+    pub fn index(self) -> u32 {
+        self.0
+    }
+}
+
 /// Handle to an enum definition in the type registry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct EnumId(pub(crate) u32);
@@ -37,6 +47,29 @@ pub struct StructDef {
     /// (field_name, field_type)
     pub fields: Vec<(String, TypeId)>,
     pub methods: Vec<FunctionSig>,
+}
+
+/// A field in a user-defined bitfield.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BitfieldFieldDef {
+    pub name: String,
+    pub ty: TypeId,
+    pub kind: BitfieldFieldKind,
+}
+
+/// Shape metadata for a bitfield field.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BitfieldFieldKind {
+    Bits { width: u16 },
+    Payload,
+}
+
+/// Describes a user-defined bitfield type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BitfieldDef {
+    pub name: String,
+    pub network_order: bool,
+    pub fields: Vec<BitfieldFieldDef>,
 }
 
 /// Describes a user-defined enum type.

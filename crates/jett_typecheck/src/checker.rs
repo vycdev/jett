@@ -9,8 +9,10 @@ use jett_parser::ast::{
 use jett_resolve::resolver::ResolveResult;
 use jett_resolve::scope::{DefId, DefKind};
 use jett_types::{
-    EnumDef as TypeEnumDef, FunctionSig, InterfaceDef as TypeInterfaceDef,
-    StructDef as TypeStructDef, StructId, Type, TypeId, TypeInterner, VariantDef,
+    BitfieldDef as TypeBitfieldDef, BitfieldFieldDef as TypeBitfieldFieldDef,
+    BitfieldFieldKind as TypeBitfieldFieldKind, BitfieldId, EnumDef as TypeEnumDef, FunctionSig,
+    InterfaceDef as TypeInterfaceDef, StructDef as TypeStructDef, StructId, Type, TypeId,
+    TypeInterner, VariantDef,
 };
 
 use crate::capability;
@@ -145,6 +147,7 @@ impl<'a> TypeChecker<'a> {
             }
             Type::Secret(inner) => format!("secret[{}]", self.type_name(*inner)),
             Type::Struct(sid) => self.interner.resolve_struct(*sid).name.clone(),
+            Type::Bitfield(bid) => self.interner.resolve_bitfield(*bid).name.clone(),
             Type::Enum(eid) => self.interner.resolve_enum(*eid).name.clone(),
             Type::Interface(iid) => self.interner.resolve_interface(*iid).name.clone(),
             Type::Function {
@@ -185,6 +188,13 @@ impl<'a> TypeChecker<'a> {
         matches!(
             expr,
             Expr::Ident(ident) if self.ident_def_kind(ident) == Some(DefKind::Struct)
+        )
+    }
+
+    fn is_bitfield_type_name_expr(&self, expr: &Expr) -> bool {
+        matches!(
+            expr,
+            Expr::Ident(ident) if self.ident_def_kind(ident) == Some(DefKind::Bitfield)
         )
     }
 
@@ -377,6 +387,12 @@ impl<'a> TypeChecker<'a> {
                 .fields
                 .iter()
                 .any(|(_, field_ty)| self.type_contains_secret_data_inner(*field_ty, visited)),
+            Type::Bitfield(bid) => self
+                .interner
+                .resolve_bitfield(*bid)
+                .fields
+                .iter()
+                .any(|field| self.type_contains_secret_data_inner(field.ty, visited)),
             Type::Enum(eid) => self
                 .interner
                 .resolve_enum(*eid)
@@ -390,17 +406,25 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn secret_field_names(&self, ty: TypeId) -> Vec<String> {
-        let Type::Struct(sid) = self.interner.resolve(ty) else {
-            return Vec::new();
-        };
-
-        self.interner
-            .resolve_struct(*sid)
-            .fields
-            .iter()
-            .filter(|(_, field_ty)| self.type_contains_secret_data(*field_ty))
-            .map(|(name, _)| name.clone())
-            .collect()
+        match self.interner.resolve(ty) {
+            Type::Struct(sid) => self
+                .interner
+                .resolve_struct(*sid)
+                .fields
+                .iter()
+                .filter(|(_, field_ty)| self.type_contains_secret_data(*field_ty))
+                .map(|(name, _)| name.clone())
+                .collect(),
+            Type::Bitfield(bid) => self
+                .interner
+                .resolve_bitfield(*bid)
+                .fields
+                .iter()
+                .filter(|field| self.type_contains_secret_data(field.ty))
+                .map(|field| field.name.clone())
+                .collect(),
+            _ => Vec::new(),
+        }
     }
 
     fn types_compatible(&self, expected: TypeId, got: TypeId) -> bool {
@@ -618,6 +642,7 @@ impl<'a> TypeChecker<'a> {
             match item {
                 Item::Interface(def) => self.predeclare_interface(def),
                 Item::Struct(def) => self.predeclare_struct(def),
+                Item::Bitfield(def) => self.predeclare_bitfield(def),
                 Item::Enum(def) => self.predeclare_enum(def),
                 _ => {}
             }
@@ -628,6 +653,7 @@ impl<'a> TypeChecker<'a> {
             match item {
                 Item::Interface(def) => self.finish_interface(def),
                 Item::Struct(def) => self.finish_struct(def),
+                Item::Bitfield(def) => self.finish_bitfield(def),
                 Item::Enum(def) => self.finish_enum(def),
                 _ => {}
             }
@@ -664,6 +690,7 @@ impl<'a> TypeChecker<'a> {
                         self.purity_map.insert(dotted, is_pure);
                     }
                 }
+                Item::Bitfield(_) => {}
                 _ => {}
             }
         }
@@ -682,6 +709,7 @@ impl<'a> TypeChecker<'a> {
                         self.check_method(&def.name.name, method);
                     }
                 }
+                Item::Bitfield(_) => {}
                 Item::VarDecl(decl) => self.check_var_decl(decl),
                 Item::Verify(verify) => self.check_verify_block(verify),
                 _ => {}
@@ -771,6 +799,20 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn predeclare_bitfield(&mut self, def: &ast::BitfieldDef) {
+        let bid = self.interner.add_bitfield(TypeBitfieldDef {
+            name: def.name.name.clone(),
+            network_order: def.network_order,
+            fields: Vec::new(),
+        });
+        let ty = self.interner.intern(Type::Bitfield(bid));
+        self.named_types.insert(def.name.name.clone(), ty);
+
+        if let Some(def_id) = self.declaration_def_id(def.name.span) {
+            self.type_env.insert(def_id, ty);
+        }
+    }
+
     fn finish_struct(&mut self, def: &ast::StructDef) {
         let Some(&ty) = self.named_types.get(&def.name.name) else {
             return;
@@ -819,6 +861,85 @@ impl<'a> TypeChecker<'a> {
             TypeInterfaceDef {
                 name: def.name.name.clone(),
                 methods,
+            },
+        );
+    }
+
+    fn finish_bitfield(&mut self, def: &ast::BitfieldDef) {
+        let Some(&ty) = self.named_types.get(&def.name.name) else {
+            return;
+        };
+        let Type::Bitfield(bid) = *self.interner.resolve(ty) else {
+            return;
+        };
+
+        let list_u8 = self.interner.intern(Type::List(TypeInterner::UINT8));
+        let mut fields = Vec::with_capacity(def.fields.len());
+        for (index, field) in def.fields.iter().enumerate() {
+            let (ty, kind) = match &field.kind {
+                ast::BitfieldFieldKind::Bits { width, as_type } => {
+                    if *width == 0 {
+                        self.sink.emit(errors::invalid_bitfield_field(
+                            &def.name.name,
+                            &field.name.name,
+                            "bit width must be at least 1",
+                            field.span,
+                        ));
+                    }
+
+                    let ty = if let Some(ty_expr) = as_type {
+                        let resolved = self.resolve_type_expr(ty_expr);
+                        if resolved != TypeInterner::ERROR
+                            && !matches!(self.interner.resolve(resolved), Type::Enum(_))
+                        {
+                            self.sink.emit(errors::invalid_bitfield_field(
+                                &def.name.name,
+                                &field.name.name,
+                                "`as` annotations must name an enum type",
+                                field.span,
+                            ));
+                        }
+                        resolved
+                    } else {
+                        TypeInterner::INT64
+                    };
+                    (ty, TypeBitfieldFieldKind::Bits { width: *width })
+                }
+                ast::BitfieldFieldKind::Payload(ty_expr) => {
+                    let resolved = self.resolve_type_expr(ty_expr);
+                    if resolved != TypeInterner::ERROR && resolved != list_u8 {
+                        self.sink.emit(errors::invalid_bitfield_field(
+                            &def.name.name,
+                            &field.name.name,
+                            "payload fields must have type `list[uint8]`",
+                            field.span,
+                        ));
+                    }
+                    if index + 1 != def.fields.len() {
+                        self.sink.emit(errors::invalid_bitfield_field(
+                            &def.name.name,
+                            &field.name.name,
+                            "payload fields must be the final field",
+                            field.span,
+                        ));
+                    }
+                    (resolved, TypeBitfieldFieldKind::Payload)
+                }
+            };
+
+            fields.push(TypeBitfieldFieldDef {
+                name: field.name.name.clone(),
+                ty,
+                kind,
+            });
+        }
+
+        self.interner.update_bitfield(
+            bid,
+            TypeBitfieldDef {
+                name: def.name.name.clone(),
+                network_order: def.network_order,
+                fields,
             },
         );
     }
@@ -1946,6 +2067,9 @@ impl<'a> TypeChecker<'a> {
                 Type::Struct(sid) if self.is_struct_type_name_expr(callee) => {
                     return self.check_struct_constructor(sid, args, span);
                 }
+                Type::Bitfield(bid) if self.is_bitfield_type_name_expr(callee) => {
+                    return self.check_bitfield_constructor(bid, args, span);
+                }
                 _ => {
                     self.sink
                         .emit(errors::not_callable(&self.type_name(callee_ty), span));
@@ -2157,6 +2281,21 @@ impl<'a> TypeChecker<'a> {
                         TypeInterner::ERROR
                     }
                 }
+                Type::Bitfield(bid) => {
+                    let bitfield_def = self.interner.resolve_bitfield(*bid);
+                    if let Some(field_def) =
+                        bitfield_def.fields.iter().find(|candidate| candidate.name == field.name)
+                    {
+                        self.maybe_wrap_secret(field_def.ty, true)
+                    } else {
+                        self.sink.emit(errors::type_has_no_member(
+                            &format!("secret[{}]", bitfield_def.name),
+                            &field.name,
+                            span,
+                        ));
+                        TypeInterner::ERROR
+                    }
+                }
                 _ => {
                     self.sink.emit(errors::type_has_no_member(
                         &self.type_name(base_ty),
@@ -2183,6 +2322,21 @@ impl<'a> TypeChecker<'a> {
                     TypeInterner::ERROR
                 }
             }
+            Type::Bitfield(bid) => {
+                let bitfield_def = self.interner.resolve_bitfield(*bid);
+                if let Some(field_def) =
+                    bitfield_def.fields.iter().find(|candidate| candidate.name == field.name)
+                {
+                    field_def.ty
+                } else {
+                    self.sink.emit(errors::type_has_no_member(
+                        &bitfield_def.name,
+                        &field.name,
+                        span,
+                    ));
+                    TypeInterner::ERROR
+                }
+            }
             _ => {
                 self.sink.emit(errors::type_has_no_member(
                     &self.type_name(base_ty),
@@ -2191,6 +2345,31 @@ impl<'a> TypeChecker<'a> {
                 ));
                 TypeInterner::ERROR
             }
+        }
+    }
+
+    fn check_bitfield_literal_range(
+        &mut self,
+        bitfield_name: &str,
+        field_name: &str,
+        width: u16,
+        value: i64,
+        span: Span,
+    ) {
+        let max_value = if width >= 63 {
+            i64::MAX
+        } else {
+            (1_i64 << width) - 1
+        };
+
+        if value < 0 || value > max_value {
+            self.sink.emit(errors::bitfield_literal_out_of_range(
+                bitfield_name,
+                field_name,
+                width,
+                value,
+                span,
+            ));
         }
     }
 
@@ -2401,6 +2580,102 @@ impl<'a> TypeChecker<'a> {
                 .intern(Type::Result(struct_ty, TypeInterner::STRING))
         } else {
             struct_ty
+        }
+    }
+
+    fn check_bitfield_constructor(
+        &mut self,
+        bid: BitfieldId,
+        args: &[ast::CallArg],
+        span: Span,
+    ) -> TypeId {
+        let bitfield_def = self.interner.resolve_bitfield(bid).clone();
+        let mut assigned = vec![false; bitfield_def.fields.len()];
+        let mut requires_runtime_validation = false;
+
+        for arg in args {
+            let Some(field_index) = (match &arg.name {
+                Some(name) => bitfield_def
+                    .fields
+                    .iter()
+                    .position(|field| field.name == name.name),
+                None => assigned.iter().position(|filled| !filled),
+            }) else {
+                if let Some(name) = &arg.name {
+                    self.sink.emit(errors::type_has_no_member(
+                        &bitfield_def.name,
+                        &name.name,
+                        arg.span,
+                    ));
+                } else {
+                    self.sink.emit(errors::argument_count_mismatch(
+                        &bitfield_def.name,
+                        bitfield_def.fields.len(),
+                        args.len(),
+                        span,
+                    ));
+                }
+                self.check_expr(&arg.value);
+                continue;
+            };
+
+            if assigned[field_index] {
+                self.sink.emit(errors::duplicate_constructor_field(
+                    &bitfield_def.name,
+                    &bitfield_def.fields[field_index].name,
+                    arg.span,
+                ));
+                self.check_expr(&arg.value);
+                continue;
+            }
+
+            assigned[field_index] = true;
+            let field_def = &bitfield_def.fields[field_index];
+            let arg_ty = self.check_expr_for_expected(&arg.value, field_def.ty, false);
+            if !self.types_compatible(field_def.ty, arg_ty) {
+                self.sink.emit(errors::argument_type_mismatch(
+                    &field_def.name,
+                    &self.type_name(field_def.ty),
+                    &self.type_name(arg_ty),
+                    arg.value.span(),
+                ));
+                continue;
+            }
+
+            if let TypeBitfieldFieldKind::Bits { width } = field_def.kind {
+                if field_def.ty == TypeInterner::INT64 {
+                    match &arg.value {
+                        Expr::IntLiteral(value, literal_span) => self.check_bitfield_literal_range(
+                            &bitfield_def.name,
+                            &field_def.name,
+                            width,
+                            *value,
+                            *literal_span,
+                        ),
+                        _ => {
+                            requires_runtime_validation = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        for (index, field_def) in bitfield_def.fields.iter().enumerate() {
+            if !assigned[index] {
+                self.sink.emit(errors::missing_constructor_field(
+                    &bitfield_def.name,
+                    &field_def.name,
+                    span,
+                ));
+            }
+        }
+
+        let bitfield_ty = self.interner.intern(Type::Bitfield(bid));
+        if requires_runtime_validation {
+            self.interner
+                .intern(Type::Result(bitfield_ty, TypeInterner::STRING))
+        } else {
+            bitfield_ty
         }
     }
 
@@ -5334,6 +5609,90 @@ function main() returns nothing:
         assert!(
             errors.iter().any(|d| d.code.code() == 333),
             "expected E0333, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn bitfield_constructor_with_literals_typechecks() {
+        let result = check_source_result(
+            "\
+bitfield TcpFlags:
+    syn: 1 bit
+    ack: 1 bit
+
+function main() returns int64:
+    TcpFlags flags = TcpFlags(syn: 0, ack: 1)
+    return flags.ack
+",
+        );
+
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == jett_diagnostics::Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+    }
+
+    #[test]
+    fn bitfield_constructor_with_dynamic_int_requires_handle() {
+        let errors = check_source_errors(
+            "\
+bitfield TcpFlags:
+    syn: 1 bit
+    ack: 1 bit
+
+function main(bit: int64) returns nothing:
+    TcpFlags flags = TcpFlags(syn: bit, ack: 0)
+    return nothing
+",
+        );
+
+        assert!(
+            errors.iter().any(|d| d.code.code() == 316),
+            "expected E0316, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn bitfield_literal_out_of_range_reports_error() {
+        let errors = check_source_errors(
+            "\
+bitfield ColorChannel:
+    red: 8 bits
+    green: 8 bits
+
+function main() returns nothing:
+    ColorChannel color = ColorChannel(red: 300, green: 1)
+    return nothing
+",
+        );
+
+        assert!(
+            errors.iter().any(|d| d.code.code() == 337),
+            "expected E0337, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn bitfield_payload_must_be_list_of_uint8() {
+        let errors = check_source_errors(
+            "\
+bitfield Packet:
+    header: 8 bits
+    payload: bytes
+
+function main() returns nothing:
+    return nothing
+",
+        );
+
+        assert!(
+            errors.iter().any(|d| d.code.code() == 336),
+            "expected E0336, got: {:?}",
             errors
         );
     }

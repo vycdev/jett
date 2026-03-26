@@ -176,6 +176,9 @@ impl Resolver {
                 Item::Struct(s) => {
                     self.declare_top_level(&s.name.name, DefKind::Struct, s.name.span, index);
                 }
+                Item::Bitfield(b) => {
+                    self.declare_top_level(&b.name.name, DefKind::Bitfield, b.name.span, index);
+                }
                 Item::Enum(e) => {
                     self.declare_top_level(&e.name.name, DefKind::Enum, e.name.span, index);
                 }
@@ -283,10 +286,16 @@ impl Resolver {
                     self.resolve_function(func, index);
                 }
                 Item::Struct(s) => {
+                    for field in &s.fields {
+                        self.resolve_type_expr(&field.ty, index);
+                    }
                     // Resolve method bodies.
                     for method in &s.methods {
                         self.resolve_function(method, index);
                     }
+                }
+                Item::Bitfield(bitfield) => {
+                    self.resolve_bitfield(bitfield, index);
                 }
                 Item::VarDecl(v) => {
                     self.resolve_expr(&v.value, index);
@@ -322,6 +331,21 @@ impl Resolver {
             );
             self.resolve_expr(constraint, item_index);
             self.pop_scope(scope);
+        }
+    }
+
+    fn resolve_bitfield(&mut self, bitfield: &jett_parser::ast::BitfieldDef, item_index: usize) {
+        for field in &bitfield.fields {
+            match &field.kind {
+                jett_parser::ast::BitfieldFieldKind::Bits { as_type, .. } => {
+                    if let Some(ty) = as_type {
+                        self.resolve_type_expr(ty, item_index);
+                    }
+                }
+                jett_parser::ast::BitfieldFieldKind::Payload(ty) => {
+                    self.resolve_type_expr(ty, item_index);
+                }
+            }
         }
     }
 

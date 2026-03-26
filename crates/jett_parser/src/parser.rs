@@ -170,6 +170,10 @@ impl<'src> Parser<'src> {
             TokenKind::Interface => Some(Item::Interface(self.parse_interface())),
             TokenKind::Implement => Some(Item::Implement(self.parse_implement())),
             TokenKind::Struct => Some(Item::Struct(self.parse_struct())),
+            TokenKind::Bitfield => Some(Item::Bitfield(self.parse_bitfield(false))),
+            TokenKind::Network if self.peek_nth(1) == TokenKind::Bitfield => {
+                Some(Item::Bitfield(self.parse_bitfield(true)))
+            }
             TokenKind::Enum => Some(Item::Enum(self.parse_enum())),
             TokenKind::Machine => Some(Item::Machine(self.parse_machine())),
             TokenKind::Verify => Some(Item::Verify(self.parse_verify_block())),
@@ -181,7 +185,7 @@ impl<'src> Parser<'src> {
             _ => {
                 let tok = self.peek_token().clone();
                 self.error(
-                    format!("expected item (namespace, function, mutual, interface, implement, struct, enum, machine, type, property, or variable), found {:?}", tok.kind),
+                    format!("expected item (namespace, function, mutual, interface, implement, struct, bitfield, enum, machine, type, property, or variable), found {:?}", tok.kind),
                     tok.span,
                 );
                 None
@@ -496,6 +500,89 @@ impl<'src> Parser<'src> {
             span: name.span.merge(ty.span()),
             name,
             ty,
+        }
+    }
+
+    fn parse_bitfield(&mut self, leading_network: bool) -> BitfieldDef {
+        let mut start_span = self.peek_token().span;
+        let mut network_order = false;
+
+        if leading_network {
+            let network_kw = self.expect(TokenKind::Network);
+            start_span = network_kw.span;
+            network_order = true;
+        }
+
+        let bitfield_kw = self.expect(TokenKind::Bitfield);
+        if !leading_network {
+            start_span = bitfield_kw.span;
+        }
+        if self.eat(TokenKind::Network).is_some() {
+            network_order = true;
+        }
+
+        let name = self.parse_ident();
+        self.expect(TokenKind::Colon);
+
+        self.skip_newlines();
+        let indent_tok = self.expect(TokenKind::Indent);
+        let mut fields = Vec::new();
+        let mut last_span = indent_tok.span;
+
+        self.skip_newlines();
+        while self.peek() != TokenKind::Dedent && self.peek() != TokenKind::Eof {
+            let field = self.parse_bitfield_field_def();
+            last_span = field.span;
+            fields.push(field);
+            self.skip_newlines();
+        }
+        if self.peek() == TokenKind::Dedent {
+            last_span = self.advance().span;
+        }
+
+        BitfieldDef {
+            span: start_span.merge(last_span),
+            name,
+            network_order,
+            fields,
+        }
+    }
+
+    fn parse_bitfield_field_def(&mut self) -> BitfieldFieldDef {
+        let name = self.parse_ident();
+        self.expect(TokenKind::Colon);
+
+        let (kind, end_span) = if self.peek() == TokenKind::IntLiteral {
+            let width_tok = self.advance();
+            let width = self
+                .token_text(&width_tok)
+                .parse::<u16>()
+                .unwrap_or_else(|_| {
+                    self.error("bitfield width must be a base-10 integer", width_tok.span);
+                    0
+                });
+            let unit_tok = if self.peek() == TokenKind::Bit {
+                self.advance()
+            } else {
+                self.expect(TokenKind::Bits)
+            };
+            let as_type = if self.eat(TokenKind::As).is_some() {
+                Some(self.parse_type())
+            } else {
+                None
+            };
+            let end_span = as_type.as_ref().map_or(unit_tok.span, TypeExpr::span);
+            (BitfieldFieldKind::Bits { width, as_type }, end_span)
+        } else {
+            let ty = self.parse_type();
+            let end_span = ty.span();
+            (BitfieldFieldKind::Payload(ty), end_span)
+        };
+
+        BitfieldFieldDef {
+            span: name.span.merge(end_span),
+            name,
+            kind,
         }
     }
 
@@ -2132,6 +2219,59 @@ struct Point:
                 assert_eq!(s.methods[0].name.name, "distance");
             }
             other => panic!("expected Struct, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_bitfield_with_width_fields() {
+        let src = "\
+bitfield TcpFlags:
+    syn: 1 bit
+    ack: 1 bit
+    window_size: 16 bits
+";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        match &result.module.items[0] {
+            Item::Bitfield(bitfield) => {
+                assert_eq!(bitfield.name.name, "TcpFlags");
+                assert!(!bitfield.network_order);
+                assert_eq!(bitfield.fields.len(), 3);
+                match &bitfield.fields[2].kind {
+                    BitfieldFieldKind::Bits { width, as_type } => {
+                        assert_eq!(*width, 16);
+                        assert!(as_type.is_none());
+                    }
+                    other => panic!("expected width field, got {:?}", other),
+                }
+            }
+            other => panic!("expected Bitfield, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_bitfield_with_network_modifier_and_payload() {
+        let src = "\
+bitfield network DnsHeader:
+    id: 16 bits
+    payload: list[uint8]
+";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        match &result.module.items[0] {
+            Item::Bitfield(bitfield) => {
+                assert_eq!(bitfield.name.name, "DnsHeader");
+                assert!(bitfield.network_order);
+                assert_eq!(bitfield.fields.len(), 2);
+                match &bitfield.fields[1].kind {
+                    BitfieldFieldKind::Payload(TypeExpr::Generic(name, args, _)) => {
+                        assert_eq!(name.name, "list");
+                        assert_eq!(args.len(), 1);
+                    }
+                    other => panic!("expected payload field, got {:?}", other),
+                }
+            }
+            other => panic!("expected Bitfield, got {:?}", other),
         }
     }
 

@@ -112,6 +112,9 @@ pub fn run_verify_blocks_detailed(module: &Module) -> Vec<VerifyResult> {
             Item::Struct(strukt) => {
                 interp.register_struct(strukt);
             }
+            Item::Bitfield(bitfield) => {
+                interp.register_bitfield(bitfield);
+            }
             Item::Verify(vb) => {
                 verify_blocks.push(vb.clone());
             }

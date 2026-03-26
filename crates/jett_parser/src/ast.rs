@@ -20,6 +20,7 @@ pub enum Item {
     Interface(InterfaceDecl),
     Implement(ImplementBlock),
     Struct(StructDef),
+    Bitfield(BitfieldDef),
     Enum(EnumDef),
     Machine(MachineDef),
     VarDecl(VarDecl),
@@ -150,6 +151,30 @@ pub struct FieldDef {
     pub name: Ident,
     pub ty: TypeExpr,
     pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct BitfieldDef {
+    pub name: Ident,
+    pub network_order: bool,
+    pub fields: Vec<BitfieldFieldDef>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct BitfieldFieldDef {
+    pub name: Ident,
+    pub kind: BitfieldFieldKind,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub enum BitfieldFieldKind {
+    Bits {
+        width: u16,
+        as_type: Option<TypeExpr>,
+    },
+    Payload(TypeExpr),
 }
 
 #[derive(Debug, Clone)]

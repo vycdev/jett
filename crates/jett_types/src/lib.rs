@@ -5,7 +5,8 @@ mod interner;
 mod types;
 
 pub use defs::{
-    EnumDef, EnumId, FunctionSig, InterfaceDef, InterfaceId, StructDef, StructId, VariantDef,
+    BitfieldDef, BitfieldFieldDef, BitfieldFieldKind, BitfieldId, EnumDef, EnumId, FunctionSig,
+    InterfaceDef, InterfaceId, StructDef, StructId, VariantDef,
 };
 pub use interner::TypeInterner;
 pub use types::{Type, TypeId};
