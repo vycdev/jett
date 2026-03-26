@@ -1,50 +1,91 @@
 namespace test
 
-function main() returns nothing:
+function sort_length_test() returns int64:
     list[int64] nums = list(3, 1, 4, 1, 5, 9, 2, 6, 5, 3)
+    return list.length(list.sort(nums))
 
-    list[int64] sorted = list.sort(nums)
-    assert list.length(sorted) == 10
+verify sort_length_test:
+    assert sort_length_test() == 10
 
-    int64 first_sorted = list.first[int64](sorted) handle:
-        return nothing
-    assert first_sorted == 1
+function sort_first_test() returns int64:
+    list[int64] sorted = list.sort(list(3, 1, 4, 1, 5, 9, 2, 6, 5, 3))
+    return list.first[int64](sorted) handle:
+        default 0
 
-    int64 last_sorted = list.last[int64](sorted) handle:
-        return nothing
-    assert last_sorted == 9
+verify sort_first_test:
+    assert sort_first_test() == 1
 
-    list[int64] unique_sorted = list.unique(list.sort(nums))
-    assert list.length(unique_sorted) == 7
+function sort_last_test() returns int64:
+    list[int64] sorted = list.sort(list(3, 1, 4, 1, 5, 9, 2, 6, 5, 3))
+    return list.last[int64](sorted) handle:
+        default 0
 
-    list[int64] taken = list.take(sorted, 3)
-    assert list.length(taken) == 3
+verify sort_last_test:
+    assert sort_last_test() == 9
 
-    int64 first_taken = list.first[int64](taken) handle:
-        return nothing
-    assert first_taken == 1
+function unique_length_test() returns int64:
+    list[int64] nums = list(3, 1, 4, 1, 5, 9, 2, 6, 5, 3)
+    return list.length(list.unique(list.sort(nums)))
 
-    list[int64] skipped = list.skip(sorted, 7)
-    assert list.length(skipped) == 3
+verify unique_length_test:
+    assert unique_length_test() == 7
 
+function take_length_test() returns int64:
+    list[int64] sorted = list.sort(list(3, 1, 4, 1, 5, 9, 2, 6, 5, 3))
+    return list.length(list.take(sorted, 3))
+
+verify take_length_test:
+    assert take_length_test() == 3
+
+function skip_length_test() returns int64:
+    list[int64] sorted = list.sort(list(3, 1, 4, 1, 5, 9, 2, 6, 5, 3))
+    return list.length(list.skip(sorted, 7))
+
+verify skip_length_test:
+    assert skip_length_test() == 3
+
+function reverse_first_test() returns int64:
     list[int64] rev = list.reverse(list(1, 2, 3))
-    int64 rev_first = list.first[int64](rev) handle:
-        return nothing
-    assert rev_first == 3
+    return list.first[int64](rev) handle:
+        default 0
 
-    int64 rev_last = list.last[int64](rev) handle:
-        return nothing
-    assert rev_last == 1
+verify reverse_first_test:
+    assert reverse_first_test() == 3
 
-    list[int64] a = list(1, 2, 3)
-    list[int64] b = list(4, 5, 6)
-    list[int64] combined = list.concat(a, b)
-    assert list.length(combined) == 6
+function reverse_last_test() returns int64:
+    list[int64] rev = list.reverse(list(1, 2, 3))
+    return list.last[int64](rev) handle:
+        default 0
 
-    assert list.contains(combined, 4) == true
-    assert list.contains(combined, 99) == false
+verify reverse_last_test:
+    assert reverse_last_test() == 1
 
-    assert list.is_empty(list()) == true
-    assert list.is_empty(list(1)) == false
+function concat_length_test() returns int64:
+    return list.length(list.concat(list(1, 2, 3), list(4, 5, 6)))
 
-    return nothing
+verify concat_length_test:
+    assert concat_length_test() == 6
+
+function contains_true_test() returns bool:
+    return list.contains(list.concat(list(1, 2, 3), list(4, 5, 6)), 4)
+
+verify contains_true_test:
+    assert contains_true_test() == true
+
+function contains_false_test() returns bool:
+    return list.contains(list.concat(list(1, 2, 3), list(4, 5, 6)), 99)
+
+verify contains_false_test:
+    assert contains_false_test() == false
+
+function is_empty_true_test() returns bool:
+    return list.is_empty(list())
+
+verify is_empty_true_test:
+    assert is_empty_true_test() == true
+
+function is_empty_false_test() returns bool:
+    return list.is_empty(list(1))
+
+verify is_empty_false_test:
+    assert is_empty_false_test() == false

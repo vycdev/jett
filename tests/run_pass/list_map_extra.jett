@@ -1,0 +1,66 @@
+namespace app
+
+function chunk_length_test() returns int64:
+    list[int64] nums = list(1, 2, 3, 4, 5)
+    list[list[int64]] chunks = list.chunk[int64](nums, 2)
+    return list.length[list[int64]](chunks)
+
+verify chunk_length_test:
+    assert chunk_length_test() == 3
+
+function is_sorted_true_test() returns bool:
+    return list.is_sorted[int64](list(1, 2, 3, 4, 5))
+
+verify is_sorted_true_test:
+    assert is_sorted_true_test() == true
+
+function is_sorted_false_test() returns bool:
+    return list.is_sorted[int64](list(3, 1, 2))
+
+verify is_sorted_false_test:
+    assert is_sorted_false_test() == false
+
+function all_elements_in_true_test() returns bool:
+    return list.all_elements_in[int64](list(1, 2), list(1, 2, 3, 4, 5))
+
+verify all_elements_in_true_test:
+    assert all_elements_in_true_test() == true
+
+function all_elements_in_false_test() returns bool:
+    return list.all_elements_in[int64](list(1, 6), list(1, 2, 3, 4, 5))
+
+verify all_elements_in_false_test:
+    assert all_elements_in_false_test() == false
+
+function reduce_sum_test() returns int64:
+    return list.reduce[int64, int64](list(1, 2, 3, 4, 5), 0, function(acc: int64, n: int64) returns int64: return acc + n)
+
+verify reduce_sum_test:
+    assert reduce_sum_test() == 15
+
+function map_get_or_found_test() returns int64:
+    map[string, int64] scores = map.new[string, int64]()
+    scores = map.insert[string, int64](scores, "alice", 10)
+    return map.get_or[string, int64](scores, "alice", 0)
+
+verify map_get_or_found_test:
+    assert map_get_or_found_test() == 10
+
+function map_get_or_missing_test() returns int64:
+    map[string, int64] scores = map.new[string, int64]()
+    scores = map.insert[string, int64](scores, "alice", 10)
+    return map.get_or[string, int64](scores, "bob", 99)
+
+verify map_get_or_missing_test:
+    assert map_get_or_missing_test() == 99
+
+function map_merge_length_test() returns int64:
+    map[string, int64] m1 = map.new[string, int64]()
+    m1 = map.insert[string, int64](m1, "a", 1)
+    map[string, int64] m2 = map.new[string, int64]()
+    m2 = map.insert[string, int64](m2, "b", 2)
+    map[string, int64] merged = map.merge[string, int64](m1, m2)
+    return map.length[string, int64](merged)
+
+verify map_merge_length_test:
+    assert map_merge_length_test() == 2

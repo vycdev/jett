@@ -1,0 +1,37 @@
+namespace app
+
+function sha256_empty_test() returns string:
+    return crypto.sha256("")
+
+verify sha256_empty_test:
+    assert sha256_empty_test() == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+function sha256_abc_test() returns string:
+    return crypto.sha256("abc")
+
+verify sha256_abc_test:
+    assert sha256_abc_test() == "ba7816bf8f01cfea414140de5dae2ec73b00361bbef0469f490f67a6f03fce2d"
+
+function sha256_length_test() returns int64:
+    return string.length(crypto.sha256(""))
+
+verify sha256_length_test:
+    assert sha256_length_test() == 64
+
+function md5_empty_test() returns string:
+    return crypto.md5("")
+
+verify md5_empty_test:
+    assert md5_empty_test() == "d41d8cd98f00b204e9800998ecf8427e"
+
+function md5_abc_test() returns string:
+    return crypto.md5("abc")
+
+verify md5_abc_test:
+    assert md5_abc_test() == "900150983cd24fb0d6963f7d28e17f72"
+
+function md5_length_test() returns int64:
+    return string.length(crypto.md5(""))
+
+verify md5_length_test:
+    assert md5_length_test() == 32

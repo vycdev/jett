@@ -81,6 +81,8 @@ struct TypeChecker<'a> {
     current_function_pure: bool,
     /// Whether we are inside a verify block.
     in_verify_block: bool,
+    /// Whether we are inside a property block.
+    in_property_block: bool,
     /// The name of the verify block currently being checked (for error messages).
     current_verify_name: Option<String>,
     /// Nesting depth inside a handle-block body. Used to validate `default`.
@@ -130,6 +132,7 @@ impl<'a> TypeChecker<'a> {
             current_function_name: None,
             current_function_pure: false,
             in_verify_block: false,
+            in_property_block: false,
             current_verify_name: None,
             handle_body_depth: 0,
             generic_struct_templates: HashMap::new(),
@@ -795,7 +798,28 @@ impl<'a> TypeChecker<'a> {
                     TypeInterner::FLOAT64,
                 ))
             }
-            // string builtins
+            "math.average" | "math.median" => {
+                let inner = if type_args.len() == 1 {
+                    self.resolve_type_expr(&type_args[0])
+                } else {
+                    TypeInterner::FLOAT64
+                };
+                let list_ty = self.interner.intern(Type::List(inner));
+                Some((vec![list_ty], TypeInterner::FLOAT64))
+            }
+            // string extras
+            "string.reverse" | "string.trim_start" | "string.trim_end" => {
+                Some((vec![TypeInterner::STRING], TypeInterner::STRING))
+            }
+            "string.after" | "string.before" => Some((
+                vec![TypeInterner::STRING, TypeInterner::STRING],
+                TypeInterner::STRING,
+            )),
+            // string.chars / string.words / string.lines → list[string]
+            "string.chars" | "string.words" | "string.lines" => {
+                let list_str = self.interner.intern(Type::List(TypeInterner::STRING));
+                Some((vec![TypeInterner::STRING], list_str))
+            }
             // random builtins
             "random.int64" => Some((
                 vec![TypeInterner::INT64, TypeInterner::INT64],
@@ -825,6 +849,7 @@ impl<'a> TypeChecker<'a> {
                 Some((vec![list_ty], list_ty))
             }
             "string.is_empty" => Some((vec![TypeInterner::STRING], TypeInterner::BOOL)),
+            "string.is_not_empty" => Some((vec![TypeInterner::STRING], TypeInterner::BOOL)),
             "string.repeat" => Some((
                 vec![TypeInterner::STRING, TypeInterner::INT64],
                 TypeInterner::STRING,
@@ -833,8 +858,18 @@ impl<'a> TypeChecker<'a> {
                 vec![TypeInterner::STRING, TypeInterner::INT64, TypeInterner::INT64],
                 TypeInterner::STRING,
             )),
-            "string.pad_start" | "string.pad_end" => Some((
+            // string.pad_left is the canonical name; pad_start/pad_end are aliases
+            "string.pad_left" | "string.pad_start" | "string.pad_end" => Some((
                 vec![TypeInterner::STRING, TypeInterner::INT64, TypeInterner::STRING],
+                TypeInterner::STRING,
+            )),
+            "string.slugify" => Some((vec![TypeInterner::STRING], TypeInterner::STRING)),
+            "string.truncate" => Some((
+                vec![TypeInterner::STRING, TypeInterner::INT64, TypeInterner::STRING],
+                TypeInterner::STRING,
+            )),
+            "string.between" => Some((
+                vec![TypeInterner::STRING, TypeInterner::STRING, TypeInterner::STRING],
                 TypeInterner::STRING,
             )),
             "map.new" => {
@@ -991,6 +1026,99 @@ impl<'a> TypeChecker<'a> {
                 ));
                 Some((vec![list_ty, TypeInterner::ERROR], group_map_ty))
             }
+            // list.reduce[T, U](list, initial, fn) -> U
+            "list.reduce" => {
+                let inner = if type_args.len() >= 1 {
+                    self.resolve_type_expr(&type_args[0])
+                } else {
+                    TypeInterner::ERROR
+                };
+                let list_ty = self.interner.intern(Type::List(inner));
+                Some((vec![list_ty, TypeInterner::ERROR, TypeInterner::ERROR], TypeInterner::ERROR))
+            }
+            // list.chunk[T](list, size) -> list[list[T]]
+            "list.chunk" => {
+                let inner = if type_args.len() >= 1 {
+                    self.resolve_type_expr(&type_args[0])
+                } else {
+                    TypeInterner::ERROR
+                };
+                let list_ty = self.interner.intern(Type::List(inner));
+                let list_of_list = self.interner.intern(Type::List(list_ty));
+                Some((vec![list_ty, TypeInterner::INT64], list_of_list))
+            }
+            // list.sort_by_index[T](list[T], index) -> list[T]
+            // where T is the element type (e.g., list[string])
+            "list.sort_by_index" => {
+                let elem = if type_args.len() >= 1 {
+                    self.resolve_type_expr(&type_args[0])
+                } else {
+                    TypeInterner::ERROR
+                };
+                let list_ty = self.interner.intern(Type::List(elem));
+                Some((vec![list_ty, TypeInterner::INT64], list_ty))
+            }
+            "list.is_sorted" => {
+                let inner = if type_args.len() >= 1 {
+                    self.resolve_type_expr(&type_args[0])
+                } else {
+                    TypeInterner::ERROR
+                };
+                let list_ty = self.interner.intern(Type::List(inner));
+                Some((vec![list_ty], TypeInterner::BOOL))
+            }
+            "list.all_elements_in" => {
+                let inner = if type_args.len() >= 1 {
+                    self.resolve_type_expr(&type_args[0])
+                } else {
+                    TypeInterner::ERROR
+                };
+                let list_ty = self.interner.intern(Type::List(inner));
+                Some((vec![list_ty, list_ty], TypeInterner::BOOL))
+            }
+            // map extras
+            "map.set" => {
+                // alias for map.insert
+                let (k, v) = self.map_type_args(type_args);
+                let map_ty = self.interner.intern(Type::Map(k, v));
+                Some((vec![map_ty, k, v], map_ty))
+            }
+            "map.get_or" => {
+                let (k, v) = self.map_type_args(type_args);
+                let map_ty = self.interner.intern(Type::Map(k, v));
+                Some((vec![map_ty, k, v], v))
+            }
+            "map.merge" => {
+                let (k, v) = self.map_type_args(type_args);
+                let map_ty = self.interner.intern(Type::Map(k, v));
+                Some((vec![map_ty, map_ty], map_ty))
+            }
+            "map.contains_key" => {
+                // alias for map.has
+                let (k, v) = self.map_type_args(type_args);
+                let map_ty = self.interner.intern(Type::Map(k, v));
+                Some((vec![map_ty, k], TypeInterner::BOOL))
+            }
+            "uuid.new" => Some((vec![], TypeInterner::STRING)),
+            // char-level string operations
+            "string.take_chars" | "string.take_last_chars" | "string.drop_chars" => Some((
+                vec![TypeInterner::STRING, TypeInterner::INT64],
+                TypeInterner::STRING,
+            )),
+            "string.char_at" => {
+                let opt_str = self.interner.intern(Type::Optional(TypeInterner::STRING));
+                Some((vec![TypeInterner::STRING, TypeInterner::INT64], opt_str))
+            }
+            // encoding module (all string → string)
+            "encoding.base64_encode" | "encoding.base64_decode"
+            | "encoding.hex_encode" | "encoding.hex_decode"
+            | "encoding.url_encode" | "encoding.url_decode" => {
+                Some((vec![TypeInterner::STRING], TypeInterner::STRING))
+            }
+            // crypto module (string → string)
+            "crypto.sha256" | "crypto.md5" => {
+                Some((vec![TypeInterner::STRING], TypeInterner::STRING))
+            }
             _ => None,
         }
     }
@@ -1092,6 +1220,7 @@ impl<'a> TypeChecker<'a> {
                 Item::Actor(def) => self.check_actor(def),
                 Item::VarDecl(decl) => self.check_var_decl(decl),
                 Item::Verify(verify) => self.check_verify_block(verify),
+                Item::Property(prop) => self.check_property_block(prop),
                 _ => {}
             }
         }
@@ -1995,6 +2124,12 @@ impl<'a> TypeChecker<'a> {
         self.current_verify_name = None;
     }
 
+    fn check_property_block(&mut self, prop: &ast::PropertyBlock) {
+        self.in_property_block = true;
+        self.check_block(&prop.body);
+        self.in_property_block = false;
+    }
+
     // ------------------------------------------------------------------
     // Block
     // ------------------------------------------------------------------
@@ -2274,6 +2409,9 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn check_assert(&mut self, assert_stmt: &ast::AssertStmt) {
+        if !self.in_verify_block && !self.in_property_block {
+            self.sink.emit(errors::assert_outside_test_block(assert_stmt.span));
+        }
         let cond_type = self.check_expr(&assert_stmt.condition);
         if cond_type != TypeInterner::ERROR && cond_type != TypeInterner::BOOL {
             self.sink.emit(errors::assert_condition_not_bool(

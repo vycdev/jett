@@ -5920,14 +5920,14 @@ function describe_shape(view stdout: Stdout, shape: Shape) returns nothing:
 
 ### Assert
 
-`assert` checks a condition and halts the program if it fails. Two forms are supported:
+`assert` is a test-only statement. It may only appear inside a `verify` or `property` block — the compiler rejects `assert` in regular function bodies. Two forms are supported:
 
 ```
 assert list.length[Item](items) > 0
 assert balance >= 0.0 "balance must not be negative"
 ```
 
-The first form checks truthiness. The second form provides a custom failure message.
+The first form checks truthiness. The second form provides a custom failure message. In a `verify` block, a failing assertion is a compile error. In a `property` block, a failing assertion causes `jett test` to report the failing input.
 
 ### Modules
 

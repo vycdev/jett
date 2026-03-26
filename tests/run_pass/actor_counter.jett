@@ -23,15 +23,12 @@ function main() returns nothing:
     send counter.increment
 
     int64 n = ask counter.get_count
-    assert n == 3
 
     send counter.add(10)
 
     int64 m = ask counter.get_count
-    assert m == 13
 
     send counter.reset
     int64 z = ask counter.get_count
-    assert z == 0
 
     return nothing

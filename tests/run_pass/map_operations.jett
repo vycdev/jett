@@ -1,31 +1,73 @@
 namespace test
 
-function main() returns nothing:
+function map_has_true_test() returns bool:
     map[string, int64] scores = map("alice": 10, "bob": 20, "carol": 30)
+    return map.has(scores, "alice")
 
-    assert map.has(scores, "alice") == true
-    assert map.has(scores, "dave") == false
-    assert map.length(scores) == 3
+verify map_has_true_test:
+    assert map_has_true_test() == true
 
-    optional[int64] alice_score = map.get(scores, "alice")
-    int64 score = alice_score handle:
-        return nothing
-    assert score == 10
+function map_has_false_test() returns bool:
+    map[string, int64] scores = map("alice": 10, "bob": 20, "carol": 30)
+    return map.has(scores, "dave")
 
-    optional[int64] dave_score = map.get(scores, "dave")
-    int64 fallback = dave_score handle:
+verify map_has_false_test:
+    assert map_has_false_test() == false
+
+function map_length_test() returns int64:
+    map[string, int64] scores = map("alice": 10, "bob": 20, "carol": 30)
+    return map.length(scores)
+
+verify map_length_test:
+    assert map_length_test() == 3
+
+function map_get_found_test() returns int64:
+    map[string, int64] scores = map("alice": 10, "bob": 20, "carol": 30)
+    optional[int64] v = map.get(scores, "alice")
+    return v handle:
         default 0
-    assert fallback == 0
 
+verify map_get_found_test:
+    assert map_get_found_test() == 10
+
+function map_get_missing_test() returns int64:
+    map[string, int64] scores = map("alice": 10, "bob": 20, "carol": 30)
+    optional[int64] v = map.get(scores, "dave")
+    return v handle:
+        default 0
+
+verify map_get_missing_test:
+    assert map_get_missing_test() == 0
+
+function map_insert_has_test() returns bool:
+    map[string, int64] scores = map("alice": 10, "bob": 20, "carol": 30)
     map[string, int64] updated = map.insert(scores, "dave", 40)
-    assert map.has(updated, "dave") == true
-    assert map.length(updated) == 4
+    return map.has(updated, "dave")
 
+verify map_insert_has_test:
+    assert map_insert_has_test() == true
+
+function map_insert_length_test() returns int64:
+    map[string, int64] scores = map("alice": 10, "bob": 20, "carol": 30)
+    map[string, int64] updated = map.insert(scores, "dave", 40)
+    return map.length(updated)
+
+verify map_insert_length_test:
+    assert map_insert_length_test() == 4
+
+function map_remove_test() returns bool:
+    map[string, int64] scores = map("alice": 10, "bob": 20, "carol": 30)
+    map[string, int64] updated = map.insert(scores, "dave", 40)
     map[string, int64] removed = map.remove(updated, "bob")
-    assert map.has(removed, "bob") == false
-    assert map.length(removed) == 3
+    return map.has(removed, "bob")
 
+verify map_remove_test:
+    assert map_remove_test() == false
+
+function map_keys_length_test() returns int64:
+    map[string, int64] scores = map("alice": 10, "bob": 20, "carol": 30)
     list[string] keys = map.keys(scores)
-    assert list.length(keys) == 3
+    return list.length(keys)
 
-    return nothing
+verify map_keys_length_test:
+    assert map_keys_length_test() == 3

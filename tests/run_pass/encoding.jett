@@ -1,0 +1,45 @@
+namespace app
+
+function base64_encode_test() returns string:
+    return encoding.base64_encode("hello")
+
+verify base64_encode_test:
+    assert base64_encode_test() == "aGVsbG8="
+
+function base64_decode_test() returns string:
+    return encoding.base64_decode("aGVsbG8=")
+
+verify base64_decode_test:
+    assert base64_decode_test() == "hello"
+
+function base64_roundtrip_test() returns string:
+    string original = "Jett language"
+    string encoded = encoding.base64_encode(original)
+    return encoding.base64_decode(encoded)
+
+verify base64_roundtrip_test:
+    assert base64_roundtrip_test() == "Jett language"
+
+function hex_encode_test() returns string:
+    return encoding.hex_encode("hi")
+
+verify hex_encode_test:
+    assert hex_encode_test() == "6869"
+
+function hex_decode_test() returns string:
+    return encoding.hex_decode("6869")
+
+verify hex_decode_test:
+    assert hex_decode_test() == "hi"
+
+function url_encode_test() returns string:
+    return encoding.url_encode("hello world!")
+
+verify url_encode_test:
+    assert url_encode_test() == "hello%20world%21"
+
+function url_decode_test() returns string:
+    return encoding.url_decode("hello%20world%21")
+
+verify url_decode_test:
+    assert url_decode_test() == "hello world!"

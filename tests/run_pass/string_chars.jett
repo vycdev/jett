@@ -1,0 +1,42 @@
+namespace app
+
+function take_chars_test() returns string:
+    return string.take_chars("hello world", 5)
+
+verify take_chars_test:
+    assert take_chars_test() == "hello"
+
+function take_last_chars_test() returns string:
+    return string.take_last_chars("hello world", 5)
+
+verify take_last_chars_test:
+    assert take_last_chars_test() == "world"
+
+function drop_chars_test() returns string:
+    return string.drop_chars("hello world", 6)
+
+verify drop_chars_test:
+    assert drop_chars_test() == "world"
+
+function char_at_found_test() returns string:
+    optional[string] ch = string.char_at("hello", 1)
+    return ch handle:
+        default "error"
+
+verify char_at_found_test:
+    assert char_at_found_test() == "e"
+
+function char_at_missing_test() returns string:
+    optional[string] out_of_bounds = string.char_at("hello", 10)
+    return out_of_bounds handle:
+        default "none"
+
+verify char_at_missing_test:
+    assert char_at_missing_test() == "none"
+
+function uuid_length_test() returns int64:
+    string id = uuid.new()
+    return string.char_count(id)
+
+verify uuid_length_test:
+    assert uuid_length_test() == 36

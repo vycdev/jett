@@ -791,6 +791,10 @@ impl Interpreter {
             Expr::FieldAccess(obj, field, _) => {
                 let dotted = Self::extract_dotted_name(obj, &field.name);
                 if let Some(ref name) = dotted {
+                    // Check higher-order builtins first (need &mut self).
+                    if let Some(result) = self.call_higher_order_builtin(name, arg_values.clone()) {
+                        return Ok(ExprFlow::Value(result?));
+                    }
                     if let Some(result) = self.call_builtin(name, &arg_values) {
                         return Ok(ExprFlow::Value(result?));
                     }
@@ -1639,17 +1643,34 @@ impl Interpreter {
         Some(value)
     }
 
-    // -- Built-in standard library functions ----------------------------------
+    // =========================================================================
+    // Built-in implementations
+    //
+    // This function handles two distinct categories:
+    //
+    //   COMPILER PRIMITIVES — operations that are semantically special and
+    //   will remain as interpreter/compiler built-ins permanently (I/O
+    //   capabilities, JSON serialization, secret-taint ops, random).
+    //
+    //   STANDARD LIBRARY STUBS — functions that belong to the Jett standard
+    //   library (stdlib/*.jett) but are implemented here as interpreter
+    //   builtins until Phase D code generation is complete.  Once codegen
+    //   exists these should migrate to actual Jett source files.
+    // =========================================================================
 
-    /// Try to call a built-in standard library function.  Returns `None` if
-    /// the name does not match any built-in, allowing the caller to fall
-    /// through to user-defined function lookup.
+    /// Try to call a built-in function.  Returns `None` if the name does not
+    /// match any built-in, allowing the caller to fall through to
+    /// user-defined function lookup.
     fn call_builtin(&self, name: &str, args: &[Value]) -> Option<Result<Value, String>> {
         if let Some(result) = self.call_bitfield_builtin(name, args) {
             return Some(result);
         }
 
         match name {
+            // =================================================================
+            // COMPILER PRIMITIVES
+            // =================================================================
+
             // -- I/O (capability-simulated) -----------------------------------
             "Stdout.write" => {
                 // Stdout.write(stdout, message) — ignore capability, print message
@@ -1681,7 +1702,7 @@ impl Interpreter {
                 Some(Ok(Value::String(value_to_json(&args[0]))))
             }
 
-            // -- Random operations -------------------------------------------
+            // -- Random operations (stdlib/random.jett) -----------------------
             "random.int64" => {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
@@ -1736,7 +1757,12 @@ impl Interpreter {
                 }
             }
 
-            // -- String operations --------------------------------------------
+            // =================================================================
+            // STANDARD LIBRARY STUBS
+            // (will migrate to stdlib/*.jett once codegen is available)
+            // =================================================================
+
+            // -- String operations (stdlib/string.jett) -----------------------
             "string.length" | "string.char_count" => {
                 require_args!(name, 1, args);
                 match &args[0] {
@@ -1879,26 +1905,8 @@ impl Interpreter {
                 }
             }
 
-            "string.pad_start" => {
-                require_args!(name, 3, args);
-                match (&args[0], &args[1], &args[2]) {
-                    (Value::String(s), Value::Int64(width), Value::String(pad)) => {
-                        let pad_char = pad.chars().next().unwrap_or(' ');
-                        let current_len = s.chars().count();
-                        let width = (*width).max(0) as usize;
-                        if current_len >= width {
-                            Some(Ok(Value::String(s.clone())))
-                        } else {
-                            let padding: String =
-                                std::iter::repeat(pad_char).take(width - current_len).collect();
-                            Some(Ok(Value::String(format!("{padding}{s}"))))
-                        }
-                    }
-                    _ => Some(Err(format!(
-                        "{name} expects a string, int64 width, and string pad char"
-                    ))),
-                }
-            }
+            // string.pad_start is an alias for string.pad_left
+            "string.pad_start" => self.call_builtin("string.pad_left", args),
 
             "string.pad_end" => {
                 require_args!(name, 3, args);
@@ -1921,7 +1929,7 @@ impl Interpreter {
                 }
             }
 
-            // -- String conversions -------------------------------------------
+            // -- Type conversions (stdlib/string.jett, stdlib/int64.jett) -----
             "string.from_int64" => {
                 require_args!(name, 1, args);
                 match &args[0] {
@@ -1930,7 +1938,97 @@ impl Interpreter {
                 }
             }
 
-            // -- Int64 conversions --------------------------------------------
+            "string.is_not_empty" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::String(s) => Some(Ok(Value::Bool(!s.is_empty()))),
+                    _ => Some(Err(format!("{name} expects a string argument"))),
+                }
+            }
+
+            "string.slugify" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::String(s) => {
+                        let slug: String = s
+                            .to_lowercase()
+                            .chars()
+                            .map(|c| if c.is_alphanumeric() { c } else { '-' })
+                            .collect::<String>()
+                            .split('-')
+                            .filter(|part| !part.is_empty())
+                            .collect::<Vec<_>>()
+                            .join("-");
+                        Some(Ok(Value::String(slug)))
+                    }
+                    _ => Some(Err(format!("{name} expects a string argument"))),
+                }
+            }
+
+            "string.truncate" => {
+                if args.len() != 3 {
+                    return Some(Err(format!("{name} expects 3 arguments")));
+                }
+                match (&args[0], &args[1], &args[2]) {
+                    (Value::String(s), Value::Int64(max_len), Value::String(suffix)) => {
+                        let max = (*max_len).max(0) as usize;
+                        let chars: Vec<char> = s.chars().collect();
+                        let result = if chars.len() <= max {
+                            s.clone()
+                        } else {
+                            // Keep first `max` characters, then append suffix
+                            let kept: String = chars[..max].iter().collect();
+                            format!("{kept}{suffix}")
+                        };
+                        Some(Ok(Value::String(result)))
+                    }
+                    _ => Some(Err(format!("{name} expects (string, int64, string)"))),
+                }
+            }
+
+            "string.between" => {
+                if args.len() != 3 {
+                    return Some(Err(format!("{name} expects 3 arguments")));
+                }
+                match (&args[0], &args[1], &args[2]) {
+                    (Value::String(s), Value::String(start), Value::String(end)) => {
+                        // Returns "" when the markers are not found (design doc shows plain string)
+                        let result = if let Some(after_start) = s.find(start.as_str()).map(|i| &s[i + start.len()..]) {
+                            if let Some(end_pos) = after_start.find(end.as_str()) {
+                                after_start[..end_pos].to_string()
+                            } else {
+                                String::new()
+                            }
+                        } else {
+                            String::new()
+                        };
+                        Some(Ok(Value::String(result)))
+                    }
+                    _ => Some(Err(format!("{name} expects (string, string, string)"))),
+                }
+            }
+
+            // string.pad_left is the canonical name (design doc); pad_start is an alias
+            "string.pad_left" => {
+                require_args!(name, 3, args);
+                match (&args[0], &args[1], &args[2]) {
+                    (Value::String(s), Value::Int64(width), Value::String(pad)) => {
+                        let pad_char = pad.chars().next().unwrap_or(' ');
+                        let current_len = s.chars().count();
+                        let width = (*width).max(0) as usize;
+                        if current_len >= width {
+                            Some(Ok(Value::String(s.clone())))
+                        } else {
+                            let padding: String =
+                                std::iter::repeat(pad_char).take(width - current_len).collect();
+                            Some(Ok(Value::String(format!("{padding}{s}"))))
+                        }
+                    }
+                    _ => Some(Err(format!("{name} expects (string, int64, string)"))),
+                }
+            }
+
+            // -- int64 / float64 conversions ----------------------------------
             "int64.from_string" => {
                 require_args!(name, 1, args);
                 match &args[0] {
@@ -1944,7 +2042,7 @@ impl Interpreter {
                 }
             }
 
-            // -- Float64 conversions ------------------------------------------
+            // -- float64 conversions ------------------------------------------
             "float64.from_int64" => {
                 require_args!(name, 1, args);
                 match &args[0] {
@@ -1953,7 +2051,7 @@ impl Interpreter {
                 }
             }
 
-            // -- List operations ----------------------------------------------
+            // -- List operations (stdlib/list.jett) ---------------------------
             "list.new" => {
                 require_args!(name, 0, args);
                 Some(Ok(Value::List(vec![])))
@@ -2189,7 +2287,7 @@ impl Interpreter {
                 }
             }
 
-            // -- Map operations -----------------------------------------------
+            // -- Map operations (stdlib/map.jett) -----------------------------
             "map.new" => {
                 Some(Ok(Value::Map(Vec::new())))
             }
@@ -2277,7 +2375,113 @@ impl Interpreter {
                 }
             }
 
-            // -- Math operations ----------------------------------------------
+            // map.set is the canonical name (design doc); insert is an alias
+            "map.set" => self.call_builtin("map.insert", args),
+
+            "map.get_or" => {
+                if args.len() != 3 {
+                    return Some(Err(format!("{name} expects 3 arguments")));
+                }
+                match &args[0] {
+                    Value::Map(entries) => {
+                        let key = &args[1];
+                        let default = args[2].clone();
+                        let found = entries.iter()
+                            .find(|(k, _)| k == key)
+                            .map(|(_, v)| v.clone())
+                            .unwrap_or(default);
+                        Some(Ok(found))
+                    }
+                    _ => Some(Err(format!("{name} expects a map argument"))),
+                }
+            }
+
+            "map.merge" => {
+                require_args!(name, 2, args);
+                match (&args[0], &args[1]) {
+                    (Value::Map(a), Value::Map(b)) => {
+                        let mut merged = a.clone();
+                        for (k, v) in b {
+                            if let Some(pos) = merged.iter().position(|(mk, _)| mk == k) {
+                                merged[pos].1 = v.clone();
+                            } else {
+                                merged.push((k.clone(), v.clone()));
+                            }
+                        }
+                        Some(Ok(Value::Map(merged)))
+                    }
+                    _ => Some(Err(format!("{name} expects two map arguments"))),
+                }
+            }
+
+            "map.contains_key" => self.call_builtin("map.has", args),
+
+            // -- Additional list operations ------------------------------------
+            "list.chunk" => {
+                require_args!(name, 2, args);
+                match (&args[0], &args[1]) {
+                    (Value::List(items), Value::Int64(size)) => {
+                        let size = (*size).max(1) as usize;
+                        let chunks: Vec<Value> = items.chunks(size)
+                            .map(|c| Value::List(c.to_vec()))
+                            .collect();
+                        Some(Ok(Value::List(chunks)))
+                    }
+                    _ => Some(Err(format!("{name} expects a list and an int64 chunk size"))),
+                }
+            }
+
+            "list.sort_by_index" => {
+                require_args!(name, 2, args);
+                match (&args[0], &args[1]) {
+                    (Value::List(items), Value::Int64(idx)) => {
+                        let idx = *idx as usize;
+                        let mut sorted = items.clone();
+                        sorted.sort_by(|a, b| {
+                            let va = match a { Value::List(l) => l.get(idx).cloned(), _ => None };
+                            let vb = match b { Value::List(l) => l.get(idx).cloned(), _ => None };
+                            match (va, vb) {
+                                (Some(Value::String(sa)), Some(Value::String(sb))) => sa.cmp(&sb),
+                                (Some(Value::Int64(ia)), Some(Value::Int64(ib))) => ia.cmp(&ib),
+                                _ => std::cmp::Ordering::Equal,
+                            }
+                        });
+                        Some(Ok(Value::List(sorted)))
+                    }
+                    _ => Some(Err(format!("{name} expects a list of lists and an int64 index"))),
+                }
+            }
+
+            "list.is_sorted" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::List(items) => {
+                        let sorted = items.windows(2).all(|w| {
+                            match (&w[0], &w[1]) {
+                                (Value::Int64(a), Value::Int64(b)) => a <= b,
+                                (Value::Float64(a), Value::Float64(b)) => a <= b,
+                                (Value::String(a), Value::String(b)) => a <= b,
+                                _ => true,
+                            }
+                        });
+                        Some(Ok(Value::Bool(sorted)))
+                    }
+                    _ => Some(Err(format!("{name} expects a list argument"))),
+                }
+            }
+
+            "list.all_elements_in" => {
+                require_args!(name, 2, args);
+                match (&args[0], &args[1]) {
+                    (Value::List(items), Value::List(pool)) => {
+                        let all_in = items.iter().all(|item| pool.contains(item));
+                        Some(Ok(Value::Bool(all_in)))
+                    }
+                    _ => Some(Err(format!("{name} expects two list arguments"))),
+                }
+            }
+
+            // -- Math operations (stdlib/math.jett) ---------------------------
             "math.abs" => {
                 require_args!(name, 1, args);
                 match &args[0] {
@@ -2401,6 +2605,352 @@ impl Interpreter {
                     Value::Float64(n) => Some(Ok(Value::Float64(n.log10()))),
                     Value::Int64(n) => Some(Ok(Value::Float64((*n as f64).log10()))),
                     _ => Some(Err(format!("{name} expects a numeric argument"))),
+                }
+            }
+
+            "math.average" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::List(items) if !items.is_empty() => {
+                        let sum: f64 = items.iter().map(|v| match v {
+                            Value::Int64(n) => *n as f64,
+                            Value::Float64(n) => *n,
+                            _ => 0.0,
+                        }).sum();
+                        Some(Ok(Value::Float64(sum / items.len() as f64)))
+                    }
+                    Value::List(_) => Some(Err("math.average: list is empty".to_string())),
+                    _ => Some(Err(format!("{name} expects a list of numbers"))),
+                }
+            }
+
+            "math.median" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::List(items) if !items.is_empty() => {
+                        let mut nums: Vec<f64> = items.iter().map(|v| match v {
+                            Value::Int64(n) => *n as f64,
+                            Value::Float64(n) => *n,
+                            _ => 0.0,
+                        }).collect();
+                        nums.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                        let mid = nums.len() / 2;
+                        let median = if nums.len() % 2 == 0 {
+                            (nums[mid - 1] + nums[mid]) / 2.0
+                        } else {
+                            nums[mid]
+                        };
+                        Some(Ok(Value::Float64(median)))
+                    }
+                    Value::List(_) => Some(Err("math.median: list is empty".to_string())),
+                    _ => Some(Err(format!("{name} expects a list of numbers"))),
+                }
+            }
+
+            // -- Additional string operations (stdlib/string.jett) ------------
+            "string.reverse" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::String(s) => {
+                        let reversed: String = s.chars().rev().collect();
+                        Some(Ok(Value::String(reversed)))
+                    }
+                    _ => Some(Err(format!("{name} expects a string argument"))),
+                }
+            }
+
+            "string.after" => {
+                require_args!(name, 2, args);
+                match (&args[0], &args[1]) {
+                    (Value::String(s), Value::String(marker)) => {
+                        let result = if let Some(pos) = s.find(marker.as_str()) {
+                            s[pos + marker.len()..].to_string()
+                        } else {
+                            String::new()
+                        };
+                        Some(Ok(Value::String(result)))
+                    }
+                    _ => Some(Err(format!("{name} expects two string arguments"))),
+                }
+            }
+
+            "string.before" => {
+                require_args!(name, 2, args);
+                match (&args[0], &args[1]) {
+                    (Value::String(s), Value::String(marker)) => {
+                        let result = if let Some(pos) = s.find(marker.as_str()) {
+                            s[..pos].to_string()
+                        } else {
+                            s.clone()
+                        };
+                        Some(Ok(Value::String(result)))
+                    }
+                    _ => Some(Err(format!("{name} expects two string arguments"))),
+                }
+            }
+
+            "string.trim_start" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::String(s) => Some(Ok(Value::String(s.trim_start().to_string()))),
+                    _ => Some(Err(format!("{name} expects a string argument"))),
+                }
+            }
+
+            "string.trim_end" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::String(s) => Some(Ok(Value::String(s.trim_end().to_string()))),
+                    _ => Some(Err(format!("{name} expects a string argument"))),
+                }
+            }
+
+            // string.chars / string.words / string.lines — yield list[string]
+            "string.chars" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::String(s) => {
+                        // Yields grapheme clusters; approximate with chars for now
+                        let chars: Vec<Value> = s.chars()
+                            .map(|c| Value::String(c.to_string()))
+                            .collect();
+                        Some(Ok(Value::List(chars)))
+                    }
+                    _ => Some(Err(format!("{name} expects a string argument"))),
+                }
+            }
+
+            "string.words" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::String(s) => {
+                        let words: Vec<Value> = s.split_whitespace()
+                            .map(|w| Value::String(w.to_string()))
+                            .collect();
+                        Some(Ok(Value::List(words)))
+                    }
+                    _ => Some(Err(format!("{name} expects a string argument"))),
+                }
+            }
+
+            "string.lines" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::String(s) => {
+                        let lines: Vec<Value> = s.lines()
+                            .map(|l| Value::String(l.to_string()))
+                            .collect();
+                        Some(Ok(Value::List(lines)))
+                    }
+                    _ => Some(Err(format!("{name} expects a string argument"))),
+                }
+            }
+
+            // -- UUID operations (stdlib/uuid.jett) ---------------------------
+            "uuid.new" => {
+                require_args!(name, 0, args);
+                // Generate a UUID v4 using rand
+                let mut rng = rand::thread_rng();
+                let mut b = [0u8; 16];
+                for byte in b.iter_mut() {
+                    *byte = rand::Rng::r#gen(&mut rng);
+                }
+                // Set version 4 bits
+                b[6] = (b[6] & 0x0F) | 0x40;
+                // Set variant bits
+                b[8] = (b[8] & 0x3F) | 0x80;
+                let uuid = format!(
+                    "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+                    b[0], b[1], b[2], b[3],
+                    b[4], b[5],
+                    b[6], b[7],
+                    b[8], b[9],
+                    b[10], b[11], b[12], b[13], b[14], b[15]
+                );
+                Some(Ok(Value::String(uuid)))
+            }
+
+            // -- Additional char-level string operations -----------------------
+            "string.take_chars" => {
+                require_args!(name, 2, args);
+                match (&args[0], &args[1]) {
+                    (Value::String(s), Value::Int64(n)) => {
+                        let n = (*n).max(0) as usize;
+                        let result: String = s.chars().take(n).collect();
+                        Some(Ok(Value::String(result)))
+                    }
+                    _ => Some(Err(format!("{name} expects a string and an int64"))),
+                }
+            }
+
+            "string.take_last_chars" => {
+                require_args!(name, 2, args);
+                match (&args[0], &args[1]) {
+                    (Value::String(s), Value::Int64(n)) => {
+                        let n = (*n).max(0) as usize;
+                        let chars: Vec<char> = s.chars().collect();
+                        let start = chars.len().saturating_sub(n);
+                        let result: String = chars[start..].iter().collect();
+                        Some(Ok(Value::String(result)))
+                    }
+                    _ => Some(Err(format!("{name} expects a string and an int64"))),
+                }
+            }
+
+            "string.drop_chars" => {
+                require_args!(name, 2, args);
+                match (&args[0], &args[1]) {
+                    (Value::String(s), Value::Int64(n)) => {
+                        let n = (*n).max(0) as usize;
+                        let result: String = s.chars().skip(n).collect();
+                        Some(Ok(Value::String(result)))
+                    }
+                    _ => Some(Err(format!("{name} expects a string and an int64"))),
+                }
+            }
+
+            "string.char_at" => {
+                require_args!(name, 2, args);
+                match (&args[0], &args[1]) {
+                    (Value::String(s), Value::Int64(i)) => {
+                        let result = if *i < 0 {
+                            Value::OptionalNone
+                        } else {
+                            match s.chars().nth(*i as usize) {
+                                Some(c) => Value::OptionalSome(Box::new(Value::String(c.to_string()))),
+                                None => Value::OptionalNone,
+                            }
+                        };
+                        Some(Ok(result))
+                    }
+                    _ => Some(Err(format!("{name} expects a string and an int64 index"))),
+                }
+            }
+
+            // -- Encoding operations (stdlib/encoding.jett) -------------------
+            "encoding.base64_encode" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::String(s) => {
+                        let encoded = base64_encode(s.as_bytes());
+                        Some(Ok(Value::String(encoded)))
+                    }
+                    _ => Some(Err(format!("{name} expects a string argument"))),
+                }
+            }
+
+            "encoding.base64_decode" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::String(s) => match base64_decode(s) {
+                        Ok(bytes) => match String::from_utf8(bytes) {
+                            Ok(decoded) => Some(Ok(Value::String(decoded))),
+                            Err(_) => Some(Err("encoding.base64_decode: decoded bytes are not valid UTF-8".to_string())),
+                        },
+                        Err(e) => Some(Err(format!("encoding.base64_decode: {e}"))),
+                    },
+                    _ => Some(Err(format!("{name} expects a string argument"))),
+                }
+            }
+
+            "encoding.hex_encode" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::String(s) => {
+                        let hex: String = s.bytes().map(|b| format!("{b:02x}")).collect();
+                        Some(Ok(Value::String(hex)))
+                    }
+                    _ => Some(Err(format!("{name} expects a string argument"))),
+                }
+            }
+
+            "encoding.hex_decode" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::String(s) => {
+                        if s.len() % 2 != 0 {
+                            return Some(Err("encoding.hex_decode: odd-length hex string".to_string()));
+                        }
+                        let bytes: Result<Vec<u8>, _> = (0..s.len() / 2)
+                            .map(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16))
+                            .collect();
+                        match bytes {
+                            Ok(b) => match String::from_utf8(b) {
+                                Ok(decoded) => Some(Ok(Value::String(decoded))),
+                                Err(_) => Some(Err("encoding.hex_decode: bytes are not valid UTF-8".to_string())),
+                            },
+                            Err(_) => Some(Err("encoding.hex_decode: invalid hex characters".to_string())),
+                        }
+                    }
+                    _ => Some(Err(format!("{name} expects a string argument"))),
+                }
+            }
+
+            "encoding.url_encode" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::String(s) => {
+                        let encoded: String = s.bytes().flat_map(|b| {
+                            if b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.' || b == b'~' {
+                                vec![b as char]
+                            } else {
+                                format!("%{b:02X}").chars().collect()
+                            }
+                        }).collect();
+                        Some(Ok(Value::String(encoded)))
+                    }
+                    _ => Some(Err(format!("{name} expects a string argument"))),
+                }
+            }
+
+            "encoding.url_decode" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::String(s) => {
+                        let bytes = s.as_bytes();
+                        let mut result = Vec::new();
+                        let mut i = 0;
+                        while i < bytes.len() {
+                            if bytes[i] == b'%' && i + 2 < bytes.len() {
+                                if let Ok(b) = u8::from_str_radix(
+                                    std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""),
+                                    16,
+                                ) {
+                                    result.push(b);
+                                    i += 3;
+                                    continue;
+                                }
+                            } else if bytes[i] == b'+' {
+                                result.push(b' ');
+                                i += 1;
+                                continue;
+                            }
+                            result.push(bytes[i]);
+                            i += 1;
+                        }
+                        match String::from_utf8(result) {
+                            Ok(decoded) => Some(Ok(Value::String(decoded))),
+                            Err(_) => Some(Err("encoding.url_decode: result is not valid UTF-8".to_string())),
+                        }
+                    }
+                    _ => Some(Err(format!("{name} expects a string argument"))),
+                }
+            }
+
+            // -- Crypto operations (stdlib/crypto.jett) -----------------------
+            "crypto.sha256" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::String(s) => Some(Ok(Value::String(sha256_hash(s.as_bytes())))),
+                    _ => Some(Err(format!("{name} expects a string argument"))),
+                }
+            }
+
+            "crypto.md5" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::String(s) => Some(Ok(Value::String(md5_hash(s.as_bytes())))),
+                    _ => Some(Err(format!("{name} expects a string argument"))),
                 }
             }
 
@@ -2730,6 +3280,29 @@ impl Interpreter {
                     }
                 }
                 Some(Ok(Value::Map(groups)))
+            }
+
+            // list.reduce[T, U](list, initial, fn(acc, item) -> acc)
+            "list.reduce" => {
+                if args.len() != 3 {
+                    return Some(Err(format!(
+                        "list.reduce expects 3 arguments (list, initial, fn), got {}",
+                        args.len()
+                    )));
+                }
+                let items = match &args[0] {
+                    Value::List(v) => v.clone(),
+                    _ => return Some(Err("list.reduce: first argument must be a list".into())),
+                };
+                let mut acc = args[1].clone();
+                let fn_val = args[2].clone();
+                for item in items {
+                    acc = match self.call_fn_value(fn_val.clone(), vec![acc, item]) {
+                        Ok(v) => v,
+                        Err(e) => return Some(Err(e)),
+                    };
+                }
+                Some(Ok(acc))
             }
             _ => None,
         }
@@ -5007,6 +5580,221 @@ mod tests {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Base64 helpers (no external crate dependency)
+// ---------------------------------------------------------------------------
+
+fn base64_encode(data: &[u8]) -> String {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    let mut i = 0;
+    while i < data.len() {
+        let b0 = data[i] as u32;
+        let b1 = if i + 1 < data.len() { data[i + 1] as u32 } else { 0 };
+        let b2 = if i + 2 < data.len() { data[i + 2] as u32 } else { 0 };
+        let combined = (b0 << 16) | (b1 << 8) | b2;
+        out.push(ALPHABET[((combined >> 18) & 63) as usize] as char);
+        out.push(ALPHABET[((combined >> 12) & 63) as usize] as char);
+        if i + 1 < data.len() {
+            out.push(ALPHABET[((combined >> 6) & 63) as usize] as char);
+        } else {
+            out.push('=');
+        }
+        if i + 2 < data.len() {
+            out.push(ALPHABET[(combined & 63) as usize] as char);
+        } else {
+            out.push('=');
+        }
+        i += 3;
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
+// SHA-256 helper (no external crate dependency)
+// ---------------------------------------------------------------------------
+
+fn sha256_hash(data: &[u8]) -> String {
+    #[rustfmt::skip]
+    const K: [u32; 64] = [
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,
+        0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
+        0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc,
+        0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+        0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3,
+        0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5,
+        0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+        0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+    ];
+    let mut h: [u32; 8] = [
+        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+        0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+    ];
+    let bit_len = (data.len() as u64).wrapping_mul(8);
+    let mut msg = data.to_vec();
+    msg.push(0x80);
+    while msg.len() % 64 != 56 {
+        msg.push(0x00);
+    }
+    msg.extend_from_slice(&bit_len.to_be_bytes());
+    for chunk in msg.chunks(64) {
+        let mut w = [0u32; 64];
+        for i in 0..16 {
+            w[i] = u32::from_be_bytes([chunk[i * 4], chunk[i * 4 + 1], chunk[i * 4 + 2], chunk[i * 4 + 3]]);
+        }
+        for i in 16..64 {
+            let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
+            let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
+            w[i] = w[i - 16].wrapping_add(s0).wrapping_add(w[i - 7]).wrapping_add(s1);
+        }
+        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut hh] = h;
+        for i in 0..64 {
+            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+            let ch = (e & f) ^ ((!e) & g);
+            let temp1 = hh.wrapping_add(s1).wrapping_add(ch).wrapping_add(K[i]).wrapping_add(w[i]);
+            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+            let maj = (a & b) ^ (a & c) ^ (b & c);
+            let temp2 = s0.wrapping_add(maj);
+            hh = g; g = f; f = e; e = d.wrapping_add(temp1);
+            d = c; c = b; b = a; a = temp1.wrapping_add(temp2);
+        }
+        h[0] = h[0].wrapping_add(a); h[1] = h[1].wrapping_add(b);
+        h[2] = h[2].wrapping_add(c); h[3] = h[3].wrapping_add(d);
+        h[4] = h[4].wrapping_add(e); h[5] = h[5].wrapping_add(f);
+        h[6] = h[6].wrapping_add(g); h[7] = h[7].wrapping_add(hh);
+    }
+    format!(
+        "{:08x}{:08x}{:08x}{:08x}{:08x}{:08x}{:08x}{:08x}",
+        h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7]
+    )
+}
+
+// ---------------------------------------------------------------------------
+// MD5 helper (no external crate dependency)
+// ---------------------------------------------------------------------------
+
+fn md5_hash(data: &[u8]) -> String {
+    #[rustfmt::skip]
+    const S: [u32; 64] = [
+        7, 12, 17, 22,  7, 12, 17, 22,  7, 12, 17, 22,  7, 12, 17, 22,
+        5,  9, 14, 20,  5,  9, 14, 20,  5,  9, 14, 20,  5,  9, 14, 20,
+        4, 11, 16, 23,  4, 11, 16, 23,  4, 11, 16, 23,  4, 11, 16, 23,
+        6, 10, 15, 21,  6, 10, 15, 21,  6, 10, 15, 21,  6, 10, 15, 21,
+    ];
+    #[rustfmt::skip]
+    const K: [u32; 64] = [
+        0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee,
+        0xf57c0faf, 0x4787c62a, 0xa8304613, 0xfd469501,
+        0x698098d8, 0x8b44f7af, 0xffff5bb1, 0x895cd7be,
+        0x6b901122, 0xfd987193, 0xa679438e, 0x49b40821,
+        0xf61e2562, 0xc040b340, 0x265e5a51, 0xe9b6c7aa,
+        0xd62f105d, 0x02441453, 0xd8a1e681, 0xe7d3fbc8,
+        0x21e1cde6, 0xc33707d6, 0xf4d50d87, 0x455a14ed,
+        0xa9e3e905, 0xfcefa3f8, 0x676f02d9, 0x8d2a4c8a,
+        0xfffa3942, 0x8771f681, 0x6d9d6122, 0xfde5380c,
+        0xa4beea44, 0x4bdecfa9, 0xf6bb4b60, 0xbebfbc70,
+        0x289b7ec6, 0xeaa127fa, 0xd4ef3085, 0x04881d05,
+        0xd9d4d039, 0xe6db99e5, 0x1fa27cf8, 0xc4ac5665,
+        0xf4292244, 0x432aff97, 0xab9423a7, 0xfc93a039,
+        0x655b59c3, 0x8f0ccc92, 0xffeff47d, 0x85845dd1,
+        0x6fa87e4f, 0xfe2ce6e0, 0xa3014314, 0x4e0811a1,
+        0xf7537e82, 0xbd3af235, 0x2ad7d2bb, 0xeb86d391,
+    ];
+    let mut a0: u32 = 0x67452301;
+    let mut b0: u32 = 0xefcdab89;
+    let mut c0: u32 = 0x98badcfe;
+    let mut d0: u32 = 0x10325476;
+    let bit_len = (data.len() as u64).wrapping_mul(8);
+    let mut msg = data.to_vec();
+    msg.push(0x80);
+    while msg.len() % 64 != 56 {
+        msg.push(0x00);
+    }
+    msg.extend_from_slice(&bit_len.to_le_bytes());
+    for chunk in msg.chunks(64) {
+        let mut m = [0u32; 16];
+        for i in 0..16 {
+            m[i] = u32::from_le_bytes([chunk[i * 4], chunk[i * 4 + 1], chunk[i * 4 + 2], chunk[i * 4 + 3]]);
+        }
+        let mut a = a0;
+        let mut b = b0;
+        let mut c = c0;
+        let mut d = d0;
+        for i in 0..64usize {
+            let (f, g) = if i < 16 {
+                ((b & c) | ((!b) & d), i)
+            } else if i < 32 {
+                ((d & b) | ((!d) & c), (5 * i + 1) % 16)
+            } else if i < 48 {
+                (b ^ c ^ d, (3 * i + 5) % 16)
+            } else {
+                (c ^ (b | (!d)), (7 * i) % 16)
+            };
+            let temp = d;
+            d = c;
+            c = b;
+            b = b.wrapping_add(
+                a.wrapping_add(f).wrapping_add(K[i]).wrapping_add(m[g]).rotate_left(S[i]),
+            );
+            a = temp;
+        }
+        a0 = a0.wrapping_add(a);
+        b0 = b0.wrapping_add(b);
+        c0 = c0.wrapping_add(c);
+        d0 = d0.wrapping_add(d);
+    }
+    let mut out = [0u8; 16];
+    out[0..4].copy_from_slice(&a0.to_le_bytes());
+    out[4..8].copy_from_slice(&b0.to_le_bytes());
+    out[8..12].copy_from_slice(&c0.to_le_bytes());
+    out[12..16].copy_from_slice(&d0.to_le_bytes());
+    out.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn base64_decode(s: &str) -> Result<Vec<u8>, String> {
+    fn char_val(c: u8) -> Result<u32, String> {
+        match c {
+            b'A'..=b'Z' => Ok((c - b'A') as u32),
+            b'a'..=b'z' => Ok((c - b'a' + 26) as u32),
+            b'0'..=b'9' => Ok((c - b'0' + 52) as u32),
+            b'+' => Ok(62),
+            b'/' => Ok(63),
+            b'=' => Ok(0),
+            _ => Err(format!("invalid base64 character: {c:?}")),
+        }
+    }
+    let bytes = s.as_bytes();
+    if bytes.len() % 4 != 0 {
+        return Err("base64 string length must be a multiple of 4".to_string());
+    }
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let v0 = char_val(bytes[i])?;
+        let v1 = char_val(bytes[i + 1])?;
+        let v2 = char_val(bytes[i + 2])?;
+        let v3 = char_val(bytes[i + 3])?;
+        let combined = (v0 << 18) | (v1 << 12) | (v2 << 6) | v3;
+        out.push(((combined >> 16) & 0xFF) as u8);
+        if bytes[i + 2] != b'=' {
+            out.push(((combined >> 8) & 0xFF) as u8);
+        }
+        if bytes[i + 3] != b'=' {
+            out.push((combined & 0xFF) as u8);
+        }
+        i += 4;
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod builtin_tests {
     use jett_common::{FileId, Span};
@@ -5514,5 +6302,83 @@ mod builtin_tests {
         let expr = Expr::Pipeline(Box::new(initial), steps, sp());
         let result = interp.eval_expr(&expr).unwrap();
         assert_eq!(result, Value::String("hello jett".to_string()));
+    }
+
+    fn sha256_debug(data: &[u8]) {
+        // K constants (same as sha256_hash)
+        const K: [u32; 64] = [
+            0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+            0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+            0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+            0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+            0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+            0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+            0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+            0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+        ];
+        let bit_len = (data.len() as u64).wrapping_mul(8);
+        let mut msg = data.to_vec();
+        msg.push(0x80);
+        while msg.len() % 64 != 56 { msg.push(0x00); }
+        msg.extend_from_slice(&bit_len.to_be_bytes());
+        let chunk = &msg[0..64];
+        let mut w = [0u32; 64];
+        for i in 0..16 {
+            w[i] = u32::from_be_bytes([chunk[i*4], chunk[i*4+1], chunk[i*4+2], chunk[i*4+3]]);
+        }
+        for i in 16..64 {
+            let s0 = w[i-15].rotate_right(7) ^ w[i-15].rotate_right(18) ^ (w[i-15] >> 3);
+            let s1 = w[i-2].rotate_right(17) ^ w[i-2].rotate_right(19) ^ (w[i-2] >> 10);
+            w[i] = w[i-16].wrapping_add(s0).wrapping_add(w[i-7]).wrapping_add(s1);
+        }
+        for i in 0..64 {
+            eprintln!("w[{i:2}] = {:08x}", w[i]);
+        }
+        let mut a = 0x6a09e667u32; let mut b = 0xbb67ae85u32; let mut c = 0x3c6ef372u32; let mut d = 0xa54ff53au32;
+        let mut e = 0x510e527fu32; let mut f = 0x9b05688cu32; let mut g = 0x1f83d9abu32; let mut h = 0x5be0cd19u32;
+        for i in 0..64 {
+            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+            let ch = (e & f) ^ ((!e) & g);
+            let temp1 = h.wrapping_add(s1).wrapping_add(ch).wrapping_add(K[i]).wrapping_add(w[i]);
+            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+            let maj = (a & b) ^ (a & c) ^ (b & c);
+            let temp2 = s0.wrapping_add(maj);
+            if i >= 58 && i <= 63 {
+                eprintln!("--- round {i} ---");
+                eprintln!("  inputs: a={a:08x} b={b:08x} c={c:08x} d={d:08x}");
+                eprintln!("          e={e:08x} f={f:08x} g={g:08x} h={h:08x}");
+                eprintln!("  w[{i}]={:08x} K[{i}]={:08x}", w[i], K[i]);
+                eprintln!("  s1(e)={s1:08x} ch={ch:08x} temp1={temp1:08x}");
+                eprintln!("  s0(a)={s0:08x} maj={maj:08x} temp2={temp2:08x}");
+            }
+            h = g; g = f; f = e; e = d.wrapping_add(temp1);
+            d = c; c = b; b = a; a = temp1.wrapping_add(temp2);
+            eprintln!("t={i:2}: a={a:08x} b={b:08x} c={c:08x} d={d:08x} e={e:08x} f={f:08x} g={g:08x} h={h:08x}");
+        }
+        eprintln!("final: a={a:08x} b={b:08x} c={c:08x} d={d:08x} e={e:08x} f={f:08x} g={g:08x} h={h:08x}");
+        let expected_a = 0xba7816bfu32;
+        eprintln!("expected h[0] final = {:08x}, got a before adding h0={:08x}", expected_a, a);
+    }
+
+    #[test]
+    fn test_sha256_known_vectors() {
+        sha256_debug(b"abc");
+        // NIST test vectors
+        assert_eq!(
+            sha256_hash(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "sha256 of empty string"
+        );
+        assert_eq!(
+            sha256_hash(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2ec73b00361bbef0469f490f67a6f03fce2d",
+            "sha256 of 'abc'"
+        );
+    }
+
+    #[test]
+    fn test_md5_known_vectors() {
+        assert_eq!(md5_hash(b""), "d41d8cd98f00b204e9800998ecf8427e");
+        assert_eq!(md5_hash(b"abc"), "900150983cd24fb0d6963f7d28e17f72");
     }
 }

@@ -1440,17 +1440,31 @@ impl<'src> Parser<'src> {
 
     fn parse_expr(&mut self) -> Expr {
         let expr = self.parse_expr_bp(0);
-        // Check for pipeline: `expr into f into g(...)`
+        // Check for pipeline: `expr into f into g(...)` — may be on the same line or
+        // on subsequent indented lines.
         if self.peek() == TokenKind::Into {
-            self.parse_pipeline(expr)
-        } else {
-            expr
+            return self.parse_pipeline(expr, false);
         }
+        // Multi-line form: newline + Indent + into ...
+        let saved = self.pos;
+        self.skip_newlines();
+        if self.peek() == TokenKind::Indent {
+            self.advance(); // consume Indent
+            if self.peek() == TokenKind::Into {
+                return self.parse_pipeline(expr, true);
+            }
+            // Not a pipeline — backtrack
+            self.pos = saved;
+        } else {
+            self.pos = saved;
+        }
+        expr
     }
 
     /// Parse a pipeline starting after the initial expression.
-    /// Collects one or more `into <step>` clauses.
-    fn parse_pipeline(&mut self, initial: Expr) -> Expr {
+    /// `indented` is true when we consumed an `Indent` before the first `into`
+    /// (multi-line form); in that case we consume the matching `Dedent` at the end.
+    fn parse_pipeline(&mut self, initial: Expr, indented: bool) -> Expr {
         let start = initial.span();
         let mut steps = Vec::new();
 
@@ -1486,6 +1500,16 @@ impl<'src> Parser<'src> {
                 extra_args,
                 span,
             });
+
+            // Allow `into` steps on subsequent lines at the same indentation level.
+            if indented {
+                self.skip_newlines();
+            }
+        }
+
+        if indented {
+            // Consume the Dedent that closes the indented pipeline block.
+            self.eat(TokenKind::Dedent);
         }
 
         let end = steps.last().map_or(start, |s| s.span);

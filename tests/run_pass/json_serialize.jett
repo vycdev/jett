@@ -1,19 +1,31 @@
 namespace test
 
-function main() returns nothing:
-    string s1 = json.serialize[int64](42)
-    assert s1 == "42"
+function json_int_test() returns string:
+    return json.serialize[int64](42)
 
-    string s2 = json.serialize[bool](true)
-    assert s2 == "true"
+verify json_int_test:
+    assert json_int_test() == "42"
 
-    string s3 = json.serialize[bool](false)
-    assert s3 == "false"
+function json_true_test() returns string:
+    return json.serialize[bool](true)
 
-    string s4 = json.serialize[nothing](nothing)
-    assert s4 == "null"
+verify json_true_test:
+    assert json_true_test() == "true"
 
-    string s5 = json.serialize[list[int64]](list(1, 2, 3))
-    assert s5 == "[1,2,3]"
+function json_false_test() returns string:
+    return json.serialize[bool](false)
 
-    return nothing
+verify json_false_test:
+    assert json_false_test() == "false"
+
+function json_null_test() returns string:
+    return json.serialize[nothing](nothing)
+
+verify json_null_test:
+    assert json_null_test() == "null"
+
+function json_list_test() returns string:
+    return json.serialize[list[int64]](list(1, 2, 3))
+
+verify json_list_test:
+    assert json_list_test() == "[1,2,3]"

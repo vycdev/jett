@@ -469,6 +469,16 @@ impl<'a> OwnershipChecker<'a> {
             "list.group_by",
             "random.choice",
             "random.shuffle",
+            "math.average",
+            "math.median",
+            "list.chunk",
+            "list.sort_by_index",
+            "list.is_sorted",
+            "list.all_elements_in",
+            "map.get_or",
+            "map.merge",
+            "map.contains_key",
+            "map.set",
         ];
         let first_arg_is_view = callee_name
             .as_deref()

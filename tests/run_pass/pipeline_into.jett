@@ -1,0 +1,31 @@
+namespace app
+
+function pipeline_single_line_test() returns string:
+    return "  Hello  " into string.trim into string.lower
+
+verify pipeline_single_line_test:
+    assert pipeline_single_line_test() == "hello"
+
+function pipeline_multi_line_test() returns string:
+    return "  Hello World  "
+        into string.trim
+        into string.lower
+
+verify pipeline_multi_line_test:
+    assert pipeline_multi_line_test() == "hello world"
+
+function pipeline_replace_test() returns string:
+    return "hello world"
+        into string.replace("world", "jett")
+
+verify pipeline_replace_test:
+    assert pipeline_replace_test() == "hello jett"
+
+function pipeline_multi_step_test() returns string:
+    return "  HELLO WORLD  "
+        into string.trim
+        into string.lower
+        into string.replace("world", "jett")
+
+verify pipeline_multi_step_test:
+    assert pipeline_multi_step_test() == "hello jett"

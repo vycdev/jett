@@ -3,6 +3,7 @@ namespace app
 function add(a: int64, b: int64) returns int64:
     return a + b
 
-function main() returns nothing:
-    int64 result = add(2, 3)
-    assert result == 5
+verify add:
+    assert add(2, 3) == 5
+    assert add(0, 0) == 0
+    assert add(-1, 1) == 0

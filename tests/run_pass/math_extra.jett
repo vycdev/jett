@@ -1,0 +1,22 @@
+namespace app
+
+function average_test() returns float64:
+    list[float64] nums = list(1.0, 2.0, 3.0, 4.0, 5.0)
+    return math.average[float64](nums)
+
+verify average_test:
+    assert average_test() == 3.0
+
+function median_odd_test() returns float64:
+    list[float64] nums = list(1.0, 2.0, 3.0, 4.0, 5.0)
+    return math.median[float64](nums)
+
+verify median_odd_test:
+    assert median_odd_test() == 3.0
+
+function median_even_test() returns float64:
+    list[float64] even = list(1.0, 2.0, 3.0, 4.0)
+    return math.median[float64](even)
+
+verify median_even_test:
+    assert median_even_test() == 2.5

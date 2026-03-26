@@ -2,8 +2,8 @@
 
 ## Statistics
 
-- **Lines of Rust:** ~27,800
-- **Tests:** 448 passing
+- **Lines of Rust:** ~30,500
+- **Tests:** 441 passing
 - **Crates:** 15
 - **VS Code extension:** Yes
 
@@ -19,7 +19,7 @@
 | Lexer (indentation, interpolation, 90+ tokens) | `jett_lexer` | 62 | Done |
 | Parser (recursive descent + Pratt) | `jett_parser` | 58 | Done |
 | Formatter (canonical whitespace) | `jett_fmt` | 3 | Done |
-| Pipeline orchestration | `jett_driver` | 27 | Done |
+| Pipeline orchestration | `jett_driver` | 36 | Done |
 | CLI (format, build, run, test, lsp) | `jett_cli` | 0 | Done |
 
 ### Phase B: Type System Core — COMPLETE
@@ -70,7 +70,7 @@
 | Refinement types (`type X = T where ...`, `coarsen`) | Done |
 | User-defined structs (constructors, field access, methods) | Done |
 | Match statements with enum destructuring | Done |
-| Pipeline operator (`into`) | Done |
+| Pipeline operator (`into`, single-line and multi-line indented form) | Done |
 | String interpolation | Done |
 | Verify blocks (parsing + execution) | Done |
 | Property-based testing (`property` blocks) | Done |
@@ -87,6 +87,13 @@
 | Inline function expressions (`function(x: T) returns U: body`) | Done |
 | Higher-order list functions (`filter`, `map`, `find`, `sort_by`, `all`, `any`, `count`, `sum`, `group_by`) | Done |
 | Single-line `handle:` blocks | Done |
+| `math.average`, `math.median` | Done |
+| `string.reverse`, `string.after`, `string.before`, `string.trim_start`, `string.trim_end` | Done |
+| `string.slugify`, `string.truncate`, `string.between`, `string.pad_left`, `string.is_not_empty` | Done |
+| `string.chars`, `string.words`, `string.lines` (iterator builtins → `list[string]`) | Done |
+| `list.reduce`, `list.chunk`, `list.sort_by_index`, `list.is_sorted`, `list.all_elements_in` | Done |
+| `map.get_or`, `map.merge`, `map.set`, `map.contains_key` | Done |
+| `encoding` module: `base64_encode`, `base64_decode`, `hex_encode`, `hex_decode`, `url_encode`, `url_decode` | Done |
 
 ### Phase H: Agent Tooling — PARTIAL
 
@@ -123,10 +130,10 @@
 
 | Module | Status |
 |---|---|
-| `string` (basic ops in interpreter) | Partial (18 builtins) |
-| `list` (basic ops in interpreter) | Partial (28 builtins: 19 basic + filter, map, find, sort_by, all, any, count, sum, group_by) |
-| `map` (basic ops in interpreter) | Partial (9 builtins: new, length, has, get, insert, remove, keys, values, is_empty) |
-| `math` (basic ops in interpreter) | Partial (12 builtins) |
+| `string` (basic ops in interpreter) | Partial (23 builtins: length/char_count, contains, trim, upper, lower, replace, split, join, starts_with, ends_with, is_empty, is_not_empty, slice, repeat, pad_left, pad_end, from_int64, from_float64, from_bool, slugify, truncate, between) |
+| `list` (basic ops in interpreter) | Partial (34 builtins: 19 basic + filter, map, find, sort_by, all, any, count, sum, group_by, reduce, chunk, sort_by_index, is_sorted, all_elements_in) |
+| `map` (basic ops in interpreter) | Partial (12 builtins: new, length, has/contains_key, get, get_or, insert/set, remove, keys, values, is_empty, merge) |
+| `math` (basic ops in interpreter) | Partial (15 builtins: abs, sqrt, pow, floor, ceil, round, clamp, log, log2, log10, min, max, average, median, pi constant) |
 | `json` (serialize) | Partial (json.serialize, json.serialize_public) |
 | `random` (basic ops in interpreter) | Partial (5 builtins: int64, float64, bool, choice, shuffle) |
 | `net.http` | Not started |
@@ -135,7 +142,8 @@
 | `csv` | Not started |
 | `time` | Not started |
 | `crypto` | Not started |
-| `encoding` | Not started |
+| `encoding` (base64, hex, URL) | Partial (6 builtins: base64_encode, base64_decode, hex_encode, hex_decode, url_encode, url_decode) |
+| `uuid` | Partial (1 builtin: uuid.new) |
 | `validate` | Not started |
 | `regex` | Not started |
 | `random` | Not started |

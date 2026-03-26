@@ -21,53 +21,86 @@ function gt_five(n: int64) returns bool:
 function gt_ten(n: int64) returns bool:
     return n > 10
 
-function main(view stdout: Stdout) returns nothing:
+function filter_evens_count() returns int64:
     list[int64] nums = list(1, 2, 3, 4, 5, 6)
+    return list.length[int64](list.filter[int64](nums, is_even))
 
-    # filter: keep evens
-    list[int64] evens = list.filter[int64](nums, is_even)
-    assert list.length[int64](evens) == 3
+verify filter_evens_count:
+    assert filter_evens_count() == 3
 
-    # map: square each
+function map_squares_length() returns int64:
+    list[int64] nums = list(1, 2, 3, 4, 5, 6)
+    return list.length[int64](list.map[int64, int64](nums, square))
+
+verify map_squares_length:
+    assert map_squares_length() == 6
+
+function map_squares_first() returns int64:
+    list[int64] nums = list(1, 2, 3, 4, 5, 6)
     list[int64] squares = list.map[int64, int64](nums, square)
-    assert list.length[int64](squares) == 6
-    int64 first_sq = list.get[int64](squares, 0) handle:
-        return nothing
-    assert first_sq == 1
-    int64 last_sq = list.get[int64](squares, 5) handle:
-        return nothing
-    assert last_sq == 36
+    return list.get[int64](squares, 0) handle:
+        default 0
 
-    # find: first > 3
+verify map_squares_first:
+    assert map_squares_first() == 1
+
+function map_squares_last() returns int64:
+    list[int64] nums = list(1, 2, 3, 4, 5, 6)
+    list[int64] squares = list.map[int64, int64](nums, square)
+    return list.get[int64](squares, 5) handle:
+        default 0
+
+verify map_squares_last:
+    assert map_squares_last() == 36
+
+function find_gt_three() returns int64:
+    list[int64] nums = list(1, 2, 3, 4, 5, 6)
     optional[int64] found = list.find[int64](nums, gt_three)
-    int64 val = found handle:
-        return nothing
-    assert val == 4
+    return found handle:
+        default 0
 
-    # sort_by: descending by value
+verify find_gt_three:
+    assert find_gt_three() == 4
+
+function sort_by_desc_first() returns int64:
+    list[int64] nums = list(1, 2, 3, 4, 5, 6)
     list[int64] sorted = list.sort_by[int64](nums, negate)
-    int64 first_sorted = list.get[int64](sorted, 0) handle:
-        return nothing
-    assert first_sorted == 6
+    return list.get[int64](sorted, 0) handle:
+        default 0
 
-    # all: all positive?
-    bool all_pos = list.all[int64](nums, gt_zero)
-    assert all_pos == true
+verify sort_by_desc_first:
+    assert sort_by_desc_first() == 6
 
-    # any: any > 5?
-    bool any_big = list.any[int64](nums, gt_five)
-    assert any_big == true
+function all_positive_test() returns bool:
+    list[int64] nums = list(1, 2, 3, 4, 5, 6)
+    return list.all[int64](nums, gt_zero)
 
-    # any: any > 10? (false case)
-    bool any_huge = list.any[int64](nums, gt_ten)
-    assert any_huge == false
+verify all_positive_test:
+    assert all_positive_test() == true
 
-    # count: how many even?
-    int64 even_count = list.count[int64](nums, is_even)
-    assert even_count == 3
+function any_big_test() returns bool:
+    list[int64] nums = list(1, 2, 3, 4, 5, 6)
+    return list.any[int64](nums, gt_five)
 
-    # sum
-    int64 total = list.sum[int64](nums)
-    assert total == 21
+verify any_big_test:
+    assert any_big_test() == true
 
-    Stdout.write(view stdout, "ok")
+function any_huge_test() returns bool:
+    list[int64] nums = list(1, 2, 3, 4, 5, 6)
+    return list.any[int64](nums, gt_ten)
+
+verify any_huge_test:
+    assert any_huge_test() == false
+
+function count_evens_test() returns int64:
+    list[int64] nums = list(1, 2, 3, 4, 5, 6)
+    return list.count[int64](nums, is_even)
+
+verify count_evens_test:
+    assert count_evens_test() == 3
+
+function sum_test() returns int64:
+    return list.sum[int64](list(1, 2, 3, 4, 5, 6))
+
+verify sum_test:
+    assert sum_test() == 21

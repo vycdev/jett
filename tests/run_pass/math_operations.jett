@@ -1,26 +1,73 @@
 namespace test
 
-function main() returns nothing:
-    assert math.abs(-5) == 5
-    assert math.abs(5) == 5
-    assert math.min(3, 7) == 3
-    assert math.max(3, 7) == 7
+function abs_neg() returns int64:
+    return math.abs(-5)
 
-    float64 root = math.sqrt(4.0)
-    assert root == 2.0
+verify abs_neg:
+    assert abs_neg() == 5
 
-    float64 p = math.pow(2.0, 10.0)
-    assert p == 1024.0
+function abs_pos() returns int64:
+    return math.abs(5)
 
-    assert math.floor(3.7) == 3.0
-    assert math.ceil(3.2) == 4.0
-    assert math.round(3.5) == 4.0
-    assert math.round(3.4) == 3.0
+verify abs_pos:
+    assert abs_pos() == 5
 
-    float64 clamped = math.clamp(15.0, 0.0, 10.0)
-    assert clamped == 10.0
+function min_test() returns int64:
+    return math.min(3, 7)
 
-    float64 clamped2 = math.clamp(-5.0, 0.0, 10.0)
-    assert clamped2 == 0.0
+verify min_test:
+    assert min_test() == 3
 
-    return nothing
+function max_test() returns int64:
+    return math.max(3, 7)
+
+verify max_test:
+    assert max_test() == 7
+
+function sqrt_test() returns float64:
+    return math.sqrt(4.0)
+
+verify sqrt_test:
+    assert sqrt_test() == 2.0
+
+function pow_test() returns float64:
+    return math.pow(2.0, 10.0)
+
+verify pow_test:
+    assert pow_test() == 1024.0
+
+function floor_test() returns float64:
+    return math.floor(3.7)
+
+verify floor_test:
+    assert floor_test() == 3.0
+
+function ceil_test() returns float64:
+    return math.ceil(3.2)
+
+verify ceil_test:
+    assert ceil_test() == 4.0
+
+function round_up_test() returns float64:
+    return math.round(3.5)
+
+verify round_up_test:
+    assert round_up_test() == 4.0
+
+function round_down_test() returns float64:
+    return math.round(3.4)
+
+verify round_down_test:
+    assert round_down_test() == 3.0
+
+function clamp_high_test() returns float64:
+    return math.clamp(15.0, 0.0, 10.0)
+
+verify clamp_high_test:
+    assert clamp_high_test() == 10.0
+
+function clamp_low_test() returns float64:
+    return math.clamp(-5.0, 0.0, 10.0)
+
+verify clamp_low_test:
+    assert clamp_low_test() == 0.0

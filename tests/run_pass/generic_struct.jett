@@ -7,12 +7,23 @@ struct Pair[T, U]:
 struct Box[T]:
     value: T
 
-function main() returns nothing:
+function pair_first_test() returns int64:
     Pair[int64, string] p = Pair[int64, string](first: 42, second: "hello")
+    return p.first
+
+verify pair_first_test:
+    assert pair_first_test() == 42
+
+function pair_second_test() returns string:
+    Pair[int64, string] p = Pair[int64, string](first: 42, second: "hello")
+    return p.second
+
+verify pair_second_test:
+    assert pair_second_test() == "hello"
+
+function box_value_test() returns int64:
     Box[int64] b = Box[int64](value: 100)
-    int64 x = p.first
-    string s = p.second
-    assert x == 42
-    assert s == "hello"
-    assert b.value == 100
-    return nothing
+    return b.value
+
+verify box_value_test:
+    assert box_value_test() == 100

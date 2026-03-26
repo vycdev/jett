@@ -3,13 +3,15 @@ function parse_or_default(raw: string) returns int64:
         default 7
     return parsed
 
+verify parse_or_default:
+    assert parse_or_default("12") == 12
+    assert parse_or_default("abc") == 7
+
 function first_or_zero(items: list[int64]) returns int64:
     int64 first = list.first[int64](items) handle:
         default 0
     return first
 
-function main() returns nothing:
-    assert parse_or_default("12") == 12
-    assert parse_or_default("abc") == 7
+verify first_or_zero:
     assert first_or_zero(list(4, 5, 6)) == 4
     assert first_or_zero(list()) == 0

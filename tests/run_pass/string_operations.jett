@@ -1,0 +1,61 @@
+namespace app
+
+function is_not_empty_true() returns bool:
+    return string.is_not_empty("hello")
+
+verify is_not_empty_true:
+    assert is_not_empty_true() == true
+
+function is_not_empty_false() returns bool:
+    return string.is_not_empty("")
+
+verify is_not_empty_false:
+    assert is_not_empty_false() == false
+
+function slugify_test() returns string:
+    return string.slugify("Hello World!")
+
+verify slugify_test:
+    assert slugify_test() == "hello-world"
+
+function slugify_spaces_test() returns string:
+    return string.slugify("  Multiple   Spaces  ")
+
+verify slugify_spaces_test:
+    assert slugify_spaces_test() == "multiple-spaces"
+
+function truncate_long_test() returns string:
+    return string.truncate("hello world", 5, "...")
+
+verify truncate_long_test:
+    assert truncate_long_test() == "hello..."
+
+function truncate_short_test() returns string:
+    return string.truncate("hi", 10, "...")
+
+verify truncate_short_test:
+    assert truncate_short_test() == "hi"
+
+function between_found_test() returns string:
+    return string.between("<title>Hello</title>", "<title>", "</title>")
+
+verify between_found_test:
+    assert between_found_test() == "Hello"
+
+function between_missing_test() returns string:
+    return string.between("no markers here", "<title>", "</title>")
+
+verify between_missing_test:
+    assert between_missing_test() == ""
+
+function pad_left_test() returns string:
+    return string.pad_left("42", 5, "0")
+
+verify pad_left_test:
+    assert pad_left_test() == "00042"
+
+function pad_left_wide_test() returns string:
+    return string.pad_left("hello", 3, "0")
+
+verify pad_left_wide_test:
+    assert pad_left_wide_test() == "hello"

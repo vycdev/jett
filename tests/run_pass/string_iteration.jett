@@ -1,0 +1,57 @@
+namespace app
+
+function chars_length_test() returns int64:
+    list[string] chars = string.chars("hello")
+    return list.length[string](chars)
+
+verify chars_length_test:
+    assert chars_length_test() == 5
+
+function chars_first_test() returns string:
+    list[string] chars = string.chars("hello")
+    return list.get[string](chars, 0) handle:
+        default "error"
+
+verify chars_first_test:
+    assert chars_first_test() == "h"
+
+function chars_for_loop_count() returns int64:
+    int64 count = 0
+    for c in string.chars("hi!"):
+        count = count + 1
+    return count
+
+verify chars_for_loop_count:
+    assert chars_for_loop_count() == 3
+
+function words_length_test() returns int64:
+    list[string] words = string.words("the quick brown fox")
+    return list.length[string](words)
+
+verify words_length_test:
+    assert words_length_test() == 4
+
+function words_first_test() returns string:
+    list[string] words = string.words("the quick brown fox")
+    return list.get[string](words, 0) handle:
+        default "error"
+
+verify words_first_test:
+    assert words_first_test() == "the"
+
+function lines_length_test() returns int64:
+    string multiline = "line one\nline two\nline three"
+    list[string] lines = string.lines(multiline)
+    return list.length[string](lines)
+
+verify lines_length_test:
+    assert lines_length_test() == 3
+
+function lines_first_test() returns string:
+    string multiline = "line one\nline two\nline three"
+    list[string] lines = string.lines(multiline)
+    return list.get[string](lines, 0) handle:
+        default "error"
+
+verify lines_first_test:
+    assert lines_first_test() == "line one"

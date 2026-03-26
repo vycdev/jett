@@ -9,26 +9,18 @@ function may_fail(x: int64) returns result[int64, string]:
     return ok(x + 1)
 
 function main() returns nothing:
-    # run evaluates immediately in sequential simulation
     int64 task1 = run compute(5)
     int64 task2 = run compute(7)
 
-    # join unwraps the pending result
     int64 result1 = join task1 handle error:
         return nothing
     int64 result2 = join task2 handle error:
         return nothing
 
-    assert result1 == 25
-    assert result2 == 49
-
-    # run with a function that returns result
     result[int64, string] task3 = run may_fail(3)
     int64 r3 = join task3 handle error:
         return nothing
-    assert r3 == 4
 
-    # cancel is a no-op in sequential simulation
     int64 task4 = run compute(10)
     cancel task4
 

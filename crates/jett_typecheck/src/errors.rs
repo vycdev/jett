@@ -415,6 +415,15 @@ pub fn duplicate_enum_discriminant(
     )
 }
 
+/// E0340: `assert` used outside a `verify` or `property` block.
+pub fn assert_outside_test_block(span: Span) -> Diagnostic {
+    Diagnostic::error(
+        340,
+        "`assert` may only be used inside a `verify` or `property` block".to_string(),
+        span,
+    )
+}
+
 /// E0500: Pure function calls impure function.
 pub fn pure_calls_impure(caller: &str, callee: &str, span: Span) -> Diagnostic {
     Diagnostic::error(
