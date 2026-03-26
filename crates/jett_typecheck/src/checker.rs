@@ -478,6 +478,18 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    /// Extract (key_type, value_type) from map builtin type args.
+    /// Uses ERROR as a wildcard when type args are absent (matches any map).
+    fn map_type_args(&mut self, type_args: &[TypeExpr]) -> (TypeId, TypeId) {
+        match type_args.len() {
+            2 => (
+                self.resolve_type_expr(&type_args[0]),
+                self.resolve_type_expr(&type_args[1]),
+            ),
+            _ => (TypeInterner::ERROR, TypeInterner::ERROR),
+        }
+    }
+
     fn extract_dotted_name(expr: &Expr) -> Option<String> {
         match expr {
             Expr::Ident(ident) => Some(ident.name.clone()),
@@ -650,17 +662,11 @@ impl<'a> TypeChecker<'a> {
                 Some((vec![list_ty, inner], list_ty))
             }
             "list.length" => {
-                if type_args.len() != 1 {
-                    self.sink.emit(errors::unknown_type(
-                        &format!(
-                            "list.length (expected 1 type argument, got {})",
-                            type_args.len()
-                        ),
-                        span,
-                    ));
-                    return Some((vec![TypeInterner::ERROR], TypeInterner::ERROR));
-                }
-                let inner = self.resolve_type_expr(&type_args[0]);
+                let inner = if type_args.len() == 1 {
+                    self.resolve_type_expr(&type_args[0])
+                } else {
+                    TypeInterner::ERROR
+                };
                 Some((
                     vec![self.interner.intern(Type::List(inner))],
                     TypeInterner::INT64,
@@ -685,6 +691,171 @@ impl<'a> TypeChecker<'a> {
                     vec![self.interner.intern(Type::List(inner)), TypeInterner::INT64],
                     self.interner.intern(Type::Optional(inner)),
                 ))
+            }
+            // list builtins that transform a list → list
+            "list.reverse" | "list.sort" | "list.unique" | "list.flatten" => {
+                let inner = if type_args.len() == 1 {
+                    self.resolve_type_expr(&type_args[0])
+                } else {
+                    TypeInterner::ERROR
+                };
+                let list_ty = self.interner.intern(Type::List(inner));
+                Some((vec![list_ty], list_ty))
+            }
+            "list.is_empty" => {
+                let inner = if type_args.len() == 1 {
+                    self.resolve_type_expr(&type_args[0])
+                } else {
+                    TypeInterner::ERROR
+                };
+                let list_ty = self.interner.intern(Type::List(inner));
+                Some((vec![list_ty], TypeInterner::BOOL))
+            }
+            "list.skip" | "list.take" => {
+                let inner = if type_args.len() == 1 {
+                    self.resolve_type_expr(&type_args[0])
+                } else {
+                    TypeInterner::ERROR
+                };
+                let list_ty = self.interner.intern(Type::List(inner));
+                Some((vec![list_ty, TypeInterner::INT64], list_ty))
+            }
+            "list.contains" => {
+                let inner = if type_args.len() == 1 {
+                    self.resolve_type_expr(&type_args[0])
+                } else {
+                    TypeInterner::ERROR
+                };
+                let list_ty = self.interner.intern(Type::List(inner));
+                Some((vec![list_ty, inner], TypeInterner::BOOL))
+            }
+            "list.index_of" => {
+                let inner = if type_args.len() == 1 {
+                    self.resolve_type_expr(&type_args[0])
+                } else {
+                    TypeInterner::ERROR
+                };
+                let list_ty = self.interner.intern(Type::List(inner));
+                Some((
+                    vec![list_ty, inner],
+                    self.interner.intern(Type::Optional(TypeInterner::INT64)),
+                ))
+            }
+            "list.remove" => {
+                let inner = if type_args.len() == 1 {
+                    self.resolve_type_expr(&type_args[0])
+                } else {
+                    TypeInterner::ERROR
+                };
+                let list_ty = self.interner.intern(Type::List(inner));
+                Some((vec![list_ty, TypeInterner::INT64], list_ty))
+            }
+            "list.concat" => {
+                let inner = if type_args.len() == 1 {
+                    self.resolve_type_expr(&type_args[0])
+                } else {
+                    TypeInterner::ERROR
+                };
+                let list_ty = self.interner.intern(Type::List(inner));
+                Some((vec![list_ty, list_ty], list_ty))
+            }
+            "list.zip" => {
+                let inner_a = if type_args.len() >= 1 {
+                    self.resolve_type_expr(&type_args[0])
+                } else {
+                    TypeInterner::ERROR
+                };
+                let inner_b = if type_args.len() >= 2 {
+                    self.resolve_type_expr(&type_args[1])
+                } else {
+                    TypeInterner::ERROR
+                };
+                let list_a = self.interner.intern(Type::List(inner_a));
+                let list_b = self.interner.intern(Type::List(inner_b));
+                let result_inner = self.interner.intern(Type::List(TypeInterner::ERROR));
+                let result_ty = self.interner.intern(Type::List(result_inner));
+                Some((vec![list_a, list_b], result_ty))
+            }
+            // math builtins
+            "math.sqrt" | "math.log" | "math.log2" | "math.log10" => {
+                Some((vec![TypeInterner::FLOAT64], TypeInterner::FLOAT64))
+            }
+            "math.pow" => {
+                Some((
+                    vec![TypeInterner::FLOAT64, TypeInterner::FLOAT64],
+                    TypeInterner::FLOAT64,
+                ))
+            }
+            "math.floor" | "math.ceil" | "math.round" => {
+                Some((vec![TypeInterner::FLOAT64], TypeInterner::FLOAT64))
+            }
+            "math.clamp" => {
+                Some((
+                    vec![TypeInterner::FLOAT64, TypeInterner::FLOAT64, TypeInterner::FLOAT64],
+                    TypeInterner::FLOAT64,
+                ))
+            }
+            // string builtins
+            "string.is_empty" => Some((vec![TypeInterner::STRING], TypeInterner::BOOL)),
+            "string.repeat" => Some((
+                vec![TypeInterner::STRING, TypeInterner::INT64],
+                TypeInterner::STRING,
+            )),
+            "string.slice" => Some((
+                vec![TypeInterner::STRING, TypeInterner::INT64, TypeInterner::INT64],
+                TypeInterner::STRING,
+            )),
+            "string.pad_start" | "string.pad_end" => Some((
+                vec![TypeInterner::STRING, TypeInterner::INT64, TypeInterner::STRING],
+                TypeInterner::STRING,
+            )),
+            "map.new" => {
+                let (k, v) = self.map_type_args(type_args);
+                let map_ty = self.interner.intern(Type::Map(k, v));
+                Some((vec![], map_ty))
+            }
+            "map.length" => {
+                let (k, v) = self.map_type_args(type_args);
+                let map_ty = self.interner.intern(Type::Map(k, v));
+                Some((vec![map_ty], TypeInterner::INT64))
+            }
+            "map.is_empty" => {
+                let (k, v) = self.map_type_args(type_args);
+                let map_ty = self.interner.intern(Type::Map(k, v));
+                Some((vec![map_ty], TypeInterner::BOOL))
+            }
+            "map.has" => {
+                let (k, v) = self.map_type_args(type_args);
+                let map_ty = self.interner.intern(Type::Map(k, v));
+                Some((vec![map_ty, k], TypeInterner::BOOL))
+            }
+            "map.get" => {
+                let (k, v) = self.map_type_args(type_args);
+                let map_ty = self.interner.intern(Type::Map(k, v));
+                Some((
+                    vec![map_ty, k],
+                    self.interner.intern(Type::Optional(v)),
+                ))
+            }
+            "map.insert" => {
+                let (k, v) = self.map_type_args(type_args);
+                let map_ty = self.interner.intern(Type::Map(k, v));
+                Some((vec![map_ty, k, v], map_ty))
+            }
+            "map.remove" => {
+                let (k, v) = self.map_type_args(type_args);
+                let map_ty = self.interner.intern(Type::Map(k, v));
+                Some((vec![map_ty, k], map_ty))
+            }
+            "map.keys" => {
+                let (k, v) = self.map_type_args(type_args);
+                let map_ty = self.interner.intern(Type::Map(k, v));
+                Some((vec![map_ty], self.interner.intern(Type::List(k))))
+            }
+            "map.values" => {
+                let (k, v) = self.map_type_args(type_args);
+                let map_ty = self.interner.intern(Type::Map(k, v));
+                Some((vec![map_ty], self.interner.intern(Type::List(v))))
             }
             _ => None,
         }

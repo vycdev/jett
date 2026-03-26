@@ -423,17 +423,67 @@ impl<'a> OwnershipChecker<'a> {
         // Check the callee itself (e.g., reading a function variable).
         self.check_expr_ownership(callee);
 
-        for arg in args {
+        // Map and list builtins that operate on a collection without consuming it.
+        // The first argument (the collection) is implicitly viewed.
+        let callee_name = Self::dotted_name_str(callee);
+        let collection_view_builtins: &[&str] = &[
+            "map.length",
+            "map.has",
+            "map.get",
+            "map.insert",
+            "map.remove",
+            "map.keys",
+            "map.values",
+            "map.is_empty",
+            "list.length",
+            "list.get",
+            "list.first",
+            "list.last",
+            "list.append",
+            "list.is_empty",
+            "list.skip",
+            "list.take",
+            "list.reverse",
+            "list.sort",
+            "list.contains",
+            "list.index_of",
+            "list.remove",
+            "list.concat",
+            "list.flatten",
+            "list.unique",
+            "list.zip",
+        ];
+        let first_arg_is_view = callee_name
+            .as_deref()
+            .map(|n| collection_view_builtins.contains(&n))
+            .unwrap_or(false);
+
+        for (i, arg) in args.iter().enumerate() {
             match &arg.value {
                 Expr::View(inner, _) => {
                     // `view x` — the argument is passed as a view; no consumption.
                     self.check_expr_ownership(inner);
+                }
+                _ if first_arg_is_view && i == 0 => {
+                    // First argument to a collection builtin is implicitly viewed.
+                    self.check_expr_ownership(&arg.value);
                 }
                 _ => {
                     // Non-view argument — consumes the value.
                     self.consume_expr(&arg.value, arg.span);
                 }
             }
+        }
+    }
+
+    fn dotted_name_str(expr: &Expr) -> Option<String> {
+        match expr {
+            Expr::Ident(ident) => Some(ident.name.clone()),
+            Expr::FieldAccess(inner, field, _) => {
+                let prefix = Self::dotted_name_str(inner)?;
+                Some(format!("{prefix}.{}", field.name))
+            }
+            _ => None,
         }
     }
 
@@ -517,7 +567,8 @@ impl<'a> OwnershipChecker<'a> {
                 _ => TypeInterner::BYTES, // Use BYTES as a non-copyable stand-in
             },
             ast::TypeExpr::Generic(_, _, _) => {
-                // Generic types (list[T], map[K,V], etc.) are not copyable.
+                // Generic types (list[T], map[K,V], etc.) are handled by
+                // is_type_expr_copyable which inspects the AST directly.
                 TypeInterner::BYTES
             }
             ast::TypeExpr::View(inner, _) => {

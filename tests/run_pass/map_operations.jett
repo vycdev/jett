@@ -1,0 +1,31 @@
+namespace test
+
+function main() returns nothing:
+    map[string, int64] scores = map("alice": 10, "bob": 20, "carol": 30)
+
+    assert map.has(scores, "alice") == true
+    assert map.has(scores, "dave") == false
+    assert map.length(scores) == 3
+
+    optional[int64] alice_score = map.get(scores, "alice")
+    int64 score = alice_score handle:
+        return nothing
+    assert score == 10
+
+    optional[int64] dave_score = map.get(scores, "dave")
+    int64 fallback = dave_score handle:
+        default 0
+    assert fallback == 0
+
+    map[string, int64] updated = map.insert(scores, "dave", 40)
+    assert map.has(updated, "dave") == true
+    assert map.length(updated) == 4
+
+    map[string, int64] removed = map.remove(updated, "bob")
+    assert map.has(removed, "bob") == false
+    assert map.length(removed) == 3
+
+    list[string] keys = map.keys(scores)
+    assert list.length(keys) == 3
+
+    return nothing

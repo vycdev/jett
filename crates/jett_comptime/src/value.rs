@@ -48,6 +48,8 @@ pub enum Value {
     Error(String),
     /// A pending concurrent task (sequential simulation: already evaluated).
     Pending(Box<Value>),
+    /// A key-value map: `map(key1: val1, key2: val2)`.
+    Map(Vec<(Value, Value)>),
 }
 
 impl fmt::Display for Value {
@@ -131,6 +133,16 @@ impl fmt::Display for Value {
             Value::Actor(id) => write!(f, "actor#{id}"),
             Value::Error(msg) => write!(f, "error: {msg}"),
             Value::Pending(inner) => write!(f, "pending({inner})"),
+            Value::Map(entries) => {
+                write!(f, "map(")?;
+                for (i, (k, v)) in entries.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{k}: {v}")?;
+                }
+                write!(f, ")")
+            }
         }
     }
 }

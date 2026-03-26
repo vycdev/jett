@@ -745,6 +745,11 @@ impl Resolver {
             return;
         }
 
+        // Builtin module names (e.g., `math`) are always in scope as callee prefixes.
+        if is_builtin_module(name) {
+            return;
+        }
+
         // First look up in local/nested scopes.
         if let Some(def_id) = self.scope_table.lookup(self.current_scope, name) {
             // Check for forward reference to a top-level item.
@@ -894,6 +899,13 @@ fn is_builtin_type(name: &str) -> bool {
             | "result"
             | "optional"
     )
+}
+
+/// Returns true for stdlib module names that can appear as callee prefixes
+/// (e.g., `math.abs(x)`). These are not user-definable and should not
+/// generate "undefined name" errors when used in expression position.
+fn is_builtin_module(name: &str) -> bool {
+    matches!(name, "math")
 }
 
 fn stmt_span(stmt: &Stmt) -> Span {

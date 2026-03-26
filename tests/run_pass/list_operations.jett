@@ -1,0 +1,50 @@
+namespace test
+
+function main() returns nothing:
+    list[int64] nums = list(3, 1, 4, 1, 5, 9, 2, 6, 5, 3)
+
+    list[int64] sorted = list.sort(nums)
+    assert list.length(sorted) == 10
+
+    int64 first_sorted = list.first[int64](sorted) handle:
+        return nothing
+    assert first_sorted == 1
+
+    int64 last_sorted = list.last[int64](sorted) handle:
+        return nothing
+    assert last_sorted == 9
+
+    list[int64] unique_sorted = list.unique(list.sort(nums))
+    assert list.length(unique_sorted) == 7
+
+    list[int64] taken = list.take(sorted, 3)
+    assert list.length(taken) == 3
+
+    int64 first_taken = list.first[int64](taken) handle:
+        return nothing
+    assert first_taken == 1
+
+    list[int64] skipped = list.skip(sorted, 7)
+    assert list.length(skipped) == 3
+
+    list[int64] rev = list.reverse(list(1, 2, 3))
+    int64 rev_first = list.first[int64](rev) handle:
+        return nothing
+    assert rev_first == 3
+
+    int64 rev_last = list.last[int64](rev) handle:
+        return nothing
+    assert rev_last == 1
+
+    list[int64] a = list(1, 2, 3)
+    list[int64] b = list(4, 5, 6)
+    list[int64] combined = list.concat(a, b)
+    assert list.length(combined) == 6
+
+    assert list.contains(combined, 4) == true
+    assert list.contains(combined, 99) == false
+
+    assert list.is_empty(list()) == true
+    assert list.is_empty(list(1)) == false
+
+    return nothing

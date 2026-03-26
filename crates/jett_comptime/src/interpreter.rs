@@ -555,6 +555,16 @@ impl Interpreter {
                 Ok(ExprFlow::Value(Value::List(vals)))
             }
 
+            Expr::MapConstruct(entries, _) => {
+                let mut pairs = Vec::with_capacity(entries.len());
+                for (key_expr, val_expr) in entries {
+                    let k = value_or_signal!(self, key_expr);
+                    let v = value_or_signal!(self, val_expr);
+                    pairs.push((k, v));
+                }
+                Ok(ExprFlow::Value(Value::Map(pairs)))
+            }
+
             Expr::Handle(target, bind_name, body, _) => {
                 let target_value = value_or_signal!(self, target);
                 match target_value {
@@ -1751,6 +1761,84 @@ impl Interpreter {
                 }
             }
 
+            "string.is_empty" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::String(s) => Some(Ok(Value::Bool(s.is_empty()))),
+                    _ => Some(Err(format!("{name} expects a string argument"))),
+                }
+            }
+
+            "string.slice" => {
+                require_args!(name, 3, args);
+                match (&args[0], &args[1], &args[2]) {
+                    (Value::String(s), Value::Int64(start), Value::Int64(end)) => {
+                        let chars: Vec<char> = s.chars().collect();
+                        let len = chars.len() as i64;
+                        let start = (*start).clamp(0, len) as usize;
+                        let end = (*end).clamp(0, len) as usize;
+                        let result: String = chars[start.min(end)..end].iter().collect();
+                        Some(Ok(Value::String(result)))
+                    }
+                    _ => Some(Err(format!(
+                        "{name} expects a string and two int64 indices"
+                    ))),
+                }
+            }
+
+            "string.repeat" => {
+                require_args!(name, 2, args);
+                match (&args[0], &args[1]) {
+                    (Value::String(s), Value::Int64(n)) => {
+                        let n = (*n).max(0) as usize;
+                        Some(Ok(Value::String(s.repeat(n))))
+                    }
+                    _ => Some(Err(format!("{name} expects a string and an int64"))),
+                }
+            }
+
+            "string.pad_start" => {
+                require_args!(name, 3, args);
+                match (&args[0], &args[1], &args[2]) {
+                    (Value::String(s), Value::Int64(width), Value::String(pad)) => {
+                        let pad_char = pad.chars().next().unwrap_or(' ');
+                        let current_len = s.chars().count();
+                        let width = (*width).max(0) as usize;
+                        if current_len >= width {
+                            Some(Ok(Value::String(s.clone())))
+                        } else {
+                            let padding: String =
+                                std::iter::repeat(pad_char).take(width - current_len).collect();
+                            Some(Ok(Value::String(format!("{padding}{s}"))))
+                        }
+                    }
+                    _ => Some(Err(format!(
+                        "{name} expects a string, int64 width, and string pad char"
+                    ))),
+                }
+            }
+
+            "string.pad_end" => {
+                require_args!(name, 3, args);
+                match (&args[0], &args[1], &args[2]) {
+                    (Value::String(s), Value::Int64(width), Value::String(pad)) => {
+                        let pad_char = pad.chars().next().unwrap_or(' ');
+                        let current_len = s.chars().count();
+                        let width = (*width).max(0) as usize;
+                        if current_len >= width {
+                            Some(Ok(Value::String(s.clone())))
+                        } else {
+                            let padding: String =
+                                std::iter::repeat(pad_char).take(width - current_len).collect();
+                            Some(Ok(Value::String(format!("{s}{padding}"))))
+                        }
+                    }
+                    _ => Some(Err(format!(
+                        "{name} expects a string, int64 width, and string pad char"
+                    ))),
+                }
+            }
+
             // -- String conversions -------------------------------------------
             "string.from_int64" => {
                 require_args!(name, 1, args);
@@ -1862,6 +1950,251 @@ impl Interpreter {
                 }
             }
 
+            "list.skip" => {
+                require_args!(name, 2, args);
+                match (&args[0], &args[1]) {
+                    (Value::List(items), Value::Int64(n)) => {
+                        let n = (*n).max(0) as usize;
+                        Some(Ok(Value::List(items[n.min(items.len())..].to_vec())))
+                    }
+                    _ => Some(Err(format!("{name} expects a list and an int64"))),
+                }
+            }
+
+            "list.take" => {
+                require_args!(name, 2, args);
+                match (&args[0], &args[1]) {
+                    (Value::List(items), Value::Int64(n)) => {
+                        let n = (*n).max(0) as usize;
+                        Some(Ok(Value::List(items[..n.min(items.len())].to_vec())))
+                    }
+                    _ => Some(Err(format!("{name} expects a list and an int64"))),
+                }
+            }
+
+            "list.reverse" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::List(items) => {
+                        let mut reversed = items.clone();
+                        reversed.reverse();
+                        Some(Ok(Value::List(reversed)))
+                    }
+                    _ => Some(Err(format!("{name} expects a list argument"))),
+                }
+            }
+
+            "list.sort" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::List(items) => {
+                        let mut sorted = items.clone();
+                        sorted.sort_by(|a, b| match (a, b) {
+                            (Value::Int64(x), Value::Int64(y)) => x.cmp(y),
+                            (Value::Float64(x), Value::Float64(y)) => {
+                                x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal)
+                            }
+                            (Value::String(x), Value::String(y)) => x.cmp(y),
+                            (Value::Bool(x), Value::Bool(y)) => x.cmp(y),
+                            _ => std::cmp::Ordering::Equal,
+                        });
+                        Some(Ok(Value::List(sorted)))
+                    }
+                    _ => Some(Err(format!("{name} expects a list argument"))),
+                }
+            }
+
+            "list.contains" => {
+                require_args!(name, 2, args);
+                match &args[0] {
+                    Value::List(items) => {
+                        Some(Ok(Value::Bool(items.contains(&args[1]))))
+                    }
+                    _ => Some(Err(format!("{name} expects a list as first argument"))),
+                }
+            }
+
+            "list.index_of" => {
+                require_args!(name, 2, args);
+                match &args[0] {
+                    Value::List(items) => {
+                        let idx = items.iter().position(|v| v == &args[1]);
+                        Some(Ok(match idx {
+                            Some(i) => Value::OptionalSome(Box::new(Value::Int64(i as i64))),
+                            None => Value::OptionalNone,
+                        }))
+                    }
+                    _ => Some(Err(format!("{name} expects a list as first argument"))),
+                }
+            }
+
+            "list.remove" => {
+                require_args!(name, 2, args);
+                match (&args[0], &args[1]) {
+                    (Value::List(items), Value::Int64(index)) => {
+                        let idx = *index as usize;
+                        if idx < items.len() {
+                            let mut new_list = items.clone();
+                            new_list.remove(idx);
+                            Some(Ok(Value::List(new_list)))
+                        } else {
+                            Some(Err(format!("{name}: index {index} out of bounds")))
+                        }
+                    }
+                    _ => Some(Err(format!("{name} expects a list and an int64 index"))),
+                }
+            }
+
+            "list.concat" => {
+                require_args!(name, 2, args);
+                match (&args[0], &args[1]) {
+                    (Value::List(a), Value::List(b)) => {
+                        let mut result = a.clone();
+                        result.extend(b.iter().cloned());
+                        Some(Ok(Value::List(result)))
+                    }
+                    _ => Some(Err(format!("{name} expects two list arguments"))),
+                }
+            }
+
+            "list.flatten" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::List(items) => {
+                        let mut flat = Vec::new();
+                        for item in items {
+                            match item {
+                                Value::List(inner) => flat.extend(inner.iter().cloned()),
+                                other => flat.push(other.clone()),
+                            }
+                        }
+                        Some(Ok(Value::List(flat)))
+                    }
+                    _ => Some(Err(format!("{name} expects a list argument"))),
+                }
+            }
+
+            "list.unique" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::List(items) => {
+                        let mut seen = Vec::new();
+                        for item in items {
+                            if !seen.contains(item) {
+                                seen.push(item.clone());
+                            }
+                        }
+                        Some(Ok(Value::List(seen)))
+                    }
+                    _ => Some(Err(format!("{name} expects a list argument"))),
+                }
+            }
+
+            "list.zip" => {
+                require_args!(name, 2, args);
+                match (&args[0], &args[1]) {
+                    (Value::List(a), Value::List(b)) => {
+                        let pairs: Vec<Value> = a
+                            .iter()
+                            .zip(b.iter())
+                            .map(|(x, y)| {
+                                Value::List(vec![x.clone(), y.clone()])
+                            })
+                            .collect();
+                        Some(Ok(Value::List(pairs)))
+                    }
+                    _ => Some(Err(format!("{name} expects two list arguments"))),
+                }
+            }
+
+            // -- Map operations -----------------------------------------------
+            "map.new" => {
+                Some(Ok(Value::Map(Vec::new())))
+            }
+            "map.length" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::Map(entries) => Some(Ok(Value::Int64(entries.len() as i64))),
+                    _ => Some(Err(format!("{name} expects a map argument"))),
+                }
+            }
+            "map.has" => {
+                require_args!(name, 2, args);
+                match &args[0] {
+                    Value::Map(entries) => {
+                        let found = entries.iter().any(|(k, _)| k == &args[1]);
+                        Some(Ok(Value::Bool(found)))
+                    }
+                    _ => Some(Err(format!("{name} expects a map as first argument"))),
+                }
+            }
+            "map.get" => {
+                require_args!(name, 2, args);
+                match &args[0] {
+                    Value::Map(entries) => {
+                        let val = entries.iter().find(|(k, _)| k == &args[1]).map(|(_, v)| v.clone());
+                        Some(Ok(match val {
+                            Some(v) => Value::OptionalSome(Box::new(v)),
+                            None => Value::OptionalNone,
+                        }))
+                    }
+                    _ => Some(Err(format!("{name} expects a map as first argument"))),
+                }
+            }
+            "map.insert" => {
+                require_args!(name, 3, args);
+                match args[0].clone() {
+                    Value::Map(mut entries) => {
+                        let key = args[1].clone();
+                        let val = args[2].clone();
+                        if let Some(entry) = entries.iter_mut().find(|(k, _)| k == &key) {
+                            entry.1 = val;
+                        } else {
+                            entries.push((key, val));
+                        }
+                        Some(Ok(Value::Map(entries)))
+                    }
+                    _ => Some(Err(format!("{name} expects a map as first argument"))),
+                }
+            }
+            "map.remove" => {
+                require_args!(name, 2, args);
+                match args[0].clone() {
+                    Value::Map(mut entries) => {
+                        entries.retain(|(k, _)| k != &args[1]);
+                        Some(Ok(Value::Map(entries)))
+                    }
+                    _ => Some(Err(format!("{name} expects a map as first argument"))),
+                }
+            }
+            "map.keys" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::Map(entries) => {
+                        let keys = entries.iter().map(|(k, _)| k.clone()).collect();
+                        Some(Ok(Value::List(keys)))
+                    }
+                    _ => Some(Err(format!("{name} expects a map argument"))),
+                }
+            }
+            "map.values" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::Map(entries) => {
+                        let vals = entries.iter().map(|(_, v)| v.clone()).collect();
+                        Some(Ok(Value::List(vals)))
+                    }
+                    _ => Some(Err(format!("{name} expects a map argument"))),
+                }
+            }
+            "map.is_empty" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::Map(entries) => Some(Ok(Value::Bool(entries.is_empty()))),
+                    _ => Some(Err(format!("{name} expects a map argument"))),
+                }
+            }
+
             // -- Math operations ----------------------------------------------
             "math.abs" => {
                 require_args!(name, 1, args);
@@ -1891,6 +2224,101 @@ impl Interpreter {
                     _ => Some(Err(format!(
                         "{name} expects two arguments of the same numeric type"
                     ))),
+                }
+            }
+
+            "math.sqrt" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::Float64(n) => Some(Ok(Value::Float64(n.sqrt()))),
+                    Value::Int64(n) => Some(Ok(Value::Float64((*n as f64).sqrt()))),
+                    _ => Some(Err(format!("{name} expects a numeric argument"))),
+                }
+            }
+
+            "math.pow" => {
+                require_args!(name, 2, args);
+                match (&args[0], &args[1]) {
+                    (Value::Float64(base), Value::Float64(exp)) => {
+                        Some(Ok(Value::Float64(base.powf(*exp))))
+                    }
+                    (Value::Int64(base), Value::Int64(exp)) => {
+                        let exp_u = (*exp).max(0) as u32;
+                        Some(Ok(Value::Int64(base.pow(exp_u))))
+                    }
+                    (Value::Float64(base), Value::Int64(exp)) => {
+                        Some(Ok(Value::Float64(base.powi(*exp as i32))))
+                    }
+                    _ => Some(Err(format!("{name} expects numeric arguments"))),
+                }
+            }
+
+            "math.floor" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::Float64(n) => Some(Ok(Value::Float64(n.floor()))),
+                    Value::Int64(n) => Some(Ok(Value::Int64(*n))),
+                    _ => Some(Err(format!("{name} expects a numeric argument"))),
+                }
+            }
+
+            "math.ceil" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::Float64(n) => Some(Ok(Value::Float64(n.ceil()))),
+                    Value::Int64(n) => Some(Ok(Value::Int64(*n))),
+                    _ => Some(Err(format!("{name} expects a numeric argument"))),
+                }
+            }
+
+            "math.round" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::Float64(n) => Some(Ok(Value::Float64(n.round()))),
+                    Value::Int64(n) => Some(Ok(Value::Int64(*n))),
+                    _ => Some(Err(format!("{name} expects a numeric argument"))),
+                }
+            }
+
+            "math.clamp" => {
+                require_args!(name, 3, args);
+                match (&args[0], &args[1], &args[2]) {
+                    (Value::Int64(v), Value::Int64(lo), Value::Int64(hi)) => {
+                        Some(Ok(Value::Int64((*v).clamp(*lo, *hi))))
+                    }
+                    (Value::Float64(v), Value::Float64(lo), Value::Float64(hi)) => {
+                        Some(Ok(Value::Float64(v.clamp(*lo, *hi))))
+                    }
+                    _ => Some(Err(format!(
+                        "{name} expects three arguments of the same numeric type"
+                    ))),
+                }
+            }
+
+            "math.log" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::Float64(n) => Some(Ok(Value::Float64(n.ln()))),
+                    Value::Int64(n) => Some(Ok(Value::Float64((*n as f64).ln()))),
+                    _ => Some(Err(format!("{name} expects a numeric argument"))),
+                }
+            }
+
+            "math.log2" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::Float64(n) => Some(Ok(Value::Float64(n.log2()))),
+                    Value::Int64(n) => Some(Ok(Value::Float64((*n as f64).log2()))),
+                    _ => Some(Err(format!("{name} expects a numeric argument"))),
+                }
+            }
+
+            "math.log10" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::Float64(n) => Some(Ok(Value::Float64(n.log10()))),
+                    Value::Int64(n) => Some(Ok(Value::Float64((*n as f64).log10()))),
+                    _ => Some(Err(format!("{name} expects a numeric argument"))),
                 }
             }
 
@@ -2435,6 +2863,7 @@ fn runtime_type_name(value: &Value) -> Option<String> {
         Value::Error(_) => None,
         Value::Actor(_) => Some("actor".to_string()),
         Value::Pending(_) => Some("pending".to_string()),
+        Value::Map(_) => Some("map".to_string()),
     }
 }
 

@@ -1,0 +1,26 @@
+namespace test
+
+function main() returns nothing:
+    assert math.abs(-5) == 5
+    assert math.abs(5) == 5
+    assert math.min(3, 7) == 3
+    assert math.max(3, 7) == 7
+
+    float64 root = math.sqrt(4.0)
+    assert root == 2.0
+
+    float64 p = math.pow(2.0, 10.0)
+    assert p == 1024.0
+
+    assert math.floor(3.7) == 3.0
+    assert math.ceil(3.2) == 4.0
+    assert math.round(3.5) == 4.0
+    assert math.round(3.4) == 3.0
+
+    float64 clamped = math.clamp(15.0, 0.0, 10.0)
+    assert clamped == 10.0
+
+    float64 clamped2 = math.clamp(-5.0, 0.0, 10.0)
+    assert clamped2 == 0.0
+
+    return nothing

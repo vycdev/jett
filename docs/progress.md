@@ -2,8 +2,8 @@
 
 ## Statistics
 
-- **Lines of Rust:** ~17,500
-- **Tests:** 423 passing
+- **Lines of Rust:** ~19,000
+- **Tests:** 440 passing
 - **Crates:** 15
 - **VS Code extension:** Yes
 
@@ -119,9 +119,10 @@
 
 | Module | Status |
 |---|---|
-| `string` (basic ops in interpreter) | Partial (13 builtins) |
-| `list` (basic ops in interpreter) | Partial (6 builtins) |
-| `math` (basic ops in interpreter) | Partial (3 builtins) |
+| `string` (basic ops in interpreter) | Partial (18 builtins) |
+| `list` (basic ops in interpreter) | Partial (19 builtins) |
+| `map` (basic ops in interpreter) | Partial (9 builtins: new, length, has, get, insert, remove, keys, values, is_empty) |
+| `math` (basic ops in interpreter) | Partial (12 builtins) |
 | `net.http` | Not started |
 | `net.socket` | Not started |
 | `json` | Not started |
