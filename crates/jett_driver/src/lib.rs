@@ -1,7 +1,7 @@
 use jett_common::FileId;
 use jett_comptime::verify::{run_verify_blocks, run_verify_blocks_detailed};
 use jett_diagnostics::Diagnostic;
-use jett_fmt::{format_source, FormatResult};
+use jett_fmt::{FormatResult, format_source};
 use jett_parser::parse;
 use jett_resolve::resolve;
 use jett_typecheck::check;
@@ -117,7 +117,9 @@ pub fn build_file(path: &Path) -> BuildResult {
     all_diagnostics.extend(parse_result.errors.clone());
 
     // If there are parse errors, stop here — resolve/typecheck won't produce useful results
-    let has_parse_errors = all_diagnostics.iter().any(|d| d.severity == jett_diagnostics::Severity::Error);
+    let has_parse_errors = all_diagnostics
+        .iter()
+        .any(|d| d.severity == jett_diagnostics::Severity::Error);
     if has_parse_errors {
         return BuildResult {
             has_errors: true,
@@ -131,7 +133,9 @@ pub fn build_file(path: &Path) -> BuildResult {
     let resolve_result = resolve(&parse_result.module);
     all_diagnostics.extend(resolve_result.diagnostics.clone());
 
-    let has_resolve_errors = all_diagnostics.iter().any(|d| d.severity == jett_diagnostics::Severity::Error);
+    let has_resolve_errors = all_diagnostics
+        .iter()
+        .any(|d| d.severity == jett_diagnostics::Severity::Error);
     if has_resolve_errors {
         return BuildResult {
             has_errors: true,
@@ -145,7 +149,9 @@ pub fn build_file(path: &Path) -> BuildResult {
     let check_result = check(&parse_result.module, &resolve_result);
     all_diagnostics.extend(check_result.diagnostics.clone());
 
-    let has_typecheck_errors = all_diagnostics.iter().any(|d| d.severity == jett_diagnostics::Severity::Error);
+    let has_typecheck_errors = all_diagnostics
+        .iter()
+        .any(|d| d.severity == jett_diagnostics::Severity::Error);
     if has_typecheck_errors {
         return BuildResult {
             has_errors: true,
@@ -159,7 +165,9 @@ pub fn build_file(path: &Path) -> BuildResult {
     let verify_diagnostics = run_verify_blocks(&parse_result.module);
     all_diagnostics.extend(verify_diagnostics);
 
-    let has_errors = all_diagnostics.iter().any(|d| d.severity == jett_diagnostics::Severity::Error);
+    let has_errors = all_diagnostics
+        .iter()
+        .any(|d| d.severity == jett_diagnostics::Severity::Error);
 
     BuildResult {
         has_errors,
@@ -181,7 +189,10 @@ pub fn run_file(path: &Path) -> Result<(), String> {
             .filter(|d| d.severity == jett_diagnostics::Severity::Error)
             .map(|d| format!("{}: {}", d.code, d.message))
             .collect();
-        return Err(format!("cannot run — compilation errors:\n{}", errors.join("\n")));
+        return Err(format!(
+            "cannot run — compilation errors:\n{}",
+            errors.join("\n")
+        ));
     }
 
     // Parse again to get the module for interpretation
@@ -196,8 +207,10 @@ pub fn run_file(path: &Path) -> Result<(), String> {
 
     // Register all functions
     for item in &parse_result.module.items {
-        if let jett_parser::ast::Item::Function(func) = item {
-            interp.register_function(func);
+        match item {
+            jett_parser::ast::Item::Function(func) => interp.register_function(func),
+            jett_parser::ast::Item::Struct(strukt) => interp.register_struct(strukt),
+            _ => {}
         }
     }
 
@@ -362,10 +375,7 @@ pub fn test_project(start_dir: &Path) -> Result<ProjectTestResult, String> {
 /// Walk up from `start_dir` to find a directory containing `jett.proj`.
 fn find_project_root(start_dir: &Path) -> Result<std::path::PathBuf, String> {
     let start = if start_dir.is_file() {
-        start_dir
-            .parent()
-            .unwrap_or(start_dir)
-            .to_path_buf()
+        start_dir.parent().unwrap_or(start_dir).to_path_buf()
     } else {
         start_dir.to_path_buf()
     };
@@ -378,9 +388,7 @@ fn find_project_root(start_dir: &Path) -> Result<std::path::PathBuf, String> {
         match current.parent() {
             Some(parent) => current = parent,
             None => {
-                return Err(
-                    "no jett.proj found in current directory or any parent".to_string(),
-                );
+                return Err("no jett.proj found in current directory or any parent".to_string());
             }
         }
     }

@@ -3,7 +3,7 @@
 ## Statistics
 
 - **Lines of Rust:** ~17,500
-- **Tests:** 323 passing
+- **Tests:** 327 passing
 - **Crates:** 15
 - **VS Code extension:** Yes
 
@@ -52,7 +52,7 @@
 
 | Component | Crate | Tests | Status |
 |---|---|---|---|
-| Comptime interpreter | `jett_comptime` | 111 | Done |
+| Comptime interpreter | `jett_comptime` | 115 | Done |
 | Verify blocks (compile-time) | `jett_comptime/verify` | — | Done |
 | 25+ stdlib builtins in interpreter | `jett_comptime` | — | Done |
 
@@ -68,6 +68,7 @@
 |---|---|
 | State machines (`machine`, transitions, `at`) | Done |
 | Refinement types (`type X = T where ...`, `coarsen`) | Done |
+| User-defined structs (constructors, field access, methods) | Done |
 | Match statements with enum destructuring | Done |
 | Pipeline operator (`into`) | Done |
 | String interpolation | Done |

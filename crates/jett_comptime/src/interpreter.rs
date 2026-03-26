@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use jett_parser::ast::{
     BinOp, Block, CallArg, Expr, FunctionDef, Ident, MachineDef, Pattern, PipelineStep, Stmt,
-    StringPart, TypeAlias, TypeExpr, UnaryOp,
+    StringPart, StructDef, TypeAlias, TypeExpr, UnaryOp,
 };
 
 use crate::value::Value;
@@ -94,6 +94,8 @@ pub struct Interpreter {
     scopes: Vec<Environment>,
     /// User-defined functions available for calling.
     functions: HashMap<String, FunctionDef>,
+    /// Registered user-defined structs available for construction and field access.
+    structs: HashMap<String, StructDef>,
     /// Registered type aliases: name -> (base_type_name, optional constraint).
     type_aliases: HashMap<String, Option<RefinementDef>>,
     /// Registered state machine definitions: name -> MachineDef.
@@ -106,6 +108,7 @@ impl Interpreter {
         Self {
             scopes: vec![HashMap::new()],
             functions: HashMap::new(),
+            structs: HashMap::new(),
             type_aliases: HashMap::new(),
             machines: HashMap::new(),
         }
@@ -170,8 +173,21 @@ impl Interpreter {
 
     /// Register a function definition so it can be called later.
     pub fn register_function(&mut self, func: &FunctionDef) {
-        self.functions
-            .insert(func.name.name.clone(), func.clone());
+        self.functions.insert(func.name.name.clone(), func.clone());
+    }
+
+    /// Register a user-defined struct so it can be constructed and its methods
+    /// called with dotted syntax like `Point.total(view p)`.
+    pub fn register_struct(&mut self, strukt: &StructDef) {
+        self.structs
+            .insert(strukt.name.name.clone(), strukt.clone());
+
+        for method in &strukt.methods {
+            self.functions.insert(
+                format!("{}.{}", strukt.name.name, method.name.name),
+                method.clone(),
+            );
+        }
     }
 
     /// Register a state machine definition so it can be used for construction
@@ -344,13 +360,17 @@ impl Interpreter {
                 // args, since state-name arguments are bare identifiers (not
                 // variables) and would fail evaluation.
                 match callee.as_ref() {
+                    Expr::Ident(ident) if self.structs.contains_key(&ident.name) => {}
                     Expr::Ident(ident) if self.machines.contains_key(&ident.name) => {
                         return Ok(ExprFlow::Value(self.construct_machine(&ident.name, args)?));
                     }
                     Expr::FieldAccess(obj, field, _) => {
                         if let Expr::Ident(ident) = obj.as_ref() {
-                            if field.name == "transition" && self.machines.contains_key(&ident.name) {
-                                return Ok(ExprFlow::Value(self.machine_transition(&ident.name, args)?));
+                            if field.name == "transition" && self.machines.contains_key(&ident.name)
+                            {
+                                return Ok(ExprFlow::Value(
+                                    self.machine_transition(&ident.name, args)?,
+                                ));
                             }
                         }
                     }
@@ -363,7 +383,12 @@ impl Interpreter {
                 }
 
                 match callee.as_ref() {
-                    Expr::Ident(ident) => Ok(ExprFlow::Value(self.call_function(&ident.name, arg_values)?)),
+                    Expr::Ident(ident) if self.structs.contains_key(&ident.name) => Ok(
+                        ExprFlow::Value(self.construct_struct(&ident.name, args, arg_values)?),
+                    ),
+                    Expr::Ident(ident) => Ok(ExprFlow::Value(
+                        self.call_function(&ident.name, arg_values)?,
+                    )),
                     // Handle enum variant construction: Type.variant(args)
                     Expr::EnumVariant(type_name, variant, _) => Ok(ExprFlow::Value(Value::Enum {
                         type_name: type_name.name.clone(),
@@ -394,8 +419,13 @@ impl Interpreter {
                             }));
                         }
                         match dotted {
-                            Some(name) => Ok(ExprFlow::Value(self.call_function(&name, arg_values)?)),
-                            None => Err("only named function calls are supported in comptime".to_string()),
+                            Some(name) => {
+                                Ok(ExprFlow::Value(self.call_function(&name, arg_values)?))
+                            }
+                            None => {
+                                Err("only named function calls are supported in comptime"
+                                    .to_string())
+                            }
                         }
                     }
                     _ => Err("only named function calls are supported in comptime".to_string()),
@@ -433,16 +463,12 @@ impl Interpreter {
                 fields: vec![],
             })),
 
-            // Field access: may be enum variant like `Color.red`
+            // Field access: struct field access, or enum variant like `Color.red`
             Expr::FieldAccess(obj, field, _) => {
-                // Try to evaluate as a variable first; if that fails and the
-                // object is an identifier, treat it as an enum type reference.
                 match obj.as_ref() {
                     Expr::Ident(ident) => {
-                        if self.get_variable(&ident.name).is_some() {
-                            Err(format!(
-                                "field access on values is not supported in comptime"
-                            ))
+                        if let Some(value) = self.get_variable(&ident.name).cloned() {
+                            self.eval_value_field_access(value, &field.name)
                         } else {
                             // Treat as enum variant: Type.variant
                             Ok(ExprFlow::Value(Value::Enum {
@@ -452,7 +478,10 @@ impl Interpreter {
                             }))
                         }
                     }
-                    _ => Err("field access is not supported in comptime".to_string()),
+                    _ => {
+                        let base = value_or_signal!(self, obj);
+                        self.eval_value_field_access(base, &field.name)
+                    }
                 }
             }
 
@@ -483,9 +512,7 @@ impl Interpreter {
                     Value::Machine { state, .. } => {
                         Ok(ExprFlow::Value(Value::Bool(state == state_name.name)))
                     }
-                    _ => Err(format!(
-                        "'at' requires a machine value, got {val}"
-                    )),
+                    _ => Err(format!("'at' requires a machine value, got {val}")),
                 }
             }
 
@@ -513,7 +540,9 @@ impl Interpreter {
 
         // Resolve the function name from the expression.
         match &step.function {
-            Expr::Ident(ident) => Ok(ExprFlow::Value(self.call_function(&ident.name, arg_values)?)),
+            Expr::Ident(ident) => Ok(ExprFlow::Value(
+                self.call_function(&ident.name, arg_values)?,
+            )),
             Expr::FieldAccess(obj, field, _) => {
                 let dotted = Self::extract_dotted_name(obj, &field.name);
                 if let Some(ref name) = dotted {
@@ -526,9 +555,9 @@ impl Interpreter {
                 }
                 match dotted {
                     Some(name) => Ok(ExprFlow::Value(self.call_function(&name, arg_values)?)),
-                    None => Err(
-                        "only named function calls are supported in pipeline steps".to_string(),
-                    ),
+                    None => {
+                        Err("only named function calls are supported in pipeline steps".to_string())
+                    }
                 }
             }
             _ => Err("only named function calls are supported in pipeline steps".to_string()),
@@ -596,7 +625,11 @@ impl Interpreter {
                             self.assign_variable(&ident.name, val)?;
                         }
                     }
-                    _ => return Err("only simple variable assignment is supported in comptime".to_string()),
+                    _ => {
+                        return Err(
+                            "only simple variable assignment is supported in comptime".to_string()
+                        );
+                    }
                 }
                 Ok(None)
             }
@@ -704,13 +737,8 @@ impl Interpreter {
                         Pattern::Variant(name, bindings) => {
                             if name.name == variant_name {
                                 self.push_scope();
-                                for (binding, field_val) in
-                                    bindings.iter().zip(fields.iter())
-                                {
-                                    self.set_variable(
-                                        &binding.name,
-                                        field_val.clone(),
-                                    );
+                                for (binding, field_val) in bindings.iter().zip(fields.iter()) {
+                                    self.set_variable(&binding.name, field_val.clone());
                                 }
                                 let result = self.exec_block_inner(&arm.body);
                                 self.pop_scope();
@@ -830,7 +858,6 @@ impl Interpreter {
     fn call_builtin(&self, name: &str, args: &[Value]) -> Option<Result<Value, String>> {
         match name {
             // -- I/O (capability-simulated) -----------------------------------
-
             "Stdout.write" => {
                 // Stdout.write(stdout, message) — ignore capability, print message
                 if args.len() < 2 {
@@ -845,7 +872,6 @@ impl Interpreter {
             }
 
             // -- String operations --------------------------------------------
-
             "string.length" | "string.char_count" => {
                 require_args!(name, 1, args);
                 match &args[0] {
@@ -920,9 +946,7 @@ impl Interpreter {
                             .iter()
                             .map(|v| match v {
                                 Value::String(s) => Ok(s.clone()),
-                                _ => Err(format!(
-                                    "{name} requires a list of strings, found {v}"
-                                )),
+                                _ => Err(format!("{name} requires a list of strings, found {v}")),
                             })
                             .collect();
                         match strs {
@@ -930,9 +954,7 @@ impl Interpreter {
                             Err(e) => Some(Err(e)),
                         }
                     }
-                    _ => Some(Err(format!(
-                        "{name} expects a list and a string separator"
-                    ))),
+                    _ => Some(Err(format!("{name} expects a list and a string separator"))),
                 }
             }
 
@@ -957,7 +979,6 @@ impl Interpreter {
             }
 
             // -- String conversions -------------------------------------------
-
             "string.from_int64" => {
                 require_args!(name, 1, args);
                 match &args[0] {
@@ -967,22 +988,20 @@ impl Interpreter {
             }
 
             // -- Int64 conversions --------------------------------------------
-
             "int64.from_string" => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => match s.parse::<i64>() {
                         Ok(n) => Some(Ok(Value::ResultOk(Box::new(Value::Int64(n))))),
-                        Err(_) => Some(Ok(Value::ResultFail(Box::new(Value::String(
-                            format!("int64.from_string: cannot parse '{s}' as int64"),
-                        ))))),
+                        Err(_) => Some(Ok(Value::ResultFail(Box::new(Value::String(format!(
+                            "int64.from_string: cannot parse '{s}' as int64"
+                        )))))),
                     },
                     _ => Some(Err(format!("{name} expects a string argument"))),
                 }
             }
 
             // -- Float64 conversions ------------------------------------------
-
             "float64.from_int64" => {
                 require_args!(name, 1, args);
                 match &args[0] {
@@ -992,7 +1011,6 @@ impl Interpreter {
             }
 
             // -- List operations ----------------------------------------------
-
             "list.new" => {
                 require_args!(name, 0, args);
                 Some(Ok(Value::List(vec![])))
@@ -1029,9 +1047,7 @@ impl Interpreter {
                             Some(Ok(Value::OptionalNone))
                         }
                     }
-                    _ => Some(Err(format!(
-                        "{name} expects a list and an int64 index"
-                    ))),
+                    _ => Some(Err(format!("{name} expects a list and an int64 index"))),
                 }
             }
 
@@ -1074,7 +1090,6 @@ impl Interpreter {
             }
 
             // -- Math operations ----------------------------------------------
-
             "math.abs" => {
                 require_args!(name, 1, args);
                 match &args[0] {
@@ -1087,12 +1102,8 @@ impl Interpreter {
             "math.min" => {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
-                    (Value::Int64(a), Value::Int64(b)) => {
-                        Some(Ok(Value::Int64(*a.min(b))))
-                    }
-                    (Value::Float64(a), Value::Float64(b)) => {
-                        Some(Ok(Value::Float64(a.min(*b))))
-                    }
+                    (Value::Int64(a), Value::Int64(b)) => Some(Ok(Value::Int64(*a.min(b)))),
+                    (Value::Float64(a), Value::Float64(b)) => Some(Ok(Value::Float64(a.min(*b)))),
                     _ => Some(Err(format!(
                         "{name} expects two arguments of the same numeric type"
                     ))),
@@ -1102,12 +1113,8 @@ impl Interpreter {
             "math.max" => {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
-                    (Value::Int64(a), Value::Int64(b)) => {
-                        Some(Ok(Value::Int64(*a.max(b))))
-                    }
-                    (Value::Float64(a), Value::Float64(b)) => {
-                        Some(Ok(Value::Float64(a.max(*b))))
-                    }
+                    (Value::Int64(a), Value::Int64(b)) => Some(Ok(Value::Int64(*a.max(b)))),
+                    (Value::Float64(a), Value::Float64(b)) => Some(Ok(Value::Float64(a.max(*b)))),
                     _ => Some(Err(format!(
                         "{name} expects two arguments of the same numeric type"
                     ))),
@@ -1164,16 +1171,98 @@ impl Interpreter {
         }
     }
 
+    fn construct_struct(
+        &mut self,
+        struct_name: &str,
+        args: &[CallArg],
+        arg_values: Vec<Value>,
+    ) -> Result<Value, String> {
+        let strukt = self
+            .structs
+            .get(struct_name)
+            .ok_or_else(|| format!("undefined struct '{struct_name}'"))?
+            .clone();
+
+        if args.len() > strukt.fields.len() {
+            return Err(format!(
+                "struct '{}' expects {} field argument(s), got {}",
+                struct_name,
+                strukt.fields.len(),
+                args.len()
+            ));
+        }
+
+        let mut fields: Vec<Option<Value>> = vec![None; strukt.fields.len()];
+        for (arg, value) in args.iter().zip(arg_values) {
+            let field_index = if let Some(name) = &arg.name {
+                strukt
+                    .fields
+                    .iter()
+                    .position(|field| field.name.name == name.name)
+                    .ok_or_else(|| format!("struct '{struct_name}' has no field '{}'", name.name))?
+            } else {
+                let Some(index) = fields.iter().position(|value| value.is_none()) else {
+                    return Err(format!(
+                        "struct '{}' expects {} field argument(s), got {}",
+                        struct_name,
+                        strukt.fields.len(),
+                        args.len()
+                    ));
+                };
+                index
+            };
+
+            if fields[field_index].is_some() {
+                return Err(format!(
+                    "struct '{}' received field '{}' more than once",
+                    struct_name, strukt.fields[field_index].name.name
+                ));
+            }
+
+            let type_name = type_expr_name(&strukt.fields[field_index].ty);
+            self.check_refinement(&type_name, &value)?;
+            fields[field_index] = Some(value);
+        }
+
+        for (index, field) in strukt.fields.iter().enumerate() {
+            if fields[index].is_none() {
+                return Err(format!(
+                    "struct '{}' is missing required field '{}'",
+                    struct_name, field.name.name
+                ));
+            }
+        }
+
+        let fields = strukt
+            .fields
+            .iter()
+            .zip(fields.into_iter())
+            .map(|(field, value)| (field.name.name.clone(), value.unwrap()))
+            .collect();
+
+        Ok(Value::Struct {
+            type_name: struct_name.to_string(),
+            fields,
+        })
+    }
+
+    fn eval_value_field_access(&self, value: Value, field_name: &str) -> Result<ExprFlow, String> {
+        match value {
+            Value::Struct { type_name, fields } => fields
+                .into_iter()
+                .find(|(name, _)| name == field_name)
+                .map(|(_, value)| ExprFlow::Value(value))
+                .ok_or_else(|| format!("struct '{type_name}' has no field '{field_name}'")),
+            other => Err(format!("field access is not supported on {other}")),
+        }
+    }
+
     // -- Machine operations -------------------------------------------------
 
     /// Construct a machine value: `MachineName(state_name, fields...)`
     /// The first argument is a bare identifier naming the initial state (NOT
     /// evaluated).  Remaining arguments are evaluated as field values.
-    fn construct_machine(
-        &mut self,
-        machine_name: &str,
-        args: &[CallArg],
-    ) -> Result<Value, String> {
+    fn construct_machine(&mut self, machine_name: &str, args: &[CallArg]) -> Result<Value, String> {
         if args.is_empty() {
             return Err(format!(
                 "machine '{machine_name}' construction requires at least a state name"
@@ -1260,16 +1349,21 @@ impl Interpreter {
         let machine_def = self.machines.get(machine_name).unwrap().clone();
 
         // Validate that the target state exists.
-        if !machine_def.states.iter().any(|s| s.name.name == target_state) {
+        if !machine_def
+            .states
+            .iter()
+            .any(|s| s.name.name == target_state)
+        {
             return Err(format!(
                 "machine '{machine_name}' has no state '{target_state}'"
             ));
         }
 
         // Validate that the transition is allowed.
-        let transition_allowed = machine_def.transitions.iter().any(|t| {
-            t.from.name == current_state && t.to.name == target_state
-        });
+        let transition_allowed = machine_def
+            .transitions
+            .iter()
+            .any(|t| t.from.name == current_state && t.to.name == target_state);
         if !transition_allowed {
             return Err(format!(
                 "machine '{machine_name}': transition from '{current_state}' to '{target_state}' is not allowed"
@@ -1345,9 +1439,7 @@ fn eval_binary_op(left: &Value, op: BinOp, right: &Value) -> Result<Value, Strin
         (Value::Float64(a), BinOp::Modulo, Value::Float64(b)) => Ok(Value::Float64(a % b)),
 
         // -- String concatenation --------------------------------------------
-        (Value::String(a), BinOp::Add, Value::String(b)) => {
-            Ok(Value::String(format!("{a}{b}")))
-        }
+        (Value::String(a), BinOp::Add, Value::String(b)) => Ok(Value::String(format!("{a}{b}"))),
 
         // -- Integer comparisons ---------------------------------------------
         (Value::Int64(a), BinOp::Eq, Value::Int64(b)) => Ok(Value::Bool(a == b)),
@@ -1482,10 +1574,7 @@ mod tests {
 
     /// Helper: create a block from statements.
     fn block(stmts: Vec<Stmt>) -> Block {
-        Block {
-            stmts,
-            span: sp(),
-        }
+        Block { stmts, span: sp() }
     }
 
     /// Helper: create a return statement.
@@ -1527,6 +1616,52 @@ mod tests {
                 .collect(),
             return_type: None,
             body,
+            span: sp(),
+        }
+    }
+
+    /// Helper: create a field access expression.
+    fn field_access(base: Expr, field: &str) -> Expr {
+        Expr::FieldAccess(Box::new(base), ident(field), sp())
+    }
+
+    /// Helper: create a named call argument.
+    fn named_arg(name: &str, value: Expr) -> CallArg {
+        CallArg {
+            name: Some(ident(name)),
+            value,
+            span: sp(),
+        }
+    }
+
+    /// Helper: create a dotted call expression like `Point.total(view point)`.
+    fn dotted_call(module: &str, func_name: &str, args: Vec<Expr>) -> Expr {
+        Expr::Call(
+            Box::new(field_access(var(module), func_name)),
+            args.into_iter()
+                .map(|value| CallArg {
+                    name: None,
+                    value,
+                    span: sp(),
+                })
+                .collect(),
+            sp(),
+        )
+    }
+
+    /// Helper: create a simple struct definition.
+    fn struct_def(name: &str, fields: Vec<(&str, &str)>, methods: Vec<FunctionDef>) -> StructDef {
+        StructDef {
+            name: ident(name),
+            fields: fields
+                .into_iter()
+                .map(|(field_name, field_ty)| FieldDef {
+                    name: ident(field_name),
+                    ty: type_named(field_ty),
+                    span: sp(),
+                })
+                .collect(),
+            methods,
             span: sp(),
         }
     }
@@ -1699,7 +1834,9 @@ mod tests {
     fn string_interpolation_simple() {
         // "hello {name}" with name = "world"
         let mut interp = Interpreter::new();
-        interp.exec_stmt(&var_decl("name", string("world"))).unwrap();
+        interp
+            .exec_stmt(&var_decl("name", string("world")))
+            .unwrap();
         let expr = Expr::StringInterpolation(
             vec![
                 StringPart::Literal("hello ".to_string()),
@@ -1945,7 +2082,9 @@ mod tests {
         );
         interp.register_function(&add_fn);
 
-        let result = interp.eval_expr(&call("add", vec![int(3), int(4)])).unwrap();
+        let result = interp
+            .eval_expr(&call("add", vec![int(3), int(4)]))
+            .unwrap();
         assert_eq!(result, Value::Int64(7));
     }
 
@@ -1977,6 +2116,99 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // User-defined structs
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn struct_constructor_returns_struct_value() {
+        let mut interp = Interpreter::new();
+        interp.register_struct(&struct_def(
+            "Point",
+            vec![("x", "int64"), ("y", "int64")],
+            vec![],
+        ));
+
+        let expr = Expr::Call(
+            Box::new(var("Point")),
+            vec![named_arg("x", int(3)), named_arg("y", int(4))],
+            sp(),
+        );
+
+        assert_eq!(
+            interp.eval_expr(&expr).unwrap(),
+            Value::Struct {
+                type_name: "Point".to_string(),
+                fields: vec![
+                    ("x".to_string(), Value::Int64(3)),
+                    ("y".to_string(), Value::Int64(4)),
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn struct_field_access_reads_registered_field() {
+        let mut interp = Interpreter::new();
+        interp.register_struct(&struct_def(
+            "Point",
+            vec![("x", "int64"), ("y", "int64")],
+            vec![],
+        ));
+
+        let expr = field_access(
+            Expr::Call(
+                Box::new(var("Point")),
+                vec![named_arg("x", int(8)), named_arg("y", int(13))],
+                sp(),
+            ),
+            "x",
+        );
+
+        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(8));
+    }
+
+    #[test]
+    fn struct_method_call_uses_struct_fields() {
+        let mut interp = Interpreter::new();
+        let mut total_method = func_def(
+            "total",
+            vec![("self", "Point")],
+            block(vec![return_stmt(binary(
+                field_access(var("self"), "x"),
+                BinOp::Add,
+                field_access(var("self"), "y"),
+            ))]),
+        );
+        total_method.params[0].view = true;
+
+        interp.register_struct(&struct_def(
+            "Point",
+            vec![("x", "int64"), ("y", "int64")],
+            vec![total_method],
+        ));
+        interp
+            .exec_stmt(&Stmt::VarDecl(VarDecl {
+                mutable: false,
+                ty: type_named("Point"),
+                name: ident("point"),
+                value: Expr::Call(
+                    Box::new(var("Point")),
+                    vec![named_arg("x", int(10)), named_arg("y", int(20))],
+                    sp(),
+                ),
+                span: sp(),
+            }))
+            .unwrap();
+
+        let expr = dotted_call(
+            "Point",
+            "total",
+            vec![Expr::View(Box::new(var("point")), sp())],
+        );
+        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(30));
+    }
+
+    // -----------------------------------------------------------------------
     // Nested function calls
     // -----------------------------------------------------------------------
 
@@ -2003,7 +2235,10 @@ mod tests {
         interp.register_function(&add_fn);
 
         // add(double(3), double(5)) == 16
-        let expr = call("add", vec![call("double", vec![int(3)]), call("double", vec![int(5)])]);
+        let expr = call(
+            "add",
+            vec![call("double", vec![int(3)]), call("double", vec![int(5)])],
+        );
         assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(16));
     }
 
@@ -2035,9 +2270,7 @@ mod tests {
         );
         interp.register_function(&factorial_fn);
 
-        let result = interp
-            .eval_expr(&call("factorial", vec![int(5)]))
-            .unwrap();
+        let result = interp.eval_expr(&call("factorial", vec![int(5)])).unwrap();
         assert_eq!(result, Value::Int64(120));
     }
 
@@ -2060,10 +2293,7 @@ mod tests {
     fn assert_failing() {
         let mut interp = Interpreter::new();
         // 2 + 2 = 4, which is not a boolean — type error
-        let stmt = assert_stmt(
-            binary(int(2), BinOp::Add, int(2)),
-            None,
-        );
+        let stmt = assert_stmt(binary(int(2), BinOp::Add, int(2)), None);
         assert!(interp.exec_stmt(&stmt).is_err());
     }
 
@@ -2177,9 +2407,7 @@ mod tests {
         //     rect(w, h):
         //         result = w + h
         let mut interp = Interpreter::new();
-        interp
-            .exec_stmt(&var_decl("result", int(0)))
-            .unwrap();
+        interp.exec_stmt(&var_decl("result", int(0))).unwrap();
         interp.set_variable(
             "shape",
             Value::Enum {
@@ -2197,10 +2425,7 @@ mod tests {
                     vec![assign("result", var("r"))],
                 ),
                 (
-                    Pattern::Variant(
-                        ident("rect"),
-                        vec![ident("w"), ident("h")],
-                    ),
+                    Pattern::Variant(ident("rect"), vec![ident("w"), ident("h")]),
                     vec![assign("result", binary(var("w"), BinOp::Add, var("h")))],
                 ),
             ],
@@ -2218,9 +2443,7 @@ mod tests {
         //     rect(w, h):
         //         result = w + h
         let mut interp = Interpreter::new();
-        interp
-            .exec_stmt(&var_decl("result", int(0)))
-            .unwrap();
+        interp.exec_stmt(&var_decl("result", int(0))).unwrap();
         interp.set_variable(
             "shape",
             Value::Enum {
@@ -2238,10 +2461,7 @@ mod tests {
                     vec![assign("result", var("r"))],
                 ),
                 (
-                    Pattern::Variant(
-                        ident("rect"),
-                        vec![ident("w"), ident("h")],
-                    ),
+                    Pattern::Variant(ident("rect"), vec![ident("w"), ident("h")]),
                     vec![assign("result", binary(var("w"), BinOp::Add, var("h")))],
                 ),
             ],
@@ -2296,10 +2516,7 @@ mod tests {
                     Pattern::Ident(ident("red")),
                     vec![return_stmt(string("red"))],
                 ),
-                (
-                    Pattern::Other(sp()),
-                    vec![return_stmt(string("unknown"))],
-                ),
+                (Pattern::Other(sp()), vec![return_stmt(string("unknown"))]),
             ],
         )]);
 
@@ -2397,11 +2614,7 @@ mod builtin_tests {
     #[test]
     fn builtin_stdout_write() {
         let mut interp = Interpreter::new();
-        let expr = dotted_call(
-            "Stdout",
-            "write",
-            vec![string("fake_cap"), string("hello")],
-        );
+        let expr = dotted_call("Stdout", "write", vec![string("fake_cap"), string("hello")]);
         let result = interp.eval_expr(&expr).unwrap();
         assert_eq!(result, Value::Nothing);
     }
@@ -2771,20 +2984,12 @@ mod builtin_tests {
         let initial = string("  hello  ");
         let steps = vec![
             PipelineStep {
-                function: Expr::FieldAccess(
-                    Box::new(var("string")),
-                    ident("trim"),
-                    sp(),
-                ),
+                function: Expr::FieldAccess(Box::new(var("string")), ident("trim"), sp()),
                 extra_args: vec![],
                 span: sp(),
             },
             PipelineStep {
-                function: Expr::FieldAccess(
-                    Box::new(var("string")),
-                    ident("upper"),
-                    sp(),
-                ),
+                function: Expr::FieldAccess(Box::new(var("string")), ident("upper"), sp()),
                 extra_args: vec![],
                 span: sp(),
             },
@@ -2800,11 +3005,7 @@ mod builtin_tests {
         let mut interp = Interpreter::new();
         let initial = string("hello world");
         let steps = vec![PipelineStep {
-            function: Expr::FieldAccess(
-                Box::new(var("string")),
-                ident("replace"),
-                sp(),
-            ),
+            function: Expr::FieldAccess(Box::new(var("string")), ident("replace"), sp()),
             extra_args: vec![
                 CallArg {
                     name: None,

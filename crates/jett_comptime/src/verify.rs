@@ -1,6 +1,8 @@
 use jett_common::Span;
 use jett_diagnostics::Diagnostic;
-use jett_parser::ast::{FunctionDef, GivenDecl, Item, Module, PropertyBlock, TypeExpr, VerifyBlock};
+use jett_parser::ast::{
+    FunctionDef, GivenDecl, Item, Module, PropertyBlock, TypeExpr, VerifyBlock,
+};
 
 use crate::interpreter::Interpreter;
 use crate::value::Value;
@@ -101,6 +103,9 @@ pub fn run_verify_blocks_detailed(module: &Module) -> Vec<VerifyResult> {
                     legacy_verify_functions.push(func.clone());
                 }
             }
+            Item::Struct(strukt) => {
+                interp.register_struct(strukt);
+            }
             Item::Verify(vb) => {
                 verify_blocks.push(vb.clone());
             }
@@ -175,10 +180,7 @@ pub fn run_verify_blocks_detailed(module: &Module) -> Vec<VerifyResult> {
 }
 
 /// Evaluate a single pure function at compile time with the given arguments.
-pub fn eval_function(
-    func: &FunctionDef,
-    args: Vec<Value>,
-) -> Result<Value, ComptimeError> {
+pub fn eval_function(func: &FunctionDef, args: Vec<Value>) -> Result<Value, ComptimeError> {
     let mut interp = Interpreter::new();
     interp.register_function(func);
     interp
@@ -269,11 +271,7 @@ fn run_property_block(interp: &mut Interpreter, pb: &PropertyBlock) -> VerifyRes
             return VerifyResult {
                 name: pb.name.name.clone(),
                 passed: false,
-                error: Some(format!(
-                    "{} (input: {})",
-                    msg,
-                    input_desc.join(", ")
-                )),
+                error: Some(format!("{} (input: {})", msg, input_desc.join(", "))),
                 iterations: Some(iteration + 1),
                 is_property: true,
             };
@@ -327,21 +325,9 @@ fn generate_values_for_type(ty: &TypeExpr) -> Vec<Value> {
                         TypeExpr::Named(inner) if inner.name == "int64" => vec![
                             Value::List(vec![]),
                             Value::List(vec![Value::Int64(1)]),
-                            Value::List(vec![
-                                Value::Int64(3),
-                                Value::Int64(1),
-                                Value::Int64(2),
-                            ]),
-                            Value::List(vec![
-                                Value::Int64(1),
-                                Value::Int64(1),
-                                Value::Int64(1),
-                            ]),
-                            Value::List(vec![
-                                Value::Int64(-5),
-                                Value::Int64(0),
-                                Value::Int64(5),
-                            ]),
+                            Value::List(vec![Value::Int64(3), Value::Int64(1), Value::Int64(2)]),
+                            Value::List(vec![Value::Int64(1), Value::Int64(1), Value::Int64(1)]),
+                            Value::List(vec![Value::Int64(-5), Value::Int64(0), Value::Int64(5)]),
                         ],
                         _ => vec![], // unsupported inner type
                     }
@@ -405,10 +391,7 @@ mod tests {
     }
 
     fn block(stmts: Vec<Stmt>) -> Block {
-        Block {
-            stmts,
-            span: sp(),
-        }
+        Block { stmts, span: sp() }
     }
 
     fn return_stmt(value: Expr) -> Stmt {
@@ -441,6 +424,48 @@ mod tests {
                 .collect(),
             return_type: None,
             body,
+            span: sp(),
+        }
+    }
+
+    fn field_access(base: Expr, field: &str) -> Expr {
+        Expr::FieldAccess(Box::new(base), ident(field), sp())
+    }
+
+    fn named_arg(name: &str, value: Expr) -> CallArg {
+        CallArg {
+            name: Some(ident(name)),
+            value,
+            span: sp(),
+        }
+    }
+
+    fn dotted_call(module: &str, func_name: &str, args: Vec<Expr>) -> Expr {
+        Expr::Call(
+            Box::new(field_access(var(module), func_name)),
+            args.into_iter()
+                .map(|value| CallArg {
+                    name: None,
+                    value,
+                    span: sp(),
+                })
+                .collect(),
+            sp(),
+        )
+    }
+
+    fn struct_def(name: &str, fields: Vec<(&str, &str)>, methods: Vec<FunctionDef>) -> StructDef {
+        StructDef {
+            name: ident(name),
+            fields: fields
+                .into_iter()
+                .map(|(field_name, field_ty)| FieldDef {
+                    name: ident(field_name),
+                    ty: type_named(field_ty),
+                    span: sp(),
+                })
+                .collect(),
+            methods,
             span: sp(),
         }
     }
@@ -487,7 +512,9 @@ mod tests {
         let verify_fn = func_def(
             "test_verify",
             vec![],
-            block(vec![assert_stmt_ast(binary(int(2), BinOp::Add, int(3)).pipe_eq(int(5)))]),
+            block(vec![assert_stmt_ast(
+                binary(int(2), BinOp::Add, int(3)).pipe_eq(int(5)),
+            )]),
         );
         let module = Module {
             items: vec![Item::Function(verify_fn)],
@@ -538,14 +565,15 @@ mod tests {
         let verify_fn = func_def(
             "test_verify",
             vec![],
-            block(vec![assert_stmt_ast(binary(call_double, BinOp::Eq, int(10)))]),
+            block(vec![assert_stmt_ast(binary(
+                call_double,
+                BinOp::Eq,
+                int(10),
+            ))]),
         );
 
         let module = Module {
-            items: vec![
-                Item::Function(double_fn),
-                Item::Function(verify_fn),
-            ],
+            items: vec![Item::Function(double_fn), Item::Function(verify_fn)],
             span: sp(),
         };
         let diags = run_verify_blocks(&module);
@@ -590,8 +618,16 @@ mod tests {
         let call_add = Expr::Call(
             Box::new(var("add")),
             vec![
-                CallArg { name: None, value: int(2), span: sp() },
-                CallArg { name: None, value: int(3), span: sp() },
+                CallArg {
+                    name: None,
+                    value: int(2),
+                    span: sp(),
+                },
+                CallArg {
+                    name: None,
+                    value: int(3),
+                    span: sp(),
+                },
             ],
             sp(),
         );
@@ -625,8 +661,16 @@ mod tests {
         let call_add = Expr::Call(
             Box::new(var("add")),
             vec![
-                CallArg { name: None, value: int(2), span: sp() },
-                CallArg { name: None, value: int(3), span: sp() },
+                CallArg {
+                    name: None,
+                    value: int(2),
+                    span: sp(),
+                },
+                CallArg {
+                    name: None,
+                    value: int(3),
+                    span: sp(),
+                },
             ],
             sp(),
         );
@@ -644,6 +688,58 @@ mod tests {
         assert!(!results[0].passed, "expected verify block to fail");
         assert_eq!(results[0].name, "add");
         assert!(results[0].error.is_some());
+    }
+
+    #[test]
+    fn verify_block_can_construct_and_call_struct_methods() {
+        let mut total_method = func_def(
+            "total",
+            vec![("self", "Point")],
+            block(vec![return_stmt(binary(
+                field_access(var("self"), "x"),
+                BinOp::Add,
+                field_access(var("self"), "y"),
+            ))]),
+        );
+        total_method.params[0].view = true;
+
+        let point_struct = struct_def(
+            "Point",
+            vec![("x", "int64"), ("y", "int64")],
+            vec![total_method],
+        );
+
+        let point_ctor = Expr::Call(
+            Box::new(var("Point")),
+            vec![named_arg("x", int(2)), named_arg("y", int(3))],
+            sp(),
+        );
+        let point_total = dotted_call(
+            "Point",
+            "total",
+            vec![Expr::View(Box::new(var("point")), sp())],
+        );
+        let vb = verify_block_item(
+            "point_total",
+            block(vec![
+                var_decl_stmt("Point", "point", point_ctor),
+                assert_stmt_ast(binary(field_access(var("point"), "x"), BinOp::Eq, int(2))),
+                assert_stmt_ast(binary(point_total, BinOp::Eq, int(5))),
+            ]),
+        );
+
+        let module = Module {
+            items: vec![Item::Struct(point_struct), Item::Verify(vb)],
+            span: sp(),
+        };
+        let results = run_verify_blocks_detailed(&module);
+        assert_eq!(results.len(), 1);
+        assert!(
+            results[0].passed,
+            "expected struct verify block to pass: {:?}",
+            results[0].error
+        );
+        assert_eq!(results[0].name, "point_total");
     }
 
     // -----------------------------------------------------------------------
@@ -696,7 +792,11 @@ mod tests {
         };
         let results = run_verify_blocks_detailed(&module);
         assert_eq!(results.len(), 1);
-        assert!(results[0].passed, "expected verify block to pass: {:?}", results[0].error);
+        assert!(
+            results[0].passed,
+            "expected verify block to pass: {:?}",
+            results[0].error
+        );
     }
 
     #[test]
@@ -711,12 +811,7 @@ mod tests {
         );
         let port_alias = type_alias("Port", "int64", Some(constraint));
 
-        let vb = verify_block_item(
-            "port_test",
-            block(vec![
-                var_decl_stmt("Port", "p", int(0)),
-            ]),
-        );
+        let vb = verify_block_item("port_test", block(vec![var_decl_stmt("Port", "p", int(0))]));
 
         let module = Module {
             items: vec![Item::TypeAlias(port_alias), Item::Verify(vb)],
@@ -724,7 +819,10 @@ mod tests {
         };
         let results = run_verify_blocks_detailed(&module);
         assert_eq!(results.len(), 1);
-        assert!(!results[0].passed, "expected verify block to fail for invalid port");
+        assert!(
+            !results[0].passed,
+            "expected verify block to fail for invalid port"
+        );
         assert!(
             results[0].error.as_ref().unwrap().contains("refinement"),
             "error should mention refinement: {:?}",
@@ -790,7 +888,11 @@ mod tests {
         };
         let results = run_verify_blocks_detailed(&module);
         assert_eq!(results.len(), 1);
-        assert!(results[0].passed, "expected coarsen test to pass: {:?}", results[0].error);
+        assert!(
+            results[0].passed,
+            "expected coarsen test to pass: {:?}",
+            results[0].error
+        );
     }
 
     #[test]
@@ -815,7 +917,11 @@ mod tests {
         };
         let results = run_verify_blocks_detailed(&module);
         assert_eq!(results.len(), 1);
-        assert!(results[0].passed, "expected simple alias to pass: {:?}", results[0].error);
+        assert!(
+            results[0].passed,
+            "expected simple alias to pass: {:?}",
+            results[0].error
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1040,10 +1146,7 @@ mod tests {
         };
         let results = run_verify_blocks_detailed(&module);
         assert_eq!(results.len(), 1);
-        assert!(
-            !results[0].passed,
-            "expected invalid transition to fail"
-        );
+        assert!(!results[0].passed, "expected invalid transition to fail");
         let err = results[0].error.as_ref().unwrap();
         assert!(
             err.contains("not allowed"),
@@ -1077,11 +1180,7 @@ mod tests {
             block(vec![
                 var_decl_stmt("UserAuth", "session", construct),
                 // assert NOT(session at logged_in)
-                assert_stmt_ast(Expr::Unary(
-                    UnaryOp::Not,
-                    Box::new(at_check),
-                    sp(),
-                )),
+                assert_stmt_ast(Expr::Unary(UnaryOp::Not, Box::new(at_check), sp())),
             ]),
         );
 
@@ -1140,7 +1239,11 @@ mod tests {
         };
         let results = run_verify_blocks_detailed(&module);
         assert_eq!(results.len(), 1);
-        assert!(results[0].passed, "expected property to pass: {:?}", results[0].error);
+        assert!(
+            results[0].passed,
+            "expected property to pass: {:?}",
+            results[0].error
+        );
         assert!(results[0].is_property);
         assert_eq!(results[0].iterations, Some(100));
     }
@@ -1164,20 +1267,35 @@ mod tests {
                     ident("length"),
                     sp(),
                 )),
-                vec![CallArg { name: None, value: var("items"), span: sp() }],
+                vec![CallArg {
+                    name: None,
+                    value: var("items"),
+                    span: sp(),
+                }],
                 sp(),
             ))]),
         );
 
         let pb = property_block_item(
             "list_length_non_negative",
-            vec![given_decl("items", type_generic("list", vec![type_named("int64")]))],
+            vec![given_decl(
+                "items",
+                type_generic("list", vec![type_named("int64")]),
+            )],
             block(vec![
-                var_decl_stmt("int64", "len", Expr::Call(
-                    Box::new(var("list_length")),
-                    vec![CallArg { name: None, value: var("items"), span: sp() }],
-                    sp(),
-                )),
+                var_decl_stmt(
+                    "int64",
+                    "len",
+                    Expr::Call(
+                        Box::new(var("list_length")),
+                        vec![CallArg {
+                            name: None,
+                            value: var("items"),
+                            span: sp(),
+                        }],
+                        sp(),
+                    ),
+                ),
                 assert_stmt_ast(binary(var("len"), BinOp::GtEq, int(0))),
             ]),
         );
@@ -1188,7 +1306,11 @@ mod tests {
         };
         let results = run_verify_blocks_detailed(&module);
         assert_eq!(results.len(), 1);
-        assert!(results[0].passed, "expected property to pass: {:?}", results[0].error);
+        assert!(
+            results[0].passed,
+            "expected property to pass: {:?}",
+            results[0].error
+        );
         assert!(results[0].is_property);
     }
 
@@ -1214,7 +1336,10 @@ mod tests {
         assert!(!results[0].passed, "expected property to fail");
         assert!(results[0].is_property);
         let err = results[0].error.as_ref().unwrap();
-        assert!(err.contains("input:"), "error should contain input values: {err}");
+        assert!(
+            err.contains("input:"),
+            "error should contain input values: {err}"
+        );
     }
 
     #[test]
@@ -1241,11 +1366,19 @@ mod tests {
             "identity_round_trip",
             vec![given_decl("x", type_named("int64"))],
             block(vec![
-                var_decl_stmt("int64", "y", Expr::Call(
-                    Box::new(var("identity")),
-                    vec![CallArg { name: None, value: var("x"), span: sp() }],
-                    sp(),
-                )),
+                var_decl_stmt(
+                    "int64",
+                    "y",
+                    Expr::Call(
+                        Box::new(var("identity")),
+                        vec![CallArg {
+                            name: None,
+                            value: var("x"),
+                            span: sp(),
+                        }],
+                        sp(),
+                    ),
+                ),
                 assert_stmt_ast(binary(var("y"), BinOp::Eq, var("x"))),
             ]),
         );
@@ -1256,14 +1389,18 @@ mod tests {
         };
         let results = run_verify_blocks_detailed(&module);
         assert_eq!(results.len(), 1);
-        assert!(results[0].passed, "expected property to pass: {:?}", results[0].error);
+        assert!(
+            results[0].passed,
+            "expected property to pass: {:?}",
+            results[0].error
+        );
         assert!(results[0].is_property);
         assert_eq!(results[0].iterations, Some(100));
     }
 
     #[test]
     fn property_and_verify_blocks_coexist() {
-    #[ignore]
+        #[ignore]
         // function is_non_negative(x: int64) returns bool:
         //     return x >= 0
         //
@@ -1292,7 +1429,11 @@ mod tests {
         let call_nn = |arg: Expr| -> Expr {
             Expr::Call(
                 Box::new(var("is_non_negative")),
-                vec![CallArg { name: None, value: arg, span: sp() }],
+                vec![CallArg {
+                    name: None,
+                    value: arg,
+                    span: sp(),
+                }],
                 sp(),
             )
         };
@@ -1342,7 +1483,11 @@ mod tests {
 
         // Second result is the property block
         assert!(results[1].is_property);
-        assert!(results[1].passed, "property block should pass: {:?}", results[1].error);
+        assert!(
+            results[1].passed,
+            "property block should pass: {:?}",
+            results[1].error
+        );
         assert_eq!(results[1].iterations, Some(100));
     }
 }

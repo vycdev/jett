@@ -23,6 +23,11 @@ pub enum Value {
     OptionalNone,
     /// The `nothing` value (Jett's unit type).
     Nothing,
+    /// A user-defined struct instance: `Point(x: 1, y: 2)`.
+    Struct {
+        type_name: String,
+        fields: Vec<(String, Value)>,
+    },
     /// An enum instance: `Color.red` or `Shape.circle(5.0)`.
     Enum {
         type_name: String,
@@ -61,6 +66,16 @@ impl fmt::Display for Value {
             Value::OptionalSome(value) => write!(f, "some({value})"),
             Value::OptionalNone => write!(f, "none"),
             Value::Nothing => write!(f, "nothing"),
+            Value::Struct { type_name, fields } => {
+                write!(f, "{type_name}(")?;
+                for (i, (name, value)) in fields.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{name}: {value}")?;
+                }
+                write!(f, ")")
+            }
             Value::Enum {
                 type_name,
                 variant,
