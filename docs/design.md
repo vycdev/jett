@@ -456,8 +456,10 @@ function parse_config(raw: JsonString) returns result[Config, string]:
 **Refinement types with struct fields:**
 
 ```
+type NonEmptyName = string where string.char_count(value) > 0
+
 struct User:
-    name: string where string.char_count(value) > 0
+    name: NonEmptyName
     email: Email
     age: Age
 
