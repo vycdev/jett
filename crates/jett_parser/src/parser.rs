@@ -167,6 +167,7 @@ impl<'src> Parser<'src> {
         match self.peek() {
             TokenKind::Namespace => Some(Item::Namespace(self.parse_namespace())),
             TokenKind::Function => Some(Item::Function(self.parse_function())),
+            TokenKind::Mutual => Some(Item::Mutual(self.parse_mutual_block())),
             TokenKind::Struct => Some(Item::Struct(self.parse_struct())),
             TokenKind::Enum => Some(Item::Enum(self.parse_enum())),
             TokenKind::Machine => Some(Item::Machine(self.parse_machine())),
@@ -179,7 +180,7 @@ impl<'src> Parser<'src> {
             _ => {
                 let tok = self.peek_token().clone();
                 self.error(
-                    format!("expected item (namespace, function, struct, enum, machine, type, property, or variable), found {:?}", tok.kind),
+                    format!("expected item (namespace, function, mutual, struct, enum, machine, type, property, or variable), found {:?}", tok.kind),
                     tok.span,
                 );
                 None
@@ -295,6 +296,21 @@ impl<'src> Parser<'src> {
 
     fn parse_function(&mut self) -> FunctionDef {
         let kw = self.expect(TokenKind::Function);
+        let decl = self.parse_function_decl_rest(kw.span);
+        self.expect(TokenKind::Colon);
+        let body = self.parse_block();
+        let end_span = body.span;
+
+        FunctionDef {
+            span: kw.span.merge(end_span),
+            name: decl.name,
+            params: decl.params,
+            return_type: decl.return_type,
+            body,
+        }
+    }
+
+    fn parse_function_decl_rest(&mut self, start_span: Span) -> FunctionDecl {
         let name = self.parse_ident();
         self.expect(TokenKind::LParen);
         let params = self.parse_params();
@@ -306,16 +322,40 @@ impl<'src> Parser<'src> {
             None
         };
 
-        self.expect(TokenKind::Colon);
-        let body = self.parse_block();
-        let end_span = body.span;
+        let end_span = return_type.as_ref().map_or(name.span, TypeExpr::span);
 
-        FunctionDef {
-            span: kw.span.merge(end_span),
+        FunctionDecl {
+            span: start_span.merge(end_span),
             name,
             params,
             return_type,
-            body,
+        }
+    }
+
+    fn parse_mutual_block(&mut self) -> MutualBlock {
+        let kw = self.expect(TokenKind::Mutual);
+        self.expect(TokenKind::Colon);
+
+        self.skip_newlines();
+        let indent_tok = self.expect(TokenKind::Indent);
+        let mut declarations = Vec::new();
+        let mut last_span = indent_tok.span;
+
+        self.skip_newlines();
+        while self.peek() != TokenKind::Dedent && self.peek() != TokenKind::Eof {
+            let func_kw = self.expect(TokenKind::Function);
+            let decl = self.parse_function_decl_rest(func_kw.span);
+            last_span = decl.span;
+            declarations.push(decl);
+            self.skip_newlines();
+        }
+        if self.peek() == TokenKind::Dedent {
+            last_span = self.advance().span;
+        }
+
+        MutualBlock {
+            declarations,
+            span: kw.span.merge(last_span),
         }
     }
 
@@ -1915,6 +1955,29 @@ function countdown(mutable count: int64) returns nothing:
                 }
             }
             other => panic!("expected Function, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_mutual_block() {
+        let src = "\
+mutual:
+    function is_even(n: int64) returns bool
+    function is_odd(n: int64) returns bool
+";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        match &result.module.items[0] {
+            Item::Mutual(block) => {
+                assert_eq!(block.declarations.len(), 2);
+                assert_eq!(block.declarations[0].name.name, "is_even");
+                assert_eq!(block.declarations[1].name.name, "is_odd");
+                assert!(matches!(
+                    block.declarations[0].return_type,
+                    Some(TypeExpr::Named(ref ident)) if ident.name == "bool"
+                ));
+            }
+            other => panic!("expected Mutual, got {:?}", other),
         }
     }
 

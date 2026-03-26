@@ -336,6 +336,13 @@ impl<'a> TypeChecker<'a> {
         // and build the purity map.
         for item in &module.items {
             match item {
+                Item::Mutual(block) => {
+                    for decl in &block.declarations {
+                        self.register_function_decl_sig(decl);
+                        let is_pure = Self::params_are_pure(&decl.params);
+                        self.purity_map.insert(decl.name.name.clone(), is_pure);
+                    }
+                }
                 Item::Function(func) => {
                     self.register_function_sig(func);
                     let is_pure = Self::function_is_pure(func);
@@ -351,6 +358,8 @@ impl<'a> TypeChecker<'a> {
                 _ => {}
             }
         }
+
+        self.validate_mutual_blocks(module);
 
         // Fourth pass: type-check function bodies, methods, and verify blocks.
         for item in &module.items {
@@ -370,7 +379,11 @@ impl<'a> TypeChecker<'a> {
 
     /// Returns true if a function has no capability-type parameters (i.e. is pure).
     fn function_is_pure(func: &FunctionDef) -> bool {
-        !func.params.iter().any(|p| capability::type_expr_is_capability(&p.ty))
+        Self::params_are_pure(&func.params)
+    }
+
+    fn params_are_pure(params: &[ast::Param]) -> bool {
+        !params.iter().any(|p| capability::type_expr_is_capability(&p.ty))
     }
 
     fn predeclare_struct(&mut self, def: &ast::StructDef) {
@@ -485,9 +498,35 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn function_decl_signature(&mut self, decl: &ast::FunctionDecl) -> (Vec<TypeId>, TypeId) {
+        let params = decl
+            .params
+            .iter()
+            .map(|p| self.resolve_type_expr(&p.ty))
+            .collect();
+        let return_type = decl
+            .return_type
+            .as_ref()
+            .map(|t| self.resolve_type_expr(t))
+            .unwrap_or(TypeInterner::NOTHING);
+        (params, return_type)
+    }
+
     // ------------------------------------------------------------------
     // Function registration (builds FunctionType + binds to DefId)
     // ------------------------------------------------------------------
+
+    fn register_function_decl_sig(&mut self, decl: &ast::FunctionDecl) {
+        let (param_types, return_type) = self.function_decl_signature(decl);
+        let fn_type = self.interner.intern(Type::Function {
+            params: param_types,
+            return_type,
+        });
+
+        if let Some(def_id) = self.declaration_def_id(decl.name.span) {
+            self.type_env.insert(def_id, fn_type);
+        }
+    }
 
     fn register_function_sig(&mut self, func: &FunctionDef) {
         let param_types: Vec<TypeId> = func
@@ -511,6 +550,76 @@ impl<'a> TypeChecker<'a> {
         if let Some(def_id) = self.declaration_def_id(func.name.span) {
             self.type_env.insert(def_id, fn_type);
         }
+    }
+
+    fn validate_mutual_blocks(&mut self, module: &Module) {
+        let function_defs: HashMap<&str, &FunctionDef> = module
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Function(func) => Some((func.name.name.as_str(), func)),
+                _ => None,
+            })
+            .collect();
+
+        for item in &module.items {
+            let Item::Mutual(block) = item else {
+                continue;
+            };
+
+            for decl in &block.declarations {
+                let Some(func) = function_defs.get(decl.name.name.as_str()).copied() else {
+                    self.sink.emit(errors::mutual_function_missing_definition(
+                        &decl.name.name,
+                        decl.name.span,
+                    ));
+                    continue;
+                };
+
+                if !self.function_matches_decl(func, decl) {
+                    self.sink.emit(errors::mutual_signature_mismatch(
+                        &decl.name.name,
+                        func.name.span,
+                    ));
+                }
+            }
+        }
+    }
+
+    fn function_matches_decl(&mut self, func: &FunctionDef, decl: &ast::FunctionDecl) -> bool {
+        if func.params.len() != decl.params.len() {
+            return false;
+        }
+
+        for (func_param, decl_param) in func.params.iter().zip(decl.params.iter()) {
+            if func_param.name.name != decl_param.name.name
+                || func_param.view != decl_param.view
+                || func_param.mutable != decl_param.mutable
+            {
+                return false;
+            }
+
+            let func_ty = self.resolve_type_expr(&func_param.ty);
+            let decl_ty = self.resolve_type_expr(&decl_param.ty);
+            if !self.types_compatible(decl_ty, func_ty) || !self.types_compatible(func_ty, decl_ty)
+            {
+                return false;
+            }
+        }
+
+        let func_return = func
+            .return_type
+            .as_ref()
+            .map(|ty| self.resolve_type_expr(ty))
+            .unwrap_or(TypeInterner::NOTHING);
+        let decl_return = decl
+            .return_type
+            .as_ref()
+            .map(|ty| self.resolve_type_expr(ty))
+            .unwrap_or(TypeInterner::NOTHING);
+
+        self.types_compatible(decl_return, func_return)
+            && self.types_compatible(func_return, decl_return)
     }
 
     // ------------------------------------------------------------------
@@ -3178,6 +3287,72 @@ mod tests {
             purity_errors.is_empty(),
             "unexpected purity errors: {:?}",
             purity_errors
+        );
+    }
+
+    #[test]
+    fn mutual_block_allows_mutual_recursion() {
+        let result = check_source_result(
+            "\
+mutual:
+    function is_even(n: int64) returns bool
+    function is_odd(n: int64) returns bool
+
+function is_even(n: int64) returns bool:
+    if n == 0:
+        return true
+    return is_odd(n - 1)
+
+function is_odd(n: int64) returns bool:
+    if n == 0:
+        return false
+    return is_even(n - 1)
+",
+        );
+
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == jett_diagnostics::Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+    }
+
+    #[test]
+    fn mutual_block_missing_definition_reports_error() {
+        let errors = check_source_errors(
+            "\
+mutual:
+    function is_even(n: int64) returns bool
+
+function main() returns nothing:
+    return nothing
+",
+        );
+
+        assert!(
+            errors.iter().any(|d| d.code.code() == 325),
+            "expected E0325, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn mutual_block_signature_mismatch_reports_error() {
+        let errors = check_source_errors(
+            "\
+mutual:
+    function is_even(n: int64) returns bool
+
+function is_even(value: string) returns bool:
+    return true
+",
+        );
+
+        assert!(
+            errors.iter().any(|d| d.code.code() == 326),
+            "expected E0326, got: {:?}",
+            errors
         );
     }
 

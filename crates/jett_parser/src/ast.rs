@@ -16,6 +16,7 @@ pub struct Module {
 pub enum Item {
     Namespace(NamespaceDecl),
     Function(FunctionDef),
+    Mutual(MutualBlock),
     Struct(StructDef),
     Enum(EnumDef),
     Machine(MachineDef),
@@ -93,6 +94,20 @@ pub struct FunctionDef {
     pub params: Vec<Param>,
     pub return_type: Option<TypeExpr>,
     pub body: Block,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct MutualBlock {
+    pub declarations: Vec<FunctionDecl>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct FunctionDecl {
+    pub name: Ident,
+    pub params: Vec<Param>,
+    pub return_type: Option<TypeExpr>,
     pub span: Span,
 }
 

@@ -250,6 +250,24 @@ pub fn non_exhaustive_match(enum_name: &str, missing_variant: &str, span: Span) 
     )
 }
 
+/// E0325: Mutual declaration has no corresponding function body.
+pub fn mutual_function_missing_definition(name: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        325,
+        format!("mutual declaration for `{name}` has no matching function definition"),
+        span,
+    )
+}
+
+/// E0326: Function definition does not match its mutual declaration.
+pub fn mutual_signature_mismatch(name: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        326,
+        format!("function `{name}` does not match its `mutual` declaration"),
+        span,
+    )
+}
+
 // Diagnostic codes E0500–E0599 are reserved for capability / purity checking.
 
 /// E0500: Pure function calls impure function.

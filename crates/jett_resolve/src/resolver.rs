@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use jett_common::Span;
 use jett_diagnostics::{Diagnostic, DiagnosticSink};
 use jett_parser::ast::{
-    AssertStmt, AssignStmt, Block, CallArg, Expr, ExprStmt, ForStmt, FunctionDef, IfStmt, Item,
+    AssertStmt, AssignStmt, Block, CallArg, Expr, ExprStmt, ForStmt, FunctionDecl, FunctionDef, IfStmt, Item,
     MatchStmt, Module, Pattern, ReturnStmt, Stmt, StringPart, TypeExpr, UseDecl, VarDecl,
     WhileStmt,
 };
@@ -54,6 +54,10 @@ struct Resolver {
     /// at which it was declared so that pass-2 can detect forward references.
     /// The map goes name -> (DefId, declaration order index).
     top_level_order: HashMap<String, (DefId, usize)>,
+    /// Functions predeclared by a `mutual` block: name -> declaration span.
+    mutual_declarations: HashMap<String, Span>,
+    /// Functions from `mutual` blocks that already have a real body definition.
+    mutual_definitions: HashMap<String, Span>,
 }
 
 impl Resolver {
@@ -92,6 +96,8 @@ impl Resolver {
             use_defs: HashSet::new(),
             var_defs: HashSet::new(),
             top_level_order: HashMap::new(),
+            mutual_declarations: HashMap::new(),
+            mutual_definitions: HashMap::new(),
         }
     }
 
@@ -123,12 +129,21 @@ impl Resolver {
                     );
                 }
                 Item::Function(func) => {
-                    self.declare_top_level(
-                        &func.name.name,
-                        DefKind::Function,
-                        func.name.span,
-                        index,
-                    );
+                    self.declare_function_top_level(func, index);
+                }
+                Item::Mutual(block) => {
+                    for decl in &block.declarations {
+                        if let Some(def_id) = self.declare_top_level(
+                            &decl.name.name,
+                            DefKind::Function,
+                            decl.name.span,
+                            index,
+                        ) {
+                            self.resolutions.insert(decl.name.span, def_id);
+                            self.mutual_declarations
+                                .insert(decl.name.name.clone(), decl.name.span);
+                        }
+                    }
                 }
                 Item::Struct(s) => {
                     self.declare_top_level(
@@ -179,6 +194,28 @@ impl Resolver {
         }
     }
 
+    fn declare_function_top_level(&mut self, func: &FunctionDef, order: usize) {
+        if self.mutual_declarations.contains_key(&func.name.name) {
+            if let Some(prev_span) = self
+                .mutual_definitions
+                .insert(func.name.name.clone(), func.name.span)
+            {
+                self.sink
+                    .emit(errors::duplicate_definition(&func.name.name, func.name.span, prev_span));
+                return;
+            }
+
+            let def_id = self
+                .scope_table
+                .lookup_local(self.current_scope, &func.name.name)
+                .expect("mutual declaration must already be in the current scope");
+            self.resolutions.insert(func.name.span, def_id);
+            return;
+        }
+
+        self.declare_top_level(&func.name.name, DefKind::Function, func.name.span, order);
+    }
+
     /// Register a top-level name. Returns `Some(DefId)` on success, `None` if
     /// a duplicate was detected.
     fn declare_top_level(
@@ -210,6 +247,11 @@ impl Resolver {
     fn pass2_references(&mut self, items: &[Item]) {
         for (index, item) in items.iter().enumerate() {
             match item {
+                Item::Mutual(block) => {
+                    for decl in &block.declarations {
+                        self.resolve_function_decl(decl, index);
+                    }
+                }
                 Item::Function(func) => {
                     self.resolve_function(func, index);
                 }
@@ -231,6 +273,15 @@ impl Resolver {
     // ------------------------------------------------------------------
     // Functions
     // ------------------------------------------------------------------
+
+    fn resolve_function_decl(&mut self, decl: &FunctionDecl, item_index: usize) {
+        for param in &decl.params {
+            self.resolve_type_expr(&param.ty, item_index);
+        }
+        if let Some(return_type) = &decl.return_type {
+            self.resolve_type_expr(return_type, item_index);
+        }
+    }
 
     fn resolve_function(&mut self, func: &FunctionDef, item_index: usize) {
         let func_scope = self.push_scope();
@@ -900,6 +951,108 @@ mod tests {
         assert_eq!(errors.len(), 1, "expected 1 forward-reference error");
         assert_eq!(errors[0].code.code(), 205);
         assert!(errors[0].message.contains("greet"));
+    }
+
+    #[test]
+    fn mutual_block_allows_forward_references_between_declared_functions() {
+        let module = Module {
+            items: vec![
+                Item::Mutual(MutualBlock {
+                    declarations: vec![
+                        FunctionDecl {
+                            name: ident("is_even", 0),
+                            params: vec![Param {
+                                view: false,
+                                mutable: false,
+                                name: ident("n", 8),
+                                ty: named_type("int64", 11),
+                                span: sp(8, 16),
+                            }],
+                            return_type: Some(named_type("bool", 25)),
+                            span: sp(0, 29),
+                        },
+                        FunctionDecl {
+                            name: ident("is_odd", 35),
+                            params: vec![Param {
+                                view: false,
+                                mutable: false,
+                                name: ident("n", 42),
+                                ty: named_type("int64", 45),
+                                span: sp(42, 50),
+                            }],
+                            return_type: Some(named_type("bool", 59)),
+                            span: sp(35, 63),
+                        },
+                    ],
+                    span: sp(0, 63),
+                }),
+                Item::Function(FunctionDef {
+                    name: ident("is_even", 70),
+                    params: vec![Param {
+                        view: false,
+                        mutable: false,
+                        name: ident("n", 78),
+                        ty: named_type("int64", 81),
+                        span: sp(78, 86),
+                    }],
+                    return_type: Some(named_type("bool", 95)),
+                    body: Block {
+                        stmts: vec![Stmt::Return(ReturnStmt {
+                            value: Some(Expr::Call(
+                                Box::new(ident_expr("is_odd", 110)),
+                                vec![CallArg {
+                                    name: None,
+                                    value: ident_expr("n", 117),
+                                    span: sp(117, 118),
+                                }],
+                                sp(110, 119),
+                            )),
+                            span: sp(103, 119),
+                        })],
+                        span: sp(100, 121),
+                    },
+                    span: sp(70, 121),
+                }),
+                Item::Function(FunctionDef {
+                    name: ident("is_odd", 130),
+                    params: vec![Param {
+                        view: false,
+                        mutable: false,
+                        name: ident("n", 137),
+                        ty: named_type("int64", 140),
+                        span: sp(137, 145),
+                    }],
+                    return_type: Some(named_type("bool", 154)),
+                    body: Block {
+                        stmts: vec![Stmt::Return(ReturnStmt {
+                            value: Some(Expr::Call(
+                                Box::new(ident_expr("is_even", 169)),
+                                vec![CallArg {
+                                    name: None,
+                                    value: ident_expr("n", 177),
+                                    span: sp(177, 178),
+                                }],
+                                sp(169, 179),
+                            )),
+                            span: sp(162, 179),
+                        })],
+                        span: sp(159, 181),
+                    },
+                    span: sp(130, 181),
+                }),
+            ],
+            span: sp(0, 181),
+        };
+
+        let result = resolve(&module);
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "expected no errors, got: {errors:#?}");
+        assert!(result.resolutions.contains_key(&sp(110, 116)));
+        assert!(result.resolutions.contains_key(&sp(169, 176)));
     }
 
     // ---- Test: variable shadowing rejection ----
