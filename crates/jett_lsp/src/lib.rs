@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer};
@@ -5,11 +6,16 @@ use tower_lsp::{Client, LanguageServer};
 /// The Jett LSP backend.
 pub struct JettBackend {
     client: Client,
+    /// In-memory document store: URI → source text.
+    documents: tokio::sync::RwLock<HashMap<Url, String>>,
 }
 
 impl JettBackend {
     pub fn new(client: Client) -> Self {
-        Self { client }
+        Self {
+            client,
+            documents: tokio::sync::RwLock::new(HashMap::new()),
+        }
     }
 
     /// Run the Jett compiler pipeline on the given source text and publish
@@ -86,34 +92,50 @@ impl LanguageServer for JettBackend {
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
-        self.validate(
-            params.text_document.uri,
-            &params.text_document.text,
-        )
-        .await;
+        let uri = params.text_document.uri.clone();
+        let text = params.text_document.text.clone();
+        self.documents.write().await.insert(uri.clone(), text.clone());
+        self.validate(uri, &text).await;
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
         // We requested FULL sync, so the last content change is the full text.
         if let Some(change) = params.content_changes.into_iter().last() {
-            self.validate(params.text_document.uri, &change.text).await;
+            let uri = params.text_document.uri.clone();
+            let text = change.text.clone();
+            self.documents.write().await.insert(uri.clone(), text.clone());
+            self.validate(uri, &text).await;
         }
     }
 
-    async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
-        let uri = params.text_document_position_params.text_document.uri;
-        let _position = params.text_document_position_params.position;
+    async fn did_close(&self, params: DidCloseTextDocumentParams) {
+        self.documents.write().await.remove(&params.text_document.uri);
+    }
 
-        // Basic MVP: show which file the cursor is in.
-        // A richer implementation would resolve the token at the cursor position
-        // and display its type information.
-        let contents = HoverContents::Markup(MarkupContent {
-            kind: MarkupKind::PlainText,
-            value: format!("Jett source: {}", uri),
-        });
+    async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
+        let uri = &params.text_document_position_params.text_document.uri;
+        let position = params.text_document_position_params.position;
+
+        let docs = self.documents.read().await;
+        let Some(source) = docs.get(uri) else {
+            return Ok(None);
+        };
+
+        // LSP positions are 0-based; hover_type expects 1-based.
+        let line = position.line + 1;
+        let col = position.character + 1;
+
+        let type_info = jett_driver::hover_type(source, line, col);
+
+        let Some(type_str) = type_info else {
+            return Ok(None);
+        };
 
         Ok(Some(Hover {
-            contents,
+            contents: HoverContents::Markup(MarkupContent {
+                kind: MarkupKind::PlainText,
+                value: type_str,
+            }),
             range: None,
         }))
     }
@@ -162,5 +184,15 @@ mod tests {
                 .map(|d| &d.message)
                 .collect::<Vec<_>>()
         );
+    }
+
+    /// Verify that hover_type returns a type for a known expression.
+    #[test]
+    fn hover_type_returns_type_for_identifier() {
+        let source = "namespace test\n\nfunction main() returns nothing:\n    int64 x = 42\n    return nothing\n";
+        // Line 4, col 5 = start of "int64 x" — the literal 42 is on the same line
+        // col 15 = the '4' in '42'
+        let ty = jett_driver::hover_type(source, 4, 15);
+        assert_eq!(ty, Some("int64".to_string()), "expected int64 hover type");
     }
 }

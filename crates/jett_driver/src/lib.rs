@@ -90,6 +90,68 @@ pub fn build_source(source: &str, file_path: &str) -> BuildResult {
     }
 }
 
+/// Return the inferred type name at the given (1-based) line and column in `source`.
+/// Returns `None` if the position is outside any typed expression or if the file
+/// does not compile cleanly past the parse phase.
+pub fn hover_type(source: &str, line: u32, col: u32) -> Option<String> {
+    let file_id = FileId::new(0);
+
+    // Convert 1-based (line, col) to a byte offset.
+    let offset = line_col_to_offset(source, line, col)?;
+
+    let parse_result = parse(source, file_id);
+    if parse_result.errors.iter().any(|d| d.severity == jett_diagnostics::Severity::Error) {
+        return None;
+    }
+
+    let resolve_result = resolve(&parse_result.module);
+    if resolve_result.diagnostics.iter().any(|d| d.severity == jett_diagnostics::Severity::Error) {
+        return None;
+    }
+
+    let check_result = check(&parse_result.module, &resolve_result);
+
+    // Find the smallest span in type_map that contains `offset`.
+    let mut best: Option<(u32, jett_types::TypeId)> = None;
+    for (span, ty_id) in &check_result.type_map {
+        if span.start <= offset && offset <= span.end {
+            let len = span.end - span.start;
+            if best.is_none() || len < best.unwrap().0 {
+                best = Some((len, *ty_id));
+            }
+        }
+    }
+
+    best.map(|(_, ty_id)| check_result.interner.type_name(ty_id))
+}
+
+/// Convert a 1-based line+column to a byte offset in `source`.
+fn line_col_to_offset(source: &str, line: u32, col: u32) -> Option<u32> {
+    if line == 0 || col == 0 {
+        return None;
+    }
+    let mut current_line = 1u32;
+    let mut line_start = 0usize;
+    for (i, ch) in source.char_indices() {
+        if current_line == line {
+            // col is 1-based within the line; advance col-1 chars.
+            let col_offset = source[line_start..].char_indices()
+                .nth((col - 1) as usize)
+                .map(|(o, _)| o)
+                .unwrap_or(source.len() - line_start);
+            return Some((line_start + col_offset) as u32);
+        }
+        if ch == '\n' {
+            current_line += 1;
+            line_start = i + 1;
+        }
+    }
+    if current_line == line {
+        return Some(line_start as u32);
+    }
+    None
+}
+
 /// Run the full compilation pipeline on a single file: lex → parse → resolve → typecheck.
 /// Does not produce executable output yet — just validates the source.
 pub fn build_file(path: &Path) -> BuildResult {

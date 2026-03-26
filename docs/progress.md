@@ -90,7 +90,7 @@
 |---|---|
 | TOON output (`--agent` flag) | Done |
 | LSP server (diagnostics on save) | Done |
-| LSP hover (type at cursor) | Not started |
+| LSP hover (type at cursor) | Done |
 | LSP go-to-definition | Not started |
 | LSP completions | Not started |
 | MCP server | Not started |

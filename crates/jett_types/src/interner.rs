@@ -199,6 +199,45 @@ impl TypeInterner {
         self.actors[id.0 as usize] = def;
     }
 
+    /// Return a human-readable name for the type with the given [`TypeId`].
+    pub fn type_name(&self, id: TypeId) -> String {
+        match self.resolve(id) {
+            Type::Int8 => "int8".to_string(),
+            Type::Int16 => "int16".to_string(),
+            Type::Int32 => "int32".to_string(),
+            Type::Int64 => "int64".to_string(),
+            Type::Uint8 => "uint8".to_string(),
+            Type::Uint16 => "uint16".to_string(),
+            Type::Uint32 => "uint32".to_string(),
+            Type::Uint64 => "uint64".to_string(),
+            Type::Float32 => "float32".to_string(),
+            Type::Float64 => "float64".to_string(),
+            Type::String => "string".to_string(),
+            Type::Bool => "bool".to_string(),
+            Type::Bytes => "bytes".to_string(),
+            Type::Nothing => "nothing".to_string(),
+            Type::List(inner) => format!("list[{}]", self.type_name(*inner)),
+            Type::Map(k, v) => format!("map[{}, {}]", self.type_name(*k), self.type_name(*v)),
+            Type::Set(inner) => format!("set[{}]", self.type_name(*inner)),
+            Type::Optional(inner) => format!("optional[{}]", self.type_name(*inner)),
+            Type::Result(ok, err) => {
+                format!("result[{}, {}]", self.type_name(*ok), self.type_name(*err))
+            }
+            Type::Secret(inner) => format!("secret[{}]", self.type_name(*inner)),
+            Type::Struct(sid) => self.resolve_struct(*sid).name.clone(),
+            Type::Bitfield(bid) => self.resolve_bitfield(*bid).name.clone(),
+            Type::Enum(eid) => self.resolve_enum(*eid).name.clone(),
+            Type::Interface(iid) => self.resolve_interface(*iid).name.clone(),
+            Type::Actor(aid) => self.resolve_actor(*aid).name.clone(),
+            Type::Refinement { name, .. } => name.clone(),
+            Type::Function { params, return_type } => {
+                let params: Vec<String> = params.iter().map(|p| self.type_name(*p)).collect();
+                format!("function({}) returns {}", params.join(", "), self.type_name(*return_type))
+            }
+            Type::Error => "<error>".to_string(),
+        }
+    }
+
     /// Returns the total number of interned types.
     pub fn len(&self) -> usize {
         self.types.len()
