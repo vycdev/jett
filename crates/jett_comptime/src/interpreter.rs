@@ -899,6 +899,17 @@ impl Interpreter {
                 Some(Ok(Value::Nothing))
             }
 
+            // -- Secret-safe operations --------------------------------------
+            "secret.redact" => {
+                require_args!(name, 1, args);
+                Some(Ok(Value::String("[redacted]".to_string())))
+            }
+
+            "secret.compare" => {
+                require_args!(name, 2, args);
+                Some(Ok(Value::Bool(args[0] == args[1])))
+            }
+
             // -- String operations --------------------------------------------
             "string.length" | "string.char_count" => {
                 require_args!(name, 1, args);
@@ -2938,6 +2949,23 @@ mod builtin_tests {
             interp.eval_expr(&expr).unwrap(),
             Value::String("42".to_string())
         );
+    }
+
+    #[test]
+    fn builtin_secret_redact() {
+        let mut interp = Interpreter::new();
+        let expr = dotted_call("secret", "redact", vec![string("top-secret")]);
+        assert_eq!(
+            interp.eval_expr(&expr).unwrap(),
+            Value::String("[redacted]".to_string())
+        );
+    }
+
+    #[test]
+    fn builtin_secret_compare() {
+        let mut interp = Interpreter::new();
+        let expr = dotted_call("secret", "compare", vec![string("a"), string("a")]);
+        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Bool(true));
     }
 
     #[test]

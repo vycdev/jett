@@ -362,3 +362,16 @@ pub fn declassify_requires_secret(got: &str, span: Span) -> Diagnostic {
         span,
     )
 }
+
+/// E0602: Secret helper operations require secret arguments.
+pub fn secret_operation_requires_secret(
+    operation: &str,
+    got: &str,
+    span: Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        602,
+        format!("`{operation}` requires `secret[T]`, got `{got}`"),
+        span,
+    )
+}

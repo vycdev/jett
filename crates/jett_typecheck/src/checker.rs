@@ -212,8 +212,56 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn strip_secret_type(&self, id: TypeId) -> (TypeId, bool) {
+        match self.secret_inner_type(id) {
+            Some(inner) => (inner, true),
+            None => (id, false),
+        }
+    }
+
+    fn maybe_wrap_secret(&mut self, ty: TypeId, tainted: bool) -> TypeId {
+        if !tainted || ty == TypeInterner::ERROR || ty == TypeInterner::NOTHING {
+            return ty;
+        }
+        if self.is_secret_type(ty) {
+            return ty;
+        }
+        self.interner.intern(Type::Secret(ty))
+    }
+
     fn is_secret_output_boundary(name: &str) -> bool {
+        matches!(
+            name,
+            "Stdout.write" | "json.serialize" | "Filesystem.write_file" | "log" | "http.respond"
+        )
+    }
+
+    fn is_impure_builtin(name: &str) -> bool {
         matches!(name, "Stdout.write")
+    }
+
+    fn is_secret_safe_builtin(name: &str) -> bool {
+        matches!(name, "secret.redact" | "secret.compare")
+    }
+
+    fn is_secret_liftable_call(name: &str, callee_is_pure: bool) -> bool {
+        callee_is_pure && !Self::is_secret_output_boundary(name) && !Self::is_secret_safe_builtin(name)
+    }
+
+    fn secret_argument_matches_param(&self, expected: TypeId, got: TypeId) -> (bool, bool) {
+        if self.types_compatible(expected, got) {
+            return (true, false);
+        }
+
+        let Some(inner) = self.secret_inner_type(got) else {
+            return (false, false);
+        };
+
+        if self.types_compatible(expected, inner) {
+            (true, true)
+        } else {
+            (false, false)
+        }
     }
 
     fn types_compatible(&self, expected: TypeId, got: TypeId) -> bool {
@@ -270,6 +318,35 @@ impl<'a> TypeChecker<'a> {
             )),
             "string.from_int64" => Some((vec![TypeInterner::INT64], TypeInterner::STRING)),
             "string.from_float64" => Some((vec![TypeInterner::FLOAT64], TypeInterner::STRING)),
+            "float64.from_int64" => Some((vec![TypeInterner::INT64], TypeInterner::FLOAT64)),
+            "string.length" | "string.char_count" => {
+                Some((vec![TypeInterner::STRING], TypeInterner::INT64))
+            }
+            "string.contains" | "string.starts_with" | "string.ends_with" => {
+                Some((vec![TypeInterner::STRING, TypeInterner::STRING], TypeInterner::BOOL))
+            }
+            "string.trim" | "string.upper" | "string.lower" => {
+                Some((vec![TypeInterner::STRING], TypeInterner::STRING))
+            }
+            "string.replace" => Some((
+                vec![
+                    TypeInterner::STRING,
+                    TypeInterner::STRING,
+                    TypeInterner::STRING,
+                ],
+                TypeInterner::STRING,
+            )),
+            "string.split" => Some((
+                vec![TypeInterner::STRING, TypeInterner::STRING],
+                self.interner.intern(Type::List(TypeInterner::STRING)),
+            )),
+            "string.join" => Some((
+                vec![
+                    self.interner.intern(Type::List(TypeInterner::STRING)),
+                    TypeInterner::STRING,
+                ],
+                TypeInterner::STRING,
+            )),
             "Environment.args" => Some((
                 vec![TypeInterner::ERROR],
                 self.interner.intern(Type::List(TypeInterner::STRING)),
@@ -277,6 +354,17 @@ impl<'a> TypeChecker<'a> {
             "Stdout.write" => Some((
                 vec![TypeInterner::ERROR, TypeInterner::STRING],
                 TypeInterner::NOTHING,
+            )),
+            "secret.redact" => Some((
+                vec![self.interner.intern(Type::Secret(TypeInterner::ERROR))],
+                TypeInterner::STRING,
+            )),
+            "secret.compare" => Some((
+                vec![
+                    self.interner.intern(Type::Secret(TypeInterner::ERROR)),
+                    self.interner.intern(Type::Secret(TypeInterner::ERROR)),
+                ],
+                TypeInterner::BOOL,
             )),
             "list.new" => {
                 if type_args.len() != 1 {
@@ -1375,10 +1463,15 @@ impl<'a> TypeChecker<'a> {
             return TypeInterner::ERROR;
         }
 
+        let (lhs_base, lhs_secret) = self.strip_secret_type(lhs_ty);
+        let (rhs_base, rhs_secret) = self.strip_secret_type(rhs_ty);
+        let tainted = lhs_secret || rhs_secret;
+
         match op {
             // Arithmetic operators: both sides must be the same numeric type.
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Modulo => {
-                if !self.is_numeric(lhs_ty) || !self.is_numeric(rhs_ty) || lhs_ty != rhs_ty {
+                if !self.is_numeric(lhs_base) || !self.is_numeric(rhs_base) || lhs_base != rhs_base
+                {
                     self.sink.emit(errors::binary_op_mismatch(
                         Self::binop_str(op),
                         &self.type_name(lhs_ty),
@@ -1387,12 +1480,12 @@ impl<'a> TypeChecker<'a> {
                     ));
                     return TypeInterner::ERROR;
                 }
-                lhs_ty
+                self.maybe_wrap_secret(lhs_base, tainted)
             }
 
             // Comparison operators: both sides must be the same type, returns bool.
             BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => {
-                if lhs_ty != rhs_ty {
+                if lhs_base != rhs_base {
                     self.sink.emit(errors::binary_op_mismatch(
                         Self::binop_str(op),
                         &self.type_name(lhs_ty),
@@ -1401,12 +1494,12 @@ impl<'a> TypeChecker<'a> {
                     ));
                     return TypeInterner::ERROR;
                 }
-                TypeInterner::BOOL
+                self.maybe_wrap_secret(TypeInterner::BOOL, tainted)
             }
 
             // Logical operators: both sides must be bool.
             BinOp::And | BinOp::Or => {
-                if lhs_ty != TypeInterner::BOOL || rhs_ty != TypeInterner::BOOL {
+                if lhs_base != TypeInterner::BOOL || rhs_base != TypeInterner::BOOL {
                     self.sink.emit(errors::binary_op_mismatch(
                         Self::binop_str(op),
                         &self.type_name(lhs_ty),
@@ -1415,7 +1508,7 @@ impl<'a> TypeChecker<'a> {
                     ));
                     return TypeInterner::ERROR;
                 }
-                TypeInterner::BOOL
+                self.maybe_wrap_secret(TypeInterner::BOOL, tainted)
             }
         }
     }
@@ -1427,9 +1520,11 @@ impl<'a> TypeChecker<'a> {
             return TypeInterner::ERROR;
         }
 
+        let (operand_base, tainted) = self.strip_secret_type(operand_ty);
+
         match op {
             UnaryOp::Not => {
-                if operand_ty != TypeInterner::BOOL {
+                if operand_base != TypeInterner::BOOL {
                     self.sink.emit(errors::unary_op_mismatch(
                         "not",
                         &self.type_name(operand_ty),
@@ -1437,10 +1532,10 @@ impl<'a> TypeChecker<'a> {
                     ));
                     return TypeInterner::ERROR;
                 }
-                TypeInterner::BOOL
+                self.maybe_wrap_secret(TypeInterner::BOOL, tainted)
             }
             UnaryOp::Neg => {
-                if !self.is_numeric(operand_ty) {
+                if !self.is_numeric(operand_base) {
                     self.sink.emit(errors::unary_op_mismatch(
                         "-",
                         &self.type_name(operand_ty),
@@ -1448,7 +1543,7 @@ impl<'a> TypeChecker<'a> {
                     ));
                     return TypeInterner::ERROR;
                 }
-                operand_ty
+                self.maybe_wrap_secret(operand_base, tainted)
             }
         }
     }
@@ -1461,12 +1556,20 @@ impl<'a> TypeChecker<'a> {
         span: Span,
     ) -> TypeId {
         let callee_name = Self::extract_dotted_name(callee);
+        let callee_is_pure = callee_name
+            .as_deref()
+            .map(|name| {
+                if Self::is_impure_builtin(name) {
+                    false
+                } else {
+                    self.purity_map.get(name).copied().unwrap_or(true)
+                }
+            })
+            .unwrap_or(false);
 
         // -- Capability / purity check --
         // Extract the callee name so we can look it up in the purity map.
         if let Some(callee_name) = callee_name.as_deref() {
-            let callee_is_pure = self.purity_map.get(callee_name).copied().unwrap_or(true);
-
             if !callee_is_pure {
                 // E0500: pure function calls impure function
                 if self.current_function_pure {
@@ -1542,8 +1645,11 @@ impl<'a> TypeChecker<'a> {
         }
 
         // Check each argument type.
+        let mut tainted_return = false;
+        let mut checked_arg_types = Vec::with_capacity(args.len());
         for (i, arg) in args.iter().enumerate() {
             let arg_ty = self.check_expr(&arg.value);
+            checked_arg_types.push(arg_ty);
             let param_ty = param_types[i];
 
             if let Some(callee_name) = callee_name.as_deref() {
@@ -1555,6 +1661,25 @@ impl<'a> TypeChecker<'a> {
                     ));
                     continue;
                 }
+
+                if matches!(callee_name, "secret.redact" | "secret.compare")
+                    && !self.is_secret_type(arg_ty)
+                {
+                    self.sink.emit(errors::secret_operation_requires_secret(
+                        callee_name,
+                        &self.type_name(arg_ty),
+                        arg.value.span(),
+                    ));
+                    continue;
+                }
+            }
+
+            let (matches, lifted_secret) = self.secret_argument_matches_param(param_ty, arg_ty);
+            if matches {
+                if lifted_secret {
+                    tainted_return = true;
+                }
+                continue;
             }
 
             if !self.types_compatible(param_ty, arg_ty) {
@@ -1565,6 +1690,30 @@ impl<'a> TypeChecker<'a> {
                     &self.type_name(arg_ty),
                     arg.value.span(),
                 ));
+            }
+        }
+
+        if matches!(callee_name.as_deref(), Some("secret.compare")) && checked_arg_types.len() == 2 {
+            if let (Some(lhs_inner), Some(rhs_inner)) = (
+                self.secret_inner_type(checked_arg_types[0]),
+                self.secret_inner_type(checked_arg_types[1]),
+            ) {
+                if !self.types_compatible(lhs_inner, rhs_inner)
+                    || !self.types_compatible(rhs_inner, lhs_inner)
+                {
+                    self.sink.emit(errors::argument_type_mismatch(
+                        "#2",
+                        &self.type_name(checked_arg_types[0]),
+                        &self.type_name(checked_arg_types[1]),
+                        args[1].value.span(),
+                    ));
+                }
+            }
+        }
+
+        if let Some(callee_name) = callee_name.as_deref() {
+            if tainted_return && Self::is_secret_liftable_call(callee_name, callee_is_pure) {
+                return self.maybe_wrap_secret(return_type, true);
             }
         }
 
@@ -1620,6 +1769,33 @@ impl<'a> TypeChecker<'a> {
         }
 
         match self.interner.resolve(base_ty) {
+            Type::Secret(inner) => match self.interner.resolve(*inner) {
+                Type::Struct(sid) => {
+                    let struct_def = self.interner.resolve_struct(*sid);
+                    if let Some((_, field_ty)) = struct_def
+                        .fields
+                        .iter()
+                        .find(|(name, _)| name == &field.name)
+                    {
+                        self.maybe_wrap_secret(*field_ty, true)
+                    } else {
+                        self.sink.emit(errors::type_has_no_member(
+                            &format!("secret[{}]", struct_def.name),
+                            &field.name,
+                            span,
+                        ));
+                        TypeInterner::ERROR
+                    }
+                }
+                _ => {
+                    self.sink.emit(errors::type_has_no_member(
+                        &self.type_name(base_ty),
+                        &field.name,
+                        span,
+                    ));
+                    TypeInterner::ERROR
+                }
+            },
             Type::Struct(sid) => {
                 let struct_def = self.interner.resolve_struct(*sid);
                 if let Some((_, field_ty)) = struct_def
@@ -1843,18 +2019,24 @@ impl<'a> TypeChecker<'a> {
         }
 
         let first_ty = self.check_expr(&elems[0]);
+        let (element_ty, mut tainted) = self.strip_secret_type(first_ty);
         for elem in &elems[1..] {
             let elem_ty = self.check_expr(elem);
-            if !self.types_compatible(first_ty, elem_ty) {
+            let (elem_base_ty, elem_secret) = self.strip_secret_type(elem_ty);
+            if !self.types_compatible(element_ty, elem_base_ty)
+                && !self.types_compatible(elem_base_ty, element_ty)
+            {
                 self.sink.emit(errors::type_mismatch(
-                    &self.type_name(first_ty),
+                    &self.type_name(element_ty),
                     &self.type_name(elem_ty),
                     elem.span(),
                 ));
             }
+            tainted |= elem_secret;
         }
 
-        self.interner.intern(Type::List(first_ty))
+        let element_ty = self.maybe_wrap_secret(element_ty, tainted);
+        self.interner.intern(Type::List(element_ty))
     }
 
     fn check_handle(
@@ -4182,6 +4364,174 @@ function main() returns string:
         assert!(
             errors.iter().any(|d| d.code.code() == 332),
             "expected E0332, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn pure_call_with_secret_argument_returns_secret() {
+        let result = check_source_result(
+            "\
+function main() returns nothing:
+    secret[string] api_key = \"abc\"
+    secret[string] upper = string.upper(api_key)
+    return nothing
+",
+        );
+
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == jett_diagnostics::Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+    }
+
+    #[test]
+    fn pure_call_with_secret_argument_cannot_be_assigned_to_public_type() {
+        let errors = check_source_errors(
+            "\
+function main() returns nothing:
+    secret[string] api_key = \"abc\"
+    string upper = string.upper(api_key)
+    return nothing
+",
+        );
+
+        assert!(
+            errors.iter().any(|d| d.code.code() == 311),
+            "expected E0311, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn secret_redact_returns_public_string() {
+        let result = check_source_result(
+            "\
+function main() returns string:
+    secret[string] api_key = \"abc\"
+    string masked = secret.redact(api_key)
+    return masked
+",
+        );
+
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == jett_diagnostics::Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+    }
+
+    #[test]
+    fn secret_compare_returns_bool() {
+        let result = check_source_result(
+            "\
+function main() returns bool:
+    secret[string] stored = \"abc\"
+    secret[string] computed = \"abc\"
+    return secret.compare(stored, computed)
+",
+        );
+
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == jett_diagnostics::Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+    }
+
+    #[test]
+    fn secret_compare_requires_matching_secret_types() {
+        let errors = check_source_errors(
+            "\
+function main() returns bool:
+    secret[string] stored = \"abc\"
+    secret[int64] computed = 1
+    return secret.compare(stored, computed)
+",
+        );
+
+        assert!(
+            errors.iter().any(|d| d.code.code() == 304),
+            "expected E0304, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn secret_redact_requires_secret_argument() {
+        let errors = check_source_errors(
+            "\
+function main() returns string:
+    return secret.redact(\"abc\")
+",
+        );
+
+        assert!(
+            errors.iter().any(|d| d.code.code() == 602),
+            "expected E0602, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn field_access_on_secret_struct_stays_secret() {
+        let result = check_source_result(
+            "\
+struct User:
+    name: string
+
+function main() returns nothing:
+    secret[User] user = User(name: \"Ada\")
+    secret[string] name = user.name
+    return nothing
+",
+        );
+
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == jett_diagnostics::Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+    }
+
+    #[test]
+    fn mixed_secret_and_public_list_becomes_secret_element_list() {
+        let result = check_source_result(
+            "\
+function main() returns nothing:
+    secret[string] api_key = \"abc\"
+    list[secret[string]] items = list(\"prefix\", api_key, \"suffix\")
+    return nothing
+",
+        );
+
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == jett_diagnostics::Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+    }
+
+    #[test]
+    fn string_join_rejects_list_of_secret_strings() {
+        let errors = check_source_errors(
+            "\
+function main() returns string:
+    secret[string] api_key = \"abc\"
+    list[secret[string]] items = list(\"prefix\", api_key, \"suffix\")
+    return string.join(items, \"-\")
+",
+        );
+
+        assert!(
+            errors.iter().any(|d| d.code.code() == 304 || d.code.code() == 305),
+            "expected argument/return type mismatch, got: {:?}",
             errors
         );
     }
