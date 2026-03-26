@@ -452,6 +452,8 @@ impl<'a> OwnershipChecker<'a> {
             "list.flatten",
             "list.unique",
             "list.zip",
+            "random.choice",
+            "random.shuffle",
         ];
         let first_arg_is_view = callee_name
             .as_deref()

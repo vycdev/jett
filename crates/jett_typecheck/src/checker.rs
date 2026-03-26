@@ -796,6 +796,34 @@ impl<'a> TypeChecker<'a> {
                 ))
             }
             // string builtins
+            // random builtins
+            "random.int64" => Some((
+                vec![TypeInterner::INT64, TypeInterner::INT64],
+                TypeInterner::INT64,
+            )),
+            "random.float64" => Some((vec![], TypeInterner::FLOAT64)),
+            "random.bool" => Some((vec![], TypeInterner::BOOL)),
+            "random.choice" => {
+                let inner = if type_args.len() == 1 {
+                    self.resolve_type_expr(&type_args[0])
+                } else {
+                    TypeInterner::ERROR
+                };
+                let list_ty = self.interner.intern(Type::List(inner));
+                Some((
+                    vec![list_ty],
+                    self.interner.intern(Type::Optional(inner)),
+                ))
+            }
+            "random.shuffle" => {
+                let inner = if type_args.len() == 1 {
+                    self.resolve_type_expr(&type_args[0])
+                } else {
+                    TypeInterner::ERROR
+                };
+                let list_ty = self.interner.intern(Type::List(inner));
+                Some((vec![list_ty], list_ty))
+            }
             "string.is_empty" => Some((vec![TypeInterner::STRING], TypeInterner::BOOL)),
             "string.repeat" => Some((
                 vec![TypeInterner::STRING, TypeInterner::INT64],

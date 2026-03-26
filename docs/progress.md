@@ -2,8 +2,8 @@
 
 ## Statistics
 
-- **Lines of Rust:** ~19,000
-- **Tests:** 440 passing
+- **Lines of Rust:** ~20,500
+- **Tests:** 445 passing
 - **Crates:** 15
 - **VS Code extension:** Yes
 
@@ -101,7 +101,7 @@
 | Component | Status |
 |---|---|
 | Property-based test runner | Done (basic: 100 random iterations) |
-| Input shrinking on failure | Not started |
+| Input shrinking on failure | Done (binary shrinking for int64, float64, string, list) |
 | CPU profiler (`--profile`) | Not started |
 | Memory profiler (`--profile-memory`) | Not started |
 | `trace` keyword | Not started |
@@ -123,6 +123,8 @@
 | `list` (basic ops in interpreter) | Partial (19 builtins) |
 | `map` (basic ops in interpreter) | Partial (9 builtins: new, length, has, get, insert, remove, keys, values, is_empty) |
 | `math` (basic ops in interpreter) | Partial (12 builtins) |
+| `json` (serialize) | Partial (json.serialize, json.serialize_public) |
+| `random` (basic ops in interpreter) | Partial (5 builtins: int64, float64, bool, choice, shuffle) |
 | `net.http` | Not started |
 | `net.socket` | Not started |
 | `json` | Not started |

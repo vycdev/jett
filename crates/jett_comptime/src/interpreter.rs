@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use rand::Rng;
+
 use jett_parser::ast::{
     ActorDef, BinOp, BitfieldDef, BitfieldFieldKind, Block, CallArg, EnumDef, Expr, FunctionDef,
     Ident, ImplementBlock, InterfaceDecl, MachineDef, Pattern, PipelineStep, Stmt, StringPart,
@@ -1654,6 +1656,67 @@ impl Interpreter {
                 Some(Ok(Value::Bool(args[0] == args[1])))
             }
 
+            // -- JSON operations ---------------------------------------------
+            "json.serialize" | "json.serialize_public" => {
+                require_args!(name, 1, args);
+                Some(Ok(Value::String(value_to_json(&args[0]))))
+            }
+
+            // -- Random operations -------------------------------------------
+            "random.int64" => {
+                require_args!(name, 2, args);
+                match (&args[0], &args[1]) {
+                    (Value::Int64(lo), Value::Int64(hi)) => {
+                        if lo >= hi {
+                            Some(Err(format!("random.int64: lo ({lo}) must be less than hi ({hi})")))
+                        } else {
+                            let n = rand::thread_rng().gen_range(*lo..*hi);
+                            Some(Ok(Value::Int64(n)))
+                        }
+                    }
+                    _ => Some(Err(format!("{name} expects two int64 arguments"))),
+                }
+            }
+
+            "random.float64" => {
+                require_args!(name, 0, args);
+                let f: f64 = rand::thread_rng().gen_range(0.0f64..1.0f64);
+                Some(Ok(Value::Float64(f)))
+            }
+
+            "random.bool" => {
+                require_args!(name, 0, args);
+                Some(Ok(Value::Bool(rand::thread_rng().gen_bool(0.5))))
+            }
+
+            "random.choice" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::List(items) => {
+                        if items.is_empty() {
+                            Some(Ok(Value::OptionalNone))
+                        } else {
+                            let idx = rand::thread_rng().gen_range(0..items.len());
+                            Some(Ok(Value::OptionalSome(Box::new(items[idx].clone()))))
+                        }
+                    }
+                    _ => Some(Err(format!("{name} expects a list argument"))),
+                }
+            }
+
+            "random.shuffle" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::List(items) => {
+                        use rand::seq::SliceRandom;
+                        let mut shuffled = items.clone();
+                        shuffled.shuffle(&mut rand::thread_rng());
+                        Some(Ok(Value::List(shuffled)))
+                    }
+                    _ => Some(Err(format!("{name} expects a list argument"))),
+                }
+            }
+
             // -- String operations --------------------------------------------
             "string.length" | "string.char_count" => {
                 require_args!(name, 1, args);
@@ -2838,6 +2901,71 @@ fn eval_binary_op(left: &Value, op: BinOp, right: &Value) -> Result<Value, Strin
 }
 
 /// Extract the simple name from a `TypeExpr` (e.g. `"int64"`, `"Port"`, `"list"`).
+fn value_to_json(value: &Value) -> String {
+    match value {
+        Value::Int64(n) => n.to_string(),
+        Value::Float64(f) => {
+            if f.fract() == 0.0 && f.is_finite() {
+                format!("{f:.1}")
+            } else {
+                f.to_string()
+            }
+        }
+        Value::String(s) => {
+            let escaped = s
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('\n', "\\n")
+                .replace('\r', "\\r")
+                .replace('\t', "\\t");
+            format!("\"{escaped}\"")
+        }
+        Value::Bool(b) => b.to_string(),
+        Value::Nothing => "null".to_string(),
+        Value::OptionalNone => "null".to_string(),
+        Value::OptionalSome(inner) => value_to_json(inner),
+        Value::ResultOk(inner) => {
+            format!("{{\"ok\":{}}}", value_to_json(inner))
+        }
+        Value::ResultFail(inner) => {
+            format!("{{\"fail\":{}}}", value_to_json(inner))
+        }
+        Value::List(items) => {
+            let elems: Vec<String> = items.iter().map(value_to_json).collect();
+            format!("[{}]", elems.join(","))
+        }
+        Value::Map(entries) => {
+            let pairs: Vec<String> = entries
+                .iter()
+                .map(|(k, v)| format!("{}:{}", value_to_json(k), value_to_json(v)))
+                .collect();
+            format!("{{{}}}", pairs.join(","))
+        }
+        Value::Struct { type_name: _, fields } => {
+            let pairs: Vec<String> = fields
+                .iter()
+                .map(|(k, v)| format!("\"{}\":{}", k, value_to_json(v)))
+                .collect();
+            format!("{{{}}}", pairs.join(","))
+        }
+        Value::Enum { type_name: _, variant, fields } => {
+            if fields.is_empty() {
+                format!("\"{}\"", variant)
+            } else {
+                let elems: Vec<String> = fields.iter().map(value_to_json).collect();
+                format!("{{\"{}\":[{}]}}", variant, elems.join(","))
+            }
+        }
+        Value::Bytes(bytes) => {
+            // Encode as base64-like hex for JSON
+            let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+            format!("\"0x{hex}\"")
+        }
+        Value::Error(msg) => format!("{{\"error\":{}}}", value_to_json(&Value::String(msg.clone()))),
+        _ => "null".to_string(),
+    }
+}
+
 fn type_expr_name(ty: &TypeExpr) -> String {
     match ty {
         TypeExpr::Named(ident) => ident.name.clone(),

@@ -1,0 +1,19 @@
+namespace test
+
+function main() returns nothing:
+    string s1 = json.serialize[int64](42)
+    assert s1 == "42"
+
+    string s2 = json.serialize[bool](true)
+    assert s2 == "true"
+
+    string s3 = json.serialize[bool](false)
+    assert s3 == "false"
+
+    string s4 = json.serialize[nothing](nothing)
+    assert s4 == "null"
+
+    string s5 = json.serialize[list[int64]](list(1, 2, 3))
+    assert s5 == "[1,2,3]"
+
+    return nothing

@@ -905,7 +905,7 @@ fn is_builtin_type(name: &str) -> bool {
 /// (e.g., `math.abs(x)`). These are not user-definable and should not
 /// generate "undefined name" errors when used in expression position.
 fn is_builtin_module(name: &str) -> bool {
-    matches!(name, "math")
+    matches!(name, "math" | "json" | "random")
 }
 
 fn stmt_span(stmt: &Stmt) -> Span {

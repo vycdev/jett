@@ -12,6 +12,7 @@ use crate::value::Value;
 // ---------------------------------------------------------------------------
 
 const PROPERTY_DEFAULT_ITERATIONS: usize = 100;
+const SHRINK_MAX_STEPS: usize = 50;
 
 // ---------------------------------------------------------------------------
 // Error type
@@ -230,6 +231,120 @@ pub fn eval_assert(
 /// Run a single property block for `PROPERTY_DEFAULT_ITERATIONS` iterations.
 /// Each iteration generates random values for each `given` parameter, binds
 /// them into the interpreter, and executes the body.
+/// Generate candidate shrunk versions of a value (ordered from simplest to most complex).
+fn shrink_value(value: &Value) -> Vec<Value> {
+    match value {
+        Value::Int64(n) => {
+            let mut candidates = Vec::new();
+            if *n != 0 {
+                candidates.push(Value::Int64(0));
+            }
+            if *n > 1 {
+                candidates.push(Value::Int64(n / 2));
+                candidates.push(Value::Int64(n - 1));
+            }
+            if *n < -1 {
+                candidates.push(Value::Int64(n / 2));
+                candidates.push(Value::Int64(n + 1));
+                candidates.push(Value::Int64(-n)); // try positive version
+            }
+            if *n == -1 {
+                candidates.push(Value::Int64(1));
+            }
+            candidates
+        }
+        Value::Float64(f) => {
+            let mut candidates = Vec::new();
+            if *f != 0.0 {
+                candidates.push(Value::Float64(0.0));
+            }
+            if f.abs() > 1.0 {
+                candidates.push(Value::Float64(f / 2.0));
+                candidates.push(Value::Float64(f.floor()));
+            }
+            if *f < 0.0 {
+                candidates.push(Value::Float64(-f)); // try positive version
+            }
+            candidates
+        }
+        Value::String(s) if !s.is_empty() => {
+            let mut candidates = Vec::new();
+            candidates.push(Value::String(String::new()));
+            let chars: Vec<char> = s.chars().collect();
+            if chars.len() > 1 {
+                // Remove first half
+                candidates.push(Value::String(chars[chars.len() / 2..].iter().collect()));
+                // Remove second half
+                candidates.push(Value::String(chars[..chars.len() / 2].iter().collect()));
+                // Remove last character
+                candidates.push(Value::String(chars[..chars.len() - 1].iter().collect()));
+            }
+            candidates
+        }
+        Value::List(items) if !items.is_empty() => {
+            let mut candidates = Vec::new();
+            candidates.push(Value::List(vec![]));
+            if items.len() > 1 {
+                // First half
+                candidates.push(Value::List(items[..items.len() / 2].to_vec()));
+                // Second half
+                candidates.push(Value::List(items[items.len() / 2..].to_vec()));
+                // Remove last element
+                candidates.push(Value::List(items[..items.len() - 1].to_vec()));
+            }
+            // Try shrinking individual elements
+            for (i, item) in items.iter().enumerate() {
+                for shrunk_item in shrink_value(item) {
+                    let mut new_list = items.clone();
+                    new_list[i] = shrunk_item;
+                    candidates.push(Value::List(new_list));
+                }
+            }
+            candidates
+        }
+        _ => vec![], // Bool, Nothing, etc. cannot be shrunk further
+    }
+}
+
+/// Try to find simpler inputs that still cause the property to fail.
+/// Returns the shrunk inputs as a Vec<Value> in the same order as `failing`.
+fn shrink_inputs(
+    interp: &mut Interpreter,
+    pb: &PropertyBlock,
+    failing: Vec<Value>,
+) -> Vec<Value> {
+    let mut current = failing;
+
+    'outer: for _ in 0..SHRINK_MAX_STEPS {
+        // Try to shrink each input one at a time.
+        for i in 0..current.len() {
+            let candidates = shrink_value(&current[i]);
+            for candidate in candidates {
+                let mut attempt = current.clone();
+                attempt[i] = candidate;
+
+                // Run the property with the candidate inputs.
+                interp.push_scope_public();
+                for (given, value) in pb.givens.iter().zip(attempt.iter()) {
+                    interp.set_variable_public(&given.name.name, value.clone());
+                }
+                let result = interp.exec_block(&pb.body);
+                interp.pop_scope_public();
+
+                if result.is_err() {
+                    // Still fails — use the simpler version.
+                    current = attempt;
+                    continue 'outer;
+                }
+            }
+        }
+        // No further shrinking possible.
+        break;
+    }
+
+    current
+}
+
 fn run_property_block(interp: &mut Interpreter, pb: &PropertyBlock) -> VerifyResult {
     let iterations = PROPERTY_DEFAULT_ITERATIONS;
 
@@ -278,15 +393,20 @@ fn run_property_block(interp: &mut Interpreter, pb: &PropertyBlock) -> VerifyRes
         interp.pop_scope_public();
 
         if let Err(msg) = exec_result {
-            // Build a description of the failing inputs.
-            let input_desc: Vec<String> = chosen
+            // Shrink the failing inputs to find a simpler counterexample.
+            let failing_values: Vec<Value> = chosen.iter().map(|(_, v)| v.clone()).collect();
+            let shrunk = shrink_inputs(interp, pb, failing_values);
+
+            let input_desc: Vec<String> = pb
+                .givens
                 .iter()
+                .zip(shrunk.iter())
                 .map(|(given, value)| format!("{} = {}", given.name.name, value))
                 .collect();
             return VerifyResult {
                 name: pb.name.name.clone(),
                 passed: false,
-                error: Some(format!("{} (input: {})", msg, input_desc.join(", "))),
+                error: Some(format!("{} (counterexample: {})", msg, input_desc.join(", "))),
                 iterations: Some(iteration + 1),
                 is_property: true,
             };
@@ -1453,7 +1573,7 @@ mod tests {
         assert!(results[0].is_property);
         let err = results[0].error.as_ref().unwrap();
         assert!(
-            err.contains("input:"),
+            err.contains("counterexample:") || err.contains("input:"),
             "error should contain input values: {err}"
         );
     }
