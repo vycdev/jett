@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use jett_common::Span;
 use jett_diagnostics::{Diagnostic, DiagnosticSink};
@@ -7,8 +7,11 @@ use jett_parser::ast::{
     VerifyBlock,
 };
 use jett_resolve::resolver::ResolveResult;
-use jett_resolve::scope::DefId;
-use jett_types::{Type, TypeId, TypeInterner};
+use jett_resolve::scope::{DefId, DefKind};
+use jett_types::{
+    EnumDef as TypeEnumDef, FunctionSig, StructDef as TypeStructDef, StructId, Type, TypeId,
+    TypeInterner, VariantDef,
+};
 
 use crate::capability;
 use crate::errors;
@@ -53,6 +56,10 @@ struct TypeChecker<'a> {
     sink: DiagnosticSink,
     /// DefId → TypeId for variables, parameters, and functions.
     type_env: HashMap<DefId, TypeId>,
+    /// Declaration span → DefId for locally declared names.
+    decl_defs: HashMap<Span, DefId>,
+    /// User-defined type name → TypeId.
+    named_types: HashMap<String, TypeId>,
     /// Expression span → TypeId (the output type map).
     type_map: HashMap<Span, TypeId>,
     /// The expected return type for the function currently being checked.
@@ -76,11 +83,20 @@ struct TypeChecker<'a> {
 
 impl<'a> TypeChecker<'a> {
     fn new(resolve: &'a ResolveResult) -> Self {
+        let decl_defs = resolve
+            .scope_table
+            .definitions
+            .iter()
+            .map(|def| (def.span, def.id))
+            .collect();
+
         Self {
             interner: TypeInterner::new(),
             resolve,
             sink: DiagnosticSink::new(),
             type_env: HashMap::new(),
+            decl_defs,
+            named_types: HashMap::new(),
             type_map: HashMap::new(),
             current_return_type: None,
             purity_map: HashMap::new(),
@@ -133,6 +149,31 @@ impl<'a> TypeChecker<'a> {
             Type::Refinement { name, .. } => name.clone(),
             Type::Error => "<error>".to_string(),
         }
+    }
+
+    fn declaration_def_id(&self, span: Span) -> Option<DefId> {
+        self.resolve
+            .resolutions
+            .get(&span)
+            .copied()
+            .or_else(|| self.decl_defs.get(&span).copied())
+    }
+
+    fn ident_def_kind(&self, ident: &ast::Ident) -> Option<DefKind> {
+        let def_id = self
+            .resolve
+            .resolutions
+            .get(&ident.span)
+            .copied()
+            .or_else(|| self.decl_defs.get(&ident.span).copied())?;
+        Some(self.resolve.scope_table.def(def_id).kind)
+    }
+
+    fn is_struct_type_name_expr(&self, expr: &Expr) -> bool {
+        matches!(
+            expr,
+            Expr::Ident(ident) if self.ident_def_kind(ident) == Some(DefKind::Struct)
+        )
     }
 
     /// Returns true if the type is numeric (any integer or float type).
@@ -272,24 +313,56 @@ impl<'a> TypeChecker<'a> {
     // ------------------------------------------------------------------
 
     fn check_module(&mut self, module: &Module) {
-        // First pass: register all top-level function signatures into the type env
-        // and build the purity map.
+        // First pass: predeclare all user-defined types so function signatures,
+        // fields, and methods can refer to them by name.
         for item in &module.items {
-            if let Item::Function(func) = item {
-                self.register_function_sig(func);
-                let is_pure = Self::function_is_pure(func);
-                self.purity_map.insert(func.name.name.clone(), is_pure);
+            match item {
+                Item::Struct(def) => self.predeclare_struct(def),
+                Item::Enum(def) => self.predeclare_enum(def),
+                _ => {}
             }
         }
 
-        // Second pass: type-check function bodies and verify blocks.
+        // Second pass: fill in the struct/enum contents now that all names exist.
+        for item in &module.items {
+            match item {
+                Item::Struct(def) => self.finish_struct(def),
+                Item::Enum(def) => self.finish_enum(def),
+                _ => {}
+            }
+        }
+
+        // Third pass: register all top-level function signatures into the type env
+        // and build the purity map.
+        for item in &module.items {
+            match item {
+                Item::Function(func) => {
+                    self.register_function_sig(func);
+                    let is_pure = Self::function_is_pure(func);
+                    self.purity_map.insert(func.name.name.clone(), is_pure);
+                }
+                Item::Struct(def) => {
+                    for method in &def.methods {
+                        let dotted = format!("{}.{}", def.name.name, method.name.name);
+                        let is_pure = Self::function_is_pure(method);
+                        self.purity_map.insert(dotted, is_pure);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Fourth pass: type-check function bodies, methods, and verify blocks.
         for item in &module.items {
             match item {
                 Item::Function(func) => self.check_function(func),
+                Item::Struct(def) => {
+                    for method in &def.methods {
+                        self.check_method(&def.name.name, method);
+                    }
+                }
                 Item::VarDecl(decl) => self.check_var_decl(decl),
                 Item::Verify(verify) => self.check_verify_block(verify),
-                // Struct/Enum/Namespace declarations are handled during
-                // registration; nothing to type-check in their bodies yet.
                 _ => {}
             }
         }
@@ -298,6 +371,118 @@ impl<'a> TypeChecker<'a> {
     /// Returns true if a function has no capability-type parameters (i.e. is pure).
     fn function_is_pure(func: &FunctionDef) -> bool {
         !func.params.iter().any(|p| capability::type_expr_is_capability(&p.ty))
+    }
+
+    fn predeclare_struct(&mut self, def: &ast::StructDef) {
+        let sid = self.interner.add_struct(TypeStructDef {
+            name: def.name.name.clone(),
+            fields: Vec::new(),
+            methods: Vec::new(),
+        });
+        let ty = self.interner.intern(Type::Struct(sid));
+        self.named_types.insert(def.name.name.clone(), ty);
+
+        if let Some(def_id) = self.declaration_def_id(def.name.span) {
+            self.type_env.insert(def_id, ty);
+        }
+    }
+
+    fn finish_struct(&mut self, def: &ast::StructDef) {
+        let Some(&ty) = self.named_types.get(&def.name.name) else {
+            return;
+        };
+        let Type::Struct(sid) = *self.interner.resolve(ty) else {
+            return;
+        };
+
+        let fields = def
+            .fields
+            .iter()
+            .map(|field| (field.name.name.clone(), self.resolve_type_expr(&field.ty)))
+            .collect();
+        let methods = def
+            .methods
+            .iter()
+            .map(|method| self.method_signature(method))
+            .collect();
+
+        self.interner.update_struct(
+            sid,
+            TypeStructDef {
+                name: def.name.name.clone(),
+                fields,
+                methods,
+            },
+        );
+    }
+
+    fn predeclare_enum(&mut self, def: &ast::EnumDef) {
+        let eid = self.interner.add_enum(TypeEnumDef {
+            name: def.name.name.clone(),
+            variants: Vec::new(),
+        });
+        let ty = self.interner.intern(Type::Enum(eid));
+        self.named_types.insert(def.name.name.clone(), ty);
+
+        if let Some(def_id) = self.declaration_def_id(def.name.span) {
+            self.type_env.insert(def_id, ty);
+        }
+    }
+
+    fn finish_enum(&mut self, def: &ast::EnumDef) {
+        let Some(&ty) = self.named_types.get(&def.name.name) else {
+            return;
+        };
+        let Type::Enum(eid) = *self.interner.resolve(ty) else {
+            return;
+        };
+
+        let variants = def
+            .variants
+            .iter()
+            .map(|variant| VariantDef {
+                name: variant.name.name.clone(),
+                fields: variant
+                    .fields
+                    .iter()
+                    .map(|field| (field.name.name.clone(), self.resolve_type_expr(&field.ty)))
+                    .collect(),
+            })
+            .collect();
+
+        self.interner.update_enum(
+            eid,
+            TypeEnumDef {
+                name: def.name.name.clone(),
+                variants,
+            },
+        );
+    }
+
+    fn method_signature(&mut self, func: &FunctionDef) -> FunctionSig {
+        let params = func
+            .params
+            .iter()
+            .map(|param| {
+                (
+                    param.name.name.clone(),
+                    self.resolve_type_expr(&param.ty),
+                    param.view,
+                )
+            })
+            .collect();
+        let return_type = func
+            .return_type
+            .as_ref()
+            .map(|ty| self.resolve_type_expr(ty))
+            .unwrap_or(TypeInterner::NOTHING);
+
+        FunctionSig {
+            name: func.name.name.clone(),
+            params,
+            return_type,
+            is_pure: Self::function_is_pure(func),
+        }
     }
 
     // ------------------------------------------------------------------
@@ -323,7 +508,7 @@ impl<'a> TypeChecker<'a> {
         });
 
         // Bind the function name's DefId to this function type.
-        if let Some(&def_id) = self.resolve.resolutions.get(&func.name.span) {
+        if let Some(def_id) = self.declaration_def_id(func.name.span) {
             self.type_env.insert(def_id, fn_type);
         }
     }
@@ -333,6 +518,14 @@ impl<'a> TypeChecker<'a> {
     // ------------------------------------------------------------------
 
     fn check_function(&mut self, func: &FunctionDef) {
+        self.check_function_impl(func, func.name.name.clone());
+    }
+
+    fn check_method(&mut self, owner: &str, func: &FunctionDef) {
+        self.check_function_impl(func, format!("{owner}.{}", func.name.name));
+    }
+
+    fn check_function_impl(&mut self, func: &FunctionDef, function_name: String) {
         let return_type = func
             .return_type
             .as_ref()
@@ -343,13 +536,13 @@ impl<'a> TypeChecker<'a> {
 
         // Set the purity context for this function.
         let is_pure = Self::function_is_pure(func);
-        self.current_function_name = Some(func.name.name.clone());
+        self.current_function_name = Some(function_name);
         self.current_function_pure = is_pure;
 
         // Bind parameter types into the type environment.
         for param in &func.params {
             let param_type = self.resolve_type_expr(&param.ty);
-            if let Some(&def_id) = self.resolve.resolutions.get(&param.name.span) {
+            if let Some(def_id) = self.declaration_def_id(param.name.span) {
                 self.type_env.insert(def_id, param_type);
             }
         }
@@ -395,9 +588,8 @@ impl<'a> TypeChecker<'a> {
                 self.check_expr(&expr_stmt.expr);
             }
             Stmt::Assert(assert_stmt) => self.check_assert(assert_stmt),
-            Stmt::Match(_) | Stmt::Use(_) | Stmt::Break(_) | Stmt::Continue(_) => {
-                // Nothing to type-check for these (match type-checking is TODO).
-            }
+            Stmt::Match(match_stmt) => self.check_match(match_stmt),
+            Stmt::Use(_) | Stmt::Break(_) | Stmt::Continue(_) => {}
         }
     }
 
@@ -406,7 +598,7 @@ impl<'a> TypeChecker<'a> {
         let init_type = self.check_expr(&decl.value);
 
         // Bind the variable's DefId to its declared type.
-        if let Some(&def_id) = self.resolve.resolutions.get(&decl.name.span) {
+        if let Some(def_id) = self.declaration_def_id(decl.name.span) {
             self.type_env.insert(def_id, declared_type);
         }
 
@@ -495,7 +687,7 @@ impl<'a> TypeChecker<'a> {
         };
 
         // Bind the loop variable.
-        if let Some(&def_id) = self.resolve.resolutions.get(&for_stmt.variable.span) {
+        if let Some(def_id) = self.declaration_def_id(for_stmt.variable.span) {
             self.type_env.insert(def_id, elem_type);
         }
 
@@ -526,6 +718,94 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn check_match(&mut self, match_stmt: &ast::MatchStmt) {
+        let expr_ty = self.check_expr(&match_stmt.expr);
+        if expr_ty == TypeInterner::ERROR {
+            for arm in &match_stmt.arms {
+                self.check_block(&arm.body);
+            }
+            return;
+        }
+
+        let Type::Enum(enum_id) = *self.interner.resolve(expr_ty) else {
+            self.sink.emit(errors::match_requires_enum(
+                &self.type_name(expr_ty),
+                match_stmt.expr.span(),
+            ));
+            for arm in &match_stmt.arms {
+                self.check_block(&arm.body);
+            }
+            return;
+        };
+
+        let enum_def = self.interner.resolve_enum(enum_id).clone();
+        let mut covered = HashSet::new();
+        let mut has_other = false;
+
+        for arm in &match_stmt.arms {
+            match &arm.pattern {
+                ast::Pattern::Ident(name) => {
+                    if enum_def.variants.iter().any(|variant| variant.name == name.name) {
+                        covered.insert(name.name.clone());
+                    } else {
+                        self.sink.emit(errors::type_has_no_member(
+                            &enum_def.name,
+                            &name.name,
+                            name.span,
+                        ));
+                    }
+                }
+                ast::Pattern::Variant(name, bindings) => {
+                    if let Some(variant) =
+                        enum_def.variants.iter().find(|variant| variant.name == name.name)
+                    {
+                        covered.insert(name.name.clone());
+                        if bindings.len() != variant.fields.len() {
+                            self.sink.emit(errors::variant_binding_count_mismatch(
+                                &name.name,
+                                variant.fields.len(),
+                                bindings.len(),
+                                name.span,
+                            ));
+                        }
+
+                        for (binding, (_, field_ty)) in
+                            bindings.iter().zip(variant.fields.iter())
+                        {
+                            if let Some(def_id) = self.declaration_def_id(binding.span) {
+                                self.type_env.insert(def_id, *field_ty);
+                            }
+                        }
+                    } else {
+                        self.sink.emit(errors::type_has_no_member(
+                            &enum_def.name,
+                            &name.name,
+                            name.span,
+                        ));
+                    }
+                }
+                ast::Pattern::Other(_) => {
+                    has_other = true;
+                }
+            }
+
+            self.check_block(&arm.body);
+        }
+
+        if !has_other {
+            for variant in &enum_def.variants {
+                if !covered.contains(&variant.name) {
+                    self.sink.emit(errors::non_exhaustive_match(
+                        &enum_def.name,
+                        &variant.name,
+                        match_stmt.span,
+                    ));
+                    break;
+                }
+            }
+        }
+    }
+
     // ------------------------------------------------------------------
     // Expressions
     // ------------------------------------------------------------------
@@ -546,11 +826,7 @@ impl<'a> TypeChecker<'a> {
                 self.check_call(callee, type_args, args, *span)
             }
             Expr::Paren(inner, _) => self.check_expr(inner),
-            Expr::FieldAccess(_, _, _) => {
-                // Field access type checking requires struct resolution;
-                // return Error for now.
-                TypeInterner::ERROR
-            }
+            Expr::FieldAccess(base, field, span) => self.check_field_access(base, field, *span),
             Expr::View(inner, _) => self.check_expr(inner),
 
             Expr::ListConstruct(elems, _span) => self.check_list_construct(elems),
@@ -626,9 +902,8 @@ impl<'a> TypeChecker<'a> {
                 TypeInterner::BOOL
             }
             Expr::Error(_) => TypeInterner::ERROR,
-            Expr::EnumVariant(_, _, _) => {
-                // TODO: resolve enum variant type
-                TypeInterner::ERROR
+            Expr::EnumVariant(type_name, variant, span) => {
+                self.check_enum_variant(type_name, variant, &[], *span)
             }
         };
 
@@ -638,7 +913,12 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn check_ident(&mut self, ident: &ast::Ident) -> TypeId {
-        if let Some(&def_id) = self.resolve.resolutions.get(&ident.span) {
+        if let Some(&def_id) = self
+            .resolve
+            .resolutions
+            .get(&ident.span)
+            .or_else(|| self.decl_defs.get(&ident.span))
+        {
             if let Some(&type_id) = self.type_env.get(&def_id) {
                 return type_id;
             }
@@ -744,9 +1024,8 @@ impl<'a> TypeChecker<'a> {
     ) -> TypeId {
         // -- Capability / purity check --
         // Extract the callee name so we can look it up in the purity map.
-        if let Expr::Ident(callee_ident) = callee {
-            let callee_name = &callee_ident.name;
-            let callee_is_pure = self.purity_map.get(callee_name).copied().unwrap_or(true);
+        if let Some(callee_name) = Self::extract_dotted_name(callee) {
+            let callee_is_pure = self.purity_map.get(&callee_name).copied().unwrap_or(true);
 
             if !callee_is_pure {
                 // E0500: pure function calls impure function
@@ -754,7 +1033,7 @@ impl<'a> TypeChecker<'a> {
                     if let Some(caller_name) = &self.current_function_name {
                         self.sink.emit(errors::pure_calls_impure(
                             caller_name,
-                            callee_name,
+                            &callee_name,
                             span,
                         ));
                     }
@@ -764,7 +1043,7 @@ impl<'a> TypeChecker<'a> {
                     if let Some(verify_name) = &self.current_verify_name {
                         self.sink.emit(errors::verify_calls_impure(
                             verify_name,
-                            callee_name,
+                            &callee_name,
                             span,
                         ));
                     }
@@ -793,6 +1072,9 @@ impl<'a> TypeChecker<'a> {
                     params,
                     return_type,
                 } => (params, return_type),
+                Type::Struct(sid) if self.is_struct_type_name_expr(callee) => {
+                    return self.check_struct_constructor(sid, args, span);
+                }
                 _ => {
                     self.sink
                         .emit(errors::not_callable(&self.type_name(callee_ty), span));
@@ -840,6 +1122,212 @@ impl<'a> TypeChecker<'a> {
         return_type
     }
 
+    fn check_field_access(&mut self, base: &Expr, field: &ast::Ident, span: Span) -> TypeId {
+        if let Expr::Ident(base_ident) = base {
+            if self.ident_def_kind(base_ident) == Some(DefKind::Enum) {
+                return self.check_enum_variant(base_ident, field, &[], span);
+            }
+            if self.ident_def_kind(base_ident) == Some(DefKind::Struct) {
+                let base_ty = self.check_ident(base_ident);
+                if let Type::Struct(sid) = *self.interner.resolve(base_ty) {
+                    let struct_def = self.interner.resolve_struct(sid);
+                    if let Some(method) =
+                        struct_def.methods.iter().find(|m| m.name == field.name).cloned()
+                    {
+                        let params = method.params.iter().map(|(_, ty, _)| *ty).collect();
+                        return self.interner.intern(Type::Function {
+                            params,
+                            return_type: method.return_type,
+                        });
+                    }
+
+                    self.sink.emit(errors::type_has_no_member(
+                        &struct_def.name,
+                        &field.name,
+                        span,
+                    ));
+                    return TypeInterner::ERROR;
+                }
+            }
+        }
+
+        let base_ty = self.check_expr(base);
+        if base_ty == TypeInterner::ERROR {
+            return TypeInterner::ERROR;
+        }
+
+        match self.interner.resolve(base_ty) {
+            Type::Struct(sid) => {
+                let struct_def = self.interner.resolve_struct(*sid);
+                if let Some((_, field_ty)) =
+                    struct_def.fields.iter().find(|(name, _)| name == &field.name)
+                {
+                    *field_ty
+                } else {
+                    self.sink.emit(errors::type_has_no_member(
+                        &struct_def.name,
+                        &field.name,
+                        span,
+                    ));
+                    TypeInterner::ERROR
+                }
+            }
+            _ => {
+                self.sink.emit(errors::type_has_no_member(
+                    &self.type_name(base_ty),
+                    &field.name,
+                    span,
+                ));
+                TypeInterner::ERROR
+            }
+        }
+    }
+
+    fn check_enum_variant(
+        &mut self,
+        type_name: &ast::Ident,
+        variant: &ast::Ident,
+        args: &[ast::CallArg],
+        span: Span,
+    ) -> TypeId {
+        let enum_ty = self.check_ident(type_name);
+        if enum_ty == TypeInterner::ERROR {
+            return TypeInterner::ERROR;
+        }
+
+        let Type::Enum(eid) = *self.interner.resolve(enum_ty) else {
+            self.sink.emit(errors::type_has_no_member(
+                &self.type_name(enum_ty),
+                &variant.name,
+                span,
+            ));
+            return TypeInterner::ERROR;
+        };
+
+        let enum_def = self.interner.resolve_enum(eid).clone();
+        let Some(variant_def) = enum_def
+            .variants
+            .iter()
+            .find(|candidate| candidate.name == variant.name)
+            .cloned()
+        else {
+            self.sink.emit(errors::type_has_no_member(
+                &enum_def.name,
+                &variant.name,
+                span,
+            ));
+            return TypeInterner::ERROR;
+        };
+
+        if args.is_empty() {
+            if variant_def.fields.is_empty() {
+                return enum_ty;
+            }
+
+            let params = variant_def.fields.iter().map(|(_, ty)| *ty).collect();
+            return self.interner.intern(Type::Function {
+                params,
+                return_type: enum_ty,
+            });
+        }
+
+        if args.len() != variant_def.fields.len() {
+            self.sink.emit(errors::argument_count_mismatch(
+                &format!("{}.{}", enum_def.name, variant_def.name),
+                variant_def.fields.len(),
+                args.len(),
+                span,
+            ));
+        }
+
+        for (index, arg) in args.iter().enumerate() {
+            let arg_ty = self.check_expr(&arg.value);
+            if let Some((field_name, expected_ty)) = variant_def.fields.get(index) {
+                if !self.types_compatible(*expected_ty, arg_ty) {
+                    self.sink.emit(errors::argument_type_mismatch(
+                        field_name,
+                        &self.type_name(*expected_ty),
+                        &self.type_name(arg_ty),
+                        arg.value.span(),
+                    ));
+                }
+            }
+        }
+
+        enum_ty
+    }
+
+    fn check_struct_constructor(
+        &mut self,
+        sid: StructId,
+        args: &[ast::CallArg],
+        span: Span,
+    ) -> TypeId {
+        let struct_def = self.interner.resolve_struct(sid).clone();
+        let mut assigned = vec![false; struct_def.fields.len()];
+
+        for arg in args {
+            let Some(field_index) = (match &arg.name {
+                Some(name) => struct_def
+                    .fields
+                    .iter()
+                    .position(|(field_name, _)| field_name == &name.name),
+                None => assigned.iter().position(|filled| !filled),
+            }) else {
+                if let Some(name) = &arg.name {
+                    self.sink.emit(errors::type_has_no_member(
+                        &struct_def.name,
+                        &name.name,
+                        arg.span,
+                    ));
+                } else {
+                    self.sink.emit(errors::argument_count_mismatch(
+                        &struct_def.name,
+                        struct_def.fields.len(),
+                        args.len(),
+                        span,
+                    ));
+                }
+                self.check_expr(&arg.value);
+                continue;
+            };
+
+            if assigned[field_index] {
+                self.sink.emit(errors::duplicate_constructor_field(
+                    &struct_def.name,
+                    &struct_def.fields[field_index].0,
+                    arg.span,
+                ));
+                self.check_expr(&arg.value);
+                continue;
+            }
+
+            assigned[field_index] = true;
+            let arg_ty = self.check_expr(&arg.value);
+            let expected_ty = struct_def.fields[field_index].1;
+            if !self.types_compatible(expected_ty, arg_ty) {
+                self.sink.emit(errors::argument_type_mismatch(
+                    &struct_def.fields[field_index].0,
+                    &self.type_name(expected_ty),
+                    &self.type_name(arg_ty),
+                    arg.value.span(),
+                ));
+            }
+        }
+
+        for (index, (field_name, _)) in struct_def.fields.iter().enumerate() {
+            if !assigned[index] {
+                self.sink.emit(errors::missing_constructor_field(
+                    &struct_def.name,
+                    field_name,
+                    span,
+                ));
+            }
+        }
+
+        self.interner.intern(Type::Struct(sid))
+    }
+
     fn check_list_construct(&mut self, elems: &[Expr]) -> TypeId {
         if elems.is_empty() {
             // Empty list: list[<error>] since we can't infer the element type.
@@ -882,7 +1370,7 @@ impl<'a> TypeChecker<'a> {
                     self.sink.emit(errors::result_requires_handle_error(span));
                 }
                 if let Some(name) = bind_name {
-                    if let Some(&def_id) = self.resolve.resolutions.get(&name.span) {
+                    if let Some(def_id) = self.declaration_def_id(name.span) {
                         self.type_env.insert(def_id, err_ty);
                     }
                 }
@@ -985,6 +1473,7 @@ impl<'a> TypeChecker<'a> {
             "bool" => TypeInterner::BOOL,
             "bytes" => TypeInterner::BYTES,
             "nothing" => TypeInterner::NOTHING,
+            _ if self.named_types.contains_key(name) => self.named_types[name],
             // Capability types are recognised but opaque — no further type
             // checking is performed on values of these types.
             _ if capability::is_capability_type(name) => TypeInterner::ERROR,
@@ -1192,7 +1681,7 @@ mod tests {
         }
     }
 
-    fn check_source_errors(source: &str) -> Vec<Diagnostic> {
+    fn check_source_result(source: &str) -> CheckResult {
         let file_id = FileId::new(0);
         let parse_result = parse(source, file_id);
         assert!(
@@ -1214,6 +1703,10 @@ mod tests {
         );
 
         check(&parse_result.module, &resolve_result)
+    }
+
+    fn check_source_errors(source: &str) -> Vec<Diagnostic> {
+        check_source_result(source)
             .diagnostics
             .into_iter()
             .filter(|d| d.severity == jett_diagnostics::Severity::Error)
@@ -2685,6 +3178,168 @@ mod tests {
             purity_errors.is_empty(),
             "unexpected purity errors: {:?}",
             purity_errors
+        );
+    }
+
+    #[test]
+    fn user_defined_struct_constructor_and_field_access_typecheck_cleanly() {
+        let result = check_source_result(
+            "\
+struct Point:
+    x: int64
+    y: int64
+
+function sum(view point: Point) returns int64:
+    return point.x + point.y
+
+function main() returns int64:
+    Point point = Point(x: 1, y: 2)
+    return sum(view point)
+",
+        );
+
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == jett_diagnostics::Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+    }
+
+    #[test]
+    fn struct_method_call_typechecks_cleanly() {
+        let result = check_source_result(
+            "\
+struct Point:
+    x: int64
+    y: int64
+
+    function total(view self: Point) returns int64:
+        return self.x + self.y
+
+function main() returns int64:
+    Point point = Point(x: 1, y: 2)
+    return Point.total(view point)
+",
+        );
+
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == jett_diagnostics::Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+    }
+
+    #[test]
+    fn struct_constructor_missing_field_reports_error() {
+        let errors = check_source_errors(
+            "\
+struct Point:
+    x: int64
+    y: int64
+
+function main() returns Point:
+    return Point(x: 1)
+",
+        );
+
+        assert!(
+            errors.iter().any(|d| d.code.code() == 321),
+            "expected E0321, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn unknown_struct_field_reports_error() {
+        let errors = check_source_errors(
+            "\
+struct Point:
+    x: int64
+    y: int64
+
+function main(view point: Point) returns int64:
+    return point.z
+",
+        );
+
+        assert!(
+            errors.iter().any(|d| d.code.code() == 319),
+            "expected E0319, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn enum_variant_construction_and_match_typecheck_cleanly() {
+        let result = check_source_result(
+            "\
+enum Shape:
+    circle(radius: int64)
+    rect(width: int64, height: int64)
+
+function area(shape: Shape) returns int64:
+    match shape:
+        circle(radius):
+            return radius * radius
+        rect(width, height):
+            return width * height
+
+function main() returns int64:
+    Shape shape = Shape.circle(3)
+    return area(shape)
+",
+        );
+
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == jett_diagnostics::Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+    }
+
+    #[test]
+    fn non_exhaustive_enum_match_reports_error() {
+        let errors = check_source_errors(
+            "\
+enum Color:
+    red
+    blue
+
+function describe(color: Color) returns int64:
+    match color:
+        red:
+            return 1
+",
+        );
+
+        assert!(
+            errors.iter().any(|d| d.code.code() == 324),
+            "expected E0324, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn enum_pattern_binding_count_mismatch_reports_error() {
+        let errors = check_source_errors(
+            "\
+enum Shape:
+    rect(width: int64, height: int64)
+
+function area(shape: Shape) returns int64:
+    match shape:
+        rect(width):
+            return width
+",
+        );
+
+        assert!(
+            errors.iter().any(|d| d.code.code() == 323),
+            "expected E0323, got: {:?}",
+            errors
         );
     }
 

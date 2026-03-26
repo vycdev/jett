@@ -193,6 +193,63 @@ pub fn handle_block_requires_return_or_default(span: Span) -> Diagnostic {
     )
 }
 
+/// E0319: Type has no such field or method.
+pub fn type_has_no_member(type_name: &str, member: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        319,
+        format!("type `{type_name}` has no field or method `{member}`"),
+        span,
+    )
+}
+
+/// E0320: Struct constructor field was provided more than once.
+pub fn duplicate_constructor_field(type_name: &str, field: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        320,
+        format!("constructor for `{type_name}` received field `{field}` more than once"),
+        span,
+    )
+}
+
+/// E0321: Struct constructor is missing a required field.
+pub fn missing_constructor_field(type_name: &str, field: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        321,
+        format!("constructor for `{type_name}` is missing required field `{field}`"),
+        span,
+    )
+}
+
+/// E0322: Match expressions require enum values.
+pub fn match_requires_enum(got: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(322, format!("match requires an enum value, got `{got}`"), span)
+}
+
+/// E0323: Variant pattern binding count mismatch.
+pub fn variant_binding_count_mismatch(
+    variant: &str,
+    expected: usize,
+    got: usize,
+    span: Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        323,
+        format!(
+            "pattern for variant `{variant}` expects {expected} binding(s), but {got} were provided"
+        ),
+        span,
+    )
+}
+
+/// E0324: Match is not exhaustive for the enum's variants.
+pub fn non_exhaustive_match(enum_name: &str, missing_variant: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        324,
+        format!("match on `{enum_name}` is not exhaustive; missing variant `{missing_variant}`"),
+        span,
+    )
+}
+
 // Diagnostic codes E0500–E0599 are reserved for capability / purity checking.
 
 /// E0500: Pure function calls impure function.

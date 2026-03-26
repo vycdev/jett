@@ -110,6 +110,11 @@ impl TypeInterner {
         &self.structs[id.0 as usize]
     }
 
+    /// Replace an existing struct definition.
+    pub fn update_struct(&mut self, id: StructId, def: StructDef) {
+        self.structs[id.0 as usize] = def;
+    }
+
     /// Register a new enum definition and return its [`EnumId`].
     pub fn add_enum(&mut self, def: EnumDef) -> EnumId {
         let id = EnumId(self.enums.len() as u32);
@@ -124,6 +129,11 @@ impl TypeInterner {
     /// Panics if the ID was not produced by this interner.
     pub fn resolve_enum(&self, id: EnumId) -> &EnumDef {
         &self.enums[id.0 as usize]
+    }
+
+    /// Replace an existing enum definition.
+    pub fn update_enum(&mut self, id: EnumId, def: EnumDef) {
+        self.enums[id.0 as usize] = def;
     }
 
     /// Returns the total number of interned types.
