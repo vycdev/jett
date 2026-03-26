@@ -1,4 +1,4 @@
-use crate::defs::{EnumId, StructId};
+use crate::defs::{EnumId, InterfaceId, StructId};
 
 /// A unique handle to an interned type. Cheap to copy and compare.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -57,6 +57,8 @@ pub enum Type {
     Struct(StructId),
     /// A user-defined enum.
     Enum(EnumId),
+    /// A user-defined interface.
+    Interface(InterfaceId),
 
     // -- Function type -------------------------------------------------------
     /// `function(T, U) returns V`

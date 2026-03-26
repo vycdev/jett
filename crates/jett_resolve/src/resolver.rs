@@ -3,9 +3,9 @@ use std::collections::{HashMap, HashSet};
 use jett_common::Span;
 use jett_diagnostics::{Diagnostic, DiagnosticSink};
 use jett_parser::ast::{
-    AssertStmt, AssignStmt, Block, CallArg, Expr, ExprStmt, ForStmt, FunctionDecl, FunctionDef, IfStmt, Item,
-    MatchStmt, Module, Pattern, ReturnStmt, Stmt, StringPart, TypeExpr, UseDecl, VarDecl,
-    WhileStmt,
+    AssertStmt, AssignStmt, Block, CallArg, Expr, ExprStmt, ForStmt, FunctionDecl, FunctionDef,
+    IfStmt, Item, MatchStmt, Module, Pattern, ReturnStmt, Stmt, StringPart, TypeExpr, UseDecl,
+    VarDecl, WhileStmt,
 };
 
 use crate::errors;
@@ -70,17 +70,41 @@ impl Resolver {
         // Pre-register built-in type names so they don't trigger "undefined" errors.
         let builtins = [
             // Primitive types
-            "int8", "int16", "int32", "int64",
-            "uint8", "uint16", "uint32", "uint64",
-            "float32", "float64",
-            "string", "bool", "bytes", "nothing",
+            "int8",
+            "int16",
+            "int32",
+            "int64",
+            "uint8",
+            "uint16",
+            "uint32",
+            "uint64",
+            "float32",
+            "float64",
+            "string",
+            "bool",
+            "bytes",
+            "nothing",
             // Built-in generic types (used as identifiers in type annotations)
-            "list", "map", "set", "optional", "result", "secret",
+            "list",
+            "map",
+            "set",
+            "optional",
+            "result",
+            "secret",
             // Capability types
-            "Stdout", "Stderr", "Stdin", "Filesystem", "Network",
-            "Clock", "Random", "Process", "Environment",
+            "Stdout",
+            "Stderr",
+            "Stdin",
+            "Filesystem",
+            "Network",
+            "Clock",
+            "Random",
+            "Process",
+            "Environment",
             // Common built-in functions/values
-            "true", "false", "none",
+            "true",
+            "false",
+            "none",
         ];
         for name in builtins {
             let def = scope_table.new_def(name.to_string(), DefKind::Constant, dummy_span);
@@ -121,12 +145,7 @@ impl Resolver {
         for (index, item) in items.iter().enumerate() {
             match item {
                 Item::Namespace(ns) => {
-                    self.declare_top_level(
-                        &ns.name.name,
-                        DefKind::Namespace,
-                        ns.span,
-                        index,
-                    );
+                    self.declare_top_level(&ns.name.name, DefKind::Namespace, ns.span, index);
                 }
                 Item::Function(func) => {
                     self.declare_function_top_level(func, index);
@@ -145,40 +164,29 @@ impl Resolver {
                         }
                     }
                 }
-                Item::Struct(s) => {
+                Item::Interface(interface) => {
                     self.declare_top_level(
-                        &s.name.name,
-                        DefKind::Struct,
-                        s.name.span,
+                        &interface.name.name,
+                        DefKind::Interface,
+                        interface.name.span,
                         index,
                     );
+                }
+                Item::Struct(s) => {
+                    self.declare_top_level(&s.name.name, DefKind::Struct, s.name.span, index);
                 }
                 Item::Enum(e) => {
-                    self.declare_top_level(
-                        &e.name.name,
-                        DefKind::Enum,
-                        e.name.span,
-                        index,
-                    );
+                    self.declare_top_level(&e.name.name, DefKind::Enum, e.name.span, index);
                 }
                 Item::VarDecl(v) => {
-                    let def_id = self.declare_top_level(
-                        &v.name.name,
-                        DefKind::Variable,
-                        v.name.span,
-                        index,
-                    );
+                    let def_id =
+                        self.declare_top_level(&v.name.name, DefKind::Variable, v.name.span, index);
                     if let Some(id) = def_id {
                         self.var_defs.insert(id);
                     }
                 }
                 Item::Machine(m) => {
-                    self.declare_top_level(
-                        &m.name.name,
-                        DefKind::Machine,
-                        m.name.span,
-                        index,
-                    );
+                    self.declare_top_level(&m.name.name, DefKind::Machine, m.name.span, index);
                 }
                 Item::TypeAlias(ta) => {
                     self.declare_top_level(
@@ -188,8 +196,8 @@ impl Resolver {
                         index,
                     );
                 }
-                // Verify and property blocks don't declare new names in the module scope.
-                Item::Verify(_) | Item::Property(_) => {}
+                // Verify, property, and implement blocks don't declare new names in the module scope.
+                Item::Verify(_) | Item::Property(_) | Item::Implement(_) => {}
             }
         }
     }
@@ -200,8 +208,11 @@ impl Resolver {
                 .mutual_definitions
                 .insert(func.name.name.clone(), func.name.span)
             {
-                self.sink
-                    .emit(errors::duplicate_definition(&func.name.name, func.name.span, prev_span));
+                self.sink.emit(errors::duplicate_definition(
+                    &func.name.name,
+                    func.name.span,
+                    prev_span,
+                ));
                 return;
             }
 
@@ -252,6 +263,18 @@ impl Resolver {
                         self.resolve_function_decl(decl, index);
                     }
                 }
+                Item::Interface(interface) => {
+                    for method in &interface.methods {
+                        self.resolve_function_decl(method, index);
+                    }
+                }
+                Item::Implement(block) => {
+                    self.resolve_name(&block.interface_name.name, block.interface_name.span, index);
+                    self.resolve_type_expr(&block.for_type, index);
+                    for method in &block.methods {
+                        self.resolve_function(method, index);
+                    }
+                }
                 Item::Function(func) => {
                     self.resolve_function(func, index);
                 }
@@ -288,11 +311,7 @@ impl Resolver {
 
         // Bind parameters.
         for param in &func.params {
-            self.declare_local(
-                &param.name.name,
-                DefKind::Param,
-                param.name.span,
-            );
+            self.declare_local(&param.name.name, DefKind::Param, param.name.span);
         }
 
         // Resolve the function body, tracking `use` placement.
@@ -715,8 +734,7 @@ impl Resolver {
         for &def_id in &self.use_defs {
             if !self.used_defs.contains(&def_id) {
                 let info = self.scope_table.def(def_id);
-                self.sink
-                    .emit(errors::unused_import(&info.name, info.span));
+                self.sink.emit(errors::unused_import(&info.name, info.span));
             }
         }
     }
@@ -824,11 +842,7 @@ mod tests {
                     return_type: Some(named_type("nothing", 60)),
                     body: Block {
                         stmts: vec![Stmt::Expr(ExprStmt {
-                            expr: Expr::Call(
-                                Box::new(ident_expr("greet", 80)),
-                                vec![],
-                                sp(80, 87),
-                            ),
+                            expr: Expr::Call(Box::new(ident_expr("greet", 80)), vec![], sp(80, 87)),
                             span: sp(80, 87),
                         })],
                         span: sp(70, 90),
@@ -920,11 +934,7 @@ mod tests {
                     return_type: Some(named_type("nothing", 20)),
                     body: Block {
                         stmts: vec![Stmt::Expr(ExprStmt {
-                            expr: Expr::Call(
-                                Box::new(ident_expr("greet", 50)),
-                                vec![],
-                                sp(50, 57),
-                            ),
+                            expr: Expr::Call(Box::new(ident_expr("greet", 50)), vec![], sp(50, 57)),
                             span: sp(50, 57),
                         })],
                         span: sp(30, 60),
@@ -1198,11 +1208,7 @@ mod tests {
             .iter()
             .filter(|d| d.severity == Severity::Error)
             .collect();
-        assert!(
-            errors.is_empty(),
-            "expected no errors, got: {:#?}",
-            errors
-        );
+        assert!(errors.is_empty(), "expected no errors, got: {:#?}", errors);
         // x at span (90, 91) should resolve.
         let x_usage = sp(90, 91);
         assert!(
@@ -1255,11 +1261,7 @@ mod tests {
             .iter()
             .filter(|d| d.severity == Severity::Error)
             .collect();
-        assert!(
-            errors.is_empty(),
-            "expected no errors, got: {:#?}",
-            errors
-        );
+        assert!(errors.is_empty(), "expected no errors, got: {:#?}", errors);
         // The usage of `models` at (75, 81) should resolve to the use-binding.
         let models_span = sp(75, 81);
         assert!(

@@ -33,6 +33,7 @@ impl ScopeId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DefKind {
     Function,
+    Interface,
     Struct,
     Enum,
     Machine,

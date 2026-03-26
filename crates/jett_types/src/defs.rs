@@ -20,6 +20,16 @@ impl EnumId {
     }
 }
 
+/// Handle to an interface definition in the type registry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct InterfaceId(pub(crate) u32);
+
+impl InterfaceId {
+    pub fn index(self) -> u32 {
+        self.0
+    }
+}
+
 /// Describes a user-defined struct type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StructDef {
@@ -34,6 +44,13 @@ pub struct StructDef {
 pub struct EnumDef {
     pub name: String,
     pub variants: Vec<VariantDef>,
+}
+
+/// Describes a user-defined interface type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InterfaceDef {
+    pub name: String,
+    pub methods: Vec<FunctionSig>,
 }
 
 /// A single variant of an enum.

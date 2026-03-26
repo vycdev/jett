@@ -103,6 +103,12 @@ pub fn run_verify_blocks_detailed(module: &Module) -> Vec<VerifyResult> {
                     legacy_verify_functions.push(func.clone());
                 }
             }
+            Item::Interface(interface) => {
+                interp.register_interface(interface);
+            }
+            Item::Implement(block) => {
+                interp.register_implement_block(block);
+            }
             Item::Struct(strukt) => {
                 interp.register_struct(strukt);
             }
@@ -386,6 +392,10 @@ mod tests {
         Expr::Binary(Box::new(lhs), op, Box::new(rhs), sp())
     }
 
+    fn string(s: &str) -> Expr {
+        Expr::StringLiteral(s.to_string(), sp())
+    }
+
     fn type_named(name: &str) -> TypeExpr {
         TypeExpr::Named(ident(name))
     }
@@ -465,6 +475,47 @@ mod tests {
                     span: sp(),
                 })
                 .collect(),
+            methods,
+            span: sp(),
+        }
+    }
+
+    fn interface_decl(
+        name: &str,
+        methods: Vec<(&str, Vec<(&str, &str, bool)>, &str)>,
+    ) -> InterfaceDecl {
+        InterfaceDecl {
+            name: ident(name),
+            methods: methods
+                .into_iter()
+                .map(|(method_name, params, return_type)| FunctionDecl {
+                    name: ident(method_name),
+                    params: params
+                        .into_iter()
+                        .map(|(param_name, param_ty, view)| Param {
+                            view,
+                            mutable: false,
+                            name: ident(param_name),
+                            ty: type_named(param_ty),
+                            span: sp(),
+                        })
+                        .collect(),
+                    return_type: Some(type_named(return_type)),
+                    span: sp(),
+                })
+                .collect(),
+            span: sp(),
+        }
+    }
+
+    fn implement_block(
+        interface_name: &str,
+        for_type: &str,
+        methods: Vec<FunctionDef>,
+    ) -> ImplementBlock {
+        ImplementBlock {
+            interface_name: ident(interface_name),
+            for_type: type_named(for_type),
             methods,
             span: sp(),
         }
@@ -740,6 +791,59 @@ mod tests {
             results[0].error
         );
         assert_eq!(results[0].name, "point_total");
+    }
+
+    #[test]
+    fn verify_block_can_call_interface_methods() {
+        let speaker = interface_decl(
+            "Speaker",
+            vec![("speak", vec![("self", "Speaker", true)], "string")],
+        );
+        let dog = struct_def("Dog", vec![("name", "string")], vec![]);
+
+        let mut speak = func_def(
+            "speak",
+            vec![("self", "Dog")],
+            block(vec![return_stmt(field_access(var("self"), "name"))]),
+        );
+        speak.params[0].view = true;
+        let dog_speaker = implement_block("Speaker", "Dog", vec![speak]);
+
+        let dog_ctor = Expr::Call(
+            Box::new(var("Dog")),
+            vec![named_arg("name", string("bark"))],
+            sp(),
+        );
+        let speaker_call = dotted_call(
+            "Speaker",
+            "speak",
+            vec![Expr::View(Box::new(var("dog")), sp())],
+        );
+        let vb = verify_block_item(
+            "speaker_dispatch",
+            block(vec![
+                var_decl_stmt("Dog", "dog", dog_ctor),
+                assert_stmt_ast(binary(speaker_call, BinOp::Eq, string("bark"))),
+            ]),
+        );
+
+        let module = Module {
+            items: vec![
+                Item::Interface(speaker),
+                Item::Struct(dog),
+                Item::Implement(dog_speaker),
+                Item::Verify(vb),
+            ],
+            span: sp(),
+        };
+        let results = run_verify_blocks_detailed(&module);
+        assert_eq!(results.len(), 1);
+        assert!(
+            results[0].passed,
+            "expected interface verify block to pass: {:?}",
+            results[0].error
+        );
+        assert_eq!(results[0].name, "speaker_dispatch");
     }
 
     // -----------------------------------------------------------------------

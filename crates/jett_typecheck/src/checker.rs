@@ -9,8 +9,8 @@ use jett_parser::ast::{
 use jett_resolve::resolver::ResolveResult;
 use jett_resolve::scope::{DefId, DefKind};
 use jett_types::{
-    EnumDef as TypeEnumDef, FunctionSig, StructDef as TypeStructDef, StructId, Type, TypeId,
-    TypeInterner, VariantDef,
+    EnumDef as TypeEnumDef, FunctionSig, InterfaceDef as TypeInterfaceDef,
+    StructDef as TypeStructDef, StructId, Type, TypeId, TypeInterner, VariantDef,
 };
 
 use crate::capability;
@@ -33,8 +33,7 @@ pub fn check(module: &Module, resolve: &ResolveResult) -> CheckResult {
     checker.check_module(module);
 
     // Run ownership analysis (linear type checking) after type checking.
-    let ownership_diagnostics =
-        crate::ownership::check_ownership(module, &checker.interner);
+    let ownership_diagnostics = crate::ownership::check_ownership(module, &checker.interner);
 
     let mut diagnostics = checker.sink.into_diagnostics();
     diagnostics.extend(ownership_diagnostics);
@@ -64,9 +63,12 @@ struct TypeChecker<'a> {
     type_map: HashMap<Span, TypeId>,
     /// The expected return type for the function currently being checked.
     current_return_type: Option<TypeId>,
+    /// (interface, concrete type) -> implemented method signatures.
+    interface_impls: HashMap<(TypeId, TypeId), HashMap<String, FunctionSig>>,
+    /// concrete type -> all methods contributed by implement blocks.
+    impl_methods_by_type: HashMap<TypeId, HashMap<String, FunctionSig>>,
 
     // -- Capability / purity tracking --
-
     /// Function name → is_pure.  Built during the first pass over the module.
     purity_map: HashMap<String, bool>,
     /// Name of the function currently being type-checked (None outside functions).
@@ -99,6 +101,8 @@ impl<'a> TypeChecker<'a> {
             named_types: HashMap::new(),
             type_map: HashMap::new(),
             current_return_type: None,
+            interface_impls: HashMap::new(),
+            impl_methods_by_type: HashMap::new(),
             purity_map: HashMap::new(),
             current_function_name: None,
             current_function_pure: false,
@@ -138,7 +142,11 @@ impl<'a> TypeChecker<'a> {
             Type::Secret(inner) => format!("secret[{}]", self.type_name(*inner)),
             Type::Struct(sid) => self.interner.resolve_struct(*sid).name.clone(),
             Type::Enum(eid) => self.interner.resolve_enum(*eid).name.clone(),
-            Type::Function { params, return_type } => {
+            Type::Interface(iid) => self.interner.resolve_interface(*iid).name.clone(),
+            Type::Function {
+                params,
+                return_type,
+            } => {
                 let params: Vec<String> = params.iter().map(|p| self.type_name(*p)).collect();
                 format!(
                     "function({}) returns {}",
@@ -199,6 +207,8 @@ impl<'a> TypeChecker<'a> {
         }
 
         match (self.interner.resolve(expected), self.interner.resolve(got)) {
+            (Type::Interface(_), Type::Interface(_)) => expected == got,
+            (Type::Interface(_), _) => self.interface_impls.contains_key(&(expected, got)),
             (Type::List(expected_inner), Type::List(got_inner))
             | (Type::Optional(expected_inner), Type::Optional(got_inner))
             | (Type::Secret(expected_inner), Type::Secret(got_inner)) => {
@@ -253,7 +263,10 @@ impl<'a> TypeChecker<'a> {
             "list.new" => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
-                        &format!("list.new (expected 1 type argument, got {})", type_args.len()),
+                        &format!(
+                            "list.new (expected 1 type argument, got {})",
+                            type_args.len()
+                        ),
                         span,
                     ));
                     return Some((vec![], TypeInterner::ERROR));
@@ -270,7 +283,10 @@ impl<'a> TypeChecker<'a> {
                         ),
                         span,
                     ));
-                    return Some((vec![TypeInterner::ERROR, TypeInterner::ERROR], TypeInterner::ERROR));
+                    return Some((
+                        vec![TypeInterner::ERROR, TypeInterner::ERROR],
+                        TypeInterner::ERROR,
+                    ));
                 }
                 let inner = self.resolve_type_expr(&type_args[0]);
                 let list_ty = self.interner.intern(Type::List(inner));
@@ -288,15 +304,24 @@ impl<'a> TypeChecker<'a> {
                     return Some((vec![TypeInterner::ERROR], TypeInterner::ERROR));
                 }
                 let inner = self.resolve_type_expr(&type_args[0]);
-                Some((vec![self.interner.intern(Type::List(inner))], TypeInterner::INT64))
+                Some((
+                    vec![self.interner.intern(Type::List(inner))],
+                    TypeInterner::INT64,
+                ))
             }
             "list.get" => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
-                        &format!("list.get (expected 1 type argument, got {})", type_args.len()),
+                        &format!(
+                            "list.get (expected 1 type argument, got {})",
+                            type_args.len()
+                        ),
                         span,
                     ));
-                    return Some((vec![TypeInterner::ERROR, TypeInterner::INT64], TypeInterner::ERROR));
+                    return Some((
+                        vec![TypeInterner::ERROR, TypeInterner::INT64],
+                        TypeInterner::ERROR,
+                    ));
                 }
                 let inner = self.resolve_type_expr(&type_args[0]);
                 Some((
@@ -317,6 +342,7 @@ impl<'a> TypeChecker<'a> {
         // fields, and methods can refer to them by name.
         for item in &module.items {
             match item {
+                Item::Interface(def) => self.predeclare_interface(def),
                 Item::Struct(def) => self.predeclare_struct(def),
                 Item::Enum(def) => self.predeclare_enum(def),
                 _ => {}
@@ -326,6 +352,7 @@ impl<'a> TypeChecker<'a> {
         // Second pass: fill in the struct/enum contents now that all names exist.
         for item in &module.items {
             match item {
+                Item::Interface(def) => self.finish_interface(def),
                 Item::Struct(def) => self.finish_struct(def),
                 Item::Enum(def) => self.finish_enum(def),
                 _ => {}
@@ -348,6 +375,14 @@ impl<'a> TypeChecker<'a> {
                     let is_pure = Self::function_is_pure(func);
                     self.purity_map.insert(func.name.name.clone(), is_pure);
                 }
+                Item::Interface(def) => {
+                    for method in &def.methods {
+                        let dotted = format!("{}.{}", def.name.name, method.name.name);
+                        let is_pure = Self::params_are_pure(&method.params);
+                        self.purity_map.insert(dotted, is_pure);
+                    }
+                }
+                Item::Implement(block) => self.register_implement_block(block),
                 Item::Struct(def) => {
                     for method in &def.methods {
                         let dotted = format!("{}.{}", def.name.name, method.name.name);
@@ -360,11 +395,13 @@ impl<'a> TypeChecker<'a> {
         }
 
         self.validate_mutual_blocks(module);
+        self.validate_implement_blocks(module);
 
         // Fourth pass: type-check function bodies, methods, and verify blocks.
         for item in &module.items {
             match item {
                 Item::Function(func) => self.check_function(func),
+                Item::Implement(block) => self.check_implement_block(block),
                 Item::Struct(def) => {
                     for method in &def.methods {
                         self.check_method(&def.name.name, method);
@@ -383,7 +420,9 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn params_are_pure(params: &[ast::Param]) -> bool {
-        !params.iter().any(|p| capability::type_expr_is_capability(&p.ty))
+        !params
+            .iter()
+            .any(|p| capability::type_expr_is_capability(&p.ty))
     }
 
     fn predeclare_struct(&mut self, def: &ast::StructDef) {
@@ -393,6 +432,19 @@ impl<'a> TypeChecker<'a> {
             methods: Vec::new(),
         });
         let ty = self.interner.intern(Type::Struct(sid));
+        self.named_types.insert(def.name.name.clone(), ty);
+
+        if let Some(def_id) = self.declaration_def_id(def.name.span) {
+            self.type_env.insert(def_id, ty);
+        }
+    }
+
+    fn predeclare_interface(&mut self, def: &ast::InterfaceDecl) {
+        let iid = self.interner.add_interface(TypeInterfaceDef {
+            name: def.name.name.clone(),
+            methods: Vec::new(),
+        });
+        let ty = self.interner.intern(Type::Interface(iid));
         self.named_types.insert(def.name.name.clone(), ty);
 
         if let Some(def_id) = self.declaration_def_id(def.name.span) {
@@ -424,6 +476,29 @@ impl<'a> TypeChecker<'a> {
             TypeStructDef {
                 name: def.name.name.clone(),
                 fields,
+                methods,
+            },
+        );
+    }
+
+    fn finish_interface(&mut self, def: &ast::InterfaceDecl) {
+        let Some(&ty) = self.named_types.get(&def.name.name) else {
+            return;
+        };
+        let Type::Interface(iid) = *self.interner.resolve(ty) else {
+            return;
+        };
+
+        let methods = def
+            .methods
+            .iter()
+            .map(|method| self.function_decl_method_signature(method))
+            .collect();
+
+        self.interner.update_interface(
+            iid,
+            TypeInterfaceDef {
+                name: def.name.name.clone(),
                 methods,
             },
         );
@@ -498,6 +573,32 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn function_decl_method_signature(&mut self, decl: &ast::FunctionDecl) -> FunctionSig {
+        let params = decl
+            .params
+            .iter()
+            .map(|param| {
+                (
+                    param.name.name.clone(),
+                    self.resolve_type_expr(&param.ty),
+                    param.view,
+                )
+            })
+            .collect();
+        let return_type = decl
+            .return_type
+            .as_ref()
+            .map(|ty| self.resolve_type_expr(ty))
+            .unwrap_or(TypeInterner::NOTHING);
+
+        FunctionSig {
+            name: decl.name.name.clone(),
+            params,
+            return_type,
+            is_pure: Self::params_are_pure(&decl.params),
+        }
+    }
+
     fn function_decl_signature(&mut self, decl: &ast::FunctionDecl) -> (Vec<TypeId>, TypeId) {
         let params = decl
             .params
@@ -550,6 +651,159 @@ impl<'a> TypeChecker<'a> {
         if let Some(def_id) = self.declaration_def_id(func.name.span) {
             self.type_env.insert(def_id, fn_type);
         }
+    }
+
+    fn register_implement_block(&mut self, block: &ast::ImplementBlock) {
+        let interface_ty = self.resolve_type_expr(&TypeExpr::Named(block.interface_name.clone()));
+        let owner_ty = self.resolve_type_expr(&block.for_type);
+        if interface_ty == TypeInterner::ERROR || owner_ty == TypeInterner::ERROR {
+            return;
+        }
+
+        let owner_name = self.type_name(owner_ty);
+        let interface_name = self.type_name(interface_ty);
+        let method_sigs: Vec<_> = block
+            .methods
+            .iter()
+            .map(|method| {
+                let sig = self.method_signature(method);
+                (method.name.name.clone(), sig)
+            })
+            .collect();
+
+        let impl_methods = self.impl_methods_by_type.entry(owner_ty).or_default();
+        let interface_methods = self
+            .interface_impls
+            .entry((interface_ty, owner_ty))
+            .or_default();
+
+        for (method_name, sig) in method_sigs {
+            self.purity_map
+                .insert(format!("{owner_name}.{method_name}"), sig.is_pure);
+            self.purity_map
+                .insert(format!("{interface_name}.{method_name}"), sig.is_pure);
+            impl_methods.insert(method_name.clone(), sig.clone());
+            interface_methods.insert(method_name, sig);
+        }
+    }
+
+    fn validate_implement_blocks(&mut self, module: &Module) {
+        for item in &module.items {
+            let Item::Implement(block) = item else {
+                continue;
+            };
+
+            let interface_ty =
+                self.resolve_type_expr(&TypeExpr::Named(block.interface_name.clone()));
+            let owner_ty = self.resolve_type_expr(&block.for_type);
+            if interface_ty == TypeInterner::ERROR || owner_ty == TypeInterner::ERROR {
+                continue;
+            }
+
+            let Type::Interface(iid) = *self.interner.resolve(interface_ty) else {
+                self.sink.emit(errors::expected_interface(
+                    &block.interface_name.name,
+                    block.interface_name.span,
+                ));
+                continue;
+            };
+            let interface_def = self.interner.resolve_interface(iid).clone();
+
+            let Some(impl_methods) = self.interface_impls.get(&(interface_ty, owner_ty)).cloned()
+            else {
+                continue;
+            };
+
+            let mut seen = HashSet::new();
+            for method in &block.methods {
+                if !seen.insert(method.name.name.clone()) {
+                    self.sink.emit(errors::duplicate_implemented_method(
+                        &self.type_name(owner_ty),
+                        &method.name.name,
+                        method.name.span,
+                    ));
+                    continue;
+                }
+
+                let Some(interface_method) = interface_def
+                    .methods
+                    .iter()
+                    .find(|candidate| candidate.name == method.name.name)
+                    .cloned()
+                else {
+                    self.sink.emit(errors::interface_has_no_member(
+                        &interface_def.name,
+                        &method.name.name,
+                        method.name.span,
+                    ));
+                    continue;
+                };
+
+                let impl_sig = impl_methods
+                    .get(&method.name.name)
+                    .expect("impl method must exist");
+                if !self.implementation_matches_interface(owner_ty, impl_sig, &interface_method) {
+                    self.sink
+                        .emit(errors::implemented_method_signature_mismatch(
+                            &interface_def.name,
+                            &self.type_name(owner_ty),
+                            &method.name.name,
+                            method.name.span,
+                        ));
+                }
+            }
+
+            for interface_method in &interface_def.methods {
+                if !seen.contains(&interface_method.name) {
+                    self.sink.emit(errors::missing_implemented_method(
+                        &interface_def.name,
+                        &self.type_name(owner_ty),
+                        &interface_method.name,
+                        block.span,
+                    ));
+                }
+            }
+        }
+    }
+
+    fn implementation_matches_interface(
+        &mut self,
+        owner_ty: TypeId,
+        impl_sig: &FunctionSig,
+        interface_sig: &FunctionSig,
+    ) -> bool {
+        if impl_sig.params.len() != interface_sig.params.len() {
+            return false;
+        }
+
+        for (index, (impl_param, interface_param)) in impl_sig
+            .params
+            .iter()
+            .zip(interface_sig.params.iter())
+            .enumerate()
+        {
+            if impl_param.0 != interface_param.0 || impl_param.2 != interface_param.2 {
+                return false;
+            }
+
+            let expected_ty = if index == 0 {
+                match self.interner.resolve(interface_param.1) {
+                    Type::Interface(_) => owner_ty,
+                    _ => interface_param.1,
+                }
+            } else {
+                interface_param.1
+            };
+
+            if !self.types_compatible(expected_ty, impl_param.1)
+                || !self.types_compatible(impl_param.1, expected_ty)
+            {
+                return false;
+            }
+        }
+
+        self.types_compatible(interface_sig.return_type, impl_sig.return_type)
+            && self.types_compatible(impl_sig.return_type, interface_sig.return_type)
     }
 
     fn validate_mutual_blocks(&mut self, module: &Module) {
@@ -632,6 +886,14 @@ impl<'a> TypeChecker<'a> {
 
     fn check_method(&mut self, owner: &str, func: &FunctionDef) {
         self.check_function_impl(func, format!("{owner}.{}", func.name.name));
+    }
+
+    fn check_implement_block(&mut self, block: &ast::ImplementBlock) {
+        let owner_ty = self.resolve_type_expr(&block.for_type);
+        let owner_name = self.type_name(owner_ty);
+        for method in &block.methods {
+            self.check_method(&owner_name, method);
+        }
     }
 
     fn check_function_impl(&mut self, func: &FunctionDef, function_name: String) {
@@ -854,7 +1116,11 @@ impl<'a> TypeChecker<'a> {
         for arm in &match_stmt.arms {
             match &arm.pattern {
                 ast::Pattern::Ident(name) => {
-                    if enum_def.variants.iter().any(|variant| variant.name == name.name) {
+                    if enum_def
+                        .variants
+                        .iter()
+                        .any(|variant| variant.name == name.name)
+                    {
                         covered.insert(name.name.clone());
                     } else {
                         self.sink.emit(errors::type_has_no_member(
@@ -865,8 +1131,10 @@ impl<'a> TypeChecker<'a> {
                     }
                 }
                 ast::Pattern::Variant(name, bindings) => {
-                    if let Some(variant) =
-                        enum_def.variants.iter().find(|variant| variant.name == name.name)
+                    if let Some(variant) = enum_def
+                        .variants
+                        .iter()
+                        .find(|variant| variant.name == name.name)
                     {
                         covered.insert(name.name.clone());
                         if bindings.len() != variant.fields.len() {
@@ -878,9 +1146,7 @@ impl<'a> TypeChecker<'a> {
                             ));
                         }
 
-                        for (binding, (_, field_ty)) in
-                            bindings.iter().zip(variant.fields.iter())
-                        {
+                        for (binding, (_, field_ty)) in bindings.iter().zip(variant.fields.iter()) {
                             if let Some(def_id) = self.declaration_def_id(binding.span) {
                                 self.type_env.insert(def_id, *field_ty);
                             }
@@ -977,10 +1243,17 @@ impl<'a> TypeChecker<'a> {
             }
 
             Expr::StringInterpolation(parts, _) => {
-                // Each interpolated expression is checked; the overall result is string.
+                // Each interpolated expression must be displayable; the overall result is string.
                 for part in parts {
                     if let StringPart::Expr(expr) = part {
-                        self.check_expr(expr);
+                        let expr_ty = self.check_expr(expr);
+                        if !self.is_displayable_type(expr_ty) {
+                            self.sink.emit(errors::type_does_not_implement_interface(
+                                &self.type_name(expr_ty),
+                                "Displayable",
+                                expr.span(),
+                            ));
+                        }
                     }
                 }
                 TypeInterner::STRING
@@ -1035,6 +1308,32 @@ impl<'a> TypeChecker<'a> {
         // If name resolution didn't find this ident, the resolver already
         // emitted an error. We return Error to avoid cascading type errors.
         TypeInterner::ERROR
+    }
+
+    fn is_displayable_type(&self, ty: TypeId) -> bool {
+        matches!(
+            self.interner.resolve(ty),
+            Type::Int8
+                | Type::Int16
+                | Type::Int32
+                | Type::Int64
+                | Type::Uint8
+                | Type::Uint16
+                | Type::Uint32
+                | Type::Uint64
+                | Type::Float32
+                | Type::Float64
+                | Type::String
+                | Type::Bool
+        ) || self.type_implements_named_interface(ty, "Displayable")
+    }
+
+    fn type_implements_named_interface(&self, ty: TypeId, interface_name: &str) -> bool {
+        let Some(&interface_ty) = self.named_types.get(interface_name) else {
+            return false;
+        };
+        matches!(self.interner.resolve(interface_ty), Type::Interface(_))
+            && self.interface_impls.contains_key(&(interface_ty, ty))
     }
 
     fn check_binary(&mut self, lhs: &Expr, op: BinOp, rhs: &Expr, span: Span) -> TypeId {
@@ -1140,11 +1439,8 @@ impl<'a> TypeChecker<'a> {
                 // E0500: pure function calls impure function
                 if self.current_function_pure {
                     if let Some(caller_name) = &self.current_function_name {
-                        self.sink.emit(errors::pure_calls_impure(
-                            caller_name,
-                            &callee_name,
-                            span,
-                        ));
+                        self.sink
+                            .emit(errors::pure_calls_impure(caller_name, &callee_name, span));
                     }
                 }
                 // E0501: verify block calls impure function
@@ -1236,12 +1532,15 @@ impl<'a> TypeChecker<'a> {
             if self.ident_def_kind(base_ident) == Some(DefKind::Enum) {
                 return self.check_enum_variant(base_ident, field, &[], span);
             }
-            if self.ident_def_kind(base_ident) == Some(DefKind::Struct) {
+            if self.ident_def_kind(base_ident) == Some(DefKind::Interface) {
                 let base_ty = self.check_ident(base_ident);
-                if let Type::Struct(sid) = *self.interner.resolve(base_ty) {
-                    let struct_def = self.interner.resolve_struct(sid);
-                    if let Some(method) =
-                        struct_def.methods.iter().find(|m| m.name == field.name).cloned()
+                if let Type::Interface(iid) = *self.interner.resolve(base_ty) {
+                    let interface_def = self.interner.resolve_interface(iid);
+                    if let Some(method) = interface_def
+                        .methods
+                        .iter()
+                        .find(|m| m.name == field.name)
+                        .cloned()
                     {
                         let params = method.params.iter().map(|(_, ty, _)| *ty).collect();
                         return self.interner.intern(Type::Function {
@@ -1250,12 +1549,23 @@ impl<'a> TypeChecker<'a> {
                         });
                     }
 
-                    self.sink.emit(errors::type_has_no_member(
-                        &struct_def.name,
+                    self.sink.emit(errors::interface_has_no_member(
+                        &interface_def.name,
                         &field.name,
                         span,
                     ));
                     return TypeInterner::ERROR;
+                }
+            }
+            if self.ident_def_kind(base_ident) == Some(DefKind::Struct) {
+                let base_ty = self.check_ident(base_ident);
+                if let Some(method_ty) = self.check_type_module_method(base_ty, field, span) {
+                    return method_ty;
+                }
+            }
+            if let Some(type_id) = self.named_types.get(&base_ident.name).copied() {
+                if let Some(method_ty) = self.check_type_module_method(type_id, field, span) {
+                    return method_ty;
                 }
             }
         }
@@ -1268,8 +1578,10 @@ impl<'a> TypeChecker<'a> {
         match self.interner.resolve(base_ty) {
             Type::Struct(sid) => {
                 let struct_def = self.interner.resolve_struct(*sid);
-                if let Some((_, field_ty)) =
-                    struct_def.fields.iter().find(|(name, _)| name == &field.name)
+                if let Some((_, field_ty)) = struct_def
+                    .fields
+                    .iter()
+                    .find(|(name, _)| name == &field.name)
                 {
                     *field_ty
                 } else {
@@ -1290,6 +1602,49 @@ impl<'a> TypeChecker<'a> {
                 TypeInterner::ERROR
             }
         }
+    }
+
+    fn check_type_module_method(
+        &mut self,
+        type_id: TypeId,
+        field: &ast::Ident,
+        span: Span,
+    ) -> Option<TypeId> {
+        if let Type::Struct(sid) = *self.interner.resolve(type_id) {
+            let struct_def = self.interner.resolve_struct(sid);
+            if let Some(method) = struct_def
+                .methods
+                .iter()
+                .find(|m| m.name == field.name)
+                .cloned()
+            {
+                let params = method.params.iter().map(|(_, ty, _)| *ty).collect();
+                return Some(self.interner.intern(Type::Function {
+                    params,
+                    return_type: method.return_type,
+                }));
+            }
+        }
+
+        if let Some(method) = self
+            .impl_methods_by_type
+            .get(&type_id)
+            .and_then(|methods| methods.get(&field.name))
+            .cloned()
+        {
+            let params = method.params.iter().map(|(_, ty, _)| *ty).collect();
+            return Some(self.interner.intern(Type::Function {
+                params,
+                return_type: method.return_type,
+            }));
+        }
+
+        self.sink.emit(errors::type_has_no_member(
+            &self.type_name(type_id),
+            &field.name,
+            span,
+        ));
+        None
     }
 
     fn check_enum_variant(
@@ -1540,12 +1895,16 @@ impl<'a> TypeChecker<'a> {
                     }
                 } else {
                     self.sink
-                        .emit(errors::handle_block_requires_return_or_default(expr_stmt.span));
+                        .emit(errors::handle_block_requires_return_or_default(
+                            expr_stmt.span,
+                        ));
                 }
             }
             _ => self
                 .sink
-                .emit(errors::handle_block_requires_return_or_default(stmt_span(last_stmt))),
+                .emit(errors::handle_block_requires_return_or_default(stmt_span(
+                    last_stmt,
+                ))),
         }
     }
 
@@ -1593,12 +1952,7 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
-    fn resolve_generic_type(
-        &mut self,
-        name: &str,
-        args: &[TypeExpr],
-        span: Span,
-    ) -> TypeId {
+    fn resolve_generic_type(&mut self, name: &str, args: &[TypeExpr], span: Span) -> TypeId {
         match name {
             "list" => {
                 if args.len() == 1 {
@@ -1752,19 +2106,25 @@ mod tests {
         }
 
         fn def_var(&mut self, name: &str, span: Span) -> DefId {
-            let def_id = self.scope_table.new_def(name.to_string(), DefKind::Variable, span);
+            let def_id = self
+                .scope_table
+                .new_def(name.to_string(), DefKind::Variable, span);
             self.resolutions.insert(span, def_id);
             def_id
         }
 
         fn def_param(&mut self, name: &str, span: Span) -> DefId {
-            let def_id = self.scope_table.new_def(name.to_string(), DefKind::Param, span);
+            let def_id = self
+                .scope_table
+                .new_def(name.to_string(), DefKind::Param, span);
             self.resolutions.insert(span, def_id);
             def_id
         }
 
         fn def_func(&mut self, name: &str, span: Span) -> DefId {
-            let def_id = self.scope_table.new_def(name.to_string(), DefKind::Function, span);
+            let def_id = self
+                .scope_table
+                .new_def(name.to_string(), DefKind::Function, span);
             self.resolutions.insert(span, def_id);
             def_id
         }
@@ -2012,7 +2372,10 @@ mod tests {
         let result = check(&module, &resolve);
 
         assert!(
-            result.diagnostics.iter().all(|d| d.severity != jett_diagnostics::Severity::Error),
+            result
+                .diagnostics
+                .iter()
+                .all(|d| d.severity != jett_diagnostics::Severity::Error),
             "unexpected errors: {:?}",
             result.diagnostics
         );
@@ -2051,7 +2414,10 @@ mod tests {
         let result = check(&module, &resolve);
 
         assert!(
-            result.diagnostics.iter().all(|d| d.severity != jett_diagnostics::Severity::Error),
+            result
+                .diagnostics
+                .iter()
+                .all(|d| d.severity != jett_diagnostics::Severity::Error),
             "unexpected errors: {:?}",
             result.diagnostics
         );
@@ -2090,7 +2456,10 @@ mod tests {
         let result = check(&module, &resolve);
 
         assert!(
-            result.diagnostics.iter().all(|d| d.severity != jett_diagnostics::Severity::Error),
+            result
+                .diagnostics
+                .iter()
+                .all(|d| d.severity != jett_diagnostics::Severity::Error),
             "unexpected errors: {:?}",
             result.diagnostics
         );
@@ -2809,12 +3178,7 @@ mod tests {
     // ---------------------------------------------------------------
 
     /// Helper: create a minimal function definition.
-    fn make_function(
-        name: &str,
-        name_span: Span,
-        params: Vec<Param>,
-        body: Block,
-    ) -> FunctionDef {
+    fn make_function(name: &str, name_span: Span, params: Vec<Param>, body: Block) -> FunctionDef {
         FunctionDef {
             name: ident(name, name_span),
             params,
@@ -3601,6 +3965,109 @@ function main() returns int64:
 ",
         );
 
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+    }
+
+    #[test]
+    fn interface_implement_call_typechecks_cleanly() {
+        let result = check_source_result(
+            "\
+interface Speaker:
+    function speak(view self: Speaker) returns string
+
+struct Dog:
+    name: string
+
+implement Speaker for Dog:
+    function speak(view self: Dog) returns string:
+        return self.name
+
+function main() returns string:
+    Dog dog = Dog(name: \"woof\")
+    return Speaker.speak(view dog)
+",
+        );
+
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == jett_diagnostics::Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+    }
+
+    #[test]
+    fn implement_block_missing_method_reports_error() {
+        let errors = check_source_errors(
+            "\
+interface Speaker:
+    function speak(view self: Speaker) returns string
+    function growl(view self: Speaker) returns string
+
+struct Dog:
+    name: string
+
+implement Speaker for Dog:
+    function speak(view self: Dog) returns string:
+        return self.name
+",
+        );
+
+        assert!(
+            errors.iter().any(|d| d.code.code() == 331),
+            "expected E0331, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn implement_block_signature_mismatch_reports_error() {
+        let errors = check_source_errors(
+            "\
+interface Speaker:
+    function speak(view self: Speaker) returns string
+
+struct Dog:
+    name: string
+
+implement Speaker for Dog:
+    function speak(self: Dog) returns int64:
+        return 1
+",
+        );
+
+        assert!(
+            errors.iter().any(|d| d.code.code() == 330),
+            "expected E0330, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn string_interpolation_accepts_user_defined_displayable_types() {
+        let result = check_source_result(
+            "\
+interface Displayable:
+    function display(view self: Displayable) returns string
+
+struct User:
+    name: string
+
+implement Displayable for User:
+    function display(view self: User) returns string:
+        return self.name
+
+function main() returns string:
+    User user = User(name: \"Ada\")
+    return \"user: {user}\"
+",
+        );
+
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == jett_diagnostics::Severity::Error)
+            .collect();
         assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
     }
 }

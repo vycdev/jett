@@ -103,8 +103,7 @@ impl<'src> Parser<'src> {
     }
 
     fn error(&mut self, message: impl Into<String>, span: Span) {
-        self.errors
-            .push(Diagnostic::error(1000, message, span));
+        self.errors.push(Diagnostic::error(1000, message, span));
     }
 
     /// Skip tokens until we reach one of the recovery points (Newline, Dedent, Eof).
@@ -168,6 +167,8 @@ impl<'src> Parser<'src> {
             TokenKind::Namespace => Some(Item::Namespace(self.parse_namespace())),
             TokenKind::Function => Some(Item::Function(self.parse_function())),
             TokenKind::Mutual => Some(Item::Mutual(self.parse_mutual_block())),
+            TokenKind::Interface => Some(Item::Interface(self.parse_interface())),
+            TokenKind::Implement => Some(Item::Implement(self.parse_implement())),
             TokenKind::Struct => Some(Item::Struct(self.parse_struct())),
             TokenKind::Enum => Some(Item::Enum(self.parse_enum())),
             TokenKind::Machine => Some(Item::Machine(self.parse_machine())),
@@ -180,7 +181,7 @@ impl<'src> Parser<'src> {
             _ => {
                 let tok = self.peek_token().clone();
                 self.error(
-                    format!("expected item (namespace, function, mutual, struct, enum, machine, type, property, or variable), found {:?}", tok.kind),
+                    format!("expected item (namespace, function, mutual, interface, implement, struct, enum, machine, type, property, or variable), found {:?}", tok.kind),
                     tok.span,
                 );
                 None
@@ -282,9 +283,7 @@ impl<'src> Parser<'src> {
             None
         };
 
-        let end_span = constraint
-            .as_ref()
-            .map_or(base_type.span(), |c| c.span());
+        let end_span = constraint.as_ref().map_or(base_type.span(), |c| c.span());
 
         TypeAlias {
             span: kw.span.merge(end_span),
@@ -355,6 +354,66 @@ impl<'src> Parser<'src> {
 
         MutualBlock {
             declarations,
+            span: kw.span.merge(last_span),
+        }
+    }
+
+    fn parse_interface(&mut self) -> InterfaceDecl {
+        let kw = self.expect(TokenKind::Interface);
+        let name = self.parse_ident();
+        self.expect(TokenKind::Colon);
+
+        self.skip_newlines();
+        let indent_tok = self.expect(TokenKind::Indent);
+        let mut methods = Vec::new();
+        let mut last_span = indent_tok.span;
+
+        self.skip_newlines();
+        while self.peek() != TokenKind::Dedent && self.peek() != TokenKind::Eof {
+            let func_kw = self.expect(TokenKind::Function);
+            let decl = self.parse_function_decl_rest(func_kw.span);
+            last_span = decl.span;
+            methods.push(decl);
+            self.skip_newlines();
+        }
+        if self.peek() == TokenKind::Dedent {
+            last_span = self.advance().span;
+        }
+
+        InterfaceDecl {
+            name,
+            methods,
+            span: kw.span.merge(last_span),
+        }
+    }
+
+    fn parse_implement(&mut self) -> ImplementBlock {
+        let kw = self.expect(TokenKind::Implement);
+        let interface_name = self.parse_ident();
+        self.expect(TokenKind::For);
+        let for_type = self.parse_type();
+        self.expect(TokenKind::Colon);
+
+        self.skip_newlines();
+        let indent_tok = self.expect(TokenKind::Indent);
+        let mut methods = Vec::new();
+        let mut last_span = indent_tok.span;
+
+        self.skip_newlines();
+        while self.peek() != TokenKind::Dedent && self.peek() != TokenKind::Eof {
+            let method = self.parse_function();
+            last_span = method.span;
+            methods.push(method);
+            self.skip_newlines();
+        }
+        if self.peek() == TokenKind::Dedent {
+            last_span = self.advance().span;
+        }
+
+        ImplementBlock {
+            interface_name,
+            for_type,
+            methods,
             span: kw.span.merge(last_span),
         }
     }
@@ -954,16 +1013,13 @@ impl<'src> Parser<'src> {
         let kw = self.expect(TokenKind::Assert);
         let condition = self.parse_expr();
         // Optional message (string literal)
-        let message = if self.peek() == TokenKind::StringLiteral
-            || self.peek() == TokenKind::StringStart
-        {
-            Some(self.parse_expr())
-        } else {
-            None
-        };
-        let end = message
-            .as_ref()
-            .map_or(condition.span(), |m| m.span());
+        let message =
+            if self.peek() == TokenKind::StringLiteral || self.peek() == TokenKind::StringStart {
+                Some(self.parse_expr())
+            } else {
+                None
+            };
+        let end = message.as_ref().map_or(condition.span(), |m| m.span());
         Stmt::Assert(AssertStmt {
             condition,
             message,
@@ -1150,17 +1206,17 @@ impl<'src> Parser<'src> {
     /// Parse postfix field-access chain (`.field`) without call args.
     /// Used by pipeline parsing to build dotted names like `string.trim`.
     fn parse_postfix_chain(&mut self, mut expr: Expr) -> Expr {
-                while self.peek() == TokenKind::Dot {
-                    self.advance(); // consume `.`
-                    let field = self.parse_ident();
-                    let span = expr.span().merge(field.span);
-                    expr = Expr::FieldAccess(Box::new(expr), field, span);
-                    if self.peek() == TokenKind::LBracket && self.looks_like_generic_args() {
-                        expr = self.parse_generic_call(expr);
-                    }
-                }
-                expr
+        while self.peek() == TokenKind::Dot {
+            self.advance(); // consume `.`
+            let field = self.parse_ident();
+            let span = expr.span().merge(field.span);
+            expr = Expr::FieldAccess(Box::new(expr), field, span);
+            if self.peek() == TokenKind::LBracket && self.looks_like_generic_args() {
+                expr = self.parse_generic_call(expr);
             }
+        }
+        expr
+    }
 
     /// Pratt parser: parse expression with minimum binding power.
     fn parse_expr_bp(&mut self, min_bp: u8) -> Expr {
@@ -1575,7 +1631,8 @@ impl<'src> Parser<'src> {
             i += 1;
         }
         // After `]`, we should see `(`
-        self.peek_nth(i) == TokenKind::LParen || depth == 0 && self.peek_nth(i - 1 + 1) == TokenKind::LParen
+        self.peek_nth(i) == TokenKind::LParen
+            || depth == 0 && self.peek_nth(i - 1 + 1) == TokenKind::LParen
     }
 
     fn parse_generic_call(&mut self, callee: Expr) -> Expr {
@@ -1981,6 +2038,47 @@ mutual:
         }
     }
 
+    #[test]
+    fn parse_interface_declaration() {
+        let src = "\
+interface Speaker:
+    function speak(view self: Speaker) returns string
+";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        match &result.module.items[0] {
+            Item::Interface(interface) => {
+                assert_eq!(interface.name.name, "Speaker");
+                assert_eq!(interface.methods.len(), 1);
+                assert_eq!(interface.methods[0].name.name, "speak");
+            }
+            other => panic!("expected Interface, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_implement_block() {
+        let src = "\
+implement Speaker for Dog:
+    function speak(view self: Dog) returns string:
+        return \"woof\"
+";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        match &result.module.items[0] {
+            Item::Implement(block) => {
+                assert_eq!(block.interface_name.name, "Speaker");
+                assert!(matches!(
+                    block.for_type,
+                    TypeExpr::Named(ref ident) if ident.name == "Dog"
+                ));
+                assert_eq!(block.methods.len(), 1);
+                assert_eq!(block.methods[0].name.name, "speak");
+            }
+            other => panic!("expected Implement, got {:?}", other),
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Parsing struct definitions
     // -----------------------------------------------------------------------
@@ -2296,7 +2394,11 @@ function f() returns nothing:
             Item::Function(f) => {
                 // We recovered and parsed the valid var decl
                 let has_var_decl = f.body.stmts.iter().any(|s| matches!(s, Stmt::VarDecl(_)));
-                assert!(has_var_decl, "should have recovered and parsed var decl, stmts: {:?}", f.body.stmts);
+                assert!(
+                    has_var_decl,
+                    "should have recovered and parsed var decl, stmts: {:?}",
+                    f.body.stmts
+                );
             }
             other => panic!("expected Function, got {:?}", other),
         }
@@ -2440,9 +2542,15 @@ function f(color: Color) returns string:
                 match &f.body.stmts[0] {
                     Stmt::Match(m) => {
                         assert_eq!(m.arms.len(), 3);
-                        assert!(matches!(&m.arms[0].pattern, Pattern::Ident(id) if id.name == "red"));
-                        assert!(matches!(&m.arms[1].pattern, Pattern::Ident(id) if id.name == "green"));
-                        assert!(matches!(&m.arms[2].pattern, Pattern::Ident(id) if id.name == "blue"));
+                        assert!(
+                            matches!(&m.arms[0].pattern, Pattern::Ident(id) if id.name == "red")
+                        );
+                        assert!(
+                            matches!(&m.arms[1].pattern, Pattern::Ident(id) if id.name == "green")
+                        );
+                        assert!(
+                            matches!(&m.arms[2].pattern, Pattern::Ident(id) if id.name == "blue")
+                        );
                         // Each arm body has one return statement
                         assert_eq!(m.arms[0].body.stmts.len(), 1);
                     }
@@ -2726,10 +2834,14 @@ function transform(x: string) returns string:
                 assert!(matches!(initial.as_ref(), Expr::Ident(i) if i.name == "x"));
                 assert_eq!(steps.len(), 2);
                 // First step should be string.trim (FieldAccess)
-                assert!(matches!(&steps[0].function, Expr::FieldAccess(_, field, _) if field.name == "trim"));
+                assert!(
+                    matches!(&steps[0].function, Expr::FieldAccess(_, field, _) if field.name == "trim")
+                );
                 assert!(steps[0].extra_args.is_empty());
                 // Second step should be string.upper (FieldAccess)
-                assert!(matches!(&steps[1].function, Expr::FieldAccess(_, field, _) if field.name == "upper"));
+                assert!(
+                    matches!(&steps[1].function, Expr::FieldAccess(_, field, _) if field.name == "upper")
+                );
                 assert!(steps[1].extra_args.is_empty());
             }
             other => panic!("expected Pipeline, got {:?}", other),
@@ -2750,7 +2862,9 @@ function transform(x: string) returns string:
             Expr::Pipeline(initial, steps, _) => {
                 assert!(matches!(initial.as_ref(), Expr::Ident(i) if i.name == "x"));
                 assert_eq!(steps.len(), 1);
-                assert!(matches!(&steps[0].function, Expr::FieldAccess(_, field, _) if field.name == "replace"));
+                assert!(
+                    matches!(&steps[0].function, Expr::FieldAccess(_, field, _) if field.name == "replace")
+                );
                 assert_eq!(steps[0].extra_args.len(), 2);
             }
             other => panic!("expected Pipeline, got {:?}", other),

@@ -17,6 +17,8 @@ pub enum Item {
     Namespace(NamespaceDecl),
     Function(FunctionDef),
     Mutual(MutualBlock),
+    Interface(InterfaceDecl),
+    Implement(ImplementBlock),
     Struct(StructDef),
     Enum(EnumDef),
     Machine(MachineDef),
@@ -108,6 +110,21 @@ pub struct FunctionDecl {
     pub name: Ident,
     pub params: Vec<Param>,
     pub return_type: Option<TypeExpr>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct InterfaceDecl {
+    pub name: Ident,
+    pub methods: Vec<FunctionDecl>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct ImplementBlock {
+    pub interface_name: Ident,
+    pub for_type: TypeExpr,
+    pub methods: Vec<FunctionDef>,
     pub span: Span,
 }
 

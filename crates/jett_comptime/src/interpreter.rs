@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use jett_parser::ast::{
-    BinOp, Block, CallArg, Expr, FunctionDef, Ident, MachineDef, Pattern, PipelineStep, Stmt,
-    StringPart, StructDef, TypeAlias, TypeExpr, UnaryOp,
+    BinOp, Block, CallArg, Expr, FunctionDef, Ident, ImplementBlock, InterfaceDecl, MachineDef,
+    Pattern, PipelineStep, Stmt, StringPart, StructDef, TypeAlias, TypeExpr, UnaryOp,
 };
 
 use crate::value::Value;
@@ -96,6 +96,8 @@ pub struct Interpreter {
     functions: HashMap<String, FunctionDef>,
     /// Registered user-defined structs available for construction and field access.
     structs: HashMap<String, StructDef>,
+    /// Interface dotted name -> concrete runtime type -> concrete dotted function name.
+    interface_methods: HashMap<String, HashMap<String, String>>,
     /// Registered type aliases: name -> (base_type_name, optional constraint).
     type_aliases: HashMap<String, Option<RefinementDef>>,
     /// Registered state machine definitions: name -> MachineDef.
@@ -109,6 +111,7 @@ impl Interpreter {
             scopes: vec![HashMap::new()],
             functions: HashMap::new(),
             structs: HashMap::new(),
+            interface_methods: HashMap::new(),
             type_aliases: HashMap::new(),
             machines: HashMap::new(),
         }
@@ -187,6 +190,28 @@ impl Interpreter {
                 format!("{}.{}", strukt.name.name, method.name.name),
                 method.clone(),
             );
+        }
+    }
+
+    /// Register an interface declaration. Interfaces carry no runtime state,
+    /// but keeping the entry point makes module registration symmetric.
+    pub fn register_interface(&mut self, _interface: &InterfaceDecl) {}
+
+    /// Register an `implement Interface for Type` block so interface-qualified
+    /// calls can dispatch to the concrete method body at runtime.
+    pub fn register_implement_block(&mut self, block: &ImplementBlock) {
+        let interface_name = block.interface_name.name.clone();
+        let owner_name = type_expr_name(&block.for_type);
+
+        for method in &block.methods {
+            let concrete_name = format!("{}.{}", owner_name, method.name.name);
+            let interface_method_name = format!("{}.{}", interface_name, method.name.name);
+
+            self.functions.insert(concrete_name.clone(), method.clone());
+            self.interface_methods
+                .entry(interface_method_name)
+                .or_default()
+                .insert(owner_name.clone(), concrete_name);
         }
     }
 
@@ -405,7 +430,9 @@ impl Interpreter {
                                 return Ok(ExprFlow::Value(result?));
                             }
                             // Try user-defined dotted functions.
-                            if self.functions.contains_key(name.as_str()) {
+                            if self.functions.contains_key(name.as_str())
+                                || self.resolve_interface_dispatch(name, &arg_values).is_some()
+                            {
                                 return Ok(ExprFlow::Value(self.call_function(name, arg_values)?));
                             }
                         }
@@ -1137,17 +1164,21 @@ impl Interpreter {
             return result;
         }
 
+        let resolved_name = self
+            .resolve_interface_dispatch(name, &args)
+            .unwrap_or_else(|| name.to_string());
+
         // Look up the function definition.
         let func = self
             .functions
-            .get(name)
+            .get(&resolved_name)
             .ok_or_else(|| format!("undefined function '{name}'"))?
             .clone();
 
         if args.len() != func.params.len() {
             return Err(format!(
                 "function '{}' expects {} argument(s), got {}",
-                name,
+                resolved_name,
                 func.params.len(),
                 args.len()
             ));
@@ -1169,6 +1200,18 @@ impl Interpreter {
             }
             _ => Ok(Value::Nothing),
         }
+    }
+
+    fn resolve_interface_dispatch(&self, name: &str, args: &[Value]) -> Option<String> {
+        if self.functions.contains_key(name) {
+            return Some(name.to_string());
+        }
+
+        let receiver_type = runtime_type_name(args.first()?)?;
+        self.interface_methods
+            .get(name)
+            .and_then(|methods| methods.get(&receiver_type))
+            .cloned()
     }
 
     fn construct_struct(
@@ -1484,6 +1527,23 @@ fn type_expr_name(ty: &TypeExpr) -> String {
     }
 }
 
+fn runtime_type_name(value: &Value) -> Option<String> {
+    match value {
+        Value::Int64(_) => Some("int64".to_string()),
+        Value::Float64(_) => Some("float64".to_string()),
+        Value::String(_) => Some("string".to_string()),
+        Value::Bool(_) => Some("bool".to_string()),
+        Value::List(_) => Some("list".to_string()),
+        Value::ResultOk(_) | Value::ResultFail(_) => Some("result".to_string()),
+        Value::OptionalSome(_) | Value::OptionalNone => Some("optional".to_string()),
+        Value::Nothing => Some("nothing".to_string()),
+        Value::Struct { type_name, .. }
+        | Value::Enum { type_name, .. }
+        | Value::Machine { type_name, .. } => Some(type_name.clone()),
+        Value::Error(_) => None,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -1661,6 +1721,47 @@ mod tests {
                     span: sp(),
                 })
                 .collect(),
+            methods,
+            span: sp(),
+        }
+    }
+
+    fn interface_decl(
+        name: &str,
+        methods: Vec<(&str, Vec<(&str, &str, bool)>, &str)>,
+    ) -> InterfaceDecl {
+        InterfaceDecl {
+            name: ident(name),
+            methods: methods
+                .into_iter()
+                .map(|(method_name, params, return_type)| FunctionDecl {
+                    name: ident(method_name),
+                    params: params
+                        .into_iter()
+                        .map(|(param_name, param_ty, view)| Param {
+                            view,
+                            mutable: false,
+                            name: ident(param_name),
+                            ty: type_named(param_ty),
+                            span: sp(),
+                        })
+                        .collect(),
+                    return_type: Some(type_named(return_type)),
+                    span: sp(),
+                })
+                .collect(),
+            span: sp(),
+        }
+    }
+
+    fn implement_block(
+        interface_name: &str,
+        for_type: &str,
+        methods: Vec<FunctionDef>,
+    ) -> ImplementBlock {
+        ImplementBlock {
+            interface_name: ident(interface_name),
+            for_type: type_named(for_type),
             methods,
             span: sp(),
         }
@@ -2206,6 +2307,79 @@ mod tests {
             vec![Expr::View(Box::new(var("point")), sp())],
         );
         assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(30));
+    }
+
+    #[test]
+    fn interface_call_dispatches_to_struct_implementation() {
+        let mut interp = Interpreter::new();
+        interp.register_interface(&interface_decl(
+            "Speaker",
+            vec![("speak", vec![("self", "Speaker", true)], "string")],
+        ));
+        interp.register_struct(&struct_def("Dog", vec![("name", "string")], vec![]));
+
+        let mut speak_method = func_def(
+            "speak",
+            vec![("self", "Dog")],
+            block(vec![return_stmt(field_access(var("self"), "name"))]),
+        );
+        speak_method.params[0].view = true;
+        interp.register_implement_block(&implement_block("Speaker", "Dog", vec![speak_method]));
+
+        interp
+            .exec_stmt(&Stmt::VarDecl(VarDecl {
+                mutable: false,
+                ty: type_named("Dog"),
+                name: ident("dog"),
+                value: Expr::Call(
+                    Box::new(var("Dog")),
+                    vec![named_arg("name", string("woof"))],
+                    sp(),
+                ),
+                span: sp(),
+            }))
+            .unwrap();
+
+        let expr = dotted_call(
+            "Speaker",
+            "speak",
+            vec![Expr::View(Box::new(var("dog")), sp())],
+        );
+        assert_eq!(
+            interp.eval_expr(&expr).unwrap(),
+            Value::String("woof".to_string())
+        );
+    }
+
+    #[test]
+    fn interface_call_dispatches_to_primitive_implementation() {
+        let mut interp = Interpreter::new();
+        interp.register_interface(&interface_decl(
+            "Displayable",
+            vec![("display", vec![("self", "Displayable", true)], "string")],
+        ));
+
+        let mut display_method = func_def(
+            "display",
+            vec![("self", "int64")],
+            block(vec![return_stmt(string("forty-two"))]),
+        );
+        display_method.params[0].view = true;
+        interp.register_implement_block(&implement_block(
+            "Displayable",
+            "int64",
+            vec![display_method],
+        ));
+
+        let expr = dotted_call(
+            "Displayable",
+            "display",
+            vec![Expr::View(Box::new(int(42)), sp())],
+        );
+        assert_eq!(
+            interp.eval_expr(&expr).unwrap(),
+            Value::String("forty-two".to_string())
+        );
     }
 
     // -----------------------------------------------------------------------

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::defs::{EnumDef, EnumId, StructDef, StructId};
+use crate::defs::{EnumDef, EnumId, InterfaceDef, InterfaceId, StructDef, StructId};
 use crate::types::{Type, TypeId};
 
 /// Type interner that deduplicates types and provides stable [`TypeId`] handles.
@@ -17,6 +17,8 @@ pub struct TypeInterner {
     structs: Vec<StructDef>,
     /// User-defined enum definitions.
     enums: Vec<EnumDef>,
+    /// User-defined interface definitions.
+    interfaces: Vec<InterfaceDef>,
 }
 
 // Constant TypeId values for every primitive type.
@@ -70,6 +72,7 @@ impl TypeInterner {
             map,
             structs: Vec::new(),
             enums: Vec::new(),
+            interfaces: Vec::new(),
         }
     }
 
@@ -134,6 +137,23 @@ impl TypeInterner {
     /// Replace an existing enum definition.
     pub fn update_enum(&mut self, id: EnumId, def: EnumDef) {
         self.enums[id.0 as usize] = def;
+    }
+
+    /// Register a new interface definition and return its [`InterfaceId`].
+    pub fn add_interface(&mut self, def: InterfaceDef) -> InterfaceId {
+        let id = InterfaceId(self.interfaces.len() as u32);
+        self.interfaces.push(def);
+        id
+    }
+
+    /// Look up an interface definition by its [`InterfaceId`].
+    pub fn resolve_interface(&self, id: InterfaceId) -> &InterfaceDef {
+        &self.interfaces[id.0 as usize]
+    }
+
+    /// Replace an existing interface definition.
+    pub fn update_interface(&mut self, id: InterfaceId, def: InterfaceDef) {
+        self.interfaces[id.0 as usize] = def;
     }
 
     /// Returns the total number of interned types.
@@ -215,10 +235,7 @@ mod tests {
         assert_eq!(list_int, list_int_again);
 
         // Resolve and verify
-        assert_eq!(
-            *interner.resolve(list_int),
-            Type::List(TypeInterner::INT64)
-        );
+        assert_eq!(*interner.resolve(list_int), Type::List(TypeInterner::INT64));
     }
 
     #[test]
