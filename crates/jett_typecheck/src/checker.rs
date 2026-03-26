@@ -473,6 +473,44 @@ impl<'a> TypeChecker<'a> {
         span: Span,
     ) -> Option<(Vec<TypeId>, TypeId)> {
         let name = Self::extract_dotted_name(callee)?;
+        if let Some((type_name, method_name)) = name.rsplit_once('.') {
+            if let Some(&type_id) = self.named_types.get(type_name) {
+                if matches!(self.interner.resolve(type_id), Type::Bitfield(_)) {
+                    match method_name {
+                        "to_bytes" => {
+                            if !type_args.is_empty() {
+                                self.sink.emit(errors::unknown_type(
+                                    &format!(
+                                        "{name} (expected 0 type arguments, got {})",
+                                        type_args.len()
+                                    ),
+                                    span,
+                                ));
+                            }
+                            return Some((vec![type_id], TypeInterner::BYTES));
+                        }
+                        "from_bytes" => {
+                            if !type_args.is_empty() {
+                                self.sink.emit(errors::unknown_type(
+                                    &format!(
+                                        "{name} (expected 0 type arguments, got {})",
+                                        type_args.len()
+                                    ),
+                                    span,
+                                ));
+                            }
+                            return Some((
+                                vec![TypeInterner::BYTES],
+                                self.interner
+                                    .intern(Type::Result(type_id, TypeInterner::STRING)),
+                            ));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
         match name.as_str() {
             "int64.from_string" => Some((
                 vec![TypeInterner::STRING],
@@ -875,6 +913,7 @@ impl<'a> TypeChecker<'a> {
 
         let list_u8 = self.interner.intern(Type::List(TypeInterner::UINT8));
         let mut fields = Vec::with_capacity(def.fields.len());
+        let mut bits_before_payload = 0usize;
         for (index, field) in def.fields.iter().enumerate() {
             let (ty, kind) = match &field.kind {
                 ast::BitfieldFieldKind::Bits { width, as_type } => {
@@ -889,20 +928,50 @@ impl<'a> TypeChecker<'a> {
 
                     let ty = if let Some(ty_expr) = as_type {
                         let resolved = self.resolve_type_expr(ty_expr);
-                        if resolved != TypeInterner::ERROR
-                            && !matches!(self.interner.resolve(resolved), Type::Enum(_))
-                        {
-                            self.sink.emit(errors::invalid_bitfield_field(
-                                &def.name.name,
-                                &field.name.name,
-                                "`as` annotations must name an enum type",
-                                field.span,
-                            ));
+                        if resolved != TypeInterner::ERROR {
+                            match self.interner.resolve(resolved) {
+                                Type::Enum(eid) => {
+                                    let enum_def = self.interner.resolve_enum(*eid);
+                                    if enum_def
+                                        .variants
+                                        .iter()
+                                        .any(|variant| !variant.fields.is_empty())
+                                    {
+                                        self.sink.emit(errors::invalid_bitfield_field(
+                                            &def.name.name,
+                                            &field.name.name,
+                                            "`as` annotations require an enum with only unit variants",
+                                            field.span,
+                                        ));
+                                    }
+
+                                    let variant_count = enum_def.variants.len();
+                                    if *width < usize::BITS as u16
+                                        && variant_count > (1usize << (*width as usize))
+                                    {
+                                        self.sink.emit(errors::invalid_bitfield_field(
+                                            &def.name.name,
+                                            &field.name.name,
+                                            "enum annotation has more variants than the field width can encode",
+                                            field.span,
+                                        ));
+                                    }
+                                }
+                                _ => {
+                                    self.sink.emit(errors::invalid_bitfield_field(
+                                        &def.name.name,
+                                        &field.name.name,
+                                        "`as` annotations must name an enum type",
+                                        field.span,
+                                    ));
+                                }
+                            }
                         }
                         resolved
                     } else {
                         TypeInterner::INT64
                     };
+                    bits_before_payload += *width as usize;
                     (ty, TypeBitfieldFieldKind::Bits { width: *width })
                 }
                 ast::BitfieldFieldKind::Payload(ty_expr) => {
@@ -920,6 +989,14 @@ impl<'a> TypeChecker<'a> {
                             &def.name.name,
                             &field.name.name,
                             "payload fields must be the final field",
+                            field.span,
+                        ));
+                    }
+                    if bits_before_payload % 8 != 0 {
+                        self.sink.emit(errors::invalid_bitfield_field(
+                            &def.name.name,
+                            &field.name.name,
+                            "payload fields must start on a byte boundary",
                             field.span,
                         ));
                     }
@@ -2250,6 +2327,12 @@ impl<'a> TypeChecker<'a> {
                     return method_ty;
                 }
             }
+            if self.ident_def_kind(base_ident) == Some(DefKind::Bitfield) {
+                let base_ty = self.check_ident(base_ident);
+                if let Some(method_ty) = self.check_type_module_method(base_ty, field, span) {
+                    return method_ty;
+                }
+            }
             if let Some(type_id) = self.named_types.get(&base_ident.name).copied() {
                 if let Some(method_ty) = self.check_type_module_method(type_id, field, span) {
                     return method_ty;
@@ -2283,8 +2366,10 @@ impl<'a> TypeChecker<'a> {
                 }
                 Type::Bitfield(bid) => {
                     let bitfield_def = self.interner.resolve_bitfield(*bid);
-                    if let Some(field_def) =
-                        bitfield_def.fields.iter().find(|candidate| candidate.name == field.name)
+                    if let Some(field_def) = bitfield_def
+                        .fields
+                        .iter()
+                        .find(|candidate| candidate.name == field.name)
                     {
                         self.maybe_wrap_secret(field_def.ty, true)
                     } else {
@@ -2324,8 +2409,10 @@ impl<'a> TypeChecker<'a> {
             }
             Type::Bitfield(bid) => {
                 let bitfield_def = self.interner.resolve_bitfield(*bid);
-                if let Some(field_def) =
-                    bitfield_def.fields.iter().find(|candidate| candidate.name == field.name)
+                if let Some(field_def) = bitfield_def
+                    .fields
+                    .iter()
+                    .find(|candidate| candidate.name == field.name)
                 {
                     field_def.ty
                 } else {
@@ -2392,6 +2479,27 @@ impl<'a> TypeChecker<'a> {
                     params,
                     return_type: method.return_type,
                 }));
+            }
+        }
+
+        if matches!(self.interner.resolve(type_id), Type::Bitfield(_)) {
+            match field.name.as_str() {
+                "to_bytes" => {
+                    return Some(self.interner.intern(Type::Function {
+                        params: vec![type_id],
+                        return_type: TypeInterner::BYTES,
+                    }));
+                }
+                "from_bytes" => {
+                    let result_ty = self
+                        .interner
+                        .intern(Type::Result(type_id, TypeInterner::STRING));
+                    return Some(self.interner.intern(Type::Function {
+                        params: vec![TypeInterner::BYTES],
+                        return_type: result_ty,
+                    }));
+                }
+                _ => {}
             }
         }
 
@@ -5693,6 +5801,55 @@ function main() returns nothing:
         assert!(
             errors.iter().any(|d| d.code.code() == 336),
             "expected E0336, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn bitfield_binary_roundtrip_typechecks() {
+        let result = check_source_result(
+            "\
+bitfield network IpHeader:
+    version: 4 bits
+    header_length: 4 bits
+    total_length: 16 bits
+
+function main() returns int64:
+    IpHeader header = IpHeader(version: 4, header_length: 5, total_length: 500)
+    bytes raw = IpHeader.to_bytes(header)
+    IpHeader decoded = IpHeader.from_bytes(raw) handle error:
+        return 0
+    return decoded.total_length
+",
+        );
+
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == jett_diagnostics::Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+    }
+
+    #[test]
+    fn bitfield_from_bytes_requires_handle() {
+        let errors = check_source_errors(
+            "\
+bitfield network IpHeader:
+    version: 4 bits
+    header_length: 4 bits
+    total_length: 16 bits
+
+function main() returns nothing:
+    bytes raw = IpHeader.to_bytes(IpHeader(version: 4, header_length: 5, total_length: 500))
+    IpHeader decoded = IpHeader.from_bytes(raw)
+    return nothing
+",
+        );
+
+        assert!(
+            errors.iter().any(|d| d.code.code() == 316),
+            "expected E0316, got: {:?}",
             errors
         );
     }

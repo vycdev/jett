@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use jett_parser::ast::{
-    BinOp, BitfieldDef, BitfieldFieldKind, Block, CallArg, Expr, FunctionDef, Ident,
+    BinOp, BitfieldDef, BitfieldFieldKind, Block, CallArg, EnumDef, Expr, FunctionDef, Ident,
     ImplementBlock, InterfaceDecl, MachineDef, Pattern, PipelineStep, Stmt, StringPart, StructDef,
     TypeAlias, TypeExpr, UnaryOp,
 };
@@ -99,6 +99,8 @@ pub struct Interpreter {
     structs: HashMap<String, StructDef>,
     /// Registered user-defined bitfields available for construction and field access.
     bitfields: HashMap<String, BitfieldDef>,
+    /// Registered enums for bitfield enum annotations and runtime mapping.
+    enums: HashMap<String, EnumDef>,
     /// Interface dotted name -> concrete runtime type -> concrete dotted function name.
     interface_methods: HashMap<String, HashMap<String, String>>,
     /// Registered type alias base names.
@@ -117,6 +119,7 @@ impl Interpreter {
             functions: HashMap::new(),
             structs: HashMap::new(),
             bitfields: HashMap::new(),
+            enums: HashMap::new(),
             interface_methods: HashMap::new(),
             type_alias_bases: HashMap::new(),
             type_aliases: HashMap::new(),
@@ -205,6 +208,12 @@ impl Interpreter {
     pub fn register_bitfield(&mut self, bitfield: &BitfieldDef) {
         self.bitfields
             .insert(bitfield.name.name.clone(), bitfield.clone());
+    }
+
+    /// Register an enum definition so runtime bitfield conversions can map
+    /// between stored integers and named variants.
+    pub fn register_enum(&mut self, enm: &EnumDef) {
+        self.enums.insert(enm.name.name.clone(), enm.clone());
     }
 
     /// Register an interface declaration. Interfaces carry no runtime state,
@@ -947,12 +956,391 @@ impl Interpreter {
         }
     }
 
+    fn call_bitfield_builtin(&self, name: &str, args: &[Value]) -> Option<Result<Value, String>> {
+        let (bitfield_name, method_name) = name.rsplit_once('.')?;
+        if !self.bitfields.contains_key(bitfield_name) {
+            return None;
+        }
+
+        match method_name {
+            "to_bytes" => Some(self.bitfield_to_bytes(bitfield_name, args)),
+            "from_bytes" => Some(self.bitfield_from_bytes(bitfield_name, args)),
+            _ => None,
+        }
+    }
+
+    fn bitfield_to_bytes(&self, bitfield_name: &str, args: &[Value]) -> Result<Value, String> {
+        if args.len() != 1 {
+            return Err(format!(
+                "{}.to_bytes expects 1 argument(s), got {}",
+                bitfield_name,
+                args.len()
+            ));
+        }
+        let bitfield = self
+            .bitfields
+            .get(bitfield_name)
+            .ok_or_else(|| format!("undefined bitfield '{bitfield_name}'"))?;
+        let bytes = self.encode_bitfield_value(bitfield, &args[0])?;
+        Ok(Value::Bytes(bytes))
+    }
+
+    fn bitfield_from_bytes(&self, bitfield_name: &str, args: &[Value]) -> Result<Value, String> {
+        if args.len() != 1 {
+            return Err(format!(
+                "{}.from_bytes expects 1 argument(s), got {}",
+                bitfield_name,
+                args.len()
+            ));
+        }
+        let bitfield = self
+            .bitfields
+            .get(bitfield_name)
+            .ok_or_else(|| format!("undefined bitfield '{bitfield_name}'"))?;
+
+        let Value::Bytes(bytes) = &args[0] else {
+            return Err(format!(
+                "{bitfield_name}.from_bytes expects a bytes argument"
+            ));
+        };
+
+        match self.decode_bitfield_value(bitfield, bytes) {
+            Ok(value) => Ok(Value::ResultOk(Box::new(value))),
+            Err(message) => Ok(Value::ResultFail(Box::new(Value::String(message)))),
+        }
+    }
+
+    fn encode_bitfield_value(
+        &self,
+        bitfield: &BitfieldDef,
+        value: &Value,
+    ) -> Result<Vec<u8>, String> {
+        let Value::Struct { type_name, fields } = value else {
+            return Err(format!(
+                "{}.to_bytes expects a {} value",
+                bitfield.name.name, bitfield.name.name
+            ));
+        };
+        if type_name != &bitfield.name.name {
+            return Err(format!(
+                "{}.to_bytes expects a {} value, got {}",
+                bitfield.name.name, bitfield.name.name, type_name
+            ));
+        }
+
+        let mut bits = Vec::new();
+        for field in &bitfield.fields {
+            let (_, field_value) = fields
+                .iter()
+                .find(|(name, _)| name == &field.name.name)
+                .ok_or_else(|| {
+                    format!(
+                        "bitfield '{}' is missing field '{}'",
+                        bitfield.name.name, field.name.name
+                    )
+                })?;
+
+            match &field.kind {
+                BitfieldFieldKind::Bits { width, as_type } => {
+                    let numeric = self.bitfield_field_numeric_value(
+                        bitfield,
+                        &field.name.name,
+                        *width,
+                        as_type.as_ref(),
+                        field_value,
+                    )?;
+                    let byte_aligned = bits.len() % 8 == 0;
+                    self.push_encoded_bits(
+                        &mut bits,
+                        numeric,
+                        *width,
+                        bitfield.network_order,
+                        byte_aligned,
+                    );
+                }
+                BitfieldFieldKind::Payload(_) => {
+                    if bits.len() % 8 != 0 {
+                        return Err(format!(
+                            "bitfield '{}' payload field '{}' must begin on a byte boundary",
+                            bitfield.name.name, field.name.name
+                        ));
+                    }
+                    let payload = self.value_to_byte_list(field_value).map_err(|message| {
+                        format!(
+                            "bitfield '{}' field '{}': {}",
+                            bitfield.name.name, field.name.name, message
+                        )
+                    })?;
+                    let mut bytes = Self::bits_to_bytes(&bits);
+                    bytes.extend(payload);
+                    return Ok(bytes);
+                }
+            }
+        }
+
+        Ok(Self::bits_to_bytes(&bits))
+    }
+
+    fn decode_bitfield_value(&self, bitfield: &BitfieldDef, bytes: &[u8]) -> Result<Value, String> {
+        let mut bit_index = 0usize;
+        let mut fields = Vec::with_capacity(bitfield.fields.len());
+
+        for field in &bitfield.fields {
+            match &field.kind {
+                BitfieldFieldKind::Bits { width, as_type } => {
+                    let numeric = if *width > 8
+                        && width % 8 == 0
+                        && !bitfield.network_order
+                        && bit_index % 8 == 0
+                    {
+                        let byte_count = (*width as usize) / 8;
+                        let start = bit_index / 8;
+                        let end = start + byte_count;
+                        if end > bytes.len() {
+                            return Err(format!(
+                                "bitfield '{}.from_bytes' expected at least {} byte(s), got {}",
+                                bitfield.name.name,
+                                end,
+                                bytes.len()
+                            ));
+                        }
+                        bit_index += *width as usize;
+                        let mut value = 0u64;
+                        for (shift, byte) in bytes[start..end].iter().enumerate() {
+                            value |= (*byte as u64) << (shift * 8);
+                        }
+                        value
+                    } else {
+                        Self::read_bits(bytes, &mut bit_index, *width).ok_or_else(|| {
+                            format!(
+                                "bitfield '{}.from_bytes' expected {} bit(s), got {} byte(s)",
+                                bitfield.name.name,
+                                bit_index + (*width as usize),
+                                bytes.len()
+                            )
+                        })?
+                    };
+
+                    let value = if let Some(enum_ty) = as_type {
+                        let enum_name = type_expr_name(enum_ty);
+                        self.enum_value_from_numeric(&enum_name, numeric)
+                            .map_err(|message| {
+                                format!(
+                                    "bitfield '{}' field '{}': {}",
+                                    bitfield.name.name, field.name.name, message
+                                )
+                            })?
+                    } else {
+                        Value::Int64(numeric as i64)
+                    };
+                    fields.push((field.name.name.clone(), value));
+                }
+                BitfieldFieldKind::Payload(_) => {
+                    if bit_index % 8 != 0 {
+                        return Err(format!(
+                            "bitfield '{}' payload field '{}' must begin on a byte boundary",
+                            bitfield.name.name, field.name.name
+                        ));
+                    }
+                    let start = bit_index / 8;
+                    let payload = bytes[start..]
+                        .iter()
+                        .map(|byte| Value::Int64(*byte as i64))
+                        .collect();
+                    bit_index = bytes.len() * 8;
+                    fields.push((field.name.name.clone(), Value::List(payload)));
+                }
+            }
+        }
+
+        let consumed_bytes = bit_index.div_ceil(8);
+        if consumed_bytes != bytes.len() {
+            return Err(format!(
+                "bitfield '{}.from_bytes' expected {} byte(s), got {}",
+                bitfield.name.name,
+                consumed_bytes,
+                bytes.len()
+            ));
+        }
+
+        Ok(Value::Struct {
+            type_name: bitfield.name.name.clone(),
+            fields,
+        })
+    }
+
+    fn bitfield_field_numeric_value(
+        &self,
+        bitfield: &BitfieldDef,
+        field_name: &str,
+        width: u16,
+        as_type: Option<&TypeExpr>,
+        value: &Value,
+    ) -> Result<u64, String> {
+        if let Some(enum_ty) = as_type {
+            let enum_name = type_expr_name(enum_ty);
+            let Value::Enum {
+                type_name,
+                variant,
+                fields,
+            } = value
+            else {
+                return Err(format!(
+                    "field '{}' expects enum '{}'",
+                    field_name, enum_name
+                ));
+            };
+            if !fields.is_empty() {
+                return Err(format!(
+                    "field '{}' enum '{}' must use unit variants",
+                    field_name, enum_name
+                ));
+            }
+            if type_name != &enum_name {
+                return Err(format!(
+                    "field '{}' expects enum '{}', got '{}'",
+                    field_name, enum_name, type_name
+                ));
+            }
+            let numeric = self.enum_numeric_value(type_name, variant)?;
+            if !Self::fits_in_bits(numeric, width) {
+                return Err(format!(
+                    "bitfield '{}' field '{}' is {} bit(s) wide and cannot hold enum variant '{}.{}'",
+                    bitfield.name.name, field_name, width, type_name, variant
+                ));
+            }
+            return Ok(numeric);
+        }
+
+        let Value::Int64(int_value) = value else {
+            return Err(format!("field '{}' expects int64", field_name));
+        };
+        if *int_value < 0 || !Self::fits_in_bits(*int_value as u64, width) {
+            return Err(format!(
+                "bitfield '{}' field '{}' is {} bit(s) wide and cannot hold '{}'",
+                bitfield.name.name, field_name, width, int_value
+            ));
+        }
+        Ok(*int_value as u64)
+    }
+
+    fn enum_numeric_value(&self, enum_name: &str, variant_name: &str) -> Result<u64, String> {
+        let enm = self
+            .enums
+            .get(enum_name)
+            .ok_or_else(|| format!("unknown enum '{}'", enum_name))?;
+        enm.variants
+            .iter()
+            .position(|variant| variant.name.name == variant_name)
+            .map(|index| index as u64)
+            .ok_or_else(|| format!("enum '{}' has no variant '{}'", enum_name, variant_name))
+    }
+
+    fn enum_value_from_numeric(&self, enum_name: &str, numeric: u64) -> Result<Value, String> {
+        let enm = self
+            .enums
+            .get(enum_name)
+            .ok_or_else(|| format!("unknown enum '{}'", enum_name))?;
+        let variant = enm
+            .variants
+            .get(numeric as usize)
+            .ok_or_else(|| format!("enum '{}' has no variant for value {}", enum_name, numeric))?;
+        Ok(Value::Enum {
+            type_name: enum_name.to_string(),
+            variant: variant.name.name.clone(),
+            fields: vec![],
+        })
+    }
+
+    fn value_to_byte_list(&self, value: &Value) -> Result<Vec<u8>, String> {
+        match value {
+            Value::Bytes(bytes) => Ok(bytes.clone()),
+            Value::List(items) => items
+                .iter()
+                .map(|item| match item {
+                    Value::Int64(value) if (0..=255).contains(value) => Ok(*value as u8),
+                    Value::Int64(value) => Err(format!("byte value out of range: {}", value)),
+                    other => Err(format!("payload expects list[uint8], found {}", other)),
+                })
+                .collect(),
+            other => Err(format!(
+                "payload expects list[uint8] or bytes, found {}",
+                other
+            )),
+        }
+    }
+
+    fn fits_in_bits(value: u64, width: u16) -> bool {
+        if width >= 64 {
+            true
+        } else {
+            value < (1_u64 << width)
+        }
+    }
+
+    fn push_encoded_bits(
+        &self,
+        bits: &mut Vec<bool>,
+        value: u64,
+        width: u16,
+        network_order: bool,
+        byte_aligned: bool,
+    ) {
+        if width > 8 && width % 8 == 0 && !network_order && byte_aligned {
+            let byte_count = (width / 8) as usize;
+            for byte_index in 0..byte_count {
+                let byte = ((value >> (byte_index * 8)) & 0xFF) as u8;
+                for bit_shift in (0..8).rev() {
+                    bits.push(((byte >> bit_shift) & 1) == 1);
+                }
+            }
+            return;
+        }
+
+        for bit_shift in (0..width).rev() {
+            bits.push(((value >> bit_shift) & 1) == 1);
+        }
+    }
+
+    fn bits_to_bytes(bits: &[bool]) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(bits.len().div_ceil(8));
+        for chunk in bits.chunks(8) {
+            let mut byte = 0u8;
+            for (index, bit) in chunk.iter().enumerate() {
+                if *bit {
+                    byte |= 1 << (7 - index);
+                }
+            }
+            bytes.push(byte);
+        }
+        bytes
+    }
+
+    fn read_bits(bytes: &[u8], bit_index: &mut usize, width: u16) -> Option<u64> {
+        let mut value = 0u64;
+        for _ in 0..width {
+            let byte_index = *bit_index / 8;
+            if byte_index >= bytes.len() {
+                return None;
+            }
+            let bit_in_byte = 7 - (*bit_index % 8);
+            let bit = (bytes[byte_index] >> bit_in_byte) & 1;
+            value = (value << 1) | (bit as u64);
+            *bit_index += 1;
+        }
+        Some(value)
+    }
+
     // -- Built-in standard library functions ----------------------------------
 
     /// Try to call a built-in standard library function.  Returns `None` if
     /// the name does not match any built-in, allowing the caller to fall
     /// through to user-defined function lookup.
     fn call_builtin(&self, name: &str, args: &[Value]) -> Option<Result<Value, String>> {
+        if let Some(result) = self.call_bitfield_builtin(name, args) {
+            return Some(result);
+        }
+
         match name {
             // -- I/O (capability-simulated) -----------------------------------
             "Stdout.write" => {
@@ -1423,7 +1811,9 @@ impl Interpreter {
                     .fields
                     .iter()
                     .position(|field| field.name.name == name.name)
-                    .ok_or_else(|| format!("bitfield '{bitfield_name}' has no field '{}'", name.name))?
+                    .ok_or_else(|| {
+                        format!("bitfield '{bitfield_name}' has no field '{}'", name.name)
+                    })?
             } else {
                 let Some(index) = fields.iter().position(|value| value.is_none()) else {
                     return Err(format!(
@@ -1758,6 +2148,7 @@ fn runtime_type_name(value: &Value) -> Option<String> {
         Value::String(_) => Some("string".to_string()),
         Value::Bool(_) => Some("bool".to_string()),
         Value::List(_) => Some("list".to_string()),
+        Value::Bytes(_) => Some("bytes".to_string()),
         Value::ResultOk(_) | Value::ResultFail(_) => Some("result".to_string()),
         Value::OptionalSome(_) | Value::OptionalNone => Some("optional".to_string()),
         Value::Nothing => Some("nothing".to_string()),
@@ -1955,6 +2346,21 @@ mod tests {
                 })
                 .collect(),
             methods,
+            span: sp(),
+        }
+    }
+
+    fn enum_def(name: &str, variants: Vec<&str>) -> EnumDef {
+        EnumDef {
+            name: ident(name),
+            variants: variants
+                .into_iter()
+                .map(|variant_name| jett_parser::ast::Variant {
+                    name: ident(variant_name),
+                    fields: vec![],
+                    span: sp(),
+                })
+                .collect(),
             span: sp(),
         }
     }
@@ -2572,8 +2978,20 @@ mod tests {
         interp.register_bitfield(&bitfield_def(
             "TcpFlags",
             vec![
-                ("syn", BitfieldFieldKind::Bits { width: 1, as_type: None }),
-                ("ack", BitfieldFieldKind::Bits { width: 1, as_type: None }),
+                (
+                    "syn",
+                    BitfieldFieldKind::Bits {
+                        width: 1,
+                        as_type: None,
+                    },
+                ),
+                (
+                    "ack",
+                    BitfieldFieldKind::Bits {
+                        width: 1,
+                        as_type: None,
+                    },
+                ),
             ],
             false,
         ));
@@ -2602,8 +3020,20 @@ mod tests {
         interp.register_bitfield(&bitfield_def(
             "TcpFlags",
             vec![
-                ("syn", BitfieldFieldKind::Bits { width: 1, as_type: None }),
-                ("ack", BitfieldFieldKind::Bits { width: 1, as_type: None }),
+                (
+                    "syn",
+                    BitfieldFieldKind::Bits {
+                        width: 1,
+                        as_type: None,
+                    },
+                ),
+                (
+                    "ack",
+                    BitfieldFieldKind::Bits {
+                        width: 1,
+                        as_type: None,
+                    },
+                ),
             ],
             false,
         ));
@@ -2633,8 +3063,20 @@ mod tests {
         interp.register_bitfield(&bitfield_def(
             "TcpFlags",
             vec![
-                ("syn", BitfieldFieldKind::Bits { width: 1, as_type: None }),
-                ("ack", BitfieldFieldKind::Bits { width: 1, as_type: None }),
+                (
+                    "syn",
+                    BitfieldFieldKind::Bits {
+                        width: 1,
+                        as_type: None,
+                    },
+                ),
+                (
+                    "ack",
+                    BitfieldFieldKind::Bits {
+                        width: 1,
+                        as_type: None,
+                    },
+                ),
             ],
             false,
         ));
@@ -2649,8 +3091,7 @@ mod tests {
         assert_eq!(
             interp.eval_expr(&expr).unwrap(),
             Value::ResultFail(Box::new(Value::String(
-                "bitfield 'TcpFlags' field 'syn' is 1 bit(s) wide and cannot hold '2'"
-                    .to_string(),
+                "bitfield 'TcpFlags' field 'syn' is 1 bit(s) wide and cannot hold '2'".to_string(),
             )))
         );
     }
@@ -2661,8 +3102,20 @@ mod tests {
         interp.register_bitfield(&bitfield_def(
             "TcpFlags",
             vec![
-                ("syn", BitfieldFieldKind::Bits { width: 1, as_type: None }),
-                ("ack", BitfieldFieldKind::Bits { width: 1, as_type: None }),
+                (
+                    "syn",
+                    BitfieldFieldKind::Bits {
+                        width: 1,
+                        as_type: None,
+                    },
+                ),
+                (
+                    "ack",
+                    BitfieldFieldKind::Bits {
+                        width: 1,
+                        as_type: None,
+                    },
+                ),
                 (
                     "payload",
                     BitfieldFieldKind::Payload(TypeExpr::Generic(
@@ -2689,6 +3142,171 @@ mod tests {
         );
 
         assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(0));
+    }
+
+    #[test]
+    fn bitfield_to_bytes_packs_network_order_fields() {
+        let mut interp = Interpreter::new();
+        interp.register_bitfield(&bitfield_def(
+            "IpHeader",
+            vec![
+                (
+                    "version",
+                    BitfieldFieldKind::Bits {
+                        width: 4,
+                        as_type: None,
+                    },
+                ),
+                (
+                    "header_length",
+                    BitfieldFieldKind::Bits {
+                        width: 4,
+                        as_type: None,
+                    },
+                ),
+                (
+                    "total_length",
+                    BitfieldFieldKind::Bits {
+                        width: 16,
+                        as_type: None,
+                    },
+                ),
+            ],
+            true,
+        ));
+
+        let expr = dotted_call(
+            "IpHeader",
+            "to_bytes",
+            vec![Expr::Call(
+                Box::new(var("IpHeader")),
+                vec![
+                    named_arg("version", int(4)),
+                    named_arg("header_length", int(5)),
+                    named_arg("total_length", int(500)),
+                ],
+                sp(),
+            )],
+        );
+
+        assert_eq!(
+            interp.eval_expr(&expr).unwrap(),
+            Value::Bytes(vec![0x45, 0x01, 0xF4])
+        );
+    }
+
+    #[test]
+    fn bitfield_from_bytes_unpacks_network_order_fields() {
+        let mut interp = Interpreter::new();
+        interp.register_bitfield(&bitfield_def(
+            "IpHeader",
+            vec![
+                (
+                    "version",
+                    BitfieldFieldKind::Bits {
+                        width: 4,
+                        as_type: None,
+                    },
+                ),
+                (
+                    "header_length",
+                    BitfieldFieldKind::Bits {
+                        width: 4,
+                        as_type: None,
+                    },
+                ),
+                (
+                    "total_length",
+                    BitfieldFieldKind::Bits {
+                        width: 16,
+                        as_type: None,
+                    },
+                ),
+            ],
+            true,
+        ));
+
+        let expr = dotted_call("IpHeader", "from_bytes", vec![var("raw")]);
+        interp.set_variable("raw", Value::Bytes(vec![0x45, 0x01, 0xF4]));
+
+        assert_eq!(
+            interp.eval_expr(&expr).unwrap(),
+            Value::ResultOk(Box::new(Value::Struct {
+                type_name: "IpHeader".to_string(),
+                fields: vec![
+                    ("version".to_string(), Value::Int64(4)),
+                    ("header_length".to_string(), Value::Int64(5)),
+                    ("total_length".to_string(), Value::Int64(500)),
+                ],
+            }))
+        );
+    }
+
+    #[test]
+    fn bitfield_to_bytes_uses_enum_annotations() {
+        let mut interp = Interpreter::new();
+        interp.register_enum(&enum_def("IpProtocol", vec!["icmp", "tcp", "udp"]));
+        interp.register_bitfield(&bitfield_def(
+            "Header",
+            vec![(
+                "protocol",
+                BitfieldFieldKind::Bits {
+                    width: 8,
+                    as_type: Some(type_named("IpProtocol")),
+                },
+            )],
+            true,
+        ));
+
+        let expr = dotted_call(
+            "Header",
+            "to_bytes",
+            vec![Expr::Call(
+                Box::new(var("Header")),
+                vec![named_arg(
+                    "protocol",
+                    Expr::EnumVariant(ident("IpProtocol"), ident("tcp"), sp()),
+                )],
+                sp(),
+            )],
+        );
+
+        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Bytes(vec![1]));
+    }
+
+    #[test]
+    fn bitfield_from_bytes_decodes_enum_annotations() {
+        let mut interp = Interpreter::new();
+        interp.register_enum(&enum_def("IpProtocol", vec!["icmp", "tcp", "udp"]));
+        interp.register_bitfield(&bitfield_def(
+            "Header",
+            vec![(
+                "protocol",
+                BitfieldFieldKind::Bits {
+                    width: 8,
+                    as_type: Some(type_named("IpProtocol")),
+                },
+            )],
+            true,
+        ));
+
+        let expr = dotted_call("Header", "from_bytes", vec![var("raw")]);
+        interp.set_variable("raw", Value::Bytes(vec![2]));
+
+        assert_eq!(
+            interp.eval_expr(&expr).unwrap(),
+            Value::ResultOk(Box::new(Value::Struct {
+                type_name: "Header".to_string(),
+                fields: vec![(
+                    "protocol".to_string(),
+                    Value::Enum {
+                        type_name: "IpProtocol".to_string(),
+                        variant: "udp".to_string(),
+                        fields: vec![],
+                    },
+                )],
+            }))
+        );
     }
 
     #[test]
@@ -2733,7 +3351,8 @@ mod tests {
             )),
         ));
 
-        let mut default_port = func_def("default_port", vec![], block(vec![return_stmt(int(8080))]));
+        let mut default_port =
+            func_def("default_port", vec![], block(vec![return_stmt(int(8080))]));
         default_port.return_type = Some(type_named("Port"));
         interp.register_function(&default_port);
 
@@ -2756,7 +3375,8 @@ mod tests {
             )),
         ));
 
-        let mut invalid_port = func_def("invalid_port", vec![], block(vec![return_stmt(int(70000))]));
+        let mut invalid_port =
+            func_def("invalid_port", vec![], block(vec![return_stmt(int(70000))]));
         invalid_port.return_type = Some(type_named("Port"));
         interp.register_function(&invalid_port);
 

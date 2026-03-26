@@ -13,6 +13,8 @@ pub enum Value {
     Bool(bool),
     /// Ordered list of values.
     List(Vec<Value>),
+    /// Raw bytes.
+    Bytes(Vec<u8>),
     /// `ok(value)`
     ResultOk(Box<Value>),
     /// `fail(error)`
@@ -58,6 +60,16 @@ impl fmt::Display for Value {
                         write!(f, ", ")?;
                     }
                     write!(f, "{item}")?;
+                }
+                write!(f, ")")
+            }
+            Value::Bytes(bytes) => {
+                write!(f, "bytes(")?;
+                for (i, byte) in bytes.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{byte}")?;
                 }
                 write!(f, ")")
             }

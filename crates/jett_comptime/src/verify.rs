@@ -112,6 +112,9 @@ pub fn run_verify_blocks_detailed(module: &Module) -> Vec<VerifyResult> {
             Item::Struct(strukt) => {
                 interp.register_struct(strukt);
             }
+            Item::Enum(enm) => {
+                interp.register_enum(enm);
+            }
             Item::Bitfield(bitfield) => {
                 interp.register_bitfield(bitfield);
             }

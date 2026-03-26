@@ -3,7 +3,7 @@
 ## Statistics
 
 - **Lines of Rust:** ~17,500
-- **Tests:** 399 passing
+- **Tests:** 401 passing
 - **Crates:** 15
 - **VS Code extension:** Yes
 
@@ -26,9 +26,9 @@
 
 | Component | Crate | Tests | Status |
 |---|---|---|---|
-| Type interning, struct/enum/interface defs | `jett_types` | 17 | Done |
+| Type interning, struct/enum/interface defs | `jett_types` | 18 | Done |
 | Name resolution, scoping | `jett_resolve` | 15 | Done |
-| Type checking (expressions, operators, generics) | `jett_typecheck` | 91 | Done |
+| Type checking (expressions, operators, generics) | `jett_typecheck` | 93 | Done |
 
 ### Phase C: Ownership and Capabilities — COMPLETE
 
@@ -52,7 +52,7 @@
 
 | Component | Crate | Tests | Status |
 |---|---|---|---|
-| Comptime interpreter | `jett_comptime` | 130 | Done |
+| Comptime interpreter | `jett_comptime` | 134 | Done |
 | Verify blocks (compile-time) | `jett_comptime/verify` | — | Done |
 | 25+ stdlib builtins in interpreter | `jett_comptime` | — | Done |
 
