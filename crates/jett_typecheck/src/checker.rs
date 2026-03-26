@@ -59,6 +59,8 @@ struct TypeChecker<'a> {
     decl_defs: HashMap<Span, DefId>,
     /// User-defined type name → TypeId.
     named_types: HashMap<String, TypeId>,
+    type_aliases: HashMap<String, ast::TypeAlias>,
+    resolving_type_aliases: HashSet<String>,
     /// Expression span → TypeId (the output type map).
     type_map: HashMap<Span, TypeId>,
     /// The expected return type for the function currently being checked.
@@ -99,6 +101,8 @@ impl<'a> TypeChecker<'a> {
             type_env: HashMap::new(),
             decl_defs,
             named_types: HashMap::new(),
+            type_aliases: HashMap::new(),
+            resolving_type_aliases: HashSet::new(),
             type_map: HashMap::new(),
             current_return_type: None,
             interface_impls: HashMap::new(),
@@ -203,6 +207,49 @@ impl<'a> TypeChecker<'a> {
 
     fn is_secret_type(&self, id: TypeId) -> bool {
         matches!(self.interner.resolve(id), Type::Secret(_))
+    }
+
+    fn is_refinement_type(&self, id: TypeId) -> bool {
+        matches!(self.interner.resolve(id), Type::Refinement { .. })
+    }
+
+    fn refinement_base_type(&self, id: TypeId) -> Option<TypeId> {
+        match self.interner.resolve(id) {
+            Type::Refinement { base, .. } => Some(*base),
+            _ => None,
+        }
+    }
+
+    fn fully_coarsened_type(&self, mut id: TypeId) -> TypeId {
+        while let Some(base) = self.refinement_base_type(id) {
+            id = base;
+        }
+        id
+    }
+
+    fn can_coarsen_to(&self, mut source: TypeId, target: TypeId) -> bool {
+        while let Some(base) = self.refinement_base_type(source) {
+            if base == target {
+                return true;
+            }
+            source = base;
+        }
+        false
+    }
+
+    fn refinement_boundary_input_type(&self, refinement_ty: TypeId) -> TypeId {
+        let base_ty = self.fully_coarsened_type(refinement_ty);
+        self.secret_inner_type(base_ty).unwrap_or(base_ty)
+    }
+
+    fn can_refine_from(&self, source: TypeId, mut refinement_ty: TypeId) -> bool {
+        while let Some(base) = self.refinement_base_type(refinement_ty) {
+            if base == source || self.secret_inner_type(base) == Some(source) {
+                return true;
+            }
+            refinement_ty = base;
+        }
+        false
     }
 
     fn secret_inner_type(&self, id: TypeId) -> Option<TypeId> {
@@ -532,6 +579,8 @@ impl<'a> TypeChecker<'a> {
     // ------------------------------------------------------------------
 
     fn check_module(&mut self, module: &Module) {
+        self.collect_type_aliases(module);
+
         // First pass: predeclare all user-defined types so function signatures,
         // fields, and methods can refer to them by name.
         for item in &module.items {
@@ -594,6 +643,7 @@ impl<'a> TypeChecker<'a> {
         // Fourth pass: type-check function bodies, methods, and verify blocks.
         for item in &module.items {
             match item {
+                Item::TypeAlias(alias) => self.check_type_alias(alias),
                 Item::Function(func) => self.check_function(func),
                 Item::Implement(block) => self.check_implement_block(block),
                 Item::Struct(def) => {
@@ -608,6 +658,16 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn collect_type_aliases(&mut self, module: &Module) {
+        self.type_aliases
+            .extend(module.items.iter().filter_map(|item| {
+                let Item::TypeAlias(alias) = item else {
+                    return None;
+                };
+                Some((alias.name.name.clone(), alias.clone()))
+            }));
+    }
+
     /// Returns true if a function has no capability-type parameters (i.e. is pure).
     fn function_is_pure(func: &FunctionDef) -> bool {
         Self::params_are_pure(&func.params)
@@ -617,6 +677,40 @@ impl<'a> TypeChecker<'a> {
         !params
             .iter()
             .any(|p| capability::type_expr_is_capability(&p.ty))
+    }
+
+    fn check_type_alias(&mut self, alias: &ast::TypeAlias) {
+        let Some(constraint) = &alias.constraint else {
+            let _ = self.resolve_type_alias(&alias.name.name, alias.name.span);
+            return;
+        };
+
+        let alias_ty = self.resolve_type_alias(&alias.name.name, alias.name.span);
+        let Some(_base_ty) = self.refinement_base_type(alias_ty) else {
+            return;
+        };
+        let constraint_value_ty = self.refinement_boundary_input_type(alias_ty);
+
+        let saved_name = self.current_function_name.clone();
+        let saved_pure = self.current_function_pure;
+        self.current_function_name = Some(format!("type {}", alias.name.name));
+        self.current_function_pure = true;
+
+        if let Some(def_id) = self.declaration_def_id(constraint.span()) {
+            self.type_env.insert(def_id, constraint_value_ty);
+        }
+
+        let constraint_ty = self.check_expr(constraint);
+        if constraint_ty != TypeInterner::ERROR && constraint_ty != TypeInterner::BOOL {
+            self.sink.emit(errors::refinement_constraint_not_bool(
+                &alias.name.name,
+                &self.type_name(constraint_ty),
+                constraint.span(),
+            ));
+        }
+
+        self.current_function_name = saved_name;
+        self.current_function_pure = saved_pure;
     }
 
     fn predeclare_struct(&mut self, def: &ast::StructDef) {
@@ -1158,9 +1252,104 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn check_expr_for_expected(
+        &mut self,
+        expr: &Expr,
+        expected_ty: TypeId,
+        allow_refinement_handle: bool,
+    ) -> TypeId {
+        let ty = match expr {
+            Expr::Coarsen(inner, span) => {
+                let inner_ty = self.check_expr(inner);
+                if inner_ty == TypeInterner::ERROR {
+                    TypeInterner::ERROR
+                } else if !self.is_refinement_type(inner_ty) {
+                    self.sink.emit(errors::coarsen_requires_refinement(
+                        &self.type_name(inner_ty),
+                        *span,
+                    ));
+                    inner_ty
+                } else if self.can_coarsen_to(inner_ty, expected_ty)
+                    || self.fully_coarsened_type(inner_ty) == expected_ty
+                {
+                    expected_ty
+                } else {
+                    self.fully_coarsened_type(inner_ty)
+                }
+            }
+            Expr::Handle(target, bind_name, body, span)
+                if allow_refinement_handle && self.is_refinement_type(expected_ty) =>
+            {
+                self.check_refinement_handle(expected_ty, target, bind_name.as_ref(), body, *span)
+            }
+            _ => {
+                let actual_ty = self.check_expr(expr);
+                if allow_refinement_handle
+                    && self.is_refinement_type(expected_ty)
+                    && actual_ty != TypeInterner::ERROR
+                    && actual_ty != expected_ty
+                    && self.can_refine_from(actual_ty, expected_ty)
+                {
+                    self.sink.emit(errors::refinement_requires_handle_error(
+                        &self.type_name(expected_ty),
+                        &self.type_name(actual_ty),
+                        expr.span(),
+                    ));
+                    expected_ty
+                } else {
+                    actual_ty
+                }
+            }
+        };
+
+        self.type_map.insert(expr.span(), ty);
+        ty
+    }
+
+    fn check_refinement_handle(
+        &mut self,
+        refinement_ty: TypeId,
+        target: &Expr,
+        bind_name: Option<&ast::Ident>,
+        body: &Block,
+        span: Span,
+    ) -> TypeId {
+        let input_ty = self.check_expr(target);
+        let expected_input_ty = self.refinement_boundary_input_type(refinement_ty);
+        let Some(_base_ty) = self.refinement_base_type(refinement_ty) else {
+            return TypeInterner::ERROR;
+        };
+
+        if input_ty != TypeInterner::ERROR && !self.can_refine_from(input_ty, refinement_ty) {
+            self.sink.emit(errors::type_mismatch(
+                &self.type_name(expected_input_ty),
+                &self.type_name(input_ty),
+                target.span(),
+            ));
+        }
+
+        if bind_name.is_none() {
+            self.sink.emit(errors::refinement_requires_handle_error(
+                &self.type_name(refinement_ty),
+                &self.type_name(expected_input_ty),
+                span,
+            ));
+        }
+
+        if let Some(name) = bind_name {
+            if let Some(def_id) = self.declaration_def_id(name.span) {
+                self.type_env.insert(def_id, TypeInterner::STRING);
+            }
+        }
+
+        self.check_handle_body(body);
+        self.validate_handle_terminator(body, refinement_ty);
+        refinement_ty
+    }
+
     fn check_var_decl(&mut self, decl: &ast::VarDecl) {
         let declared_type = self.resolve_type_expr(&decl.ty);
-        let init_type = self.check_expr(&decl.value);
+        let init_type = self.check_expr_for_expected(&decl.value, declared_type, true);
 
         // Bind the variable's DefId to its declared type.
         if let Some(def_id) = self.declaration_def_id(decl.name.span) {
@@ -1180,7 +1369,7 @@ impl<'a> TypeChecker<'a> {
 
     fn check_assign(&mut self, assign: &ast::AssignStmt) {
         let target_type = self.check_expr(&assign.target);
-        let value_type = self.check_expr(&assign.value);
+        let value_type = self.check_expr_for_expected(&assign.value, target_type, false);
 
         if !self.types_compatible(target_type, value_type) {
             self.sink.emit(errors::assign_type_mismatch(
@@ -1193,7 +1382,13 @@ impl<'a> TypeChecker<'a> {
 
     fn check_return(&mut self, ret: &ast::ReturnStmt) {
         let ret_type = match &ret.value {
-            Some(expr) => self.check_expr(expr),
+            Some(expr) => {
+                if let Some(expected) = self.current_return_type {
+                    self.check_expr_for_expected(expr, expected, false)
+                } else {
+                    self.check_expr(expr)
+                }
+            }
             None => TypeInterner::NOTHING,
         };
 
@@ -1465,9 +1660,14 @@ impl<'a> TypeChecker<'a> {
                 }
             }
             Expr::Coarsen(inner, _) => {
-                // coarsen strips a refinement type back to its base type.
-                // For now just check the inner expression.
-                self.check_expr(inner)
+                let inner_ty = self.check_expr(inner);
+                if inner_ty != TypeInterner::ERROR && !self.is_refinement_type(inner_ty) {
+                    self.sink.emit(errors::coarsen_requires_refinement(
+                        &self.type_name(inner_ty),
+                        expr.span(),
+                    ));
+                }
+                self.fully_coarsened_type(inner_ty)
             }
             Expr::Pipeline(initial, steps, _) => {
                 // Check the initial expression and each step; return the type
@@ -1736,9 +1936,9 @@ impl<'a> TypeChecker<'a> {
         let mut tainted_return = false;
         let mut checked_arg_types = Vec::with_capacity(args.len());
         for (i, arg) in args.iter().enumerate() {
-            let arg_ty = self.check_expr(&arg.value);
-            checked_arg_types.push(arg_ty);
             let param_ty = param_types[i];
+            let arg_ty = self.check_expr_for_expected(&arg.value, param_ty, false);
+            checked_arg_types.push(arg_ty);
 
             if let Some(callee_name) = callee_name.as_deref() {
                 if Self::is_secret_output_boundary(callee_name) && self.is_secret_type(arg_ty) {
@@ -2040,8 +2240,8 @@ impl<'a> TypeChecker<'a> {
         }
 
         for (index, arg) in args.iter().enumerate() {
-            let arg_ty = self.check_expr(&arg.value);
             if let Some((field_name, expected_ty)) = variant_def.fields.get(index) {
+                let arg_ty = self.check_expr_for_expected(&arg.value, *expected_ty, false);
                 if !self.types_compatible(*expected_ty, arg_ty) {
                     self.sink.emit(errors::argument_type_mismatch(
                         field_name,
@@ -2102,8 +2302,8 @@ impl<'a> TypeChecker<'a> {
             }
 
             assigned[field_index] = true;
-            let arg_ty = self.check_expr(&arg.value);
             let expected_ty = struct_def.fields[field_index].1;
+            let arg_ty = self.check_expr_for_expected(&arg.value, expected_ty, false);
             if !self.types_compatible(expected_ty, arg_ty) {
                 self.sink.emit(errors::argument_type_mismatch(
                     &struct_def.fields[field_index].0,
@@ -2283,6 +2483,7 @@ impl<'a> TypeChecker<'a> {
             "bytes" => TypeInterner::BYTES,
             "nothing" => TypeInterner::NOTHING,
             _ if self.named_types.contains_key(name) => self.named_types[name],
+            _ if self.type_aliases.contains_key(name) => self.resolve_type_alias(name, span),
             // Capability types are recognised but opaque — no further type
             // checking is performed on values of these types.
             _ if capability::is_capability_type(name) => TypeInterner::ERROR,
@@ -2291,6 +2492,36 @@ impl<'a> TypeChecker<'a> {
                 TypeInterner::ERROR
             }
         }
+    }
+
+    fn resolve_type_alias(&mut self, name: &str, span: Span) -> TypeId {
+        if let Some(&ty) = self.named_types.get(name) {
+            return ty;
+        }
+
+        if !self.resolving_type_aliases.insert(name.to_string()) {
+            self.sink.emit(errors::unknown_type(name, span));
+            return TypeInterner::ERROR;
+        }
+
+        let alias = self
+            .type_aliases
+            .get(name)
+            .cloned()
+            .expect("type alias existence checked before resolution");
+        let base_ty = self.resolve_type_expr(&alias.base_type);
+        let alias_ty = if alias.constraint.is_some() {
+            self.interner.intern(Type::Refinement {
+                name: name.to_string(),
+                base: base_ty,
+            })
+        } else {
+            base_ty
+        };
+
+        self.named_types.insert(name.to_string(), alias_ty);
+        self.resolving_type_aliases.remove(name);
+        alias_ty
     }
 
     fn resolve_generic_type(&mut self, name: &str, args: &[TypeExpr], span: Span) -> TypeId {
@@ -4817,5 +5048,109 @@ function main(view stdout: Stdout) returns nothing:
             .filter(|d| d.severity == jett_diagnostics::Severity::Error)
             .collect();
         assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+    }
+
+    #[test]
+    fn refinement_type_assignment_requires_handle_error() {
+        let errors = check_source_errors(
+            "\
+type Port = int64 where value >= 1 && value <= 65535
+
+function main() returns nothing:
+    Port port = 8080
+    return nothing
+",
+        );
+
+        assert!(
+            errors.iter().any(|d| d.code.code() == 333),
+            "expected E0333, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn refinement_type_assignment_with_handle_and_coarsen_typechecks() {
+        let result = check_source_result(
+            "\
+type Port = int64 where value >= 1 && value <= 65535
+
+function main() returns int64:
+    Port port = 8080 handle error:
+        return 80
+    return coarsen port
+",
+        );
+
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == jett_diagnostics::Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+    }
+
+    #[test]
+    fn simple_type_alias_behaves_like_base_type() {
+        let result = check_source_result(
+            "\
+type UserId = int64
+
+function id(value: UserId) returns UserId:
+    return value
+
+function main() returns int64:
+    UserId user_id = 42
+    return id(user_id)
+",
+        );
+
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == jett_diagnostics::Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+    }
+
+    #[test]
+    fn coarsen_can_target_refinement_ancestors() {
+        let result = check_source_result(
+            "\
+type NonEmpty = string where string.char_count(value) > 0
+type Password = NonEmpty where string.char_count(value) > 8
+
+function main() returns string:
+    Password password = \"hunter42!\" handle error:
+        return \"\"
+    NonEmpty non_empty = coarsen password
+    return coarsen non_empty
+",
+        );
+
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == jett_diagnostics::Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+    }
+
+    #[test]
+    fn refinement_constraint_must_return_bool() {
+        let errors = check_source_errors(
+            "\
+type Broken = int64 where 42
+
+function main() returns nothing:
+    return nothing
+",
+        );
+
+        assert!(
+            errors.iter().any(|d| d.code.code() == 335),
+            "expected E0335, got: {:?}",
+            errors
+        );
     }
 }

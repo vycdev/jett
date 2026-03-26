@@ -4,8 +4,8 @@ use jett_common::Span;
 use jett_diagnostics::{Diagnostic, DiagnosticSink};
 use jett_parser::ast::{
     AssertStmt, AssignStmt, Block, CallArg, Expr, ExprStmt, ForStmt, FunctionDecl, FunctionDef,
-    IfStmt, Item, MatchStmt, Module, Pattern, ReturnStmt, Stmt, StringPart, TypeExpr, UseDecl,
-    VarDecl, WhileStmt,
+    IfStmt, Item, MatchStmt, Module, Pattern, ReturnStmt, Stmt, StringPart, TypeAlias, TypeExpr,
+    UseDecl, VarDecl, WhileStmt,
 };
 
 use crate::errors;
@@ -276,6 +276,9 @@ impl Resolver {
                         self.resolve_function(method, index);
                     }
                 }
+                Item::TypeAlias(alias) => {
+                    self.resolve_type_alias(alias, index);
+                }
                 Item::Function(func) => {
                     self.resolve_function(func, index);
                 }
@@ -304,6 +307,21 @@ impl Resolver {
         }
         if let Some(return_type) = &decl.return_type {
             self.resolve_type_expr(return_type, item_index);
+        }
+    }
+
+    fn resolve_type_alias(&mut self, alias: &TypeAlias, item_index: usize) {
+        self.resolve_type_expr(&alias.base_type, item_index);
+
+        if let Some(constraint) = &alias.constraint {
+            let scope = self.push_scope();
+            self.declare_local_without_unused_warning(
+                "value",
+                DefKind::Variable,
+                constraint.span(),
+            );
+            self.resolve_expr(constraint, item_index);
+            self.pop_scope(scope);
         }
     }
 
@@ -1525,6 +1543,34 @@ mod tests {
         assert!(
             unused_warnings.is_empty(),
             "handle error binding should not trigger unused warnings"
+        );
+    }
+
+    #[test]
+    fn refinement_type_constraint_resolves_value_binding() {
+        let module = Module {
+            items: vec![Item::TypeAlias(TypeAlias {
+                name: ident("Port", 5),
+                base_type: named_type("int64", 12),
+                constraint: Some(Expr::Binary(
+                    Box::new(Expr::Ident(ident("value", 24))),
+                    BinOp::GtEq,
+                    Box::new(Expr::IntLiteral(1, sp(33, 34))),
+                    sp(24, 34),
+                )),
+                span: sp(0, 34),
+            })],
+            span: sp(0, 34),
+        };
+
+        let result = resolve(&module);
+        assert!(
+            !result
+                .diagnostics
+                .iter()
+                .any(|d| d.severity == Severity::Error),
+            "expected no errors, got: {:#?}",
+            result.diagnostics
         );
     }
 }

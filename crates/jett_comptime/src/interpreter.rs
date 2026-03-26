@@ -242,6 +242,8 @@ impl Interpreter {
             None => return Ok(()),       // not a known type alias
         };
 
+        self.check_refinement(&def.base_type_name, value)?;
+
         self.push_scope();
         self.set_variable("value", value.clone());
         let result = self.eval_expr(&def.constraint);
@@ -258,6 +260,20 @@ impl Interpreter {
             Err(e) => Err(format!(
                 "error evaluating refinement constraint for '{type_name}': {e}"
             )),
+        }
+    }
+
+    fn eval_refinement_boundary(
+        &mut self,
+        type_name: &str,
+        target: &Expr,
+        bind_name: Option<&Ident>,
+        body: &Block,
+    ) -> Result<ExprFlow, String> {
+        let value = value_or_signal!(self, target);
+        match self.check_refinement(type_name, &value) {
+            Ok(()) => Ok(ExprFlow::Value(value)),
+            Err(message) => self.exec_handle_block(bind_name, Some(Value::String(message)), body),
         }
     }
 
@@ -626,14 +642,35 @@ impl Interpreter {
     fn exec_stmt_inner(&mut self, stmt: &Stmt) -> Result<Option<Signal>, String> {
         match stmt {
             Stmt::VarDecl(decl) => {
-                let val = match self.eval_expr_flow(&decl.value)? {
-                    ExprFlow::Value(value) => value,
-                    ExprFlow::Signal(signal) => return Ok(Some(signal)),
-                };
-                // Check refinement type constraint if the declared type is a
-                // known type alias with a constraint.
                 let type_name = type_expr_name(&decl.ty);
-                self.check_refinement(&type_name, &val)?;
+                let val = if self.type_aliases.contains_key(&type_name) {
+                    match &decl.value {
+                        Expr::Handle(target, bind_name, body, _) => {
+                            match self.eval_refinement_boundary(
+                                &type_name,
+                                target,
+                                bind_name.as_ref(),
+                                body,
+                            )? {
+                                ExprFlow::Value(value) => value,
+                                ExprFlow::Signal(signal) => return Ok(Some(signal)),
+                            }
+                        }
+                        _ => {
+                            let val = match self.eval_expr_flow(&decl.value)? {
+                                ExprFlow::Value(value) => value,
+                                ExprFlow::Signal(signal) => return Ok(Some(signal)),
+                            };
+                            self.check_refinement(&type_name, &val)?;
+                            val
+                        }
+                    }
+                } else {
+                    match self.eval_expr_flow(&decl.value)? {
+                        ExprFlow::Value(value) => value,
+                        ExprFlow::Signal(signal) => return Ok(Some(signal)),
+                    }
+                };
                 self.set_variable(&decl.name.name, val);
                 Ok(None)
             }

@@ -317,6 +317,39 @@ pub fn type_does_not_implement_interface(
     )
 }
 
+/// E0333: Entering a refinement type requires `handle error:`.
+pub fn refinement_requires_handle_error(
+    refinement_name: &str,
+    got: &str,
+    span: Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        333,
+        format!(
+            "value of type `{got}` entering refinement `{refinement_name}` requires `handle error:`"
+        ),
+        span,
+    )
+}
+
+/// E0334: `coarsen` requires a refinement type.
+pub fn coarsen_requires_refinement(got: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        334,
+        format!("`coarsen` requires a refinement type, got `{got}`"),
+        span,
+    )
+}
+
+/// E0335: Refinement constraints must evaluate to `bool`.
+pub fn refinement_constraint_not_bool(refinement_name: &str, got: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        335,
+        format!("constraint for refinement `{refinement_name}` must return `bool`, got `{got}`"),
+        span,
+    )
+}
+
 /// E0500: Pure function calls impure function.
 pub fn pure_calls_impure(caller: &str, callee: &str, span: Span) -> Diagnostic {
     Diagnostic::error(
