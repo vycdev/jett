@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use crate::defs::{
-    BitfieldDef, BitfieldId, EnumDef, EnumId, InterfaceDef, InterfaceId, StructDef, StructId,
+    ActorDef, ActorId, BitfieldDef, BitfieldId, EnumDef, EnumId, InterfaceDef, InterfaceId,
+    StructDef, StructId,
 };
 use crate::types::{Type, TypeId};
 
@@ -23,6 +24,8 @@ pub struct TypeInterner {
     enums: Vec<EnumDef>,
     /// User-defined interface definitions.
     interfaces: Vec<InterfaceDef>,
+    /// User-defined actor definitions.
+    actors: Vec<ActorDef>,
 }
 
 // Constant TypeId values for every primitive type.
@@ -78,6 +81,7 @@ impl TypeInterner {
             bitfields: Vec::new(),
             enums: Vec::new(),
             interfaces: Vec::new(),
+            actors: Vec::new(),
         }
     }
 
@@ -176,6 +180,23 @@ impl TypeInterner {
     /// Replace an existing interface definition.
     pub fn update_interface(&mut self, id: InterfaceId, def: InterfaceDef) {
         self.interfaces[id.0 as usize] = def;
+    }
+
+    /// Register a new actor definition and return its [`ActorId`].
+    pub fn add_actor(&mut self, def: ActorDef) -> ActorId {
+        let id = ActorId(self.actors.len() as u32);
+        self.actors.push(def);
+        id
+    }
+
+    /// Look up an actor definition by its [`ActorId`].
+    pub fn resolve_actor(&self, id: ActorId) -> &ActorDef {
+        &self.actors[id.0 as usize]
+    }
+
+    /// Replace an existing actor definition.
+    pub fn update_actor(&mut self, id: ActorId, def: ActorDef) {
+        self.actors[id.0 as usize] = def;
     }
 
     /// Returns the total number of interned types.

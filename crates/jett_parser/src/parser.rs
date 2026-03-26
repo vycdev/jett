@@ -176,6 +176,7 @@ impl<'src> Parser<'src> {
             }
             TokenKind::Enum => Some(Item::Enum(self.parse_enum())),
             TokenKind::Machine => Some(Item::Machine(self.parse_machine())),
+            TokenKind::Actor => Some(Item::Actor(self.parse_actor())),
             TokenKind::Verify => Some(Item::Verify(self.parse_verify_block())),
             TokenKind::Property => Some(Item::Property(self.parse_property_block())),
             TokenKind::Type => Some(Item::TypeAlias(self.parse_type_alias())),
@@ -799,6 +800,122 @@ impl<'src> Parser<'src> {
     }
 
     // =======================================================================
+    // Actors
+    // =======================================================================
+
+    fn parse_actor(&mut self) -> ActorDef {
+        let kw = self.expect(TokenKind::Actor);
+        let name = self.parse_ident();
+
+        // Optional capability parameters: `actor Counter(stdout: Stdout):`
+        let capability_params = if self.peek() == TokenKind::LParen {
+            self.advance(); // consume `(`
+            let mut params = Vec::new();
+            if self.peek() != TokenKind::RParen {
+                params.push(self.parse_param());
+                while self.eat(TokenKind::Comma).is_some() {
+                    if self.peek() == TokenKind::RParen {
+                        break;
+                    }
+                    params.push(self.parse_param());
+                }
+            }
+            self.expect(TokenKind::RParen);
+            params
+        } else {
+            vec![]
+        };
+
+        self.expect(TokenKind::Colon);
+
+        // Outer indent for the actor body
+        self.skip_newlines();
+        self.expect(TokenKind::Indent);
+
+        let mut state_fields = Vec::new();
+        let mut handlers = Vec::new();
+        let mut last_span = name.span;
+
+        loop {
+            self.skip_newlines();
+            match self.peek() {
+                TokenKind::Dedent | TokenKind::Eof => break,
+                TokenKind::Receive => {
+                    let handler = self.parse_receive_handler();
+                    last_span = handler.span;
+                    handlers.push(handler);
+                }
+                TokenKind::Mutable => {
+                    let field = self.parse_var_decl();
+                    last_span = field.span;
+                    state_fields.push(field);
+                }
+                _ if self.looks_like_var_decl() => {
+                    let field = self.parse_var_decl();
+                    last_span = field.span;
+                    state_fields.push(field);
+                }
+                _ => break,
+            }
+        }
+
+        if self.peek() == TokenKind::Dedent {
+            last_span = self.advance().span;
+        }
+
+        ActorDef {
+            span: kw.span.merge(last_span),
+            name,
+            capability_params,
+            state_fields,
+            handlers,
+        }
+    }
+
+    fn parse_receive_handler(&mut self) -> ReceiveHandler {
+        let kw = self.expect(TokenKind::Receive);
+        let name = self.parse_ident();
+
+        // Optional message parameters: `receive process(data: Payload):`
+        let params = if self.peek() == TokenKind::LParen {
+            self.advance(); // consume `(`
+            let mut params = Vec::new();
+            if self.peek() != TokenKind::RParen {
+                params.push(self.parse_param());
+                while self.eat(TokenKind::Comma).is_some() {
+                    if self.peek() == TokenKind::RParen {
+                        break;
+                    }
+                    params.push(self.parse_param());
+                }
+            }
+            self.expect(TokenKind::RParen);
+            params
+        } else {
+            vec![]
+        };
+
+        // Optional `responds T` annotation
+        let responds = if self.eat(TokenKind::Responds).is_some() {
+            Some(self.parse_type())
+        } else {
+            None
+        };
+
+        self.expect(TokenKind::Colon);
+        let body = self.parse_block();
+        let end_span = body.span;
+
+        ReceiveHandler {
+            span: kw.span.merge(end_span),
+            name,
+            params,
+            responds,
+            body,
+        }
+    }
+
+    // =======================================================================
     // Types
     // =======================================================================
 
@@ -917,6 +1034,7 @@ impl<'src> Parser<'src> {
             TokenKind::Match => Some(self.parse_match_stmt()),
             TokenKind::Use => Some(self.parse_use_stmt()),
             TokenKind::Assert => Some(self.parse_assert_stmt()),
+            TokenKind::Respond => Some(self.parse_respond_stmt()),
             TokenKind::Break => {
                 let tok = self.advance();
                 Some(Stmt::Break(tok.span))
@@ -967,6 +1085,13 @@ impl<'src> Parser<'src> {
             value,
             span: kw.span.merge(end),
         })
+    }
+
+    fn parse_respond_stmt(&mut self) -> Stmt {
+        let kw = self.expect(TokenKind::Respond);
+        let value = self.parse_expr();
+        let span = kw.span.merge(value.span());
+        Stmt::Respond(RespondStmt { value, span })
     }
 
     fn parse_if_stmt(&mut self) -> Stmt {
@@ -1592,6 +1717,30 @@ impl<'src> Parser<'src> {
                 let span = tok.span.merge(inner.span());
                 Expr::Coarsen(Box::new(inner), span)
             }
+            TokenKind::Spawn => {
+                self.advance();
+                let inner = self.parse_expr_bp(13);
+                let span = tok.span.merge(inner.span());
+                Expr::Spawn(Box::new(inner), span)
+            }
+            TokenKind::Clone => {
+                self.advance();
+                let inner = self.parse_expr_bp(13);
+                let span = tok.span.merge(inner.span());
+                Expr::Clone(Box::new(inner), span)
+            }
+            TokenKind::Send => {
+                self.advance();
+                let inner = self.parse_expr_bp(0);
+                let span = tok.span.merge(inner.span());
+                Expr::Send(Box::new(inner), span)
+            }
+            TokenKind::Ask => {
+                self.advance();
+                let inner = self.parse_expr_bp(0);
+                let span = tok.span.merge(inner.span());
+                Expr::Ask(Box::new(inner), span)
+            }
             TokenKind::Ok => {
                 self.advance();
                 self.expect(TokenKind::LParen);
@@ -1910,6 +2059,7 @@ fn stmt_span(stmt: &Stmt) -> Span {
         Stmt::Expr(e) => e.span,
         Stmt::Use(u) => u.span,
         Stmt::Assert(a) => a.span,
+        Stmt::Respond(r) => r.span,
         Stmt::Break(s) | Stmt::Continue(s) => *s,
     }
 }

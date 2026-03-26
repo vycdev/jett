@@ -496,3 +496,12 @@ pub fn type_contains_secret_data(
 
     Diagnostic::error(603, message, span)
 }
+
+/// E0700: `respond` used outside a receive handler.
+pub fn respond_outside_handler(span: Span) -> Diagnostic {
+    Diagnostic::error(
+        700,
+        "`respond` can only be used inside a `receive` handler that declares `responds T`",
+        span,
+    )
+}

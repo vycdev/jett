@@ -3,9 +3,9 @@ use std::collections::{HashMap, HashSet};
 use jett_common::Span;
 use jett_diagnostics::{Diagnostic, DiagnosticSink};
 use jett_parser::ast::{
-    AssertStmt, AssignStmt, Block, CallArg, Expr, ExprStmt, ForStmt, FunctionDecl, FunctionDef,
-    IfStmt, Item, MatchStmt, Module, Pattern, ReturnStmt, Stmt, StringPart, TypeAlias, TypeExpr,
-    UseDecl, VarDecl, WhileStmt,
+    ActorDef, AssertStmt, AssignStmt, Block, CallArg, Expr, ExprStmt, ForStmt, FunctionDecl,
+    FunctionDef, IfStmt, Item, MatchStmt, Module, Pattern, RespondStmt, ReturnStmt, Stmt,
+    StringPart, TypeAlias, TypeExpr, UseDecl, VarDecl, WhileStmt,
 };
 
 use crate::errors;
@@ -196,6 +196,9 @@ impl Resolver {
                 Item::Machine(m) => {
                     self.declare_top_level(&m.name.name, DefKind::Machine, m.name.span, index);
                 }
+                Item::Actor(a) => {
+                    self.declare_top_level(&a.name.name, DefKind::Actor, a.name.span, index);
+                }
                 Item::TypeAlias(ta) => {
                     self.declare_top_level(
                         &ta.name.name,
@@ -317,10 +320,45 @@ impl Resolver {
                 Item::VarDecl(v) => {
                     self.resolve_expr(&v.value, index);
                 }
+                Item::Actor(actor) => {
+                    self.resolve_actor(actor, index);
+                }
                 // Namespace and Enum declarations have no bodies to walk.
                 _ => {}
             }
         }
+    }
+
+    fn resolve_actor(&mut self, actor: &ActorDef, item_index: usize) {
+        let actor_scope = self.push_scope();
+
+        // Capability parameters are in scope for the whole actor.
+        for param in &actor.capability_params {
+            self.resolve_type_expr(&param.ty, item_index);
+            self.declare_local(&param.name.name, DefKind::Param, param.name.span);
+        }
+
+        // State fields are in scope for handlers.
+        for field in &actor.state_fields {
+            self.resolve_expr(&field.value, item_index);
+            self.declare_local(&field.name.name, DefKind::Variable, field.name.span);
+        }
+
+        // Each receive handler gets its own inner scope for message params.
+        for handler in &actor.handlers {
+            let handler_scope = self.push_scope();
+            for param in &handler.params {
+                self.resolve_type_expr(&param.ty, item_index);
+                self.declare_local(&param.name.name, DefKind::Param, param.name.span);
+            }
+            if let Some(responds) = &handler.responds {
+                self.resolve_type_expr(responds, item_index);
+            }
+            self.resolve_block(&handler.body, item_index);
+            self.pop_scope(handler_scope);
+        }
+
+        self.pop_scope(actor_scope);
     }
 
     // ------------------------------------------------------------------
@@ -431,8 +469,13 @@ impl Resolver {
             Stmt::Use(u) => self.resolve_use(u),
             Stmt::Assert(a) => self.resolve_assert(a, item_index),
             Stmt::Match(m) => self.resolve_match(m, item_index),
+            Stmt::Respond(r) => self.resolve_respond(r, item_index),
             Stmt::Break(_) | Stmt::Continue(_) => {}
         }
+    }
+
+    fn resolve_respond(&mut self, r: &RespondStmt, item_index: usize) {
+        self.resolve_expr(&r.value, item_index);
     }
 
     fn resolve_var_decl(&mut self, v: &VarDecl, item_index: usize) {
@@ -663,6 +706,9 @@ impl Resolver {
             Expr::At(expr, _state_name, _) => {
                 self.resolve_expr(expr, item_index);
             }
+            Expr::Spawn(inner, _) | Expr::Send(inner, _) | Expr::Ask(inner, _) | Expr::Clone(inner, _) => {
+                self.resolve_expr(inner, item_index);
+            }
             // Literals and nothing — no names to resolve.
             Expr::IntLiteral(_, _)
             | Expr::FloatLiteral(_, _)
@@ -857,6 +903,7 @@ fn stmt_span(stmt: &Stmt) -> Span {
         Stmt::Use(u) => u.span,
         Stmt::Assert(a) => a.span,
         Stmt::Break(s) | Stmt::Continue(s) => *s,
+        Stmt::Respond(r) => r.span,
     }
 }
 

@@ -1,0 +1,37 @@
+namespace test
+
+actor Counter:
+    mutable int64 count = 0
+
+    receive increment:
+        count = count + 1
+
+    receive add(amount: int64):
+        count = count + amount
+
+    receive get_count responds int64:
+        respond count
+
+    receive reset:
+        count = 0
+
+function main() returns nothing:
+    Counter counter = spawn Counter()
+
+    send counter.increment
+    send counter.increment
+    send counter.increment
+
+    int64 n = ask counter.get_count
+    assert n == 3
+
+    send counter.add(10)
+
+    int64 m = ask counter.get_count
+    assert m == 13
+
+    send counter.reset
+    int64 z = ask counter.get_count
+    assert z == 0
+
+    return nothing

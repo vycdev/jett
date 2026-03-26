@@ -232,6 +232,7 @@ pub fn run_file(path: &Path) -> Result<(), String> {
             Item::Struct(strukt) => interp.register_struct(strukt),
             Item::Enum(enm) => interp.register_enum(enm),
             Item::Bitfield(bitfield) => interp.register_bitfield(bitfield),
+            Item::Actor(actor) => interp.register_actor(actor),
             _ => {}
         }
     }

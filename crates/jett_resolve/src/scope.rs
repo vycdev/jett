@@ -38,6 +38,7 @@ pub enum DefKind {
     Bitfield,
     Enum,
     Machine,
+    Actor,
     Variable,
     Param,
     Constant,

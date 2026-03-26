@@ -130,6 +130,9 @@ pub fn run_verify_blocks_detailed(module: &Module) -> Vec<VerifyResult> {
             Item::Machine(machine) => {
                 interp.register_machine(machine);
             }
+            Item::Actor(actor) => {
+                interp.register_actor(actor);
+            }
             _ => {}
         }
     }

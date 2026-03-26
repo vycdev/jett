@@ -105,3 +105,38 @@ pub struct FunctionSig {
     /// True when the function takes no capability (view) parameters.
     pub is_pure: bool,
 }
+
+// ---------------------------------------------------------------------------
+// Actor definitions
+// ---------------------------------------------------------------------------
+
+/// Handle to an actor definition in the type registry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ActorId(pub(crate) u32);
+
+impl ActorId {
+    pub fn index(self) -> u32 {
+        self.0
+    }
+}
+
+/// A single message handler on an actor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActorMessageDef {
+    pub name: String,
+    /// (param_name, param_type)
+    pub params: Vec<(String, TypeId)>,
+    /// Return type for `responds T`; `TypeInterner::NOTHING` if the handler has no response.
+    pub responds: TypeId,
+}
+
+/// Describes a user-defined actor type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActorDef {
+    pub name: String,
+    /// Capability parameters received at spawn time: (param_name, param_type).
+    pub capability_params: Vec<(String, TypeId)>,
+    /// Mutable state fields: (field_name, field_type).
+    pub state_fields: Vec<(String, TypeId)>,
+    pub messages: Vec<ActorMessageDef>,
+}

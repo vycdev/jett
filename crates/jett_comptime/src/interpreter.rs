@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
 use jett_parser::ast::{
-    BinOp, BitfieldDef, BitfieldFieldKind, Block, CallArg, EnumDef, Expr, FunctionDef, Ident,
-    ImplementBlock, InterfaceDecl, MachineDef, Pattern, PipelineStep, Stmt, StringPart, StructDef,
-    TypeAlias, TypeExpr, UnaryOp,
+    ActorDef, BinOp, BitfieldDef, BitfieldFieldKind, Block, CallArg, EnumDef, Expr, FunctionDef,
+    Ident, ImplementBlock, InterfaceDecl, MachineDef, Pattern, PipelineStep, Stmt, StringPart,
+    StructDef, TypeAlias, TypeExpr, UnaryOp,
 };
 
 use crate::value::Value;
@@ -53,6 +53,7 @@ pub type Environment = HashMap<String, Value>;
 enum Signal {
     Return(Value),
     Default(Value),
+    Respond(Value),
     Break,
     Continue,
 }
@@ -109,6 +110,22 @@ pub struct Interpreter {
     type_aliases: HashMap<String, Option<RefinementDef>>,
     /// Registered state machine definitions: name -> MachineDef.
     machines: HashMap<String, MachineDef>,
+    /// Registered actor definitions: type_name -> ActorDef (AST).
+    actor_defs: HashMap<String, ActorDef>,
+    /// Live actor instances keyed by unique ID.
+    actor_instances: HashMap<u64, ActorInstance>,
+    /// Next actor instance ID.
+    next_actor_id: u64,
+}
+
+/// Runtime state of a spawned actor instance.
+struct ActorInstance {
+    /// Name of the actor type (e.g. `"Counter"`).
+    type_name: String,
+    /// Current values of the actor's mutable state fields.
+    state: HashMap<String, Value>,
+    /// Capability values passed at spawn time.
+    capabilities: HashMap<String, Value>,
 }
 
 impl Interpreter {
@@ -124,6 +141,9 @@ impl Interpreter {
             type_alias_bases: HashMap::new(),
             type_aliases: HashMap::new(),
             machines: HashMap::new(),
+            actor_defs: HashMap::new(),
+            actor_instances: HashMap::new(),
+            next_actor_id: 0,
         }
     }
 
@@ -201,6 +221,12 @@ impl Interpreter {
                 method.clone(),
             );
         }
+    }
+
+    /// Register a user-defined actor so it can be spawned and messaged.
+    pub fn register_actor(&mut self, actor: &ActorDef) {
+        self.actor_defs
+            .insert(actor.name.name.clone(), actor.clone());
     }
 
     /// Register a user-defined bitfield so it can be constructed and its
@@ -338,6 +364,9 @@ impl Interpreter {
             }
             ExprFlow::Signal(Signal::Continue) => {
                 Err("`continue` cannot escape expression evaluation".to_string())
+            }
+            ExprFlow::Signal(Signal::Respond(_)) => {
+                Err("`respond` cannot escape expression evaluation".to_string())
             }
         }
     }
@@ -599,6 +628,75 @@ impl Interpreter {
                     }
                     _ => Err(format!("'at' requires a machine value, got {val}")),
                 }
+            }
+
+            Expr::Clone(inner, _) => {
+                // `clone expr` — deep clone (all Values are Clone so this is a no-op copy).
+                self.eval_expr_flow(inner)
+            }
+
+            Expr::Spawn(inner, _) => {
+                // `spawn ActorType(cap1: val1, ...)` — create a new actor instance.
+                let (actor_name, args) = match inner.as_ref() {
+                    Expr::Call(callee, args, _) => match callee.as_ref() {
+                        Expr::Ident(ident) => (ident.name.clone(), args),
+                        _ => return Err("spawn: expected actor type name".to_string()),
+                    },
+                    _ => return Err("spawn: expected call expression".to_string()),
+                };
+
+                let actor_def = self
+                    .actor_defs
+                    .get(&actor_name)
+                    .ok_or_else(|| format!("unknown actor type '{actor_name}'"))?
+                    .clone();
+
+                // Evaluate capability args.
+                let mut capabilities = HashMap::new();
+                for (arg, param) in args.iter().zip(actor_def.capability_params.iter()) {
+                    let val = value_or_signal!(self, &arg.value);
+                    let name = arg
+                        .name
+                        .as_ref()
+                        .map(|n| n.name.clone())
+                        .unwrap_or_else(|| param.name.name.clone());
+                    capabilities.insert(name, val);
+                }
+
+                // Evaluate state field initializers in a temp scope with capabilities in scope.
+                self.push_scope();
+                for (name, val) in &capabilities {
+                    self.set_variable(name, val.clone());
+                }
+                let mut state = HashMap::new();
+                for field in &actor_def.state_fields {
+                    let val = value_or_signal!(self, &field.value);
+                    state.insert(field.name.name.clone(), val);
+                }
+                self.pop_scope();
+
+                let id = self.next_actor_id;
+                self.next_actor_id += 1;
+                self.actor_instances.insert(
+                    id,
+                    ActorInstance {
+                        type_name: actor_name.clone(),
+                        state,
+                        capabilities,
+                    },
+                );
+
+                Ok(ExprFlow::Value(Value::Actor(id)))
+            }
+
+            Expr::Send(inner, _) => {
+                self.eval_actor_message(inner, false)?;
+                Ok(ExprFlow::Value(Value::Nothing))
+            }
+
+            Expr::Ask(inner, _) => {
+                let val = self.eval_actor_message(inner, true)?;
+                Ok(ExprFlow::Value(val))
             }
 
             // Unsupported expressions produce a clear error.
@@ -892,6 +990,11 @@ impl Interpreter {
                 }
             }
 
+            Stmt::Respond(resp) => {
+                let val = self.eval_expr(&resp.value)?;
+                Ok(Some(Signal::Respond(val)))
+            }
+
             Stmt::Break(_) => Ok(Some(Signal::Break)),
             Stmt::Continue(_) => Ok(Some(Signal::Continue)),
 
@@ -909,6 +1012,9 @@ impl Interpreter {
             None | Some(Signal::Break) | Some(Signal::Continue) | Some(Signal::Return(_)) => Ok(()),
             Some(Signal::Default(_)) => {
                 Err("`default` can only be used inside a `handle` block".to_string())
+            }
+            Some(Signal::Respond(_)) => {
+                Err("`respond` can only be used inside a `receive` handler".to_string())
             }
         }
     }
@@ -953,6 +1059,126 @@ impl Interpreter {
                 Some(format!("{inner_name}.{suffix}"))
             }
             _ => None,
+        }
+    }
+
+    /// Execute an actor message (send or ask).
+    ///
+    /// `inner` is the expression after the `send`/`ask` keyword:
+    ///   - `actor_expr.handler_name`   (no args)
+    ///   - `actor_expr.handler_name(args...)` (with args)
+    ///
+    /// When `is_ask` is true, a `respond value` inside the handler returns
+    /// `value` as the result; for `send` the result is always `nothing`.
+    fn eval_actor_message(&mut self, inner: &Expr, is_ask: bool) -> Result<Value, String> {
+        // Decompose `actor_expr.handler_name` or `actor_expr.handler_name(args)`.
+        let (actor_expr, handler_name, call_args) = match inner {
+            Expr::Call(callee, args, _) => match callee.as_ref() {
+                Expr::FieldAccess(base, field, _) => {
+                    (base.as_ref(), field.name.clone(), Some(args.as_slice()))
+                }
+                _ => return Err("send/ask: expected actor.handler or actor.handler(args)".to_string()),
+            },
+            Expr::FieldAccess(base, field, _) => (base.as_ref(), field.name.clone(), None),
+            _ => return Err("send/ask: expected actor.handler expression".to_string()),
+        };
+
+        // Evaluate actor handle.
+        let actor_val = match self.eval_expr_flow(actor_expr)? {
+            ExprFlow::Value(v) => v,
+            ExprFlow::Signal(s) => {
+                return Err(format!("send/ask: actor expression returned signal: {s:?}"));
+            }
+        };
+        let actor_id = match actor_val {
+            Value::Actor(id) => id,
+            _ => return Err(format!("send/ask: expected actor value, got {actor_val}")),
+        };
+
+        // Evaluate message arguments.
+        let mut arg_values = Vec::new();
+        if let Some(args) = call_args {
+            for arg in args {
+                let val = match self.eval_expr_flow(&arg.value)? {
+                    ExprFlow::Value(v) => v,
+                    ExprFlow::Signal(s) => {
+                        return Err(format!("send/ask: arg expression returned signal: {s:?}"));
+                    }
+                };
+                arg_values.push(val);
+            }
+        }
+
+        // Clone the actor def and instance state to avoid borrow conflicts.
+        let instance = self
+            .actor_instances
+            .get(&actor_id)
+            .ok_or_else(|| format!("unknown actor instance #{actor_id}"))?;
+        let type_name = instance.type_name.clone();
+        let state_snapshot = instance.state.clone();
+        let caps_snapshot = instance.capabilities.clone();
+
+        let actor_def = self
+            .actor_defs
+            .get(&type_name)
+            .ok_or_else(|| format!("unknown actor type '{type_name}'"))?
+            .clone();
+
+        let handler = actor_def
+            .handlers
+            .iter()
+            .find(|h| h.name.name == handler_name)
+            .ok_or_else(|| format!("actor '{type_name}' has no handler '{handler_name}'"))?
+            .clone();
+
+        // Execute handler body in a new scope with state + caps + params.
+        self.push_scope();
+        for (name, val) in &state_snapshot {
+            self.set_variable(name, val.clone());
+        }
+        for (name, val) in &caps_snapshot {
+            self.set_variable(name, val.clone());
+        }
+        for (param, val) in handler.params.iter().zip(arg_values.iter()) {
+            self.set_variable(&param.name.name, val.clone());
+        }
+
+        // Execute the handler body, collecting signals.
+        let mut respond_value = Value::Nothing;
+        for stmt in &handler.body.stmts {
+            match self.exec_stmt_inner(stmt)? {
+                Some(Signal::Respond(val)) => {
+                    respond_value = val;
+                    break;
+                }
+                Some(Signal::Return(_)) => break,
+                Some(Signal::Break) | Some(Signal::Continue) => break,
+                Some(Signal::Default(_)) => break,
+                None => {}
+            }
+        }
+
+        // Collect updated state field values before popping scope.
+        let state_field_names: Vec<String> = state_snapshot.keys().cloned().collect();
+        let mut updated_state = state_snapshot;
+        for name in &state_field_names {
+            // Check innermost scope(s) for the updated value.
+            if let Some(val) = self.scopes.last().and_then(|s| s.get(name)).cloned() {
+                updated_state.insert(name.clone(), val);
+            }
+        }
+
+        self.pop_scope();
+
+        // Write updated state back to the actor instance.
+        if let Some(instance) = self.actor_instances.get_mut(&actor_id) {
+            instance.state = updated_state;
+        }
+
+        if is_ask {
+            Ok(respond_value)
+        } else {
+            Ok(Value::Nothing)
         }
     }
 
@@ -1379,7 +1605,7 @@ impl Interpreter {
             // -- Secret-safe operations --------------------------------------
             "secret.redact" => {
                 require_args!(name, 1, args);
-                Some(Ok(Value::String("[redacted]".to_string())))
+                Some(Ok(Value::String("***".to_string())))
             }
 
             "secret.compare" => {
@@ -2176,6 +2402,7 @@ fn runtime_type_name(value: &Value) -> Option<String> {
         | Value::Enum { type_name, .. }
         | Value::Machine { type_name, .. } => Some(type_name.clone()),
         Value::Error(_) => None,
+        Value::Actor(_) => Some("actor".to_string()),
     }
 }
 
@@ -4103,7 +4330,7 @@ mod builtin_tests {
         let expr = dotted_call("secret", "redact", vec![string("top-secret")]);
         assert_eq!(
             interp.eval_expr(&expr).unwrap(),
-            Value::String("[redacted]".to_string())
+            Value::String("***".to_string())
         );
     }
 

@@ -9,10 +9,10 @@ use jett_parser::ast::{
 use jett_resolve::resolver::ResolveResult;
 use jett_resolve::scope::{DefId, DefKind};
 use jett_types::{
-    BitfieldDef as TypeBitfieldDef, BitfieldFieldDef as TypeBitfieldFieldDef,
-    BitfieldFieldKind as TypeBitfieldFieldKind, BitfieldId, EnumDef as TypeEnumDef, FunctionSig,
-    InterfaceDef as TypeInterfaceDef, StructDef as TypeStructDef, StructId, Type, TypeId,
-    TypeInterner, VariantDef,
+    ActorDef as TypeActorDef, ActorMessageDef, BitfieldDef as TypeBitfieldDef,
+    BitfieldFieldDef as TypeBitfieldFieldDef, BitfieldFieldKind as TypeBitfieldFieldKind,
+    BitfieldId, EnumDef as TypeEnumDef, FunctionSig, InterfaceDef as TypeInterfaceDef,
+    StructDef as TypeStructDef, StructId, Type, TypeId, TypeInterner, VariantDef,
 };
 
 use crate::capability;
@@ -97,6 +97,11 @@ struct TypeChecker<'a> {
     // -- Generic function support --
     /// AST templates for user-defined generic functions (have type_params).
     generic_function_templates: HashMap<String, FunctionDef>,
+
+    // -- Actor support --
+    /// The expected `responds T` type for the receive handler being checked.
+    /// `None` when not inside a receive handler.
+    current_respond_type: Option<TypeId>,
 }
 
 impl<'a> TypeChecker<'a> {
@@ -131,6 +136,7 @@ impl<'a> TypeChecker<'a> {
             monomorphized_structs: HashMap::new(),
             type_var_subst: HashMap::new(),
             generic_function_templates: HashMap::new(),
+            current_respond_type: None,
         }
     }
 
@@ -166,6 +172,7 @@ impl<'a> TypeChecker<'a> {
             Type::Bitfield(bid) => self.interner.resolve_bitfield(*bid).name.clone(),
             Type::Enum(eid) => self.interner.resolve_enum(*eid).name.clone(),
             Type::Interface(iid) => self.interner.resolve_interface(*iid).name.clone(),
+            Type::Actor(aid) => self.interner.resolve_actor(*aid).name.clone(),
             Type::Function {
                 params,
                 return_type,
@@ -698,6 +705,7 @@ impl<'a> TypeChecker<'a> {
                 Item::Struct(def) => self.predeclare_struct(def),
                 Item::Bitfield(def) => self.predeclare_bitfield(def),
                 Item::Enum(def) => self.predeclare_enum(def),
+                Item::Actor(def) => self.predeclare_actor(def),
                 _ => {}
             }
         }
@@ -709,6 +717,7 @@ impl<'a> TypeChecker<'a> {
                 Item::Struct(def) => self.finish_struct(def),
                 Item::Bitfield(def) => self.finish_bitfield(def),
                 Item::Enum(def) => self.finish_enum(def),
+                Item::Actor(def) => self.finish_actor(def),
                 _ => {}
             }
         }
@@ -775,6 +784,7 @@ impl<'a> TypeChecker<'a> {
                     }
                 }
                 Item::Bitfield(_) => {}
+                Item::Actor(def) => self.check_actor(def),
                 Item::VarDecl(decl) => self.check_var_decl(decl),
                 Item::Verify(verify) => self.check_verify_block(verify),
                 _ => {}
@@ -835,6 +845,159 @@ impl<'a> TypeChecker<'a> {
 
         self.current_function_name = saved_name;
         self.current_function_pure = saved_pure;
+    }
+
+    // ------------------------------------------------------------------
+    // Actors
+    // ------------------------------------------------------------------
+
+    fn predeclare_actor(&mut self, def: &ast::ActorDef) {
+        let aid = self.interner.add_actor(TypeActorDef {
+            name: def.name.name.clone(),
+            capability_params: Vec::new(),
+            state_fields: Vec::new(),
+            messages: Vec::new(),
+        });
+        let ty = self.interner.intern(Type::Actor(aid));
+        self.named_types.insert(def.name.name.clone(), ty);
+        if let Some(def_id) = self.declaration_def_id(def.name.span) {
+            self.type_env.insert(def_id, ty);
+        }
+    }
+
+    fn finish_actor(&mut self, def: &ast::ActorDef) {
+        let Some(&ty) = self.named_types.get(&def.name.name) else {
+            return;
+        };
+        let Type::Actor(aid) = *self.interner.resolve(ty) else {
+            return;
+        };
+
+        let capability_params: Vec<(String, TypeId)> = def
+            .capability_params
+            .iter()
+            .map(|p| (p.name.name.clone(), self.resolve_type_expr(&p.ty)))
+            .collect();
+
+        let state_fields: Vec<(String, TypeId)> = def
+            .state_fields
+            .iter()
+            .map(|f| (f.name.name.clone(), self.resolve_type_expr(&f.ty)))
+            .collect();
+
+        let messages: Vec<ActorMessageDef> = def
+            .handlers
+            .iter()
+            .map(|h| {
+                let params = h
+                    .params
+                    .iter()
+                    .map(|p| (p.name.name.clone(), self.resolve_type_expr(&p.ty)))
+                    .collect();
+                let responds = h
+                    .responds
+                    .as_ref()
+                    .map(|t| self.resolve_type_expr(t))
+                    .unwrap_or(TypeInterner::NOTHING);
+                ActorMessageDef {
+                    name: h.name.name.clone(),
+                    params,
+                    responds,
+                }
+            })
+            .collect();
+
+        self.interner.update_actor(
+            aid,
+            TypeActorDef {
+                name: def.name.name.clone(),
+                capability_params,
+                state_fields,
+                messages,
+            },
+        );
+    }
+
+    fn check_actor(&mut self, def: &ast::ActorDef) {
+        let Some(&actor_ty) = self.named_types.get(&def.name.name) else {
+            return;
+        };
+        let Type::Actor(aid) = *self.interner.resolve(actor_ty) else {
+            return;
+        };
+        let actor_def = self.interner.resolve_actor(aid).clone();
+
+        // Register state fields and capability params in a fresh type env scope.
+        let mut local_env: HashMap<String, TypeId> = HashMap::new();
+        for (name, ty) in &actor_def.capability_params {
+            local_env.insert(name.clone(), *ty);
+        }
+        for (name, ty) in &actor_def.state_fields {
+            local_env.insert(name.clone(), *ty);
+        }
+
+        // Type-check state field initializers.
+        for field in &def.state_fields {
+            let init_ty = self.check_expr(&field.value);
+            let declared_ty = self.resolve_type_expr(&field.ty);
+            if init_ty != TypeInterner::ERROR
+                && declared_ty != TypeInterner::ERROR
+                && !self.types_compatible(declared_ty, init_ty)
+            {
+                self.sink.emit(errors::type_mismatch(
+                    &self.type_name(declared_ty),
+                    &self.type_name(init_ty),
+                    field.value.span(),
+                ));
+            }
+        }
+
+        // Type-check each handler body.
+        let prev_return = self.current_return_type;
+        let prev_respond = self.current_respond_type;
+        let prev_function_name = self.current_function_name.clone();
+
+        for (handler_ast, handler_def) in def.handlers.iter().zip(actor_def.messages.iter()) {
+            // Set up respond type.
+            let responds_ty = if handler_def.responds == TypeInterner::NOTHING {
+                None
+            } else {
+                Some(handler_def.responds)
+            };
+            self.current_respond_type = responds_ty;
+            self.current_return_type = None;
+            self.current_function_name =
+                Some(format!("{}.{}", def.name.name, handler_ast.name.name));
+
+            // Register message params in the type env temporarily.
+            for (param_ast, (_, param_ty)) in
+                handler_ast.params.iter().zip(handler_def.params.iter())
+            {
+                if let Some(def_id) = self.declaration_def_id(param_ast.name.span) {
+                    self.type_env.insert(def_id, *param_ty);
+                }
+            }
+
+            // Register local_env vars into type_env using resolve declarations.
+            for field in &def.state_fields {
+                if let Some(def_id) = self.declaration_def_id(field.name.span) {
+                    let ty = self.resolve_type_expr(&field.ty);
+                    self.type_env.insert(def_id, ty);
+                }
+            }
+            for cap in &def.capability_params {
+                if let Some(def_id) = self.declaration_def_id(cap.name.span) {
+                    let ty = self.resolve_type_expr(&cap.ty);
+                    self.type_env.insert(def_id, ty);
+                }
+            }
+
+            self.check_block(&handler_ast.body);
+        }
+
+        self.current_return_type = prev_return;
+        self.current_respond_type = prev_respond;
+        self.current_function_name = prev_function_name;
     }
 
     fn predeclare_struct(&mut self, def: &ast::StructDef) {
@@ -1554,7 +1717,29 @@ impl<'a> TypeChecker<'a> {
             }
             Stmt::Assert(assert_stmt) => self.check_assert(assert_stmt),
             Stmt::Match(match_stmt) => self.check_match(match_stmt),
+            Stmt::Respond(resp) => self.check_respond(resp),
             Stmt::Use(_) | Stmt::Break(_) | Stmt::Continue(_) => {}
+        }
+    }
+
+    fn check_respond(&mut self, resp: &ast::RespondStmt) {
+        let val_ty = self.check_expr(&resp.value);
+        match self.current_respond_type {
+            None => {
+                self.sink.emit(errors::respond_outside_handler(resp.span));
+            }
+            Some(expected) => {
+                if val_ty != TypeInterner::ERROR
+                    && expected != TypeInterner::ERROR
+                    && !self.types_compatible(expected, val_ty)
+                {
+                    self.sink.emit(errors::type_mismatch(
+                        &self.type_name(expected),
+                        &self.type_name(val_ty),
+                        resp.value.span(),
+                    ));
+                }
+            }
         }
     }
 
@@ -2007,6 +2192,16 @@ impl<'a> TypeChecker<'a> {
                 self.check_expr(inner);
                 TypeInterner::BOOL
             }
+            Expr::Spawn(inner, _) => self.check_spawn(inner),
+            Expr::Send(inner, _) => {
+                self.check_send_ask_inner(inner);
+                TypeInterner::NOTHING
+            }
+            Expr::Ask(inner, _) => self.check_send_ask_inner(inner),
+            Expr::Clone(inner, _) => {
+                // `clone expr` returns the same type as the expression.
+                self.check_expr(inner)
+            }
             Expr::Error(_) => TypeInterner::ERROR,
             Expr::EnumVariant(type_name, variant, span) => {
                 self.check_enum_variant(type_name, variant, &[], *span)
@@ -2016,6 +2211,74 @@ impl<'a> TypeChecker<'a> {
         // Record the type for this expression span.
         self.type_map.insert(expr.span(), ty);
         ty
+    }
+
+    fn check_spawn(&mut self, inner: &Expr) -> TypeId {
+        // `spawn ActorType(args)` — the inner expr should be a call to the actor type name.
+        // We check the arguments but return the actor type.
+        let callee = match inner {
+            Expr::Call(callee, args, _span) => {
+                // Check argument expressions.
+                for arg in args {
+                    self.check_expr(&arg.value);
+                }
+                callee.as_ref()
+            }
+            _ => {
+                self.check_expr(inner);
+                return TypeInterner::ERROR;
+            }
+        };
+        // The callee should be an actor type name.
+        match callee {
+            Expr::Ident(ident) => {
+                if let Some(&ty) = self.named_types.get(&ident.name) {
+                    if matches!(self.interner.resolve(ty), Type::Actor(_)) {
+                        return ty;
+                    }
+                }
+                self.check_expr(callee)
+            }
+            _ => {
+                self.check_expr(callee);
+                TypeInterner::ERROR
+            }
+        }
+    }
+
+    fn check_send_ask_inner(&mut self, inner: &Expr) -> TypeId {
+        // inner is `actor_expr.handler_name` or `actor_expr.handler_name(args)`
+        // We check the actor expression and any args, and return the responds type.
+        let (actor_expr, message_name, args) = match inner {
+            Expr::Call(callee, args, _) => match callee.as_ref() {
+                Expr::FieldAccess(base, field, _) => (base.as_ref(), &field.name, Some(args)),
+                _ => {
+                    self.check_expr(inner);
+                    return TypeInterner::ERROR;
+                }
+            },
+            Expr::FieldAccess(base, field, _) => (base.as_ref(), &field.name, None),
+            _ => {
+                self.check_expr(inner);
+                return TypeInterner::ERROR;
+            }
+        };
+
+        let actor_ty = self.check_expr(actor_expr);
+        if let Some(arg_list) = args {
+            for arg in arg_list {
+                self.check_expr(&arg.value);
+            }
+        }
+
+        // Look up the handler and return its responds type.
+        if let Type::Actor(aid) = *self.interner.resolve(actor_ty) {
+            let actor_def = self.interner.resolve_actor(aid).clone();
+            if let Some(msg) = actor_def.messages.iter().find(|m| m.name == *message_name) {
+                return msg.responds;
+            }
+        }
+        TypeInterner::ERROR
     }
 
     fn check_ident(&mut self, ident: &ast::Ident) -> TypeId {
@@ -3362,6 +3625,7 @@ fn stmt_span(stmt: &Stmt) -> Span {
         Stmt::Expr(e) => e.span,
         Stmt::Use(u) => u.span,
         Stmt::Assert(a) => a.span,
+        Stmt::Respond(r) => r.span,
         Stmt::Break(span) | Stmt::Continue(span) => *span,
     }
 }

@@ -43,6 +43,7 @@ pub enum TokenKind {
     Is,
     Actor,
     Receive,
+    Responds,
     Send,
     Ask,
     Respond,

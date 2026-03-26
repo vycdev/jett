@@ -188,6 +188,9 @@ impl<'a> OwnershipChecker<'a> {
             }
             Stmt::Assert(assert_stmt) => self.check_assert(assert_stmt),
             Stmt::Match(match_stmt) => self.check_match(match_stmt),
+            Stmt::Respond(resp) => {
+                self.check_expr_ownership(&resp.value);
+            }
             Stmt::Use(_) | Stmt::Break(_) | Stmt::Continue(_) => {}
         }
     }
@@ -388,6 +391,12 @@ impl<'a> OwnershipChecker<'a> {
                 }
             }
             Expr::At(inner, _, _) => {
+                self.check_expr_ownership(inner);
+            }
+            Expr::Spawn(inner, _)
+            | Expr::Send(inner, _)
+            | Expr::Ask(inner, _)
+            | Expr::Clone(inner, _) => {
                 self.check_expr_ownership(inner);
             }
             // Literals and other leaves have no ownership effects.

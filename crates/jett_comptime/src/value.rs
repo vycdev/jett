@@ -42,6 +42,8 @@ pub enum Value {
         state: String,
         fields: Vec<Value>,
     },
+    /// A handle to a spawned actor instance (holds the instance ID).
+    Actor(u64),
     /// A runtime error value.
     Error(String),
 }
@@ -124,6 +126,7 @@ impl fmt::Display for Value {
                 }
                 Ok(())
             }
+            Value::Actor(id) => write!(f, "actor#{id}"),
             Value::Error(msg) => write!(f, "error: {msg}"),
         }
     }

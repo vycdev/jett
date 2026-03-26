@@ -75,7 +75,7 @@
 | Verify blocks (parsing + execution) | Done |
 | Property-based testing (`property` blocks) | Done |
 | Bitfield declarations | Partial |
-| Actor model (`actor`, `spawn`, `send`, `ask`) | Not started |
+| Actor model (`actor`, `spawn`, `send`, `ask`) | Done |
 | Structured concurrency (`run`, `join`, `cancel`) | Not started |
 | Interface/implement blocks | Done |
 | `mutual` blocks | Done |

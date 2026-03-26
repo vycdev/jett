@@ -23,6 +23,7 @@ pub enum Item {
     Bitfield(BitfieldDef),
     Enum(EnumDef),
     Machine(MachineDef),
+    Actor(ActorDef),
     VarDecl(VarDecl),
     Verify(VerifyBlock),
     Property(PropertyBlock),
@@ -201,6 +202,35 @@ pub struct Variant {
 }
 
 // ---------------------------------------------------------------------------
+// Actor model
+// ---------------------------------------------------------------------------
+
+/// An actor declaration: `actor Name(cap: CapType):` with state fields and
+/// `receive` handlers.
+#[derive(Debug, Clone)]
+pub struct ActorDef {
+    pub name: Ident,
+    /// Capability parameters received at spawn time: `(stdout: Stdout)`.
+    pub capability_params: Vec<Param>,
+    /// Mutable state fields declared in the actor body: `mutable int64 count = 0`.
+    pub state_fields: Vec<VarDecl>,
+    /// Message handlers.
+    pub handlers: Vec<ReceiveHandler>,
+    pub span: Span,
+}
+
+/// A single `receive` handler inside an actor.
+#[derive(Debug, Clone)]
+pub struct ReceiveHandler {
+    pub name: Ident,
+    pub params: Vec<Param>,
+    /// Return type annotation for `responds T`; `None` for no-response handlers.
+    pub responds: Option<TypeExpr>,
+    pub body: Block,
+    pub span: Span,
+}
+
+// ---------------------------------------------------------------------------
 // State machines
 // ---------------------------------------------------------------------------
 
@@ -245,6 +275,7 @@ pub enum Stmt {
     VarDecl(VarDecl),
     Assign(AssignStmt),
     Return(ReturnStmt),
+    Respond(RespondStmt),
     If(IfStmt),
     For(ForStmt),
     While(WhileStmt),
@@ -254,6 +285,12 @@ pub enum Stmt {
     Assert(AssertStmt),
     Break(Span),
     Continue(Span),
+}
+
+#[derive(Debug, Clone)]
+pub struct RespondStmt {
+    pub value: Expr,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -432,6 +469,14 @@ pub enum Expr {
     Pipeline(Box<Expr>, Vec<PipelineStep>, Span),
     /// State check: `expr at state_name` — returns true if machine is in the given state
     At(Box<Expr>, Ident, Span),
+    /// `spawn ActorType(args)` — create an actor instance
+    Spawn(Box<Expr>, Span),
+    /// `send actor.message` or `send actor.message(args)` — fire-and-forget message
+    Send(Box<Expr>, Span),
+    /// `ask actor.message` or `ask actor.message(args)` — request/response message
+    Ask(Box<Expr>, Span),
+    /// `clone expr` — clone a capability
+    Clone(Box<Expr>, Span),
     /// Error node for recovery
     Error(Span),
 }
@@ -465,6 +510,10 @@ impl Expr {
             | Expr::Coarsen(_, s)
             | Expr::Pipeline(_, _, s)
             | Expr::At(_, _, s)
+            | Expr::Spawn(_, s)
+            | Expr::Send(_, s)
+            | Expr::Ask(_, s)
+            | Expr::Clone(_, s)
             | Expr::Error(s) => *s,
             Expr::Ident(ident) => ident.span,
         }
