@@ -38,8 +38,6 @@ struct VarInfo {
     mutable: bool,
     /// The type of the variable (used to determine if it's a copyable primitive).
     type_id: TypeId,
-    /// The span where the variable was declared (for diagnostics).
-    decl_span: Span,
     /// The span where the variable was consumed (for "previously consumed here" labels).
     consumed_span: Option<Span>,
 }
@@ -64,15 +62,6 @@ fn cannot_consume_view(name: &str, span: Span) -> Diagnostic {
         401,
         format!("cannot consume `{name}` because it is a view parameter"),
         span,
-    )
-}
-
-/// E0402: Variable not consumed — a linear value was never used.
-fn variable_not_consumed(name: &str, decl_span: Span) -> Diagnostic {
-    Diagnostic::warning(
-        402,
-        format!("linear variable `{name}` was never consumed"),
-        decl_span,
     )
 }
 
@@ -163,23 +152,12 @@ impl<'a> OwnershipChecker<'a> {
                     state,
                     mutable: param.mutable,
                     type_id,
-                    decl_span: param.name.span,
                     consumed_span: None,
                 },
             );
         }
 
         self.check_block(&func.body);
-
-        // Check for unconsumed linear values (non-view, non-copyable parameters
-        // that were never consumed). We only warn about owned parameters — view
-        // parameters are borrowed and don't need to be consumed.
-        for (name, info) in &self.states {
-            if info.state == OwnershipState::Owned && !self.is_copyable(info.type_id) {
-                self.diagnostics
-                    .push(variable_not_consumed(name, info.decl_span));
-            }
-        }
 
         // Restore the outer scope.
         self.states = saved;
@@ -227,7 +205,6 @@ impl<'a> OwnershipChecker<'a> {
                 state: OwnershipState::Owned,
                 mutable: decl.mutable,
                 type_id,
-                decl_span: decl.name.span,
                 consumed_span: None,
             },
         );
@@ -296,7 +273,6 @@ impl<'a> OwnershipChecker<'a> {
                 },
                 mutable: false,
                 type_id: TypeInterner::ERROR, // Element type not tracked here
-                decl_span: for_stmt.variable.span,
                 consumed_span: None,
             },
         );
@@ -590,14 +566,6 @@ mod tests {
             .collect()
     }
 
-    /// Extract warning diagnostics from a result.
-    fn warnings(diagnostics: &[Diagnostic]) -> Vec<&Diagnostic> {
-        diagnostics
-            .iter()
-            .filter(|d| d.severity == jett_diagnostics::Severity::Warning)
-            .collect()
-    }
-
     // ---------------------------------------------------------------
     // Test: Variable consumed after passing to function
     // ---------------------------------------------------------------
@@ -814,6 +782,11 @@ mod tests {
 
         let errs = errors(&diagnostics);
         assert!(errs.is_empty(), "unexpected errors: {:?}", errs);
+        assert!(
+            diagnostics.is_empty(),
+            "viewed values may go out of scope without warnings: {:?}",
+            diagnostics
+        );
     }
 
     // ---------------------------------------------------------------
@@ -1184,14 +1157,14 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
-    // Test: Unconsumed linear variable warning
+    // Test: Owned linear values may go out of scope without warnings
     // ---------------------------------------------------------------
 
     #[test]
-    fn unconsumed_linear_variable_warning() {
+    fn owned_linear_value_can_exit_scope_without_warning() {
         // function example(data: list[int64]) returns nothing:
         //     return nothing
-        // Warning: `data` is a linear variable that was never consumed.
+        // No warning: scope exit is a valid ownership endpoint.
 
         let func = FunctionDef {
             name: ident("example", sp(0, 7)),
@@ -1221,10 +1194,11 @@ mod tests {
         let module = module_with_func(func);
         let diagnostics = check_ownership(&module, &interner);
 
-        let warns = warnings(&diagnostics);
-        assert_eq!(warns.len(), 1, "expected 1 warning, got: {:?}", warns);
-        assert_eq!(warns[0].code.code(), 402);
-        assert!(warns[0].message.contains("data"));
+        assert!(
+            diagnostics.is_empty(),
+            "owned values may go out of scope without warnings: {:?}",
+            diagnostics
+        );
     }
 
     // ---------------------------------------------------------------
@@ -1263,7 +1237,6 @@ mod tests {
 
         let errs = errors(&diagnostics);
         assert!(errs.is_empty(), "unexpected errors: {:?}", errs);
-        let warns = warnings(&diagnostics);
-        assert!(warns.is_empty(), "unexpected warnings: {:?}", warns);
+        assert!(diagnostics.is_empty(), "unexpected diagnostics: {:?}", diagnostics);
     }
 }

@@ -474,7 +474,11 @@ impl Resolver {
                 self.resolve_expr(expr, item_index);
                 let scope = self.push_scope();
                 if let Some(binding) = error_binding {
-                    self.declare_local(&binding.name, DefKind::Variable, binding.span);
+                    self.declare_local_without_unused_warning(
+                        &binding.name,
+                        DefKind::Variable,
+                        binding.span,
+                    );
                 }
                 for stmt in &block.stmts {
                     self.resolve_stmt(stmt, item_index);
@@ -576,6 +580,29 @@ impl Resolver {
 
     /// Declare a local binding (variable, parameter). Checks for shadowing.
     fn declare_local(&mut self, name: &str, kind: DefKind, span: Span) -> Option<DefId> {
+        self.declare_local_impl(name, kind, span, true)
+    }
+
+    /// Declare a local binding that should not participate in unused-variable
+    /// warnings. This is used for mandatory contextual bindings like
+    /// `handle error:`, where the syntax requires the binding even if the body
+    /// does not need to reference it.
+    fn declare_local_without_unused_warning(
+        &mut self,
+        name: &str,
+        kind: DefKind,
+        span: Span,
+    ) -> Option<DefId> {
+        self.declare_local_impl(name, kind, span, false)
+    }
+
+    fn declare_local_impl(
+        &mut self,
+        name: &str,
+        kind: DefKind,
+        span: Span,
+        track_unused: bool,
+    ) -> Option<DefId> {
         // Check for shadowing in ancestor scopes.
         if let Some(prev_id) = self.scope_table.lookup_ancestor(self.current_scope, name) {
             let prev_span = self.scope_table.def(prev_id).span;
@@ -593,7 +620,7 @@ impl Resolver {
         let def_id = self.scope_table.new_def(name.to_string(), kind, span);
         self.scope_table
             .bind(self.current_scope, name.to_string(), def_id);
-        if kind == DefKind::Variable || kind == DefKind::Param {
+        if track_unused && (kind == DefKind::Variable || kind == DefKind::Param) {
             self.var_defs.insert(def_id);
         }
         Some(def_id)
@@ -1292,6 +1319,53 @@ mod tests {
         assert!(
             unused_warnings.is_empty(),
             "underscore-prefixed variables should not trigger unused warnings"
+        );
+    }
+
+    // ---- Test: `handle error:` binding does not warn when unused ----
+
+    #[test]
+    fn handle_error_binding_does_not_trigger_unused_warning() {
+        let module = Module {
+            items: vec![Item::Function(FunctionDef {
+                name: ident("main", 0),
+                params: vec![],
+                return_type: Some(named_type("nothing", 20)),
+                body: Block {
+                    stmts: vec![Stmt::VarDecl(VarDecl {
+                        mutable: false,
+                        ty: named_type("int64", 40),
+                        name: ident("_parsed", 46),
+                        value: Expr::Handle(
+                            Box::new(Expr::Error(sp(55, 60))),
+                            Some(ident("error", 68)),
+                            Block {
+                                stmts: vec![Stmt::Return(ReturnStmt {
+                                    value: Some(Expr::Nothing(sp(80, 87))),
+                                    span: sp(73, 87),
+                                })],
+                                span: sp(70, 87),
+                            },
+                            sp(55, 87),
+                        ),
+                        span: sp(40, 87),
+                    })],
+                    span: sp(35, 90),
+                },
+                span: sp(0, 90),
+            })],
+            span: sp(0, 90),
+        };
+
+        let result = resolve(&module);
+        let unused_warnings: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == Severity::Warning && d.code.code() == 202)
+            .collect();
+        assert!(
+            unused_warnings.is_empty(),
+            "handle error binding should not trigger unused warnings"
         );
     }
 }
