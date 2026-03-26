@@ -98,6 +98,8 @@ pub struct Interpreter {
     structs: HashMap<String, StructDef>,
     /// Interface dotted name -> concrete runtime type -> concrete dotted function name.
     interface_methods: HashMap<String, HashMap<String, String>>,
+    /// Registered type alias base names.
+    type_alias_bases: HashMap<String, String>,
     /// Registered type aliases: name -> (base_type_name, optional constraint).
     type_aliases: HashMap<String, Option<RefinementDef>>,
     /// Registered state machine definitions: name -> MachineDef.
@@ -112,6 +114,7 @@ impl Interpreter {
             functions: HashMap::new(),
             structs: HashMap::new(),
             interface_methods: HashMap::new(),
+            type_alias_bases: HashMap::new(),
             type_aliases: HashMap::new(),
             machines: HashMap::new(),
         }
@@ -226,6 +229,8 @@ impl Interpreter {
     /// constraints when values are assigned to the type.
     pub fn register_type_alias(&mut self, alias: &TypeAlias) {
         let base_name = type_expr_name(&alias.base_type);
+        self.type_alias_bases
+            .insert(alias.name.name.clone(), base_name.clone());
         let def = alias.constraint.as_ref().map(|c| RefinementDef {
             base_type_name: base_name,
             constraint: c.clone(),
@@ -236,13 +241,15 @@ impl Interpreter {
     /// Check a value against a refinement type's constraint.
     /// Returns `Ok(())` if valid, or `Err(message)` if the constraint fails.
     fn check_refinement(&mut self, type_name: &str, value: &Value) -> Result<(), String> {
+        if let Some(base_type_name) = self.type_alias_bases.get(type_name).cloned() {
+            self.check_refinement(&base_type_name, value)?;
+        }
+
         let def = match self.type_aliases.get(type_name) {
             Some(Some(def)) => def.clone(),
             Some(None) => return Ok(()), // simple alias, no constraint
             None => return Ok(()),       // not a known type alias
         };
-
-        self.check_refinement(&def.base_type_name, value)?;
 
         self.push_scope();
         self.set_variable("value", value.clone());
@@ -274,6 +281,17 @@ impl Interpreter {
         match self.check_refinement(type_name, &value) {
             Ok(()) => Ok(ExprFlow::Value(value)),
             Err(message) => self.exec_handle_block(bind_name, Some(Value::String(message)), body),
+        }
+    }
+
+    fn type_name_has_refinement(&self, type_name: &str) -> bool {
+        match self.type_aliases.get(type_name) {
+            Some(Some(_)) => true,
+            Some(None) => self
+                .type_alias_bases
+                .get(type_name)
+                .is_some_and(|base| self.type_name_has_refinement(base)),
+            None => false,
         }
     }
 
@@ -1274,6 +1292,10 @@ impl Interpreter {
             .get(struct_name)
             .ok_or_else(|| format!("undefined struct '{struct_name}'"))?
             .clone();
+        let validates_refinements = strukt
+            .fields
+            .iter()
+            .any(|field| self.type_name_has_refinement(&type_expr_name(&field.ty)));
 
         if args.len() > strukt.fields.len() {
             return Err(format!(
@@ -1312,7 +1334,12 @@ impl Interpreter {
             }
 
             let type_name = type_expr_name(&strukt.fields[field_index].ty);
-            self.check_refinement(&type_name, &value)?;
+            if let Err(message) = self.check_refinement(&type_name, &value) {
+                if validates_refinements {
+                    return Ok(Value::ResultFail(Box::new(Value::String(message))));
+                }
+                return Err(message);
+            }
             fields[field_index] = Some(value);
         }
 
@@ -1332,10 +1359,16 @@ impl Interpreter {
             .map(|(field, value)| (field.name.name.clone(), value.unwrap()))
             .collect();
 
-        Ok(Value::Struct {
+        let value = Value::Struct {
             type_name: struct_name.to_string(),
             fields,
-        })
+        };
+
+        if validates_refinements {
+            Ok(Value::ResultOk(Box::new(value)))
+        } else {
+            Ok(value)
+        }
     }
 
     fn eval_value_field_access(&self, value: Value, field_name: &str) -> Result<ExprFlow, String> {
@@ -1650,6 +1683,15 @@ mod tests {
     /// Helper: create a simple type expression.
     fn type_named(name: &str) -> TypeExpr {
         TypeExpr::Named(ident(name))
+    }
+
+    fn type_alias(name: &str, base: &str, constraint: Option<Expr>) -> TypeAlias {
+        TypeAlias {
+            name: ident(name),
+            base_type: type_named(base),
+            constraint,
+            span: sp(),
+        }
     }
 
     /// Helper: create a variable declaration statement.
@@ -2305,6 +2347,59 @@ mod tests {
                     ("y".to_string(), Value::Int64(4)),
                 ],
             }
+        );
+    }
+
+    #[test]
+    fn struct_constructor_with_refinement_field_returns_result_ok() {
+        let mut interp = Interpreter::new();
+        interp.register_type_alias(&type_alias(
+            "Age",
+            "int64",
+            Some(binary(
+                binary(var("value"), BinOp::GtEq, int(0)),
+                BinOp::And,
+                binary(var("value"), BinOp::Lt, int(150)),
+            )),
+        ));
+        interp.register_struct(&struct_def("User", vec![("age", "Age")], vec![]));
+
+        let expr = Expr::Call(Box::new(var("User")), vec![named_arg("age", int(42))], sp());
+
+        assert_eq!(
+            interp.eval_expr(&expr).unwrap(),
+            Value::ResultOk(Box::new(Value::Struct {
+                type_name: "User".to_string(),
+                fields: vec![("age".to_string(), Value::Int64(42))],
+            }))
+        );
+    }
+
+    #[test]
+    fn struct_constructor_with_refinement_field_returns_result_fail() {
+        let mut interp = Interpreter::new();
+        interp.register_type_alias(&type_alias(
+            "Age",
+            "int64",
+            Some(binary(
+                binary(var("value"), BinOp::GtEq, int(0)),
+                BinOp::And,
+                binary(var("value"), BinOp::Lt, int(150)),
+            )),
+        ));
+        interp.register_struct(&struct_def("User", vec![("age", "Age")], vec![]));
+
+        let expr = Expr::Call(
+            Box::new(var("User")),
+            vec![named_arg("age", int(200))],
+            sp(),
+        );
+
+        assert_eq!(
+            interp.eval_expr(&expr).unwrap(),
+            Value::ResultFail(Box::new(Value::String(
+                "refinement type constraint failed for 'Age'".to_string(),
+            )))
         );
     }
 

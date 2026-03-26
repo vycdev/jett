@@ -252,6 +252,32 @@ impl<'a> TypeChecker<'a> {
         false
     }
 
+    fn type_requires_handle_error(&self, expected: TypeId, got: TypeId) -> bool {
+        if matches!(
+            self.interner.resolve(expected),
+            Type::Result(_, _) | Type::Optional(_)
+        ) {
+            return false;
+        }
+        match self.interner.resolve(got) {
+            Type::Result(ok_ty, _) => self.types_compatible(expected, *ok_ty),
+            _ => false,
+        }
+    }
+
+    fn type_requires_bare_handle(&self, expected: TypeId, got: TypeId) -> bool {
+        if matches!(
+            self.interner.resolve(expected),
+            Type::Result(_, _) | Type::Optional(_)
+        ) {
+            return false;
+        }
+        match self.interner.resolve(got) {
+            Type::Optional(inner_ty) => self.types_compatible(expected, *inner_ty),
+            _ => false,
+        }
+    }
+
     fn secret_inner_type(&self, id: TypeId) -> Option<TypeId> {
         match self.interner.resolve(id) {
             Type::Secret(inner) => Some(*inner),
@@ -1284,7 +1310,21 @@ impl<'a> TypeChecker<'a> {
             }
             _ => {
                 let actual_ty = self.check_expr(expr);
-                if allow_refinement_handle
+                if actual_ty != TypeInterner::ERROR
+                    && !self.is_refinement_type(expected_ty)
+                    && self.type_requires_handle_error(expected_ty, actual_ty)
+                {
+                    self.sink
+                        .emit(errors::result_requires_handle_error(expr.span()));
+                    expected_ty
+                } else if actual_ty != TypeInterner::ERROR
+                    && !self.is_refinement_type(expected_ty)
+                    && self.type_requires_bare_handle(expected_ty, actual_ty)
+                {
+                    self.sink
+                        .emit(errors::optional_requires_bare_handle(expr.span()));
+                    expected_ty
+                } else if allow_refinement_handle
                     && self.is_refinement_type(expected_ty)
                     && actual_ty != TypeInterner::ERROR
                     && actual_ty != expected_ty
@@ -2264,6 +2304,10 @@ impl<'a> TypeChecker<'a> {
     ) -> TypeId {
         let struct_def = self.interner.resolve_struct(sid).clone();
         let mut assigned = vec![false; struct_def.fields.len()];
+        let validates_refinements = struct_def
+            .fields
+            .iter()
+            .any(|(_, ty)| self.is_refinement_type(*ty));
 
         for arg in args {
             let Some(field_index) = (match &arg.name {
@@ -2303,7 +2347,19 @@ impl<'a> TypeChecker<'a> {
 
             assigned[field_index] = true;
             let expected_ty = struct_def.fields[field_index].1;
-            let arg_ty = self.check_expr_for_expected(&arg.value, expected_ty, false);
+            let arg_ty = if self.is_refinement_type(expected_ty) {
+                match &arg.value {
+                    Expr::Handle(_, _, _, _) => {
+                        self.check_expr_for_expected(&arg.value, expected_ty, true)
+                    }
+                    _ => self.check_expr(&arg.value),
+                }
+            } else {
+                self.check_expr_for_expected(&arg.value, expected_ty, false)
+            };
+            if self.is_refinement_type(expected_ty) && self.can_refine_from(arg_ty, expected_ty) {
+                continue;
+            }
             if !self.types_compatible(expected_ty, arg_ty) {
                 self.sink.emit(errors::argument_type_mismatch(
                     &struct_def.fields[field_index].0,
@@ -2324,7 +2380,13 @@ impl<'a> TypeChecker<'a> {
             }
         }
 
-        self.interner.intern(Type::Struct(sid))
+        let struct_ty = self.interner.intern(Type::Struct(sid));
+        if validates_refinements {
+            self.interner
+                .intern(Type::Result(struct_ty, TypeInterner::STRING))
+        } else {
+            struct_ty
+        }
     }
 
     fn check_list_construct(&mut self, elems: &[Expr]) -> TypeId {
@@ -5152,5 +5214,51 @@ function main() returns nothing:
             "expected E0335, got: {:?}",
             errors
         );
+    }
+
+    #[test]
+    fn struct_constructor_with_refinement_field_requires_handle() {
+        let errors = check_source_errors(
+            "\
+type Age = int64 where value >= 0 && value < 150
+
+struct User:
+    age: Age
+
+function main() returns nothing:
+    User user = User(age: 42)
+    return nothing
+",
+        );
+
+        assert!(
+            errors.iter().any(|d| d.code.code() == 316),
+            "expected E0316, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn struct_constructor_with_refinement_field_handle_typechecks() {
+        let result = check_source_result(
+            "\
+type Age = int64 where value >= 0 && value < 150
+
+struct User:
+    age: Age
+
+function main() returns nothing:
+    User user = User(age: 42) handle error:
+        return nothing
+    return nothing
+",
+        );
+
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == jett_diagnostics::Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
     }
 }
