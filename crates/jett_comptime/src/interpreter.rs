@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use jett_parser::ast::{
-    BinOp, Block, CallArg, Expr, FunctionDef, MachineDef, Pattern, PipelineStep, Stmt,
+    BinOp, Block, CallArg, Expr, FunctionDef, Ident, MachineDef, Pattern, PipelineStep, Stmt,
     StringPart, TypeAlias, TypeExpr, UnaryOp,
 };
 
@@ -51,8 +51,24 @@ pub type Environment = HashMap<String, Value>;
 #[derive(Debug)]
 enum Signal {
     Return(Value),
+    Default(Value),
     Break,
     Continue,
+}
+
+#[derive(Debug)]
+enum ExprFlow {
+    Value(Value),
+    Signal(Signal),
+}
+
+macro_rules! value_or_signal {
+    ($self:expr, $expr:expr) => {
+        match $self.eval_expr_flow($expr)? {
+            ExprFlow::Value(value) => value,
+            ExprFlow::Signal(signal) => return Ok(ExprFlow::Signal(signal)),
+        }
+    };
 }
 
 // ---------------------------------------------------------------------------
@@ -214,72 +230,108 @@ impl Interpreter {
 
     /// Evaluate an expression, returning its [`Value`].
     pub fn eval_expr(&mut self, expr: &Expr) -> Result<Value, String> {
+        match self.eval_expr_flow(expr)? {
+            ExprFlow::Value(value) => Ok(value),
+            ExprFlow::Signal(Signal::Default(_)) => {
+                Err("`default` can only be used inside a `handle` block".to_string())
+            }
+            ExprFlow::Signal(Signal::Return(_)) => {
+                Err("`return` cannot escape expression evaluation".to_string())
+            }
+            ExprFlow::Signal(Signal::Break) => {
+                Err("`break` cannot escape expression evaluation".to_string())
+            }
+            ExprFlow::Signal(Signal::Continue) => {
+                Err("`continue` cannot escape expression evaluation".to_string())
+            }
+        }
+    }
+
+    fn eval_expr_flow(&mut self, expr: &Expr) -> Result<ExprFlow, String> {
         match expr {
             // Literals
-            Expr::IntLiteral(n, _) => Ok(Value::Int64(*n)),
-            Expr::FloatLiteral(n, _) => Ok(Value::Float64(*n)),
-            Expr::StringLiteral(s, _) => Ok(Value::String(s.clone())),
+            Expr::IntLiteral(n, _) => Ok(ExprFlow::Value(Value::Int64(*n))),
+            Expr::FloatLiteral(n, _) => Ok(ExprFlow::Value(Value::Float64(*n))),
+            Expr::StringLiteral(s, _) => Ok(ExprFlow::Value(Value::String(s.clone()))),
             Expr::StringInterpolation(parts, _) => {
                 let mut result = String::new();
                 for part in parts {
                     match part {
                         StringPart::Literal(s) => result.push_str(s),
                         StringPart::Expr(expr) => {
-                            let val = self.eval_expr(expr)?;
+                            let val = value_or_signal!(self, expr);
                             result.push_str(&val.to_string());
                         }
                     }
                 }
-                Ok(Value::String(result))
+                Ok(ExprFlow::Value(Value::String(result)))
             }
-            Expr::BoolLiteral(b, _) => Ok(Value::Bool(*b)),
-            Expr::Nothing(_) => Ok(Value::Nothing),
+            Expr::BoolLiteral(b, _) => Ok(ExprFlow::Value(Value::Bool(*b))),
+            Expr::Nothing(_) => Ok(ExprFlow::Value(Value::Nothing)),
+            Expr::Ok(inner, _) => {
+                let value = value_or_signal!(self, inner);
+                Ok(ExprFlow::Value(Value::ResultOk(Box::new(value))))
+            }
+            Expr::Fail(inner, _) => {
+                let value = value_or_signal!(self, inner);
+                Ok(ExprFlow::Value(Value::ResultFail(Box::new(value))))
+            }
+            Expr::Some(inner, _) => {
+                let value = value_or_signal!(self, inner);
+                Ok(ExprFlow::Value(Value::OptionalSome(Box::new(value))))
+            }
+            Expr::None(_) => Ok(ExprFlow::Value(Value::OptionalNone)),
+            Expr::Default(inner, _) => {
+                let value = value_or_signal!(self, inner);
+                Ok(ExprFlow::Signal(Signal::Default(value)))
+            }
 
             // Variables
             Expr::Ident(ident) => self
                 .get_variable(&ident.name)
                 .cloned()
+                .map(ExprFlow::Value)
                 .ok_or_else(|| format!("undefined variable '{}'", ident.name)),
 
             // Parenthesized
-            Expr::Paren(inner, _) => self.eval_expr(inner),
+            Expr::Paren(inner, _) => self.eval_expr_flow(inner),
 
             // Binary operations
             Expr::Binary(lhs, op, rhs, _) => {
-                let left = self.eval_expr(lhs)?;
+                let left = value_or_signal!(self, lhs);
                 // Short-circuit for logical operators
                 match op {
                     BinOp::And => {
                         if let Value::Bool(false) = left {
-                            return Ok(Value::Bool(false));
+                            return Ok(ExprFlow::Value(Value::Bool(false)));
                         }
-                        let right = self.eval_expr(rhs)?;
-                        return eval_binary_op(&left, *op, &right);
+                        let right = value_or_signal!(self, rhs);
+                        return Ok(ExprFlow::Value(eval_binary_op(&left, *op, &right)?));
                     }
                     BinOp::Or => {
                         if let Value::Bool(true) = left {
-                            return Ok(Value::Bool(true));
+                            return Ok(ExprFlow::Value(Value::Bool(true)));
                         }
-                        let right = self.eval_expr(rhs)?;
-                        return eval_binary_op(&left, *op, &right);
+                        let right = value_or_signal!(self, rhs);
+                        return Ok(ExprFlow::Value(eval_binary_op(&left, *op, &right)?));
                     }
                     _ => {}
                 }
-                let right = self.eval_expr(rhs)?;
-                eval_binary_op(&left, *op, &right)
+                let right = value_or_signal!(self, rhs);
+                Ok(ExprFlow::Value(eval_binary_op(&left, *op, &right)?))
             }
 
             // Unary operations
             Expr::Unary(op, operand, _) => {
-                let val = self.eval_expr(operand)?;
+                let val = value_or_signal!(self, operand);
                 match op {
                     UnaryOp::Not => match val {
-                        Value::Bool(b) => Ok(Value::Bool(!b)),
+                        Value::Bool(b) => Ok(ExprFlow::Value(Value::Bool(!b))),
                         _ => Err("'not' requires a boolean operand".to_string()),
                     },
                     UnaryOp::Neg => match val {
-                        Value::Int64(n) => Ok(Value::Int64(-n)),
-                        Value::Float64(n) => Ok(Value::Float64(-n)),
+                        Value::Int64(n) => Ok(ExprFlow::Value(Value::Int64(-n))),
+                        Value::Float64(n) => Ok(ExprFlow::Value(Value::Float64(-n))),
                         _ => Err("unary '-' requires a numeric operand".to_string()),
                     },
                 }
@@ -292,33 +344,31 @@ impl Interpreter {
                 // variables) and would fail evaluation.
                 match callee.as_ref() {
                     Expr::Ident(ident) if self.machines.contains_key(&ident.name) => {
-                        return self.construct_machine(&ident.name, args);
+                        return Ok(ExprFlow::Value(self.construct_machine(&ident.name, args)?));
                     }
                     Expr::FieldAccess(obj, field, _) => {
                         if let Expr::Ident(ident) = obj.as_ref() {
                             if field.name == "transition" && self.machines.contains_key(&ident.name) {
-                                return self.machine_transition(&ident.name, args);
+                                return Ok(ExprFlow::Value(self.machine_transition(&ident.name, args)?));
                             }
                         }
                     }
                     _ => {}
                 }
 
-                let arg_values: Vec<Value> = args
-                    .iter()
-                    .map(|a| self.eval_expr(&a.value))
-                    .collect::<Result<_, _>>()?;
+                let mut arg_values = Vec::with_capacity(args.len());
+                for arg in args {
+                    arg_values.push(value_or_signal!(self, &arg.value));
+                }
 
                 match callee.as_ref() {
-                    Expr::Ident(ident) => {
-                        self.call_function(&ident.name, arg_values)
-                    }
+                    Expr::Ident(ident) => Ok(ExprFlow::Value(self.call_function(&ident.name, arg_values)?)),
                     // Handle enum variant construction: Type.variant(args)
-                    Expr::EnumVariant(type_name, variant, _) => Ok(Value::Enum {
+                    Expr::EnumVariant(type_name, variant, _) => Ok(ExprFlow::Value(Value::Enum {
                         type_name: type_name.name.clone(),
                         variant: variant.name.clone(),
                         fields: arg_values,
-                    }),
+                    })),
                     // Handle dotted names: string.trim(...), Stdout.write(...), etc.
                     // Also handles enum variant construction: Shape.circle(5.0)
                     Expr::FieldAccess(obj, field, _) => {
@@ -326,24 +376,24 @@ impl Interpreter {
                         if let Some(ref name) = dotted {
                             // Try built-in functions first.
                             if let Some(result) = self.call_builtin(name, &arg_values) {
-                                return result;
+                                return Ok(ExprFlow::Value(result?));
                             }
                             // Try user-defined dotted functions.
                             if self.functions.contains_key(name.as_str()) {
-                                return self.call_function(name, arg_values);
+                                return Ok(ExprFlow::Value(self.call_function(name, arg_values)?));
                             }
                         }
                         // Fall through to enum variant construction if no
                         // built-in or user function matched.
                         if let Expr::Ident(ident) = obj.as_ref() {
-                            return Ok(Value::Enum {
+                            return Ok(ExprFlow::Value(Value::Enum {
                                 type_name: ident.name.clone(),
                                 variant: field.name.clone(),
                                 fields: arg_values,
-                            });
+                            }));
                         }
                         match dotted {
-                            Some(name) => self.call_function(&name, arg_values),
+                            Some(name) => Ok(ExprFlow::Value(self.call_function(&name, arg_values)?)),
                             None => Err("only named function calls are supported in comptime".to_string()),
                         }
                     }
@@ -353,19 +403,34 @@ impl Interpreter {
 
             // List construction
             Expr::ListConstruct(elems, _) => {
-                let vals: Vec<Value> = elems
-                    .iter()
-                    .map(|e| self.eval_expr(e))
-                    .collect::<Result<_, _>>()?;
-                Ok(Value::List(vals))
+                let mut vals = Vec::with_capacity(elems.len());
+                for elem in elems {
+                    vals.push(value_or_signal!(self, elem));
+                }
+                Ok(ExprFlow::Value(Value::List(vals)))
+            }
+
+            Expr::Handle(target, bind_name, body, _) => {
+                let target_value = value_or_signal!(self, target);
+                match target_value {
+                    Value::ResultOk(value) => Ok(ExprFlow::Value(*value)),
+                    Value::ResultFail(error) => {
+                        self.exec_handle_block(bind_name.as_ref(), Some(*error), body)
+                    }
+                    Value::OptionalSome(value) => Ok(ExprFlow::Value(*value)),
+                    Value::OptionalNone => self.exec_handle_block(None, None, body),
+                    other => Err(format!(
+                        "handle block requires a result or optional value, got {other}"
+                    )),
+                }
             }
 
             // Enum variant reference: `Color.red`
-            Expr::EnumVariant(type_name, variant, _) => Ok(Value::Enum {
+            Expr::EnumVariant(type_name, variant, _) => Ok(ExprFlow::Value(Value::Enum {
                 type_name: type_name.name.clone(),
                 variant: variant.name.clone(),
                 fields: vec![],
-            }),
+            })),
 
             // Field access: may be enum variant like `Color.red`
             Expr::FieldAccess(obj, field, _) => {
@@ -379,11 +444,11 @@ impl Interpreter {
                             ))
                         } else {
                             // Treat as enum variant: Type.variant
-                            Ok(Value::Enum {
+                            Ok(ExprFlow::Value(Value::Enum {
                                 type_name: ident.name.clone(),
                                 variant: field.name.clone(),
                                 fields: vec![],
-                            })
+                            }))
                         }
                     }
                     _ => Err("field access is not supported in comptime".to_string()),
@@ -393,26 +458,29 @@ impl Interpreter {
             // Coarsen: strip refinement type, returning the underlying value.
             // In the interpreter, the value is already the base type at
             // runtime, so coarsen is a no-op.
-            Expr::Coarsen(inner, _) => self.eval_expr(inner),
+            Expr::Coarsen(inner, _) => self.eval_expr_flow(inner),
 
             // Pipeline: `expr into f into g(extra)`
             // Evaluate the initial expression, then for each step, call the
             // function with the accumulated value as the first argument plus
             // any extra args.
             Expr::Pipeline(initial, steps, _) => {
-                let mut value = self.eval_expr(initial)?;
+                let mut value = value_or_signal!(self, initial);
                 for step in steps {
-                    value = self.eval_pipeline_step(&step, value)?;
+                    value = match self.eval_pipeline_step(&step, value)? {
+                        ExprFlow::Value(next) => next,
+                        ExprFlow::Signal(signal) => return Ok(ExprFlow::Signal(signal)),
+                    };
                 }
-                Ok(value)
+                Ok(ExprFlow::Value(value))
             }
 
             // State check: `expr at state_name`
             Expr::At(expr, state_name, _) => {
-                let val = self.eval_expr(expr)?;
+                let val = value_or_signal!(self, expr);
                 match val {
                     Value::Machine { state, .. } => {
-                        Ok(Value::Bool(state == state_name.name))
+                        Ok(ExprFlow::Value(Value::Bool(state == state_name.name)))
                     }
                     _ => Err(format!(
                         "'at' requires a machine value, got {val}"
@@ -435,34 +503,61 @@ impl Interpreter {
         &mut self,
         step: &PipelineStep,
         piped_value: Value,
-    ) -> Result<Value, String> {
+    ) -> Result<ExprFlow, String> {
         // Build argument list: piped value first, then extra args.
         let mut arg_values = vec![piped_value];
         for arg in &step.extra_args {
-            arg_values.push(self.eval_expr(&arg.value)?);
+            arg_values.push(value_or_signal!(self, &arg.value));
         }
 
         // Resolve the function name from the expression.
         match &step.function {
-            Expr::Ident(ident) => self.call_function(&ident.name, arg_values),
+            Expr::Ident(ident) => Ok(ExprFlow::Value(self.call_function(&ident.name, arg_values)?)),
             Expr::FieldAccess(obj, field, _) => {
                 let dotted = Self::extract_dotted_name(obj, &field.name);
                 if let Some(ref name) = dotted {
                     if let Some(result) = self.call_builtin(name, &arg_values) {
-                        return result;
+                        return Ok(ExprFlow::Value(result?));
                     }
                     if self.functions.contains_key(name.as_str()) {
-                        return self.call_function(name, arg_values);
+                        return Ok(ExprFlow::Value(self.call_function(name, arg_values)?));
                     }
                 }
                 match dotted {
-                    Some(name) => self.call_function(&name, arg_values),
+                    Some(name) => Ok(ExprFlow::Value(self.call_function(&name, arg_values)?)),
                     None => Err(
                         "only named function calls are supported in pipeline steps".to_string(),
                     ),
                 }
             }
             _ => Err("only named function calls are supported in pipeline steps".to_string()),
+        }
+    }
+
+    fn exec_handle_block(
+        &mut self,
+        bind_name: Option<&Ident>,
+        bind_value: Option<Value>,
+        body: &Block,
+    ) -> Result<ExprFlow, String> {
+        self.push_scope();
+        if let (Some(name), Some(value)) = (bind_name, bind_value) {
+            self.set_variable(&name.name, value);
+        }
+
+        let mut signal = None;
+        for stmt in &body.stmts {
+            if let Some(next) = self.exec_stmt_inner(stmt)? {
+                signal = Some(next);
+                break;
+            }
+        }
+        self.pop_scope();
+
+        match signal {
+            Some(Signal::Default(value)) => Ok(ExprFlow::Value(value)),
+            Some(other) => Ok(ExprFlow::Signal(other)),
+            None => Err("handle block must end with return or default".to_string()),
         }
     }
 
@@ -473,7 +568,10 @@ impl Interpreter {
     fn exec_stmt_inner(&mut self, stmt: &Stmt) -> Result<Option<Signal>, String> {
         match stmt {
             Stmt::VarDecl(decl) => {
-                let val = self.eval_expr(&decl.value)?;
+                let val = match self.eval_expr_flow(&decl.value)? {
+                    ExprFlow::Value(value) => value,
+                    ExprFlow::Signal(signal) => return Ok(Some(signal)),
+                };
                 // Check refinement type constraint if the declared type is a
                 // known type alias with a constraint.
                 let type_name = type_expr_name(&decl.ty);
@@ -483,7 +581,10 @@ impl Interpreter {
             }
 
             Stmt::Assign(assign) => {
-                let val = self.eval_expr(&assign.value)?;
+                let val = match self.eval_expr_flow(&assign.value)? {
+                    ExprFlow::Value(value) => value,
+                    ExprFlow::Signal(signal) => return Ok(Some(signal)),
+                };
                 match &assign.target {
                     Expr::Ident(ident) => {
                         // If variable doesn't exist yet, create it (handles parser producing
@@ -501,19 +602,28 @@ impl Interpreter {
 
             Stmt::Return(ret) => {
                 let val = match &ret.value {
-                    Some(expr) => self.eval_expr(expr)?,
+                    Some(expr) => match self.eval_expr_flow(expr)? {
+                        ExprFlow::Value(value) => value,
+                        ExprFlow::Signal(signal) => return Ok(Some(signal)),
+                    },
                     None => Value::Nothing,
                 };
                 Ok(Some(Signal::Return(val)))
             }
 
             Stmt::If(if_stmt) => {
-                let cond = self.eval_expr(&if_stmt.condition)?;
+                let cond = match self.eval_expr_flow(&if_stmt.condition)? {
+                    ExprFlow::Value(value) => value,
+                    ExprFlow::Signal(signal) => return Ok(Some(signal)),
+                };
                 if is_truthy(&cond)? {
                     return self.exec_block_inner(&if_stmt.then_block);
                 }
                 for (else_if_cond, else_if_block) in &if_stmt.else_ifs {
-                    let val = self.eval_expr(else_if_cond)?;
+                    let val = match self.eval_expr_flow(else_if_cond)? {
+                        ExprFlow::Value(value) => value,
+                        ExprFlow::Signal(signal) => return Ok(Some(signal)),
+                    };
                     if is_truthy(&val)? {
                         return self.exec_block_inner(else_if_block);
                     }
@@ -525,7 +635,10 @@ impl Interpreter {
             }
 
             Stmt::For(for_stmt) => {
-                let iterable = self.eval_expr(&for_stmt.iterable)?;
+                let iterable = match self.eval_expr_flow(&for_stmt.iterable)? {
+                    ExprFlow::Value(value) => value,
+                    ExprFlow::Signal(signal) => return Ok(Some(signal)),
+                };
                 match iterable {
                     Value::List(items) => {
                         for item in items {
@@ -536,7 +649,7 @@ impl Interpreter {
                             match signal {
                                 Some(Signal::Break) => break,
                                 Some(Signal::Continue) => continue,
-                                Some(Signal::Return(v)) => return Ok(Some(Signal::Return(v))),
+                                Some(other) => return Ok(Some(other)),
                                 None => {}
                             }
                         }
@@ -548,7 +661,10 @@ impl Interpreter {
 
             Stmt::While(while_stmt) => {
                 loop {
-                    let cond = self.eval_expr(&while_stmt.condition)?;
+                    let cond = match self.eval_expr_flow(&while_stmt.condition)? {
+                        ExprFlow::Value(value) => value,
+                        ExprFlow::Signal(signal) => return Ok(Some(signal)),
+                    };
                     if !is_truthy(&cond)? {
                         break;
                     }
@@ -558,7 +674,7 @@ impl Interpreter {
                     match signal {
                         Some(Signal::Break) => break,
                         Some(Signal::Continue) => continue,
-                        Some(Signal::Return(v)) => return Ok(Some(Signal::Return(v))),
+                        Some(other) => return Ok(Some(other)),
                         None => {}
                     }
                 }
@@ -566,7 +682,10 @@ impl Interpreter {
             }
 
             Stmt::Match(match_stmt) => {
-                let val = self.eval_expr(&match_stmt.expr)?;
+                let val = match self.eval_expr_flow(&match_stmt.expr)? {
+                    ExprFlow::Value(value) => value,
+                    ExprFlow::Signal(signal) => return Ok(Some(signal)),
+                };
                 let (variant_name, fields) = match &val {
                     Value::Enum {
                         variant, fields, ..
@@ -608,19 +727,26 @@ impl Interpreter {
             Stmt::Expr(expr_stmt) => {
                 // Type names appearing as bare ExprStmt (from parser producing ExprStmt
                 // instead of VarDecl for `Type name = expr`) are harmless — ignore errors.
-                let _ = self.eval_expr(&expr_stmt.expr);
-                Ok(None)
+                match self.eval_expr_flow(&expr_stmt.expr) {
+                    Ok(ExprFlow::Value(_)) => Ok(None),
+                    Ok(ExprFlow::Signal(signal)) => Ok(Some(signal)),
+                    Err(_) => Ok(None),
+                }
             }
 
             Stmt::Assert(assert_stmt) => {
-                let cond = self.eval_expr(&assert_stmt.condition)?;
+                let cond = match self.eval_expr_flow(&assert_stmt.condition)? {
+                    ExprFlow::Value(value) => value,
+                    ExprFlow::Signal(signal) => return Ok(Some(signal)),
+                };
                 match cond {
                     Value::Bool(true) => Ok(None),
                     Value::Bool(false) => {
                         let msg = if let Some(msg_expr) = &assert_stmt.message {
-                            match self.eval_expr(msg_expr)? {
-                                Value::String(s) => s,
-                                other => other.to_string(),
+                            match self.eval_expr_flow(msg_expr)? {
+                                ExprFlow::Value(Value::String(s)) => s,
+                                ExprFlow::Value(other) => other.to_string(),
+                                ExprFlow::Signal(signal) => return Ok(Some(signal)),
                             }
                         } else {
                             "assertion failed".to_string()
@@ -645,8 +771,10 @@ impl Interpreter {
     /// public-facing result.
     pub fn exec_stmt(&mut self, stmt: &Stmt) -> Result<(), String> {
         match self.exec_stmt_inner(stmt)? {
-            None | Some(Signal::Break) | Some(Signal::Continue) => Ok(()),
-            Some(Signal::Return(_)) => Ok(()),
+            None | Some(Signal::Break) | Some(Signal::Continue) | Some(Signal::Return(_)) => Ok(()),
+            Some(Signal::Default(_)) => {
+                Err("`default` can only be used inside a `handle` block".to_string())
+            }
         }
     }
 
@@ -671,6 +799,9 @@ impl Interpreter {
     pub fn exec_block(&mut self, block: &Block) -> Result<Option<Value>, String> {
         match self.exec_block_inner(block)? {
             Some(Signal::Return(v)) => Ok(Some(v)),
+            Some(Signal::Default(_)) => {
+                Err("`default` can only be used inside a `handle` block".to_string())
+            }
             _ => Ok(None),
         }
     }
@@ -840,10 +971,10 @@ impl Interpreter {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => match s.parse::<i64>() {
-                        Ok(n) => Some(Ok(Value::Int64(n))),
-                        Err(_) => Some(Err(format!(
-                            "int64.from_string: cannot parse '{s}' as int64"
-                        ))),
+                        Ok(n) => Some(Ok(Value::ResultOk(Box::new(Value::Int64(n))))),
+                        Err(_) => Some(Ok(Value::ResultFail(Box::new(Value::String(
+                            format!("int64.from_string: cannot parse '{s}' as int64"),
+                        ))))),
                     },
                     _ => Some(Err(format!("{name} expects a string argument"))),
                 }
@@ -1021,6 +1152,9 @@ impl Interpreter {
 
         match result {
             Some(Signal::Return(v)) => Ok(v),
+            Some(Signal::Default(_)) => {
+                Err("`default` can only be used inside a `handle` block".to_string())
+            }
             _ => Ok(Value::Nothing),
         }
     }
@@ -2227,6 +2361,34 @@ mod builtin_tests {
         )
     }
 
+    fn default_stmt(value: Expr) -> Stmt {
+        Stmt::Expr(ExprStmt {
+            expr: Expr::Default(Box::new(value), sp()),
+            span: sp(),
+        })
+    }
+
+    fn return_stmt(value: Expr) -> Stmt {
+        Stmt::Return(ReturnStmt {
+            value: Some(value),
+            span: sp(),
+        })
+    }
+
+    fn block(stmts: Vec<Stmt>) -> Block {
+        Block { stmts, span: sp() }
+    }
+
+    fn func_def(name: &str, body: Block) -> FunctionDef {
+        FunctionDef {
+            name: ident(name),
+            params: vec![],
+            return_type: None,
+            body,
+            span: sp(),
+        }
+    }
+
     #[test]
     fn builtin_stdout_write() {
         let mut interp = Interpreter::new();
@@ -2493,14 +2655,73 @@ mod builtin_tests {
     fn builtin_int64_from_string() {
         let mut interp = Interpreter::new();
         let expr = dotted_call("int64", "from_string", vec![string("123")]);
-        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(123));
+        assert_eq!(
+            interp.eval_expr(&expr).unwrap(),
+            Value::ResultOk(Box::new(Value::Int64(123)))
+        );
     }
 
     #[test]
     fn builtin_int64_from_string_error() {
         let mut interp = Interpreter::new();
         let expr = dotted_call("int64", "from_string", vec![string("abc")]);
-        assert!(interp.eval_expr(&expr).is_err());
+        assert_eq!(
+            interp.eval_expr(&expr).unwrap(),
+            Value::ResultFail(Box::new(Value::String(
+                "int64.from_string: cannot parse 'abc' as int64".to_string(),
+            )))
+        );
+    }
+
+    #[test]
+    fn handle_result_uses_default_value() {
+        let mut interp = Interpreter::new();
+        let expr = Expr::Handle(
+            Box::new(dotted_call("int64", "from_string", vec![string("abc")])),
+            Some(ident("error")),
+            block(vec![default_stmt(int(7))]),
+            sp(),
+        );
+        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(7));
+    }
+
+    #[test]
+    fn handle_optional_uses_default_value() {
+        let mut interp = Interpreter::new();
+        let expr = Expr::Handle(
+            Box::new(Expr::None(sp())),
+            None,
+            block(vec![default_stmt(int(5))]),
+            sp(),
+        );
+        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(5));
+    }
+
+    #[test]
+    fn handle_return_exits_enclosing_function() {
+        let mut interp = Interpreter::new();
+        let parse_fn = func_def(
+            "parse_or_default",
+            block(vec![
+                Stmt::VarDecl(VarDecl {
+                    mutable: false,
+                    ty: TypeExpr::Named(ident("int64")),
+                    name: ident("parsed"),
+                    value: Expr::Handle(
+                        Box::new(dotted_call("int64", "from_string", vec![string("abc")])),
+                        Some(ident("error")),
+                        block(vec![return_stmt(int(9))]),
+                        sp(),
+                    ),
+                    span: sp(),
+                }),
+                return_stmt(var("parsed")),
+            ]),
+        );
+        interp.register_function(&parse_fn);
+
+        let result = interp.call_function("parse_or_default", vec![]).unwrap();
+        assert_eq!(result, Value::Int64(9));
     }
 
     #[test]

@@ -13,6 +13,14 @@ pub enum Value {
     Bool(bool),
     /// Ordered list of values.
     List(Vec<Value>),
+    /// `ok(value)`
+    ResultOk(Box<Value>),
+    /// `fail(error)`
+    ResultFail(Box<Value>),
+    /// `some(value)`
+    OptionalSome(Box<Value>),
+    /// `none`
+    OptionalNone,
     /// The `nothing` value (Jett's unit type).
     Nothing,
     /// An enum instance: `Color.red` or `Shape.circle(5.0)`.
@@ -48,6 +56,10 @@ impl fmt::Display for Value {
                 }
                 write!(f, ")")
             }
+            Value::ResultOk(value) => write!(f, "ok({value})"),
+            Value::ResultFail(value) => write!(f, "fail({value})"),
+            Value::OptionalSome(value) => write!(f, "some({value})"),
+            Value::OptionalNone => write!(f, "none"),
             Value::Nothing => write!(f, "nothing"),
             Value::Enum {
                 type_name,

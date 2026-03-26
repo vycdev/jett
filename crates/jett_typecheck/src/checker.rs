@@ -70,6 +70,8 @@ struct TypeChecker<'a> {
     in_verify_block: bool,
     /// The name of the verify block currently being checked (for error messages).
     current_verify_name: Option<String>,
+    /// Nesting depth inside a handle-block body. Used to validate `default`.
+    handle_body_depth: usize,
 }
 
 impl<'a> TypeChecker<'a> {
@@ -86,6 +88,7 @@ impl<'a> TypeChecker<'a> {
             current_function_pure: false,
             in_verify_block: false,
             current_verify_name: None,
+            handle_body_depth: 0,
         }
     }
 
@@ -147,6 +150,31 @@ impl<'a> TypeChecker<'a> {
                 | Type::Float32
                 | Type::Float64
         )
+    }
+
+    fn extract_dotted_name(expr: &Expr) -> Option<String> {
+        match expr {
+            Expr::Ident(ident) => Some(ident.name.clone()),
+            Expr::FieldAccess(inner, field, _) => {
+                let prefix = Self::extract_dotted_name(inner)?;
+                Some(format!("{prefix}.{}", field.name))
+            }
+            _ => None,
+        }
+    }
+
+    fn builtin_signature(&mut self, callee: &Expr) -> Option<(Vec<TypeId>, TypeId)> {
+        let name = Self::extract_dotted_name(callee)?;
+        match name.as_str() {
+            "int64.from_string" => Some((
+                vec![TypeInterner::STRING],
+                self.interner
+                    .intern(Type::Result(TypeInterner::INT64, TypeInterner::STRING)),
+            )),
+            "string.from_int64" => Some((vec![TypeInterner::INT64], TypeInterner::STRING)),
+            "string.from_float64" => Some((vec![TypeInterner::FLOAT64], TypeInterner::STRING)),
+            _ => None,
+        }
     }
 
     // ------------------------------------------------------------------
@@ -476,7 +504,12 @@ impl<'a> TypeChecker<'a> {
                 // none → optional[<error>] (unknown inner type without context)
                 self.interner.intern(Type::Optional(TypeInterner::ERROR))
             }
-            Expr::Default(inner, _span) => self.check_expr(inner),
+            Expr::Default(inner, span) => {
+                if self.handle_body_depth == 0 {
+                    self.sink.emit(errors::default_outside_handle(*span));
+                }
+                self.check_expr(inner)
+            }
 
             Expr::StringInterpolation(parts, _) => {
                 // Each interpolated expression is checked; the overall result is string.
@@ -653,39 +686,42 @@ impl<'a> TypeChecker<'a> {
             }
         }
 
-        let callee_ty = self.check_expr(callee);
+        let builtin_signature = self.builtin_signature(callee);
 
-        if callee_ty == TypeInterner::ERROR {
-            // Still check argument expressions so we populate the type map.
-            for arg in args {
-                self.check_expr(&arg.value);
-            }
-            return TypeInterner::ERROR;
-        }
+        let (param_types, return_type) = if let Some(signature) = builtin_signature {
+            signature
+        } else {
+            let callee_ty = self.check_expr(callee);
 
-        // The callee must be a function type.
-        let (param_types, return_type) = match self.interner.resolve(callee_ty).clone() {
-            Type::Function {
-                params,
-                return_type,
-            } => (params, return_type),
-            _ => {
-                self.sink
-                    .emit(errors::not_callable(&self.type_name(callee_ty), span));
+            if callee_ty == TypeInterner::ERROR {
+                // Still check argument expressions so we populate the type map.
                 for arg in args {
                     self.check_expr(&arg.value);
                 }
                 return TypeInterner::ERROR;
             }
+
+            // The callee must be a function type.
+            match self.interner.resolve(callee_ty).clone() {
+                Type::Function {
+                    params,
+                    return_type,
+                } => (params, return_type),
+                _ => {
+                    self.sink
+                        .emit(errors::not_callable(&self.type_name(callee_ty), span));
+                    for arg in args {
+                        self.check_expr(&arg.value);
+                    }
+                    return TypeInterner::ERROR;
+                }
+            }
         };
 
         // Check argument count.
         if args.len() != param_types.len() {
-            // Extract function name for the error message.
-            let func_name = match callee {
-                Expr::Ident(ident) => ident.name.clone(),
-                _ => "<anonymous>".to_string(),
-            };
+            let func_name =
+                Self::extract_dotted_name(callee).unwrap_or_else(|| "<anonymous>".to_string());
             self.sink.emit(errors::argument_count_mismatch(
                 &func_name,
                 param_types.len(),
@@ -755,29 +791,31 @@ impl<'a> TypeChecker<'a> {
         let target_ty = self.check_expr(target);
 
         if target_ty == TypeInterner::ERROR {
-            self.check_block(body);
+            self.check_handle_body(body);
+            self.validate_handle_terminator(body, TypeInterner::ERROR);
             return TypeInterner::ERROR;
         }
 
         match self.interner.resolve(target_ty).clone() {
             Type::Result(ok_ty, err_ty) => {
-                // Bind the error variable (if any) to E.
+                if bind_name.is_none() {
+                    self.sink.emit(errors::result_requires_handle_error(span));
+                }
                 if let Some(name) = bind_name {
                     if let Some(&def_id) = self.resolve.resolutions.get(&name.span) {
                         self.type_env.insert(def_id, err_ty);
                     }
                 }
-                self.check_block(body);
+                self.check_handle_body(body);
+                self.validate_handle_terminator(body, ok_ty);
                 ok_ty
             }
             Type::Optional(inner_ty) => {
-                // Handle on optional: bind variable to nothing, produce inner type.
-                if let Some(name) = bind_name {
-                    if let Some(&def_id) = self.resolve.resolutions.get(&name.span) {
-                        self.type_env.insert(def_id, TypeInterner::NOTHING);
-                    }
+                if bind_name.is_some() {
+                    self.sink.emit(errors::optional_requires_bare_handle(span));
                 }
-                self.check_block(body);
+                self.check_handle_body(body);
+                self.validate_handle_terminator(body, inner_ty);
                 inner_ty
             }
             _ => {
@@ -785,9 +823,52 @@ impl<'a> TypeChecker<'a> {
                     &self.type_name(target_ty),
                     span,
                 ));
-                self.check_block(body);
+                self.check_handle_body(body);
+                self.validate_handle_terminator(body, TypeInterner::ERROR);
                 TypeInterner::ERROR
             }
+        }
+    }
+
+    fn check_handle_body(&mut self, body: &Block) {
+        self.handle_body_depth += 1;
+        self.check_block(body);
+        self.handle_body_depth -= 1;
+    }
+
+    fn validate_handle_terminator(&mut self, body: &Block, success_ty: TypeId) {
+        let Some(last_stmt) = body.stmts.last() else {
+            self.sink
+                .emit(errors::handle_block_requires_return_or_default(body.span));
+            return;
+        };
+
+        match last_stmt {
+            Stmt::Return(_) => {}
+            Stmt::Expr(expr_stmt) => {
+                if matches!(expr_stmt.expr, Expr::Default(_, _)) {
+                    if success_ty != TypeInterner::ERROR {
+                        let default_ty = self
+                            .type_map
+                            .get(&expr_stmt.expr.span())
+                            .copied()
+                            .unwrap_or(TypeInterner::ERROR);
+                        if default_ty != TypeInterner::ERROR && default_ty != success_ty {
+                            self.sink.emit(errors::type_mismatch(
+                                &self.type_name(success_ty),
+                                &self.type_name(default_ty),
+                                expr_stmt.expr.span(),
+                            ));
+                        }
+                    }
+                } else {
+                    self.sink
+                        .emit(errors::handle_block_requires_return_or_default(expr_stmt.span));
+                }
+            }
+            _ => self
+                .sink
+                .emit(errors::handle_block_requires_return_or_default(stmt_span(last_stmt))),
         }
     }
 
@@ -945,6 +1026,22 @@ impl<'a> TypeChecker<'a> {
     }
 }
 
+fn stmt_span(stmt: &Stmt) -> Span {
+    match stmt {
+        Stmt::VarDecl(v) => v.span,
+        Stmt::Assign(a) => a.span,
+        Stmt::Return(r) => r.span,
+        Stmt::If(i) => i.span,
+        Stmt::For(f) => f.span,
+        Stmt::While(w) => w.span,
+        Stmt::Match(m) => m.span,
+        Stmt::Expr(e) => e.span,
+        Stmt::Use(u) => u.span,
+        Stmt::Assert(a) => a.span,
+        Stmt::Break(span) | Stmt::Continue(span) => *span,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -953,7 +1050,7 @@ impl<'a> TypeChecker<'a> {
 mod tests {
     use super::*;
     use jett_common::{FileId, Span};
-    use jett_parser::ast::*;
+    use jett_parser::{ast::*, parse};
     use jett_resolve::resolver::ResolveResult;
     use jett_resolve::scope::{DefKind, ScopeTable};
 
@@ -1013,6 +1110,34 @@ mod tests {
             name: name.to_string(),
             span,
         }
+    }
+
+    fn check_source_errors(source: &str) -> Vec<Diagnostic> {
+        let file_id = FileId::new(0);
+        let parse_result = parse(source, file_id);
+        assert!(
+            parse_result.errors.is_empty(),
+            "unexpected parse errors: {:?}",
+            parse_result.errors
+        );
+
+        let resolve_result = jett_resolve::resolve(&parse_result.module);
+        let resolve_errors: Vec<_> = resolve_result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == jett_diagnostics::Severity::Error)
+            .collect();
+        assert!(
+            resolve_errors.is_empty(),
+            "unexpected resolve errors: {:?}",
+            resolve_result.diagnostics
+        );
+
+        check(&parse_result.module, &resolve_result)
+            .diagnostics
+            .into_iter()
+            .filter(|d| d.severity == jett_diagnostics::Severity::Error)
+            .collect()
     }
 
     // ---------------------------------------------------------------
@@ -2481,5 +2606,91 @@ mod tests {
             "unexpected purity errors: {:?}",
             purity_errors
         );
+    }
+
+    #[test]
+    fn result_handle_requires_error_keyword() {
+        let errors = check_source_errors(
+            "\
+function main() returns int64:
+    int64 parsed = int64.from_string(\"42\") handle:
+        default 0
+    return parsed
+",
+        );
+
+        assert!(
+            errors.iter().any(|d| d.code.code() == 316),
+            "expected E0316, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn optional_handle_rejects_error_keyword() {
+        let errors = check_source_errors(
+            "\
+function main() returns int64:
+    int64 value = some(1) handle error:
+        default 0
+    return value
+",
+        );
+
+        assert!(
+            errors.iter().any(|d| d.code.code() == 317),
+            "expected E0317, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn handle_block_requires_explicit_terminator() {
+        let errors = check_source_errors(
+            "\
+function main() returns int64:
+    int64 parsed = int64.from_string(\"oops\") handle error:
+        int64 fallback = 0
+    return parsed
+",
+        );
+
+        assert!(
+            errors.iter().any(|d| d.code.code() == 318),
+            "expected E0318, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn handle_default_must_match_unwrapped_type() {
+        let errors = check_source_errors(
+            "\
+function main() returns int64:
+    int64 parsed = int64.from_string(\"oops\") handle error:
+        default \"bad\"
+    return parsed
+",
+        );
+
+        assert!(
+            errors.iter().any(|d| d.code.code() == 300),
+            "expected E0300, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn handle_with_builtin_result_type_checks_cleanly() {
+        let errors = check_source_errors(
+            "\
+function main() returns int64:
+    int64 parsed = int64.from_string(\"42\") handle error:
+        default 0
+    return parsed
+",
+        );
+
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
     }
 }

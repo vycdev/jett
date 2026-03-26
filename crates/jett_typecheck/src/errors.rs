@@ -157,6 +157,42 @@ pub fn assert_condition_not_bool(got: &str, span: Span) -> Diagnostic {
     )
 }
 
+/// E0315: `default` may only appear inside a handle block.
+pub fn default_outside_handle(span: Span) -> Diagnostic {
+    Diagnostic::error(
+        315,
+        "`default` may only appear inside a `handle` block".to_string(),
+        span,
+    )
+}
+
+/// E0316: `result[T, E]` requires `handle error:`.
+pub fn result_requires_handle_error(span: Span) -> Diagnostic {
+    Diagnostic::error(
+        316,
+        "`result[T, E]` values must use `handle error:`".to_string(),
+        span,
+    )
+}
+
+/// E0317: `optional[T]` requires bare `handle:`.
+pub fn optional_requires_bare_handle(span: Span) -> Diagnostic {
+    Diagnostic::error(
+        317,
+        "`optional[T]` values must use bare `handle:`".to_string(),
+        span,
+    )
+}
+
+/// E0318: Handle blocks must terminate explicitly.
+pub fn handle_block_requires_return_or_default(span: Span) -> Diagnostic {
+    Diagnostic::error(
+        318,
+        "handle block must end with `return` or `default`".to_string(),
+        span,
+    )
+}
+
 // Diagnostic codes E0500–E0599 are reserved for capability / purity checking.
 
 /// E0500: Pure function calls impure function.
