@@ -3,7 +3,7 @@
 ## Statistics
 
 - **Lines of Rust:** ~17,500
-- **Tests:** 364 passing
+- **Tests:** 370 passing
 - **Crates:** 15
 - **VS Code extension:** Yes
 
@@ -17,7 +17,7 @@
 | Diagnostics, error rendering, TOON output | `jett_diagnostics` | 12 | Done |
 | Project discovery, jett.proj parsing | `jett_project` | 7 | Done |
 | Lexer (indentation, interpolation, 90+ tokens) | `jett_lexer` | 62 | Done |
-| Parser (recursive descent + Pratt) | `jett_parser` | 54 | Done |
+| Parser (recursive descent + Pratt) | `jett_parser` | 55 | Done |
 | Formatter (canonical whitespace) | `jett_fmt` | 3 | Done |
 | Pipeline orchestration | `jett_driver` | 0 | Done |
 | CLI (format, build, run, test, lsp) | `jett_cli` | 0 | Done |
@@ -28,7 +28,7 @@
 |---|---|---|---|
 | Type interning, struct/enum/interface defs | `jett_types` | 17 | Done |
 | Name resolution, scoping | `jett_resolve` | 14 | Done |
-| Type checking (expressions, operators, generics) | `jett_typecheck` | 69 | Done |
+| Type checking (expressions, operators, generics) | `jett_typecheck` | 74 | Done |
 
 ### Phase C: Ownership and Capabilities — COMPLETE
 

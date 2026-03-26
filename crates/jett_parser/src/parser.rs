@@ -1704,6 +1704,7 @@ impl<'src> Parser<'src> {
                 | TokenKind::Other
                 | TokenKind::Error
                 | TokenKind::Value
+                | TokenKind::Serialize
                 | TokenKind::Network
                 | TokenKind::Default
                 | TokenKind::Ok
@@ -2898,6 +2899,30 @@ function first(view items: list[int64]) returns optional[int64]:
                 ));
                 assert_eq!(type_args.len(), 1);
                 assert_eq!(args.len(), 2);
+            }
+            other => panic!("expected GenericCall, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_json_serialize_generic_call() {
+        let src = "\
+function dump(view user: User) returns string:
+    return json.serialize[User](view user)
+";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        let expr = extract_expr_from_return(&result);
+        match expr {
+            Expr::GenericCall(callee, type_args, args, _) => {
+                assert!(matches!(
+                    callee.as_ref(),
+                    Expr::FieldAccess(inner, field, _)
+                        if matches!(inner.as_ref(), Expr::Ident(id) if id.name == "json")
+                        && field.name == "serialize"
+                ));
+                assert_eq!(type_args.len(), 1);
+                assert_eq!(args.len(), 1);
             }
             other => panic!("expected GenericCall, got {:?}", other),
         }

@@ -232,12 +232,20 @@ impl<'a> TypeChecker<'a> {
     fn is_secret_output_boundary(name: &str) -> bool {
         matches!(
             name,
-            "Stdout.write" | "json.serialize" | "Filesystem.write_file" | "log" | "http.respond"
+            "Stdout.write"
+                | "json.serialize"
+                | "json.serialize_public"
+                | "Filesystem.write_file"
+                | "log"
+                | "http.respond"
         )
     }
 
     fn is_impure_builtin(name: &str) -> bool {
-        matches!(name, "Stdout.write")
+        matches!(
+            name,
+            "Stdout.write" | "Environment.args" | "Filesystem.read_file" | "Filesystem.write_file"
+        )
     }
 
     fn is_secret_safe_builtin(name: &str) -> bool {
@@ -245,7 +253,9 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn is_secret_liftable_call(name: &str, callee_is_pure: bool) -> bool {
-        callee_is_pure && !Self::is_secret_output_boundary(name) && !Self::is_secret_safe_builtin(name)
+        callee_is_pure
+            && !Self::is_secret_output_boundary(name)
+            && !Self::is_secret_safe_builtin(name)
     }
 
     fn secret_argument_matches_param(&self, expected: TypeId, got: TypeId) -> (bool, bool) {
@@ -262,6 +272,57 @@ impl<'a> TypeChecker<'a> {
         } else {
             (false, false)
         }
+    }
+
+    fn type_contains_secret_data(&self, ty: TypeId) -> bool {
+        let mut visited = HashSet::new();
+        self.type_contains_secret_data_inner(ty, &mut visited)
+    }
+
+    fn type_contains_secret_data_inner(&self, ty: TypeId, visited: &mut HashSet<TypeId>) -> bool {
+        if !visited.insert(ty) {
+            return false;
+        }
+
+        match self.interner.resolve(ty) {
+            Type::Secret(_) => true,
+            Type::List(inner) | Type::Set(inner) | Type::Optional(inner) => {
+                self.type_contains_secret_data_inner(*inner, visited)
+            }
+            Type::Map(key, value) | Type::Result(key, value) => {
+                self.type_contains_secret_data_inner(*key, visited)
+                    || self.type_contains_secret_data_inner(*value, visited)
+            }
+            Type::Struct(sid) => self
+                .interner
+                .resolve_struct(*sid)
+                .fields
+                .iter()
+                .any(|(_, field_ty)| self.type_contains_secret_data_inner(*field_ty, visited)),
+            Type::Enum(eid) => self
+                .interner
+                .resolve_enum(*eid)
+                .variants
+                .iter()
+                .flat_map(|variant| variant.fields.iter())
+                .any(|(_, field_ty)| self.type_contains_secret_data_inner(*field_ty, visited)),
+            Type::Refinement { base, .. } => self.type_contains_secret_data_inner(*base, visited),
+            _ => false,
+        }
+    }
+
+    fn secret_field_names(&self, ty: TypeId) -> Vec<String> {
+        let Type::Struct(sid) = self.interner.resolve(ty) else {
+            return Vec::new();
+        };
+
+        self.interner
+            .resolve_struct(*sid)
+            .fields
+            .iter()
+            .filter(|(_, field_ty)| self.type_contains_secret_data(*field_ty))
+            .map(|(name, _)| name.clone())
+            .collect()
     }
 
     fn types_compatible(&self, expected: TypeId, got: TypeId) -> bool {
@@ -322,9 +383,10 @@ impl<'a> TypeChecker<'a> {
             "string.length" | "string.char_count" => {
                 Some((vec![TypeInterner::STRING], TypeInterner::INT64))
             }
-            "string.contains" | "string.starts_with" | "string.ends_with" => {
-                Some((vec![TypeInterner::STRING, TypeInterner::STRING], TypeInterner::BOOL))
-            }
+            "string.contains" | "string.starts_with" | "string.ends_with" => Some((
+                vec![TypeInterner::STRING, TypeInterner::STRING],
+                TypeInterner::BOOL,
+            )),
             "string.trim" | "string.upper" | "string.lower" => {
                 Some((vec![TypeInterner::STRING], TypeInterner::STRING))
             }
@@ -351,10 +413,36 @@ impl<'a> TypeChecker<'a> {
                 vec![TypeInterner::ERROR],
                 self.interner.intern(Type::List(TypeInterner::STRING)),
             )),
+            "Filesystem.read_file" => Some((
+                vec![TypeInterner::ERROR, TypeInterner::STRING],
+                self.interner
+                    .intern(Type::Result(TypeInterner::STRING, TypeInterner::STRING)),
+            )),
+            "Filesystem.write_file" => Some((
+                vec![
+                    TypeInterner::ERROR,
+                    TypeInterner::STRING,
+                    TypeInterner::STRING,
+                ],
+                self.interner
+                    .intern(Type::Result(TypeInterner::NOTHING, TypeInterner::STRING)),
+            )),
             "Stdout.write" => Some((
                 vec![TypeInterner::ERROR, TypeInterner::STRING],
                 TypeInterner::NOTHING,
             )),
+            "json.serialize" | "json.serialize_public" => {
+                if type_args.len() != 1 {
+                    self.sink.emit(errors::unknown_type(
+                        &format!("{name} (expected 1 type argument, got {})", type_args.len()),
+                        span,
+                    ));
+                    return Some((vec![TypeInterner::ERROR], TypeInterner::ERROR));
+                }
+
+                let value_ty = self.resolve_type_expr(&type_args[0]);
+                Some((vec![value_ty], TypeInterner::STRING))
+            }
             "secret.redact" => Some((
                 vec![self.interner.intern(Type::Secret(TypeInterner::ERROR))],
                 TypeInterner::STRING,
@@ -1693,7 +1781,8 @@ impl<'a> TypeChecker<'a> {
             }
         }
 
-        if matches!(callee_name.as_deref(), Some("secret.compare")) && checked_arg_types.len() == 2 {
+        if matches!(callee_name.as_deref(), Some("secret.compare")) && checked_arg_types.len() == 2
+        {
             if let (Some(lhs_inner), Some(rhs_inner)) = (
                 self.secret_inner_type(checked_arg_types[0]),
                 self.secret_inner_type(checked_arg_types[1]),
@@ -1708,6 +1797,19 @@ impl<'a> TypeChecker<'a> {
                         args[1].value.span(),
                     ));
                 }
+            }
+        }
+
+        if matches!(callee_name.as_deref(), Some("json.serialize")) && !checked_arg_types.is_empty()
+        {
+            let value_ty = checked_arg_types[0];
+            if self.type_contains_secret_data(value_ty) {
+                self.sink.emit(errors::type_contains_secret_data(
+                    "json.serialize",
+                    &self.type_name(value_ty),
+                    &self.secret_field_names(value_ty),
+                    args[0].value.span(),
+                ));
             }
         }
 
@@ -4530,9 +4632,110 @@ function main() returns string:
         );
 
         assert!(
-            errors.iter().any(|d| d.code.code() == 304 || d.code.code() == 305),
+            errors
+                .iter()
+                .any(|d| d.code.code() == 304 || d.code.code() == 305),
             "expected argument/return type mismatch, got: {:?}",
             errors
         );
+    }
+
+    #[test]
+    fn filesystem_write_file_rejects_secret_string() {
+        let errors = check_source_errors(
+            "\
+function main(view fs: Filesystem) returns nothing:
+    secret[string] api_key = \"abc\"
+    Filesystem.write_file(view fs, \"secret.txt\", api_key) handle error:
+        return nothing
+    return nothing
+",
+        );
+
+        assert!(
+            errors.iter().any(|d| d.code.code() == 600),
+            "expected E0600, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn json_serialize_blocks_struct_with_secret_fields() {
+        let errors = check_source_errors(
+            "\
+struct User:
+    id: string
+    api_key: secret[string]
+
+function main(view user: User) returns string:
+    return json.serialize[User](view user)
+",
+        );
+
+        assert!(
+            errors.iter().any(|d| d.code.code() == 603),
+            "expected E0603, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn json_serialize_public_allows_struct_with_secret_fields() {
+        let result = check_source_result(
+            "\
+struct User:
+    id: string
+    api_key: secret[string]
+
+function main(view user: User) returns string:
+    return json.serialize_public[User](view user)
+",
+        );
+
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == jett_diagnostics::Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+    }
+
+    #[test]
+    fn json_serialize_public_rejects_secret_wrapped_value() {
+        let errors = check_source_errors(
+            "\
+struct User:
+    id: string
+
+function main() returns string:
+    secret[User] user = User(id: \"1\")
+    return json.serialize_public[User](user)
+",
+        );
+
+        assert!(
+            errors.iter().any(|d| d.code.code() == 600),
+            "expected E0600, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn filesystem_read_file_returns_result_string() {
+        let result = check_source_result(
+            "\
+function main(view fs: Filesystem) returns string:
+    string raw = Filesystem.read_file(view fs, \"config.json\") handle error:
+        default \"\"
+    return raw
+",
+        );
+
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == jett_diagnostics::Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
     }
 }

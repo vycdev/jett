@@ -364,14 +364,37 @@ pub fn declassify_requires_secret(got: &str, span: Span) -> Diagnostic {
 }
 
 /// E0602: Secret helper operations require secret arguments.
-pub fn secret_operation_requires_secret(
-    operation: &str,
-    got: &str,
-    span: Span,
-) -> Diagnostic {
+pub fn secret_operation_requires_secret(operation: &str, got: &str, span: Span) -> Diagnostic {
     Diagnostic::error(
         602,
         format!("`{operation}` requires `secret[T]`, got `{got}`"),
         span,
     )
+}
+
+/// E0603: A type containing secret data reached a forbidden output boundary.
+pub fn type_contains_secret_data(
+    boundary: &str,
+    type_name: &str,
+    fields: &[String],
+    span: Span,
+) -> Diagnostic {
+    let detail = if fields.is_empty() {
+        format!("type `{type_name}` contains secret data and cannot be passed to `{boundary}`")
+    } else {
+        format!(
+            "type `{type_name}` contains secret field(s) {} and cannot be passed to `{boundary}`",
+            fields.join(", ")
+        )
+    };
+
+    let message = if boundary == "json.serialize" {
+        format!(
+            "{detail}; use `json.serialize_public[{type_name}](view value)` to omit secret fields"
+        )
+    } else {
+        detail
+    };
+
+    Diagnostic::error(603, message, span)
 }

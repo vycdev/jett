@@ -91,6 +91,7 @@ impl Resolver {
             "optional",
             "result",
             "secret",
+            "json",
             // Capability types
             "Stdout",
             "Stderr",
