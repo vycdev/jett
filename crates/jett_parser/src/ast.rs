@@ -188,6 +188,7 @@ pub struct EnumDef {
 pub struct Variant {
     pub name: Ident,
     pub fields: Vec<FieldDef>,
+    pub discriminant: Option<i64>,
     pub span: Span,
 }
 

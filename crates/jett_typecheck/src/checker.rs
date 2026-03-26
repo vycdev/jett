@@ -945,14 +945,24 @@ impl<'a> TypeChecker<'a> {
                                         ));
                                     }
 
-                                    let variant_count = enum_def.variants.len();
-                                    if *width < usize::BITS as u16
-                                        && variant_count > (1usize << (*width as usize))
-                                    {
+                                    let max_discriminant = enum_def
+                                        .variants
+                                        .iter()
+                                        .map(|variant| variant.discriminant)
+                                        .max()
+                                        .unwrap_or(0);
+                                    let fits = if max_discriminant < 0 {
+                                        false
+                                    } else if *width >= 63 {
+                                        true
+                                    } else {
+                                        (max_discriminant as u64) < (1_u64 << *width)
+                                    };
+                                    if !fits {
                                         self.sink.emit(errors::invalid_bitfield_field(
                                             &def.name.name,
                                             &field.name.name,
-                                            "enum annotation has more variants than the field width can encode",
+                                            "enum annotation has a discriminant that does not fit in the declared bit width",
                                             field.span,
                                         ));
                                     }
@@ -1042,16 +1052,45 @@ impl<'a> TypeChecker<'a> {
             return;
         };
 
+        let mut next_discriminant = 0_i64;
+        let mut seen_discriminants = HashMap::new();
         let variants = def
             .variants
             .iter()
-            .map(|variant| VariantDef {
-                name: variant.name.name.clone(),
-                fields: variant
-                    .fields
-                    .iter()
-                    .map(|field| (field.name.name.clone(), self.resolve_type_expr(&field.ty)))
-                    .collect(),
+            .map(|variant| {
+                if variant.discriminant.is_some() && !variant.fields.is_empty() {
+                    self.sink
+                        .emit(errors::enum_discriminant_requires_unit_variant(
+                            &def.name.name,
+                            &variant.name.name,
+                            variant.span,
+                        ));
+                }
+
+                let discriminant = variant.discriminant.unwrap_or(next_discriminant);
+                next_discriminant = discriminant.saturating_add(1);
+
+                if let Some(previous_span) =
+                    seen_discriminants.insert(discriminant, variant.name.span)
+                {
+                    self.sink.emit(errors::duplicate_enum_discriminant(
+                        &def.name.name,
+                        &variant.name.name,
+                        discriminant,
+                        variant.name.span,
+                        previous_span,
+                    ));
+                }
+
+                VariantDef {
+                    name: variant.name.name.clone(),
+                    fields: variant
+                        .fields
+                        .iter()
+                        .map(|field| (field.name.name.clone(), self.resolve_type_expr(&field.ty)))
+                        .collect(),
+                    discriminant,
+                }
             })
             .collect();
 
@@ -5850,6 +5889,75 @@ function main() returns nothing:
         assert!(
             errors.iter().any(|d| d.code.code() == 316),
             "expected E0316, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn enum_with_explicit_discriminants_typechecks() {
+        let result = check_source_result(
+            "\
+enum IpProtocol:
+    icmp = 1
+    tcp = 6
+    udp = 17
+
+bitfield network IpHeader:
+    protocol: 8 bits as IpProtocol
+
+function main() returns nothing:
+    IpHeader header = IpHeader(protocol: IpProtocol.tcp)
+    bytes raw = IpHeader.to_bytes(header)
+    IpHeader decoded = IpHeader.from_bytes(raw) handle error:
+        return nothing
+    IpProtocol protocol = decoded.protocol
+    return nothing
+",
+        );
+
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == jett_diagnostics::Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+    }
+
+    #[test]
+    fn duplicate_enum_discriminant_reports_error() {
+        let errors = check_source_errors(
+            "\
+enum Bad:
+    first = 1
+    second = 1
+
+function main() returns nothing:
+    return nothing
+",
+        );
+
+        assert!(
+            errors.iter().any(|d| d.code.code() == 339),
+            "expected E0339, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn enum_discriminant_requires_unit_variant() {
+        let errors = check_source_errors(
+            "\
+enum Bad:
+    named(value: int64) = 1
+
+function main() returns nothing:
+    return nothing
+",
+        );
+
+        assert!(
+            errors.iter().any(|d| d.code.code() == 338),
+            "expected E0338, got: {:?}",
             errors
         );
     }

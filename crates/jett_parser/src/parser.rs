@@ -617,6 +617,7 @@ impl<'src> Parser<'src> {
     fn parse_variant(&mut self) -> Variant {
         let name = self.parse_ident();
         let mut fields = Vec::new();
+        let mut discriminant = None;
         let mut end_span = name.span;
 
         if self.eat(TokenKind::LParen).is_some() {
@@ -632,10 +633,23 @@ impl<'src> Parser<'src> {
             end_span = self.expect(TokenKind::RParen).span;
         }
 
+        if self.eat(TokenKind::Eq).is_some() {
+            let value_tok = self.expect(TokenKind::IntLiteral);
+            discriminant = self.token_text(&value_tok).parse::<i64>().ok();
+            if discriminant.is_none() {
+                self.error(
+                    "enum discriminants must be base-10 integer literals",
+                    value_tok.span,
+                );
+            }
+            end_span = value_tok.span;
+        }
+
         Variant {
             span: name.span.merge(end_span),
             name,
             fields,
+            discriminant,
         }
     }
 
@@ -2315,6 +2329,27 @@ enum Shape:
                 assert_eq!(e.variants.len(), 2);
                 assert_eq!(e.variants[0].fields.len(), 1);
                 assert_eq!(e.variants[1].fields.len(), 2);
+            }
+            other => panic!("expected Enum, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_enum_with_explicit_discriminants() {
+        let src = "\
+enum IpProtocol:
+    icmp = 1
+    tcp = 6
+    udp = 17
+";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        match &result.module.items[0] {
+            Item::Enum(e) => {
+                assert_eq!(e.variants.len(), 3);
+                assert_eq!(e.variants[0].discriminant, Some(1));
+                assert_eq!(e.variants[1].discriminant, Some(6));
+                assert_eq!(e.variants[2].discriminant, Some(17));
             }
             other => panic!("expected Enum, got {:?}", other),
         }

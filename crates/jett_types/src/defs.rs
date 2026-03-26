@@ -92,6 +92,7 @@ pub struct VariantDef {
     pub name: String,
     /// (field_name, field_type) — empty for unit variants.
     pub fields: Vec<(String, TypeId)>,
+    pub discriminant: i64,
 }
 
 /// A function signature (used for methods on structs, etc.).

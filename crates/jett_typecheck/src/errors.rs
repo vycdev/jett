@@ -381,6 +381,40 @@ pub fn bitfield_literal_out_of_range(
     )
 }
 
+/// E0338: Only unit enum variants may declare explicit numeric discriminants.
+pub fn enum_discriminant_requires_unit_variant(
+    enum_name: &str,
+    variant_name: &str,
+    span: Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        338,
+        format!(
+            "enum `{enum_name}` variant `{variant_name}` cannot declare a numeric value because only unit variants may have discriminants"
+        ),
+        span,
+    )
+}
+
+/// E0339: Duplicate enum discriminant value.
+pub fn duplicate_enum_discriminant(
+    enum_name: &str,
+    variant_name: &str,
+    value: i64,
+    span: Span,
+    previous_span: Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        339,
+        format!("enum `{enum_name}` variant `{variant_name}` reuses discriminant `{value}`"),
+        span,
+    )
+    .with_label(
+        previous_span,
+        format!("discriminant `{value}` was first assigned here"),
+    )
+}
+
 /// E0500: Pure function calls impure function.
 pub fn pure_calls_impure(caller: &str, callee: &str, span: Span) -> Diagnostic {
     Diagnostic::error(

@@ -1229,11 +1229,24 @@ impl Interpreter {
             .enums
             .get(enum_name)
             .ok_or_else(|| format!("unknown enum '{}'", enum_name))?;
-        enm.variants
-            .iter()
-            .position(|variant| variant.name.name == variant_name)
-            .map(|index| index as u64)
-            .ok_or_else(|| format!("enum '{}' has no variant '{}'", enum_name, variant_name))
+        let mut next_discriminant = 0_i64;
+        for variant in &enm.variants {
+            let discriminant = variant.discriminant.unwrap_or(next_discriminant);
+            next_discriminant = discriminant.saturating_add(1);
+            if variant.name.name == variant_name {
+                if discriminant < 0 {
+                    return Err(format!(
+                        "enum '{}.{}' has negative discriminant {}",
+                        enum_name, variant_name, discriminant
+                    ));
+                }
+                return Ok(discriminant as u64);
+            }
+        }
+        Err(format!(
+            "enum '{}' has no variant '{}'",
+            enum_name, variant_name
+        ))
     }
 
     fn enum_value_from_numeric(&self, enum_name: &str, numeric: u64) -> Result<Value, String> {
@@ -1241,15 +1254,22 @@ impl Interpreter {
             .enums
             .get(enum_name)
             .ok_or_else(|| format!("unknown enum '{}'", enum_name))?;
-        let variant = enm
-            .variants
-            .get(numeric as usize)
-            .ok_or_else(|| format!("enum '{}' has no variant for value {}", enum_name, numeric))?;
-        Ok(Value::Enum {
-            type_name: enum_name.to_string(),
-            variant: variant.name.name.clone(),
-            fields: vec![],
-        })
+        let mut next_discriminant = 0_i64;
+        for variant in &enm.variants {
+            let discriminant = variant.discriminant.unwrap_or(next_discriminant);
+            next_discriminant = discriminant.saturating_add(1);
+            if discriminant >= 0 && discriminant as u64 == numeric {
+                return Ok(Value::Enum {
+                    type_name: enum_name.to_string(),
+                    variant: variant.name.name.clone(),
+                    fields: vec![],
+                });
+            }
+        }
+        Err(format!(
+            "enum '{}' has no variant for value {}",
+            enum_name, numeric
+        ))
     }
 
     fn value_to_byte_list(&self, value: &Value) -> Result<Vec<u8>, String> {
@@ -2350,14 +2370,15 @@ mod tests {
         }
     }
 
-    fn enum_def(name: &str, variants: Vec<&str>) -> EnumDef {
+    fn enum_def_with_values(name: &str, variants: Vec<(&str, i64)>) -> EnumDef {
         EnumDef {
             name: ident(name),
             variants: variants
                 .into_iter()
-                .map(|variant_name| jett_parser::ast::Variant {
+                .map(|(variant_name, discriminant)| jett_parser::ast::Variant {
                     name: ident(variant_name),
                     fields: vec![],
+                    discriminant: Some(discriminant),
                     span: sp(),
                 })
                 .collect(),
@@ -3245,7 +3266,10 @@ mod tests {
     #[test]
     fn bitfield_to_bytes_uses_enum_annotations() {
         let mut interp = Interpreter::new();
-        interp.register_enum(&enum_def("IpProtocol", vec!["icmp", "tcp", "udp"]));
+        interp.register_enum(&enum_def_with_values(
+            "IpProtocol",
+            vec![("icmp", 1), ("tcp", 6), ("udp", 17)],
+        ));
         interp.register_bitfield(&bitfield_def(
             "Header",
             vec![(
@@ -3271,13 +3295,16 @@ mod tests {
             )],
         );
 
-        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Bytes(vec![1]));
+        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Bytes(vec![6]));
     }
 
     #[test]
     fn bitfield_from_bytes_decodes_enum_annotations() {
         let mut interp = Interpreter::new();
-        interp.register_enum(&enum_def("IpProtocol", vec!["icmp", "tcp", "udp"]));
+        interp.register_enum(&enum_def_with_values(
+            "IpProtocol",
+            vec![("icmp", 1), ("tcp", 6), ("udp", 17)],
+        ));
         interp.register_bitfield(&bitfield_def(
             "Header",
             vec![(
@@ -3291,7 +3318,7 @@ mod tests {
         ));
 
         let expr = dotted_call("Header", "from_bytes", vec![var("raw")]);
-        interp.set_variable("raw", Value::Bytes(vec![2]));
+        interp.set_variable("raw", Value::Bytes(vec![17]));
 
         assert_eq!(
             interp.eval_expr(&expr).unwrap(),

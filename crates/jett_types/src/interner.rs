@@ -408,10 +408,12 @@ mod tests {
                 VariantDef {
                     name: "Red".to_string(),
                     fields: vec![],
+                    discriminant: 0,
                 },
                 VariantDef {
                     name: "Green".to_string(),
                     fields: vec![],
+                    discriminant: 1,
                 },
                 VariantDef {
                     name: "Custom".to_string(),
@@ -420,6 +422,7 @@ mod tests {
                         ("g".to_string(), TypeInterner::UINT8),
                         ("b".to_string(), TypeInterner::UINT8),
                     ],
+                    discriminant: 2,
                 },
             ],
         };
