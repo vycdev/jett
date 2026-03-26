@@ -706,7 +706,13 @@ impl Resolver {
             Expr::At(expr, _state_name, _) => {
                 self.resolve_expr(expr, item_index);
             }
-            Expr::Spawn(inner, _) | Expr::Send(inner, _) | Expr::Ask(inner, _) | Expr::Clone(inner, _) => {
+            Expr::Spawn(inner, _)
+            | Expr::Send(inner, _)
+            | Expr::Ask(inner, _)
+            | Expr::Clone(inner, _)
+            | Expr::Run(inner, _)
+            | Expr::Join(inner, _)
+            | Expr::Cancel(inner, _) => {
                 self.resolve_expr(inner, item_index);
             }
             // Literals and nothing — no names to resolve.

@@ -2202,6 +2202,24 @@ impl<'a> TypeChecker<'a> {
                 // `clone expr` returns the same type as the expression.
                 self.check_expr(inner)
             }
+            Expr::Run(inner, _) => {
+                // `run call` returns the same type as the call (pending tracked internally).
+                self.check_expr(inner)
+            }
+            Expr::Join(inner, _) => {
+                // `join task` returns result[T, string] so `handle error:` works.
+                // If the task already has a result type, preserve it as-is.
+                let inner_ty = self.check_expr(inner);
+                match self.interner.resolve(inner_ty).clone() {
+                    jett_types::Type::Result(_, _) => inner_ty,
+                    _ => self.interner.intern(jett_types::Type::Result(inner_ty, TypeInterner::STRING)),
+                }
+            }
+            Expr::Cancel(inner, _) => {
+                // `cancel task` — checks the inner expression and returns nothing.
+                self.check_expr(inner);
+                TypeInterner::NOTHING
+            }
             Expr::Error(_) => TypeInterner::ERROR,
             Expr::EnumVariant(type_name, variant, span) => {
                 self.check_enum_variant(type_name, variant, &[], *span)

@@ -699,6 +699,37 @@ impl Interpreter {
                 Ok(ExprFlow::Value(val))
             }
 
+            // Structured concurrency — sequential simulation:
+            // `run call` evaluates immediately and wraps in Pending.
+            Expr::Run(inner, _) => {
+                let val = value_or_signal!(self, inner);
+                Ok(ExprFlow::Value(Value::Pending(Box::new(val))))
+            }
+
+            // `join pending` unwraps the Pending, returning result[T, error]
+            // so that a `handle error:` block can handle failures.
+            Expr::Join(inner, _) => {
+                let val = value_or_signal!(self, inner);
+                let result = match val {
+                    Value::Pending(inner_val) => match *inner_val {
+                        Value::ResultOk(_) | Value::ResultFail(_) => *inner_val,
+                        other => Value::ResultOk(Box::new(other)),
+                    },
+                    Value::Nothing => Value::ResultFail(Box::new(Value::String(
+                        "task was cancelled".to_string(),
+                    ))),
+                    other => Value::ResultOk(Box::new(other)),
+                };
+                Ok(ExprFlow::Value(result))
+            }
+
+            // `cancel task` — in the sequential simulation this is a no-op;
+            // the task has already completed.
+            Expr::Cancel(inner, _) => {
+                value_or_signal!(self, inner);
+                Ok(ExprFlow::Value(Value::Nothing))
+            }
+
             // Unsupported expressions produce a clear error.
             _ => Err(format!(
                 "unsupported expression in comptime: {:?}",
@@ -2403,6 +2434,7 @@ fn runtime_type_name(value: &Value) -> Option<String> {
         | Value::Machine { type_name, .. } => Some(type_name.clone()),
         Value::Error(_) => None,
         Value::Actor(_) => Some("actor".to_string()),
+        Value::Pending(_) => Some("pending".to_string()),
     }
 }
 

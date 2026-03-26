@@ -396,7 +396,10 @@ impl<'a> OwnershipChecker<'a> {
             Expr::Spawn(inner, _)
             | Expr::Send(inner, _)
             | Expr::Ask(inner, _)
-            | Expr::Clone(inner, _) => {
+            | Expr::Clone(inner, _)
+            | Expr::Run(inner, _)
+            | Expr::Join(inner, _)
+            | Expr::Cancel(inner, _) => {
                 self.check_expr_ownership(inner);
             }
             // Literals and other leaves have no ownership effects.

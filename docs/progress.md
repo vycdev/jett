@@ -76,7 +76,7 @@
 | Property-based testing (`property` blocks) | Done |
 | Bitfield declarations | Partial |
 | Actor model (`actor`, `spawn`, `send`, `ask`) | Done |
-| Structured concurrency (`run`, `join`, `cancel`) | Not started |
+| Structured concurrency (`run`, `join`, `cancel`) | Done |
 | Interface/implement blocks | Done |
 | `mutual` blocks | Done |
 | Secret types (`secret[T]`, `declassify`) | Partial |

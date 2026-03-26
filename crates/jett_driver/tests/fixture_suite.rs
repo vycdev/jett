@@ -190,3 +190,4 @@ run_pass_fixture!(run_pass_bitfield_roundtrip, "bitfield_roundtrip.jett");
 run_pass_fixture!(run_pass_generic_struct, "generic_struct.jett");
 run_pass_fixture!(run_pass_generic_function, "generic_function.jett");
 run_pass_fixture!(run_pass_actor_counter, "actor_counter.jett");
+run_pass_fixture!(run_pass_structured_concurrency, "structured_concurrency.jett");

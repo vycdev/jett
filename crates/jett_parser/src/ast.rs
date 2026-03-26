@@ -477,6 +477,12 @@ pub enum Expr {
     Ask(Box<Expr>, Span),
     /// `clone expr` — clone a capability
     Clone(Box<Expr>, Span),
+    /// `run call_expr` — launch a function call as a concurrent task
+    Run(Box<Expr>, Span),
+    /// `join task_expr` — wait for a concurrent task, returns result[T, error]
+    Join(Box<Expr>, Span),
+    /// `cancel task_expr` — cancel a pending task
+    Cancel(Box<Expr>, Span),
     /// Error node for recovery
     Error(Span),
 }
@@ -514,6 +520,9 @@ impl Expr {
             | Expr::Send(_, s)
             | Expr::Ask(_, s)
             | Expr::Clone(_, s)
+            | Expr::Run(_, s)
+            | Expr::Join(_, s)
+            | Expr::Cancel(_, s)
             | Expr::Error(s) => *s,
             Expr::Ident(ident) => ident.span,
         }

@@ -1741,6 +1741,26 @@ impl<'src> Parser<'src> {
                 let span = tok.span.merge(inner.span());
                 Expr::Ask(Box::new(inner), span)
             }
+            TokenKind::Run => {
+                self.advance();
+                let inner = self.parse_expr_bp(0);
+                let span = tok.span.merge(inner.span());
+                Expr::Run(Box::new(inner), span)
+            }
+            TokenKind::Join => {
+                self.advance();
+                // Use min_bp=2 so the `handle` postfix (l_bp=1) is NOT consumed
+                // inside `join`; instead it wraps the whole `join expr` expression.
+                let inner = self.parse_expr_bp(2);
+                let span = tok.span.merge(inner.span());
+                Expr::Join(Box::new(inner), span)
+            }
+            TokenKind::Cancel => {
+                self.advance();
+                let inner = self.parse_expr_bp(2);
+                let span = tok.span.merge(inner.span());
+                Expr::Cancel(Box::new(inner), span)
+            }
             TokenKind::Ok => {
                 self.advance();
                 self.expect(TokenKind::LParen);

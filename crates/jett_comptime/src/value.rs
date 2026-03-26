@@ -46,6 +46,8 @@ pub enum Value {
     Actor(u64),
     /// A runtime error value.
     Error(String),
+    /// A pending concurrent task (sequential simulation: already evaluated).
+    Pending(Box<Value>),
 }
 
 impl fmt::Display for Value {
@@ -128,6 +130,7 @@ impl fmt::Display for Value {
             }
             Value::Actor(id) => write!(f, "actor#{id}"),
             Value::Error(msg) => write!(f, "error: {msg}"),
+            Value::Pending(inner) => write!(f, "pending({inner})"),
         }
     }
 }
