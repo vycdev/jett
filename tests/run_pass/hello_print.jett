@@ -1,5 +1,5 @@
 namespace app
 
-function main() returns nothing:
-    Stdout.write(nothing, "Hello, Jett!")
-    Stdout.write(nothing, string.from_int64(42))
+function main(view stdout: Stdout) returns nothing:
+    Stdout.write(view stdout, "Hello, Jett!")
+    Stdout.write(view stdout, string.from_int64(42))

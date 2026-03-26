@@ -3,7 +3,7 @@
 ## Statistics
 
 - **Lines of Rust:** ~17,500
-- **Tests:** 405 passing
+- **Tests:** 420 passing
 - **Crates:** 15
 - **VS Code extension:** Yes
 
@@ -19,7 +19,7 @@
 | Lexer (indentation, interpolation, 90+ tokens) | `jett_lexer` | 62 | Done |
 | Parser (recursive descent + Pratt) | `jett_parser` | 58 | Done |
 | Formatter (canonical whitespace) | `jett_fmt` | 3 | Done |
-| Pipeline orchestration | `jett_driver` | 0 | Done |
+| Pipeline orchestration | `jett_driver` | 15 | Done |
 | CLI (format, build, run, test, lsp) | `jett_cli` | 0 | Done |
 
 ### Phase B: Type System Core — COMPLETE

@@ -1,0 +1,13 @@
+interface Displayable:
+    function display(view self: Displayable) returns string
+
+struct User:
+    name: string
+
+implement Displayable for User:
+    function display(view self: User) returns string:
+        return self.name
+
+function describe_user() returns string:
+    User user = User(name: "Ada")
+    return "user: {user}"

@@ -1,0 +1,6 @@
+# ERROR: E0333
+type Port = int64 where value >= 1 && value <= 65535
+
+function main() returns nothing:
+    Port port = 8080
+    return nothing

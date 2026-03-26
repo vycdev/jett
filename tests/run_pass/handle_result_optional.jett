@@ -1,0 +1,15 @@
+function parse_or_default(raw: string) returns int64:
+    int64 parsed = int64.from_string(raw) handle error:
+        default 7
+    return parsed
+
+function first_or_zero(items: list[int64]) returns int64:
+    int64 first = list.first[int64](items) handle:
+        default 0
+    return first
+
+function main() returns nothing:
+    assert parse_or_default("12") == 12
+    assert parse_or_default("abc") == 7
+    assert first_or_zero(list(4, 5, 6)) == 4
+    assert first_or_zero(list()) == 0

@@ -1,7 +1,9 @@
 use jett_common::FileId;
+use jett_comptime::value::Value;
 use jett_comptime::verify::{run_verify_blocks, run_verify_blocks_detailed};
 use jett_diagnostics::Diagnostic;
 use jett_fmt::{format_source, FormatResult};
+use jett_parser::ast::{FunctionDef, Item, Param, TypeExpr};
 use jett_parser::parse;
 use jett_resolve::resolve;
 use jett_typecheck::check;
@@ -205,24 +207,88 @@ pub fn run_file(path: &Path) -> Result<(), String> {
     use jett_comptime::interpreter::Interpreter;
     let mut interp = Interpreter::new();
 
+    let main_func = parse_result
+        .module
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Item::Function(func) if func.name.name == "main" => Some(func),
+            _ => None,
+        });
+
+    let Some(main_func) = main_func else {
+        return Err("runtime error: no `main` function found".to_string());
+    };
+
+    let main_args = default_runtime_args_for_main(main_func)?;
+
     // Register all functions
     for item in &parse_result.module.items {
         match item {
-            jett_parser::ast::Item::Function(func) => interp.register_function(func),
-            jett_parser::ast::Item::TypeAlias(alias) => interp.register_type_alias(alias),
-            jett_parser::ast::Item::Interface(interface) => interp.register_interface(interface),
-            jett_parser::ast::Item::Implement(block) => interp.register_implement_block(block),
-            jett_parser::ast::Item::Struct(strukt) => interp.register_struct(strukt),
-            jett_parser::ast::Item::Enum(enm) => interp.register_enum(enm),
-            jett_parser::ast::Item::Bitfield(bitfield) => interp.register_bitfield(bitfield),
+            Item::Function(func) => interp.register_function(func),
+            Item::TypeAlias(alias) => interp.register_type_alias(alias),
+            Item::Interface(interface) => interp.register_interface(interface),
+            Item::Implement(block) => interp.register_implement_block(block),
+            Item::Struct(strukt) => interp.register_struct(strukt),
+            Item::Enum(enm) => interp.register_enum(enm),
+            Item::Bitfield(bitfield) => interp.register_bitfield(bitfield),
             _ => {}
         }
     }
 
     // Call main()
-    match interp.call_function("main", vec![]) {
+    match interp.call_function("main", main_args) {
         Ok(_) => Ok(()),
         Err(e) => Err(format!("runtime error: {}", e)),
+    }
+}
+
+fn default_runtime_args_for_main(main: &FunctionDef) -> Result<Vec<Value>, String> {
+    main.params
+        .iter()
+        .map(default_runtime_arg_for_param)
+        .collect()
+}
+
+fn default_runtime_arg_for_param(param: &Param) -> Result<Value, String> {
+    if type_expr_is_capability(&param.ty) {
+        return Ok(Value::Nothing);
+    }
+
+    Err(format!(
+        "runtime error: `main` parameter `{}` has unsupported type `{}`; only zero-argument or capability-only `main` functions can be run right now",
+        param.name.name,
+        type_expr_name(&param.ty)
+    ))
+}
+
+fn type_expr_is_capability(ty: &TypeExpr) -> bool {
+    match ty {
+        TypeExpr::Named(ident) => matches!(
+            ident.name.as_str(),
+            "Stdout"
+                | "Stderr"
+                | "Stdin"
+                | "Filesystem"
+                | "Network"
+                | "Clock"
+                | "Random"
+                | "Process"
+                | "Environment"
+        ),
+        TypeExpr::View(inner, _) => type_expr_is_capability(inner),
+        TypeExpr::Generic(_, _, _) => false,
+    }
+}
+
+fn type_expr_name(ty: &TypeExpr) -> String {
+    match ty {
+        TypeExpr::Named(ident) => ident.name.clone(),
+        TypeExpr::Generic(name, args, _) => {
+            let args: Vec<String> = args.iter().map(type_expr_name).collect();
+            format!("{}[{}]", name.name, args.join(", "))
+        }
+        TypeExpr::View(inner, _) => format!("view {}", type_expr_name(inner)),
     }
 }
 

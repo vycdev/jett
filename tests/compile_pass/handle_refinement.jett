@@ -1,0 +1,8 @@
+type Port = int64 where value >= 1 && value <= 65535
+
+function parse_port(raw: string) returns int64:
+    int64 parsed = int64.from_string(raw) handle error:
+        return 80
+    Port port = parsed handle error:
+        return 80
+    return coarsen port

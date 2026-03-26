@@ -3,7 +3,7 @@ namespace app
 function greet(name: string) returns string:
     return "Hello, {name}!"
 
-function main() returns nothing:
+function main(view stdout: Stdout) returns nothing:
     string msg = greet("World")
-    Stdout.write(nothing, msg)
-    Stdout.write(nothing, "2 + 3 = {2 + 3}")
+    Stdout.write(view stdout, msg)
+    Stdout.write(view stdout, "2 + 3 = {2 + 3}")
