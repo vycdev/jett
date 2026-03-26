@@ -1,0 +1,18 @@
+namespace test
+
+struct Pair[T, U]:
+    first: T
+    second: U
+
+struct Box[T]:
+    value: T
+
+function main() returns nothing:
+    Pair[int64, string] p = Pair[int64, string](first: 42, second: "hello")
+    Box[int64] b = Box[int64](value: 100)
+    int64 x = p.first
+    string s = p.second
+    assert x == 42
+    assert s == "hello"
+    assert b.value == 100
+    return nothing

@@ -58,6 +58,9 @@ struct Resolver {
     mutual_declarations: HashMap<String, Span>,
     /// Functions from `mutual` blocks that already have a real body definition.
     mutual_definitions: HashMap<String, Span>,
+    /// Type parameter names that are currently in scope (e.g. `T`, `U` in a generic struct).
+    /// Names in this set are suppressed from "undefined name" errors.
+    active_type_params: HashSet<String>,
 }
 
 impl Resolver {
@@ -123,6 +126,7 @@ impl Resolver {
             top_level_order: HashMap::new(),
             mutual_declarations: HashMap::new(),
             mutual_definitions: HashMap::new(),
+            active_type_params: HashSet::new(),
         }
     }
 
@@ -286,12 +290,25 @@ impl Resolver {
                     self.resolve_function(func, index);
                 }
                 Item::Struct(s) => {
+                    // For generic structs, add type params to active set so
+                    // uses of T/U etc. in field types are not reported as errors.
+                    let added_params: Vec<String> = s
+                        .type_params
+                        .iter()
+                        .filter(|p| self.active_type_params.insert(p.name.clone()))
+                        .map(|p| p.name.clone())
+                        .collect();
+
                     for field in &s.fields {
                         self.resolve_type_expr(&field.ty, index);
                     }
                     // Resolve method bodies.
                     for method in &s.methods {
                         self.resolve_function(method, index);
+                    }
+
+                    for param in added_params {
+                        self.active_type_params.remove(&param);
                     }
                 }
                 Item::Bitfield(bitfield) => {
@@ -658,6 +675,11 @@ impl Resolver {
     /// error. `item_index` is the index of the current top-level item being
     /// processed (used for forward-reference checking).
     fn resolve_name(&mut self, name: &str, span: Span, item_index: usize) {
+        // Type parameters introduced by a generic struct are always in scope.
+        if self.active_type_params.contains(name) {
+            return;
+        }
+
         // First look up in local/nested scopes.
         if let Some(def_id) = self.scope_table.lookup(self.current_scope, name) {
             // Check for forward reference to a top-level item.

@@ -167,6 +167,7 @@ compile_pass_fixture!(
     "interface_displayable.jett"
 );
 compile_pass_fixture!(compile_pass_handle_refinement, "handle_refinement.jett");
+compile_pass_fixture!(compile_pass_generic_struct, "generic_struct.jett");
 
 compile_fail_fixture!(compile_fail_type_mismatch, "type_mismatch.jett");
 compile_fail_fixture!(compile_fail_secret_stdout, "secret_stdout.jett");
@@ -186,3 +187,4 @@ run_pass_fixture!(
     "handle_result_optional.jett"
 );
 run_pass_fixture!(run_pass_bitfield_roundtrip, "bitfield_roundtrip.jett");
+run_pass_fixture!(run_pass_generic_struct, "generic_struct.jett");

@@ -457,6 +457,23 @@ impl<'src> Parser<'src> {
     fn parse_struct(&mut self) -> StructDef {
         let kw = self.expect(TokenKind::Struct);
         let name = self.parse_ident();
+
+        // Optional generic type parameters: `[T, U, ...]`
+        let type_params = if self.peek() == TokenKind::LBracket {
+            self.advance(); // consume `[`
+            let mut params = Vec::new();
+            if self.peek() != TokenKind::RBracket {
+                params.push(self.parse_ident());
+                while self.eat(TokenKind::Comma).is_some() {
+                    params.push(self.parse_ident());
+                }
+            }
+            self.expect(TokenKind::RBracket);
+            params
+        } else {
+            vec![]
+        };
+
         self.expect(TokenKind::Colon);
 
         // Expect an indented block of fields and methods
@@ -487,6 +504,7 @@ impl<'src> Parser<'src> {
         StructDef {
             span: kw.span.merge(last_span),
             name,
+            type_params,
             fields,
             methods,
         }

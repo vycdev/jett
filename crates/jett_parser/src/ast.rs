@@ -141,6 +141,9 @@ pub struct Param {
 #[derive(Debug, Clone)]
 pub struct StructDef {
     pub name: Ident,
+    /// Generic type parameters, e.g. `[T, U]` in `struct Pair[T, U]:`.
+    /// Empty for non-generic structs.
+    pub type_params: Vec<Ident>,
     pub fields: Vec<FieldDef>,
     pub methods: Vec<FunctionDef>,
     pub span: Span,

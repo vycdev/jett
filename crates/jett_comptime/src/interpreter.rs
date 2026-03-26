@@ -2357,6 +2357,7 @@ mod tests {
     fn struct_def(name: &str, fields: Vec<(&str, &str)>, methods: Vec<FunctionDef>) -> StructDef {
         StructDef {
             name: ident(name),
+            type_params: vec![],
             fields: fields
                 .into_iter()
                 .map(|(field_name, field_ty)| FieldDef {

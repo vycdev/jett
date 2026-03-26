@@ -85,6 +85,14 @@ struct TypeChecker<'a> {
     current_verify_name: Option<String>,
     /// Nesting depth inside a handle-block body. Used to validate `default`.
     handle_body_depth: usize,
+
+    // -- Generic struct support --
+    /// AST templates for user-defined generic structs (have type_params).
+    generic_struct_templates: HashMap<String, ast::StructDef>,
+    /// Cache of monomorphized generic struct instances: (name, concrete type args) → TypeId.
+    monomorphized_structs: HashMap<(String, Vec<TypeId>), TypeId>,
+    /// Active type variable substitution during monomorphization (type_param_name → TypeId).
+    type_var_subst: HashMap<String, TypeId>,
 }
 
 impl<'a> TypeChecker<'a> {
@@ -115,6 +123,9 @@ impl<'a> TypeChecker<'a> {
             in_verify_block: false,
             current_verify_name: None,
             handle_body_depth: 0,
+            generic_struct_templates: HashMap::new(),
+            monomorphized_structs: HashMap::new(),
+            type_var_subst: HashMap::new(),
         }
     }
 
@@ -811,6 +822,13 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn predeclare_struct(&mut self, def: &ast::StructDef) {
+        if !def.type_params.is_empty() {
+            // Generic struct — store the template for later monomorphization.
+            self.generic_struct_templates
+                .insert(def.name.name.clone(), def.clone());
+            return;
+        }
+
         let sid = self.interner.add_struct(TypeStructDef {
             name: def.name.name.clone(),
             fields: Vec::new(),
@@ -852,6 +870,10 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn finish_struct(&mut self, def: &ast::StructDef) {
+        if !def.type_params.is_empty() {
+            // Generic structs are monomorphized on demand — nothing to finish here.
+            return;
+        }
         let Some(&ty) = self.named_types.get(&def.name.name) else {
             return;
         };
@@ -2159,6 +2181,28 @@ impl<'a> TypeChecker<'a> {
             }
         }
 
+        // Check for generic struct construction: `Name[T, U](fields...)`.
+        if !type_args.is_empty() {
+            if let Expr::Ident(ident) = callee {
+                if self.generic_struct_templates.contains_key(&ident.name) {
+                    let concrete_args: Vec<TypeId> = type_args
+                        .iter()
+                        .map(|a| self.resolve_type_expr(a))
+                        .collect();
+                    let name_clone = ident.name.clone();
+                    let mono_ty = self.monomorphize_struct(&name_clone, &concrete_args, span);
+                    if mono_ty != TypeInterner::ERROR {
+                        let sid = match self.interner.resolve(mono_ty) {
+                            Type::Struct(sid) => *sid,
+                            _ => return TypeInterner::ERROR,
+                        };
+                        return self.check_struct_constructor(sid, args, span);
+                    }
+                    return TypeInterner::ERROR;
+                }
+            }
+        }
+
         let builtin_signature = self.builtin_signature(callee, type_args, span);
 
         let (param_types, return_type) = if let Some(signature) = builtin_signature {
@@ -2966,6 +3010,10 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn resolve_named_type(&mut self, name: &str, span: Span) -> TypeId {
+        // Type variable substitution takes priority (active during monomorphization).
+        if let Some(&ty) = self.type_var_subst.get(name) {
+            return ty;
+        }
         match name {
             "int8" => TypeInterner::INT8,
             "int16" => TypeInterner::INT16,
@@ -3100,10 +3148,94 @@ impl<'a> TypeChecker<'a> {
                 }
             }
             _ => {
+                // Check if this is a user-defined generic struct.
+                if self.generic_struct_templates.contains_key(name) {
+                    let concrete_args: Vec<TypeId> = args
+                        .iter()
+                        .map(|a| self.resolve_type_expr(a))
+                        .collect();
+                    return self.monomorphize_struct(name, &concrete_args, span);
+                }
                 self.sink.emit(errors::unknown_type(name, span));
                 TypeInterner::ERROR
             }
         }
+    }
+
+    /// Monomorphize a generic struct with the given concrete type arguments.
+    ///
+    /// Returns the `TypeId` of the resulting `Type::Struct`, creating a new
+    /// `StructId` on first use and caching it for subsequent calls with the
+    /// same `(name, type_args)` key.
+    fn monomorphize_struct(&mut self, name: &str, type_args: &[TypeId], span: Span) -> TypeId {
+        // Check the cache first.
+        let cache_key = (name.to_string(), type_args.to_vec());
+        if let Some(&cached) = self.monomorphized_structs.get(&cache_key) {
+            return cached;
+        }
+
+        let template = match self.generic_struct_templates.get(name).cloned() {
+            Some(t) => t,
+            None => return TypeInterner::ERROR,
+        };
+
+        if template.type_params.len() != type_args.len() {
+            self.sink.emit(errors::unknown_type(
+                &format!(
+                    "{} (expected {} type argument(s), got {})",
+                    name,
+                    template.type_params.len(),
+                    type_args.len()
+                ),
+                span,
+            ));
+            return TypeInterner::ERROR;
+        }
+
+        // Build substitution map: type param name → concrete TypeId.
+        let substitution: HashMap<String, TypeId> = template
+            .type_params
+            .iter()
+            .zip(type_args.iter())
+            .map(|(param, &ty)| (param.name.clone(), ty))
+            .collect();
+
+        // Install the substitution, resolve fields, then restore.
+        let old_subst = std::mem::replace(&mut self.type_var_subst, substitution);
+
+        let fields: Vec<(String, TypeId)> = template
+            .fields
+            .iter()
+            .map(|field| {
+                let field_ty = self.resolve_type_expr(&field.ty);
+                (field.name.name.clone(), field_ty)
+            })
+            .collect();
+
+        let methods: Vec<FunctionSig> = template
+            .methods
+            .iter()
+            .map(|method| self.method_signature(method))
+            .collect();
+
+        self.type_var_subst = old_subst;
+
+        // Build a mangled name, e.g. "Pair[int64, string]".
+        let type_arg_names: Vec<String> = type_args
+            .iter()
+            .map(|&ty| self.type_name(ty))
+            .collect();
+        let mono_name = format!("{}[{}]", name, type_arg_names.join(", "));
+
+        let sid = self.interner.add_struct(TypeStructDef {
+            name: mono_name,
+            fields,
+            methods,
+        });
+        let ty = self.interner.intern(Type::Struct(sid));
+
+        self.monomorphized_structs.insert(cache_key, ty);
+        ty
     }
 
     // ------------------------------------------------------------------

@@ -1,0 +1,13 @@
+namespace test
+
+struct Pair[T, U]:
+    first: T
+    second: U
+
+struct Box[T]:
+    value: T
+
+function main() returns nothing:
+    Pair[int64, string] p = Pair[int64, string](first: 42, second: "hello")
+    Box[bool] b = Box[bool](value: true)
+    return nothing

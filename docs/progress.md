@@ -3,7 +3,7 @@
 ## Statistics
 
 - **Lines of Rust:** ~17,500
-- **Tests:** 420 passing
+- **Tests:** 422 passing
 - **Crates:** 15
 - **VS Code extension:** Yes
 
@@ -81,7 +81,7 @@
 | `mutual` blocks | Done |
 | Secret types (`secret[T]`, `declassify`) | Partial |
 | Handle blocks (`handle error:`, `handle:`, `default`) | Done |
-| Generic structs | Not started |
+| Generic structs | Done |
 
 ### Phase H: Agent Tooling — PARTIAL
 
