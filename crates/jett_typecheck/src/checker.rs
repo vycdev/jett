@@ -2376,11 +2376,14 @@ impl<'a> TypeChecker<'a> {
     fn check_for(&mut self, for_stmt: &ast::ForStmt) {
         let iterable_type = self.check_expr(&for_stmt.iterable);
 
-        // The iterable must be list[T]; the loop variable gets type T.
+        // The iterable must be list[T] or string; the loop variable gets type T or string.
         let elem_type = if iterable_type == TypeInterner::ERROR {
             TypeInterner::ERROR
         } else if let Type::List(inner) = self.interner.resolve(iterable_type) {
             *inner
+        } else if iterable_type == TypeInterner::STRING {
+            // Iterating over a string yields individual characters as strings.
+            TypeInterner::STRING
         } else {
             self.sink.emit(errors::not_iterable(
                 &self.type_name(iterable_type),

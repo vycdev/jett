@@ -1,0 +1,79 @@
+namespace app
+
+# --- range(end) ---
+
+function sum_to(n: int64) returns int64:
+    int64 total = 0
+    for i in range(n):
+        total = total + i
+    return total
+
+verify sum_to:
+    assert sum_to(5) == 10
+    assert sum_to(0) == 0
+    assert sum_to(1) == 0
+
+# --- range(start, end) ---
+
+function sum_range(a: int64, b: int64) returns int64:
+    int64 total = 0
+    for i in range(a, b):
+        total = total + i
+    return total
+
+verify sum_range:
+    assert sum_range(1, 5) == 10
+    assert sum_range(3, 3) == 0
+    assert sum_range(10, 13) == 33
+
+# --- range(start, end, step) ---
+
+function sum_step() returns int64:
+    int64 total = 0
+    for i in range(0, 10, 2):
+        total = total + i
+    return total
+
+verify sum_step:
+    assert sum_step() == 20
+
+# --- for loop over string ---
+
+function count_chars(s: string) returns int64:
+    int64 count = 0
+    for ch in s:
+        count = count + 1
+    return count
+
+verify count_chars:
+    assert count_chars("hello") == 5
+    assert count_chars("") == 0
+
+# --- while loop ---
+
+function factorial(n: int64) returns int64:
+    int64 result = 1
+    int64 i = 2
+    while i <= n:
+        result = result * i
+        i = i + 1
+    return result
+
+verify factorial:
+    assert factorial(5) == 120
+    assert factorial(1) == 1
+    assert factorial(0) == 1
+
+# --- break in for loop ---
+
+function first_above(items: list[int64], threshold: int64) returns int64:
+    int64 found = -1
+    for item in items:
+        if item > threshold:
+            found = item
+            break
+    return found
+
+verify first_above:
+    assert first_above(list(1, 5, 3, 8, 2), 4) == 5
+    assert first_above(list(1, 2, 3), 10) == -1

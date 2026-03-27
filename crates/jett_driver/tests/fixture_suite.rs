@@ -209,6 +209,7 @@ run_pass_fixture!(run_pass_string_chars, "string_chars.jett");
 run_pass_fixture!(run_pass_crypto, "crypto.jett");
 run_pass_fixture!(run_pass_closures, "closures.jett");
 run_pass_fixture!(run_pass_use_imports, "use_imports.jett");
+run_pass_fixture!(run_pass_loops, "loops.jett");
 
 #[test]
 fn multifile_cross_file_calls() {

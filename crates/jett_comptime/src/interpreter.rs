@@ -967,7 +967,24 @@ impl Interpreter {
                             }
                         }
                     }
-                    _ => return Err("for loop requires a list value in comptime".to_string()),
+                    Value::String(s) => {
+                        for ch in s.chars() {
+                            self.push_scope();
+                            self.set_variable(
+                                &for_stmt.variable.name,
+                                Value::String(ch.to_string()),
+                            );
+                            let signal = self.exec_block_inner(&for_stmt.body)?;
+                            self.pop_scope();
+                            match signal {
+                                Some(Signal::Break) => break,
+                                Some(Signal::Continue) => continue,
+                                Some(other) => return Ok(Some(other)),
+                                None => {}
+                            }
+                        }
+                    }
+                    _ => return Err("for loop requires a list or string value".to_string()),
                 }
                 Ok(None)
             }
@@ -2960,6 +2977,52 @@ impl Interpreter {
                 match &args[0] {
                     Value::String(s) => Some(Ok(Value::String(md5_hash(s.as_bytes())))),
                     _ => Some(Err(format!("{name} expects a string argument"))),
+                }
+            }
+
+            // -- Range generation ---------------------------------------------------
+            "range" => {
+                match args.len() {
+                    // range(end) — 0 to end exclusive
+                    1 => match &args[0] {
+                        Value::Int64(end) => {
+                            let items: Vec<Value> = (0..*end).map(Value::Int64).collect();
+                            Some(Ok(Value::List(items)))
+                        }
+                        _ => Some(Err(format!("{name} expects int64 arguments"))),
+                    },
+                    // range(start, end) — start to end exclusive
+                    2 => match (&args[0], &args[1]) {
+                        (Value::Int64(start), Value::Int64(end)) => {
+                            let items: Vec<Value> = (*start..*end).map(Value::Int64).collect();
+                            Some(Ok(Value::List(items)))
+                        }
+                        _ => Some(Err(format!("{name} expects int64 arguments"))),
+                    },
+                    // range(start, end, step)
+                    3 => match (&args[0], &args[1], &args[2]) {
+                        (Value::Int64(start), Value::Int64(end), Value::Int64(step)) => {
+                            if *step == 0 {
+                                return Some(Err("range step cannot be zero".to_string()));
+                            }
+                            let mut items = Vec::new();
+                            let mut i = *start;
+                            if *step > 0 {
+                                while i < *end {
+                                    items.push(Value::Int64(i));
+                                    i += step;
+                                }
+                            } else {
+                                while i > *end {
+                                    items.push(Value::Int64(i));
+                                    i += step;
+                                }
+                            }
+                            Some(Ok(Value::List(items)))
+                        }
+                        _ => Some(Err(format!("{name} expects int64 arguments"))),
+                    },
+                    _ => Some(Err(format!("{name} expects 1, 2, or 3 arguments"))),
                 }
             }
 
