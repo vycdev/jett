@@ -1,0 +1,67 @@
+namespace app
+
+# --- math constants ---
+
+function pi_test() returns bool:
+    float64 pi = math.pi()
+    return pi > 3.14
+
+verify pi_test:
+    assert pi_test() == true
+
+function e_test() returns bool:
+    float64 e = math.e()
+    return e > 2.71
+
+verify e_test:
+    assert e_test() == true
+
+# --- trig functions ---
+
+function sin_zero_test() returns float64:
+    return math.sin(0.0)
+
+verify sin_zero_test:
+    assert sin_zero_test() == 0.0
+
+function cos_zero_test() returns float64:
+    return math.cos(0.0)
+
+verify cos_zero_test:
+    assert cos_zero_test() == 1.0
+
+# --- parity ---
+
+function is_even_test() returns bool:
+    return math.is_even(4)
+
+function is_odd_test() returns bool:
+    return math.is_odd(5)
+
+function is_even_false_test() returns bool:
+    return math.is_even(3)
+
+verify is_even_test:
+    assert is_even_test() == true
+
+verify is_odd_test:
+    assert is_odd_test() == true
+
+verify is_even_false_test:
+    assert is_even_false_test() == false
+
+# --- math.mod ---
+
+function mod_test() returns int64:
+    return math.mod(17, 5)
+
+verify mod_test:
+    assert mod_test() == 2
+
+# --- math.sum ---
+
+function sum_list_test() returns int64:
+    return math.sum(list(1, 2, 3, 4, 5))
+
+verify sum_list_test:
+    assert sum_list_test() == 15

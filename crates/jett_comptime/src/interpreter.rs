@@ -2841,6 +2841,110 @@ impl Interpreter {
                 }
             }
 
+            // -- Math constants and extras -----------------------------------------
+            "math.pi" => {
+                require_args!(name, 0, args);
+                Some(Ok(Value::Float64(std::f64::consts::PI)))
+            }
+            "math.e" => {
+                require_args!(name, 0, args);
+                Some(Ok(Value::Float64(std::f64::consts::E)))
+            }
+            "math.sin" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::Float64(n) => Some(Ok(Value::Float64(n.sin()))),
+                    Value::Int64(n) => Some(Ok(Value::Float64((*n as f64).sin()))),
+                    _ => Some(Err(format!("{name} expects a numeric argument"))),
+                }
+            }
+            "math.cos" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::Float64(n) => Some(Ok(Value::Float64(n.cos()))),
+                    Value::Int64(n) => Some(Ok(Value::Float64((*n as f64).cos()))),
+                    _ => Some(Err(format!("{name} expects a numeric argument"))),
+                }
+            }
+            "math.tan" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::Float64(n) => Some(Ok(Value::Float64(n.tan()))),
+                    Value::Int64(n) => Some(Ok(Value::Float64((*n as f64).tan()))),
+                    _ => Some(Err(format!("{name} expects a numeric argument"))),
+                }
+            }
+            "math.mod" => {
+                require_args!(name, 2, args);
+                match (&args[0], &args[1]) {
+                    (Value::Int64(a), Value::Int64(b)) => {
+                        if *b == 0 {
+                            Some(Err("math.mod: division by zero".to_string()))
+                        } else {
+                            Some(Ok(Value::Int64(a % b)))
+                        }
+                    }
+                    _ => Some(Err(format!("{name} expects two int64 arguments"))),
+                }
+            }
+            "math.is_even" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::Int64(n) => Some(Ok(Value::Bool(n % 2 == 0))),
+                    _ => Some(Err(format!("{name} expects an int64 argument"))),
+                }
+            }
+            "math.is_odd" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::Int64(n) => Some(Ok(Value::Bool(n % 2 != 0))),
+                    _ => Some(Err(format!("{name} expects an int64 argument"))),
+                }
+            }
+            "math.sum" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::List(items) => {
+                        let mut total: i64 = 0;
+                        for item in items {
+                            match item {
+                                Value::Int64(n) => total += n,
+                                _ => return Some(Err("math.sum: list must contain int64 values".to_string())),
+                            }
+                        }
+                        Some(Ok(Value::Int64(total)))
+                    }
+                    _ => Some(Err(format!("{name} expects a list argument"))),
+                }
+            }
+
+            // -- list.enumerate (returns list of [index, value] pairs) ----------
+            "list.enumerate" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::List(items) => {
+                        let enumerated: Vec<Value> = items
+                            .iter()
+                            .enumerate()
+                            .map(|(i, v)| {
+                                Value::List(vec![Value::Int64(i as i64), v.clone()])
+                            })
+                            .collect();
+                        Some(Ok(Value::List(enumerated)))
+                    }
+                    _ => Some(Err(format!("{name} expects a list argument"))),
+                }
+            }
+
+            // -- list.from_set (convert set to list) ----------------------------
+            "list.from_set" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::Set(items) => Some(Ok(Value::List(items.clone()))),
+                    _ => Some(Err(format!("{name} expects a set argument"))),
+                }
+            }
+
             // -- Additional string operations (stdlib/string.jett) ------------
             "string.reverse" => {
                 require_args!(name, 1, args);
