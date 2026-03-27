@@ -53,6 +53,8 @@ pub enum Value {
     Pending(Box<Value>),
     /// A key-value map: `map(key1: val1, key2: val2)`.
     Map(Vec<(Value, Value)>),
+    /// A set of unique values: `set(1, 2, 3)`.
+    Set(Vec<Value>),
     /// A captured inline function expression (closure).
     Function {
         params: Vec<Param>,
@@ -82,6 +84,7 @@ impl PartialEq for Value {
             (Value::Error(a), Value::Error(b)) => a == b,
             (Value::Pending(a), Value::Pending(b)) => a == b,
             (Value::Map(a), Value::Map(b)) => a == b,
+            (Value::Set(a), Value::Set(b)) => a == b,
             // Functions are never considered equal.
             (Value::Function { .. }, Value::Function { .. }) => false,
             _ => false,
@@ -185,6 +188,16 @@ impl fmt::Display for Value {
                         write!(f, ", ")?;
                     }
                     write!(f, "{k}: {v}")?;
+                }
+                write!(f, ")")
+            }
+            Value::Set(items) => {
+                write!(f, "set(")?;
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{item}")?;
                 }
                 write!(f, ")")
             }

@@ -2387,6 +2387,8 @@ impl<'a> TypeChecker<'a> {
         } else if let Type::Map(key_ty, _) = resolved {
             // Map iteration: first variable gets key type.
             *key_ty
+        } else if let Type::Set(inner) = resolved {
+            *inner
         } else {
             self.sink.emit(errors::not_iterable(
                 &self.type_name(iterable_type),

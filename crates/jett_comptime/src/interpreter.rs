@@ -1001,7 +1001,21 @@ impl Interpreter {
                             }
                         }
                     }
-                    _ => return Err("for loop requires a list, string, or map value".to_string()),
+                    Value::Set(items) => {
+                        for item in items {
+                            self.push_scope();
+                            self.set_variable(&for_stmt.variable.name, item);
+                            let signal = self.exec_block_inner(&for_stmt.body)?;
+                            self.pop_scope();
+                            match signal {
+                                Some(Signal::Break) => break,
+                                Some(Signal::Continue) => continue,
+                                Some(other) => return Ok(Some(other)),
+                                None => {}
+                            }
+                        }
+                    }
+                    _ => return Err("for loop requires a list, string, map, or set value".to_string()),
                 }
                 Ok(None)
             }
@@ -2498,6 +2512,103 @@ impl Interpreter {
             }
 
             "map.contains_key" => self.call_builtin("map.has", args),
+
+            // -- Set operations (stdlib/set.jett) -----------------------------
+            "set.new" => {
+                Some(Ok(Value::Set(Vec::new())))
+            }
+            "set.add" => {
+                require_args!(name, 2, args);
+                match args[0].clone() {
+                    Value::Set(mut items) => {
+                        let val = args[1].clone();
+                        if !items.contains(&val) {
+                            items.push(val);
+                        }
+                        Some(Ok(Value::Set(items)))
+                    }
+                    _ => Some(Err(format!("{name} expects a set as first argument"))),
+                }
+            }
+            "set.remove" => {
+                require_args!(name, 2, args);
+                match args[0].clone() {
+                    Value::Set(mut items) => {
+                        items.retain(|v| v != &args[1]);
+                        Some(Ok(Value::Set(items)))
+                    }
+                    _ => Some(Err(format!("{name} expects a set as first argument"))),
+                }
+            }
+            "set.contains" => {
+                require_args!(name, 2, args);
+                match &args[0] {
+                    Value::Set(items) => Some(Ok(Value::Bool(items.contains(&args[1])))),
+                    _ => Some(Err(format!("{name} expects a set as first argument"))),
+                }
+            }
+            "set.length" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::Set(items) => Some(Ok(Value::Int64(items.len() as i64))),
+                    _ => Some(Err(format!("{name} expects a set argument"))),
+                }
+            }
+            "set.is_empty" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::Set(items) => Some(Ok(Value::Bool(items.is_empty()))),
+                    _ => Some(Err(format!("{name} expects a set argument"))),
+                }
+            }
+            "set.to_list" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::Set(items) => Some(Ok(Value::List(items.clone()))),
+                    _ => Some(Err(format!("{name} expects a set argument"))),
+                }
+            }
+            "set.union" => {
+                require_args!(name, 2, args);
+                match (&args[0], &args[1]) {
+                    (Value::Set(a), Value::Set(b)) => {
+                        let mut result = a.clone();
+                        for item in b {
+                            if !result.contains(item) {
+                                result.push(item.clone());
+                            }
+                        }
+                        Some(Ok(Value::Set(result)))
+                    }
+                    _ => Some(Err(format!("{name} expects two set arguments"))),
+                }
+            }
+            "set.intersection" => {
+                require_args!(name, 2, args);
+                match (&args[0], &args[1]) {
+                    (Value::Set(a), Value::Set(b)) => {
+                        let result: Vec<Value> = a.iter()
+                            .filter(|v| b.contains(v))
+                            .cloned()
+                            .collect();
+                        Some(Ok(Value::Set(result)))
+                    }
+                    _ => Some(Err(format!("{name} expects two set arguments"))),
+                }
+            }
+            "set.difference" => {
+                require_args!(name, 2, args);
+                match (&args[0], &args[1]) {
+                    (Value::Set(a), Value::Set(b)) => {
+                        let result: Vec<Value> = a.iter()
+                            .filter(|v| !b.contains(v))
+                            .cloned()
+                            .collect();
+                        Some(Ok(Value::Set(result)))
+                    }
+                    _ => Some(Err(format!("{name} expects two set arguments"))),
+                }
+            }
 
             // -- Additional list operations ------------------------------------
             "list.chunk" => {
@@ -4025,6 +4136,7 @@ fn runtime_type_name(value: &Value) -> Option<String> {
         Value::Actor(_) => Some("actor".to_string()),
         Value::Pending(_) => Some("pending".to_string()),
         Value::Map(_) => Some("map".to_string()),
+        Value::Set(_) => Some("set".to_string()),
         Value::Function { .. } => Some("function".to_string()),
     }
 }
