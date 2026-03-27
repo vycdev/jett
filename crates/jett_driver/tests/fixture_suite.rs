@@ -209,3 +209,10 @@ run_pass_fixture!(run_pass_string_chars, "string_chars.jett");
 run_pass_fixture!(run_pass_crypto, "crypto.jett");
 run_pass_fixture!(run_pass_closures, "closures.jett");
 run_pass_fixture!(run_pass_use_imports, "use_imports.jett");
+
+#[test]
+fn multifile_cross_file_calls() {
+    let path = workspace_root().join("tests").join("multifile").join("main.jett");
+    run_file(&path)
+        .unwrap_or_else(|err| panic!("expected multifile test to run successfully: {err}"));
+}

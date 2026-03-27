@@ -203,6 +203,10 @@ fn line_col_to_offset(source: &str, line: u32, col: u32) -> Option<u32> {
 /// Run the full compilation pipeline on a single file: lex → parse → resolve → typecheck.
 /// Does not produce executable output yet — just validates the source.
 pub fn build_file(path: &Path) -> BuildResult {
+    build_file_inner(path, true)
+}
+
+fn build_file_inner(path: &Path, include_project: bool) -> BuildResult {
     let file_path_str = path.display().to_string();
 
     let source = match fs::read_to_string(path) {
@@ -225,7 +229,7 @@ pub fn build_file(path: &Path) -> BuildResult {
     let mut all_diagnostics = Vec::new();
 
     // Phase 1+2: Lex + Parse (parse internally calls tokenize)
-    let parse_result = parse(&source, file_id);
+    let mut parse_result = parse(&source, file_id);
     all_diagnostics.extend(parse_result.errors.clone());
 
     // If there are parse errors, stop here — resolve/typecheck won't produce useful results
@@ -239,6 +243,20 @@ pub fn build_file(path: &Path) -> BuildResult {
             source,
             file_path: file_path_str,
         };
+    }
+
+    // Multi-file: prepend items from sibling project files so resolver/typechecker
+    // can see cross-file definitions (functions, types, etc.).
+    if include_project {
+        let sibling_modules = discover_project_modules(path);
+        if !sibling_modules.is_empty() {
+            let mut merged_items = Vec::new();
+            for module in sibling_modules {
+                merged_items.extend(module.items);
+            }
+            merged_items.append(&mut parse_result.module.items);
+            parse_result.module.items = merged_items;
+        }
     }
 
     // Phase 3: Resolve names
@@ -289,8 +307,65 @@ pub fn build_file(path: &Path) -> BuildResult {
     }
 }
 
+/// Register all items from a parsed module into an interpreter.
+fn register_module_items(interp: &mut jett_comptime::interpreter::Interpreter, module: &jett_parser::ast::Module) {
+    for item in &module.items {
+        match item {
+            Item::Function(func) => interp.register_function(func),
+            Item::TypeAlias(alias) => interp.register_type_alias(alias),
+            Item::Interface(interface) => interp.register_interface(interface),
+            Item::Implement(block) => interp.register_implement_block(block),
+            Item::Struct(strukt) => interp.register_struct(strukt),
+            Item::Enum(enm) => interp.register_enum(enm),
+            Item::Bitfield(bitfield) => interp.register_bitfield(bitfield),
+            Item::Actor(actor) => interp.register_actor(actor),
+            _ => {}
+        }
+    }
+}
+
+/// Discover and parse all sibling .jett files in the project (if a jett.proj exists).
+/// Returns parsed modules for files other than the entry file.
+fn discover_project_modules(entry_path: &Path) -> Vec<jett_parser::ast::Module> {
+    let canon = entry_path.canonicalize().ok();
+    let project_root = find_project_root(entry_path).ok();
+    let Some(root) = project_root else {
+        return Vec::new();
+    };
+    let mut files = Vec::new();
+    if collect_jett_files(&root, &mut files).is_err() {
+        return Vec::new();
+    }
+    files.sort();
+
+    let mut modules = Vec::new();
+    for (idx, file_path) in files.iter().enumerate() {
+        // Skip the entry file — it will be registered separately.
+        let is_entry = canon.as_ref().map_or(false, |c| {
+            file_path.canonicalize().ok().as_ref() == Some(c)
+        });
+        if is_entry {
+            continue;
+        }
+        if let Ok(source) = fs::read_to_string(file_path) {
+            let file_id = FileId::new((idx + 1) as u32);
+            let parsed = parse(&source, file_id);
+            // Only include files that parse without errors.
+            let has_errors = parsed
+                .errors
+                .iter()
+                .any(|d| d.severity == jett_diagnostics::Severity::Error);
+            if !has_errors {
+                modules.push(parsed.module);
+            }
+        }
+    }
+    modules
+}
+
 /// Run a .jett file using the tree-walking interpreter.
 /// First validates (lex → parse → resolve → typecheck → verify), then executes main().
+/// If a jett.proj exists, also loads sibling .jett files so cross-file calls work.
 pub fn run_file(path: &Path) -> Result<(), String> {
     let build = build_file(path);
 
@@ -313,10 +388,7 @@ pub fn run_file(path: &Path) -> Result<(), String> {
     let file_id = FileId::new(0);
     let parse_result = parse(&source, file_id);
 
-    // Find and execute main()
-    use jett_comptime::interpreter::Interpreter;
-    let mut interp = Interpreter::new();
-
+    // Find main()
     let main_func = parse_result
         .module
         .items
@@ -332,20 +404,17 @@ pub fn run_file(path: &Path) -> Result<(), String> {
 
     let main_args = default_runtime_args_for_main(main_func)?;
 
-    // Register all functions
-    for item in &parse_result.module.items {
-        match item {
-            Item::Function(func) => interp.register_function(func),
-            Item::TypeAlias(alias) => interp.register_type_alias(alias),
-            Item::Interface(interface) => interp.register_interface(interface),
-            Item::Implement(block) => interp.register_implement_block(block),
-            Item::Struct(strukt) => interp.register_struct(strukt),
-            Item::Enum(enm) => interp.register_enum(enm),
-            Item::Bitfield(bitfield) => interp.register_bitfield(bitfield),
-            Item::Actor(actor) => interp.register_actor(actor),
-            _ => {}
-        }
+    use jett_comptime::interpreter::Interpreter;
+    let mut interp = Interpreter::new();
+
+    // Register items from sibling project files first (so they're available to main file).
+    let sibling_modules = discover_project_modules(path);
+    for module in &sibling_modules {
+        register_module_items(&mut interp, module);
     }
+
+    // Register items from the entry file (may override sibling definitions).
+    register_module_items(&mut interp, &parse_result.module);
 
     // Call main()
     match interp.call_function("main", main_args) {

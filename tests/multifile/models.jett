@@ -1,0 +1,8 @@
+namespace models
+
+struct Point:
+    x: int64
+    y: int64
+
+function distance_sq(p: Point) returns int64:
+    return p.x * p.x + p.y * p.y

@@ -1,0 +1,10 @@
+namespace mathlib
+
+function double(n: int64) returns int64:
+    return n * 2
+
+function triple(n: int64) returns int64:
+    return n * 3
+
+function square(n: int64) returns int64:
+    return n * n

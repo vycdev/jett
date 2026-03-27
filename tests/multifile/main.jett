@@ -1,0 +1,13 @@
+namespace app
+
+function main(stdout: Stdout) returns nothing:
+    # Call functions defined in mathlib.jett
+    int64 a = double(5)
+    int64 b = triple(3)
+    int64 c = square(4)
+    Stdout.write(view stdout, "{a},{b},{c}")
+
+    # Use struct from models.jett
+    Point p = Point(x: 3, y: 4)
+    int64 d = distance_sq(p)
+    Stdout.write(view stdout, ",{d}")
