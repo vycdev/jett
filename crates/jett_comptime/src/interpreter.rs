@@ -2093,6 +2093,46 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects an int64 argument"))),
                 }
             }
+            "float64.from_string" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::String(s) => match s.parse::<f64>() {
+                        Ok(n) => Some(Ok(Value::ResultOk(Box::new(Value::Float64(n))))),
+                        Err(_) => Some(Ok(Value::ResultFail(Box::new(Value::String(format!(
+                            "float64.from_string: cannot parse '{s}' as float64"
+                        )))))),
+                    },
+                    _ => Some(Err(format!("{name} expects a string argument"))),
+                }
+            }
+
+            // -- Additional string conversions --------------------------------
+            "string.from_float64" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::Float64(n) => Some(Ok(Value::String(format!("{n}")))),
+                    _ => Some(Err(format!("{name} expects a float64 argument"))),
+                }
+            }
+            "string.from_bool" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::Bool(b) => Some(Ok(Value::String(format!("{b}")))),
+                    _ => Some(Err(format!("{name} expects a bool argument"))),
+                }
+            }
+
+            // -- print (debugging helper) -------------------------------------
+            "print" => {
+                let output: Vec<String> = args.iter().map(|v| format!("{v}")).collect();
+                print!("{}", output.join(" "));
+                Some(Ok(Value::Nothing))
+            }
+            "println" => {
+                let output: Vec<String> = args.iter().map(|v| format!("{v}")).collect();
+                println!("{}", output.join(" "));
+                Some(Ok(Value::Nothing))
+            }
 
             // -- List operations (stdlib/list.jett) ---------------------------
             "list.new" => {

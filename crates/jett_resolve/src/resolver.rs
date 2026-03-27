@@ -110,6 +110,8 @@ impl Resolver {
             "false",
             "none",
             "range",
+            "print",
+            "println",
         ];
         for name in builtins {
             let def = scope_table.new_def(name.to_string(), DefKind::Constant, dummy_span);

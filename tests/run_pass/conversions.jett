@@ -1,0 +1,49 @@
+namespace app
+
+# --- string from int64 ---
+
+function int_to_str_test() returns string:
+    return string.from_int64(42)
+
+verify int_to_str_test:
+    assert int_to_str_test() == "42"
+
+# --- string from float64 ---
+
+function float_to_str_test() returns string:
+    return string.from_float64(3.14)
+
+verify float_to_str_test:
+    assert float_to_str_test() == "3.14"
+
+# --- string from bool ---
+
+function bool_to_str_test() returns string:
+    string t = string.from_bool(true)
+    string f = string.from_bool(false)
+    return "{t},{f}"
+
+verify bool_to_str_test:
+    assert bool_to_str_test() == "true,false"
+
+# --- int64 from string (result type) ---
+
+function parse_int_test() returns int64:
+    result[int64, string] r = int64.from_string("123")
+    int64 val = r handle error:
+        default 0
+    return val
+
+verify parse_int_test:
+    assert parse_int_test() == 123
+
+# --- float64 from string (result type) ---
+
+function parse_float_test() returns float64:
+    result[float64, string] r = float64.from_string("2.5")
+    float64 val = r handle error:
+        default 0.0
+    return val
+
+verify parse_float_test:
+    assert parse_float_test() == 2.5
