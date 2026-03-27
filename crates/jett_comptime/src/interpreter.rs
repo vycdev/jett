@@ -3021,6 +3021,72 @@ impl Interpreter {
                 }
             }
 
+            "string.index_of" => {
+                require_args!(name, 2, args);
+                match (&args[0], &args[1]) {
+                    (Value::String(haystack), Value::String(needle)) => {
+                        let result = match haystack.find(needle.as_str()) {
+                            Some(pos) => {
+                                // Convert byte offset to char index.
+                                let char_idx = haystack[..pos].chars().count() as i64;
+                                Value::OptionalSome(Box::new(Value::Int64(char_idx)))
+                            }
+                            None => Value::OptionalNone,
+                        };
+                        Some(Ok(result))
+                    }
+                    _ => Some(Err(format!("{name} expects two string arguments"))),
+                }
+            }
+            "string.count" => {
+                require_args!(name, 2, args);
+                match (&args[0], &args[1]) {
+                    (Value::String(haystack), Value::String(needle)) => {
+                        let count = if needle.is_empty() {
+                            0
+                        } else {
+                            haystack.matches(needle.as_str()).count() as i64
+                        };
+                        Some(Ok(Value::Int64(count)))
+                    }
+                    _ => Some(Err(format!("{name} expects two string arguments"))),
+                }
+            }
+            "string.to_upper_first" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::String(s) => {
+                        let mut chars = s.chars();
+                        let result = match chars.next() {
+                            Some(c) => {
+                                let upper: String = c.to_uppercase().collect();
+                                format!("{upper}{}", chars.as_str())
+                            }
+                            None => String::new(),
+                        };
+                        Some(Ok(Value::String(result)))
+                    }
+                    _ => Some(Err(format!("{name} expects a string argument"))),
+                }
+            }
+            "string.to_lower_first" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::String(s) => {
+                        let mut chars = s.chars();
+                        let result = match chars.next() {
+                            Some(c) => {
+                                let lower: String = c.to_lowercase().collect();
+                                format!("{lower}{}", chars.as_str())
+                            }
+                            None => String::new(),
+                        };
+                        Some(Ok(Value::String(result)))
+                    }
+                    _ => Some(Err(format!("{name} expects a string argument"))),
+                }
+            }
+
             // -- Encoding operations (stdlib/encoding.jett) -------------------
             "encoding.base64_encode" => {
                 require_args!(name, 1, args);

@@ -216,6 +216,8 @@ run_pass_fixture!(run_pass_error_handling, "error_handling.jett");
 
 compile_fail_fixture!(compile_fail_unhandled_result, "unhandled_result.jett");
 
+run_pass_fixture!(run_pass_string_search, "string_search.jett");
+
 #[test]
 fn multifile_cross_file_calls() {
     let path = workspace_root().join("tests").join("multifile").join("main.jett");

@@ -1,0 +1,53 @@
+namespace app
+
+# --- string.index_of ---
+
+function find_pos_test() returns int64:
+    optional[int64] idx = string.index_of("hello world", "world")
+    return idx handle:
+        default -1
+
+verify find_pos_test:
+    assert find_pos_test() == 6
+
+function find_not_found_test() returns int64:
+    optional[int64] idx = string.index_of("hello", "xyz")
+    return idx handle:
+        default -1
+
+verify find_not_found_test:
+    assert find_not_found_test() == -1
+
+# --- string.count ---
+
+function count_test() returns int64:
+    return string.count("banana", "an")
+
+verify count_test:
+    assert count_test() == 2
+
+function count_none_test() returns int64:
+    return string.count("hello", "xyz")
+
+verify count_none_test:
+    assert count_none_test() == 0
+
+# --- string.to_upper_first / string.to_lower_first ---
+
+function capitalize_test() returns string:
+    return string.to_upper_first("hello world")
+
+verify capitalize_test:
+    assert capitalize_test() == "Hello world"
+
+function decapitalize_test() returns string:
+    return string.to_lower_first("Hello World")
+
+verify decapitalize_test:
+    assert decapitalize_test() == "hello World"
+
+function empty_capitalize_test() returns string:
+    return string.to_upper_first("")
+
+verify empty_capitalize_test:
+    assert empty_capitalize_test() == ""
