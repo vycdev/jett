@@ -1181,6 +1181,14 @@ impl<'src> Parser<'src> {
     fn parse_for_stmt(&mut self) -> Stmt {
         let kw = self.expect(TokenKind::For);
         let variable = self.parse_ident();
+
+        // Check for `key, value` destructuring: `for key, value in map:`
+        let value_variable = if self.eat(TokenKind::Comma).is_some() {
+            Some(self.parse_ident())
+        } else {
+            None
+        };
+
         self.expect(TokenKind::In);
 
         // Check for `view` keyword before iterable
@@ -1192,6 +1200,7 @@ impl<'src> Parser<'src> {
         Stmt::For(ForStmt {
             span: kw.span.merge(body.span),
             variable,
+            value_variable,
             view,
             iterable,
             body,

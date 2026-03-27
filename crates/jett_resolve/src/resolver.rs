@@ -517,9 +517,12 @@ impl Resolver {
         // Resolve the iterable in the outer scope.
         self.resolve_expr(&f.iterable, item_index);
 
-        // Create a scope for the loop variable + body.
+        // Create a scope for the loop variable(s) + body.
         let scope = self.push_scope();
         self.declare_local(&f.variable.name, DefKind::Variable, f.variable.span);
+        if let Some(ref val_var) = f.value_variable {
+            self.declare_local(&val_var.name, DefKind::Variable, val_var.span);
+        }
         for stmt in &f.body.stmts {
             self.resolve_stmt(stmt, item_index);
         }

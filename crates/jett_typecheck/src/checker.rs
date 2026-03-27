@@ -2376,14 +2376,17 @@ impl<'a> TypeChecker<'a> {
     fn check_for(&mut self, for_stmt: &ast::ForStmt) {
         let iterable_type = self.check_expr(&for_stmt.iterable);
 
-        // The iterable must be list[T] or string; the loop variable gets type T or string.
+        // The iterable must be list[T], string, or map[K,V].
+        let resolved = self.interner.resolve(iterable_type);
         let elem_type = if iterable_type == TypeInterner::ERROR {
             TypeInterner::ERROR
-        } else if let Type::List(inner) = self.interner.resolve(iterable_type) {
+        } else if let Type::List(inner) = resolved {
             *inner
         } else if iterable_type == TypeInterner::STRING {
-            // Iterating over a string yields individual characters as strings.
             TypeInterner::STRING
+        } else if let Type::Map(key_ty, _) = resolved {
+            // Map iteration: first variable gets key type.
+            *key_ty
         } else {
             self.sink.emit(errors::not_iterable(
                 &self.type_name(iterable_type),
@@ -2392,9 +2395,21 @@ impl<'a> TypeChecker<'a> {
             TypeInterner::ERROR
         };
 
-        // Bind the loop variable.
+        // Bind the loop variable (key for maps, element for lists/strings).
         if let Some(def_id) = self.declaration_def_id(for_stmt.variable.span) {
             self.type_env.insert(def_id, elem_type);
+        }
+
+        // Bind the optional value variable (only for map iteration).
+        if let Some(ref val_var) = for_stmt.value_variable {
+            let val_type = if let Type::Map(_, val_ty) = self.interner.resolve(iterable_type) {
+                *val_ty
+            } else {
+                TypeInterner::ERROR
+            };
+            if let Some(def_id) = self.declaration_def_id(val_var.span) {
+                self.type_env.insert(def_id, val_type);
+            }
         }
 
         self.check_block(&for_stmt.body);

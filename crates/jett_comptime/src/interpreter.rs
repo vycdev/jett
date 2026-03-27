@@ -984,7 +984,24 @@ impl Interpreter {
                             }
                         }
                     }
-                    _ => return Err("for loop requires a list or string value".to_string()),
+                    Value::Map(entries) => {
+                        for (key, val) in entries {
+                            self.push_scope();
+                            self.set_variable(&for_stmt.variable.name, key);
+                            if let Some(ref val_var) = for_stmt.value_variable {
+                                self.set_variable(&val_var.name, val);
+                            }
+                            let signal = self.exec_block_inner(&for_stmt.body)?;
+                            self.pop_scope();
+                            match signal {
+                                Some(Signal::Break) => break,
+                                Some(Signal::Continue) => continue,
+                                Some(other) => return Ok(Some(other)),
+                                None => {}
+                            }
+                        }
+                    }
+                    _ => return Err("for loop requires a list, string, or map value".to_string()),
                 }
                 Ok(None)
             }

@@ -327,6 +327,8 @@ pub struct IfStmt {
 #[derive(Debug, Clone)]
 pub struct ForStmt {
     pub variable: Ident,
+    /// Optional second binding for map iteration: `for key, value in map:`
+    pub value_variable: Option<Ident>,
     pub view: bool,
     pub iterable: Expr,
     pub body: Block,

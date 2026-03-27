@@ -77,3 +77,21 @@ function first_above(items: list[int64], threshold: int64) returns int64:
 verify first_above:
     assert first_above(list(1, 5, 3, 8, 2), 4) == 5
     assert first_above(list(1, 2, 3), 10) == -1
+
+# --- for loop over map (key, value) ---
+
+function sum_map_values(m: map[string, int64]) returns int64:
+    int64 total = 0
+    for key, value in m:
+        total = total + value
+    return total
+
+function test_sum_map() returns int64:
+    map[string, int64] scores = map.new[string, int64]()
+    scores = map.insert[string, int64](scores, "alice", 90)
+    scores = map.insert[string, int64](scores, "bob", 85)
+    scores = map.insert[string, int64](scores, "carol", 95)
+    return sum_map_values(scores)
+
+verify test_sum_map:
+    assert test_sum_map() == 270
