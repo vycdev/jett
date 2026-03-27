@@ -219,6 +219,7 @@ compile_fail_fixture!(compile_fail_unhandled_result, "unhandled_result.jett");
 run_pass_fixture!(run_pass_string_search, "string_search.jett");
 run_pass_fixture!(run_pass_time_and_os, "time_and_os.jett");
 run_pass_fixture!(run_pass_math_trig, "math_trig.jett");
+run_pass_fixture!(run_pass_logical_ops, "logical_ops.jett");
 
 #[test]
 fn multifile_cross_file_calls() {

@@ -80,6 +80,7 @@ pub enum TokenKind {
     Break,
     Continue,
     And,
+    Or,
     Within,
     Self_,
     Value,

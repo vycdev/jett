@@ -924,6 +924,7 @@ fn keyword_lookup(text: &str) -> Option<TokenKind> {
         "break" => Some(TokenKind::Break),
         "continue" => Some(TokenKind::Continue),
         "and" => Some(TokenKind::And),
+        "or" => Some(TokenKind::Or),
         "within" => Some(TokenKind::Within),
         "self" => Some(TokenKind::Self_),
         "value" => Some(TokenKind::Value),

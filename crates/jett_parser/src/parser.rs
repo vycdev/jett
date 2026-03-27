@@ -2254,8 +2254,8 @@ fn unescape_string(raw: &str) -> String {
 
 fn infix_binding_power(kind: TokenKind) -> Option<(u8, u8)> {
     match kind {
-        TokenKind::PipePipe => Some((1, 2)),
-        TokenKind::AmpAmp => Some((3, 4)),
+        TokenKind::PipePipe | TokenKind::Or => Some((1, 2)),
+        TokenKind::AmpAmp | TokenKind::And => Some((3, 4)),
         TokenKind::EqEq | TokenKind::NotEq => Some((5, 6)),
         TokenKind::Lt | TokenKind::Gt | TokenKind::LtEq | TokenKind::GtEq => Some((7, 8)),
         TokenKind::Plus | TokenKind::Minus => Some((9, 10)),
@@ -2277,8 +2277,8 @@ fn token_to_binop(kind: TokenKind) -> BinOp {
         TokenKind::Gt => BinOp::Gt,
         TokenKind::LtEq => BinOp::LtEq,
         TokenKind::GtEq => BinOp::GtEq,
-        TokenKind::AmpAmp => BinOp::And,
-        TokenKind::PipePipe => BinOp::Or,
+        TokenKind::AmpAmp | TokenKind::And => BinOp::And,
+        TokenKind::PipePipe | TokenKind::Or => BinOp::Or,
         _ => unreachable!("not a binary operator: {:?}", kind),
     }
 }

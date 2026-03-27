@@ -1,0 +1,64 @@
+namespace app
+
+# --- and operator ---
+
+function both_true() returns bool:
+    return true and true
+
+function one_false() returns bool:
+    return true and false
+
+verify both_true:
+    assert both_true() == true
+
+verify one_false:
+    assert one_false() == false
+
+# --- or operator ---
+
+function either_true() returns bool:
+    return false or true
+
+function both_false() returns bool:
+    return false or false
+
+verify either_true:
+    assert either_true() == true
+
+verify both_false:
+    assert both_false() == false
+
+# --- compound expressions with and/or ---
+
+function range_check(x: int64) returns bool:
+    return x > 0 and x < 100
+
+verify range_check:
+    assert range_check(50) == true
+    assert range_check(0) == false
+    assert range_check(100) == false
+
+function out_of_bounds(x: int64) returns bool:
+    return x < 0 or x > 99
+
+verify out_of_bounds:
+    assert out_of_bounds(-1) == true
+    assert out_of_bounds(100) == true
+    assert out_of_bounds(50) == false
+
+# --- chained and/or ---
+
+function triple_and(a: bool, b: bool, c: bool) returns bool:
+    return a and b and c
+
+verify triple_and:
+    assert triple_and(true, true, true) == true
+    assert triple_and(true, true, false) == false
+
+function mixed_logic(x: int64) returns bool:
+    return x > 0 and x < 10 or x == 99
+
+verify mixed_logic:
+    assert mixed_logic(5) == true
+    assert mixed_logic(99) == true
+    assert mixed_logic(50) == false
