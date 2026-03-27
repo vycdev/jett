@@ -1,0 +1,6 @@
+# ERROR: E0306
+namespace test
+
+function check(x: int64) returns nothing:
+    if x:
+        return nothing

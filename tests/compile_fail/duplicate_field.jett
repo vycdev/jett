@@ -1,0 +1,9 @@
+# ERROR: E0321
+namespace test
+
+struct Point:
+    x: int64
+    y: int64
+
+function make_point() returns Point:
+    return Point(x: 1)

@@ -2513,6 +2513,35 @@ impl Interpreter {
 
             "map.contains_key" => self.call_builtin("map.has", args),
 
+            "map.from_lists" => {
+                require_args!(name, 2, args);
+                match (&args[0], &args[1]) {
+                    (Value::List(keys), Value::List(values)) => {
+                        let entries: Vec<(Value, Value)> = keys
+                            .iter()
+                            .zip(values.iter())
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect();
+                        Some(Ok(Value::Map(entries)))
+                    }
+                    _ => Some(Err(format!("{name} expects two list arguments"))),
+                }
+            }
+
+            "map.entries" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::Map(entries) => {
+                        let pairs = entries
+                            .iter()
+                            .map(|(k, v)| Value::List(vec![k.clone(), v.clone()]))
+                            .collect();
+                        Some(Ok(Value::List(pairs)))
+                    }
+                    _ => Some(Err(format!("{name} expects a map argument"))),
+                }
+            }
+
             // -- Set operations (stdlib/set.jett) -----------------------------
             "set.new" => {
                 Some(Ok(Value::Set(Vec::new())))
@@ -2918,6 +2947,83 @@ impl Interpreter {
                 }
             }
 
+            "math.gcd" => {
+                require_args!(name, 2, args);
+                match (&args[0], &args[1]) {
+                    (Value::Int64(a), Value::Int64(b)) => {
+                        let (mut x, mut y) = (a.abs(), b.abs());
+                        while y != 0 {
+                            let t = y;
+                            y = x % y;
+                            x = t;
+                        }
+                        Some(Ok(Value::Int64(x)))
+                    }
+                    _ => Some(Err(format!("{name} expects two int64 arguments"))),
+                }
+            }
+            "math.lcm" => {
+                require_args!(name, 2, args);
+                match (&args[0], &args[1]) {
+                    (Value::Int64(a), Value::Int64(b)) => {
+                        if *a == 0 && *b == 0 {
+                            Some(Ok(Value::Int64(0)))
+                        } else {
+                            let (mut x, mut y) = (a.abs(), b.abs());
+                            let product = x * y;
+                            while y != 0 {
+                                let t = y;
+                                y = x % y;
+                                x = t;
+                            }
+                            Some(Ok(Value::Int64(product / x)))
+                        }
+                    }
+                    _ => Some(Err(format!("{name} expects two int64 arguments"))),
+                }
+            }
+            "math.factorial" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::Int64(n) => {
+                        if *n < 0 {
+                            Some(Err("math.factorial: argument must be non-negative".to_string()))
+                        } else {
+                            let mut result: i64 = 1;
+                            for i in 2..=*n {
+                                result = result.saturating_mul(i);
+                            }
+                            Some(Ok(Value::Int64(result)))
+                        }
+                    }
+                    _ => Some(Err(format!("{name} expects an int64 argument"))),
+                }
+            }
+            "math.sign" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::Int64(n) => {
+                        let s = if *n < 0 { -1 } else if *n > 0 { 1 } else { 0 };
+                        Some(Ok(Value::Int64(s)))
+                    }
+                    _ => Some(Err(format!("{name} expects an int64 argument"))),
+                }
+            }
+            "math.to_radians" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::Float64(deg) => Some(Ok(Value::Float64(deg.to_radians()))),
+                    _ => Some(Err(format!("{name} expects a float64 argument"))),
+                }
+            }
+            "math.to_degrees" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::Float64(rad) => Some(Ok(Value::Float64(rad.to_degrees()))),
+                    _ => Some(Err(format!("{name} expects a float64 argument"))),
+                }
+            }
+
             // -- list.enumerate (returns list of [index, value] pairs) ----------
             "list.enumerate" => {
                 require_args!(name, 1, args);
@@ -2942,6 +3048,82 @@ impl Interpreter {
                 match &args[0] {
                     Value::Set(items) => Some(Ok(Value::List(items.clone()))),
                     _ => Some(Err(format!("{name} expects a set argument"))),
+                }
+            }
+
+            // -- list.repeat, list.range, list.last_index_of, list.insert_at, list.remove_at, list.swap
+            "list.repeat" => {
+                require_args!(name, 2, args);
+                match &args[1] {
+                    Value::Int64(count) => {
+                        let n = (*count).max(0) as usize;
+                        let items: Vec<Value> = std::iter::repeat(args[0].clone()).take(n).collect();
+                        Some(Ok(Value::List(items)))
+                    }
+                    _ => Some(Err(format!("{name} expects a value and an int64 count"))),
+                }
+            }
+            "list.range" => self.call_builtin("range", args),
+            "list.last_index_of" => {
+                require_args!(name, 2, args);
+                match &args[0] {
+                    Value::List(items) => {
+                        let idx = items.iter().rposition(|v| v == &args[1]);
+                        Some(Ok(match idx {
+                            Some(i) => Value::OptionalSome(Box::new(Value::Int64(i as i64))),
+                            None => Value::OptionalNone,
+                        }))
+                    }
+                    _ => Some(Err(format!("{name} expects a list as first argument"))),
+                }
+            }
+            "list.insert_at" => {
+                require_args!(name, 3, args);
+                match (&args[0], &args[1]) {
+                    (Value::List(items), Value::Int64(index)) => {
+                        let idx = *index as usize;
+                        if idx <= items.len() {
+                            let mut new_list = items.clone();
+                            new_list.insert(idx, args[2].clone());
+                            Some(Ok(Value::List(new_list)))
+                        } else {
+                            Some(Err(format!("{name}: index {index} out of bounds")))
+                        }
+                    }
+                    _ => Some(Err(format!("{name} expects a list, an int64 index, and a value"))),
+                }
+            }
+            "list.remove_at" => {
+                require_args!(name, 2, args);
+                match (&args[0], &args[1]) {
+                    (Value::List(items), Value::Int64(index)) => {
+                        let idx = *index as usize;
+                        if idx < items.len() {
+                            let mut new_list = items.clone();
+                            new_list.remove(idx);
+                            Some(Ok(Value::List(new_list)))
+                        } else {
+                            Some(Err(format!("{name}: index {index} out of bounds")))
+                        }
+                    }
+                    _ => Some(Err(format!("{name} expects a list and an int64 index"))),
+                }
+            }
+            "list.swap" => {
+                require_args!(name, 3, args);
+                match (&args[0], &args[1], &args[2]) {
+                    (Value::List(items), Value::Int64(i), Value::Int64(j)) => {
+                        let a = *i as usize;
+                        let b = *j as usize;
+                        if a >= items.len() || b >= items.len() {
+                            Some(Err(format!("{name}: index out of bounds")))
+                        } else {
+                            let mut new_list = items.clone();
+                            new_list.swap(a, b);
+                            Some(Ok(Value::List(new_list)))
+                        }
+                    }
+                    _ => Some(Err(format!("{name} expects a list and two int64 indices"))),
                 }
             }
 
@@ -3191,6 +3373,131 @@ impl Interpreter {
                 }
             }
 
+            // -- String formatting operations ----------------------------------
+            "string.center" => {
+                require_args!(name, 2, args);
+                match (&args[0], &args[1]) {
+                    (Value::String(s), Value::Int64(width)) => {
+                        let width = (*width).max(0) as usize;
+                        let char_len = s.chars().count();
+                        if char_len >= width {
+                            Some(Ok(Value::String(s.clone())))
+                        } else {
+                            let total_pad = width - char_len;
+                            let left_pad = total_pad / 2;
+                            let right_pad = total_pad - left_pad;
+                            let left: String = std::iter::repeat(' ').take(left_pad).collect();
+                            let right: String = std::iter::repeat(' ').take(right_pad).collect();
+                            Some(Ok(Value::String(format!("{left}{s}{right}"))))
+                        }
+                    }
+                    _ => Some(Err(format!("{name} expects a string and an int64 width"))),
+                }
+            }
+
+            "string.ljust" => {
+                require_args!(name, 2, args);
+                match (&args[0], &args[1]) {
+                    (Value::String(s), Value::Int64(width)) => {
+                        let width = (*width).max(0) as usize;
+                        let char_len = s.chars().count();
+                        if char_len >= width {
+                            Some(Ok(Value::String(s.clone())))
+                        } else {
+                            let padding: String = std::iter::repeat(' ').take(width - char_len).collect();
+                            Some(Ok(Value::String(format!("{s}{padding}"))))
+                        }
+                    }
+                    _ => Some(Err(format!("{name} expects a string and an int64 width"))),
+                }
+            }
+
+            "string.rjust" => {
+                require_args!(name, 2, args);
+                match (&args[0], &args[1]) {
+                    (Value::String(s), Value::Int64(width)) => {
+                        let width = (*width).max(0) as usize;
+                        let char_len = s.chars().count();
+                        if char_len >= width {
+                            Some(Ok(Value::String(s.clone())))
+                        } else {
+                            let padding: String = std::iter::repeat(' ').take(width - char_len).collect();
+                            Some(Ok(Value::String(format!("{padding}{s}"))))
+                        }
+                    }
+                    _ => Some(Err(format!("{name} expects a string and an int64 width"))),
+                }
+            }
+
+            "string.zfill" => {
+                require_args!(name, 2, args);
+                match (&args[0], &args[1]) {
+                    (Value::String(s), Value::Int64(width)) => {
+                        let width = (*width).max(0) as usize;
+                        let char_len = s.chars().count();
+                        if char_len >= width {
+                            Some(Ok(Value::String(s.clone())))
+                        } else {
+                            // Handle optional leading sign
+                            let (sign, digits) = if s.starts_with('-') || s.starts_with('+') {
+                                (&s[..1], &s[1..])
+                            } else {
+                                ("", s.as_str())
+                            };
+                            let zeros: String = std::iter::repeat('0').take(width - char_len).collect();
+                            Some(Ok(Value::String(format!("{sign}{zeros}{digits}"))))
+                        }
+                    }
+                    _ => Some(Err(format!("{name} expects a string and an int64 width"))),
+                }
+            }
+
+            "string.remove_prefix" => {
+                require_args!(name, 2, args);
+                match (&args[0], &args[1]) {
+                    (Value::String(s), Value::String(prefix)) => {
+                        let result = s.strip_prefix(prefix.as_str())
+                            .unwrap_or(s)
+                            .to_string();
+                        Some(Ok(Value::String(result)))
+                    }
+                    _ => Some(Err(format!("{name} expects two string arguments"))),
+                }
+            }
+
+            "string.remove_suffix" => {
+                require_args!(name, 2, args);
+                match (&args[0], &args[1]) {
+                    (Value::String(s), Value::String(suffix)) => {
+                        let result = s.strip_suffix(suffix.as_str())
+                            .unwrap_or(s)
+                            .to_string();
+                        Some(Ok(Value::String(result)))
+                    }
+                    _ => Some(Err(format!("{name} expects two string arguments"))),
+                }
+            }
+
+            "string.is_numeric" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::String(s) => {
+                        Some(Ok(Value::Bool(!s.is_empty() && s.chars().all(|c| c.is_ascii_digit()))))
+                    }
+                    _ => Some(Err(format!("{name} expects a string argument"))),
+                }
+            }
+
+            "string.is_alpha" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::String(s) => {
+                        Some(Ok(Value::Bool(!s.is_empty() && s.chars().all(|c| c.is_alphabetic()))))
+                    }
+                    _ => Some(Err(format!("{name} expects a string argument"))),
+                }
+            }
+
             // -- Encoding operations (stdlib/encoding.jett) -------------------
             "encoding.base64_encode" => {
                 require_args!(name, 1, args);
@@ -3356,6 +3663,80 @@ impl Interpreter {
                     .map(Value::String)
                     .collect();
                 Some(Ok(Value::List(args_list)))
+            }
+
+            // -- CSV operations (stdlib/csv.jett) ---------------------------------
+            "csv.parse" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::String(s) => {
+                        let rows: Vec<Value> = s
+                            .lines()
+                            .filter(|line| !line.is_empty())
+                            .map(|line| {
+                                let cols: Vec<Value> = parse_csv_line(line)
+                                    .into_iter()
+                                    .map(Value::String)
+                                    .collect();
+                                Value::List(cols)
+                            })
+                            .collect();
+                        Some(Ok(Value::List(rows)))
+                    }
+                    _ => Some(Err(format!("{name} expects a string argument"))),
+                }
+            }
+
+            "csv.stringify" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::List(rows) => {
+                        let mut lines = Vec::new();
+                        for row in rows {
+                            match row {
+                                Value::List(cols) => {
+                                    let fields: Vec<String> = cols
+                                        .iter()
+                                        .map(|v| match v {
+                                            Value::String(s) => csv_quote_field(s),
+                                            other => csv_quote_field(&format!("{other}")),
+                                        })
+                                        .collect();
+                                    lines.push(fields.join(","));
+                                }
+                                _ => return Some(Err(format!("{name} expects list[list[string]]"))),
+                            }
+                        }
+                        Some(Ok(Value::String(lines.join("\n"))))
+                    }
+                    _ => Some(Err(format!("{name} expects a list argument"))),
+                }
+            }
+
+            "csv.parse_with_header" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::String(s) => {
+                        let mut line_iter = s.lines().filter(|line| !line.is_empty());
+                        let headers: Vec<String> = match line_iter.next() {
+                            Some(header_line) => parse_csv_line(header_line),
+                            None => return Some(Ok(Value::List(Vec::new()))),
+                        };
+                        let rows: Vec<Value> = line_iter
+                            .map(|line| {
+                                let cols = parse_csv_line(line);
+                                let entries: Vec<(Value, Value)> = headers
+                                    .iter()
+                                    .zip(cols.into_iter())
+                                    .map(|(h, c)| (Value::String(h.clone()), Value::String(c)))
+                                    .collect();
+                                Value::Map(entries)
+                            })
+                            .collect();
+                        Some(Ok(Value::List(rows)))
+                    }
+                    _ => Some(Err(format!("{name} expects a string argument"))),
+                }
             }
 
             // -- Range generation ---------------------------------------------------
@@ -3761,6 +4142,97 @@ impl Interpreter {
                 }
                 Some(Ok(acc))
             }
+
+            "list.flat_map" => {
+                if args.len() != 2 {
+                    return Some(Err(format!("list.flat_map expects 2 arguments, got {}", args.len())));
+                }
+                let items = match &args[0] {
+                    Value::List(v) => v.clone(),
+                    _ => return Some(Err("list.flat_map: first argument must be a list".into())),
+                };
+                let fn_val = args[1].clone();
+                let mut result = Vec::new();
+                for item in items {
+                    match self.call_fn_value(fn_val.clone(), vec![item]) {
+                        Ok(Value::List(inner)) => result.extend(inner),
+                        Ok(other) => return Some(Err(format!("list.flat_map: function returned {other}, expected a list"))),
+                        Err(e) => return Some(Err(e)),
+                    }
+                }
+                Some(Ok(Value::List(result)))
+            }
+
+            // -- Map higher-order builtins ------------------------------------
+            "map.filter" => {
+                if args.len() != 2 {
+                    return Some(Err(format!(
+                        "map.filter expects 2 arguments, got {}",
+                        args.len()
+                    )));
+                }
+                let entries = match &args[0] {
+                    Value::Map(v) => v.clone(),
+                    _ => return Some(Err("map.filter: first argument must be a map".into())),
+                };
+                let fn_val = args[1].clone();
+                let mut result = Vec::new();
+                for (k, v) in entries {
+                    match self.call_fn_value(fn_val.clone(), vec![k.clone(), v.clone()]) {
+                        Ok(Value::Bool(true)) => result.push((k, v)),
+                        Ok(Value::Bool(false)) => {}
+                        Ok(other) => {
+                            return Some(Err(format!(
+                                "map.filter: predicate returned {other}, expected bool"
+                            )))
+                        }
+                        Err(e) => return Some(Err(e)),
+                    }
+                }
+                Some(Ok(Value::Map(result)))
+            }
+            "map.map_values" => {
+                if args.len() != 2 {
+                    return Some(Err(format!(
+                        "map.map_values expects 2 arguments, got {}",
+                        args.len()
+                    )));
+                }
+                let entries = match &args[0] {
+                    Value::Map(v) => v.clone(),
+                    _ => return Some(Err("map.map_values: first argument must be a map".into())),
+                };
+                let fn_val = args[1].clone();
+                let mut result = Vec::new();
+                for (k, v) in entries {
+                    match self.call_fn_value(fn_val.clone(), vec![v]) {
+                        Ok(new_v) => result.push((k, new_v)),
+                        Err(e) => return Some(Err(e)),
+                    }
+                }
+                Some(Ok(Value::Map(result)))
+            }
+            "map.for_each" => {
+                if args.len() != 2 {
+                    return Some(Err(format!(
+                        "map.for_each expects 2 arguments, got {}",
+                        args.len()
+                    )));
+                }
+                let entries = match &args[0] {
+                    Value::Map(v) => v.clone(),
+                    _ => return Some(Err("map.for_each: first argument must be a map".into())),
+                };
+                let fn_val = args[1].clone();
+                for (k, v) in entries {
+                    match self.call_fn_value(fn_val.clone(), vec![k, v]) {
+                        Ok(_) => {}
+                        Err(e) => return Some(Err(e)),
+                    }
+                }
+                Some(Ok(Value::Nothing))
+            }
+
             _ => None,
         }
     }
@@ -6262,6 +6734,59 @@ fn base64_decode(s: &str) -> Result<Vec<u8>, String> {
         i += 4;
     }
     Ok(out)
+}
+
+// ---------------------------------------------------------------------------
+// CSV helpers
+// ---------------------------------------------------------------------------
+
+/// Parse a single CSV line, handling quoted fields with embedded commas,
+/// quotes (escaped as `""`), and newlines.
+fn parse_csv_line(line: &str) -> Vec<String> {
+    let mut fields = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    let chars: Vec<char> = line.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let ch = chars[i];
+        if in_quotes {
+            if ch == '"' {
+                // Check for escaped quote ""
+                if i + 1 < chars.len() && chars[i + 1] == '"' {
+                    current.push('"');
+                    i += 2;
+                    continue;
+                } else {
+                    in_quotes = false;
+                    i += 1;
+                    continue;
+                }
+            } else {
+                current.push(ch);
+            }
+        } else if ch == '"' {
+            in_quotes = true;
+        } else if ch == ',' {
+            fields.push(current.clone());
+            current.clear();
+        } else {
+            current.push(ch);
+        }
+        i += 1;
+    }
+    fields.push(current);
+    fields
+}
+
+/// Quote a CSV field if it contains commas, quotes, or newlines.
+fn csv_quote_field(s: &str) -> String {
+    if s.contains(',') || s.contains('"') || s.contains('\n') {
+        let escaped = s.replace('"', "\"\"");
+        format!("\"{escaped}\"")
+    } else {
+        s.to_string()
+    }
 }
 
 #[cfg(test)]

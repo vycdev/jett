@@ -11,3 +11,13 @@ function main(stdout: Stdout) returns nothing:
     Point p = Point(x: 3, y: 4)
     int64 d = distance_sq(p)
     Stdout.write(view stdout, ",{d}")
+
+    # Use enum and function from enums.jett
+    Color col = Color.blue
+    string name = color_name(col)
+    Stdout.write(view stdout, ",{name}")
+
+    # Use functions from validators.jett
+    bool pos = is_positive(42)
+    int64 clamped = clamp_value(150, 0, 100)
+    Stdout.write(view stdout, ",{pos},{clamped}")

@@ -1,0 +1,11 @@
+namespace validators
+
+function is_positive(n: int64) returns bool:
+    return n > 0
+
+function clamp_value(n: int64, lo: int64, hi: int64) returns int64:
+    if n < lo:
+        return lo
+    if n > hi:
+        return hi
+    return n

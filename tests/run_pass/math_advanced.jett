@@ -1,0 +1,145 @@
+namespace app
+
+# --- math.gcd ---
+
+function gcd_basic() returns int64:
+    return math.gcd(12, 8)
+
+verify gcd_basic:
+    assert gcd_basic() == 4
+
+function gcd_coprime() returns int64:
+    return math.gcd(7, 13)
+
+verify gcd_coprime:
+    assert gcd_coprime() == 1
+
+function gcd_same() returns int64:
+    return math.gcd(5, 5)
+
+verify gcd_same:
+    assert gcd_same() == 5
+
+function gcd_with_zero() returns int64:
+    return math.gcd(10, 0)
+
+verify gcd_with_zero:
+    assert gcd_with_zero() == 10
+
+# --- math.lcm ---
+
+function lcm_basic() returns int64:
+    return math.lcm(4, 6)
+
+verify lcm_basic:
+    assert lcm_basic() == 12
+
+function lcm_coprime() returns int64:
+    return math.lcm(3, 7)
+
+verify lcm_coprime:
+    assert lcm_coprime() == 21
+
+function lcm_with_zero() returns int64:
+    return math.lcm(0, 5)
+
+verify lcm_with_zero:
+    assert lcm_with_zero() == 0
+
+# --- math.factorial ---
+
+function factorial_zero() returns int64:
+    return math.factorial(0)
+
+verify factorial_zero:
+    assert factorial_zero() == 1
+
+function factorial_one() returns int64:
+    return math.factorial(1)
+
+verify factorial_one:
+    assert factorial_one() == 1
+
+function factorial_five() returns int64:
+    return math.factorial(5)
+
+verify factorial_five:
+    assert factorial_five() == 120
+
+function factorial_ten() returns int64:
+    return math.factorial(10)
+
+verify factorial_ten:
+    assert factorial_ten() == 3628800
+
+# --- math.sign ---
+
+function sign_positive() returns int64:
+    return math.sign(42)
+
+verify sign_positive:
+    assert sign_positive() == 1
+
+function sign_negative() returns int64:
+    return math.sign(-7)
+
+verify sign_negative:
+    assert sign_negative() == -1
+
+function sign_zero() returns int64:
+    return math.sign(0)
+
+verify sign_zero:
+    assert sign_zero() == 0
+
+# --- math.to_radians ---
+
+function to_radians_180() returns bool:
+    float64 rad = math.to_radians(180.0)
+    float64 pi = math.pi()
+    float64 diff = math.abs(rad - pi)
+    return diff < 0.0001
+
+verify to_radians_180:
+    assert to_radians_180() == true
+
+function to_radians_90() returns bool:
+    float64 rad = math.to_radians(90.0)
+    float64 half_pi = math.pi() / 2.0
+    float64 diff = math.abs(rad - half_pi)
+    return diff < 0.0001
+
+verify to_radians_90:
+    assert to_radians_90() == true
+
+function to_radians_zero() returns float64:
+    return math.to_radians(0.0)
+
+verify to_radians_zero:
+    assert to_radians_zero() == 0.0
+
+# --- math.to_degrees ---
+
+function to_degrees_pi() returns bool:
+    float64 pi = math.pi()
+    float64 deg = math.to_degrees(pi)
+    float64 diff = math.abs(deg - 180.0)
+    return diff < 0.0001
+
+verify to_degrees_pi:
+    assert to_degrees_pi() == true
+
+function to_degrees_zero() returns float64:
+    return math.to_degrees(0.0)
+
+verify to_degrees_zero:
+    assert to_degrees_zero() == 0.0
+
+function to_degrees_half_pi() returns bool:
+    float64 half_pi = math.pi() / 2.0
+    float64 deg = math.to_degrees(half_pi)
+    float64 diff = math.abs(deg - 90.0)
+    return diff < 0.0001
+
+verify to_degrees_half_pi:
+    assert to_degrees_half_pi() == true

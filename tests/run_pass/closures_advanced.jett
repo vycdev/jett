@@ -1,0 +1,96 @@
+namespace app
+
+# --- Closure that captures a struct value ---
+
+struct Point:
+    x: int64
+    y: int64
+
+function make_point_offset(p: Point) returns function(int64, int64) returns int64:
+    return function(dx: int64, dy: int64) returns int64:
+        return (p.x + dx) + (p.y + dy)
+
+function test_capture_struct() returns int64:
+    Point origin = Point(x: 10, y: 20)
+    function(int64, int64) returns int64 offset = make_point_offset(origin)
+    return offset(3, 7)
+
+verify test_capture_struct:
+    assert test_capture_struct() == 40
+
+# --- Closure passed as argument to a user-defined higher-order function ---
+
+function apply_twice(f: function(int64) returns int64, x: int64) returns int64:
+    return f(f(x))
+
+function test_closure_as_argument() returns int64:
+    int64 factor = 3
+    function(int64) returns int64 triple = function(n: int64) returns int64: return n * factor
+    return apply_twice(triple, 2)
+
+verify test_closure_as_argument:
+    assert test_closure_as_argument() == 18
+
+# --- Function that returns different closures based on a condition ---
+
+function make_op(add_mode: bool) returns function(int64, int64) returns int64:
+    if add_mode:
+        return function(a: int64, b: int64) returns int64: return a + b
+    return function(a: int64, b: int64) returns int64: return a * b
+
+function test_conditional_closure_add() returns int64:
+    function(int64, int64) returns int64 op = make_op(true)
+    return op(5, 3)
+
+function test_conditional_closure_mul() returns int64:
+    function(int64, int64) returns int64 op = make_op(false)
+    return op(5, 3)
+
+verify test_conditional_closures:
+    assert test_conditional_closure_add() == 8
+    assert test_conditional_closure_mul() == 15
+
+# --- Closure used inside a for loop ---
+
+function sum_with_closure() returns int64:
+    function(int64, int64) returns int64 add = function(a: int64, b: int64) returns int64: return a + b
+    int64 total = 0
+    for i in range(1, 6):
+        total = add(total, i)
+    return total
+
+verify test_closure_in_loop:
+    assert sum_with_closure() == 15
+
+# --- Closure that captures a loop variable ---
+
+function accumulate_squares() returns int64:
+    int64 sum = 0
+    for i in range(1, 5):
+        function() returns int64 sq = function() returns int64: return i * i
+        sum = sum + sq()
+    return sum
+
+verify test_capture_loop_var:
+    assert accumulate_squares() == 30
+
+# --- Multiple closures sharing the same captured variable ---
+
+function make_inc_and_dec(base: int64) returns int64:
+    function(int64) returns int64 inc = function(n: int64) returns int64: return base + n
+    function(int64) returns int64 dec = function(n: int64) returns int64: return base - n
+    return inc(10) + dec(3)
+
+verify test_shared_capture:
+    assert make_inc_and_dec(5) == 17
+
+# --- Closure combined with list.map to transform data ---
+
+function double_all_sum() returns int64:
+    list[int64] nums = list(1, 2, 3, 4, 5)
+    int64 factor = 2
+    list[int64] doubled = list.map[int64, int64](nums, function(n: int64) returns int64: return n * factor)
+    return list.reduce[int64, int64](doubled, 0, function(acc: int64, n: int64) returns int64: return acc + n)
+
+verify test_closure_with_map:
+    assert double_all_sum() == 30

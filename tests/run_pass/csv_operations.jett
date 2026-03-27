@@ -1,0 +1,123 @@
+namespace test
+
+# --- csv.parse ---------------------------------------------------------
+
+function csv_parse_row_count_test() returns int64:
+    string data = "name,age,city\nalice,30,new york\nbob,25,london"
+    list[list[string]] rows = csv.parse(data)
+    return list.length(rows)
+
+verify csv_parse_row_count_test:
+    assert csv_parse_row_count_test() == 3
+
+function csv_parse_col_count_test() returns int64:
+    string data = "a,b,c\n1,2,3"
+    list[list[string]] rows = csv.parse(data)
+    list[string] first_row = list.get[list[string]](rows, 0) handle:
+        default list("err")
+    return list.length(first_row)
+
+verify csv_parse_col_count_test:
+    assert csv_parse_col_count_test() == 3
+
+function csv_parse_cell_test() returns string:
+    string data = "name,age\nalice,30"
+    list[list[string]] rows = csv.parse(data)
+    list[string] second_row = list.get[list[string]](rows, 1) handle:
+        default list("err")
+    return list.get[string](second_row, 0) handle:
+        default "err"
+
+verify csv_parse_cell_test:
+    assert csv_parse_cell_test() == "alice"
+
+function csv_parse_quoted_test() returns string:
+    string data = "name,desc\nalice,\"hello, world\""
+    list[list[string]] rows = csv.parse(data)
+    list[string] row = list.get[list[string]](rows, 1) handle:
+        default list("err")
+    return list.get[string](row, 1) handle:
+        default "err"
+
+verify csv_parse_quoted_test:
+    assert csv_parse_quoted_test() == "hello, world"
+
+function csv_parse_empty_test() returns int64:
+    string data = ""
+    list[list[string]] rows = csv.parse(data)
+    return list.length(rows)
+
+verify csv_parse_empty_test:
+    assert csv_parse_empty_test() == 0
+
+# --- csv.stringify -----------------------------------------------------
+
+function csv_stringify_basic_test() returns string:
+    list[list[string]] rows = list(list("name", "age"), list("alice", "30"))
+    return csv.stringify(rows)
+
+verify csv_stringify_basic_test:
+    assert csv_stringify_basic_test() == "name,age\nalice,30"
+
+function csv_stringify_quoting_test() returns string:
+    list[list[string]] rows = list(list("a", "b,c"))
+    return csv.stringify(rows)
+
+verify csv_stringify_quoting_test:
+    assert csv_stringify_quoting_test() == "a,\"b,c\""
+
+# --- csv.parse_with_header ---------------------------------------------
+
+function csv_header_row_count_test() returns int64:
+    string data = "name,age,city\nalice,30,new york\nbob,25,london"
+    list[map[string, string]] rows = csv.parse_with_header(data)
+    return list.length(rows)
+
+verify csv_header_row_count_test:
+    assert csv_header_row_count_test() == 2
+
+function csv_header_get_name_test() returns string:
+    string data = "name,age\nalice,30\nbob,25"
+    list[map[string, string]] rows = csv.parse_with_header(data)
+    map[string, string] first = list.get[map[string, string]](rows, 0) handle:
+        default map("err": "err")
+    optional[string] val = map.get(first, "name")
+    return val handle:
+        default "missing"
+
+verify csv_header_get_name_test:
+    assert csv_header_get_name_test() == "alice"
+
+function csv_header_get_age_test() returns string:
+    string data = "name,age\nalice,30\nbob,25"
+    list[map[string, string]] rows = csv.parse_with_header(data)
+    map[string, string] second = list.get[map[string, string]](rows, 1) handle:
+        default map("err": "err")
+    optional[string] val = map.get(second, "age")
+    return val handle:
+        default "missing"
+
+verify csv_header_get_age_test:
+    assert csv_header_get_age_test() == "25"
+
+function csv_header_empty_test() returns int64:
+    string data = ""
+    list[map[string, string]] rows = csv.parse_with_header(data)
+    return list.length(rows)
+
+verify csv_header_empty_test:
+    assert csv_header_empty_test() == 0
+
+# --- roundtrip ---------------------------------------------------------
+
+function csv_roundtrip_test() returns string:
+    list[list[string]] original = list(list("x", "y"), list("1", "2"))
+    string text = csv.stringify(original)
+    list[list[string]] parsed = csv.parse(text)
+    list[string] row = list.get[list[string]](parsed, 1) handle:
+        default list("err")
+    return list.get[string](row, 1) handle:
+        default "err"
+
+verify csv_roundtrip_test:
+    assert csv_roundtrip_test() == "2"

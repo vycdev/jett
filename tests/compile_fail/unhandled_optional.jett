@@ -1,0 +1,5 @@
+# ERROR: E0342
+namespace test
+
+function bad_ignore() returns nothing:
+    list.first[int64](list(1, 2, 3))

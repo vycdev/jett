@@ -1,0 +1,5 @@
+# ERROR: E0325
+namespace test
+
+mutual:
+    function ghost(n: int64) returns bool

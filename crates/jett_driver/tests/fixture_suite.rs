@@ -220,6 +220,19 @@ run_pass_fixture!(run_pass_string_search, "string_search.jett");
 run_pass_fixture!(run_pass_time_and_os, "time_and_os.jett");
 run_pass_fixture!(run_pass_math_trig, "math_trig.jett");
 run_pass_fixture!(run_pass_logical_ops, "logical_ops.jett");
+run_pass_fixture!(run_pass_closures_advanced, "closures_advanced.jett");
+run_pass_fixture!(run_pass_math_advanced, "math_advanced.jett");
+run_pass_fixture!(run_pass_csv_operations, "csv_operations.jett");
+run_pass_fixture!(run_pass_string_format, "string_format.jett");
+run_pass_fixture!(run_pass_list_extras, "list_extras.jett");
+run_pass_fixture!(run_pass_map_advanced, "map_advanced.jett");
+
+compile_fail_fixture!(compile_fail_type_mismatch_return, "type_mismatch_return.jett");
+compile_fail_fixture!(compile_fail_non_exhaustive_match, "non_exhaustive_match.jett");
+compile_fail_fixture!(compile_fail_assert_outside_verify, "assert_outside_verify.jett");
+compile_fail_fixture!(compile_fail_unhandled_optional, "unhandled_optional.jett");
+compile_fail_fixture!(compile_fail_unknown_type, "unknown_type.jett");
+compile_fail_fixture!(compile_fail_duplicate_field, "duplicate_field.jett");
 
 #[test]
 fn multifile_cross_file_calls() {

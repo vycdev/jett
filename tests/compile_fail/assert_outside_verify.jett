@@ -1,0 +1,5 @@
+# ERROR: E0340
+namespace test
+
+function bad_assert() returns nothing:
+    assert 1 + 1 == 2

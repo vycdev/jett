@@ -1,0 +1,137 @@
+namespace app
+
+# -- string.center ----------------------------------------------------------
+
+function center_basic() returns string:
+    return string.center("hi", 6)
+
+verify center_basic:
+    assert center_basic() == "  hi  "
+
+function center_odd_padding() returns string:
+    return string.center("hi", 7)
+
+verify center_odd_padding:
+    assert center_odd_padding() == "  hi   "
+
+function center_no_pad_needed() returns string:
+    return string.center("hello", 3)
+
+verify center_no_pad_needed:
+    assert center_no_pad_needed() == "hello"
+
+# -- string.ljust -----------------------------------------------------------
+
+function ljust_basic() returns string:
+    return string.ljust("hi", 6)
+
+verify ljust_basic:
+    assert ljust_basic() == "hi    "
+
+function ljust_no_pad_needed() returns string:
+    return string.ljust("hello", 3)
+
+verify ljust_no_pad_needed:
+    assert ljust_no_pad_needed() == "hello"
+
+# -- string.rjust -----------------------------------------------------------
+
+function rjust_basic() returns string:
+    return string.rjust("hi", 6)
+
+verify rjust_basic:
+    assert rjust_basic() == "    hi"
+
+function rjust_no_pad_needed() returns string:
+    return string.rjust("hello", 3)
+
+verify rjust_no_pad_needed:
+    assert rjust_no_pad_needed() == "hello"
+
+# -- string.zfill -----------------------------------------------------------
+
+function zfill_basic() returns string:
+    return string.zfill("42", 5)
+
+verify zfill_basic:
+    assert zfill_basic() == "00042"
+
+function zfill_negative() returns string:
+    return string.zfill("-42", 6)
+
+verify zfill_negative:
+    assert zfill_negative() == "-00042"
+
+function zfill_no_pad_needed() returns string:
+    return string.zfill("12345", 3)
+
+verify zfill_no_pad_needed:
+    assert zfill_no_pad_needed() == "12345"
+
+# -- string.remove_prefix ---------------------------------------------------
+
+function remove_prefix_present() returns string:
+    return string.remove_prefix("hello world", "hello ")
+
+verify remove_prefix_present:
+    assert remove_prefix_present() == "world"
+
+function remove_prefix_absent() returns string:
+    return string.remove_prefix("hello world", "xyz")
+
+verify remove_prefix_absent:
+    assert remove_prefix_absent() == "hello world"
+
+# -- string.remove_suffix ---------------------------------------------------
+
+function remove_suffix_present() returns string:
+    return string.remove_suffix("hello.txt", ".txt")
+
+verify remove_suffix_present:
+    assert remove_suffix_present() == "hello"
+
+function remove_suffix_absent() returns string:
+    return string.remove_suffix("hello.txt", ".csv")
+
+verify remove_suffix_absent:
+    assert remove_suffix_absent() == "hello.txt"
+
+# -- string.is_numeric ------------------------------------------------------
+
+function is_numeric_true() returns bool:
+    return string.is_numeric("12345")
+
+verify is_numeric_true:
+    assert is_numeric_true() == true
+
+function is_numeric_false() returns bool:
+    return string.is_numeric("123a5")
+
+verify is_numeric_false:
+    assert is_numeric_false() == false
+
+function is_numeric_empty() returns bool:
+    return string.is_numeric("")
+
+verify is_numeric_empty:
+    assert is_numeric_empty() == false
+
+# -- string.is_alpha --------------------------------------------------------
+
+function is_alpha_true() returns bool:
+    return string.is_alpha("hello")
+
+verify is_alpha_true:
+    assert is_alpha_true() == true
+
+function is_alpha_false() returns bool:
+    return string.is_alpha("hello123")
+
+verify is_alpha_false:
+    assert is_alpha_false() == false
+
+function is_alpha_empty() returns bool:
+    return string.is_alpha("")
+
+verify is_alpha_empty:
+    assert is_alpha_empty() == false

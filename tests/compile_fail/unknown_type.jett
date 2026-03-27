@@ -1,0 +1,5 @@
+# ERROR: E0309
+namespace test
+
+function bad_param(x: Foo) returns nothing:
+    return nothing

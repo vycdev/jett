@@ -1,0 +1,39 @@
+namespace app
+
+function repeat_test() returns int64:
+    list[int64] zeros = list.repeat(0, 5)
+    return list.length(zeros)
+
+verify repeat_test:
+    assert repeat_test() == 5
+
+function insert_at_test() returns int64:
+    list[int64] out = list.insert_at(list(2, 3, 4), 0, 1)
+    return list.first(out) handle:
+        default 0
+
+verify insert_at_test:
+    assert insert_at_test() == 1
+
+function remove_at_test() returns int64:
+    list[int64] out = list.remove_at(list(10, 20, 30), 0)
+    return list.first(out) handle:
+        default 0
+
+verify remove_at_test:
+    assert remove_at_test() == 20
+
+function swap_test() returns int64:
+    list[int64] swapped = list.swap(list(1, 2, 3), 0, 2)
+    return list.first(swapped) handle:
+        default 0
+
+verify swap_test:
+    assert swap_test() == 3
+
+function last_index_test() returns int64:
+    return list.last_index_of(list(1, 2, 3, 2, 1), 2) handle:
+        default -1
+
+verify last_index_test:
+    assert last_index_test() == 3

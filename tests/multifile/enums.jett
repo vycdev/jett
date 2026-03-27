@@ -1,0 +1,15 @@
+namespace enums
+
+enum Color:
+    red
+    green
+    blue
+
+function color_name(c: Color) returns string:
+    match c:
+        red:
+            return "red"
+        green:
+            return "green"
+        blue:
+            return "blue"

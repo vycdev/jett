@@ -1,0 +1,49 @@
+namespace test
+
+function filter_positive_count() returns int64:
+    map[string, int64] scores = map("alice": 10, "bob": -5, "carol": 30, "dave": -2)
+    map[string, int64] positive = map.filter(scores, function(k: string, v: int64) returns bool: return v > 0)
+    return map.length(positive)
+
+verify filter_positive_count:
+    assert filter_positive_count() == 2
+
+function filter_has_included() returns bool:
+    map[string, int64] scores = map("alice": 10, "bob": -5, "carol": 30)
+    map[string, int64] positive = map.filter(scores, function(k: string, v: int64) returns bool: return v > 0)
+    return map.has(positive, "alice")
+
+verify filter_has_included:
+    assert filter_has_included() == true
+
+function filter_excludes_negative() returns bool:
+    map[string, int64] scores = map("alice": 10, "bob": -5, "carol": 30)
+    map[string, int64] positive = map.filter(scores, function(k: string, v: int64) returns bool: return v > 0)
+    return map.has(positive, "bob")
+
+verify filter_excludes_negative:
+    assert filter_excludes_negative() == false
+
+function filter_empty_result() returns int64:
+    map[string, int64] scores = map("alice": 10, "bob": 20)
+    map[string, int64] none = map.filter(scores, function(k: string, v: int64) returns bool: return v > 100)
+    return map.length(none)
+
+verify filter_empty_result:
+    assert filter_empty_result() == 0
+
+function map_values_count() returns int64:
+    map[string, int64] scores = map("alice": 10, "bob": 20, "carol": 30)
+    map[string, int64] doubled = map.map_values(scores, function(v: int64) returns int64: return v * 2)
+    return map.length(doubled)
+
+verify map_values_count:
+    assert map_values_count() == 3
+
+function map_values_alice() returns int64:
+    map[string, int64] scores = map("alice": 10, "bob": 20, "carol": 30)
+    map[string, int64] doubled = map.map_values(scores, function(v: int64) returns int64: return v * 2)
+    return map.get_or(doubled, "alice", 0)
+
+verify map_values_alice:
+    assert map_values_alice() == 20
