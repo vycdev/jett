@@ -3214,6 +3214,46 @@ impl Interpreter {
                 }
             }
 
+            // -- Time operations (stdlib/time.jett) -------------------------------
+            "time.now_ms" => {
+                require_args!(name, 0, args);
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as i64;
+                Some(Ok(Value::Int64(now)))
+            }
+            "time.now_s" => {
+                require_args!(name, 0, args);
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64;
+                Some(Ok(Value::Int64(now)))
+            }
+
+            // -- OS operations (stdlib/os.jett) ---------------------------------
+            "os.env" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::String(key) => {
+                        let result = match std::env::var(key) {
+                            Ok(val) => Value::OptionalSome(Box::new(Value::String(val))),
+                            Err(_) => Value::OptionalNone,
+                        };
+                        Some(Ok(result))
+                    }
+                    _ => Some(Err(format!("{name} expects a string argument"))),
+                }
+            }
+            "os.args" => {
+                require_args!(name, 0, args);
+                let args_list: Vec<Value> = std::env::args()
+                    .map(Value::String)
+                    .collect();
+                Some(Ok(Value::List(args_list)))
+            }
+
             // -- Range generation ---------------------------------------------------
             "range" => {
                 match args.len() {
