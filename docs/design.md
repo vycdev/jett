@@ -6061,6 +6061,16 @@ int64 doubled = apply(5, function(x: int64) returns int64: return x * 2)
 
 Anonymous functions can capture **immutable** values from the enclosing scope. Captured values are implicitly viewed — they are not consumed by the closure. Closures over **mutable** state are banned.
 
+Function types can be used in variable declarations to store closures:
+
+```
+function make_adder(n: int64) returns function(int64) returns int64:
+    return function(x: int64) returns int64: return x + n
+
+function(int64) returns int64 add5 = make_adder(5)
+int64 result = add5(10)    # result == 15
+```
+
 ### Explicit Typing
 
 Every variable declaration requires a type annotation. There is no type inference for variable declarations.

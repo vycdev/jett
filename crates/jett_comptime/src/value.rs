@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fmt;
 
 use jett_parser::ast::{Block, Param};
@@ -52,8 +53,12 @@ pub enum Value {
     Pending(Box<Value>),
     /// A key-value map: `map(key1: val1, key2: val2)`.
     Map(Vec<(Value, Value)>),
-    /// A captured inline function expression.
-    Function { params: Vec<Param>, body: Block },
+    /// A captured inline function expression (closure).
+    Function {
+        params: Vec<Param>,
+        body: Block,
+        captures: HashMap<String, Value>,
+    },
 }
 
 impl PartialEq for Value {

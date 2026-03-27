@@ -207,3 +207,4 @@ run_pass_fixture!(run_pass_list_map_extra, "list_map_extra.jett");
 run_pass_fixture!(run_pass_encoding, "encoding.jett");
 run_pass_fixture!(run_pass_string_chars, "string_chars.jett");
 run_pass_fixture!(run_pass_crypto, "crypto.jett");
+run_pass_fixture!(run_pass_closures, "closures.jett");

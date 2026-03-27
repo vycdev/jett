@@ -927,6 +927,27 @@ impl<'src> Parser<'src> {
             return TypeExpr::View(Box::new(inner), span);
         }
 
+        // Function type: `function(T, U) returns V`
+        if self.peek() == TokenKind::Function {
+            let start = self.advance().span;
+            self.expect(TokenKind::LParen);
+            let mut param_types = Vec::new();
+            if self.peek() != TokenKind::RParen {
+                param_types.push(self.parse_type());
+                while self.eat(TokenKind::Comma).is_some() {
+                    if self.peek() == TokenKind::RParen {
+                        break;
+                    }
+                    param_types.push(self.parse_type());
+                }
+            }
+            self.expect(TokenKind::RParen);
+            self.expect(TokenKind::Returns);
+            let return_type = self.parse_type();
+            let span = start.merge(return_type.span());
+            return TypeExpr::Function(param_types, Box::new(return_type), span);
+        }
+
         let ident = self.parse_type_ident();
 
         // Check for generic parameters: `list[string]`, `map[string, int64]`
@@ -1351,6 +1372,35 @@ impl<'src> Parser<'src> {
         if !self.is_type_start(first) {
             return false;
         }
+
+        // Handle function types: `function(T, U) returns V name =`
+        if first == TokenKind::Function {
+            lookahead += 1;
+            if self.peek_nth(lookahead) != TokenKind::LParen {
+                return false;
+            }
+            lookahead += 1;
+            let mut depth = 1;
+            while depth > 0 && lookahead < 40 {
+                match self.peek_nth(lookahead) {
+                    TokenKind::LParen => depth += 1,
+                    TokenKind::RParen => depth -= 1,
+                    TokenKind::Eof => return false,
+                    _ => {}
+                }
+                lookahead += 1;
+            }
+            // Skip `returns Type` — the return type can itself be complex
+            // (e.g. `function(int64) returns function(int64) returns int64`)
+            if self.peek_nth(lookahead) != TokenKind::Returns {
+                return false;
+            }
+            lookahead += 1;
+            // Skip the return type recursively (simplified: skip one or more tokens
+            // until we find an identifier followed by `=`)
+            return self.scan_past_type_for_var_decl(lookahead);
+        }
+
         lookahead += 1;
 
         // Handle dotted paths for types: e.g. module.Type — not needed for MVP
@@ -1403,8 +1453,62 @@ impl<'src> Parser<'src> {
                 | TokenKind::Result
                 | TokenKind::Optional
                 | TokenKind::Secret
+                | TokenKind::Function
                 | TokenKind::Ident
         )
+    }
+
+    /// Starting at `lookahead`, skip past one type expression, then check for `ident =`.
+    /// Used by `looks_like_var_decl` to handle function type return types.
+    fn scan_past_type_for_var_decl(&self, mut lookahead: usize) -> bool {
+        if lookahead >= 60 {
+            return false;
+        }
+        let kind = self.peek_nth(lookahead);
+        if kind == TokenKind::Function {
+            // Nested function type: `function(…) returns T`
+            lookahead += 1;
+            if self.peek_nth(lookahead) != TokenKind::LParen {
+                return false;
+            }
+            lookahead += 1;
+            let mut depth = 1;
+            while depth > 0 && lookahead < 60 {
+                match self.peek_nth(lookahead) {
+                    TokenKind::LParen => depth += 1,
+                    TokenKind::RParen => depth -= 1,
+                    TokenKind::Eof => return false,
+                    _ => {}
+                }
+                lookahead += 1;
+            }
+            if self.peek_nth(lookahead) != TokenKind::Returns {
+                return false;
+            }
+            lookahead += 1;
+            return self.scan_past_type_for_var_decl(lookahead);
+        }
+        if !self.is_type_start(kind) {
+            return false;
+        }
+        lookahead += 1;
+        // Skip generic args: Type[…]
+        if self.peek_nth(lookahead) == TokenKind::LBracket {
+            lookahead += 1;
+            let mut depth = 1;
+            while depth > 0 && lookahead < 60 {
+                match self.peek_nth(lookahead) {
+                    TokenKind::LBracket => depth += 1,
+                    TokenKind::RBracket => depth -= 1,
+                    TokenKind::Eof => return false,
+                    _ => {}
+                }
+                lookahead += 1;
+            }
+        }
+        let name_kind = self.peek_nth(lookahead);
+        (name_kind == TokenKind::Ident || self.is_contextual_ident(name_kind))
+            && self.peek_nth(lookahead + 1) == TokenKind::Eq
     }
 
     // =======================================================================

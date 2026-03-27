@@ -397,6 +397,8 @@ pub enum TypeExpr {
     Generic(Ident, Vec<TypeExpr>, Span),
     /// `view T` — a view/borrow of a type (used in `for item in view expr:`)
     View(Box<TypeExpr>, Span),
+    /// `function(T, U) returns V` — a function type
+    Function(Vec<TypeExpr>, Box<TypeExpr>, Span),
 }
 
 impl TypeExpr {
@@ -405,6 +407,7 @@ impl TypeExpr {
             TypeExpr::Named(ident) => ident.span,
             TypeExpr::Generic(_, _, span) => *span,
             TypeExpr::View(_, span) => *span,
+            TypeExpr::Function(_, _, span) => *span,
         }
     }
 }

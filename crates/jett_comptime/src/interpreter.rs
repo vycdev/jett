@@ -421,6 +421,7 @@ impl Interpreter {
                     Ok(ExprFlow::Value(Value::Function {
                         params: func.params.clone(),
                         body: func.body.clone(),
+                        captures: HashMap::new(),
                     }))
                 } else {
                     Err(format!("undefined variable '{}'", ident.name))
@@ -755,9 +756,17 @@ impl Interpreter {
             }
 
             Expr::InlineFn(params, _return_type, body, _) => {
+                // Capture the current environment (all visible variables) for closure semantics.
+                let mut captures = HashMap::new();
+                for scope in &self.scopes {
+                    for (name, value) in scope {
+                        captures.insert(name.clone(), value.clone());
+                    }
+                }
                 Ok(ExprFlow::Value(Value::Function {
                     params: params.clone(),
                     body: body.clone(),
+                    captures,
                 }))
             }
 
@@ -2974,6 +2983,13 @@ impl Interpreter {
             return result;
         }
 
+        // Check if the name refers to a variable holding a function value (closure).
+        if let Some(fn_val) = self.get_variable(name).cloned() {
+            if matches!(fn_val, Value::Function { .. }) {
+                return self.call_fn_value(fn_val, args);
+            }
+        }
+
         let resolved_name = self
             .resolve_interface_dispatch(name, &args)
             .unwrap_or_else(|| name.to_string());
@@ -3311,7 +3327,11 @@ impl Interpreter {
     /// Call a `Value::Function` (inline function) with the given arguments.
     fn call_fn_value(&mut self, fn_val: Value, args: Vec<Value>) -> Result<Value, String> {
         match fn_val {
-            Value::Function { params, body } => {
+            Value::Function {
+                params,
+                body,
+                captures,
+            } => {
                 if args.len() != params.len() {
                     return Err(format!(
                         "inline function expects {} argument(s), got {}",
@@ -3319,12 +3339,18 @@ impl Interpreter {
                         args.len()
                     ));
                 }
+                // Push the captured environment as a scope, then the parameter scope on top.
+                self.push_scope();
+                for (name, value) in &captures {
+                    self.set_variable(name, value.clone());
+                }
                 self.push_scope();
                 for (param, arg) in params.iter().zip(args) {
                     self.set_variable(&param.name.name, arg);
                 }
                 let result = self.exec_block_inner(&body)?;
-                self.pop_scope();
+                self.pop_scope(); // params
+                self.pop_scope(); // captures
                 Ok(match result {
                     Some(Signal::Return(v)) => v,
                     _ => Value::Nothing,
@@ -3857,6 +3883,7 @@ fn type_expr_name(ty: &TypeExpr) -> String {
         TypeExpr::Named(ident) => ident.name.clone(),
         TypeExpr::Generic(ident, _, _) => ident.name.clone(),
         TypeExpr::View(inner, _) => type_expr_name(inner),
+        TypeExpr::Function(_, _, _) => "function".to_string(),
     }
 }
 

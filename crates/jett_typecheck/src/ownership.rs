@@ -602,6 +602,10 @@ impl<'a> OwnershipChecker<'a> {
                 // View of a type — resolve the inner type.
                 self.resolve_type_for_ownership(inner)
             }
+            ast::TypeExpr::Function(_, _, _) => {
+                // Function types are non-copyable (closures carry captured env).
+                TypeInterner::BYTES
+            }
         }
     }
 }

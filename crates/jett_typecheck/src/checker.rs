@@ -2687,15 +2687,21 @@ impl<'a> TypeChecker<'a> {
                     }
                 }
 
+                let param_types: Vec<_> = params
+                    .iter()
+                    .map(|p| self.resolve_type_expr(&p.ty))
+                    .collect();
+
                 self.check_block(body);
 
                 self.current_return_type = saved_return_type;
                 self.current_function_name = saved_fn_name;
                 self.current_function_pure = saved_pure;
 
-                // Inline functions have no first-class type in Jett's type system yet;
-                // use ERROR as an "any" placeholder so they pass type-checking.
-                TypeInterner::ERROR
+                self.interner.intern(Type::Function {
+                    params: param_types,
+                    return_type: ret,
+                })
             }
         };
 
@@ -3848,6 +3854,17 @@ impl<'a> TypeChecker<'a> {
             TypeExpr::View(inner, _span) => {
                 // View types are transparent for type checking purposes.
                 self.resolve_type_expr(inner)
+            }
+            TypeExpr::Function(param_types, return_type, _span) => {
+                let params = param_types
+                    .iter()
+                    .map(|t| self.resolve_type_expr(t))
+                    .collect();
+                let ret = self.resolve_type_expr(return_type);
+                self.interner.intern(Type::Function {
+                    params,
+                    return_type: ret,
+                })
             }
         }
     }

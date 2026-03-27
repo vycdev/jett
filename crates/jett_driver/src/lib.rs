@@ -389,6 +389,7 @@ fn type_expr_is_capability(ty: &TypeExpr) -> bool {
         ),
         TypeExpr::View(inner, _) => type_expr_is_capability(inner),
         TypeExpr::Generic(_, _, _) => false,
+        TypeExpr::Function(_, _, _) => false,
     }
 }
 
@@ -400,6 +401,10 @@ fn type_expr_name(ty: &TypeExpr) -> String {
             format!("{}[{}]", name.name, args.join(", "))
         }
         TypeExpr::View(inner, _) => format!("view {}", type_expr_name(inner)),
+        TypeExpr::Function(params, ret, _) => {
+            let params: Vec<String> = params.iter().map(type_expr_name).collect();
+            format!("function({}) returns {}", params.join(", "), type_expr_name(ret))
+        }
     }
 }
 

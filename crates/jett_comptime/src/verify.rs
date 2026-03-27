@@ -471,6 +471,7 @@ fn generate_values_for_type(ty: &TypeExpr) -> Vec<Value> {
             }
         }
         TypeExpr::View(inner, _) => generate_values_for_type(inner),
+        TypeExpr::Function(_, _, _) => vec![], // cannot generate function values
     }
 }
 
