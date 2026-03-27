@@ -1304,7 +1304,15 @@ impl<'src> Parser<'src> {
 
     fn parse_use_stmt(&mut self) -> Stmt {
         let kw = self.expect(TokenKind::Use);
-        let path = self.parse_ident();
+        let mut path = self.parse_ident();
+        // Support dotted paths: `use net.http`
+        while self.eat(TokenKind::Dot).is_some() {
+            let segment = self.parse_ident();
+            path = Ident {
+                name: format!("{}.{}", path.name, segment.name),
+                span: path.span.merge(segment.span),
+            };
+        }
         let alias = if self.eat(TokenKind::As).is_some() {
             Some(self.parse_ident())
         } else {
