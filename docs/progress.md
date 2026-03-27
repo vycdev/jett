@@ -2,8 +2,8 @@
 
 ## Statistics
 
-- **Lines of Rust:** ~30,500
-- **Tests:** 441 passing
+- **Lines of Rust:** ~33,000
+- **Tests:** 460+ passing
 - **Crates:** 15
 - **VS Code extension:** Yes
 
@@ -91,9 +91,25 @@
 | `string.reverse`, `string.after`, `string.before`, `string.trim_start`, `string.trim_end` | Done |
 | `string.slugify`, `string.truncate`, `string.between`, `string.pad_left`, `string.is_not_empty` | Done |
 | `string.chars`, `string.words`, `string.lines` (iterator builtins → `list[string]`) | Done |
+| `string.index_of`, `string.count`, `string.to_upper_first`, `string.to_lower_first` | Done |
 | `list.reduce`, `list.chunk`, `list.sort_by_index`, `list.is_sorted`, `list.all_elements_in` | Done |
+| `list.enumerate` | Done |
 | `map.get_or`, `map.merge`, `map.set`, `map.contains_key` | Done |
 | `encoding` module: `base64_encode`, `base64_decode`, `hex_encode`, `hex_decode`, `url_encode`, `url_decode` | Done |
+| Closure captures (inline functions capture immutable enclosing scope) | Done |
+| Function type expressions (`function(T) returns U` in type annotations) | Done |
+| Dotted `use` paths (`use net.http`) | Done |
+| Multi-file compilation (project-aware build/run with `jett.proj`) | Done |
+| `range()` builtin (1, 2, or 3 args) | Done |
+| For-in over strings, maps (with `key, value` destructuring), sets | Done |
+| `and`/`or` keyword operators for logical expressions | Done |
+| Unhandled result/optional detection (E0341, E0342) | Done |
+| Set value type and 12 set builtins (`new`, `add`, `remove`, `contains`, `union`, `intersection`, `difference`) | Done |
+| `print`/`println` builtins | Done |
+| Type conversions: `float64.from_string`, `string.from_float64`, `string.from_bool` | Done |
+| `time.now_ms`, `time.now_s` | Done |
+| `os.env`, `os.args` | Done |
+| Math: `pi`, `e`, `sin`, `cos`, `tan`, `mod`, `is_even`, `is_odd`, `sum` | Done |
 
 ### Phase H: Agent Tooling — PARTIAL
 
@@ -130,27 +146,23 @@
 
 | Module | Status |
 |---|---|
-| `string` (basic ops in interpreter) | Partial (23 builtins: length/char_count, contains, trim, upper, lower, replace, split, join, starts_with, ends_with, is_empty, is_not_empty, slice, repeat, pad_left, pad_end, from_int64, from_float64, from_bool, slugify, truncate, between) |
-| `list` (basic ops in interpreter) | Partial (34 builtins: 19 basic + filter, map, find, sort_by, all, any, count, sum, group_by, reduce, chunk, sort_by_index, is_sorted, all_elements_in) |
-| `map` (basic ops in interpreter) | Partial (12 builtins: new, length, has/contains_key, get, get_or, insert/set, remove, keys, values, is_empty, merge) |
-| `math` (basic ops in interpreter) | Partial (15 builtins: abs, sqrt, pow, floor, ceil, round, clamp, log, log2, log10, min, max, average, median, pi constant) |
-| `json` (serialize) | Partial (json.serialize, json.serialize_public) |
-| `random` (basic ops in interpreter) | Partial (5 builtins: int64, float64, bool, choice, shuffle) |
+| `string` | Partial (30+ builtins: length, contains, trim, upper, lower, replace, split, join, starts_with, ends_with, is_empty, slice, repeat, pad_left, pad_end, from_int64, from_float64, from_bool, slugify, truncate, between, reverse, after, before, chars, words, lines, index_of, count, to_upper_first, to_lower_first) |
+| `list` | Partial (35+ builtins: new, length, append, get, first, last, is_empty, skip, take, reverse, sort, contains, index_of, remove, concat, flatten, unique, zip, chunk, sort_by_index, is_sorted, all_elements_in, enumerate, from_set + higher-order: filter, map, find, sort_by, all, any, count, sum, group_by, reduce) |
+| `set` | Partial (12 builtins: new, add, remove, contains, length, is_empty, to_list, union, intersection, difference) |
+| `map` | Partial (12 builtins: new, length, has/contains_key, get, get_or, insert/set, remove, keys, values, is_empty, merge) |
+| `math` | Partial (20+ builtins: abs, sqrt, pow, floor, ceil, round, clamp, log, log2, log10, min, max, average, median, pi, e, sin, cos, tan, mod, is_even, is_odd, sum) |
+| `json` | Partial (json.serialize, json.serialize_public) |
+| `random` | Partial (5 builtins: int64, float64, bool, choice, shuffle) |
+| `crypto` | Partial (sha256, md5) |
+| `encoding` | Partial (6 builtins: base64_encode, base64_decode, hex_encode, hex_decode, url_encode, url_decode) |
+| `uuid` | Partial (uuid.new) |
+| `time` | Partial (time.now_ms, time.now_s) |
+| `os` | Partial (os.env, os.args) |
 | `net.http` | Not started |
 | `net.socket` | Not started |
-| `json` | Not started |
 | `csv` | Not started |
-| `time` | Not started |
-| `crypto` | Not started |
-| `encoding` (base64, hex, URL) | Partial (6 builtins: base64_encode, base64_decode, hex_encode, hex_decode, url_encode, url_decode) |
-| `uuid` | Partial (1 builtin: uuid.new) |
-| `validate` | Not started |
 | `regex` | Not started |
-| `random` | Not started |
-| `uuid` | Not started |
 | `log` | Not started |
-| `format` | Not started |
-| `os` | Not started |
 | `test.mock` | Not started |
 
 ### Phase L: Incremental Compilation — NOT STARTED
