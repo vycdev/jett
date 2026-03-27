@@ -514,3 +514,21 @@ pub fn respond_outside_handler(span: Span) -> Diagnostic {
         span,
     )
 }
+
+/// E0341: `result[T, E]` value discarded without `handle error:`.
+pub fn unhandled_result(span: Span) -> Diagnostic {
+    Diagnostic::error(
+        341,
+        "result value must be handled — use `handle error:` to handle the error, or assign to a variable".to_string(),
+        span,
+    )
+}
+
+/// E0342: `optional[T]` value discarded without `handle:`.
+pub fn unhandled_optional(span: Span) -> Diagnostic {
+    Diagnostic::error(
+        342,
+        "optional value must be handled — use `handle:` to provide a default, or assign to a variable".to_string(),
+        span,
+    )
+}

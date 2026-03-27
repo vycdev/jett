@@ -2153,7 +2153,16 @@ impl<'a> TypeChecker<'a> {
             Stmt::For(for_stmt) => self.check_for(for_stmt),
             Stmt::While(while_stmt) => self.check_while(while_stmt),
             Stmt::Expr(expr_stmt) => {
-                self.check_expr(&expr_stmt.expr);
+                let ty = self.check_expr(&expr_stmt.expr);
+                // Warn if a result or optional value is silently discarded.
+                if ty != TypeInterner::ERROR {
+                    let resolved = self.interner.resolve(ty);
+                    if matches!(resolved, Type::Result(_, _)) {
+                        self.sink.emit(errors::unhandled_result(expr_stmt.span));
+                    } else if matches!(resolved, Type::Optional(_)) {
+                        self.sink.emit(errors::unhandled_optional(expr_stmt.span));
+                    }
+                }
             }
             Stmt::Assert(assert_stmt) => self.check_assert(assert_stmt),
             Stmt::Match(match_stmt) => self.check_match(match_stmt),

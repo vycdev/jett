@@ -1,0 +1,107 @@
+namespace app
+
+# --- Basic handle with default ---
+
+function safe_parse(s: string) returns int64:
+    int64 val = int64.from_string(s) handle error:
+        default 0
+    return val
+
+verify safe_parse:
+    assert safe_parse("42") == 42
+    assert safe_parse("abc") == 0
+
+# --- Handle with return fail (error propagation) ---
+
+function strict_parse(s: string) returns result[int64, string]:
+    int64 val = int64.from_string(s) handle error:
+        return fail("parse failed: {error}")
+    return ok(val)
+
+function test_strict_parse_ok() returns int64:
+    int64 v = strict_parse("99") handle error:
+        default -1
+    return v
+
+function test_strict_parse_fail() returns int64:
+    int64 v = strict_parse("nope") handle error:
+        default -1
+    return v
+
+verify test_strict_parse_ok:
+    assert test_strict_parse_ok() == 99
+
+verify test_strict_parse_fail:
+    assert test_strict_parse_fail() == -1
+
+# --- Optional handle ---
+
+function first_item(items: list[int64]) returns int64:
+    int64 val = list.first[int64](items) handle:
+        default -1
+    return val
+
+verify first_item:
+    assert first_item(list(10, 20, 30)) == 10
+    assert first_item(list()) == -1
+
+# --- Nested handle blocks ---
+
+function double_parse(a: string, b: string) returns int64:
+    int64 x = int64.from_string(a) handle error:
+        default 0
+    int64 y = int64.from_string(b) handle error:
+        default 0
+    return x + y
+
+verify double_parse:
+    assert double_parse("3", "4") == 7
+    assert double_parse("3", "bad") == 3
+    assert double_parse("bad", "4") == 4
+    assert double_parse("bad", "bad") == 0
+
+# --- Handle with error variable used in default ---
+
+function parse_with_fallback(s: string) returns string:
+    int64 val = int64.from_string(s) handle error:
+        return "error: {error}"
+    return "ok: {val}"
+
+verify parse_with_fallback:
+    assert parse_with_fallback("42") == "ok: 42"
+
+# --- Chaining results through multiple steps ---
+
+function add_strings(a: string, b: string) returns result[int64, string]:
+    int64 x = int64.from_string(a) handle error:
+        return fail("first: {error}")
+    int64 y = int64.from_string(b) handle error:
+        return fail("second: {error}")
+    return ok(x + y)
+
+function test_chain_ok() returns int64:
+    int64 r = add_strings("10", "20") handle error:
+        default 0
+    return r
+
+function test_chain_fail() returns int64:
+    int64 r = add_strings("10", "xyz") handle error:
+        default -1
+    return r
+
+verify test_chain_ok:
+    assert test_chain_ok() == 30
+
+verify test_chain_fail:
+    assert test_chain_fail() == -1
+
+# --- Handle block with side effects before default ---
+
+function parse_or_log(s: string, fallback: int64) returns int64:
+    int64 val = int64.from_string(s) handle error:
+        default fallback
+    return val
+
+verify parse_or_log:
+    assert parse_or_log("7", 99) == 7
+    assert parse_or_log("bad", 99) == 99

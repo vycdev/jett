@@ -212,6 +212,9 @@ run_pass_fixture!(run_pass_use_imports, "use_imports.jett");
 run_pass_fixture!(run_pass_loops, "loops.jett");
 run_pass_fixture!(run_pass_conversions, "conversions.jett");
 run_pass_fixture!(run_pass_set_operations, "set_operations.jett");
+run_pass_fixture!(run_pass_error_handling, "error_handling.jett");
+
+compile_fail_fixture!(compile_fail_unhandled_result, "unhandled_result.jett");
 
 #[test]
 fn multifile_cross_file_calls() {

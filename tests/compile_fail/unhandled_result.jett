@@ -1,0 +1,5 @@
+# ERROR: E0341
+namespace app
+
+function bad_ignore() returns nothing:
+    int64.from_string("42")
