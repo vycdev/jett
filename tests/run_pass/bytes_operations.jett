@@ -1,0 +1,127 @@
+namespace app
+
+# --- bytes.new ---
+
+function new_bytes_test() returns int64:
+    bytes b = bytes.new()
+    return bytes.length(b)
+
+verify new_bytes_test:
+    assert new_bytes_test() == 0
+
+# --- bytes.from_string and bytes.length ---
+
+function from_string_length_test() returns int64:
+    bytes b = bytes.from_string("hello")
+    return bytes.length(b)
+
+verify from_string_length_test:
+    assert from_string_length_test() == 5
+
+# --- bytes.to_string ---
+
+function to_string_test() returns string:
+    bytes b = bytes.from_string("hello")
+    string s = bytes.to_string(b) handle error:
+        default "failed"
+    return s
+
+verify to_string_test:
+    assert to_string_test() == "hello"
+
+# --- bytes.get (valid index) ---
+
+function get_valid_test() returns int64:
+    bytes b = bytes.from_string("A")
+    int64 val = bytes.get(b, 0) handle:
+        default -1
+    return val
+
+verify get_valid_test:
+    assert get_valid_test() == 65
+
+# --- bytes.get (out of bounds) ---
+
+function get_oob_test() returns int64:
+    bytes b = bytes.from_string("A")
+    int64 val = bytes.get(b, 5) handle:
+        default -1
+    return val
+
+verify get_oob_test:
+    assert get_oob_test() == -1
+
+# --- bytes.slice ---
+
+function slice_test() returns int64:
+    bytes b = bytes.from_string("hello")
+    bytes sliced = bytes.slice(b, 1, 4)
+    return bytes.length(sliced)
+
+verify slice_test:
+    assert slice_test() == 3
+
+function slice_content_test() returns string:
+    bytes b = bytes.from_string("hello world")
+    bytes sliced = bytes.slice(b, 0, 5)
+    string s = bytes.to_string(sliced) handle error:
+        default "failed"
+    return s
+
+verify slice_content_test:
+    assert slice_content_test() == "hello"
+
+# --- bytes.concat ---
+
+function concat_test() returns string:
+    bytes a = bytes.from_string("hello")
+    bytes b = bytes.from_string(" world")
+    bytes c = bytes.concat(a, b)
+    string s = bytes.to_string(c) handle error:
+        default "failed"
+    return s
+
+verify concat_test:
+    assert concat_test() == "hello world"
+
+function concat_length_test() returns int64:
+    bytes a = bytes.from_string("abc")
+    bytes b = bytes.from_string("de")
+    bytes c = bytes.concat(a, b)
+    return bytes.length(c)
+
+verify concat_length_test:
+    assert concat_length_test() == 5
+
+# --- bytes.slice clamping ---
+
+function slice_clamp_test() returns int64:
+    bytes b = bytes.from_string("hi")
+    bytes sliced = bytes.slice(b, 0, 100)
+    return bytes.length(sliced)
+
+verify slice_clamp_test:
+    assert slice_clamp_test() == 2
+
+# --- roundtrip: string -> bytes -> string ---
+
+function roundtrip_test() returns string:
+    string original = "Jett language"
+    bytes b = bytes.from_string(original)
+    string result = bytes.to_string(b) handle error:
+        default "failed"
+    return result
+
+verify roundtrip_test:
+    assert roundtrip_test() == "Jett language"
+
+# --- empty concat ---
+
+function concat_empty_test() returns int64:
+    bytes empty = bytes.new()
+    bytes data = bytes.from_string("abc")
+    bytes result = bytes.concat(empty, data)
+    return bytes.length(result)
+
+verify concat_empty_test:
+    assert concat_empty_test() == 3

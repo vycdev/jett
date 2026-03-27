@@ -3785,6 +3785,86 @@ impl Interpreter {
                 }
             }
 
+            // -- Bytes operations (stdlib/bytes.jett) ---------------------------
+            "bytes.new" => {
+                require_args!(name, 0, args);
+                Some(Ok(Value::Bytes(Vec::new())))
+            }
+
+            "bytes.length" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::Bytes(b) => Some(Ok(Value::Int64(b.len() as i64))),
+                    _ => Some(Err(format!("{name} expects a bytes argument"))),
+                }
+            }
+
+            "bytes.slice" => {
+                require_args!(name, 3, args);
+                match (&args[0], &args[1], &args[2]) {
+                    (Value::Bytes(b), Value::Int64(start), Value::Int64(end)) => {
+                        let len = b.len() as i64;
+                        let start = (*start).clamp(0, len) as usize;
+                        let end = (*end).clamp(0, len) as usize;
+                        let result = b[start.min(end)..end].to_vec();
+                        Some(Ok(Value::Bytes(result)))
+                    }
+                    _ => Some(Err(format!(
+                        "{name} expects a bytes value and two int64 indices"
+                    ))),
+                }
+            }
+
+            "bytes.concat" => {
+                require_args!(name, 2, args);
+                match (&args[0], &args[1]) {
+                    (Value::Bytes(a), Value::Bytes(b)) => {
+                        let mut result = a.clone();
+                        result.extend(b.iter());
+                        Some(Ok(Value::Bytes(result)))
+                    }
+                    _ => Some(Err(format!("{name} expects two bytes arguments"))),
+                }
+            }
+
+            "bytes.from_string" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::String(s) => Some(Ok(Value::Bytes(s.as_bytes().to_vec()))),
+                    _ => Some(Err(format!("{name} expects a string argument"))),
+                }
+            }
+
+            "bytes.to_string" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::Bytes(b) => {
+                        match String::from_utf8(b.clone()) {
+                            Ok(s) => Some(Ok(Value::ResultOk(Box::new(Value::String(s))))),
+                            Err(e) => Some(Ok(Value::ResultFail(Box::new(Value::String(
+                                format!("invalid UTF-8: {e}"),
+                            ))))),
+                        }
+                    }
+                    _ => Some(Err(format!("{name} expects a bytes argument"))),
+                }
+            }
+
+            "bytes.get" => {
+                require_args!(name, 2, args);
+                match (&args[0], &args[1]) {
+                    (Value::Bytes(b), Value::Int64(index)) => {
+                        let idx = *index as usize;
+                        if idx < b.len() {
+                            Some(Ok(Value::OptionalSome(Box::new(Value::Int64(b[idx] as i64)))))
+                        } else {
+                            Some(Ok(Value::OptionalNone))
+                        }
+                    }
+                    _ => Some(Err(format!("{name} expects a bytes value and an int64 index"))),
+                }
+            }
+
             // Not a built-in
             _ => None,
         }
@@ -4718,6 +4798,14 @@ fn eval_binary_op(left: &Value, op: BinOp, right: &Value) -> Result<Value, Strin
         // -- Boolean logic ---------------------------------------------------
         (Value::Bool(a), BinOp::And, Value::Bool(b)) => Ok(Value::Bool(*a && *b)),
         (Value::Bool(a), BinOp::Or, Value::Bool(b)) => Ok(Value::Bool(*a || *b)),
+
+        // -- Enum equality ---------------------------------------------------
+        (Value::Enum { .. }, BinOp::Eq, Value::Enum { .. }) => Ok(Value::Bool(left == right)),
+        (Value::Enum { .. }, BinOp::NotEq, Value::Enum { .. }) => Ok(Value::Bool(left != right)),
+
+        // -- Nothing equality ------------------------------------------------
+        (Value::Nothing, BinOp::Eq, Value::Nothing) => Ok(Value::Bool(true)),
+        (Value::Nothing, BinOp::NotEq, Value::Nothing) => Ok(Value::Bool(false)),
 
         _ => Err(format!(
             "unsupported binary operation: {left} {op:?} {right}"

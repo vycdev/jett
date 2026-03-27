@@ -226,6 +226,8 @@ run_pass_fixture!(run_pass_csv_operations, "csv_operations.jett");
 run_pass_fixture!(run_pass_string_format, "string_format.jett");
 run_pass_fixture!(run_pass_list_extras, "list_extras.jett");
 run_pass_fixture!(run_pass_map_advanced, "map_advanced.jett");
+run_pass_fixture!(run_pass_bytes_operations, "bytes_operations.jett");
+run_pass_fixture!(run_pass_enum_advanced, "enum_advanced.jett");
 
 compile_fail_fixture!(compile_fail_type_mismatch_return, "type_mismatch_return.jett");
 compile_fail_fixture!(compile_fail_non_exhaustive_match, "non_exhaustive_match.jett");

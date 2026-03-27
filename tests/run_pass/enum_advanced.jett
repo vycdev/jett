@@ -1,0 +1,139 @@
+namespace test
+
+# --- Simple enum: Direction ---
+
+enum Direction:
+    north
+    south
+    east
+    west
+
+function opposite(d: Direction) returns Direction:
+    match d:
+        north:
+            return Direction.south
+        south:
+            return Direction.north
+        east:
+            return Direction.west
+        west:
+            return Direction.east
+
+function is_vertical(d: Direction) returns bool:
+    match d:
+        north:
+            return true
+        south:
+            return true
+        east:
+            return false
+        west:
+            return false
+
+function make_north() returns Direction:
+    return Direction.north
+
+function make_south() returns Direction:
+    return Direction.south
+
+function make_east() returns Direction:
+    return Direction.east
+
+function make_west() returns Direction:
+    return Direction.west
+
+function test_opposite_north() returns bool:
+    return opposite(Direction.north) == Direction.south
+
+function test_opposite_south() returns bool:
+    return opposite(Direction.south) == Direction.north
+
+function test_opposite_east() returns bool:
+    return opposite(Direction.east) == Direction.west
+
+function test_opposite_west() returns bool:
+    return opposite(Direction.west) == Direction.east
+
+function test_is_vertical_north() returns bool:
+    return is_vertical(Direction.north)
+
+function test_is_vertical_south() returns bool:
+    return is_vertical(Direction.south)
+
+function test_is_horizontal_east() returns bool:
+    return is_vertical(Direction.east) == false
+
+function test_is_horizontal_west() returns bool:
+    return is_vertical(Direction.west) == false
+
+verify opposite:
+    assert test_opposite_north()
+    assert test_opposite_south()
+    assert test_opposite_east()
+    assert test_opposite_west()
+
+verify is_vertical:
+    assert test_is_vertical_north()
+    assert test_is_vertical_south()
+    assert test_is_horizontal_east()
+    assert test_is_horizontal_west()
+
+# --- Payload enum: Shape ---
+
+enum Shape:
+    circle(radius: float64)
+    rect(width: float64, height: float64)
+    triangle(base: float64, height: float64)
+
+function area(s: Shape) returns float64:
+    match s:
+        circle(r):
+            float64 pi = math.pi()
+            return pi * r * r
+        rect(w, h):
+            return w * h
+        triangle(b, h):
+            return 0.5 * b * h
+
+function describe(s: Shape) returns string:
+    match s:
+        circle(r):
+            return "circle with radius {r}"
+        rect(w, h):
+            return "rect {w} x {h}"
+        triangle(b, h):
+            return "triangle base {b} height {h}"
+
+function test_area_circle() returns bool:
+    float64 a = area(Shape.circle(1.0))
+    return a > 3.14
+
+function test_area_circle_upper() returns bool:
+    float64 a = area(Shape.circle(1.0))
+    return a < 3.15
+
+function test_area_rect() returns bool:
+    return area(Shape.rect(3.0, 4.0)) == 12.0
+
+function test_area_triangle() returns bool:
+    return area(Shape.triangle(6.0, 2.0)) == 6.0
+
+function test_describe_circle() returns string:
+    return describe(Shape.circle(5.0))
+
+function test_describe_rect() returns string:
+    return describe(Shape.rect(3.0, 4.0))
+
+function test_describe_triangle() returns string:
+    return describe(Shape.triangle(6.0, 2.0))
+
+verify area:
+    assert test_area_circle()
+    assert test_area_circle_upper()
+    assert test_area_rect()
+    assert test_area_triangle()
+
+verify describe:
+    assert test_describe_circle() == "circle with radius 5"
+    assert test_describe_rect() == "rect 3 x 4"
+    assert test_describe_triangle() == "triangle base 6 height 2"
