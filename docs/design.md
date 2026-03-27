@@ -2544,6 +2544,8 @@ entry: src/main.jett
 
 That's it. No dependency lists (dependencies are vendored `.jett` files — git tracks them), no build configuration (the compiler has one mode), no scripts. The project file is small because the language eliminates the reasons other project files are large.
 
+When compiling any file in a project, the compiler automatically discovers and merges all sibling `.jett` files. Functions, structs, enums, and other definitions from any file in the project are visible to all other files — no explicit imports are required for project-local code.
+
 **Project structure (example):**
 
 ```
