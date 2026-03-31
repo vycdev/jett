@@ -405,7 +405,7 @@ pub fn run_file(path: &Path) -> Result<(), String> {
     let main_args = default_runtime_args_for_main(main_func)?;
 
     use jett_comptime::interpreter::Interpreter;
-    let mut interp = Interpreter::new();
+    let mut interp = Interpreter::new_runtime();
 
     // Register items from sibling project files first (so they're available to main file).
     let sibling_modules = discover_project_modules(path);

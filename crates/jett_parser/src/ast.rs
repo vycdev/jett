@@ -283,6 +283,7 @@ pub enum Stmt {
     Expr(ExprStmt),
     Use(UseDecl),
     Assert(AssertStmt),
+    Trace(TraceStmt),
     Break(Span),
     Continue(Span),
 }
@@ -359,6 +360,12 @@ pub struct UseDecl {
 pub struct AssertStmt {
     pub condition: Expr,
     pub message: Option<Expr>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct TraceStmt {
+    pub name: Ident,
     pub span: Span,
 }
 

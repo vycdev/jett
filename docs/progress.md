@@ -131,7 +131,7 @@
 | Input shrinking on failure | Done (binary shrinking for int64, float64, string, list) |
 | CPU profiler (`--profile`) | Not started |
 | Memory profiler (`--profile-memory`) | Not started |
-| `trace` keyword | Not started |
+| `trace` keyword | Partial (parses, typechecks, runtime current-value output in `jett run`) |
 | `breakpoint` keyword | Not started |
 
 ### Phase J: Cross-Platform and Interop — NOT STARTED

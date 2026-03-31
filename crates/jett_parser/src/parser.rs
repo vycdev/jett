@@ -1079,6 +1079,7 @@ impl<'src> Parser<'src> {
             TokenKind::Match => Some(self.parse_match_stmt()),
             TokenKind::Use => Some(self.parse_use_stmt()),
             TokenKind::Assert => Some(self.parse_assert_stmt()),
+            TokenKind::Trace => Some(self.parse_trace_stmt()),
             TokenKind::Respond => Some(self.parse_respond_stmt()),
             TokenKind::Break => {
                 let tok = self.advance();
@@ -1351,6 +1352,13 @@ impl<'src> Parser<'src> {
             message,
             span: kw.span.merge(end),
         })
+    }
+
+    fn parse_trace_stmt(&mut self) -> Stmt {
+        let kw = self.expect(TokenKind::Trace);
+        let name = self.parse_ident();
+        let span = kw.span.merge(name.span);
+        Stmt::Trace(TraceStmt { name, span })
     }
 
     fn parse_var_decl(&mut self) -> VarDecl {
@@ -2295,6 +2303,7 @@ fn stmt_span(stmt: &Stmt) -> Span {
         Stmt::Expr(e) => e.span,
         Stmt::Use(u) => u.span,
         Stmt::Assert(a) => a.span,
+        Stmt::Trace(t) => t.span,
         Stmt::Respond(r) => r.span,
         Stmt::Break(s) | Stmt::Continue(s) => *s,
     }
@@ -2976,6 +2985,24 @@ function f() returns nothing:
                     assert!(a.message.is_none());
                 }
                 other => panic!("expected Assert, got {:?}", other),
+            },
+            other => panic!("expected Function, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_trace_statement() {
+        let src = "\
+function main() returns nothing:
+    int64 total = 42
+    trace total
+";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        match &result.module.items[0] {
+            Item::Function(f) => match &f.body.stmts[1] {
+                Stmt::Trace(trace_stmt) => assert_eq!(trace_stmt.name.name, "total"),
+                other => panic!("expected Trace, got {:?}", other),
             },
             other => panic!("expected Function, got {:?}", other),
         }

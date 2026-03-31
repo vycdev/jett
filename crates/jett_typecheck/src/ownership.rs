@@ -187,12 +187,18 @@ impl<'a> OwnershipChecker<'a> {
                 self.check_expr_ownership(&expr_stmt.expr);
             }
             Stmt::Assert(assert_stmt) => self.check_assert(assert_stmt),
+            Stmt::Trace(trace_stmt) => self.check_trace(trace_stmt),
             Stmt::Match(match_stmt) => self.check_match(match_stmt),
             Stmt::Respond(resp) => {
                 self.check_expr_ownership(&resp.value);
             }
             Stmt::Use(_) | Stmt::Break(_) | Stmt::Continue(_) => {}
         }
+    }
+
+    fn check_trace(&mut self, trace_stmt: &ast::TraceStmt) {
+        let expr = Expr::Ident(trace_stmt.name.clone());
+        self.check_expr_ownership(&expr);
     }
 
     fn check_var_decl(&mut self, decl: &ast::VarDecl) {
@@ -1089,6 +1095,7 @@ mod tests {
                     // for item in items:
                     Stmt::For(ForStmt {
                         variable: ident("item", sp(50, 54)),
+                        value_variable: None,
                         view: false, // Not a view iteration — consumes items
                         iterable: Expr::Ident(ident("items", sp(58, 63))),
                         body: Block {
@@ -1167,6 +1174,7 @@ mod tests {
                     // for item in view items:
                     Stmt::For(ForStmt {
                         variable: ident("item", sp(50, 54)),
+                        value_variable: None,
                         view: true, // View iteration — does NOT consume items
                         iterable: Expr::Ident(ident("items", sp(63, 68))),
                         body: Block {

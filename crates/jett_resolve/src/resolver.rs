@@ -5,7 +5,7 @@ use jett_diagnostics::{Diagnostic, DiagnosticSink};
 use jett_parser::ast::{
     ActorDef, AssertStmt, AssignStmt, Block, CallArg, Expr, ExprStmt, ForStmt, FunctionDecl,
     FunctionDef, IfStmt, Item, MatchStmt, Module, Pattern, RespondStmt, ReturnStmt, Stmt,
-    StringPart, TypeAlias, TypeExpr, UseDecl, VarDecl, WhileStmt,
+    StringPart, TraceStmt, TypeAlias, TypeExpr, UseDecl, VarDecl, WhileStmt,
 };
 
 use crate::errors;
@@ -471,6 +471,7 @@ impl Resolver {
             Stmt::Expr(e) => self.resolve_expr_stmt(e, item_index),
             Stmt::Use(u) => self.resolve_use(u),
             Stmt::Assert(a) => self.resolve_assert(a, item_index),
+            Stmt::Trace(t) => self.resolve_trace(t, item_index),
             Stmt::Match(m) => self.resolve_match(m, item_index),
             Stmt::Respond(r) => self.resolve_respond(r, item_index),
             Stmt::Break(_) | Stmt::Continue(_) => {}
@@ -562,6 +563,10 @@ impl Resolver {
         if let Some(ref msg) = a.message {
             self.resolve_expr(msg, item_index);
         }
+    }
+
+    fn resolve_trace(&mut self, t: &TraceStmt, item_index: usize) {
+        self.resolve_name(&t.name.name, t.name.span, item_index);
     }
 
     fn resolve_match(&mut self, m: &MatchStmt, item_index: usize) {
@@ -945,6 +950,7 @@ fn stmt_span(stmt: &Stmt) -> Span {
         Stmt::Expr(e) => e.span,
         Stmt::Use(u) => u.span,
         Stmt::Assert(a) => a.span,
+        Stmt::Trace(t) => t.span,
         Stmt::Break(s) | Stmt::Continue(s) => *s,
         Stmt::Respond(r) => r.span,
     }

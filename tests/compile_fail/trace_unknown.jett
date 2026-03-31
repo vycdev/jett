@@ -1,0 +1,3 @@
+# ERROR: E0200
+function main() returns nothing:
+    trace missing_value

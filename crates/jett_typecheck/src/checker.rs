@@ -2165,10 +2165,15 @@ impl<'a> TypeChecker<'a> {
                 }
             }
             Stmt::Assert(assert_stmt) => self.check_assert(assert_stmt),
+            Stmt::Trace(trace_stmt) => self.check_trace(trace_stmt),
             Stmt::Match(match_stmt) => self.check_match(match_stmt),
             Stmt::Respond(resp) => self.check_respond(resp),
             Stmt::Use(_) | Stmt::Break(_) | Stmt::Continue(_) => {}
         }
+    }
+
+    fn check_trace(&mut self, trace_stmt: &ast::TraceStmt) {
+        self.check_ident(&trace_stmt.name);
     }
 
     fn check_respond(&mut self, resp: &ast::RespondStmt) {
@@ -4162,6 +4167,7 @@ fn stmt_span(stmt: &Stmt) -> Span {
         Stmt::Expr(e) => e.span,
         Stmt::Use(u) => u.span,
         Stmt::Assert(a) => a.span,
+        Stmt::Trace(t) => t.span,
         Stmt::Respond(r) => r.span,
         Stmt::Break(span) | Stmt::Continue(span) => *span,
     }
@@ -5165,6 +5171,7 @@ mod tests {
                 body: Block {
                     stmts: vec![Stmt::For(ForStmt {
                         variable: ident("x", var_span),
+                        value_variable: None,
                         view: false,
                         iterable: Expr::IntLiteral(42, iterable_span),
                         body: Block {
@@ -6932,6 +6939,24 @@ function main() returns nothing:
             "expected E0316, got: {:?}",
             errors
         );
+    }
+
+    #[test]
+    fn trace_statement_reads_variable_without_error() {
+        let result = check_source_result(
+            "\
+function main() returns nothing:
+    int64 total = 42
+    trace total
+",
+        );
+
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == jett_diagnostics::Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
     }
 
     #[test]

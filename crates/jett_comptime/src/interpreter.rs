@@ -118,6 +118,10 @@ pub struct Interpreter {
     actor_instances: HashMap<u64, ActorInstance>,
     /// Next actor instance ID.
     next_actor_id: u64,
+    /// Recorded `trace` output lines.
+    trace_output: Vec<String>,
+    /// Whether `trace` should print as the program runs.
+    emit_runtime_trace: bool,
 }
 
 /// Runtime state of a spawned actor instance.
@@ -146,7 +150,21 @@ impl Interpreter {
             actor_defs: HashMap::new(),
             actor_instances: HashMap::new(),
             next_actor_id: 0,
+            trace_output: Vec::new(),
+            emit_runtime_trace: false,
         }
+    }
+
+    /// Create an interpreter that emits `trace` output during execution.
+    pub fn new_runtime() -> Self {
+        let mut interp = Self::new();
+        interp.emit_runtime_trace = true;
+        interp
+    }
+
+    /// Drain any trace lines recorded so far.
+    pub fn take_trace_output(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.trace_output)
     }
 
     // -- Scope management ---------------------------------------------------
@@ -184,6 +202,22 @@ impl Interpreter {
             }
         }
         Err(format!("undefined variable '{name}'"))
+    }
+
+    fn emit_trace(&mut self, line: String) {
+        self.trace_output.push(line.clone());
+        if self.emit_runtime_trace {
+            println!("{line}");
+        }
+    }
+
+    fn trace_variable(&mut self, name: &str) -> Result<(), String> {
+        let value = self
+            .get_variable(name)
+            .cloned()
+            .ok_or_else(|| format!("undefined variable '{name}'"))?;
+        self.emit_trace(format!("trace {name} = {value}"));
+        Ok(())
     }
 
     // -- Public scope management (for property-based testing) ---------------
@@ -1111,6 +1145,11 @@ impl Interpreter {
                     }
                     _ => Err("assert condition must be a boolean".to_string()),
                 }
+            }
+
+            Stmt::Trace(trace_stmt) => {
+                self.trace_variable(&trace_stmt.name.name)?;
+                Ok(None)
             }
 
             Stmt::Respond(resp) => {
@@ -5464,6 +5503,21 @@ mod tests {
     }
 
     #[test]
+    fn trace_stmt_records_current_value() {
+        let mut interp = Interpreter::new();
+        interp.exec_stmt(&var_decl("total", int(42))).unwrap();
+
+        interp
+            .exec_stmt(&Stmt::Trace(TraceStmt {
+                name: ident("total"),
+                span: sp(),
+            }))
+            .unwrap();
+
+        assert_eq!(interp.take_trace_output(), vec!["trace total = 42"]);
+    }
+
+    #[test]
     fn undefined_variable_error() {
         let mut interp = Interpreter::new();
         assert!(interp.eval_expr(&var("nonexistent")).is_err());
@@ -5530,6 +5584,7 @@ mod tests {
         let list = Expr::ListConstruct(vec![int(1), int(2), int(3)], sp());
         let for_stmt = Stmt::For(ForStmt {
             variable: ident("item"),
+            value_variable: None,
             view: false,
             iterable: list,
             body: block(vec![assign(
@@ -5550,6 +5605,7 @@ mod tests {
         let list = Expr::ListConstruct(vec![int(1), int(2), int(3), int(4), int(5)], sp());
         let for_stmt = Stmt::For(ForStmt {
             variable: ident("item"),
+            value_variable: None,
             view: false,
             iterable: list,
             body: block(vec![
