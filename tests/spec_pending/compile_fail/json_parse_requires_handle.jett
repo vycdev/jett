@@ -1,0 +1,10 @@
+# SPEC: `json.parse[T](raw)` returns `result[T, string]` and cannot be used
+# without `handle error:`.
+struct User:
+    id: string
+    name: string
+
+function main() returns nothing:
+    string raw = "{\"id\":\"123\",\"name\":\"alice\"}"
+    User user = json.parse[User](raw)
+    return nothing

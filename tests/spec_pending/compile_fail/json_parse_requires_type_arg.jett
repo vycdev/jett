@@ -1,0 +1,7 @@
+# SPEC: `json.parse[Type](raw)` is the only parse form. Untyped
+# `json.parse(raw)` is not part of the language.
+function main() returns nothing:
+    string raw = "{\"id\":\"123\"}"
+    string value = json.parse(raw) handle error:
+        return nothing
+    return nothing

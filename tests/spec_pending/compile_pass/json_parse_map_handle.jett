@@ -1,0 +1,5 @@
+# SPEC: `json.parse[T](raw)` works for generic container types too.
+function parse_headers(raw: string) returns map[string, string]:
+    map[string, string] headers = json.parse[map[string, string]](raw) handle error:
+        return map()
+    return headers

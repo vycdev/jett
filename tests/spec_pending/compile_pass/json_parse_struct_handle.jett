@@ -1,0 +1,10 @@
+# SPEC: `json.parse[Type](raw)` is the canonical typed parse form and returns
+# a result that must be handled explicitly.
+struct User:
+    id: string
+    name: string
+
+function parse_user(raw: string) returns User:
+    User user = json.parse[User](raw) handle error:
+        return User(id: "0", name: "invalid")
+    return user
