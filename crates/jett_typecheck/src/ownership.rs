@@ -188,6 +188,7 @@ impl<'a> OwnershipChecker<'a> {
             }
             Stmt::Assert(assert_stmt) => self.check_assert(assert_stmt),
             Stmt::Trace(trace_stmt) => self.check_trace(trace_stmt),
+            Stmt::Breakpoint(breakpoint_stmt) => self.check_breakpoint(breakpoint_stmt),
             Stmt::Match(match_stmt) => self.check_match(match_stmt),
             Stmt::Respond(resp) => {
                 self.check_expr_ownership(&resp.value);
@@ -199,6 +200,12 @@ impl<'a> OwnershipChecker<'a> {
     fn check_trace(&mut self, trace_stmt: &ast::TraceStmt) {
         let expr = Expr::Ident(trace_stmt.name.clone());
         self.check_expr_ownership(&expr);
+    }
+
+    fn check_breakpoint(&mut self, breakpoint_stmt: &ast::BreakpointStmt) {
+        if let Some(condition) = &breakpoint_stmt.condition {
+            self.check_expr_ownership(condition);
+        }
     }
 
     fn check_var_decl(&mut self, decl: &ast::VarDecl) {

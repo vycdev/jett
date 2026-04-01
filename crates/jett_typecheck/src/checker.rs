@@ -2166,6 +2166,7 @@ impl<'a> TypeChecker<'a> {
             }
             Stmt::Assert(assert_stmt) => self.check_assert(assert_stmt),
             Stmt::Trace(trace_stmt) => self.check_trace(trace_stmt),
+            Stmt::Breakpoint(breakpoint_stmt) => self.check_breakpoint(breakpoint_stmt),
             Stmt::Match(match_stmt) => self.check_match(match_stmt),
             Stmt::Respond(resp) => self.check_respond(resp),
             Stmt::Use(_) | Stmt::Break(_) | Stmt::Continue(_) => {}
@@ -2174,6 +2175,18 @@ impl<'a> TypeChecker<'a> {
 
     fn check_trace(&mut self, trace_stmt: &ast::TraceStmt) {
         self.check_ident(&trace_stmt.name);
+    }
+
+    fn check_breakpoint(&mut self, breakpoint_stmt: &ast::BreakpointStmt) {
+        if let Some(condition) = &breakpoint_stmt.condition {
+            let cond_type = self.check_expr(condition);
+            if cond_type != TypeInterner::ERROR && cond_type != TypeInterner::BOOL {
+                self.sink.emit(errors::condition_not_bool(
+                    &self.type_name(cond_type),
+                    condition.span(),
+                ));
+            }
+        }
     }
 
     fn check_respond(&mut self, resp: &ast::RespondStmt) {
@@ -4168,6 +4181,7 @@ fn stmt_span(stmt: &Stmt) -> Span {
         Stmt::Use(u) => u.span,
         Stmt::Assert(a) => a.span,
         Stmt::Trace(t) => t.span,
+        Stmt::Breakpoint(b) => b.span,
         Stmt::Respond(r) => r.span,
         Stmt::Break(span) | Stmt::Continue(span) => *span,
     }

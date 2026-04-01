@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use rand::Rng;
 
@@ -118,10 +118,10 @@ pub struct Interpreter {
     actor_instances: HashMap<u64, ActorInstance>,
     /// Next actor instance ID.
     next_actor_id: u64,
-    /// Recorded `trace` output lines.
-    trace_output: Vec<String>,
-    /// Whether `trace` should print as the program runs.
-    emit_runtime_trace: bool,
+    /// Recorded debug output lines (`trace`, `breakpoint`).
+    debug_output: Vec<String>,
+    /// Whether debug output should print as the program runs.
+    emit_runtime_debug: bool,
 }
 
 /// Runtime state of a spawned actor instance.
@@ -150,21 +150,21 @@ impl Interpreter {
             actor_defs: HashMap::new(),
             actor_instances: HashMap::new(),
             next_actor_id: 0,
-            trace_output: Vec::new(),
-            emit_runtime_trace: false,
+            debug_output: Vec::new(),
+            emit_runtime_debug: false,
         }
     }
 
-    /// Create an interpreter that emits `trace` output during execution.
+    /// Create an interpreter that emits debug output during execution.
     pub fn new_runtime() -> Self {
         let mut interp = Self::new();
-        interp.emit_runtime_trace = true;
+        interp.emit_runtime_debug = true;
         interp
     }
 
-    /// Drain any trace lines recorded so far.
-    pub fn take_trace_output(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.trace_output)
+    /// Drain any debug lines recorded so far.
+    pub fn take_debug_output(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.debug_output)
     }
 
     // -- Scope management ---------------------------------------------------
@@ -204,9 +204,9 @@ impl Interpreter {
         Err(format!("undefined variable '{name}'"))
     }
 
-    fn emit_trace(&mut self, line: String) {
-        self.trace_output.push(line.clone());
-        if self.emit_runtime_trace {
+    fn emit_debug_line(&mut self, line: String) {
+        self.debug_output.push(line.clone());
+        if self.emit_runtime_debug {
             println!("{line}");
         }
     }
@@ -216,8 +216,28 @@ impl Interpreter {
             .get_variable(name)
             .cloned()
             .ok_or_else(|| format!("undefined variable '{name}'"))?;
-        self.emit_trace(format!("trace {name} = {value}"));
+        self.emit_debug_line(format!("trace {name} = {value}"));
         Ok(())
+    }
+
+    fn hit_breakpoint(&mut self) {
+        let mut bindings = BTreeMap::new();
+        for scope in &self.scopes {
+            for (name, value) in scope {
+                bindings.insert(name.clone(), value.clone());
+            }
+        }
+
+        if bindings.is_empty() {
+            self.emit_debug_line("breakpoint hit".to_string());
+            return;
+        }
+
+        let fields: Vec<String> = bindings
+            .into_iter()
+            .map(|(name, value)| format!("{name} = {value}"))
+            .collect();
+        self.emit_debug_line(format!("breakpoint hit: {}", fields.join(", ")));
     }
 
     // -- Public scope management (for property-based testing) ---------------
@@ -1149,6 +1169,25 @@ impl Interpreter {
 
             Stmt::Trace(trace_stmt) => {
                 self.trace_variable(&trace_stmt.name.name)?;
+                Ok(None)
+            }
+
+            Stmt::Breakpoint(breakpoint_stmt) => {
+                let should_break = if let Some(condition) = &breakpoint_stmt.condition {
+                    match self.eval_expr_flow(condition)? {
+                        ExprFlow::Value(Value::Bool(value)) => value,
+                        ExprFlow::Value(other) => {
+                            return Err(format!("breakpoint condition must be bool, got {other}"));
+                        }
+                        ExprFlow::Signal(signal) => return Ok(Some(signal)),
+                    }
+                } else {
+                    true
+                };
+
+                if should_break {
+                    self.hit_breakpoint();
+                }
                 Ok(None)
             }
 
@@ -5514,7 +5553,40 @@ mod tests {
             }))
             .unwrap();
 
-        assert_eq!(interp.take_trace_output(), vec!["trace total = 42"]);
+        assert_eq!(interp.take_debug_output(), vec!["trace total = 42"]);
+    }
+
+    #[test]
+    fn breakpoint_stmt_records_visible_bindings() {
+        let mut interp = Interpreter::new();
+        interp.exec_stmt(&var_decl("total", int(42))).unwrap();
+
+        interp
+            .exec_stmt(&Stmt::Breakpoint(BreakpointStmt {
+                condition: Some(bool_expr(true)),
+                span: sp(),
+            }))
+            .unwrap();
+
+        assert_eq!(
+            interp.take_debug_output(),
+            vec!["breakpoint hit: total = 42"]
+        );
+    }
+
+    #[test]
+    fn breakpoint_stmt_skips_when_condition_is_false() {
+        let mut interp = Interpreter::new();
+        interp.exec_stmt(&var_decl("total", int(42))).unwrap();
+
+        interp
+            .exec_stmt(&Stmt::Breakpoint(BreakpointStmt {
+                condition: Some(bool_expr(false)),
+                span: sp(),
+            }))
+            .unwrap();
+
+        assert!(interp.take_debug_output().is_empty());
     }
 
     #[test]

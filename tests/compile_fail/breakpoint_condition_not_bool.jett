@@ -1,0 +1,3 @@
+# ERROR: E0306
+function main() returns nothing:
+    breakpoint 42
