@@ -704,7 +704,7 @@ You cannot accidentally ignore an error. The compiler will not let the program c
 function read_config(view fs: Filesystem, path: string) returns result[Config, string]:
     string raw = Filesystem.read_file(view fs, path) handle error:
         return fail("could not read file")
-    return ok(json.parse[Config](raw))
+    return json.parse[Config](raw)
 
 # Complex — E is a custom enum:
 enum DatabaseError:
@@ -715,14 +715,17 @@ enum DatabaseError:
 function query(view net: Network, sql: string) returns result[list[Row], DatabaseError]:
     # ...
 
-list[Row] rows = query(view net, "select * from users") handle error:
-    match error:
-        connection_failed(msg):
-            return fail("db down: {msg}")
-        query_failed(q, reason):
-            return fail("bad query: {q} — {reason}")
-        timeout:
-            return fail("db timed out")
+# Caller remaps DatabaseError to string:
+function load_users(view net: Network) returns result[list[Row], string]:
+    list[Row] rows = query(view net, "select * from users") handle error:
+        match error:
+            connection_failed(msg):
+                return fail("db down: {msg}")
+            query_failed(q, reason):
+                return fail("bad query: {q} — {reason}")
+            timeout:
+                return fail("db timed out")
+    return ok(rows)
 ```
 
 **The `handle` keyword — the only way to coarsen a result or optional:**
