@@ -547,7 +547,7 @@ The HIR is the first representation where generic functions are fully expanded. 
 2. **Method resolution:** `Dog.speak(view my_dog)` is resolved to the specific `implement Speaker for Dog` function.
 3. **Auto-view for field access:** `self.x` is annotated as an implicit view operation.
 4. **Primitive copyability:** Primitive types (`int64`, `float64`, `bool`, `string`) are marked as implicitly copyable — they don't follow linear consumption rules.
-5. **Serialization generation:** For each struct used with `json.serialize[T]` or `json.parse[T]`, generate the serialization/deserialization HIR functions. Respect `serialize` annotations for field name mapping, `secret` fields for `serialize_public`, and refinement type validation during parsing.
+5. **Comptime reflection lowering:** Preserve enough type metadata for comptime code to inspect `type.name[T]()`, `type.kind[T]()`, `type.has_secret[T]()` and `type.fields[T]()`. JSON serialization should be expressible in terms of these reflection primitives rather than as format-specific HIR magic. Deserialization still needs a comptime construction primitive for building `T` from parsed field values.
 
 ---
 
@@ -1084,19 +1084,20 @@ The boundary between compiler-generated code and stdlib-implemented code is a cr
 
 ### Three Categories
 
-**1. Compiler intrinsics** — code the compiler synthesizes at HIR generation time:
+**1. Compiler intrinsics** — minimal compiler-provided operations that expose type metadata or unavoidable runtime hooks:
 
-| Intrinsic | Trigger | What the compiler generates |
+| Intrinsic | Trigger | What the compiler provides |
 |---|---|---|
-| `json.serialize[T]()` | Any use of `json.serialize` with a user-defined struct | Field-by-field JSON string builder based on struct definition |
-| `json.parse[T]()` | Any use of `json.parse` with a user-defined struct | Field-by-field JSON parser with error handling |
-| `json.serialize_public[T]()` | Struct with `secret` fields | Same as `serialize` but skips `secret` fields |
+| `type.name[T]()` | Comptime reflection | Stable display name for `T` |
+| `type.kind[T]()` | Comptime reflection | Category such as `primitive`, `list`, `struct`, `secret` |
+| `type.has_secret[T]()` | Comptime reflection | Whether `T` contains secret data |
+| `type.fields[T]()` | Struct reflection | Ordered `list[TypeField]` metadata for struct fields |
 | `T.to_bytes()` / `T.from_bytes()` | Binary serialization | Field-by-field binary packing/unpacking |
 | `Displayable.display()` for structs | Struct implementing `Displayable` | Field-by-field string representation |
 | `clone` for structs | `clone value` on a struct | Field-by-field recursive deep copy |
 | Refinement type constraint functions | `type Port = int64 where ...` | Synthesized boolean check function |
 
-These are not `.jett` files — the compiler generates the HIR directly from type metadata. The `jett_hir` crate contains the generation logic.
+Format-specific modules such as `json` should live in `.jett` stdlib code as the reflection API matures. Current interpreter implementations may still bootstrap JSON in Rust until comptime field-value access and comptime struct construction exist.
 
 **2. Stdlib functions** — normal Jett code shipped in `stdlib/`:
 

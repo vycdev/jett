@@ -54,6 +54,7 @@
 |---|---|---|---|
 | Comptime interpreter | `jett_comptime` | 134 | Done |
 | Verify blocks (compile-time) | `jett_comptime/verify` | — | Done |
+| Comptime type reflection (`type.name`, `type.kind`, `type.has_secret`, `type.fields`) | `jett_comptime` | — | Partial |
 | 25+ stdlib builtins in interpreter | `jett_comptime` | — | Done |
 
 ### Phase F: Interpreter — COMPLETE
@@ -83,6 +84,7 @@
 | Handle blocks (`handle error:`, `handle:`, `default`) | Done |
 | Generic structs | Done |
 | Generic functions | Done |
+| Comptime struct introspection (`TypeField` metadata) | Partial |
 | String escape sequences (`\"`, `\\`, `\n`, `\t`, `\r`) | Done |
 | Inline function expressions (`function(x: T) returns U: body`) | Done |
 | Higher-order list functions (`filter`, `map`, `find`, `sort_by`, `all`, `any`, `count`, `sum`, `group_by`) | Done |

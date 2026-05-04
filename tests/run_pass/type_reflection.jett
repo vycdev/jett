@@ -1,0 +1,75 @@
+namespace test
+
+struct User:
+    id: string
+    age: int64
+    api_key: secret[string]
+
+struct TokenBox:
+    tokens: list[secret[string]]
+
+struct Pair[T, U]:
+    first: T
+    second: U
+
+function user_field_count() returns int64:
+    list[TypeField] fields = type.fields[User]()
+    return list.length(fields)
+
+function user_field_type(field_name: string) returns string:
+    list[TypeField] fields = type.fields[User]()
+    string found = "missing"
+    for field in fields:
+        if field.name == field_name:
+            found = field.type_name
+    return found
+
+function user_field_secret(field_name: string) returns bool:
+    list[TypeField] fields = type.fields[User]()
+    bool found = false
+    for field in fields:
+        if field.name == field_name:
+            found = field.has_secret
+    return found
+
+function user_field_serialize_name(field_name: string) returns string:
+    list[TypeField] fields = type.fields[User]()
+    string found = "missing"
+    for field in fields:
+        if field.name == field_name:
+            found = field.serialize_name
+    return found
+
+function pair_field_type(field_name: string) returns string:
+    list[TypeField] fields = type.fields[Pair[int64, string]]()
+    string found = "missing"
+    for field in fields:
+        if field.name == field_name:
+            found = field.type_name
+    return found
+
+function reflected_name[T]() returns string:
+    return type.name[T]()
+
+function reflected_field_count[T]() returns int64:
+    list[TypeField] fields = type.fields[T]()
+    return list.length(fields)
+
+verify type_reflection:
+    assert type.name[int64]() == "int64"
+    assert type.name[list[string]]() == "list[string]"
+    assert reflected_name[Pair[string, int64]]() == "Pair[string, int64]"
+    assert type.kind[int64]() == "primitive"
+    assert type.kind[list[string]]() == "list"
+    assert type.kind[User]() == "struct"
+    assert user_field_count() == 3
+    assert reflected_field_count[User]() == 3
+    assert user_field_type("id") == "string"
+    assert user_field_type("age") == "int64"
+    assert user_field_serialize_name("id") == "id"
+    assert user_field_secret("api_key") == true
+    assert type.has_secret[User]() == true
+    assert type.has_secret[TokenBox]() == true
+    assert type.has_secret[Pair[int64, string]]() == false
+    assert pair_field_type("first") == "int64"
+    assert pair_field_type("second") == "string"

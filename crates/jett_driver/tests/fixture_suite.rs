@@ -189,12 +189,14 @@ run_pass_fixture!(
 run_pass_fixture!(run_pass_bitfield_roundtrip, "bitfield_roundtrip.jett");
 run_pass_fixture!(run_pass_generic_struct, "generic_struct.jett");
 run_pass_fixture!(run_pass_generic_function, "generic_function.jett");
+run_pass_fixture!(run_pass_type_reflection, "type_reflection.jett");
 run_pass_fixture!(run_pass_actor_counter, "actor_counter.jett");
 run_pass_fixture!(run_pass_structured_concurrency, "structured_concurrency.jett");
 run_pass_fixture!(run_pass_map_operations, "map_operations.jett");
 run_pass_fixture!(run_pass_list_operations, "list_operations.jett");
 run_pass_fixture!(run_pass_math_operations, "math_operations.jett");
 run_pass_fixture!(run_pass_json_serialize, "json_serialize.jett");
+run_pass_fixture!(run_pass_json_serialize_public, "json_serialize_public.jett");
 run_pass_fixture!(run_pass_escape_sequences, "escape_sequences.jett");
 run_pass_fixture!(run_pass_list_higher_order, "list_higher_order.jett");
 run_pass_fixture!(run_pass_inline_functions, "inline_functions.jett");

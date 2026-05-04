@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use rand::Rng;
 
@@ -93,6 +93,13 @@ struct RefinementDef {
     constraint: Expr,
 }
 
+#[derive(Debug, Clone)]
+struct ReflectionField {
+    name: String,
+    ty: TypeExpr,
+    serialize_name: String,
+}
+
 pub struct Interpreter {
     /// Stack of lexical scopes. The last element is the innermost scope.
     scopes: Vec<Environment>,
@@ -114,6 +121,8 @@ pub struct Interpreter {
     machines: HashMap<String, MachineDef>,
     /// Registered actor definitions: type_name -> ActorDef (AST).
     actor_defs: HashMap<String, ActorDef>,
+    /// Active generic type argument substitutions for interpreted generic functions.
+    type_arg_scopes: Vec<HashMap<String, TypeExpr>>,
     /// Live actor instances keyed by unique ID.
     actor_instances: HashMap<u64, ActorInstance>,
     /// Next actor instance ID.
@@ -148,6 +157,7 @@ impl Interpreter {
             type_aliases: HashMap::new(),
             machines: HashMap::new(),
             actor_defs: HashMap::new(),
+            type_arg_scopes: Vec::new(),
             actor_instances: HashMap::new(),
             next_actor_id: 0,
             debug_output: Vec::new(),
@@ -529,90 +539,9 @@ impl Interpreter {
             }
 
             // Function / method calls
-            Expr::Call(callee, args, _) | Expr::GenericCall(callee, _, args, _) => {
-                // Check for machine construction/transition BEFORE evaluating
-                // args, since state-name arguments are bare identifiers (not
-                // variables) and would fail evaluation.
-                match callee.as_ref() {
-                    Expr::Ident(ident) if self.structs.contains_key(&ident.name) => {}
-                    Expr::Ident(ident) if self.machines.contains_key(&ident.name) => {
-                        return Ok(ExprFlow::Value(self.construct_machine(&ident.name, args)?));
-                    }
-                    Expr::FieldAccess(obj, field, _) => {
-                        if let Expr::Ident(ident) = obj.as_ref() {
-                            if field.name == "transition" && self.machines.contains_key(&ident.name)
-                            {
-                                return Ok(ExprFlow::Value(
-                                    self.machine_transition(&ident.name, args)?,
-                                ));
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-
-                let mut arg_values = Vec::with_capacity(args.len());
-                for arg in args {
-                    arg_values.push(value_or_signal!(self, &arg.value));
-                }
-
-                match callee.as_ref() {
-                    Expr::Ident(ident) if self.structs.contains_key(&ident.name) => Ok(
-                        ExprFlow::Value(self.construct_struct(&ident.name, args, arg_values)?),
-                    ),
-                    Expr::Ident(ident) if self.bitfields.contains_key(&ident.name) => Ok(
-                        ExprFlow::Value(self.construct_bitfield(&ident.name, args, arg_values)?),
-                    ),
-                    Expr::Ident(ident) => Ok(ExprFlow::Value(
-                        self.call_function(&ident.name, arg_values)?,
-                    )),
-                    // Handle enum variant construction: Type.variant(args)
-                    Expr::EnumVariant(type_name, variant, _) => Ok(ExprFlow::Value(Value::Enum {
-                        type_name: type_name.name.clone(),
-                        variant: variant.name.clone(),
-                        fields: arg_values,
-                    })),
-                    // Handle dotted names: string.trim(...), Stdout.write(...), etc.
-                    // Also handles enum variant construction: Shape.circle(5.0)
-                    Expr::FieldAccess(obj, field, _) => {
-                        let dotted = Self::extract_dotted_name(obj, &field.name);
-                        if let Some(ref name) = dotted {
-                            // Try higher-order built-ins first (require &mut self).
-                            if let Some(result) = self.call_higher_order_builtin(name, arg_values.clone()) {
-                                return Ok(ExprFlow::Value(result?));
-                            }
-                            // Try built-in functions first.
-                            if let Some(result) = self.call_builtin(name, &arg_values) {
-                                return Ok(ExprFlow::Value(result?));
-                            }
-                            // Try user-defined dotted functions.
-                            if self.functions.contains_key(name.as_str())
-                                || self.resolve_interface_dispatch(name, &arg_values).is_some()
-                            {
-                                return Ok(ExprFlow::Value(self.call_function(name, arg_values)?));
-                            }
-                        }
-                        // Fall through to enum variant construction if no
-                        // built-in or user function matched.
-                        if let Expr::Ident(ident) = obj.as_ref() {
-                            return Ok(ExprFlow::Value(Value::Enum {
-                                type_name: ident.name.clone(),
-                                variant: field.name.clone(),
-                                fields: arg_values,
-                            }));
-                        }
-                        match dotted {
-                            Some(name) => {
-                                Ok(ExprFlow::Value(self.call_function(&name, arg_values)?))
-                            }
-                            None => {
-                                Err("only named function calls are supported in comptime"
-                                    .to_string())
-                            }
-                        }
-                    }
-                    _ => Err("only named function calls are supported in comptime".to_string()),
-                }
+            Expr::Call(callee, args, _) => self.eval_call_flow(callee, &[], args),
+            Expr::GenericCall(callee, type_args, args, _) => {
+                self.eval_call_flow(callee, type_args, args)
             }
 
             // List construction
@@ -835,6 +764,100 @@ impl Interpreter {
     /// Evaluate a single pipeline step: call the step's function with the
     /// accumulated `piped_value` as the first argument, followed by any
     /// extra arguments.
+    fn eval_call_flow(
+        &mut self,
+        callee: &Expr,
+        type_args: &[TypeExpr],
+        args: &[CallArg],
+    ) -> Result<ExprFlow, String> {
+        // Check for machine construction/transition BEFORE evaluating args,
+        // since state-name arguments are bare identifiers (not variables) and
+        // would fail evaluation.
+        match callee {
+            Expr::Ident(ident) if self.structs.contains_key(&ident.name) => {}
+            Expr::Ident(ident) if self.machines.contains_key(&ident.name) => {
+                return Ok(ExprFlow::Value(self.construct_machine(&ident.name, args)?));
+            }
+            Expr::FieldAccess(obj, field, _) => {
+                if let Expr::Ident(ident) = obj.as_ref() {
+                    if field.name == "transition" && self.machines.contains_key(&ident.name) {
+                        return Ok(ExprFlow::Value(self.machine_transition(&ident.name, args)?));
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        let mut arg_values = Vec::with_capacity(args.len());
+        for arg in args {
+            arg_values.push(value_or_signal!(self, &arg.value));
+        }
+
+        match callee {
+            Expr::Ident(ident) if self.structs.contains_key(&ident.name) => Ok(ExprFlow::Value(
+                self.construct_struct(&ident.name, args, arg_values)?,
+            )),
+            Expr::Ident(ident) if self.bitfields.contains_key(&ident.name) => Ok(ExprFlow::Value(
+                self.construct_bitfield(&ident.name, args, arg_values)?,
+            )),
+            Expr::Ident(ident) => Ok(ExprFlow::Value(self.call_function_with_type_args(
+                &ident.name,
+                type_args,
+                arg_values,
+            )?)),
+            // Handle enum variant construction: Type.variant(args)
+            Expr::EnumVariant(type_name, variant, _) => Ok(ExprFlow::Value(Value::Enum {
+                type_name: type_name.name.clone(),
+                variant: variant.name.clone(),
+                fields: arg_values,
+            })),
+            // Handle dotted names: string.trim(...), Stdout.write(...), etc.
+            // Also handles enum variant construction: Shape.circle(5.0)
+            Expr::FieldAccess(obj, field, _) => {
+                let dotted = Self::extract_dotted_name(obj, &field.name);
+                if let Some(ref name) = dotted {
+                    // Try higher-order built-ins first (require &mut self).
+                    if let Some(result) = self.call_higher_order_builtin(name, arg_values.clone()) {
+                        return Ok(ExprFlow::Value(result?));
+                    }
+                    // Try type-reflection built-ins before ordinary built-ins.
+                    if let Some(result) =
+                        self.call_builtin_with_type_args(name, type_args, &arg_values)
+                    {
+                        return Ok(ExprFlow::Value(result?));
+                    }
+                    if let Some(result) = self.call_builtin(name, &arg_values) {
+                        return Ok(ExprFlow::Value(result?));
+                    }
+                    // Try user-defined dotted functions.
+                    if self.functions.contains_key(name.as_str())
+                        || self.resolve_interface_dispatch(name, &arg_values).is_some()
+                    {
+                        return Ok(ExprFlow::Value(
+                            self.call_function_with_type_args(name, type_args, arg_values)?,
+                        ));
+                    }
+                }
+                // Fall through to enum variant construction if no built-in or
+                // user function matched.
+                if let Expr::Ident(ident) = obj.as_ref() {
+                    return Ok(ExprFlow::Value(Value::Enum {
+                        type_name: ident.name.clone(),
+                        variant: field.name.clone(),
+                        fields: arg_values,
+                    }));
+                }
+                match dotted {
+                    Some(name) => Ok(ExprFlow::Value(
+                        self.call_function_with_type_args(&name, type_args, arg_values)?,
+                    )),
+                    None => Err("only named function calls are supported in comptime".to_string()),
+                }
+            }
+            _ => Err("only named function calls are supported in comptime".to_string()),
+        }
+    }
+
     fn eval_pipeline_step(
         &mut self,
         step: &PipelineStep,
@@ -1778,6 +1801,385 @@ impl Interpreter {
         Some(value)
     }
 
+    fn call_builtin_with_type_args(
+        &self,
+        name: &str,
+        type_args: &[TypeExpr],
+        args: &[Value],
+    ) -> Option<Result<Value, String>> {
+        let is_reflection_builtin = matches!(
+            name,
+            "type.name" | "type.kind" | "type.has_secret" | "type.fields"
+        );
+        if !is_reflection_builtin {
+            return None;
+        }
+
+        if let Some(err) = check_args(name, 0, args) {
+            return Some(err);
+        }
+        if type_args.len() != 1 {
+            return Some(Err(format!(
+                "{name} expects 1 type argument, got {}",
+                type_args.len()
+            )));
+        }
+
+        let ty = self.substitute_type_expr(&type_args[0]);
+        Some(match name {
+            "type.name" => Ok(Value::String(type_expr_display(&ty))),
+            "type.kind" => Ok(Value::String(self.type_expr_kind(&ty).to_string())),
+            "type.has_secret" => Ok(Value::Bool(self.type_expr_has_secret(&ty))),
+            "type.fields" => Ok(Value::List(
+                self.type_expr_fields(&ty)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, field)| self.type_field_value(index, field))
+                    .collect(),
+            )),
+            _ => unreachable!(),
+        })
+    }
+
+    fn current_type_binding(&self, name: &str) -> Option<TypeExpr> {
+        self.type_arg_scopes
+            .iter()
+            .rev()
+            .find_map(|scope| scope.get(name).cloned())
+    }
+
+    fn substitute_type_expr(&self, ty: &TypeExpr) -> TypeExpr {
+        match ty {
+            TypeExpr::Named(ident) => self
+                .current_type_binding(&ident.name)
+                .unwrap_or_else(|| ty.clone()),
+            TypeExpr::Generic(ident, args, span) => TypeExpr::Generic(
+                ident.clone(),
+                args.iter()
+                    .map(|arg| self.substitute_type_expr(arg))
+                    .collect(),
+                *span,
+            ),
+            TypeExpr::View(inner, span) => {
+                TypeExpr::View(Box::new(self.substitute_type_expr(inner)), *span)
+            }
+            TypeExpr::Function(params, return_type, span) => TypeExpr::Function(
+                params
+                    .iter()
+                    .map(|param| self.substitute_type_expr(param))
+                    .collect(),
+                Box::new(self.substitute_type_expr(return_type)),
+                *span,
+            ),
+        }
+    }
+
+    fn substitute_type_expr_with_map(
+        &self,
+        ty: &TypeExpr,
+        substitutions: &HashMap<String, TypeExpr>,
+    ) -> TypeExpr {
+        match ty {
+            TypeExpr::Named(ident) => substitutions
+                .get(&ident.name)
+                .cloned()
+                .or_else(|| self.current_type_binding(&ident.name))
+                .unwrap_or_else(|| ty.clone()),
+            TypeExpr::Generic(ident, args, span) => TypeExpr::Generic(
+                ident.clone(),
+                args.iter()
+                    .map(|arg| self.substitute_type_expr_with_map(arg, substitutions))
+                    .collect(),
+                *span,
+            ),
+            TypeExpr::View(inner, span) => TypeExpr::View(
+                Box::new(self.substitute_type_expr_with_map(inner, substitutions)),
+                *span,
+            ),
+            TypeExpr::Function(params, return_type, span) => TypeExpr::Function(
+                params
+                    .iter()
+                    .map(|param| self.substitute_type_expr_with_map(param, substitutions))
+                    .collect(),
+                Box::new(self.substitute_type_expr_with_map(return_type, substitutions)),
+                *span,
+            ),
+        }
+    }
+
+    fn type_expr_kind(&self, ty: &TypeExpr) -> &'static str {
+        match ty {
+            TypeExpr::Named(ident) => {
+                if let Some(bound) = self.current_type_binding(&ident.name) {
+                    return self.type_expr_kind(&bound);
+                }
+                if matches!(
+                    ident.name.as_str(),
+                    "int64" | "float64" | "string" | "bool" | "bytes" | "nothing"
+                ) {
+                    "primitive"
+                } else if self.structs.contains_key(&ident.name) {
+                    "struct"
+                } else {
+                    "named"
+                }
+            }
+            TypeExpr::Generic(ident, _, _) => {
+                if self.structs.contains_key(&ident.name) {
+                    "struct"
+                } else {
+                    match ident.name.as_str() {
+                        "list" => "list",
+                        "map" => "map",
+                        "set" => "set",
+                        "optional" => "optional",
+                        "result" => "result",
+                        "secret" => "secret",
+                        other if self.structs.contains_key(other) => "struct",
+                        _ => "generic",
+                    }
+                }
+            }
+            TypeExpr::View(inner, _) => self.type_expr_kind(inner),
+            TypeExpr::Function(_, _, _) => "function",
+        }
+    }
+
+    fn type_expr_has_secret(&self, ty: &TypeExpr) -> bool {
+        let ty = self.substitute_type_expr(ty);
+        self.type_expr_has_secret_inner(&ty, &mut HashSet::new())
+    }
+
+    fn type_expr_has_secret_inner(&self, ty: &TypeExpr, visited: &mut HashSet<String>) -> bool {
+        match ty {
+            TypeExpr::Named(ident) => {
+                if let Some(bound) = self.current_type_binding(&ident.name) {
+                    return self.type_expr_has_secret_inner(&bound, visited);
+                }
+                let Some(strukt) = self.structs.get(&ident.name) else {
+                    return false;
+                };
+                if !visited.insert(type_expr_display(ty)) {
+                    return false;
+                }
+                strukt.fields.iter().any(|field| {
+                    self.type_expr_has_secret_inner(&self.substitute_type_expr(&field.ty), visited)
+                })
+            }
+            TypeExpr::Generic(ident, args, _) => {
+                if ident.name == "secret" {
+                    return true;
+                }
+                if let Some(strukt) = self.structs.get(&ident.name) {
+                    if !visited.insert(type_expr_display(ty)) {
+                        return false;
+                    }
+                    let substitutions = self.generic_type_substitutions(strukt, args);
+                    return strukt.fields.iter().any(|field| {
+                        let field_ty = self.substitute_type_expr_with_map(&field.ty, &substitutions);
+                        self.type_expr_has_secret_inner(&field_ty, visited)
+                    });
+                }
+                args.iter()
+                    .any(|arg| self.type_expr_has_secret_inner(arg, visited))
+            }
+            TypeExpr::View(inner, _) => self.type_expr_has_secret_inner(inner, visited),
+            TypeExpr::Function(params, return_type, _) => {
+                params
+                    .iter()
+                    .any(|param| self.type_expr_has_secret_inner(param, visited))
+                    || self.type_expr_has_secret_inner(return_type, visited)
+            }
+        }
+    }
+
+    fn type_expr_fields(&self, ty: &TypeExpr) -> Vec<ReflectionField> {
+        match ty {
+            TypeExpr::Named(ident) => self
+                .structs
+                .get(&ident.name)
+                .map(|strukt| {
+                    strukt
+                        .fields
+                        .iter()
+                        .map(|field| ReflectionField {
+                            name: field.name.name.clone(),
+                            ty: self.substitute_type_expr(&field.ty),
+                            serialize_name: field.name.name.clone(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            TypeExpr::Generic(ident, args, _) => self
+                .structs
+                .get(&ident.name)
+                .map(|strukt| {
+                    let substitutions = self.generic_type_substitutions(strukt, args);
+                    strukt
+                        .fields
+                        .iter()
+                        .map(|field| ReflectionField {
+                            name: field.name.name.clone(),
+                            ty: self.substitute_type_expr_with_map(&field.ty, &substitutions),
+                            serialize_name: field.name.name.clone(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            TypeExpr::View(inner, _) => self.type_expr_fields(inner),
+            TypeExpr::Function(_, _, _) => Vec::new(),
+        }
+    }
+
+    fn generic_type_substitutions(
+        &self,
+        strukt: &StructDef,
+        args: &[TypeExpr],
+    ) -> HashMap<String, TypeExpr> {
+        strukt
+            .type_params
+            .iter()
+            .zip(args.iter())
+            .map(|(param, arg)| (param.name.clone(), self.substitute_type_expr(arg)))
+            .collect()
+    }
+
+    fn type_field_value(&self, index: usize, field: ReflectionField) -> Value {
+        let kind = self.type_expr_kind(&field.ty).to_string();
+        let has_secret = self.type_expr_has_secret(&field.ty);
+        Value::Struct {
+            type_name: "TypeField".to_string(),
+            fields: vec![
+                ("index".to_string(), Value::Int64(index as i64)),
+                ("name".to_string(), Value::String(field.name)),
+                ("type_name".to_string(), Value::String(type_expr_display(&field.ty))),
+                ("kind".to_string(), Value::String(kind)),
+                (
+                    "serialize_name".to_string(),
+                    Value::String(field.serialize_name),
+                ),
+                ("has_secret".to_string(), Value::Bool(has_secret)),
+            ],
+        }
+    }
+
+    fn value_to_json_reflected(&self, value: &Value, public_only: bool) -> String {
+        match value {
+            Value::Int64(n) => n.to_string(),
+            Value::Float64(f) => {
+                if f.fract() == 0.0 && f.is_finite() {
+                    format!("{f:.1}")
+                } else {
+                    f.to_string()
+                }
+            }
+            Value::String(s) => {
+                let escaped = s
+                    .replace('\\', "\\\\")
+                    .replace('"', "\\\"")
+                    .replace('\n', "\\n")
+                    .replace('\r', "\\r")
+                    .replace('\t', "\\t");
+                format!("\"{escaped}\"")
+            }
+            Value::Bool(b) => b.to_string(),
+            Value::Nothing | Value::OptionalNone => "null".to_string(),
+            Value::OptionalSome(inner) => self.value_to_json_reflected(inner, public_only),
+            Value::ResultOk(inner) => {
+                format!(
+                    "{{\"ok\":{}}}",
+                    self.value_to_json_reflected(inner, public_only)
+                )
+            }
+            Value::ResultFail(inner) => {
+                format!(
+                    "{{\"fail\":{}}}",
+                    self.value_to_json_reflected(inner, public_only)
+                )
+            }
+            Value::List(items) => {
+                let elems: Vec<String> = items
+                    .iter()
+                    .map(|item| self.value_to_json_reflected(item, public_only))
+                    .collect();
+                format!("[{}]", elems.join(","))
+            }
+            Value::Map(entries) => {
+                let pairs: Vec<String> = entries
+                    .iter()
+                    .map(|(k, v)| {
+                        format!(
+                            "{}:{}",
+                            self.value_to_json_reflected(k, public_only),
+                            self.value_to_json_reflected(v, public_only)
+                        )
+                    })
+                    .collect();
+                format!("{{{}}}", pairs.join(","))
+            }
+            Value::Set(items) => {
+                let elems: Vec<String> = items
+                    .iter()
+                    .map(|item| self.value_to_json_reflected(item, public_only))
+                    .collect();
+                format!("[{}]", elems.join(","))
+            }
+            Value::Struct { type_name, fields } => {
+                let pairs: Vec<String> = fields
+                    .iter()
+                    .filter(|(name, _)| {
+                        !public_only || !self.struct_field_has_secret(type_name, name)
+                    })
+                    .map(|(name, value)| {
+                        format!(
+                            "\"{}\":{}",
+                            name,
+                            self.value_to_json_reflected(value, public_only)
+                        )
+                    })
+                    .collect();
+                format!("{{{}}}", pairs.join(","))
+            }
+            Value::Enum {
+                type_name: _,
+                variant,
+                fields,
+            } => {
+                if fields.is_empty() {
+                    format!("\"{}\"", variant)
+                } else {
+                    let elems: Vec<String> = fields
+                        .iter()
+                        .map(|field| self.value_to_json_reflected(field, public_only))
+                        .collect();
+                    format!("{{\"{}\":[{}]}}", variant, elems.join(","))
+                }
+            }
+            Value::Bytes(bytes) => {
+                let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+                format!("\"0x{hex}\"")
+            }
+            Value::Error(msg) => format!(
+                "{{\"error\":{}}}",
+                self.value_to_json_reflected(&Value::String(msg.clone()), public_only)
+            ),
+            _ => "null".to_string(),
+        }
+    }
+
+    fn struct_field_has_secret(&self, type_name: &str, field_name: &str) -> bool {
+        self.structs
+            .get(type_name)
+            .and_then(|strukt| {
+                strukt
+                    .fields
+                    .iter()
+                    .find(|field| field.name.name == field_name)
+            })
+            .map(|field| self.type_expr_has_secret(&field.ty))
+            .unwrap_or(false)
+    }
+
     // =========================================================================
     // Built-in implementations
     //
@@ -1834,7 +2236,10 @@ impl Interpreter {
             // -- JSON operations ---------------------------------------------
             "json.serialize" | "json.serialize_public" => {
                 require_args!(name, 1, args);
-                Some(Ok(Value::String(value_to_json(&args[0]))))
+                Some(Ok(Value::String(self.value_to_json_reflected(
+                    &args[0],
+                    name == "json.serialize_public",
+                ))))
             }
 
             // -- Random operations (stdlib/random.jett) -----------------------
@@ -3954,8 +4359,20 @@ impl Interpreter {
     /// Built-in standard library functions are checked first; if the name
     /// does not match a built-in, user-defined functions are consulted.
     pub fn call_function(&mut self, name: &str, args: Vec<Value>) -> Result<Value, String> {
+        self.call_function_with_type_args(name, &[], args)
+    }
+
+    fn call_function_with_type_args(
+        &mut self,
+        name: &str,
+        type_args: &[TypeExpr],
+        args: Vec<Value>,
+    ) -> Result<Value, String> {
         // Check higher-order built-ins first (require &mut self).
         if let Some(result) = self.call_higher_order_builtin(name, args.clone()) {
+            return result;
+        }
+        if let Some(result) = self.call_builtin_with_type_args(name, type_args, &args) {
             return result;
         }
         // Check built-in functions first.
@@ -3990,16 +4407,30 @@ impl Interpreter {
             ));
         }
 
+        let type_scope = self.type_scope_for_function(&func, type_args)?;
+        self.type_arg_scopes.push(type_scope);
+
         // Create a new scope and bind parameters.
         self.push_scope();
+        let mut bind_error = None;
         for (param, arg) in func.params.iter().zip(args) {
             let type_name = type_expr_name(&param.ty);
-            self.check_refinement(&type_name, &arg)?;
+            if let Err(message) = self.check_refinement(&type_name, &arg) {
+                bind_error = Some(message);
+                break;
+            }
             self.set_variable(&param.name.name, arg);
         }
+        if let Some(message) = bind_error {
+            self.pop_scope();
+            self.type_arg_scopes.pop();
+            return Err(message);
+        }
 
-        let result = self.exec_block_inner(&func.body)?;
+        let result = self.exec_block_inner(&func.body);
         self.pop_scope();
+        self.type_arg_scopes.pop();
+        let result = result?;
 
         let value = match result {
             Some(Signal::Return(v)) => v,
@@ -4015,6 +4446,36 @@ impl Interpreter {
         }
 
         Ok(value)
+    }
+
+    fn type_scope_for_function(
+        &self,
+        func: &FunctionDef,
+        type_args: &[TypeExpr],
+    ) -> Result<HashMap<String, TypeExpr>, String> {
+        if func.type_params.is_empty() && type_args.is_empty() {
+            return Ok(HashMap::new());
+        }
+        if func.type_params.len() != type_args.len() {
+            return Err(format!(
+                "function '{}' expects {} type argument(s), got {}",
+                func.name.name,
+                func.type_params.len(),
+                type_args.len()
+            ));
+        }
+
+        let raw: HashMap<String, TypeExpr> = func
+            .type_params
+            .iter()
+            .zip(type_args.iter())
+            .map(|(param, arg)| (param.name.clone(), self.substitute_type_expr(arg)))
+            .collect();
+
+        Ok(raw
+            .iter()
+            .map(|(name, ty)| (name.clone(), self.substitute_type_expr_with_map(ty, &raw)))
+            .collect())
     }
 
     /// Try to call a higher-order built-in that requires `&mut self` (because
@@ -4892,77 +5353,31 @@ fn eval_binary_op(left: &Value, op: BinOp, right: &Value) -> Result<Value, Strin
 }
 
 /// Extract the simple name from a `TypeExpr` (e.g. `"int64"`, `"Port"`, `"list"`).
-fn value_to_json(value: &Value) -> String {
-    match value {
-        Value::Int64(n) => n.to_string(),
-        Value::Float64(f) => {
-            if f.fract() == 0.0 && f.is_finite() {
-                format!("{f:.1}")
-            } else {
-                f.to_string()
-            }
-        }
-        Value::String(s) => {
-            let escaped = s
-                .replace('\\', "\\\\")
-                .replace('"', "\\\"")
-                .replace('\n', "\\n")
-                .replace('\r', "\\r")
-                .replace('\t', "\\t");
-            format!("\"{escaped}\"")
-        }
-        Value::Bool(b) => b.to_string(),
-        Value::Nothing => "null".to_string(),
-        Value::OptionalNone => "null".to_string(),
-        Value::OptionalSome(inner) => value_to_json(inner),
-        Value::ResultOk(inner) => {
-            format!("{{\"ok\":{}}}", value_to_json(inner))
-        }
-        Value::ResultFail(inner) => {
-            format!("{{\"fail\":{}}}", value_to_json(inner))
-        }
-        Value::List(items) => {
-            let elems: Vec<String> = items.iter().map(value_to_json).collect();
-            format!("[{}]", elems.join(","))
-        }
-        Value::Map(entries) => {
-            let pairs: Vec<String> = entries
-                .iter()
-                .map(|(k, v)| format!("{}:{}", value_to_json(k), value_to_json(v)))
-                .collect();
-            format!("{{{}}}", pairs.join(","))
-        }
-        Value::Struct { type_name: _, fields } => {
-            let pairs: Vec<String> = fields
-                .iter()
-                .map(|(k, v)| format!("\"{}\":{}", k, value_to_json(v)))
-                .collect();
-            format!("{{{}}}", pairs.join(","))
-        }
-        Value::Enum { type_name: _, variant, fields } => {
-            if fields.is_empty() {
-                format!("\"{}\"", variant)
-            } else {
-                let elems: Vec<String> = fields.iter().map(value_to_json).collect();
-                format!("{{\"{}\":[{}]}}", variant, elems.join(","))
-            }
-        }
-        Value::Bytes(bytes) => {
-            // Encode as base64-like hex for JSON
-            let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
-            format!("\"0x{hex}\"")
-        }
-        Value::Error(msg) => format!("{{\"error\":{}}}", value_to_json(&Value::String(msg.clone()))),
-        _ => "null".to_string(),
-    }
-}
-
 fn type_expr_name(ty: &TypeExpr) -> String {
     match ty {
         TypeExpr::Named(ident) => ident.name.clone(),
         TypeExpr::Generic(ident, _, _) => ident.name.clone(),
         TypeExpr::View(inner, _) => type_expr_name(inner),
         TypeExpr::Function(_, _, _) => "function".to_string(),
+    }
+}
+
+fn type_expr_display(ty: &TypeExpr) -> String {
+    match ty {
+        TypeExpr::Named(ident) => ident.name.clone(),
+        TypeExpr::Generic(ident, args, _) => {
+            let args = args.iter().map(type_expr_display).collect::<Vec<_>>();
+            format!("{}[{}]", ident.name, args.join(", "))
+        }
+        TypeExpr::View(inner, _) => format!("view {}", type_expr_display(inner)),
+        TypeExpr::Function(params, return_type, _) => {
+            let params = params.iter().map(type_expr_display).collect::<Vec<_>>();
+            format!(
+                "function({}) returns {}",
+                params.join(", "),
+                type_expr_display(return_type)
+            )
+        }
     }
 }
 

@@ -94,7 +94,9 @@ impl Resolver {
             "optional",
             "result",
             "secret",
+            "TypeField",
             "json",
+            "type",
             // Capability types
             "Stdout",
             "Stderr",
@@ -930,6 +932,10 @@ fn is_builtin_type(name: &str) -> bool {
             | "map"
             | "result"
             | "optional"
+            | "secret"
+            | "set"
+            | "bytes"
+            | "TypeField"
     )
 }
 
@@ -941,7 +947,7 @@ fn is_builtin_module(name: &str) -> bool {
         name,
         "math" | "json" | "random" | "encoding" | "crypto" | "time" | "os" | "log"
             | "format" | "validate" | "regex" | "csv" | "uuid" | "string" | "list"
-            | "map" | "set" | "net" | "bitfield"
+            | "map" | "set" | "net" | "bitfield" | "type"
     )
 }
 

@@ -115,7 +115,7 @@ impl<'a> TypeChecker<'a> {
             .map(|def| (def.span, def.id))
             .collect();
 
-        Self {
+        let mut checker = Self {
             interner: TypeInterner::new(),
             resolve,
             sink: DiagnosticSink::new(),
@@ -140,7 +140,26 @@ impl<'a> TypeChecker<'a> {
             type_var_subst: HashMap::new(),
             generic_function_templates: HashMap::new(),
             current_respond_type: None,
-        }
+        };
+        checker.install_builtin_metadata_types();
+        checker
+    }
+
+    fn install_builtin_metadata_types(&mut self) {
+        let sid = self.interner.add_struct(TypeStructDef {
+            name: "TypeField".to_string(),
+            fields: vec![
+                ("index".to_string(), TypeInterner::INT64),
+                ("name".to_string(), TypeInterner::STRING),
+                ("type_name".to_string(), TypeInterner::STRING),
+                ("kind".to_string(), TypeInterner::STRING),
+                ("serialize_name".to_string(), TypeInterner::STRING),
+                ("has_secret".to_string(), TypeInterner::BOOL),
+            ],
+            methods: Vec::new(),
+        });
+        let ty = self.interner.intern(Type::Struct(sid));
+        self.named_types.insert("TypeField".to_string(), ty);
     }
 
     // ------------------------------------------------------------------
@@ -620,6 +639,44 @@ impl<'a> TypeChecker<'a> {
 
                 let value_ty = self.resolve_type_expr(&type_args[0]);
                 Some((vec![value_ty], TypeInterner::STRING))
+            }
+            "type.name" | "type.kind" => {
+                if type_args.len() != 1 {
+                    self.sink.emit(errors::unknown_type(
+                        &format!("{name} (expected 1 type argument, got {})", type_args.len()),
+                        span,
+                    ));
+                    return Some((vec![], TypeInterner::ERROR));
+                }
+                let _ = self.resolve_type_expr(&type_args[0]);
+                Some((vec![], TypeInterner::STRING))
+            }
+            "type.has_secret" => {
+                if type_args.len() != 1 {
+                    self.sink.emit(errors::unknown_type(
+                        &format!("{name} (expected 1 type argument, got {})", type_args.len()),
+                        span,
+                    ));
+                    return Some((vec![], TypeInterner::ERROR));
+                }
+                let _ = self.resolve_type_expr(&type_args[0]);
+                Some((vec![], TypeInterner::BOOL))
+            }
+            "type.fields" => {
+                if type_args.len() != 1 {
+                    self.sink.emit(errors::unknown_type(
+                        &format!("{name} (expected 1 type argument, got {})", type_args.len()),
+                        span,
+                    ));
+                    return Some((vec![], TypeInterner::ERROR));
+                }
+                let _ = self.resolve_type_expr(&type_args[0]);
+                let type_field_ty = self
+                    .named_types
+                    .get("TypeField")
+                    .copied()
+                    .unwrap_or(TypeInterner::ERROR);
+                Some((vec![], self.interner.intern(Type::List(type_field_ty))))
             }
             "secret.redact" => Some((
                 vec![self.interner.intern(Type::Secret(TypeInterner::ERROR))],

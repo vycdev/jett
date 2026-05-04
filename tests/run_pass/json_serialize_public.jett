@@ -1,0 +1,17 @@
+namespace test
+
+struct Session:
+    id: string
+    user_name: string
+    token: secret[string]
+
+function public_session_json() returns string:
+    Session session = Session(id: "s1", user_name: "alice", token: "secret-token")
+    return json.serialize_public[Session](view session)
+
+verify serialize_public_omits_secret_fields:
+    string raw = public_session_json()
+    assert string.contains(raw, "id") == true
+    assert string.contains(raw, "user_name") == true
+    assert string.contains(raw, "token") == false
+    assert string.contains(raw, "secret-token") == false

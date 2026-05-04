@@ -2237,6 +2237,7 @@ impl<'src> Parser<'src> {
                 | TokenKind::Cancel
                 | TokenKind::Trace
                 | TokenKind::Transition
+                | TokenKind::Type
                 | TokenKind::Bit
                 | TokenKind::Bits
                 | TokenKind::States
