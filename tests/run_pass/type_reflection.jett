@@ -12,6 +12,10 @@ struct Pair[T, U]:
     first: T
     second: U
 
+struct ApiResponse:
+    user_name: string serialize "userName"
+    total_count: int64 serialize "totalCount"
+
 function user_field_count() returns int64:
     list[TypeField] fields = type.fields[User]()
     return list.length(fields)
@@ -48,6 +52,14 @@ function pair_field_type(field_name: string) returns string:
             found = field.type_name
     return found
 
+function api_field_serialize_name(field_name: string) returns string:
+    list[TypeField] fields = type.fields[ApiResponse]()
+    string found = "missing"
+    for field in fields:
+        if field.name == field_name:
+            found = field.serialize_name
+    return found
+
 function reflected_name[T]() returns string:
     return type.name[T]()
 
@@ -67,6 +79,8 @@ verify type_reflection:
     assert user_field_type("id") == "string"
     assert user_field_type("age") == "int64"
     assert user_field_serialize_name("id") == "id"
+    assert api_field_serialize_name("user_name") == "userName"
+    assert api_field_serialize_name("total_count") == "totalCount"
     assert user_field_secret("api_key") == true
     assert type.has_secret[User]() == true
     assert type.has_secret[TokenBox]() == true

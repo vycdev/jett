@@ -1807,16 +1807,17 @@ impl Interpreter {
         type_args: &[TypeExpr],
         args: &[Value],
     ) -> Option<Result<Value, String>> {
-        let is_reflection_builtin = matches!(
+        let is_typed_builtin = matches!(
             name,
-            "type.name" | "type.kind" | "type.has_secret" | "type.fields"
+            "type.name"
+                | "type.kind"
+                | "type.has_secret"
+                | "type.fields"
+                | "json.serialize"
+                | "json.serialize_public"
         );
-        if !is_reflection_builtin {
+        if !is_typed_builtin {
             return None;
-        }
-
-        if let Some(err) = check_args(name, 0, args) {
-            return Some(err);
         }
         if type_args.len() != 1 {
             return Some(Err(format!(
@@ -1827,17 +1828,47 @@ impl Interpreter {
 
         let ty = self.substitute_type_expr(&type_args[0]);
         Some(match name {
-            "type.name" => Ok(Value::String(type_expr_display(&ty))),
-            "type.kind" => Ok(Value::String(self.type_expr_kind(&ty).to_string())),
-            "type.has_secret" => Ok(Value::Bool(self.type_expr_has_secret(&ty))),
-            "type.fields" => Ok(Value::List(
-                self.type_expr_fields(&ty)
-                    .into_iter()
-                    .enumerate()
-                    .map(|(index, field)| self.type_field_value(index, field))
-                    .collect(),
-            )),
-            _ => unreachable!(),
+            "type.name" => {
+                if let Some(err) = check_args(name, 0, args) {
+                    return Some(err);
+                }
+                Ok(Value::String(type_expr_display(&ty)))
+            }
+            "type.kind" => {
+                if let Some(err) = check_args(name, 0, args) {
+                    return Some(err);
+                }
+                Ok(Value::String(self.type_expr_kind(&ty).to_string()))
+            }
+            "type.has_secret" => {
+                if let Some(err) = check_args(name, 0, args) {
+                    return Some(err);
+                }
+                Ok(Value::Bool(self.type_expr_has_secret(&ty)))
+            }
+            "type.fields" => {
+                if let Some(err) = check_args(name, 0, args) {
+                    return Some(err);
+                }
+                Ok(Value::List(
+                    self.type_expr_fields(&ty)
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, field)| self.type_field_value(index, field))
+                        .collect(),
+                ))
+            }
+            "json.serialize" | "json.serialize_public" => {
+                if let Some(err) = check_args(name, 1, args) {
+                    return Some(err);
+                }
+                Ok(Value::String(self.value_to_json_typed(
+                    &args[0],
+                    &ty,
+                    name == "json.serialize_public",
+                )))
+            }
+            _ => return None,
         })
     }
 
@@ -2005,7 +2036,10 @@ impl Interpreter {
                         .map(|field| ReflectionField {
                             name: field.name.name.clone(),
                             ty: self.substitute_type_expr(&field.ty),
-                            serialize_name: field.name.name.clone(),
+                            serialize_name: field
+                                .serialize_name
+                                .clone()
+                                .unwrap_or_else(|| field.name.name.clone()),
                         })
                         .collect()
                 })
@@ -2021,7 +2055,10 @@ impl Interpreter {
                         .map(|field| ReflectionField {
                             name: field.name.name.clone(),
                             ty: self.substitute_type_expr_with_map(&field.ty, &substitutions),
-                            serialize_name: field.name.name.clone(),
+                            serialize_name: field
+                                .serialize_name
+                                .clone()
+                                .unwrap_or_else(|| field.name.name.clone()),
                         })
                         .collect()
                 })
@@ -2063,6 +2100,99 @@ impl Interpreter {
         }
     }
 
+    fn value_to_json_typed(&self, value: &Value, ty: &TypeExpr, public_only: bool) -> String {
+        let ty = self.substitute_type_expr(ty);
+        match &ty {
+            TypeExpr::View(inner, _) => {
+                return self.value_to_json_typed(value, inner, public_only);
+            }
+            TypeExpr::Generic(ident, args, _) if ident.name == "list" && args.len() == 1 => {
+                if let Value::List(items) = value {
+                    let elems: Vec<String> = items
+                        .iter()
+                        .map(|item| self.value_to_json_typed(item, &args[0], public_only))
+                        .collect();
+                    return format!("[{}]", elems.join(","));
+                }
+            }
+            TypeExpr::Generic(ident, args, _) if ident.name == "set" && args.len() == 1 => {
+                if let Value::Set(items) = value {
+                    let elems: Vec<String> = items
+                        .iter()
+                        .map(|item| self.value_to_json_typed(item, &args[0], public_only))
+                        .collect();
+                    return format!("[{}]", elems.join(","));
+                }
+            }
+            TypeExpr::Generic(ident, args, _) if ident.name == "map" && args.len() == 2 => {
+                if let Value::Map(entries) = value {
+                    let pairs: Vec<String> = entries
+                        .iter()
+                        .map(|(key, val)| {
+                            format!(
+                                "{}:{}",
+                                self.value_to_json_typed(key, &args[0], public_only),
+                                self.value_to_json_typed(val, &args[1], public_only)
+                            )
+                        })
+                        .collect();
+                    return format!("{{{}}}", pairs.join(","));
+                }
+            }
+            TypeExpr::Generic(ident, args, _) if ident.name == "optional" && args.len() == 1 => {
+                return match value {
+                    Value::OptionalNone => "null".to_string(),
+                    Value::OptionalSome(inner) => {
+                        self.value_to_json_typed(inner, &args[0], public_only)
+                    }
+                    _ => self.value_to_json_reflected(value, public_only),
+                };
+            }
+            TypeExpr::Generic(ident, args, _) if ident.name == "result" && args.len() == 2 => {
+                return match value {
+                    Value::ResultOk(inner) => format!(
+                        "{{\"ok\":{}}}",
+                        self.value_to_json_typed(inner, &args[0], public_only)
+                    ),
+                    Value::ResultFail(inner) => format!(
+                        "{{\"fail\":{}}}",
+                        self.value_to_json_typed(inner, &args[1], public_only)
+                    ),
+                    _ => self.value_to_json_reflected(value, public_only),
+                };
+            }
+            TypeExpr::Generic(ident, args, _) if ident.name == "secret" && args.len() == 1 => {
+                return self.value_to_json_typed(value, &args[0], public_only);
+            }
+            _ => {}
+        }
+
+        if self.type_expr_kind(&ty) == "struct" {
+            if let Value::Struct { fields, .. } = value {
+                let reflected_fields = self.type_expr_fields(&ty);
+                let pairs: Vec<String> = reflected_fields
+                    .iter()
+                    .filter(|field| !public_only || !self.type_expr_has_secret(&field.ty))
+                    .filter_map(|field| {
+                        fields
+                            .iter()
+                            .find(|(name, _)| name == &field.name)
+                            .map(|(_, field_value)| {
+                                format!(
+                                    "{}:{}",
+                                    json_string(&field.serialize_name),
+                                    self.value_to_json_typed(field_value, &field.ty, public_only)
+                                )
+                            })
+                    })
+                    .collect();
+                return format!("{{{}}}", pairs.join(","));
+            }
+        }
+
+        self.value_to_json_reflected(value, public_only)
+    }
+
     fn value_to_json_reflected(&self, value: &Value, public_only: bool) -> String {
         match value {
             Value::Int64(n) => n.to_string(),
@@ -2073,15 +2203,7 @@ impl Interpreter {
                     f.to_string()
                 }
             }
-            Value::String(s) => {
-                let escaped = s
-                    .replace('\\', "\\\\")
-                    .replace('"', "\\\"")
-                    .replace('\n', "\\n")
-                    .replace('\r', "\\r")
-                    .replace('\t', "\\t");
-                format!("\"{escaped}\"")
-            }
+            Value::String(s) => json_string(s),
             Value::Bool(b) => b.to_string(),
             Value::Nothing | Value::OptionalNone => "null".to_string(),
             Value::OptionalSome(inner) => self.value_to_json_reflected(inner, public_only),
@@ -2132,8 +2254,8 @@ impl Interpreter {
                     })
                     .map(|(name, value)| {
                         format!(
-                            "\"{}\":{}",
-                            name,
+                            "{}:{}",
+                            json_string(&self.struct_field_serialize_name(type_name, name)),
                             self.value_to_json_reflected(value, public_only)
                         )
                     })
@@ -2178,6 +2300,19 @@ impl Interpreter {
             })
             .map(|field| self.type_expr_has_secret(&field.ty))
             .unwrap_or(false)
+    }
+
+    fn struct_field_serialize_name(&self, type_name: &str, field_name: &str) -> String {
+        self.structs
+            .get(type_name)
+            .and_then(|strukt| {
+                strukt
+                    .fields
+                    .iter()
+                    .find(|field| field.name.name == field_name)
+            })
+            .and_then(|field| field.serialize_name.clone())
+            .unwrap_or_else(|| field_name.to_string())
     }
 
     // =========================================================================
@@ -5362,6 +5497,16 @@ fn type_expr_name(ty: &TypeExpr) -> String {
     }
 }
 
+fn json_string(s: &str) -> String {
+    let escaped = s
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t");
+    format!("\"{escaped}\"")
+}
+
 fn type_expr_display(ty: &TypeExpr) -> String {
     match ty {
         TypeExpr::Named(ident) => ident.name.clone(),
@@ -5589,6 +5734,7 @@ mod tests {
                 .map(|(field_name, field_ty)| FieldDef {
                     name: ident(field_name),
                     ty: type_named(field_ty),
+                    serialize_name: None,
                     span: sp(),
                 })
                 .collect(),

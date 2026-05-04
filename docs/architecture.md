@@ -1091,13 +1091,13 @@ The boundary between compiler-generated code and stdlib-implemented code is a cr
 | `type.name[T]()` | Comptime reflection | Stable display name for `T` |
 | `type.kind[T]()` | Comptime reflection | Category such as `primitive`, `list`, `struct`, `secret` |
 | `type.has_secret[T]()` | Comptime reflection | Whether `T` contains secret data |
-| `type.fields[T]()` | Struct reflection | Ordered `list[TypeField]` metadata for struct fields |
+| `type.fields[T]()` | Struct reflection | Ordered `list[TypeField]` metadata for struct fields, including `serialize` names |
 | `T.to_bytes()` / `T.from_bytes()` | Binary serialization | Field-by-field binary packing/unpacking |
 | `Displayable.display()` for structs | Struct implementing `Displayable` | Field-by-field string representation |
 | `clone` for structs | `clone value` on a struct | Field-by-field recursive deep copy |
 | Refinement type constraint functions | `type Port = int64 where ...` | Synthesized boolean check function |
 
-Format-specific modules such as `json` should live in `.jett` stdlib code as the reflection API matures. Current interpreter implementations may still bootstrap JSON in Rust until comptime field-value access and comptime struct construction exist.
+Format-specific modules such as `json` should live in `.jett` stdlib code as the reflection API matures. Current interpreter implementations may still bootstrap JSON in Rust, but should consume the same type metadata (`TypeField`, `serialize_name`, and secret information) that user comptime code can inspect.
 
 **2. Stdlib functions** — normal Jett code shipped in `stdlib/`:
 

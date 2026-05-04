@@ -159,6 +159,7 @@ pub struct StructDef {
 pub struct FieldDef {
     pub name: Ident,
     pub ty: TypeExpr,
+    pub serialize_name: Option<String>,
     pub span: Span,
 }
 

@@ -604,6 +604,7 @@ mod tests {
                 .map(|(field_name, field_ty)| FieldDef {
                     name: ident(field_name),
                     ty: type_named(field_ty),
+                    serialize_name: None,
                     span: sp(),
                 })
                 .collect(),
@@ -1179,6 +1180,7 @@ mod tests {
                     fields: vec![FieldDef {
                         name: ident("user_id"),
                         ty: type_named("string"),
+                        serialize_name: None,
                         span: sp(),
                     }],
                     span: sp(),
@@ -1188,6 +1190,7 @@ mod tests {
                     fields: vec![FieldDef {
                         name: ident("user_id"),
                         ty: type_named("string"),
+                        serialize_name: None,
                         span: sp(),
                     }],
                     span: sp(),

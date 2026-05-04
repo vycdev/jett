@@ -534,10 +534,25 @@ impl<'src> Parser<'src> {
         let name = self.parse_ident();
         self.expect(TokenKind::Colon);
         let ty = self.parse_type();
+        let mut end = ty.span();
+        let serialize_name = if self.eat(TokenKind::Serialize).is_some() {
+            let tok = self.expect(TokenKind::StringLiteral);
+            end = tok.span;
+            let text = self.token_text(&tok);
+            let raw = if text.len() >= 2 {
+                &text[1..text.len() - 1]
+            } else {
+                text
+            };
+            Some(unescape_string(raw))
+        } else {
+            None
+        };
         FieldDef {
-            span: name.span.merge(ty.span()),
+            span: name.span.merge(end),
             name,
             ty,
+            serialize_name,
         }
     }
 
@@ -2683,6 +2698,25 @@ struct Point:
                 assert_eq!(s.fields.len(), 2);
                 assert_eq!(s.methods.len(), 1);
                 assert_eq!(s.methods[0].name.name, "distance");
+            }
+            other => panic!("expected Struct, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_struct_field_serialize_name() {
+        let src = "\
+struct ApiResponse:
+    user_name: string serialize \"userName\"
+    total_count: int64 serialize \"totalCount\"
+";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        match &result.module.items[0] {
+            Item::Struct(s) => {
+                assert_eq!(s.fields.len(), 2);
+                assert_eq!(s.fields[0].serialize_name.as_deref(), Some("userName"));
+                assert_eq!(s.fields[1].serialize_name.as_deref(), Some("totalCount"));
             }
             other => panic!("expected Struct, got {:?}", other),
         }

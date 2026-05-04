@@ -2,16 +2,32 @@ namespace test
 
 struct Session:
     id: string
-    user_name: string
+    user_name: string serialize "userName"
     token: secret[string]
+
+struct SecretBox[T]:
+    value: T
+    label: string serialize "displayLabel"
 
 function public_session_json() returns string:
     Session session = Session(id: "s1", user_name: "alice", token: "secret-token")
     return json.serialize_public[Session](view session)
 
+function public_secret_box_json() returns string:
+    SecretBox[secret[string]] box = SecretBox[secret[string]](value: "secret-token", label: "shown")
+    return json.serialize_public[SecretBox[secret[string]]](view box)
+
 verify serialize_public_omits_secret_fields:
     string raw = public_session_json()
     assert string.contains(raw, "id") == true
-    assert string.contains(raw, "user_name") == true
+    assert string.contains(raw, "userName") == true
+    assert string.contains(raw, "user_name") == false
     assert string.contains(raw, "token") == false
+    assert string.contains(raw, "secret-token") == false
+
+verify serialize_public_uses_generic_secret_type:
+    string raw = public_secret_box_json()
+    assert string.contains(raw, "displayLabel") == true
+    assert string.contains(raw, "shown") == true
+    assert string.contains(raw, "value") == false
     assert string.contains(raw, "secret-token") == false
