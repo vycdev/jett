@@ -1,5 +1,19 @@
 namespace test
 
+struct Profile:
+    display_name: string serialize "displayName"
+    note: string
+
+struct User:
+    id: string
+    profile: Profile serialize "profileData"
+    tags: list[string]
+    scores: map[string, int64]
+    maybe_name: optional[string] serialize "maybeName"
+    missing: optional[string]
+    outcome: result[int64, string]
+    failed: result[int64, string]
+
 function json_int_test() returns string:
     return json.serialize[int64](42)
 
@@ -29,3 +43,17 @@ function json_list_test() returns string:
 
 verify json_list_test:
     assert json_list_test() == "[1,2,3]"
+
+function json_string_escape_test() returns string:
+    return json.serialize[string]("quote \" backslash \\ newline \n tab \t nul \0")
+
+verify json_string_escape_test:
+    assert json_string_escape_test() == "\"quote \\\" backslash \\\\ newline \\n tab \\t nul \\u0000\""
+
+function json_nested_struct_test() returns string:
+    Profile profile = Profile(display_name: "Alice", note: "line\nbreak")
+    User user = User(id: "u1", profile: profile, tags: list("admin", "beta"), scores: map("wins": 3, "losses": 1), maybe_name: some("ally"), missing: none, outcome: ok(7), failed: fail("bad"))
+    return json.serialize[User](view user)
+
+verify json_nested_struct_test:
+    assert json_nested_struct_test() == "{{\"id\":\"u1\",\"profileData\":{{\"displayName\":\"Alice\",\"note\":\"line\\nbreak\"}},\"tags\":[\"admin\",\"beta\"],\"scores\":{{\"wins\":3,\"losses\":1}},\"maybeName\":\"ally\",\"missing\":null,\"outcome\":{{\"ok\":7}},\"failed\":{{\"fail\":\"bad\"}}}}"

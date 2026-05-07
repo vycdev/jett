@@ -5741,12 +5741,20 @@ fn type_expr_name(ty: &TypeExpr) -> String {
 }
 
 fn json_string(s: &str) -> String {
-    let escaped = s
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
-        .replace('\r', "\\r")
-        .replace('\t', "\\t");
+    let mut escaped = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '"' => escaped.push_str("\\\""),
+            '\\' => escaped.push_str("\\\\"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            '\u{08}' => escaped.push_str("\\b"),
+            '\u{0c}' => escaped.push_str("\\f"),
+            ch if ch <= '\u{1f}' => escaped.push_str(&format!("\\u{:04x}", ch as u32)),
+            ch => escaped.push(ch),
+        }
+    }
     format!("\"{escaped}\"")
 }
 
@@ -5834,6 +5842,16 @@ mod tests {
     /// Helper: create a bool literal expression.
     fn bool_expr(b: bool) -> Expr {
         Expr::BoolLiteral(b, sp())
+    }
+
+    #[test]
+    fn json_string_escapes_control_characters() {
+        assert_eq!(
+            json_string(
+                "quote \" slash \\ newline\n tab\t backspace\u{08} formfeed\u{0c} nul\0 unit\u{1f}"
+            ),
+            "\"quote \\\" slash \\\\ newline\\n tab\\t backspace\\b formfeed\\f nul\\u0000 unit\\u001f\""
+        );
     }
 
     /// Helper: create an identifier expression.

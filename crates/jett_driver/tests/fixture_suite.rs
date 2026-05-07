@@ -258,6 +258,10 @@ compile_fail_fixture!(compile_fail_trace_unknown, "trace_unknown.jett");
 compile_fail_fixture!(compile_fail_unknown_type, "unknown_type.jett");
 compile_fail_fixture!(compile_fail_duplicate_field, "duplicate_field.jett");
 compile_fail_fixture!(
+    compile_fail_json_serialize_secret_struct_blocked,
+    "json_serialize_secret_struct_blocked.jett"
+);
+compile_fail_fixture!(
     compile_fail_type_info_wrong_arity,
     "type_info_wrong_arity.jett"
 );
