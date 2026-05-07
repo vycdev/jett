@@ -1,0 +1,7 @@
+# ERROR: E0343
+namespace test
+
+function bad_json_map_key(raw: string) returns map[int64, string]:
+    map[int64, string] values = json.parse[map[int64, string]](raw) handle error:
+        return map()
+    return values

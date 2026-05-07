@@ -3480,6 +3480,17 @@ impl<'a> TypeChecker<'a> {
             }
         }
 
+        if matches!(callee_name.as_deref(), Some("json.parse")) {
+            if let Type::Result(parsed_ty, _) = self.interner.resolve(return_type) {
+                for key_type in self.json_non_string_map_key_types(*parsed_ty) {
+                    self.sink.emit(errors::json_map_key_must_be_string(
+                        &key_type,
+                        args[0].value.span(),
+                    ));
+                }
+            }
+        }
+
         if let Some(callee_name) = callee_name.as_deref() {
             if tainted_return && Self::is_secret_liftable_call(callee_name, callee_is_pure) {
                 return self.maybe_wrap_secret(return_type, true);
