@@ -60,6 +60,42 @@ function api_field_serialize_name(field_name: string) returns string:
             found = field.serialize_name
     return found
 
+function user_string_field_value(field_name: string) returns string:
+    User user = User(id: "u1", age: 42, api_key: "secret-token")
+    list[TypeField] fields = type.fields[User]()
+    string found = "missing"
+    for field in fields:
+        if field.name == field_name:
+            found = type.field_value[User, string](view user, view field)
+    return found
+
+function user_age_field_value() returns int64:
+    User user = User(id: "u1", age: 42, api_key: "secret-token")
+    list[TypeField] fields = type.fields[User]()
+    int64 found = 0
+    for field in fields:
+        if field.name == "age":
+            found = type.field_value[User, int64](view user, view field)
+    return found
+
+function user_secret_field_redacted() returns string:
+    User user = User(id: "u1", age: 42, api_key: "secret-token")
+    list[TypeField] fields = type.fields[User]()
+    string found = "missing"
+    for field in fields:
+        if field.name == "api_key":
+            found = secret.redact(type.field_value[User, secret[string]](view user, view field))
+    return found
+
+function pair_first_field_value() returns int64:
+    Pair[int64, string] pair = Pair[int64, string](first: 7, second: "seven")
+    list[TypeField] fields = type.fields[Pair[int64, string]]()
+    int64 found = 0
+    for field in fields:
+        if field.name == "first":
+            found = type.field_value[Pair[int64, string], int64](view pair, view field)
+    return found
+
 function reflected_name[T]() returns string:
     return type.name[T]()
 
@@ -87,3 +123,7 @@ verify type_reflection:
     assert type.has_secret[Pair[int64, string]]() == false
     assert pair_field_type("first") == "int64"
     assert pair_field_type("second") == "string"
+    assert user_string_field_value("id") == "u1"
+    assert user_age_field_value() == 42
+    assert user_secret_field_redacted() == "***"
+    assert pair_first_field_value() == 7

@@ -1813,15 +1813,17 @@ impl Interpreter {
                 | "type.kind"
                 | "type.has_secret"
                 | "type.fields"
+                | "type.field_value"
                 | "json.serialize"
                 | "json.serialize_public"
         );
         if !is_typed_builtin {
             return None;
         }
-        if type_args.len() != 1 {
+        let expected_type_arg_count = if name == "type.field_value" { 2 } else { 1 };
+        if type_args.len() != expected_type_arg_count {
             return Some(Err(format!(
-                "{name} expects 1 type argument, got {}",
+                "{name} expects {expected_type_arg_count} type argument(s), got {}",
                 type_args.len()
             )));
         }
@@ -1857,6 +1859,13 @@ impl Interpreter {
                         .map(|(index, field)| self.type_field_value(index, field))
                         .collect(),
                 ))
+            }
+            "type.field_value" => {
+                if let Some(err) = check_args(name, 2, args) {
+                    return Some(err);
+                }
+                let expected_field_ty = self.substitute_type_expr(&type_args[1]);
+                self.reflected_field_value(&args[0], &ty, &args[1], &expected_field_ty)
             }
             "json.serialize" | "json.serialize_public" => {
                 if let Some(err) = check_args(name, 1, args) {
@@ -2098,6 +2107,118 @@ impl Interpreter {
                 ("has_secret".to_string(), Value::Bool(has_secret)),
             ],
         }
+    }
+
+    fn reflected_field_value(
+        &self,
+        value: &Value,
+        owner_ty: &TypeExpr,
+        field_metadata: &Value,
+        expected_field_ty: &TypeExpr,
+    ) -> Result<Value, String> {
+        let (field_index, metadata_name, metadata_type_name) =
+            Self::type_field_metadata(field_metadata)?;
+        let owner_fields = self.type_expr_fields(owner_ty);
+        let field = owner_fields.get(field_index).ok_or_else(|| {
+            format!(
+                "type.field_value: type '{}' has no field at index {}",
+                type_expr_display(owner_ty),
+                field_index
+            )
+        })?;
+
+        if field.name != metadata_name {
+            return Err(format!(
+                "type.field_value: field metadata '{}' does not match field '{}' on type '{}'",
+                metadata_name,
+                field.name,
+                type_expr_display(owner_ty)
+            ));
+        }
+
+        let actual_type_name = type_expr_display(&field.ty);
+        if actual_type_name != metadata_type_name {
+            return Err(format!(
+                "type.field_value: field metadata for '{}' has type '{}', but type '{}' reports '{}'",
+                metadata_name,
+                metadata_type_name,
+                type_expr_display(owner_ty),
+                actual_type_name
+            ));
+        }
+
+        let expected_type_name = type_expr_display(expected_field_ty);
+        if actual_type_name != expected_type_name {
+            return Err(format!(
+                "type.field_value: field '{}' has type '{}', requested '{}'",
+                metadata_name, actual_type_name, expected_type_name
+            ));
+        }
+
+        match value {
+            Value::Struct { fields, .. } => fields
+                .iter()
+                .find(|(name, _)| name == &field.name)
+                .map(|(_, field_value)| field_value.clone())
+                .ok_or_else(|| {
+                    format!(
+                        "type.field_value: value is missing field '{}'",
+                        field.name
+                    )
+                }),
+            other => Err(format!(
+                "type.field_value: expected struct value for '{}', got {other}",
+                type_expr_display(owner_ty)
+            )),
+        }
+    }
+
+    fn type_field_metadata(value: &Value) -> Result<(usize, String, String), String> {
+        let Value::Struct { type_name, fields } = value else {
+            return Err(format!(
+                "type.field_value: second argument must be TypeField, got {value}"
+            ));
+        };
+        if type_name != "TypeField" {
+            return Err(format!(
+                "type.field_value: second argument must be TypeField, got {type_name}"
+            ));
+        }
+
+        let field_value = |name: &str| {
+            fields
+                .iter()
+                .find(|(field_name, _)| field_name == name)
+                .map(|(_, field_value)| field_value)
+                .ok_or_else(|| format!("type.field_value: TypeField is missing '{name}'"))
+        };
+
+        let index = match field_value("index")? {
+            Value::Int64(index) if *index >= 0 => *index as usize,
+            other => {
+                return Err(format!(
+                    "type.field_value: TypeField.index must be a non-negative int64, got {other}"
+                ));
+            }
+        };
+        let name = match field_value("name")? {
+            Value::String(name) => name.clone(),
+            other => {
+                return Err(format!(
+                    "type.field_value: TypeField.name must be string, got {other}"
+                ));
+            }
+        };
+        let type_name = match field_value("type_name")? {
+            Value::String(type_name) => type_name.clone(),
+            other => {
+                return Err(format!(
+                    "type.field_value: TypeField.type_name must be string, got {other}"
+                ));
+            }
+        };
+
+        Ok((index, name, type_name))
     }
 
     fn value_to_json_typed(&self, value: &Value, ty: &TypeExpr, public_only: bool) -> String {

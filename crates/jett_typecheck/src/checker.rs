@@ -678,6 +678,24 @@ impl<'a> TypeChecker<'a> {
                     .unwrap_or(TypeInterner::ERROR);
                 Some((vec![], self.interner.intern(Type::List(type_field_ty))))
             }
+            "type.field_value" => {
+                if type_args.len() != 2 {
+                    self.sink.emit(errors::unknown_type(
+                        &format!("{name} (expected 2 type arguments, got {})", type_args.len()),
+                        span,
+                    ));
+                    return Some((vec![TypeInterner::ERROR], TypeInterner::ERROR));
+                }
+
+                let value_ty = self.resolve_type_expr(&type_args[0]);
+                let return_ty = self.resolve_type_expr(&type_args[1]);
+                let type_field_ty = self
+                    .named_types
+                    .get("TypeField")
+                    .copied()
+                    .unwrap_or(TypeInterner::ERROR);
+                Some((vec![value_ty, type_field_ty], return_ty))
+            }
             "secret.redact" => Some((
                 vec![self.interner.intern(Type::Secret(TypeInterner::ERROR))],
                 TypeInterner::STRING,
