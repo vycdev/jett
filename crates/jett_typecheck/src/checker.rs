@@ -146,7 +146,30 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn install_builtin_metadata_types(&mut self) {
-        let sid = self.interner.add_struct(TypeStructDef {
+        let type_info_sid = self.interner.add_struct(TypeStructDef {
+            name: "TypeInfo".to_string(),
+            fields: Vec::new(),
+            methods: Vec::new(),
+        });
+        let type_info_ty = self.interner.intern(Type::Struct(type_info_sid));
+        let type_info_args_ty = self.interner.intern(Type::List(type_info_ty));
+        self.interner.update_struct(
+            type_info_sid,
+            TypeStructDef {
+                name: "TypeInfo".to_string(),
+                fields: vec![
+                    ("type_name".to_string(), TypeInterner::STRING),
+                    ("kind".to_string(), TypeInterner::STRING),
+                    ("has_secret".to_string(), TypeInterner::BOOL),
+                    ("args".to_string(), type_info_args_ty),
+                ],
+                methods: Vec::new(),
+            },
+        );
+        self.named_types
+            .insert("TypeInfo".to_string(), type_info_ty);
+
+        let type_field_sid = self.interner.add_struct(TypeStructDef {
             name: "TypeField".to_string(),
             fields: vec![
                 ("index".to_string(), TypeInterner::INT64),
@@ -155,10 +178,11 @@ impl<'a> TypeChecker<'a> {
                 ("kind".to_string(), TypeInterner::STRING),
                 ("serialize_name".to_string(), TypeInterner::STRING),
                 ("has_secret".to_string(), TypeInterner::BOOL),
+                ("type_info".to_string(), type_info_ty),
             ],
             methods: Vec::new(),
         });
-        let ty = self.interner.intern(Type::Struct(sid));
+        let ty = self.interner.intern(Type::Struct(type_field_sid));
         self.named_types.insert("TypeField".to_string(), ty);
     }
 
@@ -661,6 +685,22 @@ impl<'a> TypeChecker<'a> {
                 }
                 let _ = self.resolve_type_expr(&type_args[0]);
                 Some((vec![], TypeInterner::BOOL))
+            }
+            "type.info" => {
+                if type_args.len() != 1 {
+                    self.sink.emit(errors::unknown_type(
+                        &format!("{name} (expected 1 type argument, got {})", type_args.len()),
+                        span,
+                    ));
+                    return Some((vec![], TypeInterner::ERROR));
+                }
+                let _ = self.resolve_type_expr(&type_args[0]);
+                let type_info_ty = self
+                    .named_types
+                    .get("TypeInfo")
+                    .copied()
+                    .unwrap_or(TypeInterner::ERROR);
+                Some((vec![], type_info_ty))
             }
             "type.fields" => {
                 if type_args.len() != 1 {

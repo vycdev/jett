@@ -1,0 +1,158 @@
+namespace test
+
+struct User:
+    id: string
+
+struct Complex:
+    names: list[string]
+    lookup: map[string, result[int64, string]]
+    maybe_user: optional[User]
+    secret_items: list[secret[string]]
+
+struct Pair[T, U]:
+    first: T
+    second: U
+
+function type_info_kind[T]() returns string:
+    TypeInfo info = type.info[T]()
+    return info.kind
+
+function type_info_arg_count[T]() returns int64:
+    TypeInfo info = type.info[T]()
+    return list.length(info.args)
+
+function type_info_arg_kind[T](target: int64) returns string:
+    TypeInfo info = type.info[T]()
+    string found = "missing"
+    int64 index = 0
+    for arg in info.args:
+        if index == target:
+            found = arg.kind
+        index = index + 1
+    return found
+
+function type_info_arg_type_name[T](target: int64) returns string:
+    TypeInfo info = type.info[T]()
+    string found = "missing"
+    int64 index = 0
+    for arg in info.args:
+        if index == target:
+            found = arg.type_name
+        index = index + 1
+    return found
+
+function type_info_nested_arg_kind[T](outer_target: int64, inner_target: int64) returns string:
+    TypeInfo info = type.info[T]()
+    string found = "missing"
+    int64 outer_index = 0
+    for outer in info.args:
+        if outer_index == outer_target:
+            int64 inner_index = 0
+            for inner in outer.args:
+                if inner_index == inner_target:
+                    found = inner.kind
+                inner_index = inner_index + 1
+        outer_index = outer_index + 1
+    return found
+
+function type_info_nested_arg_type_name[T](outer_target: int64, inner_target: int64) returns string:
+    TypeInfo info = type.info[T]()
+    string found = "missing"
+    int64 outer_index = 0
+    for outer in info.args:
+        if outer_index == outer_target:
+            int64 inner_index = 0
+            for inner in outer.args:
+                if inner_index == inner_target:
+                    found = inner.type_name
+                inner_index = inner_index + 1
+        outer_index = outer_index + 1
+    return found
+
+function complex_field_arg_count(field_name: string) returns int64:
+    list[TypeField] fields = type.fields[Complex]()
+    int64 found = -1
+    for field in fields:
+        if field.name == field_name:
+            found = list.length(field.type_info.args)
+    return found
+
+function complex_field_arg_kind(field_name: string, target: int64) returns string:
+    list[TypeField] fields = type.fields[Complex]()
+    string found = "missing"
+    for field in fields:
+        if field.name == field_name:
+            int64 index = 0
+            for arg in field.type_info.args:
+                if index == target:
+                    found = arg.kind
+                index = index + 1
+    return found
+
+function complex_field_nested_arg_kind(field_name: string, outer_target: int64, inner_target: int64) returns string:
+    list[TypeField] fields = type.fields[Complex]()
+    string found = "missing"
+    for field in fields:
+        if field.name == field_name:
+            int64 outer_index = 0
+            for outer in field.type_info.args:
+                if outer_index == outer_target:
+                    int64 inner_index = 0
+                    for inner in outer.args:
+                        if inner_index == inner_target:
+                            found = inner.kind
+                        inner_index = inner_index + 1
+                outer_index = outer_index + 1
+    return found
+
+function complex_field_type_info_secret(field_name: string) returns bool:
+    list[TypeField] fields = type.fields[Complex]()
+    bool found = false
+    for field in fields:
+        if field.name == field_name:
+            found = field.type_info.has_secret
+    return found
+
+function complex_field_type_info_matches_legacy(field_name: string) returns bool:
+    list[TypeField] fields = type.fields[Complex]()
+    bool found = false
+    for field in fields:
+        if field.name == field_name:
+            found = field.type_info.type_name == field.type_name and field.type_info.kind == field.kind and field.type_info.has_secret == field.has_secret
+    return found
+
+function pair_field_arg_type_name(field_name: string, target: int64) returns string:
+    list[TypeField] fields = type.fields[Pair[list[int64], optional[string]]]()
+    string found = "missing"
+    for field in fields:
+        if field.name == field_name:
+            int64 index = 0
+            for arg in field.type_info.args:
+                if index == target:
+                    found = arg.type_name
+                index = index + 1
+    return found
+
+verify type_info_reflection:
+    assert type_info_kind[int64]() == "primitive"
+    assert type_info_arg_count[int64]() == 0
+    assert type_info_kind[list[optional[User]]]() == "list"
+    assert type_info_arg_count[list[optional[User]]]() == 1
+    assert type_info_arg_kind[list[optional[User]]](0) == "optional"
+    assert type_info_nested_arg_kind[list[optional[User]]](0, 0) == "struct"
+    assert type_info_nested_arg_type_name[list[optional[User]]](0, 0) == "User"
+    assert type_info_arg_count[map[string, result[int64, string]]]() == 2
+    assert type_info_arg_type_name[map[string, result[int64, string]]](0) == "string"
+    assert type_info_arg_kind[map[string, result[int64, string]]](1) == "result"
+    assert type_info_nested_arg_type_name[map[string, result[int64, string]]](1, 0) == "int64"
+    assert type_info_nested_arg_type_name[map[string, result[int64, string]]](1, 1) == "string"
+    assert complex_field_arg_count("names") == 1
+    assert complex_field_arg_kind("names", 0) == "primitive"
+    assert complex_field_arg_count("lookup") == 2
+    assert complex_field_arg_kind("lookup", 1) == "result"
+    assert complex_field_nested_arg_kind("lookup", 1, 0) == "primitive"
+    assert complex_field_type_info_secret("secret_items") == true
+    assert complex_field_type_info_matches_legacy("lookup") == true
+    assert complex_field_type_info_matches_legacy("secret_items") == true
+    assert pair_field_arg_type_name("first", 0) == "int64"
+    assert pair_field_arg_type_name("second", 0) == "string"

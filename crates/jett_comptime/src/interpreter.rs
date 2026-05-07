@@ -1820,6 +1820,7 @@ impl Interpreter {
             "type.name"
                 | "type.kind"
                 | "type.has_secret"
+                | "type.info"
                 | "type.fields"
                 | "type.field_value"
                 | "json.serialize"
@@ -1855,6 +1856,12 @@ impl Interpreter {
                     return Some(err);
                 }
                 Ok(Value::Bool(self.type_expr_has_secret(&ty)))
+            }
+            "type.info" => {
+                if let Some(err) = check_args(name, 0, args) {
+                    return Some(err);
+                }
+                Ok(self.type_info_value(&ty))
             }
             "type.fields" => {
                 if let Some(err) = check_args(name, 0, args) {
@@ -2102,6 +2109,7 @@ impl Interpreter {
     fn type_field_value(&self, index: usize, field: ReflectionField) -> Value {
         let kind = self.type_expr_kind(&field.ty).to_string();
         let has_secret = self.type_expr_has_secret(&field.ty);
+        let type_info = self.type_info_value(&field.ty);
         Value::Struct {
             type_name: "TypeField".to_string(),
             fields: vec![
@@ -2117,6 +2125,46 @@ impl Interpreter {
                     Value::String(field.serialize_name),
                 ),
                 ("has_secret".to_string(), Value::Bool(has_secret)),
+                ("type_info".to_string(), type_info),
+            ],
+        }
+    }
+
+    fn type_info_value(&self, ty: &TypeExpr) -> Value {
+        let ty = self.substitute_type_expr(ty);
+        if let TypeExpr::View(inner, _) = &ty {
+            return self.type_info_value(inner);
+        }
+
+        let arg_values = match &ty {
+            TypeExpr::Generic(_, args, _) => args
+                .iter()
+                .map(|arg| self.type_info_value(arg))
+                .collect::<Vec<_>>(),
+            TypeExpr::Function(params, return_type, _) => params
+                .iter()
+                .chain(std::iter::once(return_type.as_ref()))
+                .map(|arg| self.type_info_value(arg))
+                .collect(),
+            _ => Vec::new(),
+        };
+
+        Value::Struct {
+            type_name: "TypeInfo".to_string(),
+            fields: vec![
+                (
+                    "type_name".to_string(),
+                    Value::String(type_expr_display(&ty)),
+                ),
+                (
+                    "kind".to_string(),
+                    Value::String(self.type_expr_kind(&ty).to_string()),
+                ),
+                (
+                    "has_secret".to_string(),
+                    Value::Bool(self.type_expr_has_secret(&ty)),
+                ),
+                ("args".to_string(), Value::List(arg_values)),
             ],
         }
     }

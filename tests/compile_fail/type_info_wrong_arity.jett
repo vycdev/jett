@@ -1,0 +1,6 @@
+# ERROR: E0309
+namespace test
+
+function bad_type_info_arity() returns string:
+    TypeInfo info = type.info[int64, string]()
+    return info.kind

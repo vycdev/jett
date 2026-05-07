@@ -186,6 +186,7 @@ run_pass_fixture!(run_pass_bitfield_roundtrip, "bitfield_roundtrip.jett");
 run_pass_fixture!(run_pass_generic_struct, "generic_struct.jett");
 run_pass_fixture!(run_pass_generic_function, "generic_function.jett");
 run_pass_fixture!(run_pass_type_reflection, "type_reflection.jett");
+run_pass_fixture!(run_pass_type_info_reflection, "type_info_reflection.jett");
 run_pass_fixture!(run_pass_actor_counter, "actor_counter.jett");
 run_pass_fixture!(
     run_pass_structured_concurrency,
@@ -256,6 +257,10 @@ compile_fail_fixture!(compile_fail_unhandled_optional, "unhandled_optional.jett"
 compile_fail_fixture!(compile_fail_trace_unknown, "trace_unknown.jett");
 compile_fail_fixture!(compile_fail_unknown_type, "unknown_type.jett");
 compile_fail_fixture!(compile_fail_duplicate_field, "duplicate_field.jett");
+compile_fail_fixture!(
+    compile_fail_type_info_wrong_arity,
+    "type_info_wrong_arity.jett"
+);
 compile_fail_fixture!(
     compile_fail_type_field_value_wrong_arity,
     "type_field_value_wrong_arity.jett"
