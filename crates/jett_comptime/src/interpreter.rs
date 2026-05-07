@@ -104,6 +104,7 @@ struct ReflectionField {
 #[derive(Debug, Clone)]
 struct ReflectionVariant {
     name: String,
+    discriminant: i64,
     fields: Vec<ReflectionField>,
 }
 
@@ -2217,23 +2218,29 @@ impl Interpreter {
                 .enums
                 .get(&ident.name)
                 .map(|enum_def| {
+                    let mut next_discriminant = 0_i64;
                     enum_def
                         .variants
                         .iter()
-                        .map(|variant| ReflectionVariant {
-                            name: variant.name.name.clone(),
-                            fields: variant
-                                .fields
-                                .iter()
-                                .map(|field| ReflectionField {
-                                    name: field.name.name.clone(),
-                                    ty: self.substitute_type_expr(&field.ty),
-                                    serialize_name: field
-                                        .serialize_name
-                                        .clone()
-                                        .unwrap_or_else(|| field.name.name.clone()),
-                                })
-                                .collect(),
+                        .map(|variant| {
+                            let discriminant = variant.discriminant.unwrap_or(next_discriminant);
+                            next_discriminant = discriminant.saturating_add(1);
+                            ReflectionVariant {
+                                name: variant.name.name.clone(),
+                                discriminant,
+                                fields: variant
+                                    .fields
+                                    .iter()
+                                    .map(|field| ReflectionField {
+                                        name: field.name.name.clone(),
+                                        ty: self.substitute_type_expr(&field.ty),
+                                        serialize_name: field
+                                            .serialize_name
+                                            .clone()
+                                            .unwrap_or_else(|| field.name.name.clone()),
+                                    })
+                                    .collect(),
+                            }
                         })
                         .collect()
                 })
@@ -2297,6 +2304,10 @@ impl Interpreter {
             fields: vec![
                 ("index".to_string(), Value::Int64(index as i64)),
                 ("name".to_string(), Value::String(variant.name)),
+                (
+                    "discriminant".to_string(),
+                    Value::Int64(variant.discriminant),
+                ),
                 ("has_secret".to_string(), Value::Bool(has_secret)),
                 ("fields".to_string(), Value::List(fields)),
             ],

@@ -22,8 +22,8 @@ Implemented reflection primitives:
   `serialize_name` currently equals `name`; bitfield field renaming is not
   supported.
 - `type.variants[T]()` returns ordered `TypeVariant` metadata for enums.
-  `TypeVariant` includes `index`, `name`, `has_secret`, and payload `fields`
-  as `list[TypeField]`.
+  `TypeVariant` includes `index`, `name`, `discriminant`, `has_secret`, and
+  payload `fields` as `list[TypeField]`.
 - `type.field_value[T, U](view value, view field)` reads a field by metadata
   after checking that the metadata belongs to `T` and that `U` matches the
   reflected field type.

@@ -192,6 +192,7 @@ impl<'a> TypeChecker<'a> {
             fields: vec![
                 ("index".to_string(), TypeInterner::INT64),
                 ("name".to_string(), TypeInterner::STRING),
+                ("discriminant".to_string(), TypeInterner::INT64),
                 ("has_secret".to_string(), TypeInterner::BOOL),
                 ("fields".to_string(), type_variant_fields_ty),
             ],

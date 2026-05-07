@@ -8,6 +8,11 @@ enum Direction:
     north
     south
 
+enum Protocol:
+    icmp = 1
+    tcp = 6
+    udp = 17
+
 enum SecretChoice:
     token(value: secret[string])
     empty
@@ -181,6 +186,14 @@ function variant_field_count[T](variant_name: string) returns int64:
             found = list.length(variant.fields)
     return found
 
+function variant_discriminant[T](variant_name: string) returns int64:
+    list[TypeVariant] variants = type.variants[T]()
+    int64 found = -1
+    for variant in variants:
+        if variant.name == variant_name:
+            found = variant.discriminant
+    return found
+
 function variant_has_secret[T](variant_name: string) returns bool:
     list[TypeVariant] variants = type.variants[T]()
     bool found = false
@@ -231,6 +244,12 @@ verify type_info_reflection:
     assert type_info_arg_count[int64]() == 0
     assert type.has_secret[SecretChoice]() == true
     assert variant_count[Direction]() == 2
+    assert variant_discriminant[Direction]("north") == 0
+    assert variant_discriminant[Direction]("south") == 1
+    assert variant_discriminant[SecretChoice]("token") == 0
+    assert variant_discriminant[SecretChoice]("empty") == 1
+    assert variant_discriminant[Protocol]("tcp") == 6
+    assert variant_discriminant[Protocol]("udp") == 17
     assert variant_field_count[Direction]("north") == 0
     assert variant_field_count[SecretChoice]("token") == 1
     assert variant_field_kind[SecretChoice]("token", 0) == "secret"
