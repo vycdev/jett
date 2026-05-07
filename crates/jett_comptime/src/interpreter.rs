@@ -1990,8 +1990,22 @@ impl Interpreter {
                     "int64" | "float64" | "string" | "bool" | "bytes" | "nothing"
                 ) {
                     "primitive"
+                } else if self.type_aliases.contains_key(&ident.name) {
+                    if self
+                        .type_aliases
+                        .get(&ident.name)
+                        .is_some_and(|def| def.is_some())
+                    {
+                        "refinement"
+                    } else {
+                        "alias"
+                    }
                 } else if self.structs.contains_key(&ident.name) {
                     "struct"
+                } else if self.enums.contains_key(&ident.name) {
+                    "enum"
+                } else if self.bitfields.contains_key(&ident.name) {
+                    "bitfield"
                 } else {
                     "named"
                 }
@@ -2028,15 +2042,49 @@ impl Interpreter {
                 if let Some(bound) = self.current_type_binding(&ident.name) {
                     return self.type_expr_has_secret_inner(&bound, visited);
                 }
-                let Some(strukt) = self.structs.get(&ident.name) else {
-                    return false;
-                };
+                if let Some(base_name) = self.type_alias_bases.get(&ident.name) {
+                    return self.type_expr_has_secret_inner(
+                        &TypeExpr::Named(Ident {
+                            name: base_name.clone(),
+                            span: ident.span,
+                        }),
+                        visited,
+                    );
+                }
                 if !visited.insert(type_expr_display(ty)) {
                     return false;
                 }
-                strukt.fields.iter().any(|field| {
-                    self.type_expr_has_secret_inner(&self.substitute_type_expr(&field.ty), visited)
-                })
+                if let Some(strukt) = self.structs.get(&ident.name) {
+                    return strukt.fields.iter().any(|field| {
+                        self.type_expr_has_secret_inner(
+                            &self.substitute_type_expr(&field.ty),
+                            visited,
+                        )
+                    });
+                }
+                if let Some(enum_def) = self.enums.get(&ident.name) {
+                    return enum_def
+                        .variants
+                        .iter()
+                        .flat_map(|variant| variant.fields.iter())
+                        .any(|field| {
+                            self.type_expr_has_secret_inner(
+                                &self.substitute_type_expr(&field.ty),
+                                visited,
+                            )
+                        });
+                }
+                if let Some(bitfield) = self.bitfields.get(&ident.name) {
+                    return bitfield.fields.iter().any(|field| match &field.kind {
+                        BitfieldFieldKind::Bits { as_type, .. } => as_type
+                            .as_ref()
+                            .is_some_and(|ty| self.type_expr_has_secret_inner(ty, visited)),
+                        BitfieldFieldKind::Payload(ty) => {
+                            self.type_expr_has_secret_inner(ty, visited)
+                        }
+                    });
+                }
+                false
             }
             TypeExpr::Generic(ident, args, _) => {
                 if ident.name == "secret" {

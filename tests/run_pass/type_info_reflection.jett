@@ -1,5 +1,18 @@
 namespace test
 
+type NonEmpty = string where string.char_count(value) > 0
+
+enum Direction:
+    north
+    south
+
+enum SecretChoice:
+    token(value: secret[string])
+    empty
+
+bitfield Header:
+    version: 4 bits
+
 struct User:
     id: string
 
@@ -135,7 +148,11 @@ function pair_field_arg_type_name(field_name: string, target: int64) returns str
 
 verify type_info_reflection:
     assert type_info_kind[int64]() == "primitive"
+    assert type_info_kind[NonEmpty]() == "refinement"
+    assert type_info_kind[Direction]() == "enum"
+    assert type_info_kind[Header]() == "bitfield"
     assert type_info_arg_count[int64]() == 0
+    assert type.has_secret[SecretChoice]() == true
     assert type_info_kind[list[optional[User]]]() == "list"
     assert type_info_arg_count[list[optional[User]]]() == 1
     assert type_info_arg_kind[list[optional[User]]](0) == "optional"
