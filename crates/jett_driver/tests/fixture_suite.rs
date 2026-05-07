@@ -262,6 +262,10 @@ compile_fail_fixture!(
     "json_serialize_secret_struct_blocked.jett"
 );
 compile_fail_fixture!(
+    compile_fail_serialize_annotation_requires_string,
+    "serialize_annotation_requires_string.jett"
+);
+compile_fail_fixture!(
     compile_fail_type_info_wrong_arity,
     "type_info_wrong_arity.jett"
 );

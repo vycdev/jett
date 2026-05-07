@@ -1,0 +1,5 @@
+# ERROR: E1000
+namespace test
+
+struct User:
+    id: string serialize 123
