@@ -331,11 +331,7 @@ impl<'src> Lexer<'src> {
                 if has_content {
                     self.errors.push(LexError {
                         message: "trailing whitespace is not allowed".into(),
-                        span: Span::new(
-                            self.file,
-                            trail_start as u32,
-                            self.pos as u32,
-                        ),
+                        span: Span::new(self.file, trail_start as u32, self.pos as u32),
                     });
                 }
             }
@@ -1243,25 +1239,16 @@ mod tests {
     fn test_symbol_adjacency() {
         // "a+b" should tokenize as ident, plus, ident
         let k = kinds_no_eof("a+b");
-        assert_eq!(
-            k,
-            vec![TokenKind::Ident, TokenKind::Plus, TokenKind::Ident]
-        );
+        assert_eq!(k, vec![TokenKind::Ident, TokenKind::Plus, TokenKind::Ident]);
     }
 
     #[test]
     fn test_eq_vs_eqeq() {
         let k = kinds_no_eof("x == y");
-        assert_eq!(
-            k,
-            vec![TokenKind::Ident, TokenKind::EqEq, TokenKind::Ident]
-        );
+        assert_eq!(k, vec![TokenKind::Ident, TokenKind::EqEq, TokenKind::Ident]);
 
         let k = kinds_no_eof("x = y");
-        assert_eq!(
-            k,
-            vec![TokenKind::Ident, TokenKind::Eq, TokenKind::Ident]
-        );
+        assert_eq!(k, vec![TokenKind::Ident, TokenKind::Eq, TokenKind::Ident]);
     }
 
     // ===========================================
@@ -1289,7 +1276,11 @@ mod tests {
         let k = kinds_no_eof("\"hello {name}\"");
         assert_eq!(
             k,
-            vec![TokenKind::StringStart, TokenKind::Ident, TokenKind::StringEnd]
+            vec![
+                TokenKind::StringStart,
+                TokenKind::Ident,
+                TokenKind::StringEnd
+            ]
         );
     }
 
@@ -1630,7 +1621,7 @@ mod tests {
                 TokenKind::Return,
                 TokenKind::Ident, // a
                 TokenKind::Plus,
-                TokenKind::Ident, // b
+                TokenKind::Ident,  // b
                 TokenKind::Dedent, // at EOF
             ]
         );
@@ -1775,7 +1766,12 @@ mod tests {
         let k = kinds_no_eof(source);
         assert_eq!(
             k,
-            vec![TokenKind::List_, TokenKind::LBracket, TokenKind::Int64, TokenKind::RBracket]
+            vec![
+                TokenKind::List_,
+                TokenKind::LBracket,
+                TokenKind::Int64,
+                TokenKind::RBracket
+            ]
         );
     }
 
@@ -1902,7 +1898,10 @@ mod tests {
         let source = "x   \ny";
         let result = tokenize(source, file());
         assert!(
-            result.errors.iter().any(|e| e.message.contains("trailing whitespace")),
+            result
+                .errors
+                .iter()
+                .any(|e| e.message.contains("trailing whitespace")),
             "should report trailing whitespace error"
         );
     }
@@ -1976,9 +1975,6 @@ mod tests {
         // # after code on the same line is a comment
         let source = "x + y # this is a comment";
         let k = kinds_no_eof(source);
-        assert_eq!(
-            k,
-            vec![TokenKind::Ident, TokenKind::Plus, TokenKind::Ident]
-        );
+        assert_eq!(k, vec![TokenKind::Ident, TokenKind::Plus, TokenKind::Ident]);
     }
 }

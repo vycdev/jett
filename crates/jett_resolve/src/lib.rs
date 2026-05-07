@@ -4,5 +4,5 @@ pub mod errors;
 pub mod resolver;
 pub mod scope;
 
-pub use resolver::{resolve, ResolveResult};
+pub use resolver::{ResolveResult, resolve};
 pub use scope::{DefId, DefInfo, DefKind, Scope, ScopeId, ScopeTable};

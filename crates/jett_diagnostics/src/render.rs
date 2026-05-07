@@ -49,7 +49,10 @@ pub fn render_diagnostic(diag: &Diagnostic, source: &str, file_path: &str) -> St
     };
 
     // Header line: error[E0300]: message
-    out.push_str(&format!("{}[{}]: {}\n", severity_str, diag.code, diag.message));
+    out.push_str(&format!(
+        "{}[{}]: {}\n",
+        severity_str, diag.code, diag.message
+    ));
 
     let (line, col) = line_col(source, diag.span.start);
 
@@ -80,7 +83,9 @@ pub fn render_diagnostic(diag: &Diagnostic, source: &str, file_path: &str) -> St
     };
 
     // Clamp underline length to not exceed end of the source line
-    let underline_len = span_len.min(source_line.len().saturating_sub(col - 1)).max(1);
+    let underline_len = span_len
+        .min(source_line.len().saturating_sub(col - 1))
+        .max(1);
 
     // Build the underline: spaces up to col, then carets
     let padding = " ".repeat(col - 1);
@@ -134,10 +139,7 @@ pub fn render_diagnostic(diag: &Diagnostic, source: &str, file_path: &str) -> St
 
     // Suggested fix
     if let Some(ref fix) = diag.suggested_fix {
-        out.push_str(&format!(
-            "   hint: {}\n",
-            fix.explanation
-        ));
+        out.push_str(&format!("   hint: {}\n", fix.explanation));
     }
 
     out
@@ -191,10 +193,7 @@ mod tests {
             "type mismatch: expected int64, got string",
             Span::new(file_id, 41, 46),
         )
-        .with_label(
-            Span::new(file_id, 41, 46),
-            "int64 + string is not allowed",
-        )
+        .with_label(Span::new(file_id, 41, 46), "int64 + string is not allowed")
         .with_fix(
             Span::new(file_id, 41, 46),
             "a + b",

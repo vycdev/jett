@@ -3918,5 +3918,4 @@ property list_property:
             other => panic!("expected Property, got {:?}", other),
         }
     }
-
 }

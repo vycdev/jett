@@ -77,9 +77,40 @@ impl PartialEq for Value {
             (Value::OptionalSome(a), Value::OptionalSome(b)) => a == b,
             (Value::OptionalNone, Value::OptionalNone) => true,
             (Value::Nothing, Value::Nothing) => true,
-            (Value::Struct { type_name: t1, fields: f1 }, Value::Struct { type_name: t2, fields: f2 }) => t1 == t2 && f1 == f2,
-            (Value::Enum { type_name: t1, variant: v1, fields: f1 }, Value::Enum { type_name: t2, variant: v2, fields: f2 }) => t1 == t2 && v1 == v2 && f1 == f2,
-            (Value::Machine { type_name: t1, state: s1, fields: f1 }, Value::Machine { type_name: t2, state: s2, fields: f2 }) => t1 == t2 && s1 == s2 && f1 == f2,
+            (
+                Value::Struct {
+                    type_name: t1,
+                    fields: f1,
+                },
+                Value::Struct {
+                    type_name: t2,
+                    fields: f2,
+                },
+            ) => t1 == t2 && f1 == f2,
+            (
+                Value::Enum {
+                    type_name: t1,
+                    variant: v1,
+                    fields: f1,
+                },
+                Value::Enum {
+                    type_name: t2,
+                    variant: v2,
+                    fields: f2,
+                },
+            ) => t1 == t2 && v1 == v2 && f1 == f2,
+            (
+                Value::Machine {
+                    type_name: t1,
+                    state: s1,
+                    fields: f1,
+                },
+                Value::Machine {
+                    type_name: t2,
+                    state: s2,
+                    fields: f2,
+                },
+            ) => t1 == t2 && s1 == s2 && f1 == f2,
             (Value::Actor(a), Value::Actor(b)) => a == b,
             (Value::Error(a), Value::Error(b)) => a == b,
             (Value::Pending(a), Value::Pending(b)) => a == b,
@@ -173,7 +204,9 @@ impl fmt::Display for Value {
             Value::Function { params, .. } => {
                 write!(f, "function(")?;
                 for (i, p) in params.iter().enumerate() {
-                    if i > 0 { write!(f, ", ")?; }
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
                     write!(f, "{}", p.name.name)?;
                 }
                 write!(f, ")")

@@ -723,9 +723,9 @@ impl Interpreter {
                         Value::ResultOk(_) | Value::ResultFail(_) => *inner_val,
                         other => Value::ResultOk(Box::new(other)),
                     },
-                    Value::Nothing => Value::ResultFail(Box::new(Value::String(
-                        "task was cancelled".to_string(),
-                    ))),
+                    Value::Nothing => {
+                        Value::ResultFail(Box::new(Value::String("task was cancelled".to_string())))
+                    }
                     other => Value::ResultOk(Box::new(other)),
                 };
                 Ok(ExprFlow::Value(result))
@@ -1092,7 +1092,11 @@ impl Interpreter {
                             }
                         }
                     }
-                    _ => return Err("for loop requires a list, string, map, or set value".to_string()),
+                    _ => {
+                        return Err(
+                            "for loop requires a list, string, map, or set value".to_string()
+                        );
+                    }
                 }
                 Ok(None)
             }
@@ -1301,7 +1305,11 @@ impl Interpreter {
                 Expr::FieldAccess(base, field, _) => {
                     (base.as_ref(), field.name.clone(), Some(args.as_slice()))
                 }
-                _ => return Err("send/ask: expected actor.handler or actor.handler(args)".to_string()),
+                _ => {
+                    return Err(
+                        "send/ask: expected actor.handler or actor.handler(args)".to_string()
+                    );
+                }
             },
             Expr::FieldAccess(base, field, _) => (base.as_ref(), field.name.clone(), None),
             _ => return Err("send/ask: expected actor.handler expression".to_string()),
@@ -2016,7 +2024,8 @@ impl Interpreter {
                     }
                     let substitutions = self.generic_type_substitutions(strukt, args);
                     return strukt.fields.iter().any(|field| {
-                        let field_ty = self.substitute_type_expr_with_map(&field.ty, &substitutions);
+                        let field_ty =
+                            self.substitute_type_expr_with_map(&field.ty, &substitutions);
                         self.type_expr_has_secret_inner(&field_ty, visited)
                     });
                 }
@@ -2098,7 +2107,10 @@ impl Interpreter {
             fields: vec![
                 ("index".to_string(), Value::Int64(index as i64)),
                 ("name".to_string(), Value::String(field.name)),
-                ("type_name".to_string(), Value::String(type_expr_display(&field.ty))),
+                (
+                    "type_name".to_string(),
+                    Value::String(type_expr_display(&field.ty)),
+                ),
                 ("kind".to_string(), Value::String(kind)),
                 (
                     "serialize_name".to_string(),
@@ -2161,10 +2173,7 @@ impl Interpreter {
                 .find(|(name, _)| name == &field.name)
                 .map(|(_, field_value)| field_value.clone())
                 .ok_or_else(|| {
-                    format!(
-                        "type.field_value: value is missing field '{}'",
-                        field.name
-                    )
+                    format!("type.field_value: value is missing field '{}'", field.name)
                 }),
             other => Err(format!(
                 "type.field_value: expected struct value for '{}', got {other}",
@@ -2295,16 +2304,15 @@ impl Interpreter {
                     .iter()
                     .filter(|field| !public_only || !self.type_expr_has_secret(&field.ty))
                     .filter_map(|field| {
-                        fields
-                            .iter()
-                            .find(|(name, _)| name == &field.name)
-                            .map(|(_, field_value)| {
+                        fields.iter().find(|(name, _)| name == &field.name).map(
+                            |(_, field_value)| {
                                 format!(
                                     "{}:{}",
                                     json_string(&field.serialize_name),
                                     self.value_to_json_typed(field_value, &field.ty, public_only)
                                 )
-                            })
+                            },
+                        )
                     })
                     .collect();
                 return format!("{{{}}}", pairs.join(","));
@@ -2504,7 +2512,9 @@ impl Interpreter {
                 match (&args[0], &args[1]) {
                     (Value::Int64(lo), Value::Int64(hi)) => {
                         if lo >= hi {
-                            Some(Err(format!("random.int64: lo ({lo}) must be less than hi ({hi})")))
+                            Some(Err(format!(
+                                "random.int64: lo ({lo}) must be less than hi ({hi})"
+                            )))
                         } else {
                             let n = rand::thread_rng().gen_range(*lo..*hi);
                             Some(Ok(Value::Int64(n)))
@@ -2714,8 +2724,9 @@ impl Interpreter {
                         if current_len >= width {
                             Some(Ok(Value::String(s.clone())))
                         } else {
-                            let padding: String =
-                                std::iter::repeat(pad_char).take(width - current_len).collect();
+                            let padding: String = std::iter::repeat(pad_char)
+                                .take(width - current_len)
+                                .collect();
                             Some(Ok(Value::String(format!("{s}{padding}"))))
                         }
                     }
@@ -2789,7 +2800,9 @@ impl Interpreter {
                 match (&args[0], &args[1], &args[2]) {
                     (Value::String(s), Value::String(start), Value::String(end)) => {
                         // Returns "" when the markers are not found (design doc shows plain string)
-                        let result = if let Some(after_start) = s.find(start.as_str()).map(|i| &s[i + start.len()..]) {
+                        let result = if let Some(after_start) =
+                            s.find(start.as_str()).map(|i| &s[i + start.len()..])
+                        {
                             if let Some(end_pos) = after_start.find(end.as_str()) {
                                 after_start[..end_pos].to_string()
                             } else {
@@ -2815,8 +2828,9 @@ impl Interpreter {
                         if current_len >= width {
                             Some(Ok(Value::String(s.clone())))
                         } else {
-                            let padding: String =
-                                std::iter::repeat(pad_char).take(width - current_len).collect();
+                            let padding: String = std::iter::repeat(pad_char)
+                                .take(width - current_len)
+                                .collect();
                             Some(Ok(Value::String(format!("{padding}{s}"))))
                         }
                     }
@@ -3023,9 +3037,7 @@ impl Interpreter {
             "list.contains" => {
                 require_args!(name, 2, args);
                 match &args[0] {
-                    Value::List(items) => {
-                        Some(Ok(Value::Bool(items.contains(&args[1]))))
-                    }
+                    Value::List(items) => Some(Ok(Value::Bool(items.contains(&args[1])))),
                     _ => Some(Err(format!("{name} expects a list as first argument"))),
                 }
             }
@@ -3113,9 +3125,7 @@ impl Interpreter {
                         let pairs: Vec<Value> = a
                             .iter()
                             .zip(b.iter())
-                            .map(|(x, y)| {
-                                Value::List(vec![x.clone(), y.clone()])
-                            })
+                            .map(|(x, y)| Value::List(vec![x.clone(), y.clone()]))
                             .collect();
                         Some(Ok(Value::List(pairs)))
                     }
@@ -3124,9 +3134,7 @@ impl Interpreter {
             }
 
             // -- Map operations (stdlib/map.jett) -----------------------------
-            "map.new" => {
-                Some(Ok(Value::Map(Vec::new())))
-            }
+            "map.new" => Some(Ok(Value::Map(Vec::new()))),
             "map.length" => {
                 require_args!(name, 1, args);
                 match &args[0] {
@@ -3148,7 +3156,10 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match &args[0] {
                     Value::Map(entries) => {
-                        let val = entries.iter().find(|(k, _)| k == &args[1]).map(|(_, v)| v.clone());
+                        let val = entries
+                            .iter()
+                            .find(|(k, _)| k == &args[1])
+                            .map(|(_, v)| v.clone());
                         Some(Ok(match val {
                             Some(v) => Value::OptionalSome(Box::new(v)),
                             None => Value::OptionalNone,
@@ -3222,7 +3233,8 @@ impl Interpreter {
                     Value::Map(entries) => {
                         let key = &args[1];
                         let default = args[2].clone();
-                        let found = entries.iter()
+                        let found = entries
+                            .iter()
                             .find(|(k, _)| k == key)
                             .map(|(_, v)| v.clone())
                             .unwrap_or(default);
@@ -3282,9 +3294,7 @@ impl Interpreter {
             }
 
             // -- Set operations (stdlib/set.jett) -----------------------------
-            "set.new" => {
-                Some(Ok(Value::Set(Vec::new())))
-            }
+            "set.new" => Some(Ok(Value::Set(Vec::new()))),
             "set.add" => {
                 require_args!(name, 2, args);
                 match args[0].clone() {
@@ -3355,10 +3365,8 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::Set(a), Value::Set(b)) => {
-                        let result: Vec<Value> = a.iter()
-                            .filter(|v| b.contains(v))
-                            .cloned()
-                            .collect();
+                        let result: Vec<Value> =
+                            a.iter().filter(|v| b.contains(v)).cloned().collect();
                         Some(Ok(Value::Set(result)))
                     }
                     _ => Some(Err(format!("{name} expects two set arguments"))),
@@ -3368,10 +3376,8 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::Set(a), Value::Set(b)) => {
-                        let result: Vec<Value> = a.iter()
-                            .filter(|v| !b.contains(v))
-                            .cloned()
-                            .collect();
+                        let result: Vec<Value> =
+                            a.iter().filter(|v| !b.contains(v)).cloned().collect();
                         Some(Ok(Value::Set(result)))
                     }
                     _ => Some(Err(format!("{name} expects two set arguments"))),
@@ -3384,12 +3390,15 @@ impl Interpreter {
                 match (&args[0], &args[1]) {
                     (Value::List(items), Value::Int64(size)) => {
                         let size = (*size).max(1) as usize;
-                        let chunks: Vec<Value> = items.chunks(size)
+                        let chunks: Vec<Value> = items
+                            .chunks(size)
                             .map(|c| Value::List(c.to_vec()))
                             .collect();
                         Some(Ok(Value::List(chunks)))
                     }
-                    _ => Some(Err(format!("{name} expects a list and an int64 chunk size"))),
+                    _ => Some(Err(format!(
+                        "{name} expects a list and an int64 chunk size"
+                    ))),
                 }
             }
 
@@ -3400,8 +3409,14 @@ impl Interpreter {
                         let idx = *idx as usize;
                         let mut sorted = items.clone();
                         sorted.sort_by(|a, b| {
-                            let va = match a { Value::List(l) => l.get(idx).cloned(), _ => None };
-                            let vb = match b { Value::List(l) => l.get(idx).cloned(), _ => None };
+                            let va = match a {
+                                Value::List(l) => l.get(idx).cloned(),
+                                _ => None,
+                            };
+                            let vb = match b {
+                                Value::List(l) => l.get(idx).cloned(),
+                                _ => None,
+                            };
                             match (va, vb) {
                                 (Some(Value::String(sa)), Some(Value::String(sb))) => sa.cmp(&sb),
                                 (Some(Value::Int64(ia)), Some(Value::Int64(ib))) => ia.cmp(&ib),
@@ -3410,7 +3425,9 @@ impl Interpreter {
                         });
                         Some(Ok(Value::List(sorted)))
                     }
-                    _ => Some(Err(format!("{name} expects a list of lists and an int64 index"))),
+                    _ => Some(Err(format!(
+                        "{name} expects a list of lists and an int64 index"
+                    ))),
                 }
             }
 
@@ -3418,13 +3435,11 @@ impl Interpreter {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::List(items) => {
-                        let sorted = items.windows(2).all(|w| {
-                            match (&w[0], &w[1]) {
-                                (Value::Int64(a), Value::Int64(b)) => a <= b,
-                                (Value::Float64(a), Value::Float64(b)) => a <= b,
-                                (Value::String(a), Value::String(b)) => a <= b,
-                                _ => true,
-                            }
+                        let sorted = items.windows(2).all(|w| match (&w[0], &w[1]) {
+                            (Value::Int64(a), Value::Int64(b)) => a <= b,
+                            (Value::Float64(a), Value::Float64(b)) => a <= b,
+                            (Value::String(a), Value::String(b)) => a <= b,
+                            _ => true,
                         });
                         Some(Ok(Value::Bool(sorted)))
                     }
@@ -3574,11 +3589,14 @@ impl Interpreter {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::List(items) if !items.is_empty() => {
-                        let sum: f64 = items.iter().map(|v| match v {
-                            Value::Int64(n) => *n as f64,
-                            Value::Float64(n) => *n,
-                            _ => 0.0,
-                        }).sum();
+                        let sum: f64 = items
+                            .iter()
+                            .map(|v| match v {
+                                Value::Int64(n) => *n as f64,
+                                Value::Float64(n) => *n,
+                                _ => 0.0,
+                            })
+                            .sum();
                         Some(Ok(Value::Float64(sum / items.len() as f64)))
                     }
                     Value::List(_) => Some(Err("math.average: list is empty".to_string())),
@@ -3590,11 +3608,14 @@ impl Interpreter {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::List(items) if !items.is_empty() => {
-                        let mut nums: Vec<f64> = items.iter().map(|v| match v {
-                            Value::Int64(n) => *n as f64,
-                            Value::Float64(n) => *n,
-                            _ => 0.0,
-                        }).collect();
+                        let mut nums: Vec<f64> = items
+                            .iter()
+                            .map(|v| match v {
+                                Value::Int64(n) => *n as f64,
+                                Value::Float64(n) => *n,
+                                _ => 0.0,
+                            })
+                            .collect();
                         nums.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
                         let mid = nums.len() / 2;
                         let median = if nums.len() % 2 == 0 {
@@ -3677,7 +3698,11 @@ impl Interpreter {
                         for item in items {
                             match item {
                                 Value::Int64(n) => total += n,
-                                _ => return Some(Err("math.sum: list must contain int64 values".to_string())),
+                                _ => {
+                                    return Some(Err(
+                                        "math.sum: list must contain int64 values".to_string()
+                                    ));
+                                }
                             }
                         }
                         Some(Ok(Value::Int64(total)))
@@ -3726,7 +3751,9 @@ impl Interpreter {
                 match &args[0] {
                     Value::Int64(n) => {
                         if *n < 0 {
-                            Some(Err("math.factorial: argument must be non-negative".to_string()))
+                            Some(Err(
+                                "math.factorial: argument must be non-negative".to_string()
+                            ))
                         } else {
                             let mut result: i64 = 1;
                             for i in 2..=*n {
@@ -3742,7 +3769,13 @@ impl Interpreter {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Int64(n) => {
-                        let s = if *n < 0 { -1 } else if *n > 0 { 1 } else { 0 };
+                        let s = if *n < 0 {
+                            -1
+                        } else if *n > 0 {
+                            1
+                        } else {
+                            0
+                        };
                         Some(Ok(Value::Int64(s)))
                     }
                     _ => Some(Err(format!("{name} expects an int64 argument"))),
@@ -3771,9 +3804,7 @@ impl Interpreter {
                         let enumerated: Vec<Value> = items
                             .iter()
                             .enumerate()
-                            .map(|(i, v)| {
-                                Value::List(vec![Value::Int64(i as i64), v.clone()])
-                            })
+                            .map(|(i, v)| Value::List(vec![Value::Int64(i as i64), v.clone()]))
                             .collect();
                         Some(Ok(Value::List(enumerated)))
                     }
@@ -3796,7 +3827,8 @@ impl Interpreter {
                 match &args[1] {
                     Value::Int64(count) => {
                         let n = (*count).max(0) as usize;
-                        let items: Vec<Value> = std::iter::repeat(args[0].clone()).take(n).collect();
+                        let items: Vec<Value> =
+                            std::iter::repeat(args[0].clone()).take(n).collect();
                         Some(Ok(Value::List(items)))
                     }
                     _ => Some(Err(format!("{name} expects a value and an int64 count"))),
@@ -3829,7 +3861,9 @@ impl Interpreter {
                             Some(Err(format!("{name}: index {index} out of bounds")))
                         }
                     }
-                    _ => Some(Err(format!("{name} expects a list, an int64 index, and a value"))),
+                    _ => Some(Err(format!(
+                        "{name} expects a list, an int64 index, and a value"
+                    ))),
                 }
             }
             "list.remove_at" => {
@@ -3930,9 +3964,8 @@ impl Interpreter {
                 match &args[0] {
                     Value::String(s) => {
                         // Yields grapheme clusters; approximate with chars for now
-                        let chars: Vec<Value> = s.chars()
-                            .map(|c| Value::String(c.to_string()))
-                            .collect();
+                        let chars: Vec<Value> =
+                            s.chars().map(|c| Value::String(c.to_string())).collect();
                         Some(Ok(Value::List(chars)))
                     }
                     _ => Some(Err(format!("{name} expects a string argument"))),
@@ -3943,7 +3976,8 @@ impl Interpreter {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => {
-                        let words: Vec<Value> = s.split_whitespace()
+                        let words: Vec<Value> = s
+                            .split_whitespace()
                             .map(|w| Value::String(w.to_string()))
                             .collect();
                         Some(Ok(Value::List(words)))
@@ -3956,9 +3990,8 @@ impl Interpreter {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => {
-                        let lines: Vec<Value> = s.lines()
-                            .map(|l| Value::String(l.to_string()))
-                            .collect();
+                        let lines: Vec<Value> =
+                            s.lines().map(|l| Value::String(l.to_string())).collect();
                         Some(Ok(Value::List(lines)))
                     }
                     _ => Some(Err(format!("{name} expects a string argument"))),
@@ -3980,11 +4013,22 @@ impl Interpreter {
                 b[8] = (b[8] & 0x3F) | 0x80;
                 let uuid = format!(
                     "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-                    b[0], b[1], b[2], b[3],
-                    b[4], b[5],
-                    b[6], b[7],
-                    b[8], b[9],
-                    b[10], b[11], b[12], b[13], b[14], b[15]
+                    b[0],
+                    b[1],
+                    b[2],
+                    b[3],
+                    b[4],
+                    b[5],
+                    b[6],
+                    b[7],
+                    b[8],
+                    b[9],
+                    b[10],
+                    b[11],
+                    b[12],
+                    b[13],
+                    b[14],
+                    b[15]
                 );
                 Some(Ok(Value::String(uuid)))
             }
@@ -4036,7 +4080,9 @@ impl Interpreter {
                             Value::OptionalNone
                         } else {
                             match s.chars().nth(*i as usize) {
-                                Some(c) => Value::OptionalSome(Box::new(Value::String(c.to_string()))),
+                                Some(c) => {
+                                    Value::OptionalSome(Box::new(Value::String(c.to_string())))
+                                }
                                 None => Value::OptionalNone,
                             }
                         };
@@ -4143,7 +4189,8 @@ impl Interpreter {
                         if char_len >= width {
                             Some(Ok(Value::String(s.clone())))
                         } else {
-                            let padding: String = std::iter::repeat(' ').take(width - char_len).collect();
+                            let padding: String =
+                                std::iter::repeat(' ').take(width - char_len).collect();
                             Some(Ok(Value::String(format!("{s}{padding}"))))
                         }
                     }
@@ -4160,7 +4207,8 @@ impl Interpreter {
                         if char_len >= width {
                             Some(Ok(Value::String(s.clone())))
                         } else {
-                            let padding: String = std::iter::repeat(' ').take(width - char_len).collect();
+                            let padding: String =
+                                std::iter::repeat(' ').take(width - char_len).collect();
                             Some(Ok(Value::String(format!("{padding}{s}"))))
                         }
                     }
@@ -4183,7 +4231,8 @@ impl Interpreter {
                             } else {
                                 ("", s.as_str())
                             };
-                            let zeros: String = std::iter::repeat('0').take(width - char_len).collect();
+                            let zeros: String =
+                                std::iter::repeat('0').take(width - char_len).collect();
                             Some(Ok(Value::String(format!("{sign}{zeros}{digits}"))))
                         }
                     }
@@ -4195,9 +4244,7 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::String(s), Value::String(prefix)) => {
-                        let result = s.strip_prefix(prefix.as_str())
-                            .unwrap_or(s)
-                            .to_string();
+                        let result = s.strip_prefix(prefix.as_str()).unwrap_or(s).to_string();
                         Some(Ok(Value::String(result)))
                     }
                     _ => Some(Err(format!("{name} expects two string arguments"))),
@@ -4208,9 +4255,7 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::String(s), Value::String(suffix)) => {
-                        let result = s.strip_suffix(suffix.as_str())
-                            .unwrap_or(s)
-                            .to_string();
+                        let result = s.strip_suffix(suffix.as_str()).unwrap_or(s).to_string();
                         Some(Ok(Value::String(result)))
                     }
                     _ => Some(Err(format!("{name} expects two string arguments"))),
@@ -4220,9 +4265,9 @@ impl Interpreter {
             "string.is_numeric" => {
                 require_args!(name, 1, args);
                 match &args[0] {
-                    Value::String(s) => {
-                        Some(Ok(Value::Bool(!s.is_empty() && s.chars().all(|c| c.is_ascii_digit()))))
-                    }
+                    Value::String(s) => Some(Ok(Value::Bool(
+                        !s.is_empty() && s.chars().all(|c| c.is_ascii_digit()),
+                    ))),
                     _ => Some(Err(format!("{name} expects a string argument"))),
                 }
             }
@@ -4230,9 +4275,9 @@ impl Interpreter {
             "string.is_alpha" => {
                 require_args!(name, 1, args);
                 match &args[0] {
-                    Value::String(s) => {
-                        Some(Ok(Value::Bool(!s.is_empty() && s.chars().all(|c| c.is_alphabetic()))))
-                    }
+                    Value::String(s) => Some(Ok(Value::Bool(
+                        !s.is_empty() && s.chars().all(|c| c.is_alphabetic()),
+                    ))),
                     _ => Some(Err(format!("{name} expects a string argument"))),
                 }
             }
@@ -4255,7 +4300,10 @@ impl Interpreter {
                     Value::String(s) => match base64_decode(s) {
                         Ok(bytes) => match String::from_utf8(bytes) {
                             Ok(decoded) => Some(Ok(Value::String(decoded))),
-                            Err(_) => Some(Err("encoding.base64_decode: decoded bytes are not valid UTF-8".to_string())),
+                            Err(_) => Some(Err(
+                                "encoding.base64_decode: decoded bytes are not valid UTF-8"
+                                    .to_string(),
+                            )),
                         },
                         Err(e) => Some(Err(format!("encoding.base64_decode: {e}"))),
                     },
@@ -4279,7 +4327,9 @@ impl Interpreter {
                 match &args[0] {
                     Value::String(s) => {
                         if s.len() % 2 != 0 {
-                            return Some(Err("encoding.hex_decode: odd-length hex string".to_string()));
+                            return Some(Err(
+                                "encoding.hex_decode: odd-length hex string".to_string()
+                            ));
                         }
                         let bytes: Result<Vec<u8>, _> = (0..s.len() / 2)
                             .map(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16))
@@ -4287,9 +4337,14 @@ impl Interpreter {
                         match bytes {
                             Ok(b) => match String::from_utf8(b) {
                                 Ok(decoded) => Some(Ok(Value::String(decoded))),
-                                Err(_) => Some(Err("encoding.hex_decode: bytes are not valid UTF-8".to_string())),
+                                Err(_) => {
+                                    Some(Err("encoding.hex_decode: bytes are not valid UTF-8"
+                                        .to_string()))
+                                }
                             },
-                            Err(_) => Some(Err("encoding.hex_decode: invalid hex characters".to_string())),
+                            Err(_) => Some(Err(
+                                "encoding.hex_decode: invalid hex characters".to_string()
+                            )),
                         }
                     }
                     _ => Some(Err(format!("{name} expects a string argument"))),
@@ -4300,13 +4355,21 @@ impl Interpreter {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => {
-                        let encoded: String = s.bytes().flat_map(|b| {
-                            if b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.' || b == b'~' {
-                                vec![b as char]
-                            } else {
-                                format!("%{b:02X}").chars().collect()
-                            }
-                        }).collect();
+                        let encoded: String = s
+                            .bytes()
+                            .flat_map(|b| {
+                                if b.is_ascii_alphanumeric()
+                                    || b == b'-'
+                                    || b == b'_'
+                                    || b == b'.'
+                                    || b == b'~'
+                                {
+                                    vec![b as char]
+                                } else {
+                                    format!("%{b:02X}").chars().collect()
+                                }
+                            })
+                            .collect();
                         Some(Ok(Value::String(encoded)))
                     }
                     _ => Some(Err(format!("{name} expects a string argument"))),
@@ -4340,7 +4403,9 @@ impl Interpreter {
                         }
                         match String::from_utf8(result) {
                             Ok(decoded) => Some(Ok(Value::String(decoded))),
-                            Err(_) => Some(Err("encoding.url_decode: result is not valid UTF-8".to_string())),
+                            Err(_) => Some(Err(
+                                "encoding.url_decode: result is not valid UTF-8".to_string()
+                            )),
                         }
                     }
                     _ => Some(Err(format!("{name} expects a string argument"))),
@@ -4398,9 +4463,7 @@ impl Interpreter {
             }
             "os.args" => {
                 require_args!(name, 0, args);
-                let args_list: Vec<Value> = std::env::args()
-                    .map(Value::String)
-                    .collect();
+                let args_list: Vec<Value> = std::env::args().map(Value::String).collect();
                 Some(Ok(Value::List(args_list)))
             }
 
@@ -4443,7 +4506,9 @@ impl Interpreter {
                                         .collect();
                                     lines.push(fields.join(","));
                                 }
-                                _ => return Some(Err(format!("{name} expects list[list[string]]"))),
+                                _ => {
+                                    return Some(Err(format!("{name} expects list[list[string]]")));
+                                }
                             }
                         }
                         Some(Ok(Value::String(lines.join("\n"))))
@@ -4577,14 +4642,12 @@ impl Interpreter {
             "bytes.to_string" => {
                 require_args!(name, 1, args);
                 match &args[0] {
-                    Value::Bytes(b) => {
-                        match String::from_utf8(b.clone()) {
-                            Ok(s) => Some(Ok(Value::ResultOk(Box::new(Value::String(s))))),
-                            Err(e) => Some(Ok(Value::ResultFail(Box::new(Value::String(
-                                format!("invalid UTF-8: {e}"),
-                            ))))),
-                        }
-                    }
+                    Value::Bytes(b) => match String::from_utf8(b.clone()) {
+                        Ok(s) => Some(Ok(Value::ResultOk(Box::new(Value::String(s))))),
+                        Err(e) => Some(Ok(Value::ResultFail(Box::new(Value::String(format!(
+                            "invalid UTF-8: {e}"
+                        )))))),
+                    },
                     _ => Some(Err(format!("{name} expects a bytes argument"))),
                 }
             }
@@ -4595,12 +4658,16 @@ impl Interpreter {
                     (Value::Bytes(b), Value::Int64(index)) => {
                         let idx = *index as usize;
                         if idx < b.len() {
-                            Some(Ok(Value::OptionalSome(Box::new(Value::Int64(b[idx] as i64)))))
+                            Some(Ok(Value::OptionalSome(Box::new(Value::Int64(
+                                b[idx] as i64,
+                            )))))
                         } else {
                             Some(Ok(Value::OptionalNone))
                         }
                     }
-                    _ => Some(Err(format!("{name} expects a bytes value and an int64 index"))),
+                    _ => Some(Err(format!(
+                        "{name} expects a bytes value and an int64 index"
+                    ))),
                 }
             }
 
@@ -4763,7 +4830,7 @@ impl Interpreter {
                         Ok(other) => {
                             return Some(Err(format!(
                                 "list.filter: predicate returned {other}, expected bool"
-                            )))
+                            )));
                         }
                         Err(e) => return Some(Err(e)),
                     }
@@ -4806,13 +4873,13 @@ impl Interpreter {
                 for item in items {
                     match self.call_fn_value(fn_val.clone(), vec![item.clone()]) {
                         Ok(Value::Bool(true)) => {
-                            return Some(Ok(Value::OptionalSome(Box::new(item))))
+                            return Some(Ok(Value::OptionalSome(Box::new(item))));
                         }
                         Ok(Value::Bool(false)) => {}
                         Ok(other) => {
                             return Some(Err(format!(
                                 "list.find: predicate returned {other}, expected bool"
-                            )))
+                            )));
                         }
                         Err(e) => return Some(Err(e)),
                     }
@@ -4839,7 +4906,7 @@ impl Interpreter {
                         Ok(other) => {
                             return Some(Err(format!(
                                 "list.sort_by: key function returned {other}, expected int64"
-                            )))
+                            )));
                         }
                         Err(e) => return Some(Err(e)),
                     }
@@ -4866,7 +4933,7 @@ impl Interpreter {
                         Ok(other) => {
                             return Some(Err(format!(
                                 "list.all: predicate returned {other}, expected bool"
-                            )))
+                            )));
                         }
                         Err(e) => return Some(Err(e)),
                     }
@@ -4892,7 +4959,7 @@ impl Interpreter {
                         Ok(other) => {
                             return Some(Err(format!(
                                 "list.any: predicate returned {other}, expected bool"
-                            )))
+                            )));
                         }
                         Err(e) => return Some(Err(e)),
                     }
@@ -4919,7 +4986,7 @@ impl Interpreter {
                         Ok(other) => {
                             return Some(Err(format!(
                                 "list.count: predicate returned {other}, expected bool"
-                            )))
+                            )));
                         }
                         Err(e) => return Some(Err(e)),
                     }
@@ -4960,7 +5027,9 @@ impl Interpreter {
                                 }
                                 Some(Ok(Value::Float64(total)))
                             }
-                            _ => Some(Err("list.sum: list elements must be int64 or float64".into())),
+                            _ => Some(Err(
+                                "list.sum: list elements must be int64 or float64".into()
+                            )),
                         }
                     }
                     _ => Some(Err("list.sum: argument must be a list".into())),
@@ -5020,7 +5089,10 @@ impl Interpreter {
 
             "list.flat_map" => {
                 if args.len() != 2 {
-                    return Some(Err(format!("list.flat_map expects 2 arguments, got {}", args.len())));
+                    return Some(Err(format!(
+                        "list.flat_map expects 2 arguments, got {}",
+                        args.len()
+                    )));
                 }
                 let items = match &args[0] {
                     Value::List(v) => v.clone(),
@@ -5031,7 +5103,11 @@ impl Interpreter {
                 for item in items {
                     match self.call_fn_value(fn_val.clone(), vec![item]) {
                         Ok(Value::List(inner)) => result.extend(inner),
-                        Ok(other) => return Some(Err(format!("list.flat_map: function returned {other}, expected a list"))),
+                        Ok(other) => {
+                            return Some(Err(format!(
+                                "list.flat_map: function returned {other}, expected a list"
+                            )));
+                        }
                         Err(e) => return Some(Err(e)),
                     }
                 }
@@ -5059,7 +5135,7 @@ impl Interpreter {
                         Ok(other) => {
                             return Some(Err(format!(
                                 "map.filter: predicate returned {other}, expected bool"
-                            )))
+                            )));
                         }
                         Err(e) => return Some(Err(e)),
                     }
@@ -5322,8 +5398,7 @@ impl Interpreter {
                         if !in_range {
                             return Err(format!(
                                 "bitfield '{bitfield_name}' field '{}' is {} bit(s) wide and cannot hold '{int_value}'",
-                                bitfield.fields[field_index].name.name,
-                                width,
+                                bitfield.fields[field_index].name.name, width,
                             ));
                         }
                     } else {
@@ -5331,8 +5406,7 @@ impl Interpreter {
                         if !in_range {
                             return Ok(Value::ResultFail(Box::new(Value::String(format!(
                                 "bitfield '{bitfield_name}' field '{}' is {} bit(s) wide and cannot hold '{int_value}'",
-                                bitfield.fields[field_index].name.name,
-                                width,
+                                bitfield.fields[field_index].name.name, width,
                             )))));
                         }
                     }
@@ -7429,8 +7503,16 @@ fn base64_encode(data: &[u8]) -> String {
     let mut i = 0;
     while i < data.len() {
         let b0 = data[i] as u32;
-        let b1 = if i + 1 < data.len() { data[i + 1] as u32 } else { 0 };
-        let b2 = if i + 2 < data.len() { data[i + 2] as u32 } else { 0 };
+        let b1 = if i + 1 < data.len() {
+            data[i + 1] as u32
+        } else {
+            0
+        };
+        let b2 = if i + 2 < data.len() {
+            data[i + 2] as u32
+        } else {
+            0
+        };
         let combined = (b0 << 16) | (b1 << 8) | b2;
         out.push(ALPHABET[((combined >> 18) & 63) as usize] as char);
         out.push(ALPHABET[((combined >> 12) & 63) as usize] as char);
@@ -7474,8 +7556,8 @@ fn sha256_hash(data: &[u8]) -> String {
         0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
     ];
     let mut h: [u32; 8] = [
-        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-        0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+        0x5be0cd19,
     ];
     let bit_len = (data.len() as u64).wrapping_mul(8);
     let mut msg = data.to_vec();
@@ -7487,28 +7569,50 @@ fn sha256_hash(data: &[u8]) -> String {
     for chunk in msg.chunks(64) {
         let mut w = [0u32; 64];
         for i in 0..16 {
-            w[i] = u32::from_be_bytes([chunk[i * 4], chunk[i * 4 + 1], chunk[i * 4 + 2], chunk[i * 4 + 3]]);
+            w[i] = u32::from_be_bytes([
+                chunk[i * 4],
+                chunk[i * 4 + 1],
+                chunk[i * 4 + 2],
+                chunk[i * 4 + 3],
+            ]);
         }
         for i in 16..64 {
             let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
             let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
-            w[i] = w[i - 16].wrapping_add(s0).wrapping_add(w[i - 7]).wrapping_add(s1);
+            w[i] = w[i - 16]
+                .wrapping_add(s0)
+                .wrapping_add(w[i - 7])
+                .wrapping_add(s1);
         }
         let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut hh] = h;
         for i in 0..64 {
             let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
             let ch = (e & f) ^ ((!e) & g);
-            let temp1 = hh.wrapping_add(s1).wrapping_add(ch).wrapping_add(K[i]).wrapping_add(w[i]);
+            let temp1 = hh
+                .wrapping_add(s1)
+                .wrapping_add(ch)
+                .wrapping_add(K[i])
+                .wrapping_add(w[i]);
             let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
             let maj = (a & b) ^ (a & c) ^ (b & c);
             let temp2 = s0.wrapping_add(maj);
-            hh = g; g = f; f = e; e = d.wrapping_add(temp1);
-            d = c; c = b; b = a; a = temp1.wrapping_add(temp2);
+            hh = g;
+            g = f;
+            f = e;
+            e = d.wrapping_add(temp1);
+            d = c;
+            c = b;
+            b = a;
+            a = temp1.wrapping_add(temp2);
         }
-        h[0] = h[0].wrapping_add(a); h[1] = h[1].wrapping_add(b);
-        h[2] = h[2].wrapping_add(c); h[3] = h[3].wrapping_add(d);
-        h[4] = h[4].wrapping_add(e); h[5] = h[5].wrapping_add(f);
-        h[6] = h[6].wrapping_add(g); h[7] = h[7].wrapping_add(hh);
+        h[0] = h[0].wrapping_add(a);
+        h[1] = h[1].wrapping_add(b);
+        h[2] = h[2].wrapping_add(c);
+        h[3] = h[3].wrapping_add(d);
+        h[4] = h[4].wrapping_add(e);
+        h[5] = h[5].wrapping_add(f);
+        h[6] = h[6].wrapping_add(g);
+        h[7] = h[7].wrapping_add(hh);
     }
     format!(
         "{:08x}{:08x}{:08x}{:08x}{:08x}{:08x}{:08x}{:08x}",
@@ -7561,7 +7665,12 @@ fn md5_hash(data: &[u8]) -> String {
     for chunk in msg.chunks(64) {
         let mut m = [0u32; 16];
         for i in 0..16 {
-            m[i] = u32::from_le_bytes([chunk[i * 4], chunk[i * 4 + 1], chunk[i * 4 + 2], chunk[i * 4 + 3]]);
+            m[i] = u32::from_le_bytes([
+                chunk[i * 4],
+                chunk[i * 4 + 1],
+                chunk[i * 4 + 2],
+                chunk[i * 4 + 3],
+            ]);
         }
         let mut a = a0;
         let mut b = b0;
@@ -7581,7 +7690,10 @@ fn md5_hash(data: &[u8]) -> String {
             d = c;
             c = b;
             b = b.wrapping_add(
-                a.wrapping_add(f).wrapping_add(K[i]).wrapping_add(m[g]).rotate_left(S[i]),
+                a.wrapping_add(f)
+                    .wrapping_add(K[i])
+                    .wrapping_add(m[g])
+                    .rotate_left(S[i]),
             );
             a = temp;
         }

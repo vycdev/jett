@@ -15,9 +15,7 @@ use crate::{Diagnostic, Severity};
 /// status: ok
 /// ```
 pub fn render_toon(diagnostics: &[Diagnostic], source: &str, file_path: &str) -> String {
-    let has_errors = diagnostics
-        .iter()
-        .any(|d| d.severity == Severity::Error);
+    let has_errors = diagnostics.iter().any(|d| d.severity == Severity::Error);
 
     if diagnostics.is_empty() || !has_errors {
         return "status: ok\n".to_string();
@@ -106,24 +104,23 @@ mod tests {
 
         assert!(result.starts_with("status: error\n"));
         assert!(result.contains("errors[1]{code,severity,message,file,line,column}:"));
-        assert!(result.contains("E0300,error,type mismatch: expected int64 got string,test.jett,2,"));
+        assert!(
+            result.contains("E0300,error,type mismatch: expected int64 got string,test.jett,2,")
+        );
     }
 
     #[test]
     fn toon_error_with_suggested_fix() {
         let source = "function main() returns int64:\n    return a + b\n";
         let file_id = FileId::new(0);
-        let diags = vec![Diagnostic::error(
-            300,
-            "type mismatch",
-            Span::new(file_id, 41, 46),
-        )
-        .with_fix(
-            Span::new(file_id, 41, 46),
-            "a + b",
-            "a + int64.from_string(b)",
-            "use explicit conversion",
-        )];
+        let diags = vec![
+            Diagnostic::error(300, "type mismatch", Span::new(file_id, 41, 46)).with_fix(
+                Span::new(file_id, 41, 46),
+                "a + b",
+                "a + int64.from_string(b)",
+                "use explicit conversion",
+            ),
+        ];
 
         let result = render_toon(&diags, source, "test.jett");
 

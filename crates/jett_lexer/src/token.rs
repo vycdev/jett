@@ -116,28 +116,28 @@ pub enum TokenKind {
     StringLiteral,
 
     // Symbols
-    Eq,         // =
-    EqEq,       // ==
-    NotEq,      // !=
-    Lt,         // <
-    Gt,         // >
-    LtEq,       // <=
-    GtEq,       // >=
-    Plus,        // +
-    Minus,       // -
-    Star,        // *
-    Slash,       // /
-    AmpAmp,     // &&
-    PipePipe,   // ||
-    Bang,        // !
-    Dot,         // .
-    Comma,       // ,
-    Colon,       // :
-    LParen,      // (
-    RParen,      // )
-    LBracket,    // [
-    RBracket,    // ]
-    Hash,        // #
+    Eq,       // =
+    EqEq,     // ==
+    NotEq,    // !=
+    Lt,       // <
+    Gt,       // >
+    LtEq,     // <=
+    GtEq,     // >=
+    Plus,     // +
+    Minus,    // -
+    Star,     // *
+    Slash,    // /
+    AmpAmp,   // &&
+    PipePipe, // ||
+    Bang,     // !
+    Dot,      // .
+    Comma,    // ,
+    Colon,    // :
+    LParen,   // (
+    RParen,   // )
+    LBracket, // [
+    RBracket, // ]
+    Hash,     // #
 
     // Structural
     Newline,

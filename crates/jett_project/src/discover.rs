@@ -43,8 +43,8 @@ pub fn discover_project(
     let project_dir = find_project_root(start_path)?;
     let proj_path = project_dir.join("jett.proj");
 
-    let proj_content = fs::read_to_string(&proj_path)
-        .map_err(|e| DiscoverError::IoError(proj_path.clone(), e))?;
+    let proj_content =
+        fs::read_to_string(&proj_path).map_err(|e| DiscoverError::IoError(proj_path.clone(), e))?;
 
     let (name, version, entry) = parse_project_file(&proj_content)?;
 
@@ -55,8 +55,8 @@ pub fn discover_project(
 
     for (index, path) in jett_files.iter().enumerate() {
         let id = FileId::new(index as u32);
-        let content = fs::read_to_string(path)
-            .map_err(|e| DiscoverError::IoError(path.clone(), e))?;
+        let content =
+            fs::read_to_string(path).map_err(|e| DiscoverError::IoError(path.clone(), e))?;
 
         let namespaces = prescan_namespaces(&content, interner);
 
@@ -88,10 +88,7 @@ pub fn discover_project(
 /// Walk up from `start_path` to find a directory containing `jett.proj`.
 fn find_project_root(start_path: &Path) -> Result<PathBuf, DiscoverError> {
     let start = if start_path.is_file() {
-        start_path
-            .parent()
-            .unwrap_or(start_path)
-            .to_path_buf()
+        start_path.parent().unwrap_or(start_path).to_path_buf()
     } else {
         start_path.to_path_buf()
     };
@@ -139,9 +136,8 @@ fn parse_project_file(content: &str) -> Result<(String, String, String), Discove
         }
     }
 
-    let name = name.ok_or_else(|| {
-        DiscoverError::InvalidProjectFile("missing 'name' field".to_string())
-    })?;
+    let name =
+        name.ok_or_else(|| DiscoverError::InvalidProjectFile("missing 'name' field".to_string()))?;
     let version = version.unwrap_or_else(|| "0.1.0".to_string());
     let entry = entry.unwrap_or_else(|| "src/main.jett".to_string());
 
@@ -157,8 +153,7 @@ fn find_jett_files(dir: &Path) -> Result<Vec<PathBuf>, DiscoverError> {
 }
 
 fn collect_jett_files(dir: &Path, files: &mut Vec<PathBuf>) -> Result<(), DiscoverError> {
-    let entries = fs::read_dir(dir)
-        .map_err(|e| DiscoverError::IoError(dir.to_path_buf(), e))?;
+    let entries = fs::read_dir(dir).map_err(|e| DiscoverError::IoError(dir.to_path_buf(), e))?;
 
     for entry in entries {
         let entry = entry.map_err(|e| DiscoverError::IoError(dir.to_path_buf(), e))?;
@@ -291,10 +286,7 @@ mod tests {
         assert_eq!(project.version, "0.1.0");
         assert_eq!(project.files.len(), 1);
         assert_eq!(project.files[0].namespaces.len(), 1);
-        assert_eq!(
-            interner.resolve(project.files[0].namespaces[0].name),
-            "app"
-        );
+        assert_eq!(interner.resolve(project.files[0].namespaces[0].name), "app");
 
         // Cleanup
         let _ = fs::remove_dir_all(&tmp);

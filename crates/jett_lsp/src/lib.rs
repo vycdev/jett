@@ -96,7 +96,10 @@ impl LanguageServer for JettBackend {
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let uri = params.text_document.uri.clone();
         let text = params.text_document.text.clone();
-        self.documents.write().await.insert(uri.clone(), text.clone());
+        self.documents
+            .write()
+            .await
+            .insert(uri.clone(), text.clone());
         self.validate(uri, &text).await;
     }
 
@@ -105,13 +108,19 @@ impl LanguageServer for JettBackend {
         if let Some(change) = params.content_changes.into_iter().last() {
             let uri = params.text_document.uri.clone();
             let text = change.text.clone();
-            self.documents.write().await.insert(uri.clone(), text.clone());
+            self.documents
+                .write()
+                .await
+                .insert(uri.clone(), text.clone());
             self.validate(uri, &text).await;
         }
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
-        self.documents.write().await.remove(&params.text_document.uri);
+        self.documents
+            .write()
+            .await
+            .remove(&params.text_document.uri);
     }
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {

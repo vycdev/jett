@@ -182,13 +182,18 @@ mod tests {
 
     fn fmt(source: &str) -> String {
         let result = format_source(source, FileId::new(0));
-        assert!(result.errors.is_empty(), "format errors: {:?}", result.errors);
+        assert!(
+            result.errors.is_empty(),
+            "format errors: {:?}",
+            result.errors
+        );
         result.output
     }
 
     #[test]
     fn format_simple_function() {
-        let source = "namespace app\n\nfunction add(a: int64, b: int64) returns int64:\n    return a + b\n";
+        let source =
+            "namespace app\n\nfunction add(a: int64, b: int64) returns int64:\n    return a + b\n";
         let formatted = fmt(source);
         // Check key properties rather than exact match (whitespace may differ slightly)
         assert!(formatted.contains("namespace app"));

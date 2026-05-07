@@ -308,11 +308,7 @@ fn shrink_value(value: &Value) -> Vec<Value> {
 
 /// Try to find simpler inputs that still cause the property to fail.
 /// Returns the shrunk inputs as a Vec<Value> in the same order as `failing`.
-fn shrink_inputs(
-    interp: &mut Interpreter,
-    pb: &PropertyBlock,
-    failing: Vec<Value>,
-) -> Vec<Value> {
+fn shrink_inputs(interp: &mut Interpreter, pb: &PropertyBlock, failing: Vec<Value>) -> Vec<Value> {
     let mut current = failing;
 
     'outer: for _ in 0..SHRINK_MAX_STEPS {
@@ -406,7 +402,11 @@ fn run_property_block(interp: &mut Interpreter, pb: &PropertyBlock) -> VerifyRes
             return VerifyResult {
                 name: pb.name.name.clone(),
                 passed: false,
-                error: Some(format!("{} (counterexample: {})", msg, input_desc.join(", "))),
+                error: Some(format!(
+                    "{} (counterexample: {})",
+                    msg,
+                    input_desc.join(", ")
+                )),
                 iterations: Some(iteration + 1),
                 is_property: true,
             };

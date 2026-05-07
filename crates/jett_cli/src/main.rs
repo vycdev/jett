@@ -128,7 +128,9 @@ fn main() {
                 }
 
                 if result.has_errors {
-                    let error_count = result.diagnostics.iter()
+                    let error_count = result
+                        .diagnostics
+                        .iter()
                         .filter(|d| d.severity == jett_diagnostics::Severity::Error)
                         .count();
                     eprintln!("build failed: {error_count} error(s)");

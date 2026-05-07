@@ -2,7 +2,7 @@ use jett_common::FileId;
 use jett_comptime::value::Value;
 use jett_comptime::verify::{run_verify_blocks, run_verify_blocks_detailed};
 use jett_diagnostics::Diagnostic;
-use jett_fmt::{format_source, FormatResult};
+use jett_fmt::{FormatResult, format_source};
 use jett_parser::ast::{FunctionDef, Item, Param, TypeExpr};
 use jett_parser::parse;
 use jett_resolve::resolve;
@@ -100,12 +100,20 @@ pub fn hover_type(source: &str, line: u32, col: u32) -> Option<String> {
     let offset = line_col_to_offset(source, line, col)?;
 
     let parse_result = parse(source, file_id);
-    if parse_result.errors.iter().any(|d| d.severity == jett_diagnostics::Severity::Error) {
+    if parse_result
+        .errors
+        .iter()
+        .any(|d| d.severity == jett_diagnostics::Severity::Error)
+    {
         return None;
     }
 
     let resolve_result = resolve(&parse_result.module);
-    if resolve_result.diagnostics.iter().any(|d| d.severity == jett_diagnostics::Severity::Error) {
+    if resolve_result
+        .diagnostics
+        .iter()
+        .any(|d| d.severity == jett_diagnostics::Severity::Error)
+    {
         return None;
     }
 
@@ -130,7 +138,11 @@ pub fn hover_type(source: &str, line: u32, col: u32) -> Option<String> {
 pub fn completions(source: &str) -> Vec<(String, jett_resolve::scope::DefKind)> {
     let file_id = FileId::new(0);
     let parse_result = parse(source, file_id);
-    if parse_result.errors.iter().any(|d| d.severity == jett_diagnostics::Severity::Error) {
+    if parse_result
+        .errors
+        .iter()
+        .any(|d| d.severity == jett_diagnostics::Severity::Error)
+    {
         return Vec::new();
     }
     let resolve_result = resolve(&parse_result.module);
@@ -150,7 +162,11 @@ pub fn goto_definition(source: &str, line: u32, col: u32) -> Option<(u32, u32)> 
     let offset = line_col_to_offset(source, line, col)?;
 
     let parse_result = parse(source, file_id);
-    if parse_result.errors.iter().any(|d| d.severity == jett_diagnostics::Severity::Error) {
+    if parse_result
+        .errors
+        .iter()
+        .any(|d| d.severity == jett_diagnostics::Severity::Error)
+    {
         return None;
     }
 
@@ -183,7 +199,8 @@ fn line_col_to_offset(source: &str, line: u32, col: u32) -> Option<u32> {
     for (i, ch) in source.char_indices() {
         if current_line == line {
             // col is 1-based within the line; advance col-1 chars.
-            let col_offset = source[line_start..].char_indices()
+            let col_offset = source[line_start..]
+                .char_indices()
                 .nth((col - 1) as usize)
                 .map(|(o, _)| o)
                 .unwrap_or(source.len() - line_start);
@@ -308,7 +325,10 @@ fn build_file_inner(path: &Path, include_project: bool) -> BuildResult {
 }
 
 /// Register all items from a parsed module into an interpreter.
-fn register_module_items(interp: &mut jett_comptime::interpreter::Interpreter, module: &jett_parser::ast::Module) {
+fn register_module_items(
+    interp: &mut jett_comptime::interpreter::Interpreter,
+    module: &jett_parser::ast::Module,
+) {
     for item in &module.items {
         match item {
             Item::Function(func) => interp.register_function(func),
@@ -341,9 +361,9 @@ fn discover_project_modules(entry_path: &Path) -> Vec<jett_parser::ast::Module> 
     let mut modules = Vec::new();
     for (idx, file_path) in files.iter().enumerate() {
         // Skip the entry file — it will be registered separately.
-        let is_entry = canon.as_ref().map_or(false, |c| {
-            file_path.canonicalize().ok().as_ref() == Some(c)
-        });
+        let is_entry = canon
+            .as_ref()
+            .map_or(false, |c| file_path.canonicalize().ok().as_ref() == Some(c));
         if is_entry {
             continue;
         }
@@ -472,7 +492,11 @@ fn type_expr_name(ty: &TypeExpr) -> String {
         TypeExpr::View(inner, _) => format!("view {}", type_expr_name(inner)),
         TypeExpr::Function(params, ret, _) => {
             let params: Vec<String> = params.iter().map(type_expr_name).collect();
-            format!("function({}) returns {}", params.join(", "), type_expr_name(ret))
+            format!(
+                "function({}) returns {}",
+                params.join(", "),
+                type_expr_name(ret)
+            )
         }
     }
 }

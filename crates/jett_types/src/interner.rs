@@ -230,9 +230,16 @@ impl TypeInterner {
             Type::Interface(iid) => self.resolve_interface(*iid).name.clone(),
             Type::Actor(aid) => self.resolve_actor(*aid).name.clone(),
             Type::Refinement { name, .. } => name.clone(),
-            Type::Function { params, return_type } => {
+            Type::Function {
+                params,
+                return_type,
+            } => {
                 let params: Vec<String> = params.iter().map(|p| self.type_name(*p)).collect();
-                format!("function({}) returns {}", params.join(", "), self.type_name(*return_type))
+                format!(
+                    "function({}) returns {}",
+                    params.join(", "),
+                    self.type_name(*return_type)
+                )
             }
             Type::Error => "<error>".to_string(),
         }

@@ -30,12 +30,8 @@ pub fn unused_import(name: &str, span: Span) -> Diagnostic {
 
 /// E0204: Duplicate definition in the same scope.
 pub fn duplicate_definition(name: &str, new_span: Span, original_span: Span) -> Diagnostic {
-    Diagnostic::error(
-        204,
-        format!("duplicate definition: `{name}`"),
-        new_span,
-    )
-    .with_label(original_span, "previously defined here")
+    Diagnostic::error(204, format!("duplicate definition: `{name}`"), new_span)
+        .with_label(original_span, "previously defined here")
 }
 
 /// E0205: Forward reference — using a name before it is defined.

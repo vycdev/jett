@@ -68,11 +68,7 @@ trait IfEmptyThen {
 
 impl IfEmptyThen for String {
     fn if_empty_then(self, fallback: String) -> String {
-        if self.is_empty() {
-            fallback
-        } else {
-            self
-        }
+        if self.is_empty() { fallback } else { self }
     }
 }
 
@@ -191,7 +187,10 @@ run_pass_fixture!(run_pass_generic_struct, "generic_struct.jett");
 run_pass_fixture!(run_pass_generic_function, "generic_function.jett");
 run_pass_fixture!(run_pass_type_reflection, "type_reflection.jett");
 run_pass_fixture!(run_pass_actor_counter, "actor_counter.jett");
-run_pass_fixture!(run_pass_structured_concurrency, "structured_concurrency.jett");
+run_pass_fixture!(
+    run_pass_structured_concurrency,
+    "structured_concurrency.jett"
+);
 run_pass_fixture!(run_pass_map_operations, "map_operations.jett");
 run_pass_fixture!(run_pass_list_operations, "list_operations.jett");
 run_pass_fixture!(run_pass_math_operations, "math_operations.jett");
@@ -233,9 +232,18 @@ run_pass_fixture!(run_pass_map_advanced, "map_advanced.jett");
 run_pass_fixture!(run_pass_bytes_operations, "bytes_operations.jett");
 run_pass_fixture!(run_pass_enum_advanced, "enum_advanced.jett");
 
-compile_fail_fixture!(compile_fail_type_mismatch_return, "type_mismatch_return.jett");
-compile_fail_fixture!(compile_fail_non_exhaustive_match, "non_exhaustive_match.jett");
-compile_fail_fixture!(compile_fail_assert_outside_verify, "assert_outside_verify.jett");
+compile_fail_fixture!(
+    compile_fail_type_mismatch_return,
+    "type_mismatch_return.jett"
+);
+compile_fail_fixture!(
+    compile_fail_non_exhaustive_match,
+    "non_exhaustive_match.jett"
+);
+compile_fail_fixture!(
+    compile_fail_assert_outside_verify,
+    "assert_outside_verify.jett"
+);
 compile_fail_fixture!(
     compile_fail_breakpoint_condition_not_bool,
     "breakpoint_condition_not_bool.jett"
@@ -247,7 +255,10 @@ compile_fail_fixture!(compile_fail_duplicate_field, "duplicate_field.jett");
 
 #[test]
 fn multifile_cross_file_calls() {
-    let path = workspace_root().join("tests").join("multifile").join("main.jett");
+    let path = workspace_root()
+        .join("tests")
+        .join("multifile")
+        .join("main.jett");
     run_file(&path)
         .unwrap_or_else(|err| panic!("expected multifile test to run successfully: {err}"));
 }

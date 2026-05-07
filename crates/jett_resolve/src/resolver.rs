@@ -945,9 +945,26 @@ fn is_builtin_type(name: &str) -> bool {
 fn is_builtin_module(name: &str) -> bool {
     matches!(
         name,
-        "math" | "json" | "random" | "encoding" | "crypto" | "time" | "os" | "log"
-            | "format" | "validate" | "regex" | "csv" | "uuid" | "string" | "list"
-            | "map" | "set" | "net" | "bitfield" | "type"
+        "math"
+            | "json"
+            | "random"
+            | "encoding"
+            | "crypto"
+            | "time"
+            | "os"
+            | "log"
+            | "format"
+            | "validate"
+            | "regex"
+            | "csv"
+            | "uuid"
+            | "string"
+            | "list"
+            | "map"
+            | "set"
+            | "net"
+            | "bitfield"
+            | "type"
     )
 }
 
@@ -1022,7 +1039,7 @@ mod tests {
             items: vec![
                 Item::Function(FunctionDef {
                     name: ident("greet", 0),
-            type_params: vec![],
+                    type_params: vec![],
                     params: vec![],
                     return_type: Some(named_type("nothing", 20)),
                     body: empty_block(30),
@@ -1030,7 +1047,7 @@ mod tests {
                 }),
                 Item::Function(FunctionDef {
                     name: ident("main", 40),
-            type_params: vec![],
+                    type_params: vec![],
                     params: vec![],
                     return_type: Some(named_type("nothing", 60)),
                     body: Block {
@@ -1073,7 +1090,7 @@ mod tests {
         let module = Module {
             items: vec![Item::Function(FunctionDef {
                 name: ident("main", 0),
-            type_params: vec![],
+                type_params: vec![],
                 params: vec![],
                 return_type: Some(named_type("nothing", 20)),
                 body: Block {
@@ -1124,7 +1141,7 @@ mod tests {
             items: vec![
                 Item::Function(FunctionDef {
                     name: ident("main", 0),
-            type_params: vec![],
+                    type_params: vec![],
                     params: vec![],
                     return_type: Some(named_type("nothing", 20)),
                     body: Block {
@@ -1138,7 +1155,7 @@ mod tests {
                 }),
                 Item::Function(FunctionDef {
                     name: ident("greet", 70),
-            type_params: vec![],
+                    type_params: vec![],
                     params: vec![],
                     return_type: Some(named_type("nothing", 90)),
                     body: empty_block(100),
@@ -1167,7 +1184,7 @@ mod tests {
                     declarations: vec![
                         FunctionDecl {
                             name: ident("is_even", 0),
-            type_params: vec![],
+                            type_params: vec![],
                             params: vec![Param {
                                 view: false,
                                 mutable: false,
@@ -1180,7 +1197,7 @@ mod tests {
                         },
                         FunctionDecl {
                             name: ident("is_odd", 35),
-            type_params: vec![],
+                            type_params: vec![],
                             params: vec![Param {
                                 view: false,
                                 mutable: false,
@@ -1196,7 +1213,7 @@ mod tests {
                 }),
                 Item::Function(FunctionDef {
                     name: ident("is_even", 70),
-            type_params: vec![],
+                    type_params: vec![],
                     params: vec![Param {
                         view: false,
                         mutable: false,
@@ -1224,7 +1241,7 @@ mod tests {
                 }),
                 Item::Function(FunctionDef {
                     name: ident("is_odd", 130),
-            type_params: vec![],
+                    type_params: vec![],
                     params: vec![Param {
                         view: false,
                         mutable: false,
@@ -1275,7 +1292,7 @@ mod tests {
         let module = Module {
             items: vec![Item::Function(FunctionDef {
                 name: ident("main", 0),
-            type_params: vec![],
+                type_params: vec![],
                 params: vec![Param {
                     view: false,
                     mutable: false,
@@ -1328,7 +1345,7 @@ mod tests {
         let module = Module {
             items: vec![Item::Function(FunctionDef {
                 name: ident("main", 0),
-            type_params: vec![],
+                type_params: vec![],
                 params: vec![],
                 return_type: Some(named_type("nothing", 20)),
                 body: Block {
@@ -1368,7 +1385,7 @@ mod tests {
         let module = Module {
             items: vec![Item::Function(FunctionDef {
                 name: ident("main", 0),
-            type_params: vec![],
+                type_params: vec![],
                 params: vec![],
                 return_type: Some(named_type("nothing", 20)),
                 body: Block {
@@ -1436,7 +1453,7 @@ mod tests {
                 }),
                 Item::Function(FunctionDef {
                     name: ident("main", 20),
-            type_params: vec![],
+                    type_params: vec![],
                     params: vec![],
                     return_type: Some(named_type("nothing", 40)),
                     body: Block {
@@ -1490,7 +1507,7 @@ mod tests {
                 }),
                 Item::Function(FunctionDef {
                     name: ident("main", 20),
-            type_params: vec![],
+                    type_params: vec![],
                     params: vec![],
                     return_type: Some(named_type("nothing", 40)),
                     body: Block {
@@ -1539,7 +1556,7 @@ mod tests {
         let module = Module {
             items: vec![Item::Function(FunctionDef {
                 name: ident("main", 0),
-            type_params: vec![],
+                type_params: vec![],
                 params: vec![],
                 return_type: Some(named_type("nothing", 20)),
                 body: Block {
@@ -1578,7 +1595,7 @@ mod tests {
             items: vec![
                 Item::Function(FunctionDef {
                     name: ident("foo", 0),
-            type_params: vec![],
+                    type_params: vec![],
                     params: vec![],
                     return_type: Some(named_type("nothing", 20)),
                     body: empty_block(30),
@@ -1586,7 +1603,7 @@ mod tests {
                 }),
                 Item::Function(FunctionDef {
                     name: ident("foo", 40),
-            type_params: vec![],
+                    type_params: vec![],
                     params: vec![],
                     return_type: Some(named_type("nothing", 60)),
                     body: empty_block(70),
@@ -1621,7 +1638,7 @@ mod tests {
                 }),
                 Item::Function(FunctionDef {
                     name: ident("main", 20),
-            type_params: vec![],
+                    type_params: vec![],
                     params: vec![],
                     return_type: Some(named_type("nothing", 40)),
                     body: Block {
@@ -1657,7 +1674,7 @@ mod tests {
         let module = Module {
             items: vec![Item::Function(FunctionDef {
                 name: ident("main", 0),
-            type_params: vec![],
+                type_params: vec![],
                 params: vec![],
                 return_type: Some(named_type("nothing", 20)),
                 body: Block {
@@ -1694,7 +1711,7 @@ mod tests {
         let module = Module {
             items: vec![Item::Function(FunctionDef {
                 name: ident("main", 0),
-            type_params: vec![],
+                type_params: vec![],
                 params: vec![],
                 return_type: Some(named_type("nothing", 20)),
                 body: Block {

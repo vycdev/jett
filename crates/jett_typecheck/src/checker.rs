@@ -681,7 +681,10 @@ impl<'a> TypeChecker<'a> {
             "type.field_value" => {
                 if type_args.len() != 2 {
                     self.sink.emit(errors::unknown_type(
-                        &format!("{name} (expected 2 type arguments, got {})", type_args.len()),
+                        &format!(
+                            "{name} (expected 2 type arguments, got {})",
+                            type_args.len()
+                        ),
                         span,
                     ));
                     return Some((vec![TypeInterner::ERROR], TypeInterner::ERROR));
@@ -858,21 +861,21 @@ impl<'a> TypeChecker<'a> {
             "math.sqrt" | "math.log" | "math.log2" | "math.log10" => {
                 Some((vec![TypeInterner::FLOAT64], TypeInterner::FLOAT64))
             }
-            "math.pow" => {
-                Some((
-                    vec![TypeInterner::FLOAT64, TypeInterner::FLOAT64],
-                    TypeInterner::FLOAT64,
-                ))
-            }
+            "math.pow" => Some((
+                vec![TypeInterner::FLOAT64, TypeInterner::FLOAT64],
+                TypeInterner::FLOAT64,
+            )),
             "math.floor" | "math.ceil" | "math.round" => {
                 Some((vec![TypeInterner::FLOAT64], TypeInterner::FLOAT64))
             }
-            "math.clamp" => {
-                Some((
-                    vec![TypeInterner::FLOAT64, TypeInterner::FLOAT64, TypeInterner::FLOAT64],
+            "math.clamp" => Some((
+                vec![
                     TypeInterner::FLOAT64,
-                ))
-            }
+                    TypeInterner::FLOAT64,
+                    TypeInterner::FLOAT64,
+                ],
+                TypeInterner::FLOAT64,
+            )),
             "math.average" | "math.median" => {
                 let inner = if type_args.len() == 1 {
                     self.resolve_type_expr(&type_args[0])
@@ -909,10 +912,7 @@ impl<'a> TypeChecker<'a> {
                     TypeInterner::ERROR
                 };
                 let list_ty = self.interner.intern(Type::List(inner));
-                Some((
-                    vec![list_ty],
-                    self.interner.intern(Type::Optional(inner)),
-                ))
+                Some((vec![list_ty], self.interner.intern(Type::Optional(inner))))
             }
             "random.shuffle" => {
                 let inner = if type_args.len() == 1 {
@@ -930,21 +930,37 @@ impl<'a> TypeChecker<'a> {
                 TypeInterner::STRING,
             )),
             "string.slice" => Some((
-                vec![TypeInterner::STRING, TypeInterner::INT64, TypeInterner::INT64],
+                vec![
+                    TypeInterner::STRING,
+                    TypeInterner::INT64,
+                    TypeInterner::INT64,
+                ],
                 TypeInterner::STRING,
             )),
             // string.pad_left is the canonical name; pad_start/pad_end are aliases
             "string.pad_left" | "string.pad_start" | "string.pad_end" => Some((
-                vec![TypeInterner::STRING, TypeInterner::INT64, TypeInterner::STRING],
+                vec![
+                    TypeInterner::STRING,
+                    TypeInterner::INT64,
+                    TypeInterner::STRING,
+                ],
                 TypeInterner::STRING,
             )),
             "string.slugify" => Some((vec![TypeInterner::STRING], TypeInterner::STRING)),
             "string.truncate" => Some((
-                vec![TypeInterner::STRING, TypeInterner::INT64, TypeInterner::STRING],
+                vec![
+                    TypeInterner::STRING,
+                    TypeInterner::INT64,
+                    TypeInterner::STRING,
+                ],
                 TypeInterner::STRING,
             )),
             "string.between" => Some((
-                vec![TypeInterner::STRING, TypeInterner::STRING, TypeInterner::STRING],
+                vec![
+                    TypeInterner::STRING,
+                    TypeInterner::STRING,
+                    TypeInterner::STRING,
+                ],
                 TypeInterner::STRING,
             )),
             "map.new" => {
@@ -970,10 +986,7 @@ impl<'a> TypeChecker<'a> {
             "map.get" => {
                 let (k, v) = self.map_type_args(type_args);
                 let map_ty = self.interner.intern(Type::Map(k, v));
-                Some((
-                    vec![map_ty, k],
-                    self.interner.intern(Type::Optional(v)),
-                ))
+                Some((vec![map_ty, k], self.interner.intern(Type::Optional(v))))
             }
             "map.insert" => {
                 let (k, v) = self.map_type_args(type_args);
@@ -1003,10 +1016,7 @@ impl<'a> TypeChecker<'a> {
                     TypeInterner::ERROR
                 };
                 let list_ty = self.interner.intern(Type::List(inner));
-                Some((
-                    vec![list_ty],
-                    self.interner.intern(Type::Optional(inner)),
-                ))
+                Some((vec![list_ty], self.interner.intern(Type::Optional(inner))))
             }
             // higher-order: list.filter[T](list, fn) -> list[T]
             "list.filter" => {
@@ -1095,10 +1105,9 @@ impl<'a> TypeChecker<'a> {
                     TypeInterner::ERROR
                 };
                 let list_ty = self.interner.intern(Type::List(inner));
-                let group_map_ty = self.interner.intern(Type::Map(
-                    TypeInterner::STRING,
-                    list_ty,
-                ));
+                let group_map_ty = self
+                    .interner
+                    .intern(Type::Map(TypeInterner::STRING, list_ty));
                 Some((vec![list_ty, TypeInterner::ERROR], group_map_ty))
             }
             // list.reduce[T, U](list, initial, fn) -> U
@@ -1109,7 +1118,10 @@ impl<'a> TypeChecker<'a> {
                     TypeInterner::ERROR
                 };
                 let list_ty = self.interner.intern(Type::List(inner));
-                Some((vec![list_ty, TypeInterner::ERROR, TypeInterner::ERROR], TypeInterner::ERROR))
+                Some((
+                    vec![list_ty, TypeInterner::ERROR, TypeInterner::ERROR],
+                    TypeInterner::ERROR,
+                ))
             }
             // list.chunk[T](list, size) -> list[list[T]]
             "list.chunk" => {
@@ -1185,11 +1197,12 @@ impl<'a> TypeChecker<'a> {
                 Some((vec![TypeInterner::STRING, TypeInterner::INT64], opt_str))
             }
             // encoding module (all string → string)
-            "encoding.base64_encode" | "encoding.base64_decode"
-            | "encoding.hex_encode" | "encoding.hex_decode"
-            | "encoding.url_encode" | "encoding.url_decode" => {
-                Some((vec![TypeInterner::STRING], TypeInterner::STRING))
-            }
+            "encoding.base64_encode"
+            | "encoding.base64_decode"
+            | "encoding.hex_encode"
+            | "encoding.hex_decode"
+            | "encoding.url_encode"
+            | "encoding.url_decode" => Some((vec![TypeInterner::STRING], TypeInterner::STRING)),
             // crypto module (string → string)
             "crypto.sha256" | "crypto.md5" => {
                 Some((vec![TypeInterner::STRING], TypeInterner::STRING))
@@ -2532,7 +2545,8 @@ impl<'a> TypeChecker<'a> {
 
     fn check_assert(&mut self, assert_stmt: &ast::AssertStmt) {
         if !self.in_verify_block && !self.in_property_block {
-            self.sink.emit(errors::assert_outside_test_block(assert_stmt.span));
+            self.sink
+                .emit(errors::assert_outside_test_block(assert_stmt.span));
         }
         let cond_type = self.check_expr(&assert_stmt.condition);
         if cond_type != TypeInterner::ERROR && cond_type != TypeInterner::BOOL {
@@ -2777,7 +2791,9 @@ impl<'a> TypeChecker<'a> {
                 let inner_ty = self.check_expr(inner);
                 match self.interner.resolve(inner_ty).clone() {
                     jett_types::Type::Result(_, _) => inner_ty,
-                    _ => self.interner.intern(jett_types::Type::Result(inner_ty, TypeInterner::STRING)),
+                    _ => self
+                        .interner
+                        .intern(jett_types::Type::Result(inner_ty, TypeInterner::STRING)),
                 }
             }
             Expr::Cancel(inner, _) => {
@@ -4132,10 +4148,8 @@ impl<'a> TypeChecker<'a> {
             _ => {
                 // Check if this is a user-defined generic struct.
                 if self.generic_struct_templates.contains_key(name) {
-                    let concrete_args: Vec<TypeId> = args
-                        .iter()
-                        .map(|a| self.resolve_type_expr(a))
-                        .collect();
+                    let concrete_args: Vec<TypeId> =
+                        args.iter().map(|a| self.resolve_type_expr(a)).collect();
                     return self.monomorphize_struct(name, &concrete_args, span);
                 }
                 self.sink.emit(errors::unknown_type(name, span));
@@ -4203,10 +4217,7 @@ impl<'a> TypeChecker<'a> {
         self.type_var_subst = old_subst;
 
         // Build a mangled name, e.g. "Pair[int64, string]".
-        let type_arg_names: Vec<String> = type_args
-            .iter()
-            .map(|&ty| self.type_name(ty))
-            .collect();
+        let type_arg_names: Vec<String> = type_args.iter().map(|&ty| self.type_name(ty)).collect();
         let mono_name = format!("{}[{}]", name, type_arg_names.join(", "));
 
         let sid = self.interner.add_struct(TypeStructDef {
@@ -4400,7 +4411,7 @@ mod tests {
         let module = Module {
             items: vec![Item::Function(FunctionDef {
                 name: ident("add", fn_name_span),
-            type_params: vec![],
+                type_params: vec![],
                 params: vec![
                     Param {
                         view: false,
@@ -4477,7 +4488,7 @@ mod tests {
         let module = Module {
             items: vec![Item::Function(FunctionDef {
                 name: ident("bad", fn_name_span),
-            type_params: vec![],
+                type_params: vec![],
                 params: vec![
                     Param {
                         view: false,
@@ -4539,7 +4550,7 @@ mod tests {
         let module = Module {
             items: vec![Item::Function(FunctionDef {
                 name: ident("test", sp(50, 54)),
-            type_params: vec![],
+                type_params: vec![],
                 params: vec![],
                 return_type: Some(TypeExpr::Named(ident("nothing", sp(55, 62)))),
                 body: Block {
@@ -4582,7 +4593,7 @@ mod tests {
         let module = Module {
             items: vec![Item::Function(FunctionDef {
                 name: ident("test", sp(50, 54)),
-            type_params: vec![],
+                type_params: vec![],
                 params: vec![],
                 return_type: Some(TypeExpr::Named(ident("nothing", sp(55, 62)))),
                 body: Block {
@@ -4625,7 +4636,7 @@ mod tests {
         let module = Module {
             items: vec![Item::Function(FunctionDef {
                 name: ident("test", sp(50, 54)),
-            type_params: vec![],
+                type_params: vec![],
                 params: vec![],
                 return_type: Some(TypeExpr::Named(ident("nothing", sp(55, 62)))),
                 body: Block {
@@ -4668,7 +4679,7 @@ mod tests {
         let module = Module {
             items: vec![Item::Function(FunctionDef {
                 name: ident("test", sp(50, 54)),
-            type_params: vec![],
+                type_params: vec![],
                 params: vec![],
                 return_type: Some(TypeExpr::Named(ident("nothing", sp(55, 62)))),
                 body: Block {
@@ -4716,7 +4727,7 @@ mod tests {
         let module = Module {
             items: vec![Item::Function(FunctionDef {
                 name: ident("test", sp(50, 54)),
-            type_params: vec![],
+                type_params: vec![],
                 params: vec![],
                 return_type: Some(TypeExpr::Named(ident("nothing", sp(55, 62)))),
                 body: Block {
@@ -4757,7 +4768,7 @@ mod tests {
         let module = Module {
             items: vec![Item::Function(FunctionDef {
                 name: ident("test", sp(50, 54)),
-            type_params: vec![],
+                type_params: vec![],
                 params: vec![],
                 return_type: Some(TypeExpr::Named(ident("nothing", sp(55, 62)))),
                 body: Block {
@@ -4812,7 +4823,7 @@ mod tests {
         let module = Module {
             items: vec![Item::Function(FunctionDef {
                 name: ident("add", fn_name_span),
-            type_params: vec![],
+                type_params: vec![],
                 params: vec![
                     Param {
                         view: false,
@@ -4889,7 +4900,7 @@ mod tests {
         let module = Module {
             items: vec![Item::Function(FunctionDef {
                 name: ident("add", fn_name_span),
-            type_params: vec![],
+                type_params: vec![],
                 params: vec![
                     Param {
                         view: false,
@@ -4967,7 +4978,7 @@ mod tests {
         let module = Module {
             items: vec![Item::Function(FunctionDef {
                 name: ident("add", fn_name_span),
-            type_params: vec![],
+                type_params: vec![],
                 params: vec![
                     Param {
                         view: false,
@@ -5031,7 +5042,7 @@ mod tests {
         let module = Module {
             items: vec![Item::Function(FunctionDef {
                 name: ident("test", sp(50, 54)),
-            type_params: vec![],
+                type_params: vec![],
                 params: vec![],
                 return_type: Some(TypeExpr::Named(ident("nothing", sp(55, 62)))),
                 body: Block {
@@ -5074,7 +5085,7 @@ mod tests {
         let module = Module {
             items: vec![Item::Function(FunctionDef {
                 name: ident("test", sp(50, 54)),
-            type_params: vec![],
+                type_params: vec![],
                 params: vec![],
                 return_type: Some(TypeExpr::Named(ident("nothing", sp(55, 62)))),
                 body: Block {
@@ -5125,7 +5136,7 @@ mod tests {
         let module = Module {
             items: vec![Item::Function(FunctionDef {
                 name: ident("foo", fn_name_span),
-            type_params: vec![],
+                type_params: vec![],
                 params: vec![],
                 return_type: Some(TypeExpr::Named(ident("int64", sp(100, 105)))),
                 body: Block {
@@ -5167,7 +5178,7 @@ mod tests {
         let module = Module {
             items: vec![Item::Function(FunctionDef {
                 name: ident("foo", fn_name_span),
-            type_params: vec![],
+                type_params: vec![],
                 params: vec![],
                 return_type: Some(TypeExpr::Named(ident("int64", sp(100, 105)))),
                 body: Block {
@@ -5206,7 +5217,7 @@ mod tests {
         let module = Module {
             items: vec![Item::Function(FunctionDef {
                 name: ident("test", sp(50, 54)),
-            type_params: vec![],
+                type_params: vec![],
                 params: vec![],
                 return_type: Some(TypeExpr::Named(ident("nothing", sp(55, 62)))),
                 body: Block {
@@ -5254,7 +5265,7 @@ mod tests {
         let module = Module {
             items: vec![Item::Function(FunctionDef {
                 name: ident("test", sp(50, 54)),
-            type_params: vec![],
+                type_params: vec![],
                 params: vec![],
                 return_type: Some(TypeExpr::Named(ident("nothing", sp(55, 62)))),
                 body: Block {
@@ -5308,7 +5319,7 @@ mod tests {
         let module = Module {
             items: vec![Item::Function(FunctionDef {
                 name: ident("test", sp(50, 54)),
-            type_params: vec![],
+                type_params: vec![],
                 params: vec![],
                 return_type: Some(TypeExpr::Named(ident("nothing", sp(55, 62)))),
                 body: Block {
