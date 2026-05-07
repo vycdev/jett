@@ -308,6 +308,10 @@ compile_fail_fixture!(
     "type_info_wrong_arity.jett"
 );
 compile_fail_fixture!(
+    compile_fail_type_variants_wrong_arity,
+    "type_variants_wrong_arity.jett"
+);
+compile_fail_fixture!(
     compile_fail_type_field_value_wrong_arity,
     "type_field_value_wrong_arity.jett"
 );

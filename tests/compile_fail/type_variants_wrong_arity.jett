@@ -1,0 +1,6 @@
+namespace test
+
+# ERROR: E0309
+function bad() returns int64:
+    list[TypeVariant] variants = type.variants[int64, string]()
+    return list.length(variants)

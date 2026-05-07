@@ -182,8 +182,24 @@ impl<'a> TypeChecker<'a> {
             ],
             methods: Vec::new(),
         });
-        let ty = self.interner.intern(Type::Struct(type_field_sid));
-        self.named_types.insert("TypeField".to_string(), ty);
+        let type_field_ty = self.interner.intern(Type::Struct(type_field_sid));
+        self.named_types
+            .insert("TypeField".to_string(), type_field_ty);
+
+        let type_variant_fields_ty = self.interner.intern(Type::List(type_field_ty));
+        let type_variant_sid = self.interner.add_struct(TypeStructDef {
+            name: "TypeVariant".to_string(),
+            fields: vec![
+                ("index".to_string(), TypeInterner::INT64),
+                ("name".to_string(), TypeInterner::STRING),
+                ("has_secret".to_string(), TypeInterner::BOOL),
+                ("fields".to_string(), type_variant_fields_ty),
+            ],
+            methods: Vec::new(),
+        });
+        let type_variant_ty = self.interner.intern(Type::Struct(type_variant_sid));
+        self.named_types
+            .insert("TypeVariant".to_string(), type_variant_ty);
     }
 
     // ------------------------------------------------------------------
@@ -792,6 +808,22 @@ impl<'a> TypeChecker<'a> {
                     .copied()
                     .unwrap_or(TypeInterner::ERROR);
                 Some((vec![], self.interner.intern(Type::List(type_field_ty))))
+            }
+            "type.variants" => {
+                if type_args.len() != 1 {
+                    self.sink.emit(errors::unknown_type(
+                        &format!("{name} (expected 1 type argument, got {})", type_args.len()),
+                        span,
+                    ));
+                    return Some((vec![], TypeInterner::ERROR));
+                }
+                let _ = self.resolve_type_expr(&type_args[0]);
+                let type_variant_ty = self
+                    .named_types
+                    .get("TypeVariant")
+                    .copied()
+                    .unwrap_or(TypeInterner::ERROR);
+                Some((vec![], self.interner.intern(Type::List(type_variant_ty))))
             }
             "type.field_value" => {
                 if type_args.len() != 2 {

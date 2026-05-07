@@ -125,5 +125,5 @@ Compile-fail:
   internal reflection value could all work.
 - Should nested `TypeInfo.args` preserve provenance automatically, or should
   there be explicit helper functions such as `type.arg(info, index)`?
-- Can the same primitive support enum variant payload reflection later, or do
-  enums need a separate `type.variants[T]()` surface first?
+- Can the same primitive bind enum variant payload fields from
+  `type.variants[T]()` without adding a second visitor-specific mechanism?

@@ -18,6 +18,9 @@ Implemented reflection primitives:
 - `type.fields[T]()` returns ordered `TypeField` metadata for structs.
 - `TypeField` includes `index`, `name`, `type_name`, `kind`,
   `serialize_name`, `has_secret`, and `type_info`.
+- `type.variants[T]()` returns ordered `TypeVariant` metadata for enums.
+  `TypeVariant` includes `index`, `name`, `has_secret`, and payload `fields`
+  as `list[TypeField]`.
 - `type.field_value[T, U](view value, view field)` reads a field by metadata
   after checking that the metadata belongs to `T` and that `U` matches the
   reflected field type.

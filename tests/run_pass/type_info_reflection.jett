@@ -148,6 +148,50 @@ function pair_field_arg_type_name(field_name: string, target: int64) returns str
                 index = index + 1
     return found
 
+function variant_count[T]() returns int64:
+    list[TypeVariant] variants = type.variants[T]()
+    return list.length(variants)
+
+function variant_field_count[T](variant_name: string) returns int64:
+    list[TypeVariant] variants = type.variants[T]()
+    int64 found = -1
+    for variant in variants:
+        if variant.name == variant_name:
+            found = list.length(variant.fields)
+    return found
+
+function variant_has_secret[T](variant_name: string) returns bool:
+    list[TypeVariant] variants = type.variants[T]()
+    bool found = false
+    for variant in variants:
+        if variant.name == variant_name:
+            found = variant.has_secret
+    return found
+
+function variant_field_kind[T](variant_name: string, target: int64) returns string:
+    list[TypeVariant] variants = type.variants[T]()
+    string found = "missing"
+    for variant in variants:
+        if variant.name == variant_name:
+            int64 index = 0
+            for field in variant.fields:
+                if index == target:
+                    found = field.kind
+                index = index + 1
+    return found
+
+function variant_field_type_name[T](variant_name: string, target: int64) returns string:
+    list[TypeVariant] variants = type.variants[T]()
+    string found = "missing"
+    for variant in variants:
+        if variant.name == variant_name:
+            int64 index = 0
+            for field in variant.fields:
+                if index == target:
+                    found = field.type_name
+                index = index + 1
+    return found
+
 verify type_info_reflection:
     assert type_info_kind[int64]() == "primitive"
     assert type_info_kind[NonEmpty]() == "refinement"
@@ -162,6 +206,13 @@ verify type_info_reflection:
     assert type_info_kind[Header]() == "bitfield"
     assert type_info_arg_count[int64]() == 0
     assert type.has_secret[SecretChoice]() == true
+    assert variant_count[Direction]() == 2
+    assert variant_field_count[Direction]("north") == 0
+    assert variant_field_count[SecretChoice]("token") == 1
+    assert variant_field_kind[SecretChoice]("token", 0) == "secret"
+    assert variant_field_type_name[SecretChoice]("token", 0) == "secret[string]"
+    assert variant_has_secret[SecretChoice]("token") == true
+    assert variant_has_secret[SecretChoice]("empty") == false
     assert type_info_kind[list[optional[User]]]() == "list"
     assert type_info_arg_count[list[optional[User]]]() == 1
     assert type_info_arg_kind[list[optional[User]]](0) == "optional"

@@ -101,6 +101,12 @@ struct ReflectionField {
     serialize_name: String,
 }
 
+#[derive(Debug, Clone)]
+struct ReflectionVariant {
+    name: String,
+    fields: Vec<ReflectionField>,
+}
+
 pub struct Interpreter {
     /// Stack of lexical scopes. The last element is the innermost scope.
     scopes: Vec<Environment>,
@@ -1842,6 +1848,7 @@ impl Interpreter {
                 | "type.has_secret"
                 | "type.info"
                 | "type.fields"
+                | "type.variants"
                 | "type.field_value"
                 | "json.parse"
                 | "json.serialize"
@@ -1893,6 +1900,18 @@ impl Interpreter {
                         .into_iter()
                         .enumerate()
                         .map(|(index, field)| self.type_field_value(index, field))
+                        .collect(),
+                ))
+            }
+            "type.variants" => {
+                if let Some(err) = check_args(name, 0, args) {
+                    return Some(err);
+                }
+                Ok(Value::List(
+                    self.type_expr_variants(&ty)
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, variant)| self.type_variant_value(index, variant))
                         .collect(),
                 ))
             }
@@ -2172,6 +2191,38 @@ impl Interpreter {
         }
     }
 
+    fn type_expr_variants(&self, ty: &TypeExpr) -> Vec<ReflectionVariant> {
+        match ty {
+            TypeExpr::Named(ident) => self
+                .enums
+                .get(&ident.name)
+                .map(|enum_def| {
+                    enum_def
+                        .variants
+                        .iter()
+                        .map(|variant| ReflectionVariant {
+                            name: variant.name.name.clone(),
+                            fields: variant
+                                .fields
+                                .iter()
+                                .map(|field| ReflectionField {
+                                    name: field.name.name.clone(),
+                                    ty: self.substitute_type_expr(&field.ty),
+                                    serialize_name: field
+                                        .serialize_name
+                                        .clone()
+                                        .unwrap_or_else(|| field.name.name.clone()),
+                                })
+                                .collect(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            TypeExpr::View(inner, _) => self.type_expr_variants(inner),
+            TypeExpr::Generic(_, _, _) | TypeExpr::Function(_, _, _) => Vec::new(),
+        }
+    }
+
     fn generic_type_substitutions(
         &self,
         strukt: &StructDef,
@@ -2205,6 +2256,29 @@ impl Interpreter {
                 ),
                 ("has_secret".to_string(), Value::Bool(has_secret)),
                 ("type_info".to_string(), type_info),
+            ],
+        }
+    }
+
+    fn type_variant_value(&self, index: usize, variant: ReflectionVariant) -> Value {
+        let has_secret = variant
+            .fields
+            .iter()
+            .any(|field| self.type_expr_has_secret(&field.ty));
+        let fields = variant
+            .fields
+            .into_iter()
+            .enumerate()
+            .map(|(index, field)| self.type_field_value(index, field))
+            .collect::<Vec<_>>();
+
+        Value::Struct {
+            type_name: "TypeVariant".to_string(),
+            fields: vec![
+                ("index".to_string(), Value::Int64(index as i64)),
+                ("name".to_string(), Value::String(variant.name)),
+                ("has_secret".to_string(), Value::Bool(has_secret)),
+                ("fields".to_string(), Value::List(fields)),
             ],
         }
     }

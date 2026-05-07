@@ -54,7 +54,7 @@
 |---|---|---|---|
 | Comptime interpreter | `jett_comptime` | 134 | Done |
 | Verify blocks (compile-time) | `jett_comptime/verify` | — | Done |
-| Comptime type reflection (`type.name`, `type.kind`, `type.has_secret`, `type.info`, `type.fields`, `type.field_value`) | `jett_comptime` | — | Partial (construction and richer typed dispatch pending) |
+| Comptime type reflection (`type.name`, `type.kind`, `type.has_secret`, `type.info`, `type.fields`, `type.variants`, `type.field_value`) | `jett_comptime` | — | Partial (construction and richer typed dispatch pending) |
 | 25+ stdlib builtins in interpreter | `jett_comptime` | — | Done |
 
 ### Phase F: Interpreter — COMPLETE
@@ -84,7 +84,7 @@
 | Handle blocks (`handle error:`, `handle:`, `default`) | Done |
 | Generic structs | Done |
 | Generic functions | Done |
-| Comptime struct introspection (`TypeInfo`, `TypeField` metadata, alias/refinement base metadata, field `serialize` names, checked field access) | Partial |
+| Comptime struct/enum introspection (`TypeInfo`, `TypeField`, `TypeVariant`, alias/refinement base metadata, field `serialize` names, checked field access) | Partial |
 | String escape sequences (`\"`, `\\`, `\n`, `\t`, `\r`) | Done |
 | Inline function expressions (`function(x: T) returns U: body`) | Done |
 | Higher-order list functions (`filter`, `map`, `find`, `sort_by`, `all`, `any`, `count`, `sum`, `group_by`) | Done |
