@@ -22,9 +22,7 @@ function serialize_flat_public[T](view value: T) returns string:
                 bool item = type.field_value[T, bool](view value, view field)
                 parts = list.append[string](parts, "{quote}{field.serialize_name}{quote}:{item}")
     string body = string.join(parts, ",")
-    string open = encoding.url_decode("%7B")
-    string close = encoding.url_decode("%7D")
-    return string.join(list(open, body, close), "")
+    return "{{{body}}}"
 
 function flat_user_json() returns string:
     FlatUser user = FlatUser(id: "u1", age: 42, active: true, token: "secret-token")
@@ -32,8 +30,8 @@ function flat_user_json() returns string:
 
 verify json_reflection_flat_serializer:
     string raw = flat_user_json()
-    string open = encoding.url_decode("%7B")
-    string close = encoding.url_decode("%7D")
+    string open = "{{"
+    string close = "}}"
     assert string.starts_with(raw, open) == true
     assert string.ends_with(raw, close) == true
     assert string.contains(raw, "userId") == true

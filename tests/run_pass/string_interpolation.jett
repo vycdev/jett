@@ -3,6 +3,17 @@ namespace app
 function greet(name: string) returns string:
     return "Hello, {name}!"
 
+function wrapped(name: string) returns string:
+    return "{{{name}}}"
+
+verify escaped_braces:
+    assert string.char_count("{{") == 1
+    assert string.char_count("}}") == 1
+    assert string.char_count("{{name}}") == 6
+    assert string.starts_with(wrapped("World"), "{{") == true
+    assert string.ends_with(wrapped("World"), "}}") == true
+    assert string.contains(wrapped("World"), "World") == true
+
 function main(view stdout: Stdout) returns nothing:
     string msg = greet("World")
     Stdout.write(view stdout, msg)

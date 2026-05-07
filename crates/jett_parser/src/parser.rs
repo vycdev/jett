@@ -2287,6 +2287,20 @@ fn unescape_string(raw: &str) -> String {
                 }
                 None => result.push('\\'),
             }
+        } else if c == '{' {
+            if chars.as_str().starts_with('{') {
+                chars.next();
+                result.push('{');
+            } else {
+                result.push(c);
+            }
+        } else if c == '}' {
+            if chars.as_str().starts_with('}') {
+                chars.next();
+                result.push('}');
+            } else {
+                result.push(c);
+            }
         } else {
             result.push(c);
         }
@@ -3478,6 +3492,41 @@ function greet() returns string:
         match expr {
             Expr::StringLiteral(s, _) => assert_eq!(s, "plain string"),
             other => panic!("expected StringLiteral, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_string_escaped_braces() {
+        let src = "\
+function braces() returns string:
+    return \"{{key}}\"
+";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        let expr = extract_expr_from_return(&result);
+        match expr {
+            Expr::StringLiteral(s, _) => assert_eq!(s, "{key}"),
+            other => panic!("expected StringLiteral, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_string_interpolation_with_escaped_braces() {
+        let src = "\
+function wrapped(name: string) returns string:
+    return \"{{{name}}}\"
+";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        let expr = extract_expr_from_return(&result);
+        match expr {
+            Expr::StringInterpolation(parts, _) => {
+                assert_eq!(parts.len(), 3);
+                assert!(matches!(&parts[0], StringPart::Literal(s) if s == "{"));
+                assert!(matches!(&parts[1], StringPart::Expr(_)));
+                assert!(matches!(&parts[2], StringPart::Literal(s) if s == "}"));
+            }
+            other => panic!("expected StringInterpolation, got {:?}", other),
         }
     }
 
