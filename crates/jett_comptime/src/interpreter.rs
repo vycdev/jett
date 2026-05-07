@@ -114,8 +114,8 @@ pub struct Interpreter {
     enums: HashMap<String, EnumDef>,
     /// Interface dotted name -> concrete runtime type -> concrete dotted function name.
     interface_methods: HashMap<String, HashMap<String, String>>,
-    /// Registered type alias base names.
-    type_alias_bases: HashMap<String, String>,
+    /// Registered type alias base expressions.
+    type_alias_bases: HashMap<String, TypeExpr>,
     /// Registered type aliases: name -> (base_type_name, optional constraint).
     type_aliases: HashMap<String, Option<RefinementDef>>,
     /// Registered state machine definitions: name -> MachineDef.
@@ -341,9 +341,10 @@ impl Interpreter {
     /// Register a type alias so the interpreter can validate refinement
     /// constraints when values are assigned to the type.
     pub fn register_type_alias(&mut self, alias: &TypeAlias) {
-        let base_name = type_expr_name(&alias.base_type);
+        let base_ty = alias.base_type.clone();
+        let base_name = type_expr_name(&base_ty);
         self.type_alias_bases
-            .insert(alias.name.name.clone(), base_name.clone());
+            .insert(alias.name.name.clone(), base_ty);
         let def = alias.constraint.as_ref().map(|c| RefinementDef {
             base_type_name: base_name,
             constraint: c.clone(),
@@ -354,7 +355,8 @@ impl Interpreter {
     /// Check a value against a refinement type's constraint.
     /// Returns `Ok(())` if valid, or `Err(message)` if the constraint fails.
     fn check_refinement(&mut self, type_name: &str, value: &Value) -> Result<(), String> {
-        if let Some(base_type_name) = self.type_alias_bases.get(type_name).cloned() {
+        if let Some(base_ty) = self.type_alias_bases.get(type_name).cloned() {
+            let base_type_name = type_expr_name(&base_ty);
             self.check_refinement(&base_type_name, value)?;
         }
 
@@ -383,14 +385,13 @@ impl Interpreter {
         }
     }
 
-    fn eval_refinement_boundary(
+    fn finish_refinement_boundary(
         &mut self,
         type_name: &str,
-        target: &Expr,
+        value: Value,
         bind_name: Option<&Ident>,
         body: &Block,
     ) -> Result<ExprFlow, String> {
-        let value = value_or_signal!(self, target);
         match self.check_refinement(type_name, &value) {
             Ok(()) => Ok(ExprFlow::Value(value)),
             Err(message) => self.exec_handle_block(bind_name, Some(Value::String(message)), body),
@@ -403,7 +404,7 @@ impl Interpreter {
             Some(None) => self
                 .type_alias_bases
                 .get(type_name)
-                .is_some_and(|base| self.type_name_has_refinement(base)),
+                .is_some_and(|base| self.type_name_has_refinement(&type_expr_name(base))),
             None => false,
         }
     }
@@ -938,12 +939,30 @@ impl Interpreter {
                 let val = if self.type_aliases.contains_key(&type_name) {
                     match &decl.value {
                         Expr::Handle(target, bind_name, body, _) => {
-                            match self.eval_refinement_boundary(
-                                &type_name,
-                                target,
-                                bind_name.as_ref(),
-                                body,
-                            )? {
+                            let target_value = match self.eval_expr_flow(target)? {
+                                ExprFlow::Value(value) => value,
+                                ExprFlow::Signal(signal) => return Ok(Some(signal)),
+                            };
+                            let flow = match target_value {
+                                Value::ResultOk(value) | Value::OptionalSome(value) => self
+                                    .finish_refinement_boundary(
+                                        &type_name,
+                                        *value,
+                                        bind_name.as_ref(),
+                                        body,
+                                    )?,
+                                Value::ResultFail(error) => {
+                                    self.exec_handle_block(bind_name.as_ref(), Some(*error), body)?
+                                }
+                                Value::OptionalNone => self.exec_handle_block(None, None, body)?,
+                                value => self.finish_refinement_boundary(
+                                    &type_name,
+                                    value,
+                                    bind_name.as_ref(),
+                                    body,
+                                )?,
+                            };
+                            match flow {
                                 ExprFlow::Value(value) => value,
                                 ExprFlow::Signal(signal) => return Ok(Some(signal)),
                             }
@@ -2042,14 +2061,9 @@ impl Interpreter {
                 if let Some(bound) = self.current_type_binding(&ident.name) {
                     return self.type_expr_has_secret_inner(&bound, visited);
                 }
-                if let Some(base_name) = self.type_alias_bases.get(&ident.name) {
-                    return self.type_expr_has_secret_inner(
-                        &TypeExpr::Named(Ident {
-                            name: base_name.clone(),
-                            span: ident.span,
-                        }),
-                        visited,
-                    );
+                if let Some(base_ty) = self.type_alias_bases.get(&ident.name).cloned() {
+                    return self
+                        .type_expr_has_secret_inner(&self.substitute_type_expr(&base_ty), visited);
                 }
                 if !visited.insert(type_expr_display(ty)) {
                     return false;
@@ -2202,6 +2216,11 @@ impl Interpreter {
         }
 
         let arg_values = match &ty {
+            TypeExpr::Named(ident) if self.type_aliases.contains_key(&ident.name) => self
+                .type_alias_bases
+                .get(&ident.name)
+                .map(|base_ty| vec![self.type_info_value(base_ty)])
+                .unwrap_or_default(),
             TypeExpr::Generic(_, args, _) => args
                 .iter()
                 .map(|arg| self.type_info_value(arg))
@@ -2348,11 +2367,7 @@ impl Interpreter {
         match &ty {
             TypeExpr::View(inner, _) => self.json_to_value_typed(json, inner),
             TypeExpr::Named(ident) => {
-                if let Some(base_name) = self.type_alias_bases.get(&ident.name).cloned() {
-                    let base_ty = TypeExpr::Named(Ident {
-                        name: base_name,
-                        span: ident.span,
-                    });
+                if let Some(base_ty) = self.type_alias_bases.get(&ident.name).cloned() {
                     let value = self.json_to_value_typed(json, &base_ty)?;
                     self.check_refinement(&ident.name, &value)?;
                     return Ok(value);

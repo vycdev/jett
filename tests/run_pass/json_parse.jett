@@ -1,6 +1,7 @@
 namespace test
 
 type NonEmpty = string where string.char_count(value) > 0
+type NonEmptyNames = list[string] where list.length(value) > 0
 
 struct Profile:
     display_name: string serialize "displayName"
@@ -84,6 +85,18 @@ function parse_refinement_error() returns string:
     string name = coarsen user.name
     return name
 
+function parse_refined_list_count() returns int64:
+    NonEmptyNames names = json.parse[NonEmptyNames]("[\"alpha\",\"beta\"]") handle error:
+        return -1
+    list[string] raw = coarsen names
+    return list.length(raw)
+
+function parse_refined_list_error() returns string:
+    NonEmptyNames names = json.parse[NonEmptyNames]("[]") handle error:
+        return error
+    list[string] raw = coarsen names
+    return "{list.length(raw)}"
+
 function parse_missing_required_error() returns string:
     string raw = "{{\"id\":\"u1\",\"tags\":[],\"scores\":{{}}}}"
     User user = json.parse[User](raw) handle error:
@@ -101,4 +114,6 @@ verify json_parse:
     assert parse_generic_struct_value() == "stored"
     assert parse_refinement_ok() == "alice"
     assert parse_refinement_error() == "refinement type constraint failed for 'NonEmpty'"
+    assert parse_refined_list_count() == 2
+    assert parse_refined_list_error() == "refinement type constraint failed for 'NonEmptyNames'"
     assert parse_missing_required_error() == "missing required field 'profileData' for User"

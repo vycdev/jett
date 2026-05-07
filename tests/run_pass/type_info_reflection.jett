@@ -1,6 +1,8 @@
 namespace test
 
 type NonEmpty = string where string.char_count(value) > 0
+type NameList = list[string]
+type SecretText = secret[string]
 
 enum Direction:
     north
@@ -149,6 +151,13 @@ function pair_field_arg_type_name(field_name: string, target: int64) returns str
 verify type_info_reflection:
     assert type_info_kind[int64]() == "primitive"
     assert type_info_kind[NonEmpty]() == "refinement"
+    assert type_info_arg_count[NonEmpty]() == 1
+    assert type_info_arg_kind[NonEmpty](0) == "primitive"
+    assert type_info_kind[NameList]() == "alias"
+    assert type_info_arg_kind[NameList](0) == "list"
+    assert type_info_nested_arg_type_name[NameList](0, 0) == "string"
+    assert type.has_secret[SecretText]() == true
+    assert type_info_arg_kind[SecretText](0) == "secret"
     assert type_info_kind[Direction]() == "enum"
     assert type_info_kind[Header]() == "bitfield"
     assert type_info_arg_count[int64]() == 0

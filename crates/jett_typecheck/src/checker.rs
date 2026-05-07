@@ -2441,7 +2441,22 @@ impl<'a> TypeChecker<'a> {
             Expr::Handle(target, bind_name, body, span)
                 if allow_refinement_handle && self.is_refinement_type(expected_ty) =>
             {
-                self.check_refinement_handle(expected_ty, target, bind_name.as_ref(), body, *span)
+                let target_ty = self.check_expr(target);
+                if matches!(
+                    self.interner.resolve(target_ty),
+                    Type::Result(_, _) | Type::Optional(_)
+                ) {
+                    self.check_handle_with_target_type(target_ty, bind_name.as_ref(), body, *span)
+                } else {
+                    self.check_refinement_handle_with_input_type(
+                        expected_ty,
+                        target_ty,
+                        target.span(),
+                        bind_name.as_ref(),
+                        body,
+                        *span,
+                    )
+                }
             }
             _ => {
                 let actual_ty = self.check_expr(expr);
@@ -2479,15 +2494,15 @@ impl<'a> TypeChecker<'a> {
         ty
     }
 
-    fn check_refinement_handle(
+    fn check_refinement_handle_with_input_type(
         &mut self,
         refinement_ty: TypeId,
-        target: &Expr,
+        input_ty: TypeId,
+        target_span: Span,
         bind_name: Option<&ast::Ident>,
         body: &Block,
         span: Span,
     ) -> TypeId {
-        let input_ty = self.check_expr(target);
         let expected_input_ty = self.refinement_boundary_input_type(refinement_ty);
         let Some(_base_ty) = self.refinement_base_type(refinement_ty) else {
             return TypeInterner::ERROR;
@@ -2497,7 +2512,7 @@ impl<'a> TypeChecker<'a> {
             self.sink.emit(errors::type_mismatch(
                 &self.type_name(expected_input_ty),
                 &self.type_name(input_ty),
-                target.span(),
+                target_span,
             ));
         }
 
@@ -4031,7 +4046,16 @@ impl<'a> TypeChecker<'a> {
         span: Span,
     ) -> TypeId {
         let target_ty = self.check_expr(target);
+        self.check_handle_with_target_type(target_ty, bind_name, body, span)
+    }
 
+    fn check_handle_with_target_type(
+        &mut self,
+        target_ty: TypeId,
+        bind_name: Option<&ast::Ident>,
+        body: &Block,
+        span: Span,
+    ) -> TypeId {
         if target_ty == TypeInterner::ERROR {
             self.check_handle_body(body);
             self.validate_handle_terminator(body, TypeInterner::ERROR);

@@ -12,6 +12,9 @@ Implemented reflection primitives:
 - `type.has_secret[T]()` reports whether a type contains secret data.
 - `type.info[T]()` returns recursive `TypeInfo` metadata with `type_name`,
   `kind`, `has_secret`, and nested `args`.
+- Alias and refinement `TypeInfo` values expose their base type as the first
+  `args` entry, so stdlib code can peel a refinement such as `NonEmpty` back to
+  `string`, or an alias such as `NameList` back to `list[string]`.
 - `type.fields[T]()` returns ordered `TypeField` metadata for structs.
 - `TypeField` includes `index`, `name`, `type_name`, `kind`,
   `serialize_name`, `has_secret`, and `type_info`.
@@ -27,7 +30,8 @@ omission, and valid JSON string escaping for control characters.
 `json.parse[T](raw)` has a Rust-backed bridge: it requires one type argument,
 accepts a string, returns `result[T, string]`, and supports core primitives,
 structs with `serialize` names, lists, sets, `map[string, V]`, optionals,
-results, generic structs, and refinement validation. The long-term goal is
+results, generic structs, aliases, and refinement validation, including
+refinements over generic shapes such as `list[string]`. The long-term goal is
 still to replace this bridge with stdlib code plus a general construction
 primitive.
 
@@ -113,9 +117,8 @@ whether literals and primitives should remain ergonomic exceptions.
 
 ## Suggested Next Steps
 
-1. Add compile-fail coverage for `json.serialize[map[int64, V]]` once the
-   non-string-key policy is accepted.
-2. Design the comptime type-switch or typed field visitor primitive.
-3. Implement a nested `.jett` serializer prototype for primitives, structs,
+1. Design the comptime type-switch or typed field visitor primitive.
+2. Implement a nested `.jett` serializer prototype for primitives, structs,
    lists, maps with string keys, optionals, and results.
-4. Design `type.construct[T]` before implementing `json.parse[T]`.
+3. Design `type.construct[T]` before replacing the Rust-backed
+   `json.parse[T]` bridge.

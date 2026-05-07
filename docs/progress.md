@@ -84,7 +84,7 @@
 | Handle blocks (`handle error:`, `handle:`, `default`) | Done |
 | Generic structs | Done |
 | Generic functions | Done |
-| Comptime struct introspection (`TypeInfo`, `TypeField` metadata, field `serialize` names, checked field access) | Partial |
+| Comptime struct introspection (`TypeInfo`, `TypeField` metadata, alias/refinement base metadata, field `serialize` names, checked field access) | Partial |
 | String escape sequences (`\"`, `\\`, `\n`, `\t`, `\r`) | Done |
 | Inline function expressions (`function(x: T) returns U: body`) | Done |
 | Higher-order list functions (`filter`, `map`, `find`, `sort_by`, `all`, `any`, `count`, `sum`, `group_by`) | Done |
@@ -153,7 +153,7 @@
 | `set` | Partial (12 builtins: new, add, remove, contains, length, is_empty, to_list, union, intersection, difference) |
 | `map` | Partial (12 builtins: new, length, has/contains_key, get, get_or, insert/set, remove, keys, values, is_empty, merge) |
 | `math` | Partial (20+ builtins: abs, sqrt, pow, floor, ceil, round, clamp, log, log2, log10, min, max, average, median, pi, e, sin, cos, tan, mod, is_even, is_odd, sum) |
-| `json` | Partial (json.serialize, json.serialize_public, Rust-backed json.parse bridge) |
+| `json` | Partial (json.serialize, json.serialize_public, Rust-backed json.parse bridge with alias/refinement validation) |
 | `random` | Partial (5 builtins: int64, float64, bool, choice, shuffle) |
 | `crypto` | Partial (sha256, md5) |
 | `encoding` | Partial (6 builtins: base64_encode, base64_decode, hex_encode, hex_decode, url_encode, url_decode) |
