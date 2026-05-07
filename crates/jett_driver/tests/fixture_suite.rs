@@ -205,6 +205,7 @@ run_pass_fixture!(run_pass_list_operations, "list_operations.jett");
 run_pass_fixture!(run_pass_math_operations, "math_operations.jett");
 run_pass_fixture!(run_pass_json_serialize, "json_serialize.jett");
 run_pass_fixture!(run_pass_json_serialize_public, "json_serialize_public.jett");
+run_pass_fixture!(run_pass_json_parse, "json_parse.jett");
 run_pass_fixture!(
     run_pass_json_reflection_flat_serializer,
     "json_reflection_flat_serializer.jett"

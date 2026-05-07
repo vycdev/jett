@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use rand::Rng;
+use serde_json::Value as JsonValue;
 
 use jett_parser::ast::{
     ActorDef, BinOp, BitfieldDef, BitfieldFieldKind, Block, CallArg, EnumDef, Expr, FunctionDef,
@@ -1810,7 +1811,7 @@ impl Interpreter {
     }
 
     fn call_builtin_with_type_args(
-        &self,
+        &mut self,
         name: &str,
         type_args: &[TypeExpr],
         args: &[Value],
@@ -1888,9 +1889,13 @@ impl Interpreter {
                     return Some(err);
                 }
                 match &args[0] {
-                    Value::String(_) => Ok(Value::ResultFail(Box::new(Value::String(
-                        "json.parse is not implemented yet".to_string(),
-                    )))),
+                    Value::String(raw) => match serde_json::from_str::<JsonValue>(raw) {
+                        Ok(json) => match self.json_to_value_typed(&json, &ty) {
+                            Ok(value) => Ok(Value::ResultOk(Box::new(value))),
+                            Err(message) => Ok(Value::ResultFail(Box::new(Value::String(message)))),
+                        },
+                        Err(err) => Ok(Value::ResultFail(Box::new(Value::String(err.to_string())))),
+                    },
                     other => Err(format!("json.parse expects a string, got {other}")),
                 }
             }
@@ -2288,6 +2293,194 @@ impl Interpreter {
         };
 
         Ok((index, name, type_name))
+    }
+
+    fn json_to_value_typed(&mut self, json: &JsonValue, ty: &TypeExpr) -> Result<Value, String> {
+        let ty = self.substitute_type_expr(ty);
+        match &ty {
+            TypeExpr::View(inner, _) => self.json_to_value_typed(json, inner),
+            TypeExpr::Named(ident) => {
+                if let Some(base_name) = self.type_alias_bases.get(&ident.name).cloned() {
+                    let base_ty = TypeExpr::Named(Ident {
+                        name: base_name,
+                        span: ident.span,
+                    });
+                    let value = self.json_to_value_typed(json, &base_ty)?;
+                    self.check_refinement(&ident.name, &value)?;
+                    return Ok(value);
+                }
+
+                match ident.name.as_str() {
+                    "int64" => json
+                        .as_i64()
+                        .map(Value::Int64)
+                        .ok_or_else(|| format!("expected int64, got {}", json_type_name(json))),
+                    "float64" => json
+                        .as_f64()
+                        .map(Value::Float64)
+                        .ok_or_else(|| format!("expected float64, got {}", json_type_name(json))),
+                    "string" => json
+                        .as_str()
+                        .map(|value| Value::String(value.to_string()))
+                        .ok_or_else(|| format!("expected string, got {}", json_type_name(json))),
+                    "bool" => json
+                        .as_bool()
+                        .map(Value::Bool)
+                        .ok_or_else(|| format!("expected bool, got {}", json_type_name(json))),
+                    "nothing" => {
+                        if json.is_null() {
+                            Ok(Value::Nothing)
+                        } else {
+                            Err(format!("expected null, got {}", json_type_name(json)))
+                        }
+                    }
+                    "bytes" => self.json_to_bytes_value(json),
+                    name if self.structs.contains_key(name) => {
+                        self.json_to_struct_value(json, name, &HashMap::new())
+                    }
+                    other => Err(format!("json.parse does not support type '{other}' yet")),
+                }
+            }
+            TypeExpr::Generic(ident, args, _) if self.structs.contains_key(&ident.name) => {
+                let Some(strukt) = self.structs.get(&ident.name).cloned() else {
+                    return Err(format!("unknown struct '{}'", ident.name));
+                };
+                let substitutions = self.generic_type_substitutions(&strukt, args);
+                self.json_to_struct_value(json, &ident.name, &substitutions)
+            }
+            TypeExpr::Generic(ident, args, _) => match ident.name.as_str() {
+                "list" if args.len() == 1 => {
+                    let items = json
+                        .as_array()
+                        .ok_or_else(|| format!("expected array, got {}", json_type_name(json)))?;
+                    let mut values = Vec::with_capacity(items.len());
+                    for item in items {
+                        values.push(self.json_to_value_typed(item, &args[0])?);
+                    }
+                    Ok(Value::List(values))
+                }
+                "set" if args.len() == 1 => {
+                    let items = json
+                        .as_array()
+                        .ok_or_else(|| format!("expected array, got {}", json_type_name(json)))?;
+                    let mut values = Vec::with_capacity(items.len());
+                    for item in items {
+                        let value = self.json_to_value_typed(item, &args[0])?;
+                        if !values.contains(&value) {
+                            values.push(value);
+                        }
+                    }
+                    Ok(Value::Set(values))
+                }
+                "map" if args.len() == 2 => {
+                    if type_expr_display(&args[0]) != "string" {
+                        return Err("json.parse supports only map[string, V]".to_string());
+                    }
+                    let object = json
+                        .as_object()
+                        .ok_or_else(|| format!("expected object, got {}", json_type_name(json)))?;
+                    let mut entries = Vec::with_capacity(object.len());
+                    for (key, value) in object {
+                        entries.push((
+                            Value::String(key.clone()),
+                            self.json_to_value_typed(value, &args[1])?,
+                        ));
+                    }
+                    Ok(Value::Map(entries))
+                }
+                "optional" if args.len() == 1 => {
+                    if json.is_null() {
+                        Ok(Value::OptionalNone)
+                    } else {
+                        Ok(Value::OptionalSome(Box::new(
+                            self.json_to_value_typed(json, &args[0])?,
+                        )))
+                    }
+                }
+                "result" if args.len() == 2 => {
+                    let object = json
+                        .as_object()
+                        .ok_or_else(|| format!("expected object, got {}", json_type_name(json)))?;
+                    if object.len() != 1 {
+                        return Err("expected result object with exactly one key".to_string());
+                    }
+                    if let Some(value) = object.get("ok") {
+                        Ok(Value::ResultOk(Box::new(
+                            self.json_to_value_typed(value, &args[0])?,
+                        )))
+                    } else if let Some(value) = object.get("fail") {
+                        Ok(Value::ResultFail(Box::new(
+                            self.json_to_value_typed(value, &args[1])?,
+                        )))
+                    } else {
+                        Err("expected result object with key 'ok' or 'fail'".to_string())
+                    }
+                }
+                "secret" if args.len() == 1 => self.json_to_value_typed(json, &args[0]),
+                _ => Err(format!(
+                    "json.parse does not support type '{}' yet",
+                    type_expr_display(&ty)
+                )),
+            },
+            TypeExpr::Function(_, _, _) => {
+                Err("json.parse does not support function types".to_string())
+            }
+        }
+    }
+
+    fn json_to_struct_value(
+        &mut self,
+        json: &JsonValue,
+        struct_name: &str,
+        substitutions: &HashMap<String, TypeExpr>,
+    ) -> Result<Value, String> {
+        let object = json
+            .as_object()
+            .ok_or_else(|| format!("expected object, got {}", json_type_name(json)))?;
+        let strukt = self
+            .structs
+            .get(struct_name)
+            .cloned()
+            .ok_or_else(|| format!("unknown struct '{struct_name}'"))?;
+        let mut fields = Vec::with_capacity(strukt.fields.len());
+
+        for field in &strukt.fields {
+            let field_ty = self.substitute_type_expr_with_map(&field.ty, substitutions);
+            let json_name = field.serialize_name.as_ref().unwrap_or(&field.name.name);
+            let value = match object.get(json_name) {
+                Some(raw) => self.json_to_value_typed(raw, &field_ty)?,
+                None if type_expr_is_optional(&field_ty) => Value::OptionalNone,
+                None => {
+                    return Err(format!(
+                        "missing required field '{}' for {}",
+                        json_name, struct_name
+                    ));
+                }
+            };
+            fields.push((field.name.name.clone(), value));
+        }
+
+        Ok(Value::Struct {
+            type_name: struct_name.to_string(),
+            fields,
+        })
+    }
+
+    fn json_to_bytes_value(&self, json: &JsonValue) -> Result<Value, String> {
+        let raw = json
+            .as_str()
+            .ok_or_else(|| format!("expected bytes string, got {}", json_type_name(json)))?;
+        let hex = raw.strip_prefix("0x").unwrap_or(raw);
+        if hex.len() % 2 != 0 {
+            return Err("expected even-length hex bytes string".to_string());
+        }
+        let mut bytes = Vec::with_capacity(hex.len() / 2);
+        for index in (0..hex.len()).step_by(2) {
+            let byte = u8::from_str_radix(&hex[index..index + 2], 16)
+                .map_err(|_| "expected hex bytes string".to_string())?;
+            bytes.push(byte);
+        }
+        Ok(Value::Bytes(bytes))
     }
 
     fn value_to_json_typed(&self, value: &Value, ty: &TypeExpr, public_only: bool) -> String {
@@ -5749,6 +5942,25 @@ fn type_expr_name(ty: &TypeExpr) -> String {
         TypeExpr::Generic(ident, _, _) => ident.name.clone(),
         TypeExpr::View(inner, _) => type_expr_name(inner),
         TypeExpr::Function(_, _, _) => "function".to_string(),
+    }
+}
+
+fn type_expr_is_optional(ty: &TypeExpr) -> bool {
+    match ty {
+        TypeExpr::Generic(ident, _, _) => ident.name == "optional",
+        TypeExpr::View(inner, _) => type_expr_is_optional(inner),
+        _ => false,
+    }
+}
+
+fn json_type_name(value: &JsonValue) -> &'static str {
+    match value {
+        JsonValue::Null => "null",
+        JsonValue::Bool(_) => "bool",
+        JsonValue::Number(_) => "number",
+        JsonValue::String(_) => "string",
+        JsonValue::Array(_) => "array",
+        JsonValue::Object(_) => "object",
     }
 }
 

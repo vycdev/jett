@@ -24,9 +24,12 @@ metadata exposed to Jett code. The active tests cover nested structs, lists,
 maps with string keys, optionals, results, `serialize` names, public secret
 omission, and valid JSON string escaping for control characters.
 
-`json.parse[T](raw)` has its typechecking surface: it requires one type
-argument, accepts a string, and returns `result[T, string]` so callers must use
-`handle error:`. Runtime deserialization is intentionally still unimplemented.
+`json.parse[T](raw)` has a Rust-backed bridge: it requires one type argument,
+accepts a string, returns `result[T, string]`, and supports core primitives,
+structs with `serialize` names, lists, sets, `map[string, V]`, optionals,
+results, generic structs, and refinement validation. The long-term goal is
+still to replace this bridge with stdlib code plus a general construction
+primitive.
 
 ## Design Pressure
 
@@ -65,9 +68,11 @@ reflection.
 
 ### 2. Constructing `T` During `json.parse[T]`
 
-Deserialization needs a mirror of field access: given parsed field values, build
-`T` in declaration order while validating missing fields, `serialize` names,
-secret wrappers, optionals, results, refinements, and nested structs.
+Deserialization currently has a Rust bridge that mirrors field access: given
+parsed field values, it builds `T` in declaration order while validating missing
+fields, `serialize` names, secret wrappers, optionals, results, refinements, and
+nested structs. The missing language feature is the general primitive that would
+let stdlib code do this itself.
 
 Options:
 
