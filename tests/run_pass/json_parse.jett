@@ -3,6 +3,14 @@ namespace test
 type NonEmpty = string where string.char_count(value) > 0
 type NonEmptyNames = list[string] where list.length(value) > 0
 
+enum Direction:
+    north
+    south
+
+enum Shape:
+    circle(radius: float64)
+    rect(width: float64, height: float64)
+
 struct Profile:
     display_name: string serialize "displayName"
     note: string
@@ -97,6 +105,29 @@ function parse_refined_list_error() returns string:
     list[string] raw = coarsen names
     return "{list.length(raw)}"
 
+function parse_enum_unit() returns bool:
+    Direction direction = json.parse[Direction]("\"north\"") handle error:
+        return false
+    return direction == Direction.north
+
+function parse_enum_payload_area() returns float64:
+    Shape shape = json.parse[Shape]("{{\"rect\":[3.0,4.0]}}") handle error:
+        return -1.0
+    match shape:
+        circle(radius):
+            return radius
+        rect(width, height):
+            return width * height
+
+function parse_enum_payload_error() returns string:
+    Shape shape = json.parse[Shape]("{{\"rect\":[3.0]}}") handle error:
+        return error
+    match shape:
+        circle(radius):
+            return "{radius}"
+        rect(width, height):
+            return "{width * height}"
+
 function parse_missing_required_error() returns string:
     string raw = "{{\"id\":\"u1\",\"tags\":[],\"scores\":{{}}}}"
     User user = json.parse[User](raw) handle error:
@@ -116,4 +147,7 @@ verify json_parse:
     assert parse_refinement_error() == "refinement type constraint failed for 'NonEmpty'"
     assert parse_refined_list_count() == 2
     assert parse_refined_list_error() == "refinement type constraint failed for 'NonEmptyNames'"
+    assert parse_enum_unit() == true
+    assert parse_enum_payload_area() == 12.0
+    assert parse_enum_payload_error() == "enum variant 'Shape.rect' expects 2 payload field(s), got 1"
     assert parse_missing_required_error() == "missing required field 'profileData' for User"

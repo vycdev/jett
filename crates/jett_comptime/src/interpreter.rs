@@ -2401,6 +2401,7 @@ impl Interpreter {
                     name if self.structs.contains_key(name) => {
                         self.json_to_struct_value(json, name, &HashMap::new())
                     }
+                    name if self.enums.contains_key(name) => self.json_to_enum_value(json, name),
                     other => Err(format!("json.parse does not support type '{other}' yet")),
                 }
             }
@@ -2525,6 +2526,80 @@ impl Interpreter {
 
         Ok(Value::Struct {
             type_name: struct_name.to_string(),
+            fields,
+        })
+    }
+
+    fn json_to_enum_value(&mut self, json: &JsonValue, enum_name: &str) -> Result<Value, String> {
+        let enum_def = self
+            .enums
+            .get(enum_name)
+            .cloned()
+            .ok_or_else(|| format!("unknown enum '{enum_name}'"))?;
+
+        if let Some(variant_name) = json.as_str() {
+            let variant = enum_def
+                .variants
+                .iter()
+                .find(|variant| variant.name.name == variant_name)
+                .ok_or_else(|| format!("unknown enum variant '{enum_name}.{variant_name}'"))?;
+            if !variant.fields.is_empty() {
+                return Err(format!(
+                    "enum variant '{}.{}' expects {} payload field(s)",
+                    enum_name,
+                    variant_name,
+                    variant.fields.len()
+                ));
+            }
+            return Ok(Value::Enum {
+                type_name: enum_name.to_string(),
+                variant: variant_name.to_string(),
+                fields: Vec::new(),
+            });
+        }
+
+        let object = json.as_object().ok_or_else(|| {
+            format!(
+                "expected enum string or object, got {}",
+                json_type_name(json)
+            )
+        })?;
+        if object.len() != 1 {
+            return Err("expected enum object with exactly one variant key".to_string());
+        }
+
+        let (variant_name, payload) = object.iter().next().expect("object has one entry");
+        let variant = enum_def
+            .variants
+            .iter()
+            .find(|variant| variant.name.name == *variant_name)
+            .ok_or_else(|| format!("unknown enum variant '{enum_name}.{variant_name}'"))?;
+        let items = payload.as_array().ok_or_else(|| {
+            format!(
+                "expected array payload for enum variant '{}.{}', got {}",
+                enum_name,
+                variant_name,
+                json_type_name(payload)
+            )
+        })?;
+        if items.len() != variant.fields.len() {
+            return Err(format!(
+                "enum variant '{}.{}' expects {} payload field(s), got {}",
+                enum_name,
+                variant_name,
+                variant.fields.len(),
+                items.len()
+            ));
+        }
+
+        let mut fields = Vec::with_capacity(items.len());
+        for (field, raw) in variant.fields.iter().zip(items.iter()) {
+            fields.push(self.json_to_value_typed(raw, &field.ty)?);
+        }
+
+        Ok(Value::Enum {
+            type_name: enum_name.to_string(),
+            variant: variant_name.to_string(),
             fields,
         })
     }

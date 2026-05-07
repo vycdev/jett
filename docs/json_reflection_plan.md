@@ -30,10 +30,10 @@ omission, and valid JSON string escaping for control characters.
 `json.parse[T](raw)` has a Rust-backed bridge: it requires one type argument,
 accepts a string, returns `result[T, string]`, and supports core primitives,
 structs with `serialize` names, lists, sets, `map[string, V]`, optionals,
-results, generic structs, aliases, and refinement validation, including
-refinements over generic shapes such as `list[string]`. The long-term goal is
-still to replace this bridge with stdlib code plus a general construction
-primitive.
+results, enums using the serializer's string/object payload shape, generic
+structs, aliases, and refinement validation, including refinements over generic
+shapes such as `list[string]`. The long-term goal is still to replace this
+bridge with stdlib code plus a general construction primitive.
 
 ## Design Pressure
 
