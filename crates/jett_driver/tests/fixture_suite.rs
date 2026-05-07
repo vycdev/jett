@@ -206,6 +206,11 @@ run_pass_fixture!(run_pass_math_operations, "math_operations.jett");
 run_pass_fixture!(run_pass_json_serialize, "json_serialize.jett");
 run_pass_fixture!(run_pass_json_serialize_public, "json_serialize_public.jett");
 run_pass_fixture!(run_pass_json_parse, "json_parse.jett");
+run_pass_fixture!(run_pass_json_roundtrip_user, "json_roundtrip_user.jett");
+run_pass_fixture!(
+    run_pass_json_parse_refinement_valid,
+    "json_parse_refinement_valid.jett"
+);
 run_pass_fixture!(
     run_pass_json_reflection_flat_serializer,
     "json_reflection_flat_serializer.jett"

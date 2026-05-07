@@ -1640,7 +1640,6 @@ mod tests {
 
     #[test]
     fn property_and_verify_blocks_coexist() {
-        #[ignore]
         // function is_non_negative(x: int64) returns bool:
         //     return x >= 0
         //

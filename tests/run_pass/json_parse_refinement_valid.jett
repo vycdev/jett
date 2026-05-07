@@ -1,0 +1,16 @@
+namespace test
+
+type NonEmpty = string where string.char_count(value) > 0
+
+struct User:
+    name: NonEmpty
+
+function parse_refinement_name() returns string:
+    string raw = "{{\"name\":\"alice\"}}"
+    User user = json.parse[User](raw) handle error:
+        return error
+    string name = coarsen user.name
+    return name
+
+verify parse_refinement_valid_user:
+    assert parse_refinement_name() == "alice"

@@ -1,0 +1,23 @@
+namespace test
+
+struct User:
+    id: string
+    name: string
+
+function roundtrip_id() returns string:
+    User original = User(id: "123", name: "alice")
+    string raw = json.serialize[User](view original)
+    User restored = json.parse[User](raw) handle error:
+        return error
+    return restored.id
+
+function roundtrip_name() returns string:
+    User original = User(id: "123", name: "alice")
+    string raw = json.serialize[User](view original)
+    User restored = json.parse[User](raw) handle error:
+        return error
+    return restored.name
+
+verify user_roundtrip:
+    assert roundtrip_id() == "123"
+    assert roundtrip_name() == "alice"
