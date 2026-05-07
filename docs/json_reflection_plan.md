@@ -90,15 +90,9 @@ binary formats, config loaders, and test data generation.
 
 JSON object keys are strings. Jett maps are `map[K, V]`.
 
-Options:
-
-- Reject `json.serialize[map[K, V]]` unless `K == string`.
-- Serialize non-string keys by applying a display conversion.
-- Encode maps as arrays of key/value pairs when `K != string`.
-
-Recommendation: reject non-string keys first. It is the simplest safe contract,
-matches `json.parse[map[string, V]]`, and avoids lossy display conversions. A
-future explicit API can support pair-array encoding if needed.
+Current policy: `json.serialize[map[K, V]]` and `json.parse[map[K, V]]` require
+`K == string`. This matches JSON object semantics and avoids lossy display
+conversions. A future explicit API can support pair-array encoding if needed.
 
 ### 4. `view` Enforcement For JSON Builtins
 

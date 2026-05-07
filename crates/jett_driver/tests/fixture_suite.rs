@@ -276,6 +276,10 @@ compile_fail_fixture!(
     "json_serialize_secret_struct_blocked.jett"
 );
 compile_fail_fixture!(
+    compile_fail_json_serialize_map_key_must_be_string,
+    "json_serialize_map_key_must_be_string.jett"
+);
+compile_fail_fixture!(
     compile_fail_json_parse_requires_type_arg,
     "json_parse_requires_type_arg.jett"
 );

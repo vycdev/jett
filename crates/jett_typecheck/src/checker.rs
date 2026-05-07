@@ -496,6 +496,66 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn json_non_string_map_key_types(&self, ty: TypeId) -> Vec<String> {
+        let mut visited = HashSet::new();
+        let mut keys = Vec::new();
+        self.collect_json_non_string_map_key_types(ty, &mut visited, &mut keys);
+        keys
+    }
+
+    fn collect_json_non_string_map_key_types(
+        &self,
+        ty: TypeId,
+        visited: &mut HashSet<TypeId>,
+        keys: &mut Vec<String>,
+    ) {
+        if !visited.insert(ty) {
+            return;
+        }
+
+        match self.interner.resolve(ty) {
+            Type::List(inner) | Type::Set(inner) | Type::Optional(inner) | Type::Secret(inner) => {
+                self.collect_json_non_string_map_key_types(*inner, visited, keys);
+            }
+            Type::Map(key, value) => {
+                if self.fully_coarsened_type(*key) != TypeInterner::STRING {
+                    keys.push(self.type_name(*key));
+                }
+                self.collect_json_non_string_map_key_types(*key, visited, keys);
+                self.collect_json_non_string_map_key_types(*value, visited, keys);
+            }
+            Type::Result(ok, err) => {
+                self.collect_json_non_string_map_key_types(*ok, visited, keys);
+                self.collect_json_non_string_map_key_types(*err, visited, keys);
+            }
+            Type::Struct(sid) => {
+                for (_, field_ty) in &self.interner.resolve_struct(*sid).fields {
+                    self.collect_json_non_string_map_key_types(*field_ty, visited, keys);
+                }
+            }
+            Type::Bitfield(bid) => {
+                for field in &self.interner.resolve_bitfield(*bid).fields {
+                    self.collect_json_non_string_map_key_types(field.ty, visited, keys);
+                }
+            }
+            Type::Enum(eid) => {
+                for (_, field_ty) in self
+                    .interner
+                    .resolve_enum(*eid)
+                    .variants
+                    .iter()
+                    .flat_map(|variant| variant.fields.iter())
+                {
+                    self.collect_json_non_string_map_key_types(*field_ty, visited, keys);
+                }
+            }
+            Type::Refinement { base, .. } => {
+                self.collect_json_non_string_map_key_types(*base, visited, keys);
+            }
+            _ => {}
+        }
+    }
+
     fn types_compatible(&self, expected: TypeId, got: TypeId) -> bool {
         if expected == got || expected == TypeInterner::ERROR || got == TypeInterner::ERROR {
             return true;
@@ -3402,6 +3462,19 @@ impl<'a> TypeChecker<'a> {
                     "json.serialize",
                     &self.type_name(value_ty),
                     &self.secret_field_names(value_ty),
+                    args[0].value.span(),
+                ));
+            }
+        }
+
+        if matches!(
+            callee_name.as_deref(),
+            Some("json.serialize" | "json.serialize_public")
+        ) && !checked_arg_types.is_empty()
+        {
+            for key_type in self.json_non_string_map_key_types(checked_arg_types[0]) {
+                self.sink.emit(errors::json_map_key_must_be_string(
+                    &key_type,
                     args[0].value.span(),
                 ));
             }
