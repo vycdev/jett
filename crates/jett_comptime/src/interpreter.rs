@@ -2476,6 +2476,9 @@ impl Interpreter {
                         self.json_to_struct_value(json, name, &HashMap::new())
                     }
                     name if self.enums.contains_key(name) => self.json_to_enum_value(json, name),
+                    name if self.bitfields.contains_key(name) => {
+                        self.json_to_bitfield_value(json, name)
+                    }
                     other => Err(format!("json.parse does not support type '{other}' yet")),
                 }
             }
@@ -2674,6 +2677,57 @@ impl Interpreter {
         Ok(Value::Enum {
             type_name: enum_name.to_string(),
             variant: variant_name.to_string(),
+            fields,
+        })
+    }
+
+    fn json_to_bitfield_value(
+        &mut self,
+        json: &JsonValue,
+        bitfield_name: &str,
+    ) -> Result<Value, String> {
+        let object = json
+            .as_object()
+            .ok_or_else(|| format!("expected object, got {}", json_type_name(json)))?;
+        let bitfield = self
+            .bitfields
+            .get(bitfield_name)
+            .cloned()
+            .ok_or_else(|| format!("unknown bitfield '{bitfield_name}'"))?;
+        let mut fields = Vec::with_capacity(bitfield.fields.len());
+
+        for field in &bitfield.fields {
+            let raw = object.get(&field.name.name).ok_or_else(|| {
+                format!(
+                    "missing required field '{}' for {}",
+                    field.name.name, bitfield_name
+                )
+            })?;
+            let value = match &field.kind {
+                BitfieldFieldKind::Bits { width, as_type } => {
+                    let ty = as_type.as_ref().cloned().unwrap_or_else(|| {
+                        TypeExpr::Named(Ident {
+                            name: "int64".to_string(),
+                            span: field.span,
+                        })
+                    });
+                    let value = self.json_to_value_typed(raw, &ty)?;
+                    self.bitfield_field_numeric_value(
+                        &bitfield,
+                        &field.name.name,
+                        *width,
+                        as_type.as_ref(),
+                        &value,
+                    )?;
+                    value
+                }
+                BitfieldFieldKind::Payload(ty) => self.json_to_value_typed(raw, ty)?,
+            };
+            fields.push((field.name.name.clone(), value));
+        }
+
+        Ok(Value::Struct {
+            type_name: bitfield_name.to_string(),
             fields,
         })
     }

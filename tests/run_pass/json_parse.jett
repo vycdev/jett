@@ -11,6 +11,14 @@ enum Shape:
     circle(radius: float64)
     rect(width: float64, height: float64)
 
+enum Protocol:
+    tcp = 6
+    udp = 17
+
+bitfield Header:
+    version: 4 bits
+    protocol: 8 bits as Protocol
+
 struct Profile:
     display_name: string serialize "displayName"
     note: string
@@ -128,6 +136,21 @@ function parse_enum_payload_error() returns string:
         rect(width, height):
             return "{width * height}"
 
+function parse_bitfield_version() returns int64:
+    Header header = json.parse[Header]("{{\"version\":4,\"protocol\":\"tcp\"}}") handle error:
+        return -1
+    return header.version
+
+function parse_bitfield_protocol() returns bool:
+    Header header = json.parse[Header]("{{\"version\":4,\"protocol\":\"tcp\"}}") handle error:
+        return false
+    return header.protocol == Protocol.tcp
+
+function parse_bitfield_width_error() returns string:
+    Header header = json.parse[Header]("{{\"version\":16,\"protocol\":\"tcp\"}}") handle error:
+        return error
+    return "{header.version}"
+
 function parse_missing_required_error() returns string:
     string raw = "{{\"id\":\"u1\",\"tags\":[],\"scores\":{{}}}}"
     User user = json.parse[User](raw) handle error:
@@ -150,4 +173,7 @@ verify json_parse:
     assert parse_enum_unit() == true
     assert parse_enum_payload_area() == 12.0
     assert parse_enum_payload_error() == "enum variant 'Shape.rect' expects 2 payload field(s), got 1"
+    assert parse_bitfield_version() == 4
+    assert parse_bitfield_protocol() == true
+    assert parse_bitfield_width_error() == "bitfield 'Header' field 'version' is 4 bit(s) wide and cannot hold '16'"
     assert parse_missing_required_error() == "missing required field 'profileData' for User"
