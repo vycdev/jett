@@ -57,10 +57,10 @@ type.visit_fields[T](view value, function[Field](view field_value: Field, view f
 )
 ```
 
-This is ergonomic for struct traversal, but it makes control flow and generic
-callback typing more magical than the rest of the language today. It also helps
-fields specifically, while JSON needs recursive dispatch for list elements, map
-values, optionals, results, aliases, refinements, and enums too.
+This is ergonomic for struct and bitfield traversal, but it makes control flow
+and generic callback typing more magical than the rest of the language today.
+It also helps fields specifically, while JSON needs recursive dispatch for list
+elements, map values, optionals, results, aliases, refinements, and enums too.
 
 ### TypedValue Container
 
@@ -92,15 +92,17 @@ Rules:
 - No runtime `TypeInfo -> type` conversion exists.
 
 Initial implementation can support only `field.type_info` inside loops over
-`type.fields[T]()` plus `type.info[T]()` for root tests. Support for nested
-`args` can follow once the trust provenance is represented cleanly.
+`type.fields[T]()` plus `type.info[T]()` for root tests. That covers struct and
+bitfield fields uniformly, though bitfield-specific metadata such as width and
+enum annotations is a separate reflection question. Support for nested `args`
+can follow once the trust provenance is represented cleanly.
 
 ## Tests
 
 Run-pass:
 
-- A reflection-driven serializer that handles primitive struct fields without
-  comparing `field.type_name` strings.
+- A reflection-driven serializer that handles primitive struct and bitfield
+  fields without comparing `field.type_name` strings.
 - Nested fields: `list[User]`, `optional[User]`, `result[int64, string]`,
   `map[string, int64]`.
 - Generic structs: `Box[list[int64]]`.

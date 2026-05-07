@@ -84,7 +84,7 @@
 | Handle blocks (`handle error:`, `handle:`, `default`) | Done |
 | Generic structs | Done |
 | Generic functions | Done |
-| Comptime struct/enum introspection (`TypeInfo`, `TypeField`, `TypeVariant`, alias/refinement base metadata, field `serialize` names, checked field access) | Partial |
+| Comptime struct/enum/bitfield introspection (`TypeInfo`, `TypeField`, `TypeVariant`, alias/refinement base metadata, field `serialize` names, checked field access) | Partial |
 | String escape sequences (`\"`, `\\`, `\n`, `\t`, `\r`) | Done |
 | Inline function expressions (`function(x: T) returns U: body`) | Done |
 | Higher-order list functions (`filter`, `map`, `find`, `sort_by`, `all`, `any`, `count`, `sum`, `group_by`) | Done |

@@ -92,6 +92,18 @@ function complex_field_arg_count(field_name: string) returns int64:
             found = list.length(field.type_info.args)
     return found
 
+function field_count[T]() returns int64:
+    list[TypeField] fields = type.fields[T]()
+    return list.length(fields)
+
+function field_kind[T](field_name: string) returns string:
+    list[TypeField] fields = type.fields[T]()
+    string found = "missing"
+    for field in fields:
+        if field.name == field_name:
+            found = field.kind
+    return found
+
 function complex_field_arg_kind(field_name: string, target: int64) returns string:
     list[TypeField] fields = type.fields[Complex]()
     string found = "missing"
@@ -146,6 +158,15 @@ function pair_field_arg_type_name(field_name: string, target: int64) returns str
                 if index == target:
                     found = arg.type_name
                 index = index + 1
+    return found
+
+function header_version_by_reflection() returns int64:
+    Header header = Header(version: 4)
+    list[TypeField] fields = type.fields[Header]()
+    int64 found = -1
+    for field in fields:
+        if field.name == "version":
+            found = type.field_value[Header, int64](view header, view field)
     return found
 
 function variant_count[T]() returns int64:
@@ -204,6 +225,9 @@ verify type_info_reflection:
     assert type_info_arg_kind[SecretText](0) == "secret"
     assert type_info_kind[Direction]() == "enum"
     assert type_info_kind[Header]() == "bitfield"
+    assert field_count[Header]() == 1
+    assert field_kind[Header]("version") == "primitive"
+    assert header_version_by_reflection() == 4
     assert type_info_arg_count[int64]() == 0
     assert type.has_secret[SecretChoice]() == true
     assert variant_count[Direction]() == 2

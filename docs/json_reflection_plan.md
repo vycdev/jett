@@ -15,9 +15,12 @@ Implemented reflection primitives:
 - Alias and refinement `TypeInfo` values expose their base type as the first
   `args` entry, so stdlib code can peel a refinement such as `NonEmpty` back to
   `string`, or an alias such as `NameList` back to `list[string]`.
-- `type.fields[T]()` returns ordered `TypeField` metadata for structs.
+- `type.fields[T]()` returns ordered `TypeField` metadata for structs and
+  bitfields.
 - `TypeField` includes `index`, `name`, `type_name`, `kind`,
-  `serialize_name`, `has_secret`, and `type_info`.
+  `serialize_name`, `has_secret`, and `type_info`. For bitfields,
+  `serialize_name` currently equals `name`; bitfield field renaming is not
+  supported.
 - `type.variants[T]()` returns ordered `TypeVariant` metadata for enums.
   `TypeVariant` includes `index`, `name`, `has_secret`, and payload `fields`
   as `list[TypeField]`.
@@ -118,6 +121,17 @@ tests still use literals. Tightening this should be done deliberately:
 
 Recommendation: enforce `view` for non-copy compound values first, then decide
 whether literals and primitives should remain ergonomic exceptions.
+
+### 5. Bitfield-Specific Metadata
+
+`type.fields[T]()` exposes bitfield fields as ordinary `TypeField` values so
+serializers can read them by reflected metadata. That is enough for JSON's
+current object shape, but a full stdlib replacement for the Rust bridge also
+needs metadata that `TypeField` does not yet expose: bit width, whether a field
+is `bit`/`bits` or payload, enum annotations, payload positioning, and byte
+order. For `bits as EnumType`, the reflected field type should remain the enum
+type rather than the storage integer, matching `type.field_value[T, U]` and JSON
+enum rendering.
 
 ## Suggested Next Steps
 

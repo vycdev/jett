@@ -2149,11 +2149,9 @@ impl Interpreter {
 
     fn type_expr_fields(&self, ty: &TypeExpr) -> Vec<ReflectionField> {
         match ty {
-            TypeExpr::Named(ident) => self
-                .structs
-                .get(&ident.name)
-                .map(|strukt| {
-                    strukt
+            TypeExpr::Named(ident) => {
+                if let Some(strukt) = self.structs.get(&ident.name) {
+                    return strukt
                         .fields
                         .iter()
                         .map(|field| ReflectionField {
@@ -2164,9 +2162,31 @@ impl Interpreter {
                                 .clone()
                                 .unwrap_or_else(|| field.name.name.clone()),
                         })
-                        .collect()
-                })
-                .unwrap_or_default(),
+                        .collect();
+                }
+                if let Some(bitfield) = self.bitfields.get(&ident.name) {
+                    return bitfield
+                        .fields
+                        .iter()
+                        .map(|field| ReflectionField {
+                            name: field.name.name.clone(),
+                            ty: match &field.kind {
+                                BitfieldFieldKind::Bits { as_type, .. } => {
+                                    as_type.clone().unwrap_or_else(|| {
+                                        TypeExpr::Named(Ident {
+                                            name: "int64".to_string(),
+                                            span: field.span,
+                                        })
+                                    })
+                                }
+                                BitfieldFieldKind::Payload(ty) => self.substitute_type_expr(ty),
+                            },
+                            serialize_name: field.name.name.clone(),
+                        })
+                        .collect();
+                }
+                Vec::new()
+            }
             TypeExpr::Generic(ident, args, _) => self
                 .structs
                 .get(&ident.name)

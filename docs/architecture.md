@@ -1092,9 +1092,9 @@ The boundary between compiler-generated code and stdlib-implemented code is a cr
 | `type.kind[T]()` | Comptime reflection | Category such as `primitive`, `list`, `struct`, `secret` |
 | `type.has_secret[T]()` | Comptime reflection | Whether `T` contains secret data |
 | `type.info[T]()` | Comptime reflection | Recursive `TypeInfo` metadata for `T`, including nested type arguments |
-| `type.fields[T]()` | Struct reflection | Ordered `list[TypeField]` metadata for struct fields, including `serialize` names |
+| `type.fields[T]()` | Struct/bitfield reflection | Ordered `list[TypeField]` metadata for struct and bitfield fields, including `serialize` names for structs |
 | `type.variants[T]()` | Enum reflection | Ordered `list[TypeVariant]` metadata for enum variants and payload fields |
-| `type.field_value[T, U](view value, view field)` | Struct reflection | Checked field read by reflected `TypeField` metadata |
+| `type.field_value[T, U](view value, view field)` | Struct/bitfield reflection | Checked field read by reflected `TypeField` metadata |
 | `T.to_bytes()` / `T.from_bytes()` | Binary serialization | Field-by-field binary packing/unpacking |
 | `Displayable.display()` for structs | Struct implementing `Displayable` | Field-by-field string representation |
 | `clone` for structs | `clone value` on a struct | Field-by-field recursive deep copy |
