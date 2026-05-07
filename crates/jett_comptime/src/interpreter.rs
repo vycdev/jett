@@ -1823,6 +1823,7 @@ impl Interpreter {
                 | "type.info"
                 | "type.fields"
                 | "type.field_value"
+                | "json.parse"
                 | "json.serialize"
                 | "json.serialize_public"
         );
@@ -1881,6 +1882,17 @@ impl Interpreter {
                 }
                 let expected_field_ty = self.substitute_type_expr(&type_args[1]);
                 self.reflected_field_value(&args[0], &ty, &args[1], &expected_field_ty)
+            }
+            "json.parse" => {
+                if let Some(err) = check_args(name, 1, args) {
+                    return Some(err);
+                }
+                match &args[0] {
+                    Value::String(_) => Ok(Value::ResultFail(Box::new(Value::String(
+                        "json.parse is not implemented yet".to_string(),
+                    )))),
+                    other => Err(format!("json.parse expects a string, got {other}")),
+                }
             }
             "json.serialize" | "json.serialize_public" => {
                 if let Some(err) = check_args(name, 1, args) {

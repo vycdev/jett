@@ -1,5 +1,5 @@
-# SPEC: `json.parse[Type](raw)` is the canonical typed parse form and returns
-# a result that must be handled explicitly.
+namespace test
+
 struct User:
     id: string
     name: string

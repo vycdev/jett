@@ -164,6 +164,14 @@ compile_pass_fixture!(
 );
 compile_pass_fixture!(compile_pass_handle_refinement, "handle_refinement.jett");
 compile_pass_fixture!(compile_pass_generic_struct, "generic_struct.jett");
+compile_pass_fixture!(
+    compile_pass_json_parse_struct_handle,
+    "json_parse_struct_handle.jett"
+);
+compile_pass_fixture!(
+    compile_pass_json_parse_map_handle,
+    "json_parse_map_handle.jett"
+);
 
 compile_fail_fixture!(compile_fail_type_mismatch, "type_mismatch.jett");
 compile_fail_fixture!(compile_fail_secret_stdout, "secret_stdout.jett");
@@ -260,6 +268,14 @@ compile_fail_fixture!(compile_fail_duplicate_field, "duplicate_field.jett");
 compile_fail_fixture!(
     compile_fail_json_serialize_secret_struct_blocked,
     "json_serialize_secret_struct_blocked.jett"
+);
+compile_fail_fixture!(
+    compile_fail_json_parse_requires_type_arg,
+    "json_parse_requires_type_arg.jett"
+);
+compile_fail_fixture!(
+    compile_fail_json_parse_requires_handle,
+    "json_parse_requires_handle.jett"
 );
 compile_fail_fixture!(
     compile_fail_serialize_annotation_requires_string,

@@ -1,0 +1,11 @@
+# ERROR: E0316
+namespace test
+
+struct User:
+    id: string
+    name: string
+
+function main() returns nothing:
+    string raw = "{{\"id\":\"123\",\"name\":\"alice\"}}"
+    User user = json.parse[User](raw)
+    return nothing

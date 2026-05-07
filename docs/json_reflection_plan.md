@@ -24,6 +24,10 @@ metadata exposed to Jett code. The active tests cover nested structs, lists,
 maps with string keys, optionals, results, `serialize` names, public secret
 omission, and valid JSON string escaping for control characters.
 
+`json.parse[T](raw)` has its typechecking surface: it requires one type
+argument, accepts a string, and returns `result[T, string]` so callers must use
+`handle error:`. Runtime deserialization is intentionally still unimplemented.
+
 ## Design Pressure
 
 A real `stdlib/json.jett` serializer needs more than field metadata. It needs a

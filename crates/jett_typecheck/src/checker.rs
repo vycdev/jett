@@ -652,6 +652,21 @@ impl<'a> TypeChecker<'a> {
                 vec![TypeInterner::ERROR, TypeInterner::STRING],
                 TypeInterner::NOTHING,
             )),
+            "json.parse" => {
+                if type_args.len() != 1 {
+                    self.sink.emit(errors::unknown_type(
+                        &format!("{name} (expected 1 type argument, got {})", type_args.len()),
+                        span,
+                    ));
+                    return Some((vec![TypeInterner::STRING], TypeInterner::ERROR));
+                }
+
+                let value_ty = self.resolve_type_expr(&type_args[0]);
+                let result_ty = self
+                    .interner
+                    .intern(Type::Result(value_ty, TypeInterner::STRING));
+                Some((vec![TypeInterner::STRING], result_ty))
+            }
             "json.serialize" | "json.serialize_public" => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
