@@ -1,0 +1,15 @@
+# ERROR: E9000
+namespace test
+
+struct User:
+    id: string
+
+function bad_field_value_non_struct_owner() returns string:
+    list[TypeField] fields = type.fields[User]()
+    string found = "missing"
+    for field in fields:
+        found = type.field_value[int64, string](42, view field)
+    return found
+
+verify type_field_value_non_struct_owner:
+    assert bad_field_value_non_struct_owner() == "missing"

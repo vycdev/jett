@@ -1,0 +1,46 @@
+namespace test
+
+struct FlatUser:
+    id: string serialize "userId"
+    age: int64
+    active: bool
+    token: secret[string]
+
+function serialize_flat_public[T](view value: T) returns string:
+    list[TypeField] fields = type.fields[T]()
+    list[string] parts = list.new[string]()
+    string quote = "\""
+    for field in fields:
+        if field.has_secret == false:
+            if field.type_name == "string":
+                string item = type.field_value[T, string](view value, view field)
+                parts = list.append[string](parts, "{quote}{field.serialize_name}{quote}:{quote}{item}{quote}")
+            if field.type_name == "int64":
+                int64 item = type.field_value[T, int64](view value, view field)
+                parts = list.append[string](parts, "{quote}{field.serialize_name}{quote}:{item}")
+            if field.type_name == "bool":
+                bool item = type.field_value[T, bool](view value, view field)
+                parts = list.append[string](parts, "{quote}{field.serialize_name}{quote}:{item}")
+    string body = string.join(parts, ",")
+    string open = encoding.url_decode("%7B")
+    string close = encoding.url_decode("%7D")
+    return string.join(list(open, body, close), "")
+
+function flat_user_json() returns string:
+    FlatUser user = FlatUser(id: "u1", age: 42, active: true, token: "secret-token")
+    return serialize_flat_public[FlatUser](view user)
+
+verify json_reflection_flat_serializer:
+    string raw = flat_user_json()
+    string open = encoding.url_decode("%7B")
+    string close = encoding.url_decode("%7D")
+    assert string.starts_with(raw, open) == true
+    assert string.ends_with(raw, close) == true
+    assert string.contains(raw, "userId") == true
+    assert string.contains(raw, "u1") == true
+    assert string.contains(raw, "age") == true
+    assert string.contains(raw, "42") == true
+    assert string.contains(raw, "active") == true
+    assert string.contains(raw, "true") == true
+    assert string.contains(raw, "token") == false
+    assert string.contains(raw, "secret-token") == false

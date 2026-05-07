@@ -196,6 +196,10 @@ run_pass_fixture!(run_pass_list_operations, "list_operations.jett");
 run_pass_fixture!(run_pass_math_operations, "math_operations.jett");
 run_pass_fixture!(run_pass_json_serialize, "json_serialize.jett");
 run_pass_fixture!(run_pass_json_serialize_public, "json_serialize_public.jett");
+run_pass_fixture!(
+    run_pass_json_reflection_flat_serializer,
+    "json_reflection_flat_serializer.jett"
+);
 run_pass_fixture!(run_pass_escape_sequences, "escape_sequences.jett");
 run_pass_fixture!(run_pass_list_higher_order, "list_higher_order.jett");
 run_pass_fixture!(run_pass_inline_functions, "inline_functions.jett");
@@ -252,6 +256,30 @@ compile_fail_fixture!(compile_fail_unhandled_optional, "unhandled_optional.jett"
 compile_fail_fixture!(compile_fail_trace_unknown, "trace_unknown.jett");
 compile_fail_fixture!(compile_fail_unknown_type, "unknown_type.jett");
 compile_fail_fixture!(compile_fail_duplicate_field, "duplicate_field.jett");
+compile_fail_fixture!(
+    compile_fail_type_field_value_wrong_arity,
+    "type_field_value_wrong_arity.jett"
+);
+compile_fail_fixture!(
+    compile_fail_type_field_value_wrong_field_arg,
+    "type_field_value_wrong_field_arg.jett"
+);
+compile_fail_fixture!(
+    compile_fail_type_field_value_wrong_value_arg,
+    "type_field_value_wrong_value_arg.jett"
+);
+compile_fail_fixture!(
+    compile_fail_type_field_value_wrong_requested_type,
+    "type_field_value_wrong_requested_type.jett"
+);
+compile_fail_fixture!(
+    compile_fail_type_field_value_mismatched_metadata,
+    "type_field_value_mismatched_metadata.jett"
+);
+compile_fail_fixture!(
+    compile_fail_type_field_value_non_struct_owner,
+    "type_field_value_non_struct_owner.jett"
+);
 
 #[test]
 fn multifile_cross_file_calls() {

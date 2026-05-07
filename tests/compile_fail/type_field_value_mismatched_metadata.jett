@@ -1,0 +1,19 @@
+# ERROR: E9000
+namespace test
+
+struct User:
+    id: string
+
+struct Other:
+    name: string
+
+function bad_field_value_metadata() returns string:
+    User user = User(id: "u1")
+    list[TypeField] fields = type.fields[Other]()
+    string found = "missing"
+    for field in fields:
+        found = type.field_value[User, string](view user, view field)
+    return found
+
+verify type_field_value_mismatched_metadata:
+    assert bad_field_value_metadata() == "missing"

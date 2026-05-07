@@ -1,0 +1,18 @@
+# ERROR: E9000
+namespace test
+
+struct User:
+    id: string
+    age: int64
+
+function bad_field_value_requested_type() returns int64:
+    User user = User(id: "u1", age: 42)
+    list[TypeField] fields = type.fields[User]()
+    int64 found = 0
+    for field in fields:
+        if field.name == "id":
+            found = type.field_value[User, int64](view user, view field)
+    return found
+
+verify type_field_value_wrong_requested_type:
+    assert bad_field_value_requested_type() == 0

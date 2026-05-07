@@ -1,0 +1,9 @@
+# ERROR: E0304
+namespace test
+
+struct User:
+    id: string
+
+function bad_field_value_field_arg() returns string:
+    User user = User(id: "u1")
+    return type.field_value[User, string](view user, "id")

@@ -1,0 +1,12 @@
+# ERROR: E0304
+namespace test
+
+struct User:
+    id: string
+
+function bad_field_value_value_arg() returns string:
+    list[TypeField] fields = type.fields[User]()
+    string found = "missing"
+    for field in fields:
+        found = type.field_value[User, string](42, view field)
+    return found
