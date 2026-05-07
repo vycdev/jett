@@ -172,6 +172,10 @@ compile_pass_fixture!(
     compile_pass_json_parse_map_handle,
     "json_parse_map_handle.jett"
 );
+compile_pass_fixture!(
+    compile_pass_json_serialize_public_secret_fields,
+    "json_serialize_public_secret_fields.jett"
+);
 
 compile_fail_fixture!(compile_fail_type_mismatch, "type_mismatch.jett");
 compile_fail_fixture!(compile_fail_secret_stdout, "secret_stdout.jett");
@@ -205,6 +209,10 @@ run_pass_fixture!(run_pass_list_operations, "list_operations.jett");
 run_pass_fixture!(run_pass_math_operations, "math_operations.jett");
 run_pass_fixture!(run_pass_json_serialize, "json_serialize.jett");
 run_pass_fixture!(run_pass_json_serialize_public, "json_serialize_public.jett");
+run_pass_fixture!(
+    run_pass_json_serialize_public_omits_secret_fields,
+    "json_serialize_public_omits_secret_fields.jett"
+);
 run_pass_fixture!(run_pass_json_parse, "json_parse.jett");
 run_pass_fixture!(run_pass_json_roundtrip_user, "json_roundtrip_user.jett");
 run_pass_fixture!(

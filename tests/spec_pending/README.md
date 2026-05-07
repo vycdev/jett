@@ -12,8 +12,6 @@ yet. They are a spec backlog:
 - Only add settled semantics here. Do not add tests for open questions,
   ambiguous wording, or aspirational design notes.
 
-Current first batch:
+Current pending batch:
 
-- JSON parsing and serialization rules
-- Secret-aware JSON serialization boundaries
-- Refinement validation through `json.parse`
+- `json.serialize_public[T]` requiring `view` for non-copy compound values
