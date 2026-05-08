@@ -93,6 +93,9 @@ function json_serialize_public_reflected[T](view value: T) returns string:
         bool item = value
         return "{item}"
 
+    if type_name == "nothing":
+        return "null"
+
     if type_name == "bytes":
         bytes item = value
         return json_stdlib_quote("0x{bytes.to_hex(item)}")
@@ -170,6 +173,9 @@ function json_serialize_public_reflected[T](view value: T) returns string:
                 fields = list.append[string](fields, "{json_stdlib_quote(field.serialize_name)}:{encoded}")
     string body = string.join(fields, ",")
     return "{{{body}}}"
+
+function json_serialize_reflected[T](view value: T) returns string:
+    return json_serialize_public_reflected[T](view value)
 
 function json_decode_reflected[T](raw: JsonValue) returns result[T, string]:
     TypeKind kind = type.kind_tag[T]()

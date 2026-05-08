@@ -19,10 +19,25 @@ struct BridgeUser:
     mode: Mode
     token: secret[string]
 
+struct BridgePublicUser:
+    id: string serialize "userId"
+    active: bool
+    profile: Profile
+    tags: list[string]
+    payload: bytes
+    nickname: optional[string]
+    outcome: result[int64, string]
+    mode: Mode
+
 function bridge_user() returns BridgeUser:
     bytes payload = bytes.from_string("Hi")
     Profile profile = Profile(city: "Cluj", visits: list(3, 5))
     return BridgeUser(id: "u1", active: true, profile: profile, tags: list("admin", "beta"), payload: payload, nickname: some("ally"), outcome: ok(7), mode: Mode.advanced, token: "secret-token")
+
+function bridge_public_user() returns BridgePublicUser:
+    bytes payload = bytes.from_string("Hi")
+    Profile profile = Profile(city: "Cluj", visits: list(3, 5))
+    return BridgePublicUser(id: "u1", active: true, profile: profile, tags: list("admin", "beta"), payload: payload, nickname: some("ally"), outcome: ok(7), mode: Mode.advanced)
 
 function bridge_summary(user: BridgeUser) returns string:
     string nickname = user.nickname handle:
@@ -37,6 +52,12 @@ function reflected_public_serializer_matches_bridge() returns bool:
     string reflected = json.json_serialize_public_reflected[BridgeUser](view user)
     return bridge == reflected
 
+function reflected_full_serializer_matches_bridge() returns bool:
+    BridgePublicUser user = bridge_public_user()
+    string bridge = json.serialize[BridgePublicUser](view user)
+    string reflected = json.json_serialize_reflected[BridgePublicUser](view user)
+    return bridge == reflected
+
 function reflected_parse_matches_bridge_summary() returns string:
     string raw = "{{\"userId\":\"u1\",\"active\":true,\"profile\":{{\"city\":\"Cluj\",\"visits\":[3,5]}},\"tags\":[\"admin\",\"beta\"],\"payload\":\"0x4869\",\"nickname\":\"ally\",\"outcome\":{{\"ok\":7}},\"mode\":\"advanced\",\"token\":\"secret-token\"}}"
     BridgeUser bridge = json.parse[BridgeUser](raw) handle error:
@@ -47,4 +68,5 @@ function reflected_parse_matches_bridge_summary() returns string:
 
 verify json_reflection_bridge_parity:
     assert reflected_public_serializer_matches_bridge() == true
+    assert reflected_full_serializer_matches_bridge() == true
     assert reflected_parse_matches_bridge_summary() == "u1:true:Cluj:2:ally:7:true:2:***|u1:true:Cluj:2:ally:7:true:2:***"

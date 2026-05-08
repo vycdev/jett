@@ -62,9 +62,10 @@ metadata exposed to Jett code. The active tests cover nested structs, bitfields,
 lists, sets, maps with string keys, optionals, results, `serialize` names,
 public secret omission, and valid JSON string escaping for control characters.
 
-There is also a `.jett` public serializer prototype now staged in
+There are also `.jett` serializer hooks now staged in
 `stdlib/json_reflection.jett` as
-`json_serialize_public_reflected[T](view value)`. It recursively handles
+`json_serialize_reflected[T](view value)` and
+`json_serialize_public_reflected[T](view value)`. They recursively handle
 primitives, structs, lists, sets, `map[string, V]`, optionals, result ok/fail
 objects, alias/refinement base serialization, bitfields, and enums using the
 same string/object shape as the Rust-backed JSON bridge. It relies on reflection
@@ -73,9 +74,9 @@ element/value types. The prototype also covers basic string escaping for quotes,
 backslashes, common named control characters, and all other ASCII control bytes
 as `\u00xx` sequences while preserving non-ASCII UTF-8.
 `tests/run_pass/json_reflection_nested_serializer.jett` exercises that stdlib
-function against nested user-defined types. This is still not the public
-`json.serialize_public` replacement; namespace-qualified user functions and API
-policy still need to land first.
+function against nested user-defined types. The public `json.serialize[T]` and
+`json.serialize_public[T]` bridges now delegate to these hooks in the
+interpreter after the typechecker keeps the public policy checks.
 
 There are also `.jett` decoder prototypes:
 `tests/run_pass/json_reflection_flat_decoder.jett` covers the first
@@ -104,10 +105,9 @@ recommendation: avoid a public parse API for now, and keep public JSON as an
 output projection unless a future audit-oriented API rejects secret-containing
 targets outright.
 
-`tests/run_pass/json_reflection_bridge_parity.jett` now compares the reflected
-public serializer with the Rust-backed `json.serialize_public[T]` bridge and
-compares reflected parsing with Rust-backed `json.parse[T]` by summarizing both
-decoded values for the same input.
+`tests/run_pass/json_reflection_bridge_parity.jett` now keeps the reflected
+serializer/parser hooks aligned with the public JSON bridge for representative
+full serialization, public serialization, and typed parse calls.
 
 `json.parse[T](raw)` remains a compiler-known public bridge: it requires one
 type argument, accepts a string, returns `result[T, string]`, and the
@@ -127,10 +127,11 @@ the same builder, and enum construction is available through
 `json.serialize_public[T](view value)` follows the same staged bridge pattern:
 the typechecker keeps the public policy checks, while the interpreter delegates
 the body to `json.json_serialize_public_reflected[T](view value)` when the
-bundled stdlib function is registered. Full `json.serialize[T]` is still
-Rust-backed because the reflected full serializer and secret rejection handoff
-are not done yet. See `docs/stdlib_json_extraction_plan.md` and
-`docs/json_public_bridge_handoff.md`.
+bundled stdlib function is registered. Full `json.serialize[T](view value)` now
+delegates to `json.json_serialize_reflected[T](view value)` for
+non-secret-containing types; the typechecker still owns secret rejection, and
+the interpreter keeps a defensive guard before delegation. See
+`docs/stdlib_json_extraction_plan.md` and `docs/json_public_bridge_handoff.md`.
 
 `json.parse_raw(raw)` now exposes an opaque `JsonValue` tree with explicit
 accessors for kind checks, object fields, array indexes, scalar casts, object

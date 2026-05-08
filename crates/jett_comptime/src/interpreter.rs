@@ -2271,6 +2271,21 @@ impl Interpreter {
                 if let Some(err) = check_args(name, 1, args) {
                     return Some(err);
                 }
+                if name == "json.serialize" && self.type_expr_has_secret(&ty) {
+                    return Some(Err(format!(
+                        "json.serialize cannot serialize secret-containing type '{}'",
+                        type_expr_display(&ty)
+                    )));
+                }
+                if name == "json.serialize"
+                    && self.functions.contains_key("json.json_serialize_reflected")
+                {
+                    return Some(self.call_function_with_type_args(
+                        "json.json_serialize_reflected",
+                        type_args,
+                        args.to_vec(),
+                    ));
+                }
                 if name == "json.serialize_public"
                     && self
                         .functions

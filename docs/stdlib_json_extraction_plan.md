@@ -39,6 +39,7 @@ the `json` namespace while keeping prefixed staging function names so it does
 not collide with the compiler-owned public bridge:
 
 - `stdlib/json_reflection.jett`
+- `json_serialize_reflected[T](view value)`
 - `json_serialize_public_reflected[T](view value)`
 - `json_decode_reflected[T](raw: JsonValue)`
 - `json_parse_reflected[T](raw: string)`
@@ -62,15 +63,16 @@ Together they cover the shape needed for a future stdlib module:
 - missing optional defaults,
 - public secret omission for the serializer prototype,
 - all-control-character JSON string escaping in `.jett`.
-- parity checks between the reflected prototypes and the Rust-backed public
-  JSON bridge for representative public serialization and typed parse.
+- bridge checks that keep the reflected prototypes aligned with the public JSON
+  facade for representative full serialization, public serialization, and
+  typed parse.
 
-The Rust-backed JSON bridge remains the compatibility oracle. It still owns the
-public typechecker policy for `json.parse`, `json.serialize`, and
-`json.serialize_public`. In the interpreter, `json.parse` and
-`json.serialize_public` now delegate to reflected stdlib implementations when
-the bundled stdlib functions are registered; full `json.serialize` remains
-Rust-backed.
+The compiler-known JSON bridge remains the compatibility and policy facade. It
+still owns the public typechecker policy for `json.parse`, `json.serialize`,
+and `json.serialize_public`. In the interpreter, all three public calls now
+delegate to reflected stdlib implementations when the bundled stdlib functions
+are registered, while Rust-backed fallback paths remain for raw JSON access and
+bootstrap compatibility.
 
 ## Blockers
 
@@ -134,20 +136,21 @@ the module cleanly probably needs an export rule or another visibility story.
 
 ## Minimal Staging Plan
 
-1. Keep the Rust-backed public JSON bridge for now.
+1. Keep the compiler-known public JSON bridge for policy checks and bootstrap
+   fallback paths.
 2. Continue staging extracted prototype code under flat, non-conflicting names:
+   - `json_serialize_reflected[T](view value: T)` exists in stdlib.
    - `json_serialize_public_reflected[T](view value: T)` exists in stdlib.
    - `json_decode_reflected[T](raw: JsonValue)` exists in stdlib.
    - `json_parse_reflected[T](raw: string)` exists in stdlib as the raw-string
      wrapper around `json.parse_raw` and the reflected decoder.
-3. Continue the public bridge handoff. `json.parse` and
+3. Continue the public bridge handoff. `json.parse`, `json.serialize`, and
    `json.serialize_public` now use compiler-owned typechecker policy with
-   stdlib-owned interpreter bodies; full `json.serialize` remains pending. See
-   `docs/json_public_bridge_handoff.md`.
+   stdlib-owned interpreter bodies. See `docs/json_public_bridge_handoff.md`.
 4. Move the extracted functions into `namespace json` behind the real public
    names, while retaining compiler policy checks for secrets, `view`, map keys,
    and handled results.
-5. Run parity tests against the Rust bridge before removing any Rust-backed
+5. Keep broad bridge/parity tests before removing any Rust-backed fallback
    implementation paths.
 
 ## Recommended Shape For `stdlib/json.jett`

@@ -8,14 +8,15 @@ implementation can own public names such as `json.parse[T](raw)` and
 
 - `stdlib/json_reflection.jett` now declares `namespace json`.
 - The staged functions still use prefixed names:
+  - `json.json_serialize_reflected[T](view value)`
   - `json.json_serialize_public_reflected[T](view value)`
   - `json.json_decode_reflected[T](raw)`
   - `json.json_parse_reflected[T](raw)`
 - The public `json.parse`, `json.serialize`, and `json.serialize_public` names
   are still compiler-known builtins.
-- The interpreter delegates `json.parse[T]` and `json.serialize_public[T]` to
-  the reflected stdlib implementations when the compiler-shipped stdlib module
-  is registered. Full `json.serialize[T]` remains Rust-backed.
+- The interpreter delegates `json.parse[T]`, `json.serialize[T]`, and
+  `json.serialize_public[T]` to the reflected stdlib implementations when the
+  compiler-shipped stdlib module is registered.
 - The typechecker enforces policy for those public names:
   - `json.parse[T]` must have one type argument and returns `result[T, string]`.
   - non-string JSON map keys are rejected.
@@ -80,6 +81,10 @@ For example:
 - Typechecking `json.serialize_public[T](view value)` remains hardcoded.
 - Runtime execution of `json.serialize_public[T](view value)` can call
   `json.json_serialize_public_reflected[T](view value)`.
+- Typechecking `json.serialize[T](view value)` remains hardcoded, including the
+  secret-containing-type rejection.
+- Runtime execution of `json.serialize[T](view value)` can call
+  `json.json_serialize_reflected[T](view value)` after the compiler policy gate.
 
 This keeps the security/ergonomics contract stable while moving implementation
 logic into `.jett`.
@@ -104,10 +109,12 @@ Suggested sequence:
    `json.json_parse_reflected[T]` after preserving public-facing error
    expectations while retaining useful field-path context. Done.
 5. Keep typechecker policy for `json.parse[T]` unchanged. Done.
-6. Add parity tests for nested structs, aliases/refinements, enums, bitfields,
+6. Add `json.json_serialize_reflected[T]` and delegate full
+   `json.serialize[T]` for non-secret-containing types, while keeping secret
+   rejection as compiler/typechecker policy and a defensive interpreter guard.
+   Done.
+7. Add parity tests for nested structs, aliases/refinements, enums, bitfields,
    bytes, secrets, optionals, results, lists, sets, and `map[string, V]`.
-7. Leave full `json.serialize[T]` Rust-backed until the reflected full
-   serializer exists and the secret rejection policy remains compiler-enforced.
 8. Later, after visibility/export and policy-bearing stdlib declarations exist,
    reconsider whether `parse`, `serialize`, and `serialize_public` can become
    ordinary exported functions.
