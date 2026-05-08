@@ -49,7 +49,7 @@ struct User:
     failed: result[int64, string]
 
 function decode_reflected[T](raw: JsonValue) returns result[T, string]:
-    string kind = type.kind[T]()
+    TypeKind kind = type.kind_tag[T]()
     string type_name = type.name[T]()
 
     if type_name == "string":
@@ -84,28 +84,28 @@ function decode_reflected[T](raw: JsonValue) returns result[T, string]:
             return ok(nothing)
         return fail("expected null, got {json.kind(raw)}")
 
-    if kind == "alias":
+    if kind == TypeKind.alias_type:
         comptime type Base = type.arg[T](0):
             Base item = decode_reflected[Base](raw) handle error:
                 return fail(error)
             T alias_value = item
             return ok(alias_value)
 
-    if kind == "refinement":
+    if kind == TypeKind.refinement_type:
         comptime type Base = type.arg[T](0):
             Base item = decode_reflected[Base](raw) handle error:
                 return fail(error)
             T refined = item
             return ok(refined)
 
-    if kind == "secret":
+    if kind == TypeKind.secret_type:
         comptime type Inner = type.arg[T](0):
             Inner item = decode_reflected[Inner](raw) handle error:
                 return fail(error)
             T secret_value = item
             return ok(secret_value)
 
-    if kind == "list":
+    if kind == TypeKind.list_type:
         comptime type Elem = type.arg[T](0):
             int64 length = json.array_length(raw) handle error:
                 return fail(error)
@@ -118,7 +118,7 @@ function decode_reflected[T](raw: JsonValue) returns result[T, string]:
                 items = list.append[Elem](items, item)
             return ok(items)
 
-    if kind == "set":
+    if kind == TypeKind.set_type:
         comptime type Elem = type.arg[T](0):
             int64 length = json.array_length(raw) handle error:
                 return fail(error)
@@ -131,7 +131,7 @@ function decode_reflected[T](raw: JsonValue) returns result[T, string]:
                 items = set.add[Elem](items, item)
             return ok(items)
 
-    if kind == "map":
+    if kind == TypeKind.map_type:
         comptime type Val = type.arg[T](1):
             list[string] keys = json.object_keys(raw) handle error:
                 return fail(error)
@@ -144,7 +144,7 @@ function decode_reflected[T](raw: JsonValue) returns result[T, string]:
                 entries = map.insert[string, Val](entries, key, item)
             return ok(entries)
 
-    if kind == "optional":
+    if kind == TypeKind.optional_type:
         if json.is_null(raw) == true:
             return ok(none)
         comptime type Inner = type.arg[T](0):
@@ -152,7 +152,7 @@ function decode_reflected[T](raw: JsonValue) returns result[T, string]:
                 return fail(error)
             return ok(some(item))
 
-    if kind == "result":
+    if kind == TypeKind.result_type:
         comptime type Ok = type.arg[T](0):
             JsonValue ok_raw = json.field(raw, "ok") handle:
                 comptime type Err = type.arg[T](1):
@@ -165,7 +165,7 @@ function decode_reflected[T](raw: JsonValue) returns result[T, string]:
                 return fail("ok: {error}")
             return ok(ok(item))
 
-    if kind == "enum":
+    if kind == TypeKind.enum_type:
         if json.kind(raw) == "string":
             string variant_name = json.as_string(raw) handle error:
                 return fail(error)
@@ -208,12 +208,12 @@ function decode_reflected[T](raw: JsonValue) returns result[T, string]:
                 return type.construct_finish[T](builder)
         return fail("unknown enum variant '{type_name}.{variant_name}'")
 
-    if kind == "struct" or kind == "bitfield":
+    if kind == TypeKind.struct_type or kind == TypeKind.bitfield_type:
         mutable TypeConstruction builder = type.construct_start[T]()
         for field in type.fields[T]():
             comptime type Field = field.type_info:
                 JsonValue raw_field = json.field(raw, field.serialize_name) handle:
-                    if field.type_info.kind == "optional":
+                    if field.type_info.kind_tag == TypeKind.optional_type:
                         JsonValue missing_optional = json.parse_raw("null") handle error:
                             return fail(error)
                         default missing_optional

@@ -53,7 +53,7 @@ function json_quote(raw: string) returns string:
     return "\"{escaped}\""
 
 function serialize_reflected[T](view value: T) returns string:
-    string kind = type.kind[T]()
+    TypeKind kind = type.kind_tag[T]()
     string type_name = type.name[T]()
 
     if type_name == "string":
@@ -76,17 +76,17 @@ function serialize_reflected[T](view value: T) returns string:
         bytes item = value
         return json_quote("0x{bytes.to_hex(item)}")
 
-    if kind == "alias":
+    if kind == TypeKind.alias_type:
         comptime type Base = type.arg[T](0):
             Base item = value
             return serialize_reflected[Base](view item)
 
-    if kind == "refinement":
+    if kind == TypeKind.refinement_type:
         comptime type Base = type.arg[T](0):
             Base item = coarsen value
             return serialize_reflected[Base](view item)
 
-    if kind == "enum":
+    if kind == TypeKind.enum_type:
         TypeVariant variant = type.variant_value[T](view value)
         if list.length(variant.fields) == 0:
             return json_quote(variant.name)
@@ -99,7 +99,7 @@ function serialize_reflected[T](view value: T) returns string:
         string body = string.join(parts, ",")
         return "{{{json_quote(variant.name)}:[{body}]}}"
 
-    if kind == "list":
+    if kind == TypeKind.list_type:
         comptime type Elem = type.arg[T](0):
             list[Elem] items = value
             list[string] parts = list.new[string]()
@@ -108,7 +108,7 @@ function serialize_reflected[T](view value: T) returns string:
             string body = string.join(parts, ",")
             return "[{body}]"
 
-    if kind == "set":
+    if kind == TypeKind.set_type:
         comptime type Elem = type.arg[T](0):
             set[Elem] items = value
             list[string] parts = list.new[string]()
@@ -117,7 +117,7 @@ function serialize_reflected[T](view value: T) returns string:
             string body = string.join(parts, ",")
             return "[{body}]"
 
-    if kind == "map":
+    if kind == TypeKind.map_type:
         comptime type Val = type.arg[T](1):
             map[string, Val] entries = value
             list[string] parts = list.new[string]()
@@ -126,13 +126,13 @@ function serialize_reflected[T](view value: T) returns string:
             string body = string.join(parts, ",")
             return "{{{body}}}"
 
-    if kind == "optional":
+    if kind == TypeKind.optional_type:
         comptime type Inner = type.arg[T](0):
             Inner item = value handle:
                 return "null"
             return serialize_reflected[Inner](view item)
 
-    if kind == "result":
+    if kind == TypeKind.result_type:
         comptime type Ok = type.arg[T](0):
             Ok item = value handle error:
                 comptime type Err = type.arg[T](1):
