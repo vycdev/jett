@@ -104,6 +104,11 @@ recommendation: avoid a public parse API for now, and keep public JSON as an
 output projection unless a future audit-oriented API rejects secret-containing
 targets outright.
 
+`tests/run_pass/json_reflection_bridge_parity.jett` now compares the reflected
+public serializer with the Rust-backed `json.serialize_public[T]` bridge and
+compares reflected parsing with Rust-backed `json.parse[T]` by summarizing both
+decoded values for the same input.
+
 `json.parse[T](raw)` has a Rust-backed bridge: it requires one type argument,
 accepts a string, returns `result[T, string]`, and supports core primitives,
 structs with `serialize` names, lists, sets, `map[string, V]`, optionals,

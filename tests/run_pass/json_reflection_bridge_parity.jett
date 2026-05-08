@@ -1,0 +1,50 @@
+namespace test
+
+enum Mode:
+    basic
+    advanced
+
+struct Profile:
+    city: string
+    visits: list[int64]
+
+struct BridgeUser:
+    id: string serialize "userId"
+    active: bool
+    profile: Profile
+    tags: list[string]
+    payload: bytes
+    nickname: optional[string]
+    outcome: result[int64, string]
+    mode: Mode
+    token: secret[string]
+
+function bridge_user() returns BridgeUser:
+    bytes payload = bytes.from_string("Hi")
+    Profile profile = Profile(city: "Cluj", visits: list(3, 5))
+    return BridgeUser(id: "u1", active: true, profile: profile, tags: list("admin", "beta"), payload: payload, nickname: some("ally"), outcome: ok(7), mode: Mode.advanced, token: "secret-token")
+
+function bridge_summary(user: BridgeUser) returns string:
+    string nickname = user.nickname handle:
+        default "none"
+    int64 outcome = user.outcome handle error:
+        default -1
+    return "{user.id}:{user.active}:{user.profile.city}:{list.length[string](user.tags)}:{nickname}:{outcome}:{user.mode == Mode.advanced}:{bytes.length(user.payload)}:{secret.redact(user.token)}"
+
+function reflected_public_serializer_matches_bridge() returns bool:
+    BridgeUser user = bridge_user()
+    string bridge = json.serialize_public[BridgeUser](view user)
+    string reflected = json.json_serialize_public_reflected[BridgeUser](view user)
+    return bridge == reflected
+
+function reflected_parse_matches_bridge_summary() returns string:
+    string raw = "{{\"userId\":\"u1\",\"active\":true,\"profile\":{{\"city\":\"Cluj\",\"visits\":[3,5]}},\"tags\":[\"admin\",\"beta\"],\"payload\":\"0x4869\",\"nickname\":\"ally\",\"outcome\":{{\"ok\":7}},\"mode\":\"advanced\",\"token\":\"secret-token\"}}"
+    BridgeUser bridge = json.parse[BridgeUser](raw) handle error:
+        return error
+    BridgeUser reflected = json.json_parse_reflected[BridgeUser](raw) handle error:
+        return error
+    return "{bridge_summary(bridge)}|{bridge_summary(reflected)}"
+
+verify json_reflection_bridge_parity:
+    assert reflected_public_serializer_matches_bridge() == true
+    assert reflected_parse_matches_bridge_summary() == "u1:true:Cluj:2:ally:7:true:2:***|u1:true:Cluj:2:ally:7:true:2:***"

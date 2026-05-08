@@ -62,6 +62,8 @@ Together they cover the shape needed for a future stdlib module:
 - missing optional defaults,
 - public secret omission for the serializer prototype,
 - all-control-character JSON string escaping in `.jett`.
+- parity checks between the reflected prototypes and the Rust-backed public
+  JSON bridge for representative public serialization and typed parse.
 
 The Rust-backed JSON bridge remains the compatibility oracle. It still owns the
 public `json.parse`, `json.serialize`, and `json.serialize_public` names.

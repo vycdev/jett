@@ -243,6 +243,10 @@ run_pass_fixture!(
     "json_reflection_flat_serializer.jett"
 );
 run_pass_fixture!(
+    run_pass_json_reflection_bridge_parity,
+    "json_reflection_bridge_parity.jett"
+);
+run_pass_fixture!(
     run_pass_json_reflection_nested_serializer,
     "json_reflection_nested_serializer.jett"
 );
