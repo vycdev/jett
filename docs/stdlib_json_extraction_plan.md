@@ -35,8 +35,8 @@ automatically be callable as `json.parse[T](...)`.
 ## JSON-Specific State
 
 The reflected public serializer prototype has started moving into stdlib under
-a neutral namespace to avoid colliding with the hardcoded `json` builtin module
-prefix:
+the `json` namespace while keeping prefixed staging function names so it does
+not collide with the compiler-owned public bridge:
 
 - `stdlib/json_reflection.jett`
 - `json_serialize_public_reflected[T](view value)`
@@ -44,7 +44,7 @@ prefix:
 - `json_parse_reflected[T](raw: string)`
 
 The raw-string wrapper is also exercised through its qualified stdlib staging
-name, `stdlib_json.json_parse_reflected[T](raw)`.
+name, `json.json_parse_reflected[T](raw)`.
 
 The run-pass fixtures still own the test-specific type definitions and the
 flat decoder prototype:
@@ -84,16 +84,14 @@ This is still intentionally simple: files are collected from repo-local
 `stdlib/` and prepended before project modules. Dependency ordering is lexical
 for now.
 
-### 2. Public `namespace json`
+### 2. Public `json.*` Handoff
 
 Generic and non-generic user functions can now be called through a qualified
 namespace name such as `helpers.wrap[T](value)` or
-`stdlib_json.json_parse_reflected[T](raw)`.
+`json.json_parse_reflected[T](raw)`.
 
-Moving JSON into `.jett` still needs the public `json` namespace handoff:
+Moving JSON into `.jett` still needs the public API handoff:
 
-- `namespace json` still collides with the compiler's hardcoded `json` builtin
-  module binding,
 - the Rust-backed `json.parse`, `json.serialize`, and
   `json.serialize_public` paths still carry compiler-enforced policy checks,
 - `use` still resolves only a namespace-looking binding rather than importing a
@@ -136,9 +134,9 @@ the module cleanly probably needs an export rule or another visibility story.
    - `json_decode_reflected[T](raw: JsonValue)` exists in stdlib.
    - `json_parse_reflected[T](raw: string)` exists in stdlib as the raw-string
      wrapper around `json.parse_raw` and the reflected decoder.
-3. Resolve the public `namespace json` collision with the hardcoded builtin
-   module binding and decide how compiler policy checks hand off to stdlib
-   functions.
+3. Decide how compiler policy checks hand off from the hardcoded public
+   `json.parse`, `json.serialize`, and `json.serialize_public` bridge to
+   stdlib functions.
 4. Move the extracted functions into `namespace json` behind the real public
    names, while retaining compiler policy checks for secrets, `view`, map keys,
    and handled results.

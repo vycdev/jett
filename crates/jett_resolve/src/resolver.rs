@@ -104,7 +104,6 @@ impl Resolver {
             "TypeBitfieldField",
             "TypeBitfieldFieldShape",
             "TypeVariant",
-            "json",
             "type",
             // Capability types
             "Stdout",

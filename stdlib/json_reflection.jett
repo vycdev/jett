@@ -1,4 +1,4 @@
-namespace stdlib_json
+namespace json
 
 function json_stdlib_hex_digit(value: int64) returns string:
     if value == 0:

@@ -98,7 +98,7 @@ keeping output exposure blocked by the ordinary secret type rules.
 against nested user-defined types, while
 `tests/run_pass/json_reflection_parse_wrapper.jett` checks the raw-string
 wrapper path through the qualified staging name
-`stdlib_json.json_parse_reflected[T](raw)`. See
+`json.json_parse_reflected[T](raw)`. See
 `docs/json_public_parse_policy.md` for the current
 recommendation: avoid a public parse API for now, and keep public JSON as an
 output projection unless a future audit-oriented API rejects secret-containing
@@ -115,8 +115,8 @@ still to replace this bridge with stdlib code; struct construction is now
 available through `TypeConstruction`, bitfield construction is available through
 the same builder, and enum construction is available through
 `type.construct_variant_start`; the final syntax remains future work.
-Moving the prototypes into an actual `stdlib/json.jett` module now mostly needs
-the public `namespace json` handoff from the hardcoded builtin bridge; see
+Moving the prototypes into an actual public `json.*` API now mostly needs the
+handoff from the hardcoded builtin bridge; see
 `docs/stdlib_json_extraction_plan.md`.
 
 `json.parse_raw(raw)` now exposes an opaque `JsonValue` tree with explicit
@@ -229,7 +229,7 @@ for the decoded value. See `docs/bitfield_reflection_metadata.md`.
 
 1. Add a staged stdlib loader so extracted `.jett` helpers can be tested outside
    single-file fixtures.
-2. Resolve the public `namespace json` bridge/handoff, then move the reflected
+2. Resolve the public `json.*` bridge/handoff, then move the reflected
    JSON prototypes behind real `json.*` APIs.
 3. Keep hardening format policy with parity tests against the Rust bridge:
    unknown fields, enum/bitfield shape, public/secret modes, and error messages.
