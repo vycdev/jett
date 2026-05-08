@@ -8,9 +8,12 @@ Jett now accepts namespace-qualified type spellings such as `models.User`,
 This is intentionally implemented as a small compatibility layer over the
 existing flat declaration model:
 
-- The resolver still declares user types by their leaf name.
-- The typechecker registers both the historical leaf name and the qualified
-  `namespace.Name` spelling for types in a namespace.
+- The resolver now declares namespaced top-level values and types by their
+  qualified `namespace.Name` symbol, while preserving a first unambiguous flat
+  alias for legacy single-namespace fixtures.
+- The typechecker uses the qualified symbol as the canonical interner metadata
+  name for namespaced structs, enums, bitfields, generic structs, aliases,
+  interfaces, and actors.
 - The comptime interpreter registers both leaf and qualified runtime
   definitions, so reflection and JSON can use qualified type arguments.
 
@@ -19,17 +22,19 @@ JSON code without changing the language's broader namespace semantics.
 
 ## Known Limits
 
-- Two namespaces still cannot define the same leaf type name in the same build.
-  `namespace a; struct User` and `namespace b; struct User` collide today.
+- Two namespaces can now define the same leaf type name when callers use fully
+  qualified names such as `a.User` and `b.User`.
+- Unqualified flat aliases remain a compatibility path and should not be treated
+  as the final namespace model.
 - `use models as m` does not make `m.User` a type alias. The registered spelling
   is still `models.User`.
 - Interfaces, implementations, actors, and state machines still have some
   leaf-name-oriented paths. Qualified struct, enum, bitfield, generic struct,
   reflection, and JSON paths are covered first because they are the JSON
   extraction blocker.
-- Typechecker canonical names are mixed: type expressions preserve the
-  qualified spelling for `type.name[T]()` and reflection values, while some
-  internal `TypeId` display paths still use the leaf declaration name.
+- Typechecker canonical names for namespaced user types now use the qualified
+  spelling in reflection and `TypeId` display paths covered by the current
+  tests.
 
 ## Design Pressure
 
@@ -110,8 +115,8 @@ metadata consume those canonical names.
 
 ## Suggested Next Tests
 
-- `namespace a` and `namespace b` can both define `User`, and `a.User(...)` /
-  `b.User(...)` construct distinct shapes.
+- Add more duplicate-leaf coverage beyond structs, enums, and generic structs:
+  bitfields, actors, interfaces, and same-leaf functions.
 - `type.name[a.User]()` returns `a.User`.
 - `type.fields[a.User]()` reports field metadata with owner `a.User`.
 - `json.parse[a.User]` and `json.serialize[a.User]` roundtrip only the intended

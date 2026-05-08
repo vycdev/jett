@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use jett_common::Span;
+use jett_common::{FileId, Span};
 use jett_diagnostics::{Diagnostic, DiagnosticSink};
 use jett_parser::ast::{
     ActorDef, AssertStmt, AssignStmt, Block, BreakpointStmt, CallArg, ComptimeTypeBindStmt, Expr,
@@ -45,6 +45,10 @@ struct Resolver {
     sink: DiagnosticSink,
     /// The current scope during the walk.
     current_scope: ScopeId,
+    /// Namespace introduced by the latest `namespace` item in the current file.
+    current_namespace: Option<String>,
+    /// File for the last top-level item walked; namespaces do not leak across files.
+    current_file: Option<FileId>,
     /// Set of DefIds that have been referenced (for unused detection).
     used_defs: HashSet<DefId>,
     /// Track which definitions are `use` imports (for unused-import warnings).
@@ -134,6 +138,8 @@ impl Resolver {
             resolutions: HashMap::new(),
             sink: DiagnosticSink::new(),
             current_scope: root,
+            current_namespace: None,
+            current_file: None,
             used_defs: HashSet::new(),
             use_defs: HashSet::new(),
             var_defs: HashSet::new(),
@@ -150,9 +156,11 @@ impl Resolver {
 
     fn resolve_module(&mut self, module: &Module) {
         // Pass 1: register top-level declarations in order.
+        self.reset_namespace_tracking();
         self.pass1_declarations(&module.items);
 
         // Pass 2: walk bodies and resolve references.
+        self.reset_namespace_tracking();
         self.pass2_references(&module.items);
     }
 
@@ -162,6 +170,7 @@ impl Resolver {
 
     fn pass1_declarations(&mut self, items: &[Item]) {
         for (index, item) in items.iter().enumerate() {
+            self.update_current_namespace(item);
             match item {
                 Item::Namespace(ns) => {
                     self.declare_top_level(&ns.name.name, DefKind::Namespace, ns.span, index);
@@ -184,7 +193,7 @@ impl Resolver {
                     }
                 }
                 Item::Interface(interface) => {
-                    self.declare_top_level(
+                    self.declare_namespaced_top_level(
                         &interface.name.name,
                         DefKind::Interface,
                         interface.name.span,
@@ -192,29 +201,58 @@ impl Resolver {
                     );
                 }
                 Item::Struct(s) => {
-                    self.declare_top_level(&s.name.name, DefKind::Struct, s.name.span, index);
+                    self.declare_namespaced_top_level(
+                        &s.name.name,
+                        DefKind::Struct,
+                        s.name.span,
+                        index,
+                    );
                 }
                 Item::Bitfield(b) => {
-                    self.declare_top_level(&b.name.name, DefKind::Bitfield, b.name.span, index);
+                    self.declare_namespaced_top_level(
+                        &b.name.name,
+                        DefKind::Bitfield,
+                        b.name.span,
+                        index,
+                    );
                 }
                 Item::Enum(e) => {
-                    self.declare_top_level(&e.name.name, DefKind::Enum, e.name.span, index);
+                    self.declare_namespaced_top_level(
+                        &e.name.name,
+                        DefKind::Enum,
+                        e.name.span,
+                        index,
+                    );
                 }
                 Item::VarDecl(v) => {
-                    let def_id =
-                        self.declare_top_level(&v.name.name, DefKind::Variable, v.name.span, index);
+                    let def_id = self.declare_namespaced_top_level(
+                        &v.name.name,
+                        DefKind::Variable,
+                        v.name.span,
+                        index,
+                    );
                     if let Some(id) = def_id {
                         self.var_defs.insert(id);
                     }
                 }
                 Item::Machine(m) => {
-                    self.declare_top_level(&m.name.name, DefKind::Machine, m.name.span, index);
+                    self.declare_namespaced_top_level(
+                        &m.name.name,
+                        DefKind::Machine,
+                        m.name.span,
+                        index,
+                    );
                 }
                 Item::Actor(a) => {
-                    self.declare_top_level(&a.name.name, DefKind::Actor, a.name.span, index);
+                    self.declare_namespaced_top_level(
+                        &a.name.name,
+                        DefKind::Actor,
+                        a.name.span,
+                        index,
+                    );
                 }
                 Item::TypeAlias(ta) => {
-                    self.declare_top_level(
+                    self.declare_namespaced_top_level(
                         &ta.name.name,
                         DefKind::Struct, // treat type aliases like types for now
                         ta.name.span,
@@ -249,7 +287,12 @@ impl Resolver {
             return;
         }
 
-        self.declare_top_level(&func.name.name, DefKind::Function, func.name.span, order);
+        self.declare_namespaced_top_level(
+            &func.name.name,
+            DefKind::Function,
+            func.name.span,
+            order,
+        );
     }
 
     /// Register a top-level name. Returns `Some(DefId)` on success, `None` if
@@ -276,12 +319,85 @@ impl Resolver {
         Some(def_id)
     }
 
+    fn current_qualified_name(&self, name: &str) -> Option<String> {
+        if name.contains('.') {
+            return None;
+        }
+        self.current_namespace
+            .as_ref()
+            .map(|namespace| format!("{namespace}.{name}"))
+    }
+
+    fn reset_namespace_tracking(&mut self) {
+        self.current_namespace = None;
+        self.current_file = None;
+    }
+
+    fn item_file(item: &Item) -> FileId {
+        match item {
+            Item::Namespace(ns) => ns.span.file,
+            Item::Function(func) => func.span.file,
+            Item::Mutual(block) => block.span.file,
+            Item::Interface(interface) => interface.span.file,
+            Item::Implement(block) => block.span.file,
+            Item::Struct(strukt) => strukt.span.file,
+            Item::Bitfield(bitfield) => bitfield.span.file,
+            Item::Enum(enm) => enm.span.file,
+            Item::Machine(machine) => machine.span.file,
+            Item::Actor(actor) => actor.span.file,
+            Item::VarDecl(decl) => decl.span.file,
+            Item::Verify(verify) => verify.span.file,
+            Item::Property(prop) => prop.span.file,
+            Item::TypeAlias(alias) => alias.span.file,
+        }
+    }
+
+    fn update_current_namespace(&mut self, item: &Item) {
+        let item_file = Self::item_file(item);
+        if self.current_file.is_some_and(|file| file != item_file) {
+            self.current_namespace = None;
+        }
+        self.current_file = Some(item_file);
+
+        if let Item::Namespace(ns) = item {
+            self.current_namespace = Some(ns.name.name.clone());
+        }
+    }
+
+    fn declare_namespaced_top_level(
+        &mut self,
+        name: &str,
+        kind: DefKind,
+        span: Span,
+        order: usize,
+    ) -> Option<DefId> {
+        let Some(qualified) = self.current_qualified_name(name) else {
+            return self.declare_top_level(name, kind, span, order);
+        };
+
+        let def_id = self.declare_top_level(&qualified, kind, span, order)?;
+
+        if self
+            .scope_table
+            .lookup_local(self.current_scope, name)
+            .is_none()
+        {
+            self.scope_table
+                .bind(self.current_scope, name.to_string(), def_id);
+            self.top_level_order
+                .insert(name.to_string(), (def_id, order));
+        }
+
+        Some(def_id)
+    }
+
     // ------------------------------------------------------------------
     // Pass 2 — resolve references inside bodies
     // ------------------------------------------------------------------
 
     fn pass2_references(&mut self, items: &[Item]) {
         for (index, item) in items.iter().enumerate() {
+            self.update_current_namespace(item);
             match item {
                 Item::Mutual(block) => {
                     for decl in &block.declarations {
@@ -653,7 +769,9 @@ impl Resolver {
 
     fn resolve_type_name(&mut self, name: &str, span: Span, item_index: usize) {
         if let Some((namespace, _type_name)) = name.rsplit_once('.') {
-            if !is_builtin_module(namespace) {
+            if self.scope_table.lookup(self.current_scope, name).is_some() {
+                self.resolve_name(name, span, item_index);
+            } else if !is_builtin_module(namespace) {
                 self.resolve_name(namespace, span, item_index);
             }
         } else {
@@ -821,22 +939,54 @@ impl Resolver {
             return;
         }
 
-        // First look up in local/nested scopes.
-        if let Some(def_id) = self.scope_table.lookup(self.current_scope, name) {
-            // Check for forward reference to a top-level item.
-            if let Some(&(top_def_id, decl_index)) = self.top_level_order.get(name) {
-                if def_id == top_def_id && decl_index > item_index {
-                    let def_span = self.scope_table.def(def_id).span;
-                    self.sink
-                        .emit(errors::forward_reference(name, span, def_span));
+        if let Some(def_id) = self.lookup_local_non_root(name) {
+            self.record_resolution(name, span, item_index, def_id);
+            return;
+        }
+
+        if !name.contains('.') {
+            if let Some(qualified) = self.current_qualified_name(name) {
+                if let Some(def_id) = self.scope_table.lookup(self.current_scope, &qualified) {
+                    self.record_resolution(&qualified, span, item_index, def_id);
                     return;
                 }
             }
-            self.resolutions.insert(span, def_id);
-            self.used_defs.insert(def_id);
-        } else {
-            self.sink.emit(errors::undefined_name(name, span));
         }
+
+        if let Some(def_id) = self.scope_table.lookup(self.current_scope, name) {
+            self.record_resolution(name, span, item_index, def_id);
+            return;
+        }
+
+        self.sink.emit(errors::undefined_name(name, span));
+    }
+
+    fn record_resolution(&mut self, name: &str, span: Span, item_index: usize, def_id: DefId) {
+        // Check for forward reference to a top-level item.
+        if let Some(&(top_def_id, decl_index)) = self.top_level_order.get(name) {
+            if def_id == top_def_id && decl_index > item_index {
+                let def_span = self.scope_table.def(def_id).span;
+                self.sink
+                    .emit(errors::forward_reference(name, span, def_span));
+                return;
+            }
+        }
+        self.resolutions.insert(span, def_id);
+        self.used_defs.insert(def_id);
+    }
+
+    fn lookup_local_non_root(&self, name: &str) -> Option<DefId> {
+        let mut scope = Some(self.current_scope);
+        while let Some(scope_id) = scope {
+            if scope_id.index() == 0 {
+                return None;
+            }
+            if let Some(def_id) = self.scope_table.lookup_local(scope_id, name) {
+                return Some(def_id);
+            }
+            scope = self.scope_table.scopes[scope_id.index() as usize].parent;
+        }
+        None
     }
 
     fn resolve_namespace_prefix(&mut self, path: &str, span: Span, item_index: usize) -> bool {

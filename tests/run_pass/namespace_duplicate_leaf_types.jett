@@ -1,0 +1,50 @@
+namespace accounts
+
+struct Record:
+    id: string
+
+struct Box[T]:
+    value: T
+
+enum Status:
+    active
+
+function label(view record: accounts.Record) returns string:
+    return "account:{record.id}"
+
+namespace audit
+
+struct Record:
+    attempts: int64
+
+struct Box[T]:
+    value: T
+
+enum Status:
+    active
+
+function label(view record: audit.Record) returns string:
+    return "audit:{record.attempts}"
+
+namespace app
+
+function duplicate_leaf_summary() returns string:
+    accounts.Record account = accounts.Record(id: "a1")
+    audit.Record event = audit.Record(attempts: 3)
+    accounts.Box[accounts.Record] wrapped = accounts.Box[accounts.Record](value: account)
+    string account_raw = json.serialize[accounts.Record](view wrapped.value)
+    string event_raw = json.serialize[audit.Record](view event)
+    accounts.Record decoded_account = json.parse[accounts.Record](account_raw) handle error:
+        return error
+    audit.Record decoded_event = json.parse[audit.Record](event_raw) handle error:
+        return error
+    TypeField account_field = list.get[TypeField](type.fields[accounts.Record](), 0) handle:
+        return "missing account field"
+    TypeField audit_field = list.get[TypeField](type.fields[audit.Record](), 0) handle:
+        return "missing audit field"
+    accounts.Status account_status = accounts.Status.active
+    audit.Status audit_status = audit.Status.active
+    return "{accounts.label(view decoded_account)}:{audit.label(view decoded_event)}:{account_field.name}:{audit_field.name}:{type.name[accounts.Record]()}:{type.name[audit.Record]()}:{type.name[accounts.Box[accounts.Record]]()}:{type.name[audit.Box[audit.Record]]()}:{account_status == accounts.Status.active}:{audit_status == audit.Status.active}"
+
+verify namespace_duplicate_leaf_types:
+    assert duplicate_leaf_summary() == "account:a1:audit:3:id:attempts:accounts.Record:audit.Record:accounts.Box[accounts.Record]:audit.Box[audit.Record]:true:true"

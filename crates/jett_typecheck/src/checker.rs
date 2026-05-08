@@ -431,6 +431,10 @@ impl<'a> TypeChecker<'a> {
         namespace.map(|ns| format!("{ns}.{name}"))
     }
 
+    fn canonical_name(namespace: Option<&str>, name: &str) -> String {
+        Self::namespace_qualified_name(namespace, name).unwrap_or_else(|| name.to_string())
+    }
+
     fn function_lookup_names(namespace: Option<&str>, name: &str) -> Vec<String> {
         let mut names = vec![name.to_string()];
         if let Some(qualified) = Self::namespace_qualified_name(namespace, name) {
@@ -441,6 +445,29 @@ impl<'a> TypeChecker<'a> {
 
     fn type_lookup_names(namespace: Option<&str>, name: &str) -> Vec<String> {
         Self::function_lookup_names(namespace, name)
+    }
+
+    fn register_named_type(&mut self, namespace: Option<&str>, name: &str, ty: TypeId) {
+        let canonical = Self::canonical_name(namespace, name);
+        self.named_types.insert(canonical, ty);
+        if namespace.is_some() {
+            self.named_types.entry(name.to_string()).or_insert(ty);
+        }
+    }
+
+    fn register_generic_struct_template(
+        &mut self,
+        namespace: Option<&str>,
+        name: &str,
+        def: ast::StructDef,
+    ) {
+        let canonical = Self::canonical_name(namespace, name);
+        self.generic_struct_templates.insert(canonical, def.clone());
+        if namespace.is_some() {
+            self.generic_struct_templates
+                .entry(name.to_string())
+                .or_insert(def);
+        }
     }
 
     fn declaration_def_id(&self, span: Span) -> Option<DefId> {
@@ -459,6 +486,16 @@ impl<'a> TypeChecker<'a> {
             .copied()
             .or_else(|| self.decl_defs.get(&ident.span).copied())?;
         Some(self.resolve.scope_table.def(def_id).kind)
+    }
+
+    fn resolved_symbol_name(&self, name: &str, span: Span) -> String {
+        self.resolve
+            .resolutions
+            .get(&span)
+            .copied()
+            .or_else(|| self.decl_defs.get(&span).copied())
+            .map(|def_id| self.resolve.scope_table.def(def_id).name.clone())
+            .unwrap_or_else(|| name.to_string())
     }
 
     fn is_struct_type_name_expr(&self, expr: &Expr) -> bool {
@@ -1972,11 +2009,11 @@ impl<'a> TypeChecker<'a> {
         for item in &module.items {
             Self::update_current_namespace(item, &mut current_file, &mut current_namespace);
             match item {
-                Item::Interface(def) => self.finish_interface(def),
-                Item::Struct(def) => self.finish_struct(def),
-                Item::Bitfield(def) => self.finish_bitfield(def),
-                Item::Enum(def) => self.finish_enum(def),
-                Item::Actor(def) => self.finish_actor(def),
+                Item::Interface(def) => self.finish_interface(def, current_namespace.as_deref()),
+                Item::Struct(def) => self.finish_struct(def, current_namespace.as_deref()),
+                Item::Bitfield(def) => self.finish_bitfield(def, current_namespace.as_deref()),
+                Item::Enum(def) => self.finish_enum(def, current_namespace.as_deref()),
+                Item::Actor(def) => self.finish_actor(def, current_namespace.as_deref()),
                 _ => {}
             }
         }
@@ -2066,7 +2103,9 @@ impl<'a> TypeChecker<'a> {
         for item in &module.items {
             Self::update_current_namespace(item, &mut current_file, &mut current_namespace);
             match item {
-                Item::TypeAlias(alias) => self.check_type_alias(alias),
+                Item::TypeAlias(alias) => {
+                    self.check_type_alias(alias, current_namespace.as_deref())
+                }
                 Item::Function(func) => {
                     if func.type_params.is_empty() {
                         self.check_function(func);
@@ -2102,8 +2141,12 @@ impl<'a> TypeChecker<'a> {
             let Item::TypeAlias(alias) = item else {
                 continue;
             };
-            for name in Self::type_lookup_names(current_namespace.as_deref(), &alias.name.name) {
-                self.type_aliases.insert(name, alias.clone());
+            let canonical = Self::canonical_name(current_namespace.as_deref(), &alias.name.name);
+            self.type_aliases.insert(canonical, alias.clone());
+            if current_namespace.is_some() {
+                self.type_aliases
+                    .entry(alias.name.name.clone())
+                    .or_insert_with(|| alias.clone());
             }
         }
     }
@@ -2119,13 +2162,14 @@ impl<'a> TypeChecker<'a> {
             .any(|p| capability::type_expr_is_capability(&p.ty))
     }
 
-    fn check_type_alias(&mut self, alias: &ast::TypeAlias) {
+    fn check_type_alias(&mut self, alias: &ast::TypeAlias, namespace: Option<&str>) {
+        let alias_name = Self::canonical_name(namespace, &alias.name.name);
         let Some(constraint) = &alias.constraint else {
-            let _ = self.resolve_type_alias(&alias.name.name, alias.name.span);
+            let _ = self.resolve_type_alias(&alias_name, alias.name.span);
             return;
         };
 
-        let alias_ty = self.resolve_type_alias(&alias.name.name, alias.name.span);
+        let alias_ty = self.resolve_type_alias(&alias_name, alias.name.span);
         let Some(_base_ty) = self.refinement_base_type(alias_ty) else {
             return;
         };
@@ -2133,7 +2177,7 @@ impl<'a> TypeChecker<'a> {
 
         let saved_name = self.current_function_name.clone();
         let saved_pure = self.current_function_pure;
-        self.current_function_name = Some(format!("type {}", alias.name.name));
+        self.current_function_name = Some(format!("type {alias_name}"));
         self.current_function_pure = true;
 
         if let Some(def_id) = self.declaration_def_id(constraint.span()) {
@@ -2143,7 +2187,7 @@ impl<'a> TypeChecker<'a> {
         let constraint_ty = self.check_expr(constraint);
         if constraint_ty != TypeInterner::ERROR && constraint_ty != TypeInterner::BOOL {
             self.sink.emit(errors::refinement_constraint_not_bool(
-                &alias.name.name,
+                &alias_name,
                 &self.type_name(constraint_ty),
                 constraint.span(),
             ));
@@ -2158,23 +2202,23 @@ impl<'a> TypeChecker<'a> {
     // ------------------------------------------------------------------
 
     fn predeclare_actor(&mut self, def: &ast::ActorDef, namespace: Option<&str>) {
+        let canonical_name = Self::canonical_name(namespace, &def.name.name);
         let aid = self.interner.add_actor(TypeActorDef {
-            name: def.name.name.clone(),
+            name: canonical_name,
             capability_params: Vec::new(),
             state_fields: Vec::new(),
             messages: Vec::new(),
         });
         let ty = self.interner.intern(Type::Actor(aid));
-        for name in Self::type_lookup_names(namespace, &def.name.name) {
-            self.named_types.insert(name, ty);
-        }
+        self.register_named_type(namespace, &def.name.name, ty);
         if let Some(def_id) = self.declaration_def_id(def.name.span) {
             self.type_env.insert(def_id, ty);
         }
     }
 
-    fn finish_actor(&mut self, def: &ast::ActorDef) {
-        let Some(&ty) = self.named_types.get(&def.name.name) else {
+    fn finish_actor(&mut self, def: &ast::ActorDef, namespace: Option<&str>) {
+        let canonical_name = Self::canonical_name(namespace, &def.name.name);
+        let Some(&ty) = self.named_types.get(&canonical_name) else {
             return;
         };
         let Type::Actor(aid) = *self.interner.resolve(ty) else {
@@ -2218,7 +2262,7 @@ impl<'a> TypeChecker<'a> {
         self.interner.update_actor(
             aid,
             TypeActorDef {
-                name: def.name.name.clone(),
+                name: canonical_name,
                 capability_params,
                 state_fields,
                 messages,
@@ -2311,21 +2355,18 @@ impl<'a> TypeChecker<'a> {
     fn predeclare_struct(&mut self, def: &ast::StructDef, namespace: Option<&str>) {
         if !def.type_params.is_empty() {
             // Generic struct — store the template for later monomorphization.
-            for name in Self::type_lookup_names(namespace, &def.name.name) {
-                self.generic_struct_templates.insert(name, def.clone());
-            }
+            self.register_generic_struct_template(namespace, &def.name.name, def.clone());
             return;
         }
 
+        let canonical_name = Self::canonical_name(namespace, &def.name.name);
         let sid = self.interner.add_struct(TypeStructDef {
-            name: def.name.name.clone(),
+            name: canonical_name,
             fields: Vec::new(),
             methods: Vec::new(),
         });
         let ty = self.interner.intern(Type::Struct(sid));
-        for name in Self::type_lookup_names(namespace, &def.name.name) {
-            self.named_types.insert(name, ty);
-        }
+        self.register_named_type(namespace, &def.name.name, ty);
 
         if let Some(def_id) = self.declaration_def_id(def.name.span) {
             self.type_env.insert(def_id, ty);
@@ -2333,14 +2374,13 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn predeclare_interface(&mut self, def: &ast::InterfaceDecl, namespace: Option<&str>) {
+        let canonical_name = Self::canonical_name(namespace, &def.name.name);
         let iid = self.interner.add_interface(TypeInterfaceDef {
-            name: def.name.name.clone(),
+            name: canonical_name,
             methods: Vec::new(),
         });
         let ty = self.interner.intern(Type::Interface(iid));
-        for name in Self::type_lookup_names(namespace, &def.name.name) {
-            self.named_types.insert(name, ty);
-        }
+        self.register_named_type(namespace, &def.name.name, ty);
 
         if let Some(def_id) = self.declaration_def_id(def.name.span) {
             self.type_env.insert(def_id, ty);
@@ -2348,27 +2388,27 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn predeclare_bitfield(&mut self, def: &ast::BitfieldDef, namespace: Option<&str>) {
+        let canonical_name = Self::canonical_name(namespace, &def.name.name);
         let bid = self.interner.add_bitfield(TypeBitfieldDef {
-            name: def.name.name.clone(),
+            name: canonical_name,
             network_order: def.network_order,
             fields: Vec::new(),
         });
         let ty = self.interner.intern(Type::Bitfield(bid));
-        for name in Self::type_lookup_names(namespace, &def.name.name) {
-            self.named_types.insert(name, ty);
-        }
+        self.register_named_type(namespace, &def.name.name, ty);
 
         if let Some(def_id) = self.declaration_def_id(def.name.span) {
             self.type_env.insert(def_id, ty);
         }
     }
 
-    fn finish_struct(&mut self, def: &ast::StructDef) {
+    fn finish_struct(&mut self, def: &ast::StructDef, namespace: Option<&str>) {
         if !def.type_params.is_empty() {
             // Generic structs are monomorphized on demand — nothing to finish here.
             return;
         }
-        let Some(&ty) = self.named_types.get(&def.name.name) else {
+        let canonical_name = Self::canonical_name(namespace, &def.name.name);
+        let Some(&ty) = self.named_types.get(&canonical_name) else {
             return;
         };
         let Type::Struct(sid) = *self.interner.resolve(ty) else {
@@ -2389,15 +2429,16 @@ impl<'a> TypeChecker<'a> {
         self.interner.update_struct(
             sid,
             TypeStructDef {
-                name: def.name.name.clone(),
+                name: canonical_name,
                 fields,
                 methods,
             },
         );
     }
 
-    fn finish_interface(&mut self, def: &ast::InterfaceDecl) {
-        let Some(&ty) = self.named_types.get(&def.name.name) else {
+    fn finish_interface(&mut self, def: &ast::InterfaceDecl, namespace: Option<&str>) {
+        let canonical_name = Self::canonical_name(namespace, &def.name.name);
+        let Some(&ty) = self.named_types.get(&canonical_name) else {
             return;
         };
         let Type::Interface(iid) = *self.interner.resolve(ty) else {
@@ -2413,14 +2454,15 @@ impl<'a> TypeChecker<'a> {
         self.interner.update_interface(
             iid,
             TypeInterfaceDef {
-                name: def.name.name.clone(),
+                name: canonical_name,
                 methods,
             },
         );
     }
 
-    fn finish_bitfield(&mut self, def: &ast::BitfieldDef) {
-        let Some(&ty) = self.named_types.get(&def.name.name) else {
+    fn finish_bitfield(&mut self, def: &ast::BitfieldDef, namespace: Option<&str>) {
+        let canonical_name = Self::canonical_name(namespace, &def.name.name);
+        let Some(&ty) = self.named_types.get(&canonical_name) else {
             return;
         };
         let Type::Bitfield(bid) = *self.interner.resolve(ty) else {
@@ -2540,7 +2582,7 @@ impl<'a> TypeChecker<'a> {
         self.interner.update_bitfield(
             bid,
             TypeBitfieldDef {
-                name: def.name.name.clone(),
+                name: canonical_name,
                 network_order: def.network_order,
                 fields,
             },
@@ -2548,22 +2590,22 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn predeclare_enum(&mut self, def: &ast::EnumDef, namespace: Option<&str>) {
+        let canonical_name = Self::canonical_name(namespace, &def.name.name);
         let eid = self.interner.add_enum(TypeEnumDef {
-            name: def.name.name.clone(),
+            name: canonical_name,
             variants: Vec::new(),
         });
         let ty = self.interner.intern(Type::Enum(eid));
-        for name in Self::type_lookup_names(namespace, &def.name.name) {
-            self.named_types.insert(name, ty);
-        }
+        self.register_named_type(namespace, &def.name.name, ty);
 
         if let Some(def_id) = self.declaration_def_id(def.name.span) {
             self.type_env.insert(def_id, ty);
         }
     }
 
-    fn finish_enum(&mut self, def: &ast::EnumDef) {
-        let Some(&ty) = self.named_types.get(&def.name.name) else {
+    fn finish_enum(&mut self, def: &ast::EnumDef, namespace: Option<&str>) {
+        let canonical_name = Self::canonical_name(namespace, &def.name.name);
+        let Some(&ty) = self.named_types.get(&canonical_name) else {
             return;
         };
         let Type::Enum(eid) = *self.interner.resolve(ty) else {
@@ -2615,7 +2657,7 @@ impl<'a> TypeChecker<'a> {
         self.interner.update_enum(
             eid,
             TypeEnumDef {
-                name: def.name.name.clone(),
+                name: canonical_name,
                 variants,
             },
         );
@@ -5226,6 +5268,7 @@ impl<'a> TypeChecker<'a> {
         if let Some(&ty) = self.type_var_subst.get(name) {
             return ty;
         }
+        let lookup_name = self.resolved_symbol_name(name, span);
         match name {
             "int8" => TypeInterner::INT8,
             "int16" => TypeInterner::INT16,
@@ -5243,6 +5286,10 @@ impl<'a> TypeChecker<'a> {
             "nothing" => TypeInterner::NOTHING,
             "JsonValue" => TypeInterner::JSON_VALUE,
             "TypeConstruction" => TypeInterner::TYPE_CONSTRUCTION,
+            _ if self.named_types.contains_key(&lookup_name) => self.named_types[&lookup_name],
+            _ if self.type_aliases.contains_key(&lookup_name) => {
+                self.resolve_type_alias(&lookup_name, span)
+            }
             _ if self.named_types.contains_key(name) => self.named_types[name],
             _ if self.type_aliases.contains_key(name) => self.resolve_type_alias(name, span),
             // Capability types are recognised but opaque — no further type
@@ -5286,6 +5333,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn resolve_generic_type(&mut self, name: &str, args: &[TypeExpr], span: Span) -> TypeId {
+        let lookup_name = self.resolved_symbol_name(name, span);
         match name {
             "list" => {
                 if args.len() == 1 {
@@ -5363,6 +5411,11 @@ impl<'a> TypeChecker<'a> {
             }
             _ => {
                 // Check if this is a user-defined generic struct.
+                if self.generic_struct_templates.contains_key(&lookup_name) {
+                    let concrete_args: Vec<TypeId> =
+                        args.iter().map(|a| self.resolve_type_expr(a)).collect();
+                    return self.monomorphize_struct(&lookup_name, &concrete_args, span);
+                }
                 if self.generic_struct_templates.contains_key(name) {
                     let concrete_args: Vec<TypeId> =
                         args.iter().map(|a| self.resolve_type_expr(a)).collect();
