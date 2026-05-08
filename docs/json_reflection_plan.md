@@ -68,10 +68,10 @@ stdlib replacement for the Rust-backed builtin.
 There are also `.jett` decoder prototypes:
 `tests/run_pass/json_reflection_flat_decoder.jett` covers the first
 flat-struct path, and `tests/run_pass/json_reflection_nested_decoder.jett`
-recursively handles primitives, nested structs, lists, optionals, and
-`serialize_name` by walking raw `JsonValue` and finishing structs with
-`TypeConstruction`. Aliases/refinements, maps, sets, results, bitfields, and
-enums are still future work.
+recursively handles primitives, nested structs, lists, sets, maps with string
+keys, optionals, results, aliases/refinements, and `serialize_name` by walking
+raw `JsonValue` and finishing structs with `TypeConstruction`. Bitfields, enums,
+secret/public policy, and missing-optional-field defaults are still future work.
 
 `json.parse[T](raw)` has a Rust-backed bridge: it requires one type argument,
 accepts a string, returns `result[T, string]`, and supports core primitives,
@@ -132,10 +132,14 @@ reflection. See `docs/comptime_type_bind.md` for the current type-bind proposal.
 Deserialization currently has a Rust bridge that mirrors field access: given
 parsed field values, it builds `T` in declaration order while validating missing
 fields, `serialize` names, secret wrappers, optionals, results, refinements, and
-nested structs. Stdlib code can now build nested structs with primitive, list,
-and optional fields through `TypeConstruction`, but a full replacement still
-needs aliases/refinements, maps, sets, results, bitfields, and enum
-construction.
+nested structs. Stdlib code can now build nested structs with primitive,
+list/set/map, optional, result, alias, and refinement fields through
+`TypeConstruction`, but a full replacement still needs bitfield and enum
+construction plus the remaining format policy.
+
+Current nuance: refinement fields are validated at `construct_finish`, but the
+generic decoder should still grow a cleaner direct boundary for top-level
+refinement targets.
 
 Options:
 
@@ -186,11 +190,10 @@ for the decoded value. See `docs/bitfield_reflection_metadata.md`.
 
 ## Suggested Next Steps
 
-1. Extend the `.jett` decoder prototype to aliases/refinements, maps, sets, and
-   results.
+1. Extend the `.jett` decoder prototype to bitfields and enums.
 2. Harden the `.jett` serializer prototype toward stdlib quality: escaping,
    enum/bitfield policy, alias/refinement behavior, and public/secret modes.
-3. Extend trusted type-argument binding to less direct but still compiler-owned
-   metadata flows if the serializer prototype exposes ergonomic gaps.
-4. Extend reflected construction to bitfields and enums once the struct decoder
-   path is stable.
+3. Add missing-optional-field defaults and public/secret policy to the decoder
+   prototype.
+4. Harden top-level alias/refinement decoding so it validates outside struct
+   construction too.
