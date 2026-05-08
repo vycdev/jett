@@ -547,7 +547,7 @@ The HIR is the first representation where generic functions are fully expanded. 
 2. **Method resolution:** `Dog.speak(view my_dog)` is resolved to the specific `implement Speaker for Dog` function.
 3. **Auto-view for field access:** `self.x` is annotated as an implicit view operation.
 4. **Primitive copyability:** Primitive types (`int64`, `float64`, `bool`, `string`) are marked as implicitly copyable — they don't follow linear consumption rules.
-5. **Comptime reflection lowering:** Preserve enough type metadata for comptime code to inspect `type.name[T]()`, `type.kind[T]()`, `type.has_secret[T]()` and `type.fields[T]()`. JSON serialization should be expressible in terms of these reflection primitives rather than as format-specific HIR magic. Deserialization still needs a comptime construction primitive for building `T` from parsed field values.
+5. **Comptime reflection lowering:** Preserve enough type metadata for comptime code to inspect `type.name[T]()`, `type.kind[T]()`, `type.has_secret[T]()`, `type.fields[T]()`, and bitfield layout metadata. JSON serialization should be expressible in terms of these reflection primitives rather than as format-specific HIR magic. Deserialization still needs a comptime construction primitive for building `T` from parsed field values.
 
 ---
 
@@ -1093,6 +1093,7 @@ The boundary between compiler-generated code and stdlib-implemented code is a cr
 | `type.has_secret[T]()` | Comptime reflection | Whether `T` contains secret data |
 | `type.info[T]()` | Comptime reflection | Recursive `TypeInfo` metadata for `T`, including nested type arguments |
 | `type.fields[T]()` | Struct/bitfield reflection | Ordered `list[TypeField]` metadata for struct and bitfield fields, including `serialize` names for structs |
+| `type.bitfield_fields[T]()` | Bitfield reflection | Ordered `list[TypeBitfieldField]` metadata for bit widths, payload shape, and enum annotations |
 | `type.variants[T]()` | Enum reflection | Ordered `list[TypeVariant]` metadata for enum variants, discriminants, and payload fields |
 | `type.field_value[T, U](view value, view field)` | Struct/bitfield reflection | Checked field read by reflected `TypeField` metadata |
 | `T.to_bytes()` / `T.from_bytes()` | Binary serialization | Field-by-field binary packing/unpacking |
@@ -1100,7 +1101,7 @@ The boundary between compiler-generated code and stdlib-implemented code is a cr
 | `clone` for structs | `clone value` on a struct | Field-by-field recursive deep copy |
 | Refinement type constraint functions | `type Port = int64 where ...` | Synthesized boolean check function |
 
-Format-specific modules such as `json` should live in `.jett` stdlib code as the reflection API matures. Current interpreter implementations may still bootstrap JSON in Rust, but should consume the same type metadata (`TypeInfo`, `TypeField`, `TypeVariant`, `serialize_name`, field values, and secret information) that user comptime code can inspect.
+Format-specific modules such as `json` should live in `.jett` stdlib code as the reflection API matures. Current interpreter implementations may still bootstrap JSON in Rust, but should consume the same type metadata (`TypeInfo`, `TypeField`, `TypeBitfieldField`, `TypeVariant`, `serialize_name`, field values, layout information, and secret information) that user comptime code can inspect.
 
 **2. Stdlib functions** — normal Jett code shipped in `stdlib/`:
 

@@ -21,6 +21,9 @@ Implemented reflection primitives:
   `serialize_name`, `has_secret`, and `type_info`. For bitfields,
   `serialize_name` currently equals `name`; bitfield field renaming is not
   supported.
+- `type.bitfield_fields[T]()` returns ordered `TypeBitfieldField` metadata for
+  bitfields, including `shape`, `width`, semantic `type_info`, and optional
+  enum annotation metadata.
 - `type.variants[T]()` returns ordered `TypeVariant` metadata for enums.
   `TypeVariant` includes `index`, `name`, `discriminant`, `has_secret`, and
   payload `fields` as `list[TypeField]`.
@@ -125,14 +128,10 @@ uniformly for every JSON serialization call.
 
 ### 5. Bitfield-Specific Metadata
 
-`type.fields[T]()` exposes bitfield fields as ordinary `TypeField` values so
-serializers can read them by reflected metadata. That is enough for JSON's
-current object shape, but a full stdlib replacement for the Rust bridge also
-needs metadata that `TypeField` does not yet expose: bit width, whether a field
-is `bit`/`bits` or payload, enum annotations, payload positioning, and byte
-order. For `bits as EnumType`, the reflected field type should remain the enum
-type rather than the storage integer, matching `type.field_value[T, U]` and JSON
-enum rendering. See `docs/bitfield_reflection_metadata.md` for the current
+`type.bitfield_fields[T]()` now exposes field-level layout metadata: bit width,
+bits-vs-payload shape, semantic field type, and enum annotations. A full stdlib
+replacement for binary packing still needs bitfield-level metadata such as byte
+order. See `docs/bitfield_reflection_metadata.md` for the current staged
 proposal.
 
 ## Suggested Next Steps

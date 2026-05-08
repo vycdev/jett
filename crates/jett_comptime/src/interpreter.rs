@@ -108,6 +108,15 @@ struct ReflectionVariant {
     fields: Vec<ReflectionField>,
 }
 
+#[derive(Debug, Clone)]
+struct ReflectionBitfieldField {
+    name: String,
+    shape: String,
+    width: i64,
+    ty: TypeExpr,
+    enum_ty: Option<TypeExpr>,
+}
+
 pub struct Interpreter {
     /// Stack of lexical scopes. The last element is the innermost scope.
     scopes: Vec<Environment>,
@@ -1849,6 +1858,7 @@ impl Interpreter {
                 | "type.has_secret"
                 | "type.info"
                 | "type.fields"
+                | "type.bitfield_fields"
                 | "type.variants"
                 | "type.field_value"
                 | "json.parse"
@@ -1901,6 +1911,18 @@ impl Interpreter {
                         .into_iter()
                         .enumerate()
                         .map(|(index, field)| self.type_field_value(index, field))
+                        .collect(),
+                ))
+            }
+            "type.bitfield_fields" => {
+                if let Some(err) = check_args(name, 0, args) {
+                    return Some(err);
+                }
+                Ok(Value::List(
+                    self.type_expr_bitfield_fields(&ty)
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, field)| self.type_bitfield_field_value(index, field))
                         .collect(),
                 ))
             }
@@ -2212,6 +2234,49 @@ impl Interpreter {
         }
     }
 
+    fn type_expr_bitfield_fields(&self, ty: &TypeExpr) -> Vec<ReflectionBitfieldField> {
+        match ty {
+            TypeExpr::Named(ident) => self
+                .bitfields
+                .get(&ident.name)
+                .map(|bitfield| {
+                    bitfield
+                        .fields
+                        .iter()
+                        .map(|field| match &field.kind {
+                            BitfieldFieldKind::Bits { width, as_type } => {
+                                let ty = as_type.clone().unwrap_or_else(|| {
+                                    TypeExpr::Named(Ident {
+                                        name: "int64".to_string(),
+                                        span: field.span,
+                                    })
+                                });
+                                ReflectionBitfieldField {
+                                    name: field.name.name.clone(),
+                                    shape: "bits".to_string(),
+                                    width: *width as i64,
+                                    ty: self.substitute_type_expr(&ty),
+                                    enum_ty: as_type
+                                        .as_ref()
+                                        .map(|ty| self.substitute_type_expr(ty)),
+                                }
+                            }
+                            BitfieldFieldKind::Payload(ty) => ReflectionBitfieldField {
+                                name: field.name.name.clone(),
+                                shape: "payload".to_string(),
+                                width: 0,
+                                ty: self.substitute_type_expr(ty),
+                                enum_ty: None,
+                            },
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            TypeExpr::View(inner, _) => self.type_expr_bitfield_fields(inner),
+            TypeExpr::Generic(_, _, _) | TypeExpr::Function(_, _, _) => Vec::new(),
+        }
+    }
+
     fn type_expr_variants(&self, ty: &TypeExpr) -> Vec<ReflectionVariant> {
         match ty {
             TypeExpr::Named(ident) => self
@@ -2283,6 +2348,25 @@ impl Interpreter {
                 ),
                 ("has_secret".to_string(), Value::Bool(has_secret)),
                 ("type_info".to_string(), type_info),
+            ],
+        }
+    }
+
+    fn type_bitfield_field_value(&self, index: usize, field: ReflectionBitfieldField) -> Value {
+        let enum_type = field
+            .enum_ty
+            .as_ref()
+            .map(|ty| Value::OptionalSome(Box::new(self.type_info_value(ty))))
+            .unwrap_or(Value::OptionalNone);
+        Value::Struct {
+            type_name: "TypeBitfieldField".to_string(),
+            fields: vec![
+                ("index".to_string(), Value::Int64(index as i64)),
+                ("name".to_string(), Value::String(field.name)),
+                ("shape".to_string(), Value::String(field.shape)),
+                ("width".to_string(), Value::Int64(field.width)),
+                ("type_info".to_string(), self.type_info_value(&field.ty)),
+                ("enum_type".to_string(), enum_type),
             ],
         }
     }

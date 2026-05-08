@@ -20,6 +20,12 @@ enum SecretChoice:
 bitfield Header:
     version: 4 bits
 
+bitfield Packet:
+    version: 4 bits
+    header_length: 4 bits
+    protocol: 8 bits as Protocol
+    payload: list[uint8]
+
 struct User:
     id: string
 
@@ -174,6 +180,52 @@ function header_version_by_reflection() returns int64:
             found = type.field_value[Header, int64](view header, view field)
     return found
 
+function bitfield_field_count[T]() returns int64:
+    list[TypeBitfieldField] fields = type.bitfield_fields[T]()
+    return list.length(fields)
+
+function bitfield_field_shape[T](field_name: string) returns string:
+    list[TypeBitfieldField] fields = type.bitfield_fields[T]()
+    string found = "missing"
+    for field in fields:
+        if field.name == field_name:
+            found = field.shape
+    return found
+
+function bitfield_field_width[T](field_name: string) returns int64:
+    list[TypeBitfieldField] fields = type.bitfield_fields[T]()
+    int64 found = -1
+    for field in fields:
+        if field.name == field_name:
+            found = field.width
+    return found
+
+function bitfield_field_type_name[T](field_name: string) returns string:
+    list[TypeBitfieldField] fields = type.bitfield_fields[T]()
+    string found = "missing"
+    for field in fields:
+        if field.name == field_name:
+            found = field.type_info.type_name
+    return found
+
+function bitfield_field_type_kind[T](field_name: string) returns string:
+    list[TypeBitfieldField] fields = type.bitfield_fields[T]()
+    string found = "missing"
+    for field in fields:
+        if field.name == field_name:
+            found = field.type_info.kind
+    return found
+
+function bitfield_field_enum_kind[T](field_name: string) returns string:
+    list[TypeBitfieldField] fields = type.bitfield_fields[T]()
+    string found = "missing"
+    for field in fields:
+        if field.name == field_name:
+            TypeInfo info = field.enum_type handle:
+                default field.type_info
+            found = info.kind
+    return found
+
 function variant_count[T]() returns int64:
     list[TypeVariant] variants = type.variants[T]()
     return list.length(variants)
@@ -241,6 +293,15 @@ verify type_info_reflection:
     assert field_count[Header]() == 1
     assert field_kind[Header]("version") == "primitive"
     assert header_version_by_reflection() == 4
+    assert bitfield_field_count[Packet]() == 4
+    assert bitfield_field_shape[Packet]("version") == "bits"
+    assert bitfield_field_width[Packet]("version") == 4
+    assert bitfield_field_type_kind[Packet]("protocol") == "enum"
+    assert bitfield_field_enum_kind[Packet]("protocol") == "enum"
+    assert bitfield_field_enum_kind[Packet]("version") == "primitive"
+    assert bitfield_field_shape[Packet]("payload") == "payload"
+    assert bitfield_field_width[Packet]("payload") == 0
+    assert bitfield_field_type_name[Packet]("payload") == "list[uint8]"
     assert type_info_arg_count[int64]() == 0
     assert type.has_secret[SecretChoice]() == true
     assert variant_count[Direction]() == 2

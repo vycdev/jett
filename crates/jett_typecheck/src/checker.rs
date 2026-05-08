@@ -186,6 +186,23 @@ impl<'a> TypeChecker<'a> {
         self.named_types
             .insert("TypeField".to_string(), type_field_ty);
 
+        let optional_type_info_ty = self.interner.intern(Type::Optional(type_info_ty));
+        let type_bitfield_field_sid = self.interner.add_struct(TypeStructDef {
+            name: "TypeBitfieldField".to_string(),
+            fields: vec![
+                ("index".to_string(), TypeInterner::INT64),
+                ("name".to_string(), TypeInterner::STRING),
+                ("shape".to_string(), TypeInterner::STRING),
+                ("width".to_string(), TypeInterner::INT64),
+                ("type_info".to_string(), type_info_ty),
+                ("enum_type".to_string(), optional_type_info_ty),
+            ],
+            methods: Vec::new(),
+        });
+        let type_bitfield_field_ty = self.interner.intern(Type::Struct(type_bitfield_field_sid));
+        self.named_types
+            .insert("TypeBitfieldField".to_string(), type_bitfield_field_ty);
+
         let type_variant_fields_ty = self.interner.intern(Type::List(type_field_ty));
         let type_variant_sid = self.interner.add_struct(TypeStructDef {
             name: "TypeVariant".to_string(),
@@ -830,6 +847,25 @@ impl<'a> TypeChecker<'a> {
                     .copied()
                     .unwrap_or(TypeInterner::ERROR);
                 Some((vec![], self.interner.intern(Type::List(type_field_ty))))
+            }
+            "type.bitfield_fields" => {
+                if type_args.len() != 1 {
+                    self.sink.emit(errors::unknown_type(
+                        &format!("{name} (expected 1 type argument, got {})", type_args.len()),
+                        span,
+                    ));
+                    return Some((vec![], TypeInterner::ERROR));
+                }
+                let _ = self.resolve_type_expr(&type_args[0]);
+                let type_bitfield_field_ty = self
+                    .named_types
+                    .get("TypeBitfieldField")
+                    .copied()
+                    .unwrap_or(TypeInterner::ERROR);
+                Some((
+                    vec![],
+                    self.interner.intern(Type::List(type_bitfield_field_ty)),
+                ))
             }
             "type.variants" => {
                 if type_args.len() != 1 {

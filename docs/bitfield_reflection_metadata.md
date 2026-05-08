@@ -36,7 +36,7 @@ Rust interpreter bridge. They are not visible to `type.fields[T]()` users.
 
 ## Proposed Surface
 
-Add one builtin metadata struct:
+Implemented first-stage builtin metadata struct:
 
 ```jett
 struct TypeBitfieldField:
@@ -48,7 +48,7 @@ struct TypeBitfieldField:
     enum_type: optional[TypeInfo]
 ```
 
-Add one reflection primitive:
+Implemented first-stage reflection primitive:
 
 ```jett
 type.bitfield_fields[T]() returns list[TypeBitfieldField]
@@ -114,9 +114,9 @@ before constructing the final bitfield value.
 - payload byte alignment,
 - byte order.
 
-The recommended staged approach is:
+The staged approach is:
 
-1. Add `type.bitfield_fields[T]()` for field-level layout.
+1. Add `type.bitfield_fields[T]()` for field-level layout. Done.
 2. Add `type.bitfield[T]()` when binary packing moves into stdlib.
 3. Design construction before replacing Rust-backed parse/from-bytes behavior.
 
