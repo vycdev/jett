@@ -1,0 +1,157 @@
+# JSON Stdlib Extraction Plan
+
+This note records the remaining compiler/tooling work needed before the
+reflection JSON prototypes can become a real `stdlib/json.jett` module.
+
+The important conclusion is that JSON itself is no longer the main blocker.
+Reflection can now read fields, construct structs/bitfields/enums, inspect type
+arguments, use structured kind tags, and walk raw `JsonValue`. The blocker is
+the module and namespace path that would let ordinary `.jett` stdlib code own
+the public `json.*` API.
+
+## Current Architecture
+
+- `stdlib/` exists as a repo concept, but compiler-driven stdlib loading is not
+  wired yet.
+- `build_file` parses the requested file, then prepends sibling project modules
+  only when a `jett.proj` is discovered.
+- `run_file` validates through `build_file`, then registers sibling project
+  modules plus the entry module in the interpreter.
+- `jett test file` and project test execution still use mostly single-file
+  paths, so they do not exercise a shared prelude or stdlib module set.
+- Namespaces are parsed and resolved as declarations, but top-level functions
+  and types are still effectively registered by flat names.
+- `use` declarations bind aliases or final path segments, but they do not yet
+  import a namespace registry.
+- Builtin module prefixes such as `json`, `type`, `list`, `string`, and `bytes`
+  are hardcoded in resolver/typechecker/interpreter paths.
+
+That means a physical `stdlib/json.jett` file would not currently become
+available to single-file builds, and a `namespace json` function would not
+automatically be callable as `json.parse[T](...)`.
+
+## JSON-Specific State
+
+The reflected serializer and decoder prototypes currently live in run-pass
+fixtures:
+
+- `tests/run_pass/json_reflection_nested_serializer.jett`
+- `tests/run_pass/json_reflection_nested_decoder.jett`
+
+Together they cover the shape needed for a future stdlib module:
+
+- recursive structured type dispatch through `TypeKind`,
+- primitive values, bytes, null, aliases, refinements, secrets,
+- structs, bitfields, enum variants and enum payloads,
+- lists, sets, `map[string, V]`, optionals, and results,
+- field `serialize_name`,
+- missing optional defaults,
+- public secret omission for the serializer prototype,
+- all-control-character JSON string escaping in `.jett`.
+
+The Rust-backed JSON bridge remains the compatibility oracle. It still owns the
+public `json.parse`, `json.serialize`, and `json.serialize_public` names.
+
+## Blockers
+
+### 1. Stdlib Loading
+
+The driver needs a consistent way to load stdlib `.jett` files before user
+modules for:
+
+- `jett build`,
+- `jett run`,
+- `jett test file`,
+- `jett test` over a project,
+- LSP validation paths,
+- future query/agent tooling.
+
+The initial loader can be simple: parse a fixed set of repo-local stdlib files
+as prelude modules before project modules. Dependency ordering can be explicit
+at first.
+
+### 2. Qualified User Functions
+
+Today, generic user functions are easiest to call by simple identifier, while
+public JSON APIs are dotted calls such as `json.parse[T](raw)`.
+
+Moving JSON into `.jett` needs namespace-qualified symbols:
+
+- functions and types should be registered under `namespace.name`,
+- dotted generic calls should resolve to user functions before falling back to
+  hardcoded builtins,
+- `use` should resolve against known namespaces rather than only binding a
+  decorative alias.
+
+This is larger than JSON and should be staged carefully.
+
+### 3. Builtin Policy Boundaries
+
+Some JSON rules are typechecker policy, not only implementation:
+
+- `json.serialize[T]` and `json.serialize_public[T]` require `view` for
+  non-copy compound values.
+- full serialization rejects secret-containing values.
+- public serialization rejects top-level secret wrappers and omits
+  secret-containing fields.
+- `map[K, V]` JSON encoding is currently restricted to `K == string`.
+- `json.parse[T]` returns `result[T, string]`, so callers must handle errors.
+
+Those checks can remain compiler-known while the body moves to `.jett`, or they
+can be redesigned as ordinary typed stdlib constraints later. The safer staging
+choice is to keep the checks until namespace and stdlib loading are stable.
+
+### 4. Visibility
+
+The serializer and decoder need helper functions such as `quote`,
+`decode_value[T]`, and enum/field helpers. Jett does not yet have explicit
+public/private module visibility.
+
+Until visibility exists, extraction should avoid pretending helper names are
+private. A first stdlib experiment can use internal-looking names, but shipping
+the module cleanly probably needs an export rule or another visibility story.
+
+## Minimal Staging Plan
+
+1. Keep the Rust-backed public JSON bridge for now.
+2. Add a stdlib loader that can inject `.jett` files before user modules.
+3. Stage extracted prototype code under flat, non-conflicting names, such as:
+   - `json_decode_reflected[T](raw: JsonValue)`
+   - `json_serialize_public_reflected[T](view value: T)`
+4. Add tests that prove stdlib-loaded functions are available in build, run,
+   test, and LSP-like validation paths.
+5. Implement namespace-qualified symbol registration and dotted user-function
+   calls.
+6. Move the extracted functions into `namespace json` behind the real public
+   names, while retaining compiler policy checks for secrets, `view`, map keys,
+   and handled results.
+7. Run parity tests against the Rust bridge before removing any Rust-backed
+   implementation paths.
+
+## Recommended Shape For `stdlib/json.jett`
+
+The eventual module should keep these layers distinct:
+
+- `quote(raw: string) returns string`
+- `serialize_value[T](view value: T) returns result[string, string]`
+- `serialize_public_value[T](view value: T) returns result[string, string]`
+- `decode_value[T](raw: JsonValue) returns result[T, string]`
+- `parse[T](raw: string) returns result[T, string]`
+
+The public API can return plain `string` for serialization only if the compiler
+continues to prove that the chosen policy cannot fail. The internal reflected
+functions should probably use `result` while format policy is still evolving.
+
+## Open Questions
+
+- Should `json.serialize[T]` stay a compiler-checked secret exposure boundary
+  even after its implementation body moves to stdlib code?
+- Should unknown object fields be ignored, rejected, or configurable?
+- Should `json.field` and `json.index` keep returning `optional[JsonValue]`, or
+  should wrong-shape access be distinguishable from absence?
+- What is the stable external shape for enums, bitfields, bytes, floats, sets,
+  and maps?
+- How should stdlib helper visibility work before the language has a general
+  `export` or `private` rule?
+- How much abstraction is allowed around trusted reflection loops before
+  `comptime type Field = field.type_info:` loses provenance?

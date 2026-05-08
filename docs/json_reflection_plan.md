@@ -102,6 +102,9 @@ still to replace this bridge with stdlib code; struct construction is now
 available through `TypeConstruction`, bitfield construction is available through
 the same builder, and enum construction is available through
 `type.construct_variant_start`; the final syntax remains future work.
+Moving the prototypes into an actual `stdlib/json.jett` module also needs
+stdlib loading and namespace-qualified user function support; see
+`docs/stdlib_json_extraction_plan.md`.
 
 `json.parse_raw(raw)` now exposes an opaque `JsonValue` tree with explicit
 accessors for kind checks, object fields, array indexes, scalar casts, object
@@ -211,8 +214,9 @@ for the decoded value. See `docs/bitfield_reflection_metadata.md`.
 
 ## Suggested Next Steps
 
-1. Decide whether a public parse mode is needed, and if so whether it should
-   reject, ignore, or require absent secret fields. The current recommendation
-   is documented in `docs/json_public_parse_policy.md`.
-2. Harden the `.jett` serializer prototype toward stdlib quality: escaping,
-   enum/bitfield policy, alias/refinement behavior, and public/secret modes.
+1. Add a staged stdlib loader so extracted `.jett` helpers can be tested outside
+   single-file fixtures.
+2. Implement namespace-qualified user function lookup, then move the reflected
+   JSON prototypes behind real `namespace json` APIs.
+3. Keep hardening format policy with parity tests against the Rust bridge:
+   unknown fields, enum/bitfield shape, public/secret modes, and error messages.
