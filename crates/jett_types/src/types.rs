@@ -38,6 +38,7 @@ pub enum Type {
     Bytes,
     Nothing,
     JsonValue,
+    TypeConstruction,
 
     // -- Generic built-in types ----------------------------------------------
     /// `list[T]`

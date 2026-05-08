@@ -54,7 +54,7 @@
 |---|---|---|---|
 | Comptime interpreter | `jett_comptime` | 134 | Done |
 | Verify blocks (compile-time) | `jett_comptime/verify` | — | Done |
-| Comptime type reflection (`type.name`, `type.kind`, `type.has_secret`, `type.info`, `type.arg`, `type.fields`, `type.bitfield_layout`, `type.bitfield_fields`, `type.variants`, `type.variant_value`, `type.field_value`, `type.variant_field_value`, trusted `comptime type` binding for roots, type args, struct/enum field loops, and `TypeInfo.args`) | `jett_comptime` | — | Partial (construction and richer typed dispatch pending) |
+| Comptime type reflection (`type.name`, `type.kind`, `type.has_secret`, `type.info`, `type.arg`, `type.fields`, `type.bitfield_layout`, `type.bitfield_fields`, `type.variants`, `type.variant_value`, `type.field_value`, `type.variant_field_value`, `type.construct_start`, `type.construct_put`, `type.construct_finish`, trusted `comptime type` binding for roots, type args, struct/enum field loops, and `TypeInfo.args`) | `jett_comptime` | — | Partial (struct construction via `TypeConstruction`; bitfield/enum construction and richer typed dispatch pending) |
 | 25+ stdlib builtins in interpreter | `jett_comptime` | — | Done |
 
 ### Phase F: Interpreter — COMPLETE
@@ -153,7 +153,7 @@
 | `set` | Partial (12 builtins: new, add, remove, contains, length, is_empty, to_list, union, intersection, difference) |
 | `map` | Partial (12 builtins: new, length, has/contains_key, get, get_or, insert/set, remove, keys, values, is_empty, merge) |
 | `math` | Partial (20+ builtins: abs, sqrt, pow, floor, ceil, round, clamp, log, log2, log10, min, max, average, median, pi, e, sin, cos, tan, mod, is_even, is_odd, sum) |
-| `json` | Partial (json.serialize, json.serialize_public, json.parse_raw/JsonValue accessors, Rust-backed json.parse bridge with enum, bitfield, and alias/refinement validation) |
+| `json` | Partial (json.serialize, json.serialize_public, json.parse_raw/JsonValue accessors, Rust-backed json.parse bridge with enum, bitfield, and alias/refinement validation; struct construction primitive now available for future stdlib decoder work) |
 | `random` | Partial (5 builtins: int64, float64, bool, choice, shuffle) |
 | `crypto` | Partial (sha256, md5) |
 | `encoding` | Partial (6 builtins: base64_encode, base64_decode, hex_encode, hex_decode, url_encode, url_decode) |

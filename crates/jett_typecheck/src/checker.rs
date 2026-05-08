@@ -260,6 +260,7 @@ impl<'a> TypeChecker<'a> {
             Type::Bytes => "bytes".to_string(),
             Type::Nothing => "nothing".to_string(),
             Type::JsonValue => "JsonValue".to_string(),
+            Type::TypeConstruction => "TypeConstruction".to_string(),
             Type::List(inner) => format!("list[{}]", self.type_name(*inner)),
             Type::Map(k, v) => format!("map[{}, {}]", self.type_name(*k), self.type_name(*v)),
             Type::Set(inner) => format!("set[{}]", self.type_name(*inner)),
@@ -972,6 +973,95 @@ impl<'a> TypeChecker<'a> {
                     .copied()
                     .unwrap_or(TypeInterner::ERROR);
                 Some((vec![TypeInterner::INT64], type_info_ty))
+            }
+            "type.construct_start" => {
+                if type_args.len() != 1 {
+                    self.sink.emit(errors::unknown_type(
+                        &format!("{name} (expected 1 type argument, got {})", type_args.len()),
+                        span,
+                    ));
+                    return Some((vec![], TypeInterner::ERROR));
+                }
+                let target_ty = self.resolve_type_expr(&type_args[0]);
+                if !matches!(self.interner.resolve(target_ty), Type::Struct(_)) {
+                    self.sink.emit(errors::unknown_type(
+                        &format!(
+                            "{name} supports only structs, got {}",
+                            self.type_name(target_ty)
+                        ),
+                        span,
+                    ));
+                }
+                Some((vec![], TypeInterner::TYPE_CONSTRUCTION))
+            }
+            "type.construct_put" => {
+                if type_args.len() != 2 {
+                    self.sink.emit(errors::unknown_type(
+                        &format!(
+                            "{name} (expected 2 type arguments, got {})",
+                            type_args.len()
+                        ),
+                        span,
+                    ));
+                    return Some((
+                        vec![
+                            TypeInterner::TYPE_CONSTRUCTION,
+                            self.named_types
+                                .get("TypeField")
+                                .copied()
+                                .unwrap_or(TypeInterner::ERROR),
+                            TypeInterner::ERROR,
+                        ],
+                        TypeInterner::ERROR,
+                    ));
+                }
+                let target_ty = self.resolve_type_expr(&type_args[0]);
+                if !matches!(self.interner.resolve(target_ty), Type::Struct(_)) {
+                    self.sink.emit(errors::unknown_type(
+                        &format!(
+                            "{name} supports only structs, got {}",
+                            self.type_name(target_ty)
+                        ),
+                        span,
+                    ));
+                }
+                let field_ty = self.resolve_type_expr(&type_args[1]);
+                let type_field_ty = self
+                    .named_types
+                    .get("TypeField")
+                    .copied()
+                    .unwrap_or(TypeInterner::ERROR);
+                Some((
+                    vec![TypeInterner::TYPE_CONSTRUCTION, type_field_ty, field_ty],
+                    self.interner.intern(Type::Result(
+                        TypeInterner::TYPE_CONSTRUCTION,
+                        TypeInterner::STRING,
+                    )),
+                ))
+            }
+            "type.construct_finish" => {
+                if type_args.len() != 1 {
+                    self.sink.emit(errors::unknown_type(
+                        &format!("{name} (expected 1 type argument, got {})", type_args.len()),
+                        span,
+                    ));
+                    return Some((vec![TypeInterner::TYPE_CONSTRUCTION], TypeInterner::ERROR));
+                }
+                let target_ty = self.resolve_type_expr(&type_args[0]);
+                if !matches!(self.interner.resolve(target_ty), Type::Struct(_)) {
+                    self.sink.emit(errors::unknown_type(
+                        &format!(
+                            "{name} supports only structs, got {}",
+                            self.type_name(target_ty)
+                        ),
+                        span,
+                    ));
+                }
+                Some((
+                    vec![TypeInterner::TYPE_CONSTRUCTION],
+                    self.interner
+                        .intern(Type::Result(target_ty, TypeInterner::STRING)),
+                ))
             }
             "type.fields" => {
                 if type_args.len() != 1 {
@@ -4743,6 +4833,7 @@ impl<'a> TypeChecker<'a> {
             "bytes" => TypeInterner::BYTES,
             "nothing" => TypeInterner::NOTHING,
             "JsonValue" => TypeInterner::JSON_VALUE,
+            "TypeConstruction" => TypeInterner::TYPE_CONSTRUCTION,
             _ if self.named_types.contains_key(name) => self.named_types[name],
             _ if self.type_aliases.contains_key(name) => self.resolve_type_alias(name, span),
             // Capability types are recognised but opaque — no further type

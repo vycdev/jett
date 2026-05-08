@@ -31,6 +31,11 @@ pub enum Value {
     Nothing,
     /// An opaque parsed JSON tree.
     Json(JsonValue),
+    /// An opaque reflected construction builder.
+    TypeConstruction {
+        type_name: String,
+        fields: Vec<(usize, String, String, Value)>,
+    },
     /// A user-defined struct instance: `Point(x: 1, y: 2)`.
     Struct {
         type_name: String,
@@ -81,6 +86,16 @@ impl PartialEq for Value {
             (Value::OptionalNone, Value::OptionalNone) => true,
             (Value::Nothing, Value::Nothing) => true,
             (Value::Json(a), Value::Json(b)) => a == b,
+            (
+                Value::TypeConstruction {
+                    type_name: t1,
+                    fields: f1,
+                },
+                Value::TypeConstruction {
+                    type_name: t2,
+                    fields: f2,
+                },
+            ) => t1 == t2 && f1 == f2,
             (
                 Value::Struct {
                     type_name: t1,
@@ -160,6 +175,16 @@ impl fmt::Display for Value {
             Value::OptionalNone => write!(f, "none"),
             Value::Nothing => write!(f, "nothing"),
             Value::Json(json) => write!(f, "{json}"),
+            Value::TypeConstruction { type_name, fields } => {
+                write!(f, "TypeConstruction[{type_name}](")?;
+                for (i, (_, name, _, value)) in fields.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{name}: {value}")?;
+                }
+                write!(f, ")")
+            }
             Value::Struct { type_name, fields } => {
                 write!(f, "{type_name}(")?;
                 for (i, (name, value)) in fields.iter().enumerate() {

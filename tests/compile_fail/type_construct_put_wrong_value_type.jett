@@ -1,0 +1,13 @@
+# ERROR: E0304
+namespace test
+
+struct User:
+    id: string
+
+function bad_construct_put_value_type() returns nothing:
+    TypeConstruction builder = type.construct_start[User]()
+    TypeField field = list.get[TypeField](type.fields[User](), 0) handle:
+        return nothing
+    builder = type.construct_put[User, int64](builder, view field, "wrong") handle error:
+        return nothing
+    return nothing

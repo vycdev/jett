@@ -56,9 +56,10 @@ for field in type.fields[T]():
         ...
 ```
 
-The remaining missing piece is still construction of the final `T` from those
-typed field values. That is tracked in `docs/type_construction_design.md`.
-The current staging recommendation is in `docs/reflected_construction_staging.md`.
+For structs, construction of the final `T` from those typed field values is now
+available through `TypeConstruction`. The remaining work is integration in a
+`.jett` decoder plus bitfield and enum construction support. That is tracked in
+`docs/type_construction_design.md` and `docs/reflected_construction_staging.md`.
 
 ## Open Questions
 

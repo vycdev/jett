@@ -1971,6 +1971,9 @@ impl Interpreter {
                 | "type.variant_value"
                 | "type.field_value"
                 | "type.variant_field_value"
+                | "type.construct_start"
+                | "type.construct_put"
+                | "type.construct_finish"
                 | "json.parse"
                 | "json.serialize"
                 | "json.serialize_public"
@@ -1980,6 +1983,8 @@ impl Interpreter {
         }
         let expected_type_arg_count =
             if matches!(name, "type.field_value" | "type.variant_field_value") {
+                2
+            } else if matches!(name, "type.construct_put") {
                 2
             } else {
                 1
@@ -2038,6 +2043,28 @@ impl Interpreter {
                     )));
                 };
                 Ok(self.type_info_value(arg_ty))
+            }
+            "type.construct_start" => {
+                if let Some(err) = check_args(name, 0, args) {
+                    return Some(err);
+                }
+                Ok(Value::TypeConstruction {
+                    type_name: type_expr_display(&ty),
+                    fields: Vec::new(),
+                })
+            }
+            "type.construct_put" => {
+                if let Some(err) = check_args(name, 3, args) {
+                    return Some(err);
+                }
+                let expected_field_ty = self.substitute_type_expr(&type_args[1]);
+                self.reflected_construct_put(&ty, &expected_field_ty, &args[0], &args[1], &args[2])
+            }
+            "type.construct_finish" => {
+                if let Some(err) = check_args(name, 1, args) {
+                    return Some(err);
+                }
+                self.reflected_construct_finish(&ty, &args[0])
             }
             "type.fields" => {
                 if let Some(err) = check_args(name, 0, args) {
@@ -2546,7 +2573,7 @@ impl Interpreter {
         field_metadata: &Value,
     ) -> Result<ReflectedFieldBinding, String> {
         let (field_index, metadata_name, metadata_type_name) =
-            Self::type_field_metadata(field_metadata)?;
+            Self::type_field_metadata_for(field_metadata, "type.field_value")?;
         for variant in self.type_expr_variants(owner_ty) {
             let Some(field) = variant.fields.get(field_index) else {
                 continue;
@@ -2806,7 +2833,7 @@ impl Interpreter {
         expected_field_ty: &TypeExpr,
     ) -> Result<Value, String> {
         let (field_index, metadata_name, metadata_type_name) =
-            Self::type_field_metadata(field_metadata)?;
+            Self::type_field_metadata_for(field_metadata, "type.field_value")?;
         let owner_fields = self.type_expr_fields(owner_ty);
         let field = owner_fields.get(field_index).ok_or_else(|| {
             format!(
@@ -2899,7 +2926,7 @@ impl Interpreter {
         expected_field_ty: &TypeExpr,
     ) -> Result<Value, String> {
         let (field_index, metadata_name, metadata_type_name) =
-            Self::type_field_metadata(field_metadata)?;
+            Self::type_field_metadata_for(field_metadata, "type.variant_field_value")?;
         let Value::Enum {
             type_name,
             variant,
@@ -2968,15 +2995,159 @@ impl Interpreter {
         })
     }
 
+    fn reflected_construct_put(
+        &self,
+        owner_ty: &TypeExpr,
+        expected_field_ty: &TypeExpr,
+        builder: &Value,
+        field_metadata: &Value,
+        value: &Value,
+    ) -> Result<Value, String> {
+        let Value::TypeConstruction {
+            type_name,
+            fields: existing_fields,
+        } = builder
+        else {
+            return Err(format!(
+                "type.construct_put: first argument must be TypeConstruction, got {builder}"
+            ));
+        };
+
+        let expected_owner = type_expr_display(owner_ty);
+        if type_name != &expected_owner {
+            return Ok(result_fail(format!(
+                "type.construct_put: builder for '{}' cannot construct '{}'",
+                type_name, expected_owner
+            )));
+        }
+        if self.type_expr_kind(owner_ty) != "struct" {
+            return Ok(result_fail(format!(
+                "type.construct_put supports only structs, got '{}'",
+                type_expr_display(owner_ty)
+            )));
+        }
+
+        let (field_index, metadata_name, metadata_type_name) =
+            match Self::type_field_metadata_for(field_metadata, "type.construct_put") {
+                Ok(metadata) => metadata,
+                Err(message) => return Ok(result_fail(message)),
+            };
+        let fields = self.type_expr_fields(owner_ty);
+        let Some(field) = fields.get(field_index) else {
+            return Ok(result_fail(format!(
+                "type.construct_put: type '{}' has no field at index {}",
+                expected_owner, field_index
+            )));
+        };
+
+        if field.name != metadata_name {
+            return Ok(result_fail(format!(
+                "type.construct_put: field metadata '{}' does not match field '{}' on '{}'",
+                metadata_name, field.name, expected_owner
+            )));
+        }
+
+        let actual_type_name = type_expr_display(&field.ty);
+        if actual_type_name != metadata_type_name {
+            return Ok(result_fail(format!(
+                "type.construct_put: field metadata for '{}' has type '{}', but '{}' reports '{}'",
+                metadata_name, metadata_type_name, expected_owner, actual_type_name
+            )));
+        }
+
+        let expected_field_type_name = type_expr_display(expected_field_ty);
+        if actual_type_name != expected_field_type_name {
+            return Ok(result_fail(format!(
+                "type.construct_put: field '{}' has type '{}', provided as '{}'",
+                metadata_name, actual_type_name, expected_field_type_name
+            )));
+        }
+
+        if existing_fields
+            .iter()
+            .any(|(index, _, _, _)| *index == field_index)
+        {
+            return Ok(result_fail(format!(
+                "type.construct_put: field '{}' was provided more than once",
+                metadata_name
+            )));
+        }
+
+        let mut fields = existing_fields.clone();
+        fields.push((field_index, metadata_name, actual_type_name, value.clone()));
+        Ok(result_ok(Value::TypeConstruction {
+            type_name: type_name.clone(),
+            fields,
+        }))
+    }
+
+    fn reflected_construct_finish(
+        &mut self,
+        owner_ty: &TypeExpr,
+        builder: &Value,
+    ) -> Result<Value, String> {
+        let Value::TypeConstruction { type_name, fields } = builder else {
+            return Err(format!(
+                "type.construct_finish: first argument must be TypeConstruction, got {builder}"
+            ));
+        };
+
+        let expected_owner = type_expr_display(owner_ty);
+        if type_name != &expected_owner {
+            return Ok(result_fail(format!(
+                "type.construct_finish: builder for '{}' cannot construct '{}'",
+                type_name, expected_owner
+            )));
+        }
+        if self.type_expr_kind(owner_ty) != "struct" {
+            return Ok(result_fail(format!(
+                "type.construct_finish supports only structs, got '{}'",
+                type_expr_display(owner_ty)
+            )));
+        }
+
+        let reflected_fields = self.type_expr_fields(owner_ty);
+        let mut struct_fields = Vec::with_capacity(reflected_fields.len());
+        for (index, field) in reflected_fields.iter().enumerate() {
+            let Some((_, _, _, value)) = fields
+                .iter()
+                .find(|(field_index, _, _, _)| *field_index == index)
+            else {
+                return Ok(result_fail(format!(
+                    "type.construct_finish: '{}' is missing required field '{}'",
+                    expected_owner, field.name
+                )));
+            };
+
+            let type_name = type_expr_name(&field.ty);
+            if let Err(message) = self.check_refinement(&type_name, value) {
+                return Ok(result_fail(message));
+            }
+            struct_fields.push((field.name.clone(), value.clone()));
+        }
+
+        Ok(result_ok(Value::Struct {
+            type_name: type_expr_name(owner_ty),
+            fields: struct_fields,
+        }))
+    }
+
     fn type_field_metadata(value: &Value) -> Result<(usize, String, String), String> {
+        Self::type_field_metadata_for(value, "type.field_value")
+    }
+
+    fn type_field_metadata_for(
+        value: &Value,
+        caller: &str,
+    ) -> Result<(usize, String, String), String> {
         let Value::Struct { type_name, fields } = value else {
             return Err(format!(
-                "type.field_value: second argument must be TypeField, got {value}"
+                "{caller}: second argument must be TypeField, got {value}"
             ));
         };
         if type_name != "TypeField" {
             return Err(format!(
-                "type.field_value: second argument must be TypeField, got {type_name}"
+                "{caller}: second argument must be TypeField, got {type_name}"
             ));
         }
 
@@ -2985,14 +3156,14 @@ impl Interpreter {
                 .iter()
                 .find(|(field_name, _)| field_name == name)
                 .map(|(_, field_value)| field_value)
-                .ok_or_else(|| format!("type.field_value: TypeField is missing '{name}'"))
+                .ok_or_else(|| format!("{caller}: TypeField is missing '{name}'"))
         };
 
         let index = match field_value("index")? {
             Value::Int64(index) if *index >= 0 => *index as usize,
             other => {
                 return Err(format!(
-                    "type.field_value: TypeField.index must be a non-negative int64, got {other}"
+                    "{caller}: TypeField.index must be a non-negative int64, got {other}"
                 ));
             }
         };
@@ -3000,7 +3171,7 @@ impl Interpreter {
             Value::String(name) => name.clone(),
             other => {
                 return Err(format!(
-                    "type.field_value: TypeField.name must be string, got {other}"
+                    "{caller}: TypeField.name must be string, got {other}"
                 ));
             }
         };
@@ -3008,7 +3179,7 @@ impl Interpreter {
             Value::String(type_name) => type_name.clone(),
             other => {
                 return Err(format!(
-                    "type.field_value: TypeField.type_name must be string, got {other}"
+                    "{caller}: TypeField.type_name must be string, got {other}"
                 ));
             }
         };
@@ -7173,6 +7344,7 @@ fn runtime_type_name(value: &Value) -> Option<String> {
         Value::OptionalSome(_) | Value::OptionalNone => Some("optional".to_string()),
         Value::Nothing => Some("nothing".to_string()),
         Value::Json(_) => Some("JsonValue".to_string()),
+        Value::TypeConstruction { .. } => Some("TypeConstruction".to_string()),
         Value::Struct { type_name, .. }
         | Value::Enum { type_name, .. }
         | Value::Machine { type_name, .. } => Some(type_name.clone()),

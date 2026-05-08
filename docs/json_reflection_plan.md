@@ -39,6 +39,9 @@ Implemented reflection primitives:
 - `type.field_value[T, U](view value, view field)` reads a field by metadata
   after checking that the metadata belongs to `T` and that `U` matches the
   reflected field type.
+- `type.construct_start[T]()`, `type.construct_put[T, Field](builder, field,
+  value)`, and `type.construct_finish[T](builder)` provide a struct-only opaque
+  construction builder for turning checked field values back into `T`.
 - `comptime type Name = type.info[T]():` binds a direct reflected root as a
   scoped type, and `comptime type Field = field.type_info:` works inside direct
   `for field in type.fields[T]():` loops and direct active enum payload loops
@@ -69,7 +72,8 @@ results, enums using the serializer's string/object payload shape, bitfields
 from JSON objects with width and enum-annotation validation, generic structs,
 aliases, and refinement validation, including refinements over generic shapes
 such as `list[string]`. The long-term goal is still to replace this bridge with
-stdlib code plus a general construction primitive.
+stdlib code; struct construction is now available through `TypeConstruction`,
+while bitfields, enums, and the final syntax remain future work.
 
 `json.parse_raw(raw)` now exposes an opaque `JsonValue` tree with explicit
 accessors for kind checks, object fields, array indexes, scalar casts, object
@@ -79,20 +83,23 @@ unchecked `any` lane. See `docs/json_raw_value_design.md`.
 
 ## Design Pressure
 
-A real `stdlib/json.jett` serializer needs more than field metadata. It needs a
-way to turn reflected field type metadata into typed work.
+A real `stdlib/json.jett` implementation needs more than shape metadata. It
+needs ways to turn reflected type metadata into typed recursive work and then
+construct final values from decoded fields.
 
-Today, this is possible for a small fixed set of known field types:
+The earliest version of that problem could only handle a small fixed set of
+known field types:
 
 ```jett
 if field.type_name == "string":
     string value = type.field_value[T, string](view item, view field)
 ```
 
-That is enough for a flat proof of concept, but not enough for arbitrary nested
-structs. Jett code cannot currently say "call `serialize_value[FieldType]` where
-`FieldType` comes from this `TypeField` metadata." The next primitive should
-close that gap without becoming JSON-specific.
+That was enough for a flat proof of concept, but not enough for arbitrary nested
+structs. Trusted `comptime type` binding now closes much of the typed-dispatch
+gap for compiler-owned reflection flows. The remaining pressure is to use the
+new struct builder in a `.jett` decoder and identify where bitfield, enum, or
+less-direct metadata flows still need language support.
 
 ## Open Decisions
 
@@ -117,8 +124,9 @@ reflection. See `docs/comptime_type_bind.md` for the current type-bind proposal.
 Deserialization currently has a Rust bridge that mirrors field access: given
 parsed field values, it builds `T` in declaration order while validating missing
 fields, `serialize` names, secret wrappers, optionals, results, refinements, and
-nested structs. The missing language feature is the general primitive that would
-let stdlib code do this itself.
+nested structs. Stdlib code can now build structs with `TypeConstruction`, but a
+full replacement still needs bitfield and enum construction plus a decoder
+prototype that exercises the builder against raw `JsonValue`.
 
 Options:
 
@@ -169,11 +177,11 @@ for the decoded value. See `docs/bitfield_reflection_metadata.md`.
 
 ## Suggested Next Steps
 
-1. Harden the `.jett` serializer prototype toward stdlib quality: escaping,
+1. Use the struct-only `TypeConstruction` builder in a `.jett` decoder
+   prototype over `JsonValue`.
+2. Harden the `.jett` serializer prototype toward stdlib quality: escaping,
    enum/bitfield policy, alias/refinement behavior, and public/secret modes.
-2. Extend trusted type-argument binding to less direct but still compiler-owned
+3. Extend trusted type-argument binding to less direct but still compiler-owned
    metadata flows if the serializer prototype exposes ergonomic gaps.
-3. Prototype the reflected construction path described in
-   `docs/type_construction_design.md`.
-   The current staging recommendation is the no-syntax opaque builder in
-   `docs/reflected_construction_staging.md`.
+4. Extend reflected construction to bitfields and enums once the struct decoder
+   path is stable.

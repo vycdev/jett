@@ -28,12 +28,12 @@ The cost is that this is not a normal builtin. `type.construct[T]:` needs parser
 and AST support for a block expression, plus a contextual `provide` statement
 inside that block.
 
-## Near-Term Prototype: Opaque Builder
+## Current Prototype: Opaque Builder
 
-A no-syntax bridge can use existing reflection and `comptime type` binding:
+The first no-syntax bridge uses existing reflection and `comptime type` binding:
 
 ```jett
-TypeConstruction builder = type.construct_start[T]()
+mutable TypeConstruction builder = type.construct_start[T]()
 
 for field in type.fields[T]():
     comptime type Field = field.type_info:
@@ -45,9 +45,9 @@ for field in type.fields[T]():
 return type.construct_finish[T](builder)
 ```
 
-This is less elegant, but it avoids adding syntax before the construction
-semantics are proven. The builder is opaque: user code can add typed values, but
-cannot read heterogeneous values back out.
+This is less elegant than the eventual block syntax, but it proves the
+construction semantics without adding new syntax. The builder is opaque: user
+code can add typed values, but cannot read heterogeneous values back out.
 
 ## Why The Builder Is Acceptable As A Step
 
@@ -63,14 +63,15 @@ cannot read heterogeneous values back out.
 
 ## Guardrails For The Prototype
 
-The first implementation should be deliberately narrow:
+The current implementation is deliberately narrow:
 
-- Support structs first; add bitfields only after the struct path is stable.
+- Supports structs first; bitfields remain future work.
 - Require `construct_put` field metadata to match `T` by index, name, and
   reflected type. This is not full provenance, but it matches the current
   `type.field_value` safety model.
 - Reject duplicate fields and missing fields in `construct_finish`.
-- Return `result[T, string]` from both `construct_put` and `construct_finish`.
+- Return `result[TypeConstruction, string]` from `construct_put` and
+  `result[T, string]` from `construct_finish`.
 - Do not support enum construction in the first slice.
 - Do not parse `TypeInfo.type_name` or trust arbitrary user-created `TypeInfo`.
 
@@ -81,15 +82,15 @@ rather than a convention reconstructed from public `TypeField` contents.
 
 For the no-syntax builder:
 
-- `crates/jett_types`: add an opaque `TypeConstruction` built-in type.
-- `crates/jett_resolve`: pre-register `TypeConstruction`.
-- `crates/jett_typecheck`: add builtin signatures for
+- `crates/jett_types`: added an opaque `TypeConstruction` built-in type.
+- `crates/jett_resolve`: pre-registered `TypeConstruction`.
+- `crates/jett_typecheck`: added builtin signatures for
   `type.construct_start`, `type.construct_put`, and `type.construct_finish`.
-- `crates/jett_comptime`: add a `Value::TypeConstruction` or equivalent and
+- `crates/jett_comptime`: added `Value::TypeConstruction` and
   dispatch the three builtins.
-- `crates/jett_comptime::construct_struct`: reuse the existing runtime
-  constructor path where possible so refinement behavior does not drift.
-- Fixture tests should cover successful struct construction, missing fields,
+- Refinement validation is checked on `construct_finish`; longer term, the
+  builder should share more of the ordinary constructor helper path directly.
+- Fixture tests cover successful struct construction, missing fields,
   duplicate fields, wrong field metadata, wrong value type, generic structs, and
   refinement fields.
 
@@ -104,9 +105,9 @@ For the eventual block syntax:
 
 ## Recommendation
 
-Implement the opaque builder as the next compiler slice. It is not the final
+Use the opaque builder in a `.jett` decoder prototype next. It is not the final
 language shape, but it proves the hard semantic part while staying inside
-existing syntax. Once a `.jett` decoder can walk `JsonValue`, decode each field
-with trusted `comptime type` binding, and finish a typed struct, the case for a
+existing syntax. Once that decoder can walk `JsonValue`, decode each field with
+trusted `comptime type` binding, and finish a typed struct, the case for a
 cleaner `type.construct[T]:` block will be grounded in real usage instead of
 guesswork.

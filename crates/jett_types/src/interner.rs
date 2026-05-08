@@ -47,28 +47,30 @@ impl TypeInterner {
     pub const NOTHING: TypeId = TypeId(13);
     pub const ERROR: TypeId = TypeId(14);
     pub const JSON_VALUE: TypeId = TypeId(15);
+    pub const TYPE_CONSTRUCTION: TypeId = TypeId(16);
 }
 
 impl TypeInterner {
     /// Creates a new interner with all primitive types pre-registered.
     pub fn new() -> Self {
         let primitives = vec![
-            Type::Int8,      // 0
-            Type::Int16,     // 1
-            Type::Int32,     // 2
-            Type::Int64,     // 3
-            Type::Uint8,     // 4
-            Type::Uint16,    // 5
-            Type::Uint32,    // 6
-            Type::Uint64,    // 7
-            Type::Float32,   // 8
-            Type::Float64,   // 9
-            Type::String,    // 10
-            Type::Bool,      // 11
-            Type::Bytes,     // 12
-            Type::Nothing,   // 13
-            Type::Error,     // 14
-            Type::JsonValue, // 15
+            Type::Int8,             // 0
+            Type::Int16,            // 1
+            Type::Int32,            // 2
+            Type::Int64,            // 3
+            Type::Uint8,            // 4
+            Type::Uint16,           // 5
+            Type::Uint32,           // 6
+            Type::Uint64,           // 7
+            Type::Float32,          // 8
+            Type::Float64,          // 9
+            Type::String,           // 10
+            Type::Bool,             // 11
+            Type::Bytes,            // 12
+            Type::Nothing,          // 13
+            Type::Error,            // 14
+            Type::JsonValue,        // 15
+            Type::TypeConstruction, // 16
         ];
 
         let mut map = HashMap::with_capacity(primitives.len());
@@ -219,6 +221,7 @@ impl TypeInterner {
             Type::Bytes => "bytes".to_string(),
             Type::Nothing => "nothing".to_string(),
             Type::JsonValue => "JsonValue".to_string(),
+            Type::TypeConstruction => "TypeConstruction".to_string(),
             Type::List(inner) => format!("list[{}]", self.type_name(*inner)),
             Type::Map(k, v) => format!("map[{}, {}]", self.type_name(*k), self.type_name(*v)),
             Type::Set(inner) => format!("set[{}]", self.type_name(*inner)),
@@ -291,6 +294,10 @@ mod tests {
         assert_eq!(*interner.resolve(TypeInterner::NOTHING), Type::Nothing);
         assert_eq!(*interner.resolve(TypeInterner::ERROR), Type::Error);
         assert_eq!(*interner.resolve(TypeInterner::JSON_VALUE), Type::JsonValue);
+        assert_eq!(
+            *interner.resolve(TypeInterner::TYPE_CONSTRUCTION),
+            Type::TypeConstruction
+        );
     }
 
     // -- Basic interning ------------------------------------------------------
@@ -525,9 +532,9 @@ mod tests {
     #[test]
     fn interner_len_includes_primitives() {
         let interner = TypeInterner::new();
-        // 16 built-in leaves: int8..uint64 (8) + float32/64 (2) +
-        // string, bool, bytes, nothing, error, JsonValue (6)
-        assert_eq!(interner.len(), 16);
+        // 17 built-in leaves: int8..uint64 (8) + float32/64 (2) +
+        // string, bool, bytes, nothing, error, JsonValue, TypeConstruction (7)
+        assert_eq!(interner.len(), 17);
     }
 
     #[test]

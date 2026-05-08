@@ -89,6 +89,7 @@ impl Resolver {
             "bytes",
             "nothing",
             "JsonValue",
+            "TypeConstruction",
             // Built-in generic types (used as identifiers in type annotations)
             "list",
             "map",
@@ -954,6 +955,7 @@ fn is_builtin_type(name: &str) -> bool {
             | "set"
             | "bytes"
             | "JsonValue"
+            | "TypeConstruction"
             | "TypeInfo"
             | "TypeField"
             | "TypeBitfield"

@@ -200,6 +200,10 @@ run_pass_fixture!(run_pass_generic_function, "generic_function.jett");
 run_pass_fixture!(run_pass_comptime_type_bind, "comptime_type_bind.jett");
 run_pass_fixture!(run_pass_type_reflection, "type_reflection.jett");
 run_pass_fixture!(run_pass_type_info_reflection, "type_info_reflection.jett");
+run_pass_fixture!(
+    run_pass_type_construction_builder,
+    "type_construction_builder.jett"
+);
 run_pass_fixture!(run_pass_actor_counter, "actor_counter.jett");
 run_pass_fixture!(
     run_pass_structured_concurrency,
@@ -416,6 +420,18 @@ compile_fail_fixture!(
 compile_fail_fixture!(
     compile_fail_type_field_value_non_struct_owner,
     "type_field_value_non_struct_owner.jett"
+);
+compile_fail_fixture!(
+    compile_fail_type_construct_put_wrong_value_type,
+    "type_construct_put_wrong_value_type.jett"
+);
+compile_fail_fixture!(
+    compile_fail_type_construct_start_wrong_arity,
+    "type_construct_start_wrong_arity.jett"
+);
+compile_fail_fixture!(
+    compile_fail_type_construct_finish_non_struct_owner,
+    "type_construct_finish_non_struct_owner.jett"
 );
 
 #[test]

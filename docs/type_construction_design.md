@@ -14,7 +14,9 @@ value = type.field_value[T, Field](view item, view field)
 ```
 
 Deserialization needs the reverse operation: given checked field values, build a
-`T` while preserving the exact same rules as ordinary source constructors.
+`T` while preserving the exact same rules as ordinary source constructors. The
+first struct-only form now exists as the opaque `TypeConstruction` builder; the
+broader bitfield, enum, and final syntax story is still open.
 
 The missing operation is not JSON-specific. JSON happens to be the current
 pressure point, but the same primitive should serve:
@@ -129,9 +131,10 @@ Verdict: preferred direction, pending syntax.
 
 1. Implement the trusted `comptime type Name = info:` binding from
    `docs/comptime_type_bind.md`.
-2. Prototype the no-syntax opaque builder described in
-   `docs/reflected_construction_staging.md` for structs only, returning
-   `result[T, string]` uniformly.
+2. Done for structs: prototype the no-syntax opaque builder described in
+   `docs/reflected_construction_staging.md`, with `construct_put` returning
+   `result[TypeConstruction, string]` and `construct_finish` returning
+   `result[T, string]`.
 3. Extend construction to bitfields using `type.bitfield_layout[T]()` for width,
    enum, payload, and byte-order facts.
 4. Add enum variant construction only after variant payload typing has the same
@@ -166,8 +169,9 @@ This keeps `type.construct` from becoming `json.construct` in disguise.
 
 ## Open Questions
 
-- Should reflected construction always return `result[T, string]`, or should it
-  mirror ordinary constructors and return plain `T` when no validation can fail?
+- Should the eventual block syntax always return `result[T, string]`, matching
+  the builder, or should it mirror ordinary constructors and return plain `T`
+  when no validation can fail?
 - What exact syntax should bind a generated field value to a reflected
   `TypeField`? `provide field = ...`, `field field = ...`, and a callback API
   are all still candidates.
@@ -180,6 +184,5 @@ This keeps `type.construct` from becoming `json.construct` in disguise.
   probably ignore that policy and let each format module decide before calling
   construction.
 
-See `docs/reflected_construction_staging.md` for the current recommendation:
-prove the semantics with an opaque `TypeConstruction` builder before committing
-to new block syntax.
+See `docs/reflected_construction_staging.md` for the current builder surface and
+the remaining path toward block syntax.

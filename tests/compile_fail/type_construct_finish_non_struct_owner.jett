@@ -1,0 +1,11 @@
+# ERROR: E0309
+namespace test
+
+struct User:
+    id: string
+
+function bad_construct_finish_owner() returns nothing:
+    TypeConstruction builder = type.construct_start[User]()
+    int64 value = type.construct_finish[int64](builder) handle error:
+        return nothing
+    return nothing
