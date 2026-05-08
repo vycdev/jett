@@ -1031,6 +1031,17 @@ impl Interpreter {
                     comptime_type_info_binding(&bind.value)
                 {
                     self.substitute_type_expr(bound_type_expr)
+                } else if let Some((source_ty, index)) = comptime_type_arg_binding(&bind.value) {
+                    let source_ty = self.substitute_type_expr(source_ty);
+                    self.type_info_arg_types(&source_ty)
+                        .get(index)
+                        .cloned()
+                        .ok_or_else(|| {
+                            format!(
+                                "`comptime type` type.arg index {index} is out of range for type '{}'",
+                                type_expr_display(&source_ty)
+                            )
+                        })?
                 } else if let Some(field_name) = reflected_field_type_info_binding(&bind.value) {
                     self.bound_reflected_field_type(field_name)?
                 } else if let Some(info_name) = reflected_type_info_binding(&bind.value) {
@@ -1932,6 +1943,7 @@ impl Interpreter {
                 | "type.kind"
                 | "type.has_secret"
                 | "type.info"
+                | "type.arg"
                 | "type.fields"
                 | "type.bitfield_layout"
                 | "type.bitfield_fields"
@@ -1977,6 +1989,28 @@ impl Interpreter {
                     return Some(err);
                 }
                 Ok(self.type_info_value(&ty))
+            }
+            "type.arg" => {
+                if let Some(err) = check_args(name, 1, args) {
+                    return Some(err);
+                }
+                let index = match args.first() {
+                    Some(Value::Int64(index)) if *index >= 0 => *index as usize,
+                    Some(other) => {
+                        return Some(Err(format!(
+                            "type.arg expects a non-negative int64 index, got {other}"
+                        )));
+                    }
+                    None => unreachable!("type.arg argument count was already checked"),
+                };
+                let arg_types = self.type_info_arg_types(&ty);
+                let Some(arg_ty) = arg_types.get(index) else {
+                    return Some(Err(format!(
+                        "type.arg index {index} is out of range for type '{}'",
+                        type_expr_display(&ty)
+                    )));
+                };
+                Ok(self.type_info_value(arg_ty))
             }
             "type.fields" => {
                 if let Some(err) = check_args(name, 0, args) {
@@ -6615,6 +6649,23 @@ fn comptime_type_info_binding(expr: &Expr) -> Option<&TypeExpr> {
     type_args.first()
 }
 
+fn comptime_type_arg_binding(expr: &Expr) -> Option<(&TypeExpr, usize)> {
+    let Expr::GenericCall(callee, type_args, args, _) = expr else {
+        return None;
+    };
+    if type_args.len() != 1 || args.len() != 1 || !is_type_arg_callee(callee) {
+        return None;
+    }
+    let arg = args.first()?;
+    if arg.name.is_some() {
+        return None;
+    }
+    let Expr::IntLiteral(index, _) = &arg.value else {
+        return None;
+    };
+    Some((type_args.first()?, usize::try_from(*index).ok()?))
+}
+
 fn comptime_type_fields_binding(expr: &Expr) -> Option<&TypeExpr> {
     let Expr::GenericCall(callee, type_args, args, _) = expr else {
         return None;
@@ -6672,6 +6723,13 @@ fn is_type_info_callee(callee: &Expr) -> bool {
         return false;
     };
     field.name == "info" && matches!(base.as_ref(), Expr::Ident(ident) if ident.name == "type")
+}
+
+fn is_type_arg_callee(callee: &Expr) -> bool {
+    let Expr::FieldAccess(base, field, _) = callee else {
+        return false;
+    };
+    field.name == "arg" && matches!(base.as_ref(), Expr::Ident(ident) if ident.name == "type")
 }
 
 fn is_type_fields_callee(callee: &Expr) -> bool {

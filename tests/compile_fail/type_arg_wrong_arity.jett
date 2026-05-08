@@ -1,0 +1,6 @@
+# ERROR: E0309
+namespace test
+
+function bad_type_arg_arity() returns string:
+    TypeInfo info = type.arg[list[int64], string](0)
+    return info.type_name

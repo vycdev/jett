@@ -329,12 +329,20 @@ compile_fail_fixture!(
     "comptime_type_bind_requires_trusted_args_loop.jett"
 );
 compile_fail_fixture!(
+    compile_fail_comptime_type_bind_requires_literal_type_arg_index,
+    "comptime_type_bind_requires_literal_type_arg_index.jett"
+);
+compile_fail_fixture!(
     compile_fail_comptime_type_bind_scope,
     "comptime_type_bind_scope.jett"
 );
 compile_fail_fixture!(
     compile_fail_type_info_wrong_arity,
     "type_info_wrong_arity.jett"
+);
+compile_fail_fixture!(
+    compile_fail_type_arg_wrong_arity,
+    "type_arg_wrong_arity.jett"
 );
 compile_fail_fixture!(
     compile_fail_type_variants_wrong_arity,

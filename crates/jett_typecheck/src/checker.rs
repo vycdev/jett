@@ -851,6 +851,22 @@ impl<'a> TypeChecker<'a> {
                     .unwrap_or(TypeInterner::ERROR);
                 Some((vec![], type_info_ty))
             }
+            "type.arg" => {
+                if type_args.len() != 1 {
+                    self.sink.emit(errors::unknown_type(
+                        &format!("{name} (expected 1 type argument, got {})", type_args.len()),
+                        span,
+                    ));
+                    return Some((vec![TypeInterner::INT64], TypeInterner::ERROR));
+                }
+                let _ = self.resolve_type_expr(&type_args[0]);
+                let type_info_ty = self
+                    .named_types
+                    .get("TypeInfo")
+                    .copied()
+                    .unwrap_or(TypeInterner::ERROR);
+                Some((vec![TypeInterner::INT64], type_info_ty))
+            }
             "type.fields" => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
@@ -2516,6 +2532,27 @@ impl<'a> TypeChecker<'a> {
             return;
         }
 
+        if let Some((source_type_expr, index)) = comptime_type_arg_binding(&bind.value) {
+            let source_ty = self.resolve_type_expr(source_type_expr);
+            if source_ty == TypeInterner::ERROR {
+                self.check_block(&bind.body);
+                return;
+            }
+
+            let arg_types = self.type_info_arg_types_for_type_expr(source_type_expr);
+            if let Some(&bound_ty) = arg_types.get(index) {
+                if bound_ty != TypeInterner::ERROR {
+                    self.check_comptime_type_bind_body(&bind.name.name, bound_ty, &bind.body);
+                }
+                return;
+            }
+
+            self.sink
+                .emit(errors::invalid_comptime_type_binding(bind.value.span()));
+            self.check_block(&bind.body);
+            return;
+        }
+
         if let Some(field_name) = reflected_field_type_info_binding(&bind.value) {
             if let Some(field_types) = self.reflected_field_types_for_name(field_name) {
                 for field_ty in field_types {
@@ -2628,6 +2665,32 @@ impl<'a> TypeChecker<'a> {
                 .chain(std::iter::once(*return_type))
                 .collect(),
             _ => Vec::new(),
+        }
+    }
+
+    fn type_info_arg_types_for_type_expr(&mut self, ty: &TypeExpr) -> Vec<TypeId> {
+        match ty {
+            TypeExpr::View(inner, _) => self.type_info_arg_types_for_type_expr(inner),
+            TypeExpr::Named(ident) if self.type_aliases.contains_key(&ident.name) => {
+                let alias = self
+                    .type_aliases
+                    .get(&ident.name)
+                    .cloned()
+                    .expect("type alias existence checked before lookup");
+                vec![self.resolve_type_expr(&alias.base_type)]
+            }
+            TypeExpr::Generic(_, args, _) => {
+                args.iter().map(|arg| self.resolve_type_expr(arg)).collect()
+            }
+            TypeExpr::Function(params, return_type, _) => params
+                .iter()
+                .chain(std::iter::once(return_type.as_ref()))
+                .map(|arg| self.resolve_type_expr(arg))
+                .collect(),
+            _ => {
+                let resolved = self.resolve_type_expr(ty);
+                self.type_info_arg_types_for_type(resolved)
+            }
         }
     }
 
@@ -4768,6 +4831,23 @@ fn comptime_type_info_binding(expr: &Expr) -> Option<&TypeExpr> {
     type_args.first()
 }
 
+fn comptime_type_arg_binding(expr: &Expr) -> Option<(&TypeExpr, usize)> {
+    let Expr::GenericCall(callee, type_args, args, _) = expr else {
+        return None;
+    };
+    if type_args.len() != 1 || args.len() != 1 || !is_type_arg_callee(callee) {
+        return None;
+    }
+    let arg = args.first()?;
+    if arg.name.is_some() {
+        return None;
+    }
+    let Expr::IntLiteral(index, _) = &arg.value else {
+        return None;
+    };
+    Some((type_args.first()?, usize::try_from(*index).ok()?))
+}
+
 fn comptime_type_fields_binding(expr: &Expr) -> Option<&TypeExpr> {
     let Expr::GenericCall(callee, type_args, args, _) = expr else {
         return None;
@@ -4825,6 +4905,13 @@ fn is_type_info_callee(callee: &Expr) -> bool {
         return false;
     };
     field.name == "info" && matches!(base.as_ref(), Expr::Ident(ident) if ident.name == "type")
+}
+
+fn is_type_arg_callee(callee: &Expr) -> bool {
+    let Expr::FieldAccess(base, field, _) = callee else {
+        return false;
+    };
+    field.name == "arg" && matches!(base.as_ref(), Expr::Ident(ident) if ident.name == "type")
 }
 
 fn is_type_fields_callee(callee: &Expr) -> bool {

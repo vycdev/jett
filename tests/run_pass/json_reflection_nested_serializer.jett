@@ -37,44 +37,34 @@ function serialize_reflected[T](view value: T) returns string:
         return "{item}"
 
     if kind == "list":
-        for arg in type.info[T]().args:
-            comptime type Elem = arg:
-                list[Elem] items = value
-                list[string] parts = list.new[string]()
-                for item in items:
-                    parts = list.append[string](parts, serialize_reflected[Elem](view item))
-                string body = string.join(parts, ",")
-                return "[{body}]"
+        comptime type Elem = type.arg[T](0):
+            list[Elem] items = value
+            list[string] parts = list.new[string]()
+            for item in items:
+                parts = list.append[string](parts, serialize_reflected[Elem](view item))
+            string body = string.join(parts, ",")
+            return "[{body}]"
 
     if kind == "map":
-        int64 index = 0
-        for arg in type.info[T]().args:
-            if index == 1:
-                comptime type Val = arg:
-                    map[string, Val] entries = value
-                    list[string] parts = list.new[string]()
-                    for key, item in entries:
-                        parts = list.append[string](parts, "{json_quote(key)}:{serialize_reflected[Val](view item)}")
-                    string body = string.join(parts, ",")
-                    return "{{{body}}}"
-            index = index + 1
+        comptime type Val = type.arg[T](1):
+            map[string, Val] entries = value
+            list[string] parts = list.new[string]()
+            for key, item in entries:
+                parts = list.append[string](parts, "{json_quote(key)}:{serialize_reflected[Val](view item)}")
+            string body = string.join(parts, ",")
+            return "{{{body}}}"
 
     if kind == "optional":
-        for arg in type.info[T]().args:
-            comptime type Inner = arg:
-                Inner item = value handle:
-                    return "null"
-                return serialize_reflected[Inner](view item)
+        comptime type Inner = type.arg[T](0):
+            Inner item = value handle:
+                return "null"
+            return serialize_reflected[Inner](view item)
 
     if kind == "result":
-        int64 index = 0
-        for arg in type.info[T]().args:
-            if index == 0:
-                comptime type Ok = arg:
-                    Ok item = value handle error:
-                        return json_quote("fail")
-                    return serialize_reflected[Ok](view item)
-            index = index + 1
+        comptime type Ok = type.arg[T](0):
+            Ok item = value handle error:
+                return json_quote("fail")
+            return serialize_reflected[Ok](view item)
 
     list[string] fields = list.new[string]()
     for field in type.fields[T]():

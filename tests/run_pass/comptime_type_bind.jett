@@ -63,6 +63,16 @@ function bound_direct_arg_type() returns string:
             found = type.name[Arg]()
     return found
 
+function reflected_arg_type_info_name() returns string:
+    TypeInfo info = type.arg[map[string, list[int64]]](1)
+    return info.type_name
+
+function bound_direct_type_arg() returns string:
+    string found = "missing"
+    comptime type Value = type.arg[map[string, list[int64]]](1):
+        found = type.name[Value]()
+    return found
+
 function bound_nested_arg_type() returns string:
     string found = "missing"
     for outer in type.info[list[optional[string]]]().args:
@@ -91,5 +101,7 @@ verify comptime_type_bind:
     assert bound_reflected_field_types() == "id:string;age:int64"
     assert bound_reflected_generic_field_type() == "list[int64]"
     assert bound_direct_arg_type() == "string"
+    assert reflected_arg_type_info_name() == "list[int64]"
+    assert bound_direct_type_arg() == "list[int64]"
     assert bound_nested_arg_type() == "string"
     assert bound_field_arg_type() == "int64:3"

@@ -45,6 +45,7 @@ The generated code remains statically typed; `TypeInfo` is metadata, not an
 This should initially be limited to trusted metadata produced by reflection:
 
 - `type.info[T]()`
+- `type.arg[T](literal_index)`
 - `field.type_info` where `field` comes from `type.fields[T]()`
 - recursive `TypeInfo.args` reached from those values
 
@@ -97,6 +98,7 @@ Rules:
 The current implementation supports:
 
 - direct roots such as `comptime type Root = type.info[T]():`
+- direct type arguments such as `comptime type Value = type.arg[map[string, V]](1):`
 - `field.type_info` when `field` is the loop variable of a direct
   `for field in type.fields[T]():` loop
 - `TypeInfo` values produced by direct reflected `args` loops, such as
@@ -109,6 +111,13 @@ bitfield-specific metadata such as width and enum annotations is still exposed
 separately. The trusted `args` form currently follows direct `type.info[T]()`,
 trusted field metadata, and previously trusted `args` loop variables; storing
 metadata in ordinary variables still drops provenance.
+
+`type.arg[T](index)` is also available as an ordinary runtime metadata helper:
+it returns the indexed `TypeInfo` argument for wrappers such as `list[T]`,
+`map[K, V]`, `optional[T]`, `result[T, E]`, aliases, refinements, and function
+types. Only direct calls with a literal non-negative index are trusted as
+`comptime type` initializers; dynamic indexes still produce metadata, not a
+type.
 
 ## Tests
 
@@ -133,6 +142,7 @@ Compile-fail:
   `type.fields[T]()` loop.
 - Binding through an intermediate `TypeInfo` variable rather than a direct
   reflected `args` loop.
+- Binding through `type.arg[T](index)` with a non-literal index.
 - Binding a field from one owner and reading it from another owner remains
   rejected.
 
@@ -140,7 +150,7 @@ Compile-fail:
 
 - Should broader trust provenance use hidden tags on interpreter `Value::Struct`,
   an AST provenance side table, or a dedicated internal reflection value?
-- Should nested `TypeInfo.args` preserve provenance automatically, or should
-  there be explicit helper functions such as `type.arg(info, index)`?
+- Should nested `TypeInfo.args` preserve provenance beyond the direct trusted
+  loops, or is `type.arg[T](literal)` enough for the common generic wrappers?
 - Can the same primitive bind enum variant payload fields from
   `type.variants[T]()` without adding a second visitor-specific mechanism?

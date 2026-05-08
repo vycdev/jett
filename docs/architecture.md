@@ -1092,6 +1092,7 @@ The boundary between compiler-generated code and stdlib-implemented code is a cr
 | `type.kind[T]()` | Comptime reflection | Category such as `primitive`, `list`, `struct`, `secret` |
 | `type.has_secret[T]()` | Comptime reflection | Whether `T` contains secret data |
 | `type.info[T]()` | Comptime reflection | Recursive `TypeInfo` metadata for `T`, including nested type arguments |
+| `type.arg[T](index)` | Comptime reflection | Indexed `TypeInfo` argument for generic wrappers; direct literal indexes can bind scoped comptime types |
 | `type.fields[T]()` | Struct/bitfield reflection | Ordered `list[TypeField]` metadata for struct and bitfield fields, including `serialize` names for structs |
 | `type.bitfield_layout[T]()` | Bitfield reflection | `TypeBitfield` metadata for byte order and field-level layout |
 | `type.bitfield_fields[T]()` | Bitfield reflection | Ordered `list[TypeBitfieldField]` metadata for bit widths, payload shape, and enum annotations |
