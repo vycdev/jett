@@ -277,6 +277,7 @@ pub enum Stmt {
     Assign(AssignStmt),
     Return(ReturnStmt),
     Respond(RespondStmt),
+    ComptimeTypeBind(ComptimeTypeBindStmt),
     If(IfStmt),
     For(ForStmt),
     While(WhileStmt),
@@ -293,6 +294,14 @@ pub enum Stmt {
 #[derive(Debug, Clone)]
 pub struct RespondStmt {
     pub value: Expr,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct ComptimeTypeBindStmt {
+    pub name: Ident,
+    pub value: Expr,
+    pub body: Block,
     pub span: Span,
 }
 

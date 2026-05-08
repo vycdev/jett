@@ -197,6 +197,7 @@ run_pass_fixture!(
 run_pass_fixture!(run_pass_bitfield_roundtrip, "bitfield_roundtrip.jett");
 run_pass_fixture!(run_pass_generic_struct, "generic_struct.jett");
 run_pass_fixture!(run_pass_generic_function, "generic_function.jett");
+run_pass_fixture!(run_pass_comptime_type_bind, "comptime_type_bind.jett");
 run_pass_fixture!(run_pass_type_reflection, "type_reflection.jett");
 run_pass_fixture!(run_pass_type_info_reflection, "type_info_reflection.jett");
 run_pass_fixture!(run_pass_actor_counter, "actor_counter.jett");
@@ -310,6 +311,14 @@ compile_fail_fixture!(
 compile_fail_fixture!(
     compile_fail_serialize_annotation_requires_string,
     "serialize_annotation_requires_string.jett"
+);
+compile_fail_fixture!(
+    compile_fail_comptime_type_bind_requires_direct_type_info,
+    "comptime_type_bind_requires_direct_type_info.jett"
+);
+compile_fail_fixture!(
+    compile_fail_comptime_type_bind_scope,
+    "comptime_type_bind_scope.jett"
 );
 compile_fail_fixture!(
     compile_fail_type_info_wrong_arity,

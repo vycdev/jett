@@ -41,6 +41,7 @@ pub enum DefKind {
     Actor,
     Variable,
     Param,
+    Type,
     Constant,
     Namespace,
 }

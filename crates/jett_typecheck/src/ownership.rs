@@ -180,6 +180,7 @@ impl<'a> OwnershipChecker<'a> {
             Stmt::VarDecl(decl) => self.check_var_decl(decl),
             Stmt::Assign(assign) => self.check_assign(assign),
             Stmt::Return(ret) => self.check_return(ret),
+            Stmt::ComptimeTypeBind(bind) => self.check_block(&bind.body),
             Stmt::If(if_stmt) => self.check_if(if_stmt),
             Stmt::For(for_stmt) => self.check_for(for_stmt),
             Stmt::While(while_stmt) => self.check_while(while_stmt),

@@ -139,7 +139,8 @@ for the decoded value. See `docs/bitfield_reflection_metadata.md`.
 
 ## Suggested Next Steps
 
-1. Design the comptime type-switch or typed field visitor primitive.
+1. Extend `comptime type` binding from direct `type.info[T]()` roots to trusted
+   reflected field metadata and nested `TypeInfo.args`.
 2. Implement a nested `.jett` serializer prototype for primitives, structs,
    lists, maps with string keys, optionals, and results.
 3. Implement the trusted `comptime type` binding, then prototype the reflected

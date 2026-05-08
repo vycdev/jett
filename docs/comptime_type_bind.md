@@ -100,6 +100,11 @@ bitfield fields uniformly, though bitfield-specific metadata such as width and
 enum annotations is a separate reflection question. Support for nested `args`
 can follow once the trust provenance is represented cleanly.
 
+Current implementation status: the first compiler slice supports direct
+`type.info[T]()` initializers only. Binding from `field.type_info` and nested
+`TypeInfo.args` still needs trusted provenance and comptime loop/type
+specialization.
+
 ## Tests
 
 Run-pass:

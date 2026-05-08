@@ -1,0 +1,7 @@
+# ERROR: E0200
+namespace test
+
+function bad() returns string:
+    comptime type Bound = type.info[int64]():
+        string inside = type.name[Bound]()
+    return type.name[Bound]()

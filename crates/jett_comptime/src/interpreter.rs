@@ -1008,6 +1008,24 @@ impl Interpreter {
                 Ok(None)
             }
 
+            Stmt::ComptimeTypeBind(bind) => {
+                let Some(bound_type_expr) = comptime_type_info_binding(&bind.value) else {
+                    return Err(
+                        "`comptime type` currently requires a direct `type.info[T]()` initializer"
+                            .to_string(),
+                    );
+                };
+                let mut scope = HashMap::new();
+                scope.insert(
+                    bind.name.name.clone(),
+                    self.substitute_type_expr(bound_type_expr),
+                );
+                self.type_arg_scopes.push(scope);
+                let result = self.exec_block_inner(&bind.body);
+                self.type_arg_scopes.pop();
+                result
+            }
+
             Stmt::Assign(assign) => {
                 let val = match self.eval_expr_flow(&assign.value)? {
                     ExprFlow::Value(value) => value,
@@ -6377,6 +6395,23 @@ fn type_expr_is_optional(ty: &TypeExpr) -> bool {
         TypeExpr::View(inner, _) => type_expr_is_optional(inner),
         _ => false,
     }
+}
+
+fn comptime_type_info_binding(expr: &Expr) -> Option<&TypeExpr> {
+    let Expr::GenericCall(callee, type_args, args, _) = expr else {
+        return None;
+    };
+    if type_args.len() != 1 || !args.is_empty() || !is_type_info_callee(callee) {
+        return None;
+    }
+    type_args.first()
+}
+
+fn is_type_info_callee(callee: &Expr) -> bool {
+    let Expr::FieldAccess(base, field, _) = callee else {
+        return false;
+    };
+    field.name == "info" && matches!(base.as_ref(), Expr::Ident(ident) if ident.name == "type")
 }
 
 fn json_type_name(value: &JsonValue) -> &'static str {

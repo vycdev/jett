@@ -1,0 +1,33 @@
+namespace test
+
+struct Box[T]:
+    value: T
+
+function bound_type_name() returns string:
+    string found = "missing"
+    comptime type Bound = type.info[int64]():
+        found = type.name[Bound]()
+    return found
+
+function bound_generic_field_kind() returns string:
+    string found = "missing"
+    comptime type Bound = type.info[Box[string]]():
+        list[TypeField] fields = type.fields[Bound]()
+        for field in fields:
+            if field.name == "value":
+                found = field.kind
+    return found
+
+function bound_generic_field_type_name() returns string:
+    string found = "missing"
+    comptime type Bound = type.info[Box[string]]():
+        list[TypeField] fields = type.fields[Bound]()
+        for field in fields:
+            if field.name == "value":
+                found = field.type_info.type_name
+    return found
+
+verify comptime_type_bind:
+    assert bound_type_name() == "int64"
+    assert bound_generic_field_kind() == "primitive"
+    assert bound_generic_field_type_name() == "string"

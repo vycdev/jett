@@ -2471,6 +2471,7 @@ impl<'a> TypeChecker<'a> {
             Stmt::VarDecl(decl) => self.check_var_decl(decl),
             Stmt::Assign(assign) => self.check_assign(assign),
             Stmt::Return(ret) => self.check_return(ret),
+            Stmt::ComptimeTypeBind(bind) => self.check_comptime_type_bind(bind),
             Stmt::If(if_stmt) => self.check_if(if_stmt),
             Stmt::For(for_stmt) => self.check_for(for_stmt),
             Stmt::While(while_stmt) => self.check_while(while_stmt),
@@ -2492,6 +2493,31 @@ impl<'a> TypeChecker<'a> {
             Stmt::Match(match_stmt) => self.check_match(match_stmt),
             Stmt::Respond(resp) => self.check_respond(resp),
             Stmt::Use(_) | Stmt::Break(_) | Stmt::Continue(_) => {}
+        }
+    }
+
+    fn check_comptime_type_bind(&mut self, bind: &ast::ComptimeTypeBindStmt) {
+        self.check_expr(&bind.value);
+
+        let Some(bound_type_expr) = comptime_type_info_binding(&bind.value) else {
+            self.sink
+                .emit(errors::invalid_comptime_type_binding(bind.value.span()));
+            self.check_block(&bind.body);
+            return;
+        };
+
+        let bound_ty = self.resolve_type_expr(bound_type_expr);
+        if bound_ty == TypeInterner::ERROR {
+            self.check_block(&bind.body);
+            return;
+        }
+
+        let previous = self.type_var_subst.insert(bind.name.name.clone(), bound_ty);
+        self.check_block(&bind.body);
+        if let Some(previous) = previous {
+            self.type_var_subst.insert(bind.name.name.clone(), previous);
+        } else {
+            self.type_var_subst.remove(&bind.name.name);
         }
     }
 
@@ -4557,6 +4583,7 @@ fn stmt_span(stmt: &Stmt) -> Span {
         Stmt::VarDecl(v) => v.span,
         Stmt::Assign(a) => a.span,
         Stmt::Return(r) => r.span,
+        Stmt::ComptimeTypeBind(b) => b.span,
         Stmt::If(i) => i.span,
         Stmt::For(f) => f.span,
         Stmt::While(w) => w.span,
@@ -4569,6 +4596,23 @@ fn stmt_span(stmt: &Stmt) -> Span {
         Stmt::Respond(r) => r.span,
         Stmt::Break(span) | Stmt::Continue(span) => *span,
     }
+}
+
+fn comptime_type_info_binding(expr: &Expr) -> Option<&TypeExpr> {
+    let Expr::GenericCall(callee, type_args, args, _) = expr else {
+        return None;
+    };
+    if type_args.len() != 1 || !args.is_empty() || !is_type_info_callee(callee) {
+        return None;
+    }
+    type_args.first()
+}
+
+fn is_type_info_callee(callee: &Expr) -> bool {
+    let Expr::FieldAccess(base, field, _) = callee else {
+        return false;
+    };
+    field.name == "info" && matches!(base.as_ref(), Expr::Ident(ident) if ident.name == "type")
 }
 
 // ---------------------------------------------------------------------------

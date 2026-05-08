@@ -1097,6 +1097,7 @@ impl<'src> Parser<'src> {
             TokenKind::Trace => Some(self.parse_trace_stmt()),
             TokenKind::Breakpoint => Some(self.parse_breakpoint_stmt()),
             TokenKind::Respond => Some(self.parse_respond_stmt()),
+            TokenKind::Comptime => Some(self.parse_comptime_type_bind_stmt()),
             TokenKind::Break => {
                 let tok = self.advance();
                 Some(Stmt::Break(tok.span))
@@ -1154,6 +1155,23 @@ impl<'src> Parser<'src> {
         let value = self.parse_expr();
         let span = kw.span.merge(value.span());
         Stmt::Respond(RespondStmt { value, span })
+    }
+
+    fn parse_comptime_type_bind_stmt(&mut self) -> Stmt {
+        let kw = self.expect(TokenKind::Comptime);
+        self.expect(TokenKind::Type);
+        let name = self.parse_ident();
+        self.expect(TokenKind::Eq);
+        let value = self.parse_expr();
+        self.expect(TokenKind::Colon);
+        let body = self.parse_block();
+        let span = kw.span.merge(body.span);
+        Stmt::ComptimeTypeBind(ComptimeTypeBindStmt {
+            name,
+            value,
+            body,
+            span,
+        })
     }
 
     fn parse_if_stmt(&mut self) -> Stmt {
@@ -2344,6 +2362,7 @@ fn stmt_span(stmt: &Stmt) -> Span {
         Stmt::VarDecl(v) => v.span,
         Stmt::Assign(a) => a.span,
         Stmt::Return(r) => r.span,
+        Stmt::ComptimeTypeBind(b) => b.span,
         Stmt::If(i) => i.span,
         Stmt::For(f) => f.span,
         Stmt::While(w) => w.span,
@@ -3866,6 +3885,30 @@ function f(session: UserAuth) returns bool:
                     other => panic!("expected At expression, got {:?}", other),
                 },
                 other => panic!("expected Return, got {:?}", other),
+            },
+            other => panic!("expected Function, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_comptime_type_bind_statement() {
+        let src = "\
+function f() returns string:
+    string name = \"missing\"
+    comptime type Bound = type.info[int64]():
+        name = type.name[Bound]()
+    return name
+";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        match &result.module.items[0] {
+            Item::Function(f) => match &f.body.stmts[1] {
+                Stmt::ComptimeTypeBind(stmt) => {
+                    assert_eq!(stmt.name.name, "Bound");
+                    assert_eq!(stmt.body.stmts.len(), 1);
+                    assert!(matches!(&stmt.body.stmts[0], Stmt::Assign(_)));
+                }
+                other => panic!("expected ComptimeTypeBind, got {:?}", other),
             },
             other => panic!("expected Function, got {:?}", other),
         }

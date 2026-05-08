@@ -3,9 +3,10 @@ use std::collections::{HashMap, HashSet};
 use jett_common::Span;
 use jett_diagnostics::{Diagnostic, DiagnosticSink};
 use jett_parser::ast::{
-    ActorDef, AssertStmt, AssignStmt, Block, BreakpointStmt, CallArg, Expr, ExprStmt, ForStmt,
-    FunctionDecl, FunctionDef, IfStmt, Item, MatchStmt, Module, Pattern, RespondStmt, ReturnStmt,
-    Stmt, StringPart, TraceStmt, TypeAlias, TypeExpr, UseDecl, VarDecl, WhileStmt,
+    ActorDef, AssertStmt, AssignStmt, Block, BreakpointStmt, CallArg, ComptimeTypeBindStmt, Expr,
+    ExprStmt, ForStmt, FunctionDecl, FunctionDef, IfStmt, Item, MatchStmt, Module, Pattern,
+    RespondStmt, ReturnStmt, Stmt, StringPart, TraceStmt, TypeAlias, TypeExpr, UseDecl, VarDecl,
+    WhileStmt,
 };
 
 use crate::errors;
@@ -471,6 +472,7 @@ impl Resolver {
             Stmt::VarDecl(v) => self.resolve_var_decl(v, item_index),
             Stmt::Assign(a) => self.resolve_assign(a, item_index),
             Stmt::Return(r) => self.resolve_return(r, item_index),
+            Stmt::ComptimeTypeBind(b) => self.resolve_comptime_type_bind(b, item_index),
             Stmt::If(i) => self.resolve_if(i, item_index),
             Stmt::For(f) => self.resolve_for(f, item_index),
             Stmt::While(w) => self.resolve_while(w, item_index),
@@ -496,6 +498,17 @@ impl Resolver {
 
         // Now declare the variable.
         self.declare_local(&v.name.name, DefKind::Variable, v.name.span);
+    }
+
+    fn resolve_comptime_type_bind(&mut self, b: &ComptimeTypeBindStmt, item_index: usize) {
+        self.resolve_expr(&b.value, item_index);
+
+        let scope = self.push_scope();
+        self.declare_local(&b.name.name, DefKind::Type, b.name.span);
+        for stmt in &b.body.stmts {
+            self.resolve_stmt(stmt, item_index);
+        }
+        self.pop_scope(scope);
     }
 
     fn resolve_assign(&mut self, a: &AssignStmt, item_index: usize) {
@@ -981,6 +994,7 @@ fn stmt_span(stmt: &Stmt) -> Span {
         Stmt::VarDecl(v) => v.span,
         Stmt::Assign(a) => a.span,
         Stmt::Return(r) => r.span,
+        Stmt::ComptimeTypeBind(b) => b.span,
         Stmt::If(i) => i.span,
         Stmt::For(f) => f.span,
         Stmt::While(w) => w.span,

@@ -554,3 +554,12 @@ pub fn json_serialize_requires_view(
         span,
     )
 }
+
+/// E0345: Unsupported comptime type binding source.
+pub fn invalid_comptime_type_binding(span: Span) -> Diagnostic {
+    Diagnostic::error(
+        345,
+        "`comptime type` currently requires a direct `type.info[T]()` initializer".to_string(),
+        span,
+    )
+}
