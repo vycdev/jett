@@ -320,6 +320,10 @@ compile_fail_fixture!(
     "type_variants_wrong_arity.jett"
 );
 compile_fail_fixture!(
+    compile_fail_type_bitfield_layout_wrong_arity,
+    "type_bitfield_layout_wrong_arity.jett"
+);
+compile_fail_fixture!(
     compile_fail_type_bitfield_fields_wrong_arity,
     "type_bitfield_fields_wrong_arity.jett"
 );

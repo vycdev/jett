@@ -203,6 +203,19 @@ impl<'a> TypeChecker<'a> {
         self.named_types
             .insert("TypeBitfieldField".to_string(), type_bitfield_field_ty);
 
+        let type_bitfield_fields_ty = self.interner.intern(Type::List(type_bitfield_field_ty));
+        let type_bitfield_sid = self.interner.add_struct(TypeStructDef {
+            name: "TypeBitfield".to_string(),
+            fields: vec![
+                ("network_order".to_string(), TypeInterner::BOOL),
+                ("fields".to_string(), type_bitfield_fields_ty),
+            ],
+            methods: Vec::new(),
+        });
+        let type_bitfield_ty = self.interner.intern(Type::Struct(type_bitfield_sid));
+        self.named_types
+            .insert("TypeBitfield".to_string(), type_bitfield_ty);
+
         let type_variant_fields_ty = self.interner.intern(Type::List(type_field_ty));
         let type_variant_sid = self.interner.add_struct(TypeStructDef {
             name: "TypeVariant".to_string(),
@@ -847,6 +860,22 @@ impl<'a> TypeChecker<'a> {
                     .copied()
                     .unwrap_or(TypeInterner::ERROR);
                 Some((vec![], self.interner.intern(Type::List(type_field_ty))))
+            }
+            "type.bitfield_layout" => {
+                if type_args.len() != 1 {
+                    self.sink.emit(errors::unknown_type(
+                        &format!("{name} (expected 1 type argument, got {})", type_args.len()),
+                        span,
+                    ));
+                    return Some((vec![], TypeInterner::ERROR));
+                }
+                let _ = self.resolve_type_expr(&type_args[0]);
+                let type_bitfield_ty = self
+                    .named_types
+                    .get("TypeBitfield")
+                    .copied()
+                    .unwrap_or(TypeInterner::ERROR);
+                Some((vec![], type_bitfield_ty))
             }
             "type.bitfield_fields" => {
                 if type_args.len() != 1 {

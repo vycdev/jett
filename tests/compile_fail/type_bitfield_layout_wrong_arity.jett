@@ -1,0 +1,6 @@
+# ERROR: E0309
+namespace test
+
+function bad() returns bool:
+    TypeBitfield info = type.bitfield_layout[int64, string]()
+    return info.network_order

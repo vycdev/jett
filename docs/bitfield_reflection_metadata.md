@@ -68,7 +68,7 @@ Rules:
 - `enum_type` is `some(type.info[EnumType]())` only for `bits as EnumType`;
   otherwise it is `none`.
 
-Add one owning-type metadata struct later if needed:
+Implemented second-stage owning-type metadata struct:
 
 ```jett
 struct TypeBitfield:
@@ -76,9 +76,9 @@ struct TypeBitfield:
     fields: list[TypeBitfieldField]
 ```
 
-That can be exposed as `type.bitfield[T]()` once stdlib binary encoding needs
-the bitfield-level byte-order flag. JSON does not need byte order, so
-`type.bitfield_fields[T]()` can ship first.
+It is exposed as `type.bitfield_layout[T]()` so future `.jett` binary encoding
+code can observe the whole bitfield layout, including byte order, without
+special Rust knowledge.
 
 ## Why Not Extend `TypeField`?
 
@@ -117,7 +117,8 @@ before constructing the final bitfield value.
 The staged approach is:
 
 1. Add `type.bitfield_fields[T]()` for field-level layout. Done.
-2. Add `type.bitfield[T]()` when binary packing moves into stdlib.
+2. Add `type.bitfield_layout[T]()` for bitfield-level byte-order metadata.
+   Done.
 3. Design construction before replacing Rust-backed parse/from-bytes behavior.
 
 ## Tests
@@ -132,9 +133,12 @@ Run-pass:
   `type_info.type_name == "list[uint8]"`.
 - `type.fields[Header]()` and `type.bitfield_fields[Header]()` agree on field
   order and names.
+- `type.bitfield_layout[Header]()` exposes `network_order` and the same
+  `TypeBitfieldField` list.
 
 Compile-fail:
 
+- Wrong arity for `type.bitfield_layout`.
 - Wrong arity for `type.bitfield_fields`.
 - Attempting to use user-constructed metadata as trusted bitfield layout should
   fail once trusted reflection provenance exists.
@@ -145,6 +149,6 @@ Compile-fail:
   as `TypeBitfieldFieldShape.bits` and `.payload`?
 - Should `enum_type` be `optional[TypeInfo]`, or should enum annotation be
   encoded only through `type_info.kind == "enum"`?
-- Should byte order live in a separate `TypeBitfield`, or should
-  `type.bitfield_fields[T]()` return an object with both `network_order` and
-  `fields` from the start?
+- Should `TypeBitfield` also expose derived facts such as total fixed bit width,
+  payload index, or byte alignment, or should those remain easy stdlib folds
+  over `fields`?

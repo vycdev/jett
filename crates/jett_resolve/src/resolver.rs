@@ -96,6 +96,7 @@ impl Resolver {
             "secret",
             "TypeInfo",
             "TypeField",
+            "TypeBitfield",
             "TypeBitfieldField",
             "TypeVariant",
             "json",
@@ -940,6 +941,7 @@ fn is_builtin_type(name: &str) -> bool {
             | "bytes"
             | "TypeInfo"
             | "TypeField"
+            | "TypeBitfield"
             | "TypeBitfieldField"
             | "TypeVariant"
     )

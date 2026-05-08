@@ -26,6 +26,10 @@ bitfield Packet:
     protocol: 8 bits as Protocol
     payload: list[uint8]
 
+bitfield network NetworkPacket:
+    version: 4 bits
+    header_length: 4 bits
+
 struct User:
     id: string
 
@@ -184,6 +188,14 @@ function bitfield_field_count[T]() returns int64:
     list[TypeBitfieldField] fields = type.bitfield_fields[T]()
     return list.length(fields)
 
+function bitfield_metadata_field_count[T]() returns int64:
+    TypeBitfield info = type.bitfield_layout[T]()
+    return list.length(info.fields)
+
+function bitfield_metadata_network_order[T]() returns bool:
+    TypeBitfield info = type.bitfield_layout[T]()
+    return info.network_order
+
 function bitfield_field_shape[T](field_name: string) returns string:
     list[TypeBitfieldField] fields = type.bitfield_fields[T]()
     string found = "missing"
@@ -294,6 +306,9 @@ verify type_info_reflection:
     assert field_kind[Header]("version") == "primitive"
     assert header_version_by_reflection() == 4
     assert bitfield_field_count[Packet]() == 4
+    assert bitfield_metadata_field_count[Packet]() == 4
+    assert bitfield_metadata_network_order[Packet]() == false
+    assert bitfield_metadata_network_order[NetworkPacket]() == true
     assert bitfield_field_shape[Packet]("version") == "bits"
     assert bitfield_field_width[Packet]("version") == 4
     assert bitfield_field_type_kind[Packet]("protocol") == "enum"

@@ -24,6 +24,8 @@ Implemented reflection primitives:
 - `type.bitfield_fields[T]()` returns ordered `TypeBitfieldField` metadata for
   bitfields, including `shape`, `width`, semantic `type_info`, and optional
   enum annotation metadata.
+- `type.bitfield_layout[T]()` returns `TypeBitfield` metadata with
+  `network_order` and the same ordered `list[TypeBitfieldField]` layout.
 - `type.variants[T]()` returns ordered `TypeVariant` metadata for enums.
   `TypeVariant` includes `index`, `name`, `discriminant`, `has_secret`, and
   payload `fields` as `list[TypeField]`.
@@ -128,11 +130,11 @@ uniformly for every JSON serialization call.
 
 ### 5. Bitfield-Specific Metadata
 
-`type.bitfield_fields[T]()` now exposes field-level layout metadata: bit width,
-bits-vs-payload shape, semantic field type, and enum annotations. A full stdlib
-replacement for binary packing still needs bitfield-level metadata such as byte
-order. See `docs/bitfield_reflection_metadata.md` for the current staged
-proposal.
+`type.bitfield_fields[T]()` exposes field-level layout metadata: bit width,
+bits-vs-payload shape, semantic field type, and enum annotations.
+`type.bitfield_layout[T]()` wraps that with bitfield-level byte-order metadata.
+A full stdlib replacement for binary packing still needs a construction story
+for the decoded value. See `docs/bitfield_reflection_metadata.md`.
 
 ## Suggested Next Steps
 
