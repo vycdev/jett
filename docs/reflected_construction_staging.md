@@ -45,6 +45,22 @@ for field in type.fields[T]():
 return type.construct_finish[T](builder)
 ```
 
+Enum construction uses the same builder after selecting a variant:
+
+```jett
+for variant in type.variants[T]():
+    if variant.name == variant_name:
+        mutable TypeConstruction builder = type.construct_variant_start[T](view variant) handle error:
+            return fail(error)
+        for field in variant.fields:
+            comptime type Field = field.type_info:
+                Field decoded = decode_payload[Field](view raw, view field) handle error:
+                    return fail(error)
+                builder = type.construct_put[T, Field](builder, view field, decoded) handle error:
+                    return fail(error)
+        return type.construct_finish[T](builder)
+```
+
 This is less elegant than the eventual block syntax, but it proves the
 construction semantics without adding new syntax. The builder is opaque: user
 code can add typed values, but cannot read heterogeneous values back out.
@@ -65,14 +81,17 @@ code can add typed values, but cannot read heterogeneous values back out.
 
 The current implementation is still deliberately narrow:
 
-- Supports structs and bitfields; enum construction remains future work.
-- Require `construct_put` field metadata to match `T` by index, name, and
-  reflected type. This is not full provenance, but it matches the current
-  `type.field_value` safety model.
+- Supports structs, bitfields, and enum variants. Enums require
+  `type.construct_variant_start[T](variant)` because a variant must be selected
+  before payload fields can be provided.
+- Require `construct_put` field metadata to match `T` or the selected enum
+  variant by index, name, and reflected type. This is not full provenance, but
+  it matches the current `type.field_value` safety model.
 - Reject duplicate fields and missing fields in `construct_finish`.
+- Validate `TypeVariant` metadata by index, name, discriminant, and payload
+  field metadata before starting enum construction.
 - Return `result[TypeConstruction, string]` from `construct_put` and
   `result[T, string]` from `construct_finish`.
-- Do not support enum construction in the first slice.
 - Do not parse `TypeInfo.type_name` or trust arbitrary user-created `TypeInfo`.
 
 Longer term, trusted metadata provenance should become an internal value fact
@@ -85,15 +104,16 @@ For the no-syntax builder:
 - `crates/jett_types`: added an opaque `TypeConstruction` built-in type.
 - `crates/jett_resolve`: pre-registered `TypeConstruction`.
 - `crates/jett_typecheck`: added builtin signatures for
-  `type.construct_start`, `type.construct_put`, and `type.construct_finish`.
+  `type.construct_start`, `type.construct_variant_start`,
+  `type.construct_put`, and `type.construct_finish`.
 - `crates/jett_comptime`: added `Value::TypeConstruction` and
-  dispatch the three builtins.
+  dispatch the construction builtins.
 - Refinement validation is checked on `construct_finish`; longer term, the
   builder should share more of the ordinary constructor helper path directly.
 - Fixture tests cover successful struct construction, missing fields,
   duplicate fields, wrong field metadata, wrong value type, generic structs, and
   refinement fields. They also cover bitfield construction and bit-width
-  validation.
+  validation, plus enum unit and payload variant construction.
 
 For the eventual block syntax:
 
@@ -106,8 +126,9 @@ For the eventual block syntax:
 
 ## Recommendation
 
-Extend reflected construction to enums next. The opaque builder is not the final
-language shape, but it proves the hard semantic part while staying inside
+Keep hardening the `.jett` decoder prototype now that structs, bitfields, and
+enums can all be constructed through reflection. The opaque builder is not the
+final language shape, but it proves the hard semantic part while staying inside
 existing syntax. As the decoder grows through the remaining cases, the case for
 a cleaner `type.construct[T]:` block will be grounded in real usage instead of
 guesswork.

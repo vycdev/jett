@@ -1,0 +1,13 @@
+# ERROR: E0309
+namespace test
+
+enum Direction:
+    north
+
+function bad_construct_variant_start_owner() returns nothing:
+    list[TypeVariant] variants = type.variants[Direction]()
+    TypeVariant variant = list.get[TypeVariant](variants, 0) handle:
+        return nothing
+    TypeConstruction builder = type.construct_variant_start[int64](view variant) handle error:
+        return nothing
+    return nothing

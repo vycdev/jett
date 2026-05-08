@@ -49,6 +49,8 @@ This should initially be limited to trusted metadata produced by reflection:
 - `field.type_info` where `field` comes from `type.fields[T]()`
 - `field.type_info` where `field` comes from
   `type.variant_value[T](view value).fields`
+- `field.type_info` where `field` comes from `variant.fields` inside a direct
+  `for variant in type.variants[T]():` loop
 - recursive `TypeInfo.args` reached from those values
 
 User-constructed `TypeInfo` values must not be bindable as types.
@@ -105,6 +107,8 @@ The current implementation supports:
   `for field in type.fields[T]():` loop
 - `field.type_info` when `field` is the loop variable of a direct active enum
   payload loop such as `for field in type.variant_value[T](view value).fields:`
+- `field.type_info` when `field` is the loop variable of a direct static enum
+  variant payload loop nested under `for variant in type.variants[T]():`
 - `TypeInfo` values produced by direct reflected `args` loops, such as
   `for arg in type.info[list[T]]().args:` or nested `for inner in arg.args:`
 
@@ -116,9 +120,9 @@ separately. The trusted `args` form currently follows direct `type.info[T]()`,
 trusted field metadata, and previously trusted `args` loop variables; storing
 metadata in ordinary variables still drops provenance.
 The same narrow rule applies to enum payload fields: a stored `TypeVariant`
-value can be inspected as data, but only a direct
-`type.variant_value[T](view value).fields` loop carries enough provenance to
-bind payload field types.
+value can be inspected as data, but only direct active-value payload loops and
+direct `type.variants[T]()` loops carry enough provenance to bind payload field
+types.
 
 `type.arg[T](index)` is also available as an ordinary runtime metadata helper:
 it returns the indexed `TypeInfo` argument for wrappers such as `list[T]`,
@@ -152,7 +156,7 @@ Compile-fail:
   reflected `args` loop.
 - Binding through `type.arg[T](index)` with a non-literal index.
 - Binding through an intermediate `TypeVariant` variable rather than a direct
-  active enum payload field loop.
+  active enum payload field loop or a direct `type.variants[T]()` loop.
 - Binding a field from one owner and reading it from another owner remains
   rejected.
 
@@ -162,6 +166,6 @@ Compile-fail:
   an AST provenance side table, or a dedicated internal reflection value?
 - Should nested `TypeInfo.args` preserve provenance beyond the direct trusted
   loops, or is `type.arg[T](literal)` enough for the common generic wrappers?
-- Can the same primitive bind enum variant payload fields from
-  `type.variants[T]()` without adding broader provenance tracking for stored
-  variant metadata?
+- Should static `type.variants[T]()` field binding preserve selected-variant
+  provenance in later compiler IR, or is the current direct-loop validation
+  enough for stdlib JSON and similar formats?

@@ -114,6 +114,20 @@ struct ReflectedTypeInfoBinding {
 }
 
 #[derive(Debug, Clone)]
+struct ReflectedVariantBinding {
+    ty: TypeExpr,
+    index: usize,
+    name: String,
+    discriminant: i64,
+}
+
+#[derive(Debug, Clone)]
+struct ReflectedVariantFieldOwner {
+    ty: TypeExpr,
+    variant: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 struct ReflectionVariant {
     name: String,
     discriminant: i64,
@@ -162,6 +176,8 @@ pub struct Interpreter {
     reflected_field_scopes: Vec<HashMap<String, ReflectedFieldBinding>>,
     /// Trusted TypeInfo metadata currently produced by direct reflected `args` loops.
     reflected_type_info_scopes: Vec<HashMap<String, ReflectedTypeInfoBinding>>,
+    /// Trusted TypeVariant metadata currently produced by direct `type.variants[T]()` loops.
+    reflected_variant_scopes: Vec<HashMap<String, ReflectedVariantBinding>>,
     /// Live actor instances keyed by unique ID.
     actor_instances: HashMap<u64, ActorInstance>,
     /// Next actor instance ID.
@@ -199,6 +215,7 @@ impl Interpreter {
             type_arg_scopes: Vec::new(),
             reflected_field_scopes: Vec::new(),
             reflected_type_info_scopes: Vec::new(),
+            reflected_variant_scopes: Vec::new(),
             actor_instances: HashMap::new(),
             next_actor_id: 0,
             debug_output: Vec::new(),
@@ -1118,8 +1135,10 @@ impl Interpreter {
             Stmt::For(for_stmt) => {
                 let reflected_field_bindings =
                     self.reflected_field_loop_bindings(&for_stmt.iterable);
+                let reflected_variant_bindings =
+                    self.reflected_variant_loop_bindings(&for_stmt.iterable);
                 let reflected_variant_field_owner =
-                    self.reflected_variant_field_loop_owner(&for_stmt.iterable);
+                    self.reflected_variant_field_loop_owner(&for_stmt.iterable)?;
                 let reflected_type_info_bindings =
                     self.reflected_type_info_arg_loop_bindings(&for_stmt.iterable)?;
                 let iterable = match self.eval_expr_flow(&for_stmt.iterable)? {
@@ -1142,11 +1161,22 @@ impl Interpreter {
                                     self.reflected_field_scopes.push(scope);
                                 })
                                 .is_some();
+                            let pushed_variant_scope = reflected_variant_bindings
+                                .as_ref()
+                                .and_then(|bindings| bindings.get(index))
+                                .map(|binding| {
+                                    let mut scope = HashMap::new();
+                                    scope.insert(for_stmt.variable.name.clone(), binding.clone());
+                                    self.reflected_variant_scopes.push(scope);
+                                })
+                                .is_some();
                             let pushed_variant_field_scope = reflected_variant_field_owner
                                 .as_ref()
                                 .map(|owner_ty| {
                                     self.reflected_variant_field_binding_for_value(
-                                        owner_ty, &loop_item,
+                                        &owner_ty.ty,
+                                        owner_ty.variant.as_deref(),
+                                        &loop_item,
                                     )
                                 })
                                 .transpose()?
@@ -1175,6 +1205,9 @@ impl Interpreter {
                             }
                             if pushed_field_scope {
                                 self.reflected_field_scopes.pop();
+                            }
+                            if pushed_variant_scope {
+                                self.reflected_variant_scopes.pop();
                             }
                             self.pop_scope();
                             let signal = signal?;
@@ -1972,6 +2005,7 @@ impl Interpreter {
                 | "type.field_value"
                 | "type.variant_field_value"
                 | "type.construct_start"
+                | "type.construct_variant_start"
                 | "type.construct_put"
                 | "type.construct_finish"
                 | "json.parse"
@@ -2050,8 +2084,15 @@ impl Interpreter {
                 }
                 Ok(Value::TypeConstruction {
                     type_name: type_expr_display(&ty),
+                    variant: None,
                     fields: Vec::new(),
                 })
+            }
+            "type.construct_variant_start" => {
+                if let Some(err) = check_args(name, 1, args) {
+                    return Some(err);
+                }
+                self.reflected_construct_variant_start(&ty, &args[0])
             }
             "type.construct_put" => {
                 if let Some(err) = check_args(name, 3, args) {
@@ -2563,18 +2604,61 @@ impl Interpreter {
         )
     }
 
-    fn reflected_variant_field_loop_owner(&self, iterable: &Expr) -> Option<TypeExpr> {
-        comptime_type_variant_fields_binding(iterable).map(|ty| self.substitute_type_expr(ty))
+    fn reflected_variant_loop_bindings(
+        &self,
+        iterable: &Expr,
+    ) -> Option<Vec<ReflectedVariantBinding>> {
+        let owner_ty = comptime_type_variants_binding(iterable)?;
+        let owner_ty = self.substitute_type_expr(owner_ty);
+        Some(
+            self.type_expr_variants(&owner_ty)
+                .into_iter()
+                .enumerate()
+                .map(|(index, variant)| ReflectedVariantBinding {
+                    ty: owner_ty.clone(),
+                    index,
+                    name: variant.name,
+                    discriminant: variant.discriminant,
+                })
+                .collect(),
+        )
+    }
+
+    fn reflected_variant_field_loop_owner(
+        &self,
+        iterable: &Expr,
+    ) -> Result<Option<ReflectedVariantFieldOwner>, String> {
+        if let Some(ty) = comptime_type_variant_fields_binding(iterable) {
+            return Ok(Some(ReflectedVariantFieldOwner {
+                ty: self.substitute_type_expr(ty),
+                variant: None,
+            }));
+        }
+
+        let Some(variant_name) = reflected_variant_fields_binding(iterable) else {
+            return Ok(None);
+        };
+        let Some(binding) = self.maybe_bound_reflected_variant(variant_name)? else {
+            return Ok(None);
+        };
+        Ok(Some(ReflectedVariantFieldOwner {
+            ty: binding.ty,
+            variant: Some(binding.name),
+        }))
     }
 
     fn reflected_variant_field_binding_for_value(
         &self,
         owner_ty: &TypeExpr,
+        selected_variant: Option<&str>,
         field_metadata: &Value,
     ) -> Result<ReflectedFieldBinding, String> {
         let (field_index, metadata_name, metadata_type_name) =
             Self::type_field_metadata_for(field_metadata, "type.field_value")?;
         for variant in self.type_expr_variants(owner_ty) {
+            if matches!(selected_variant, Some(selected) if selected != variant.name) {
+                continue;
+            }
             let Some(field) = variant.fields.get(field_index) else {
                 continue;
             };
@@ -2591,6 +2675,29 @@ impl Interpreter {
             metadata_name,
             type_expr_display(owner_ty)
         ))
+    }
+
+    fn maybe_bound_reflected_variant(
+        &self,
+        variant_name: &str,
+    ) -> Result<Option<ReflectedVariantBinding>, String> {
+        let binding = self
+            .reflected_variant_scopes
+            .iter()
+            .rev()
+            .find_map(|scope| scope.get(variant_name));
+        let Some(binding) = binding else {
+            return Ok(None);
+        };
+        let current_value = self.get_variable(variant_name).ok_or_else(|| {
+            format!("`comptime type` reflected variant '{variant_name}' is not in scope")
+        })?;
+        let (index, name, discriminant) =
+            Self::type_variant_metadata(current_value, "`comptime type`")?;
+        if index != binding.index || name != binding.name || discriminant != binding.discriminant {
+            return Err("`comptime type` reflected variant metadata no longer matches the trusted `type.variants[T]()` loop item".to_string());
+        }
+        Ok(Some(binding.clone()))
     }
 
     fn reflected_type_info_arg_loop_bindings(
@@ -2626,7 +2733,7 @@ impl Interpreter {
     fn bound_reflected_field_type(&self, field_name: &str) -> Result<TypeExpr, String> {
         self.maybe_bound_reflected_field_type(field_name)?
             .ok_or_else(|| {
-                "`comptime type` can only bind field.type_info inside a direct `type.fields[T]()` loop"
+                "`comptime type` can only bind field.type_info inside direct trusted reflection field loops"
                     .to_string()
             })
     }
@@ -3005,6 +3112,7 @@ impl Interpreter {
     ) -> Result<Value, String> {
         let Value::TypeConstruction {
             type_name,
+            variant,
             fields: existing_fields,
         } = builder
         else {
@@ -3021,9 +3129,9 @@ impl Interpreter {
             )));
         }
         let owner_kind = self.type_expr_kind(owner_ty);
-        if !matches!(owner_kind, "struct" | "bitfield") {
+        if !matches!(owner_kind, "struct" | "bitfield" | "enum") {
             return Ok(result_fail(format!(
-                "type.construct_put supports only structs and bitfields, got '{}'",
+                "type.construct_put supports only structs, bitfields, and enums, got '{}'",
                 type_expr_display(owner_ty)
             )));
         }
@@ -3033,19 +3141,61 @@ impl Interpreter {
                 Ok(metadata) => metadata,
                 Err(message) => return Ok(result_fail(message)),
             };
-        let fields = self.type_expr_fields(owner_ty);
+
+        let fields = if owner_kind == "enum" {
+            let Some(variant_name) = variant.as_ref() else {
+                return Ok(result_fail(
+                    "type.construct_put: enum construction requires type.construct_variant_start"
+                        .to_string(),
+                ));
+            };
+            let Some(variant) = self
+                .type_expr_variants(owner_ty)
+                .into_iter()
+                .find(|candidate| candidate.name == *variant_name)
+            else {
+                return Ok(result_fail(format!(
+                    "type.construct_put: enum '{}' has no variant '{}'",
+                    expected_owner, variant_name
+                )));
+            };
+            variant.fields
+        } else {
+            if variant.is_some() {
+                return Ok(result_fail(format!(
+                    "type.construct_put: enum variant builder cannot construct '{}'",
+                    expected_owner
+                )));
+            }
+            self.type_expr_fields(owner_ty)
+        };
+
         let Some(field) = fields.get(field_index) else {
-            return Ok(result_fail(format!(
-                "type.construct_put: type '{}' has no field at index {}",
-                expected_owner, field_index
-            )));
+            if let Some(variant_name) = variant.as_ref() {
+                return Ok(result_fail(format!(
+                    "type.construct_put: variant '{}.{}' has no payload field at index {}",
+                    expected_owner, variant_name, field_index
+                )));
+            } else {
+                return Ok(result_fail(format!(
+                    "type.construct_put: type '{}' has no field at index {}",
+                    expected_owner, field_index
+                )));
+            }
         };
 
         if field.name != metadata_name {
-            return Ok(result_fail(format!(
-                "type.construct_put: field metadata '{}' does not match field '{}' on '{}'",
-                metadata_name, field.name, expected_owner
-            )));
+            if let Some(variant_name) = variant.as_ref() {
+                return Ok(result_fail(format!(
+                    "type.construct_put: field metadata '{}' does not match payload field '{}' on variant '{}.{}'",
+                    metadata_name, field.name, expected_owner, variant_name
+                )));
+            } else {
+                return Ok(result_fail(format!(
+                    "type.construct_put: field metadata '{}' does not match field '{}' on '{}'",
+                    metadata_name, field.name, expected_owner
+                )));
+            }
         }
 
         let actual_type_name = type_expr_display(&field.ty);
@@ -3078,7 +3228,84 @@ impl Interpreter {
         fields.push((field_index, metadata_name, actual_type_name, value.clone()));
         Ok(result_ok(Value::TypeConstruction {
             type_name: type_name.clone(),
+            variant: variant.clone(),
             fields,
+        }))
+    }
+
+    fn reflected_construct_variant_start(
+        &self,
+        owner_ty: &TypeExpr,
+        variant_metadata: &Value,
+    ) -> Result<Value, String> {
+        let owner_kind = self.type_expr_kind(owner_ty);
+        if owner_kind != "enum" {
+            return Ok(result_fail(format!(
+                "type.construct_variant_start supports only enums, got '{}'",
+                type_expr_display(owner_ty)
+            )));
+        }
+
+        let expected_owner = type_expr_display(owner_ty);
+        let (variant_index, metadata_name, metadata_discriminant) =
+            match Self::type_variant_metadata(variant_metadata, "type.construct_variant_start") {
+                Ok(metadata) => metadata,
+                Err(message) => return Ok(result_fail(message)),
+            };
+        let metadata_fields = match Self::type_variant_payload_field_metadata(
+            variant_metadata,
+            "type.construct_variant_start",
+        ) {
+            Ok(fields) => fields,
+            Err(message) => return Ok(result_fail(message)),
+        };
+
+        let variants = self.type_expr_variants(owner_ty);
+        let Some(variant) = variants.get(variant_index) else {
+            return Ok(result_fail(format!(
+                "type.construct_variant_start: enum '{}' has no variant at index {}",
+                expected_owner, variant_index
+            )));
+        };
+        if variant.name != metadata_name {
+            return Ok(result_fail(format!(
+                "type.construct_variant_start: variant metadata '{}' does not match variant '{}' on '{}'",
+                metadata_name, variant.name, expected_owner
+            )));
+        }
+        if variant.discriminant != metadata_discriminant {
+            return Ok(result_fail(format!(
+                "type.construct_variant_start: variant '{}.{}' has discriminant {}, metadata reports {}",
+                expected_owner, variant.name, variant.discriminant, metadata_discriminant
+            )));
+        }
+        if metadata_fields.len() != variant.fields.len() {
+            return Ok(result_fail(format!(
+                "type.construct_variant_start: variant '{}.{}' expects {} payload field(s), metadata reports {}",
+                expected_owner,
+                variant.name,
+                variant.fields.len(),
+                metadata_fields.len()
+            )));
+        }
+        for (index, field) in variant.fields.iter().enumerate() {
+            let (metadata_index, metadata_field_name, metadata_type_name) = &metadata_fields[index];
+            let actual_type_name = type_expr_display(&field.ty);
+            if *metadata_index != index
+                || metadata_field_name != &field.name
+                || metadata_type_name != &actual_type_name
+            {
+                return Ok(result_fail(format!(
+                    "type.construct_variant_start: payload field metadata at index {} does not match variant '{}.{}'",
+                    index, expected_owner, variant.name
+                )));
+            }
+        }
+
+        Ok(result_ok(Value::TypeConstruction {
+            type_name: expected_owner,
+            variant: Some(variant.name.clone()),
+            fields: Vec::new(),
         }))
     }
 
@@ -3087,7 +3314,12 @@ impl Interpreter {
         owner_ty: &TypeExpr,
         builder: &Value,
     ) -> Result<Value, String> {
-        let Value::TypeConstruction { type_name, fields } = builder else {
+        let Value::TypeConstruction {
+            type_name,
+            variant,
+            fields,
+        } = builder
+        else {
             return Err(format!(
                 "type.construct_finish: first argument must be TypeConstruction, got {builder}"
             ));
@@ -3101,15 +3333,35 @@ impl Interpreter {
             )));
         }
         let owner_kind = self.type_expr_kind(owner_ty);
-        if !matches!(owner_kind, "struct" | "bitfield") {
+        if !matches!(owner_kind, "struct" | "bitfield" | "enum") {
             return Ok(result_fail(format!(
-                "type.construct_finish supports only structs and bitfields, got '{}'",
+                "type.construct_finish supports only structs, bitfields, and enums, got '{}'",
                 type_expr_display(owner_ty)
             )));
         }
 
+        if owner_kind == "enum" {
+            return self.reflected_construct_finish_enum(
+                owner_ty,
+                variant.as_deref(),
+                fields,
+                &expected_owner,
+            );
+        }
         if owner_kind == "bitfield" {
+            if variant.is_some() {
+                return Ok(result_fail(format!(
+                    "type.construct_finish: enum variant builder cannot construct '{}'",
+                    expected_owner
+                )));
+            }
             return self.reflected_construct_finish_bitfield(owner_ty, fields, &expected_owner);
+        }
+        if variant.is_some() {
+            return Ok(result_fail(format!(
+                "type.construct_finish: enum variant builder cannot construct '{}'",
+                expected_owner
+            )));
         }
 
         let reflected_fields = self.type_expr_fields(owner_ty);
@@ -3135,6 +3387,56 @@ impl Interpreter {
         Ok(result_ok(Value::Struct {
             type_name: type_expr_name(owner_ty),
             fields: struct_fields,
+        }))
+    }
+
+    fn reflected_construct_finish_enum(
+        &mut self,
+        owner_ty: &TypeExpr,
+        selected_variant: Option<&str>,
+        fields: &[(usize, String, String, Value)],
+        expected_owner: &str,
+    ) -> Result<Value, String> {
+        let Some(variant_name) = selected_variant else {
+            return Ok(result_fail(
+                "type.construct_finish: enum construction requires type.construct_variant_start"
+                    .to_string(),
+            ));
+        };
+        let Some(variant) = self
+            .type_expr_variants(owner_ty)
+            .into_iter()
+            .find(|candidate| candidate.name == variant_name)
+        else {
+            return Ok(result_fail(format!(
+                "type.construct_finish: enum '{}' has no variant '{}'",
+                expected_owner, variant_name
+            )));
+        };
+
+        let mut enum_fields = Vec::with_capacity(variant.fields.len());
+        for (index, field) in variant.fields.iter().enumerate() {
+            let Some((_, _, _, value)) = fields
+                .iter()
+                .find(|(field_index, _, _, _)| *field_index == index)
+            else {
+                return Ok(result_fail(format!(
+                    "type.construct_finish: variant '{}.{}' is missing required payload field '{}'",
+                    expected_owner, variant.name, field.name
+                )));
+            };
+
+            let type_name = type_expr_name(&field.ty);
+            if let Err(message) = self.check_refinement(&type_name, value) {
+                return Ok(result_fail(message));
+            }
+            enum_fields.push(value.clone());
+        }
+
+        Ok(result_ok(Value::Enum {
+            type_name: type_expr_name(owner_ty),
+            variant: variant.name,
+            fields: enum_fields,
         }))
     }
 
@@ -3188,6 +3490,85 @@ impl Interpreter {
 
     fn type_field_metadata(value: &Value) -> Result<(usize, String, String), String> {
         Self::type_field_metadata_for(value, "type.field_value")
+    }
+
+    fn type_variant_metadata(value: &Value, caller: &str) -> Result<(usize, String, i64), String> {
+        let Value::Struct { type_name, fields } = value else {
+            return Err(format!(
+                "{caller}: argument must be TypeVariant, got {value}"
+            ));
+        };
+        if type_name != "TypeVariant" {
+            return Err(format!(
+                "{caller}: argument must be TypeVariant, got {type_name}"
+            ));
+        }
+
+        let field_value = |name: &str| {
+            fields
+                .iter()
+                .find(|(field_name, _)| field_name == name)
+                .map(|(_, field_value)| field_value)
+                .ok_or_else(|| format!("{caller}: TypeVariant is missing '{name}'"))
+        };
+
+        let index = match field_value("index")? {
+            Value::Int64(index) if *index >= 0 => *index as usize,
+            other => {
+                return Err(format!(
+                    "{caller}: TypeVariant.index must be a non-negative int64, got {other}"
+                ));
+            }
+        };
+        let name = match field_value("name")? {
+            Value::String(name) => name.clone(),
+            other => {
+                return Err(format!(
+                    "{caller}: TypeVariant.name must be string, got {other}"
+                ));
+            }
+        };
+        let discriminant = match field_value("discriminant")? {
+            Value::Int64(discriminant) => *discriminant,
+            other => {
+                return Err(format!(
+                    "{caller}: TypeVariant.discriminant must be int64, got {other}"
+                ));
+            }
+        };
+
+        Ok((index, name, discriminant))
+    }
+
+    fn type_variant_payload_field_metadata(
+        value: &Value,
+        caller: &str,
+    ) -> Result<Vec<(usize, String, String)>, String> {
+        let Value::Struct { type_name, fields } = value else {
+            return Err(format!(
+                "{caller}: argument must be TypeVariant, got {value}"
+            ));
+        };
+        if type_name != "TypeVariant" {
+            return Err(format!(
+                "{caller}: argument must be TypeVariant, got {type_name}"
+            ));
+        }
+        let field_values = fields
+            .iter()
+            .find(|(field_name, _)| field_name == "fields")
+            .map(|(_, field_value)| field_value)
+            .ok_or_else(|| format!("{caller}: TypeVariant is missing 'fields'"))?;
+        let Value::List(field_values) = field_values else {
+            return Err(format!(
+                "{caller}: TypeVariant.fields must be list[TypeField], got {field_values}"
+            ));
+        };
+
+        field_values
+            .iter()
+            .map(|field| Self::type_field_metadata_for(field, caller))
+            .collect()
     }
 
     fn type_field_metadata_for(
@@ -7222,6 +7603,16 @@ fn comptime_type_fields_binding(expr: &Expr) -> Option<&TypeExpr> {
     type_args.first()
 }
 
+fn comptime_type_variants_binding(expr: &Expr) -> Option<&TypeExpr> {
+    let Expr::GenericCall(callee, type_args, args, _) = expr else {
+        return None;
+    };
+    if type_args.len() != 1 || !args.is_empty() || !is_type_variants_callee(callee) {
+        return None;
+    }
+    type_args.first()
+}
+
 fn comptime_type_variant_value_binding(expr: &Expr) -> Option<&TypeExpr> {
     let Expr::GenericCall(callee, type_args, args, _) = expr else {
         return None;
@@ -7240,6 +7631,19 @@ fn comptime_type_variant_fields_binding(expr: &Expr) -> Option<&TypeExpr> {
         return None;
     }
     comptime_type_variant_value_binding(base)
+}
+
+fn reflected_variant_fields_binding(expr: &Expr) -> Option<&str> {
+    let Expr::FieldAccess(base, field, _) = expr else {
+        return None;
+    };
+    if field.name != "fields" {
+        return None;
+    }
+    let Expr::Ident(ident) = base.as_ref() else {
+        return None;
+    };
+    Some(&ident.name)
 }
 
 fn reflected_field_type_info_binding(expr: &Expr) -> Option<&str> {
@@ -7303,6 +7707,13 @@ fn is_type_fields_callee(callee: &Expr) -> bool {
         return false;
     };
     field.name == "fields" && matches!(base.as_ref(), Expr::Ident(ident) if ident.name == "type")
+}
+
+fn is_type_variants_callee(callee: &Expr) -> bool {
+    let Expr::FieldAccess(base, field, _) = callee else {
+        return false;
+    };
+    field.name == "variants" && matches!(base.as_ref(), Expr::Ident(ident) if ident.name == "type")
 }
 
 fn is_type_variant_value_callee(callee: &Expr) -> bool {

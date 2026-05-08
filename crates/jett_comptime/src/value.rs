@@ -34,6 +34,7 @@ pub enum Value {
     /// An opaque reflected construction builder.
     TypeConstruction {
         type_name: String,
+        variant: Option<String>,
         fields: Vec<(usize, String, String, Value)>,
     },
     /// A user-defined struct instance: `Point(x: 1, y: 2)`.
@@ -89,13 +90,15 @@ impl PartialEq for Value {
             (
                 Value::TypeConstruction {
                     type_name: t1,
+                    variant: v1,
                     fields: f1,
                 },
                 Value::TypeConstruction {
                     type_name: t2,
+                    variant: v2,
                     fields: f2,
                 },
-            ) => t1 == t2 && f1 == f2,
+            ) => t1 == t2 && v1 == v2 && f1 == f2,
             (
                 Value::Struct {
                     type_name: t1,
@@ -175,8 +178,16 @@ impl fmt::Display for Value {
             Value::OptionalNone => write!(f, "none"),
             Value::Nothing => write!(f, "nothing"),
             Value::Json(json) => write!(f, "{json}"),
-            Value::TypeConstruction { type_name, fields } => {
-                write!(f, "TypeConstruction[{type_name}](")?;
+            Value::TypeConstruction {
+                type_name,
+                variant,
+                fields,
+            } => {
+                write!(f, "TypeConstruction[{type_name}")?;
+                if let Some(variant) = variant {
+                    write!(f, ".{variant}")?;
+                }
+                write!(f, "](")?;
                 for (i, (_, name, _, value)) in fields.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;

@@ -1,0 +1,63 @@
+namespace test
+
+enum Direction:
+    north
+    south
+
+enum Shape:
+    circle(radius: float64)
+    rect(width: float64, height: float64)
+
+function construct_unit_variant() returns bool:
+    for variant in type.variants[Direction]():
+        if variant.name == "south":
+            TypeConstruction builder = type.construct_variant_start[Direction](view variant) handle error:
+                return false
+            Direction built = type.construct_finish[Direction](builder) handle error:
+                return false
+            return built == Direction.south
+    return false
+
+function construct_payload_variant_area() returns float64:
+    for variant in type.variants[Shape]():
+        if variant.name == "rect":
+            mutable TypeConstruction builder = type.construct_variant_start[Shape](view variant) handle error:
+                return -1.0
+            for field in variant.fields:
+                comptime type Field = field.type_info:
+                    mutable Field value = 0.0
+                    if field.name == "width":
+                        value = 3.0
+                    if field.name == "height":
+                        value = 4.0
+                    builder = type.construct_put[Shape, Field](builder, view field, value) handle error:
+                        return -2.0
+            Shape built = type.construct_finish[Shape](builder) handle error:
+                return -3.0
+            match built:
+                circle(radius):
+                    return radius
+                rect(width, height):
+                    return width * height
+    return -4.0
+
+function missing_payload_message() returns string:
+    for variant in type.variants[Shape]():
+        if variant.name == "rect":
+            mutable TypeConstruction builder = type.construct_variant_start[Shape](view variant) handle error:
+                return error
+            for field in variant.fields:
+                if field.name == "width":
+                    comptime type Field = field.type_info:
+                        Field value = 3.0
+                        builder = type.construct_put[Shape, Field](builder, view field, value) handle error:
+                            return error
+            Shape built = type.construct_finish[Shape](builder) handle error:
+                return error
+            return "unexpected success"
+    return "missing variant"
+
+verify type_construction_enum:
+    assert construct_unit_variant() == true
+    assert construct_payload_variant_area() == 12.0
+    assert string.contains(missing_payload_message(), "missing required payload field 'height'") == true

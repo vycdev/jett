@@ -15,8 +15,8 @@ value = type.field_value[T, Field](view item, view field)
 
 Deserialization needs the reverse operation: given checked field values, build a
 `T` while preserving the exact same rules as ordinary source constructors. The
-first form now exists as the opaque `TypeConstruction` builder for structs and
-bitfields; enum construction and the final syntax story are still open.
+first form now exists as the opaque `TypeConstruction` builder for structs,
+bitfields, and enum variants; the final syntax story is still open.
 
 The missing operation is not JSON-specific. JSON happens to be the current
 pressure point, but the same primitive should serve:
@@ -51,6 +51,14 @@ Bitfield construction similarly enforces:
 - enum-annotated bit fields,
 - result-returning construction when runtime validation is required.
 
+Enum construction enforces:
+
+- selecting a declared variant by checked `TypeVariant` metadata,
+- variant-local payload field lookup,
+- duplicate and missing payload-field errors,
+- payload field type checking,
+- refinement boundary validation for payload values.
+
 A reflected constructor must not be a weaker back door around these checks. It
 should reuse the same typechecker and interpreter rules where possible.
 
@@ -58,9 +66,9 @@ should reuse the same typechecker and interpreter rules where possible.
 
 - **Static types stay central.** Avoid an `any`-like container where values carry
   only runtime `TypeInfo`. Jett's purpose is to make the checker do useful work.
-- **Trusted metadata matters.** Compiler-produced `TypeField` and `TypeInfo`
-  can drive construction. User-created structs that merely look like metadata
-  must not be trusted.
+- **Trusted metadata matters.** Compiler-produced `TypeField`, `TypeVariant`,
+  and `TypeInfo` can drive construction. User-created structs that merely look
+  like metadata must not be trusted.
 - **Errors are explicit.** Construction from parsed or decoded data should
   surface as `result[T, string]`, forcing a `handle error:` boundary.
 - **Format policy stays outside construction.** JSON `serialize_name`, missing
@@ -137,8 +145,9 @@ Verdict: preferred direction, pending syntax.
    `result[T, string]`.
 3. Done for bitfields: reuse reflected `TypeField` values and validate bit
    widths on `construct_finish`.
-4. Add enum variant construction only after variant payload typing has the same
-   trusted metadata story.
+4. Done for enums: start from checked `TypeVariant` metadata with
+   `type.construct_variant_start[T](variant)`, then reuse `construct_put` and
+   `construct_finish` for variant-local payload fields.
 5. Replace pieces of Rust-backed `json.parse[T]` with `.jett` code as each
    construction case becomes expressible.
 
@@ -150,8 +159,11 @@ The current code already has most of the semantic checks in one place:
 - typechecking ordinary bitfield constructors: `check_bitfield_constructor`,
 - runtime/interpreter struct construction: `construct_struct`,
 - runtime/interpreter bitfield construction: `construct_bitfield`,
+- runtime/interpreter enum construction: `Value::Enum` construction and
+  `json_to_enum_value`,
 - JSON behavior oracle while replacing the Rust bridge:
-  `json_to_value_typed`, `json_to_struct_value`, and `json_to_bitfield_value`.
+  `json_to_value_typed`, `json_to_struct_value`, `json_to_bitfield_value`, and
+  `json_to_enum_value`.
 
 A reflected construction implementation should route through these same paths
 or share their core helpers. Duplicating the checks risks subtle drift, especially

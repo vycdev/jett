@@ -547,7 +547,7 @@ The HIR is the first representation where generic functions are fully expanded. 
 2. **Method resolution:** `Dog.speak(view my_dog)` is resolved to the specific `implement Speaker for Dog` function.
 3. **Auto-view for field access:** `self.x` is annotated as an implicit view operation.
 4. **Primitive copyability:** Primitive types (`int64`, `float64`, `bool`, `string`) are marked as implicitly copyable — they don't follow linear consumption rules.
-5. **Comptime reflection lowering:** Preserve enough type metadata for comptime code to inspect `type.name[T]()`, `type.kind[T]()`, `type.has_secret[T]()`, `type.fields[T]()`, and bitfield layout metadata. JSON serialization should be expressible in terms of these reflection primitives rather than as format-specific HIR magic. Struct and bitfield deserialization can now use the `TypeConstruction` builder to build `T` from parsed field values; enum construction is still pending.
+5. **Comptime reflection lowering:** Preserve enough type metadata for comptime code to inspect `type.name[T]()`, `type.kind[T]()`, `type.has_secret[T]()`, `type.fields[T]()`, and bitfield layout metadata. JSON serialization should be expressible in terms of these reflection primitives rather than as format-specific HIR magic. Struct, bitfield, and enum deserialization can now use the `TypeConstruction` builder to build `T` from parsed field values; the final construction-block syntax is still pending.
 
 ---
 
@@ -1101,8 +1101,9 @@ The boundary between compiler-generated code and stdlib-implemented code is a cr
 | `type.variant_field_value[T, U](view value, view field)` | Enum reflection | Checked payload field read by reflected `TypeField` metadata |
 | `type.field_value[T, U](view value, view field)` | Struct/bitfield reflection | Checked field read by reflected `TypeField` metadata |
 | `type.construct_start[T]()` | Struct/bitfield reflection | Start an opaque `TypeConstruction` builder for constructible `T` |
-| `type.construct_put[T, U](builder, field, value)` | Struct/bitfield reflection | Add a typed field value to a builder after metadata/type checks |
-| `type.construct_finish[T](builder)` | Struct/bitfield reflection | Finish a builder as `result[T, string]`, checking missing fields, refinements, and bitfield widths |
+| `type.construct_variant_start[T](variant)` | Enum reflection | Start an opaque `TypeConstruction` builder for a checked enum variant |
+| `type.construct_put[T, U](builder, field, value)` | Reflection construction | Add a typed field or payload value to a builder after metadata/type checks |
+| `type.construct_finish[T](builder)` | Reflection construction | Finish a builder as `result[T, string]`, checking missing fields, refinements, bitfield widths, and enum payload arity |
 | `T.to_bytes()` / `T.from_bytes()` | Binary serialization | Field-by-field binary packing/unpacking |
 | `Displayable.display()` for structs | Struct implementing `Displayable` | Field-by-field string representation |
 | `clone` for structs | `clone value` on a struct | Field-by-field recursive deep copy |

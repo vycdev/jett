@@ -3,6 +3,14 @@ namespace test
 type Scores = map[string, int64]
 type NonEmpty = string where string.char_count(value) > 0
 
+enum Direction:
+    north
+    south
+
+enum Shape:
+    empty
+    point(x: int64, y: int64)
+
 struct Profile:
     city: string
     visits: list[int64]
@@ -16,6 +24,8 @@ struct User:
     active: bool
     profile: Profile
     header: Header
+    direction: Direction
+    shape: Shape
     tags: list[string]
     nickname: optional[string]
     missing: optional[string]
@@ -118,6 +128,49 @@ function decode_reflected[T](raw: JsonValue) returns result[T, string]:
                 return fail("ok: {error}")
             return ok(ok(item))
 
+    if kind == "enum":
+        if json.kind(raw) == "string":
+            string variant_name = json.as_string(raw) handle error:
+                return fail(error)
+            for variant in type.variants[T]():
+                if variant.name == variant_name:
+                    if list.length[TypeField](variant.fields) != 0:
+                        return fail("enum variant '{type_name}.{variant_name}' expects {list.length[TypeField](variant.fields)} payload field(s)")
+                    TypeConstruction builder = type.construct_variant_start[T](view variant) handle error:
+                        return fail(error)
+                    return type.construct_finish[T](builder)
+            return fail("unknown enum variant '{type_name}.{variant_name}'")
+
+        list[string] keys = json.object_keys(raw) handle error:
+            return fail("expected enum string or object, got {json.kind(raw)}")
+        if list.length[string](keys) != 1:
+            return fail("expected enum object with exactly one variant key")
+        string variant_name = list.get[string](keys, 0) handle:
+            return fail("expected enum object with exactly one variant key")
+        JsonValue payload = json.field(raw, variant_name) handle:
+            return fail("missing enum payload for '{variant_name}'")
+        int64 payload_count = json.array_length(payload) handle error:
+            return fail("expected array payload for enum variant '{type_name}.{variant_name}', got {json.kind(payload)}")
+        for variant in type.variants[T]():
+            if variant.name == variant_name:
+                int64 expected_count = list.length[TypeField](variant.fields)
+                if payload_count != expected_count:
+                    return fail("enum variant '{type_name}.{variant_name}' expects {expected_count} payload field(s), got {payload_count}")
+                mutable TypeConstruction builder = type.construct_variant_start[T](view variant) handle error:
+                    return fail(error)
+                mutable int64 index = 0
+                for field in variant.fields:
+                    comptime type Field = field.type_info:
+                        JsonValue raw_item = json.index(payload, index) handle:
+                            return fail("missing enum payload item {index}")
+                        Field decoded = decode_reflected[Field](raw_item) handle error:
+                            return fail("{variant_name}.{field.name}: {error}")
+                        builder = type.construct_put[T, Field](builder, view field, decoded) handle error:
+                            return fail(error)
+                    index = index + 1
+                return type.construct_finish[T](builder)
+        return fail("unknown enum variant '{type_name}.{variant_name}'")
+
     if kind == "struct" or kind == "bitfield":
         mutable TypeConstruction builder = type.construct_start[T]()
         for field in type.fields[T]():
@@ -137,10 +190,17 @@ function decode_reflected[T](raw: JsonValue) returns result[T, string]:
     return fail("unsupported reflected JSON type: {type_name}")
 
 function decoded_nested_summary() returns string:
-    JsonValue root = json.parse_raw("{{\"userId\":\"u1\",\"active\":true,\"profile\":{{\"city\":\"Cluj\",\"visits\":[3,5]}},\"header\":{{\"version\":4,\"header_length\":5}},\"tags\":[\"admin\",\"beta\"],\"nickname\":\"ally\",\"scores\":{{\"wins\":3,\"losses\":1}},\"lucky\":[11,13],\"display\":\"ready\",\"outcome\":{{\"ok\":7}},\"failed\":{{\"fail\":\"bad\"}}}}") handle error:
+    JsonValue root = json.parse_raw("{{\"userId\":\"u1\",\"active\":true,\"profile\":{{\"city\":\"Cluj\",\"visits\":[3,5]}},\"header\":{{\"version\":4,\"header_length\":5}},\"direction\":\"south\",\"shape\":{{\"point\":[3,4]}},\"tags\":[\"admin\",\"beta\"],\"nickname\":\"ally\",\"scores\":{{\"wins\":3,\"losses\":1}},\"lucky\":[11,13],\"display\":\"ready\",\"outcome\":{{\"ok\":7}},\"failed\":{{\"fail\":\"bad\"}}}}") handle error:
         return error
     User user = decode_reflected[User](root) handle error:
         return error
+    bool south = user.direction == Direction.south
+    int64 shape_total = 0
+    match user.shape:
+        empty:
+            shape_total = -1
+        point(x, y):
+            shape_total = x + y
     string nick = user.nickname handle:
         default "none"
     string missing = user.missing handle:
@@ -151,10 +211,10 @@ function decoded_nested_summary() returns string:
     bool lucky = set.contains[int64](user.lucky, 13)
     int64 outcome = user.outcome handle error:
         default -1
-    return "{user.id}:{user.profile.city}:{user.header.version}:{user.header.header_length}:{list.length[int64](user.profile.visits)}:{list.length[string](user.tags)}:{nick}:{missing}:{wins}:{lucky_count}:{lucky}:{coarsen user.display}:{outcome}:{user.active}"
+    return "{user.id}:{user.profile.city}:{user.header.version}:{user.header.header_length}:{south}:{shape_total}:{list.length[int64](user.profile.visits)}:{list.length[string](user.tags)}:{nick}:{missing}:{wins}:{lucky_count}:{lucky}:{coarsen user.display}:{outcome}:{user.active}"
 
 function decoded_result_failure() returns string:
-    JsonValue root = json.parse_raw("{{\"userId\":\"u1\",\"active\":true,\"profile\":{{\"city\":\"Cluj\",\"visits\":[3]}},\"header\":{{\"version\":4,\"header_length\":5}},\"tags\":[],\"nickname\":null,\"missing\":null,\"scores\":{{\"wins\":3}},\"lucky\":[13],\"display\":\"ready\",\"outcome\":{{\"ok\":7}},\"failed\":{{\"fail\":\"bad\"}}}}") handle error:
+    JsonValue root = json.parse_raw("{{\"userId\":\"u1\",\"active\":true,\"profile\":{{\"city\":\"Cluj\",\"visits\":[3]}},\"header\":{{\"version\":4,\"header_length\":5}},\"direction\":\"south\",\"shape\":{{\"point\":[3,4]}},\"tags\":[],\"nickname\":null,\"missing\":null,\"scores\":{{\"wins\":3}},\"lucky\":[13],\"display\":\"ready\",\"outcome\":{{\"ok\":7}},\"failed\":{{\"fail\":\"bad\"}}}}") handle error:
         return error
     User user = decode_reflected[User](root) handle error:
         return error
@@ -163,37 +223,45 @@ function decoded_result_failure() returns string:
     return "{ignored}"
 
 function invalid_refinement_message() returns string:
-    JsonValue root = json.parse_raw("{{\"userId\":\"u1\",\"active\":true,\"profile\":{{\"city\":\"Cluj\",\"visits\":[3]}},\"header\":{{\"version\":4,\"header_length\":5}},\"tags\":[],\"nickname\":null,\"missing\":null,\"scores\":{{\"wins\":3}},\"lucky\":[13],\"display\":\"\",\"outcome\":{{\"ok\":7}},\"failed\":{{\"fail\":\"bad\"}}}}") handle error:
+    JsonValue root = json.parse_raw("{{\"userId\":\"u1\",\"active\":true,\"profile\":{{\"city\":\"Cluj\",\"visits\":[3]}},\"header\":{{\"version\":4,\"header_length\":5}},\"direction\":\"south\",\"shape\":{{\"point\":[3,4]}},\"tags\":[],\"nickname\":null,\"missing\":null,\"scores\":{{\"wins\":3}},\"lucky\":[13],\"display\":\"\",\"outcome\":{{\"ok\":7}},\"failed\":{{\"fail\":\"bad\"}}}}") handle error:
         return error
     User user = decode_reflected[User](root) handle error:
         return error
     return user.id
 
 function missing_nested_message() returns string:
-    JsonValue root = json.parse_raw("{{\"userId\":\"u1\",\"active\":true,\"profile\":{{\"visits\":[3]}},\"header\":{{\"version\":4,\"header_length\":5}},\"tags\":[],\"nickname\":null,\"missing\":null,\"scores\":{{\"wins\":3}},\"lucky\":[13],\"display\":\"ready\",\"outcome\":{{\"ok\":7}},\"failed\":{{\"fail\":\"bad\"}}}}") handle error:
+    JsonValue root = json.parse_raw("{{\"userId\":\"u1\",\"active\":true,\"profile\":{{\"visits\":[3]}},\"header\":{{\"version\":4,\"header_length\":5}},\"direction\":\"south\",\"shape\":{{\"point\":[3,4]}},\"tags\":[],\"nickname\":null,\"missing\":null,\"scores\":{{\"wins\":3}},\"lucky\":[13],\"display\":\"ready\",\"outcome\":{{\"ok\":7}},\"failed\":{{\"fail\":\"bad\"}}}}") handle error:
         return error
     User user = decode_reflected[User](root) handle error:
         return error
     return user.id
 
 function wrong_list_item_message() returns string:
-    JsonValue root = json.parse_raw("{{\"userId\":\"u1\",\"active\":true,\"profile\":{{\"city\":\"Cluj\",\"visits\":[3]}},\"header\":{{\"version\":4,\"header_length\":5}},\"tags\":[1],\"nickname\":null,\"missing\":null,\"scores\":{{\"wins\":3}},\"lucky\":[13],\"display\":\"ready\",\"outcome\":{{\"ok\":7}},\"failed\":{{\"fail\":\"bad\"}}}}") handle error:
+    JsonValue root = json.parse_raw("{{\"userId\":\"u1\",\"active\":true,\"profile\":{{\"city\":\"Cluj\",\"visits\":[3]}},\"header\":{{\"version\":4,\"header_length\":5}},\"direction\":\"south\",\"shape\":{{\"point\":[3,4]}},\"tags\":[1],\"nickname\":null,\"missing\":null,\"scores\":{{\"wins\":3}},\"lucky\":[13],\"display\":\"ready\",\"outcome\":{{\"ok\":7}},\"failed\":{{\"fail\":\"bad\"}}}}") handle error:
         return error
     User user = decode_reflected[User](root) handle error:
         return error
     return user.id
 
 function invalid_bitfield_message() returns string:
-    JsonValue root = json.parse_raw("{{\"userId\":\"u1\",\"active\":true,\"profile\":{{\"city\":\"Cluj\",\"visits\":[3]}},\"header\":{{\"version\":16,\"header_length\":5}},\"tags\":[],\"nickname\":null,\"missing\":null,\"scores\":{{\"wins\":3}},\"lucky\":[13],\"display\":\"ready\",\"outcome\":{{\"ok\":7}},\"failed\":{{\"fail\":\"bad\"}}}}") handle error:
+    JsonValue root = json.parse_raw("{{\"userId\":\"u1\",\"active\":true,\"profile\":{{\"city\":\"Cluj\",\"visits\":[3]}},\"header\":{{\"version\":16,\"header_length\":5}},\"direction\":\"south\",\"shape\":{{\"point\":[3,4]}},\"tags\":[],\"nickname\":null,\"missing\":null,\"scores\":{{\"wins\":3}},\"lucky\":[13],\"display\":\"ready\",\"outcome\":{{\"ok\":7}},\"failed\":{{\"fail\":\"bad\"}}}}") handle error:
         return error
     User user = decode_reflected[User](root) handle error:
         return error
     return "{user.header.version}"
 
+function invalid_enum_payload_message() returns string:
+    JsonValue root = json.parse_raw("{{\"userId\":\"u1\",\"active\":true,\"profile\":{{\"city\":\"Cluj\",\"visits\":[3]}},\"header\":{{\"version\":4,\"header_length\":5}},\"direction\":\"south\",\"shape\":{{\"point\":[3]}},\"tags\":[],\"nickname\":null,\"missing\":null,\"scores\":{{\"wins\":3}},\"lucky\":[13],\"display\":\"ready\",\"outcome\":{{\"ok\":7}},\"failed\":{{\"fail\":\"bad\"}}}}") handle error:
+        return error
+    User user = decode_reflected[User](root) handle error:
+        return error
+    return "{user.active}"
+
 verify json_reflection_nested_decoder:
-    assert decoded_nested_summary() == "u1:Cluj:4:5:2:2:ally:none:3:2:true:ready:7:true"
+    assert decoded_nested_summary() == "u1:Cluj:4:5:true:7:2:2:ally:none:3:2:true:ready:7:true"
     assert decoded_result_failure() == "bad"
     assert string.contains(invalid_refinement_message(), "refinement type constraint failed") == true
     assert missing_nested_message() == "profile: missing field 'city'"
     assert string.contains(wrong_list_item_message(), "tags: 0: expected string") == true
     assert string.contains(invalid_bitfield_message(), "header: bitfield 'Header' field 'version'") == true
+    assert string.contains(invalid_enum_payload_message(), "shape: enum variant 'Shape.point' expects 2 payload field(s), got 1") == true
