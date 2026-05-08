@@ -11,8 +11,7 @@ the public `json.*` API.
 
 ## Current Architecture
 
-- `stdlib/` now has a bootstrap loader and marker module, but real stdlib JSON
-  extraction has not happened yet.
+- `stdlib/` now has a bootstrap loader, marker module, and draft JSON module.
 - `build_file` parses the requested file, then prepends stdlib modules and, when
   a `jett.proj` is discovered, sibling project modules.
 - `run_file` validates through `build_file`, then registers stdlib modules,
@@ -28,9 +27,9 @@ the public `json.*` API.
 - Builtin module prefixes such as `json`, `type`, `list`, `string`, and `bytes`
   are hardcoded in resolver/typechecker/interpreter paths.
 
-That means a physical `stdlib/json.jett` file would not currently become
-available to single-file builds, and a `namespace json` function would not
-automatically be callable as `json.parse[T](...)`.
+That means a physical `stdlib/json.jett` file is available to single-file
+builds, but ordinary `namespace json` functions still do not automatically own
+policy-bearing public calls such as `json.parse[T](...)`.
 
 ## JSON-Specific State
 
