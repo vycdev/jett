@@ -1,0 +1,26 @@
+namespace test
+
+struct TinyUser:
+    id: string serialize "userId"
+    active: bool
+    visits: list[int64]
+
+function reflected_parse_wrapper_summary() returns string:
+    TinyUser user = json_parse_reflected[TinyUser]("{{\"userId\":\"u1\",\"active\":true,\"visits\":[2,3]}}") handle error:
+        return error
+    return "{user.id}:{user.active}:{list.length[int64](user.visits)}"
+
+function reflected_parse_wrapper_error() returns string:
+    TinyUser user = json_parse_reflected[TinyUser]("{{\"userId\":\"u1\",\"visits\":[2,3]}}") handle error:
+        return error
+    return user.id
+
+function reflected_parse_wrapper_raw_error() returns string:
+    TinyUser user = json_parse_reflected[TinyUser]("{{\"userId\":\"u1\"") handle error:
+        return error
+    return user.id
+
+verify json_reflection_parse_wrapper:
+    assert reflected_parse_wrapper_summary() == "u1:true:2"
+    assert reflected_parse_wrapper_error() == "missing field 'active'"
+    assert string.contains(reflected_parse_wrapper_raw_error(), "EOF") == true

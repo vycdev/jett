@@ -39,6 +39,7 @@ prefix:
 - `stdlib/json_reflection.jett`
 - `json_serialize_public_reflected[T](view value)`
 - `json_decode_reflected[T](raw: JsonValue)`
+- `json_parse_reflected[T](raw: string)`
 
 The run-pass fixtures still own the test-specific type definitions and the
 flat decoder prototype:
@@ -125,6 +126,8 @@ the module cleanly probably needs an export rule or another visibility story.
 2. Continue staging extracted prototype code under flat, non-conflicting names:
    - `json_serialize_public_reflected[T](view value: T)` exists in stdlib.
    - `json_decode_reflected[T](raw: JsonValue)` exists in stdlib.
+   - `json_parse_reflected[T](raw: string)` exists in stdlib as the raw-string
+     wrapper around `json.parse_raw` and the reflected decoder.
 3. Implement namespace-qualified symbol registration and dotted user-function
    calls.
 4. Move the extracted functions into `namespace json` behind the real public

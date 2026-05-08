@@ -348,3 +348,8 @@ function json_decode_reflected[T](raw: JsonValue) returns result[T, string]:
         return type.construct_finish[T](builder)
 
     return fail("unsupported reflected JSON type: {type_name}")
+
+function json_parse_reflected[T](raw: string) returns result[T, string]:
+    JsonValue value = json.parse_raw(raw) handle error:
+        return fail(error)
+    return json_decode_reflected[T](value)
