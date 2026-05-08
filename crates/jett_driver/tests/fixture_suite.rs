@@ -196,6 +196,10 @@ run_pass_fixture!(
     "namespace_qualified_functions.jett"
 );
 run_pass_fixture!(
+    run_pass_namespace_qualified_types,
+    "namespace_qualified_types.jett"
+);
+run_pass_fixture!(
     run_pass_handle_result_optional,
     "handle_result_optional.jett"
 );

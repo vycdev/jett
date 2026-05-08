@@ -196,7 +196,7 @@ impl<'src> Parser<'src> {
 
     fn parse_namespace(&mut self) -> NamespaceDecl {
         let kw = self.expect(TokenKind::Namespace);
-        let name = self.parse_ident();
+        let name = self.parse_qualified_ident();
         NamespaceDecl {
             span: kw.span.merge(name.span),
             name,
@@ -1014,7 +1014,7 @@ impl<'src> Parser<'src> {
                     span: tok.span,
                 }
             }
-            TokenKind::Ident => self.parse_ident(),
+            TokenKind::Ident => self.parse_qualified_ident(),
             _ => {
                 self.error(format!("expected type, found {:?}", tok.kind), tok.span);
                 self.advance();
@@ -1024,6 +1024,28 @@ impl<'src> Parser<'src> {
                 }
             }
         }
+    }
+
+    fn parse_qualified_ident(&mut self) -> Ident {
+        let first = self.parse_ident();
+        if first.name == "<error>" {
+            return first;
+        }
+
+        let mut name = first.name;
+        let mut span = first.span;
+        while self.peek() == TokenKind::Dot {
+            self.advance();
+            let part = self.parse_ident();
+            if part.name == "<error>" {
+                break;
+            }
+            span = span.merge(part.span);
+            name.push('.');
+            name.push_str(&part.name);
+        }
+
+        Ident { name, span }
     }
 
     // =======================================================================
@@ -1478,9 +1500,9 @@ impl<'src> Parser<'src> {
         }
 
         lookahead += 1;
+        lookahead = self.skip_dotted_type_path(lookahead);
 
-        // Handle dotted paths for types: e.g. module.Type — not needed for MVP
-        // but handle generic args: Type[...]
+        // Handle generic args: Type[...]
         if self.peek_nth(lookahead) == TokenKind::LBracket {
             lookahead += 1;
             let mut depth = 1;
@@ -1568,6 +1590,7 @@ impl<'src> Parser<'src> {
             return false;
         }
         lookahead += 1;
+        lookahead = self.skip_dotted_type_path(lookahead);
         // Skip generic args: Type[…]
         if self.peek_nth(lookahead) == TokenKind::LBracket {
             lookahead += 1;
@@ -1585,6 +1608,16 @@ impl<'src> Parser<'src> {
         let name_kind = self.peek_nth(lookahead);
         (name_kind == TokenKind::Ident || self.is_contextual_ident(name_kind))
             && self.peek_nth(lookahead + 1) == TokenKind::Eq
+    }
+
+    fn skip_dotted_type_path(&self, mut lookahead: usize) -> usize {
+        while self.peek_nth(lookahead) == TokenKind::Dot
+            && (self.peek_nth(lookahead + 1) == TokenKind::Ident
+                || self.is_contextual_ident(self.peek_nth(lookahead + 1)))
+        {
+            lookahead += 2;
+        }
+        lookahead
     }
 
     // =======================================================================

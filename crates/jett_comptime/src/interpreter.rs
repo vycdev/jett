@@ -354,14 +354,26 @@ impl Interpreter {
                 Item::Function(func) => {
                     self.register_function_in_namespace(current_namespace.as_deref(), func)
                 }
-                Item::TypeAlias(alias) => self.register_type_alias(alias),
+                Item::TypeAlias(alias) => {
+                    self.register_type_alias_in_namespace(current_namespace.as_deref(), alias)
+                }
                 Item::Interface(interface) => self.register_interface(interface),
                 Item::Implement(block) => self.register_implement_block(block),
-                Item::Struct(strukt) => self.register_struct(strukt),
-                Item::Enum(enm) => self.register_enum(enm),
-                Item::Bitfield(bitfield) => self.register_bitfield(bitfield),
-                Item::Machine(machine) => self.register_machine(machine),
-                Item::Actor(actor) => self.register_actor(actor),
+                Item::Struct(strukt) => {
+                    self.register_struct_in_namespace(current_namespace.as_deref(), strukt)
+                }
+                Item::Enum(enm) => {
+                    self.register_enum_in_namespace(current_namespace.as_deref(), enm)
+                }
+                Item::Bitfield(bitfield) => {
+                    self.register_bitfield_in_namespace(current_namespace.as_deref(), bitfield)
+                }
+                Item::Machine(machine) => {
+                    self.register_machine_in_namespace(current_namespace.as_deref(), machine)
+                }
+                Item::Actor(actor) => {
+                    self.register_actor_in_namespace(current_namespace.as_deref(), actor)
+                }
                 _ => {}
             }
         }
@@ -416,10 +428,28 @@ impl Interpreter {
         }
     }
 
+    pub fn register_struct_in_namespace(&mut self, namespace: Option<&str>, strukt: &StructDef) {
+        self.register_struct(strukt);
+        if let Some(namespace) = namespace {
+            let mut qualified = strukt.clone();
+            qualified.name.name = format!("{namespace}.{}", strukt.name.name);
+            self.register_struct(&qualified);
+        }
+    }
+
     /// Register a user-defined actor so it can be spawned and messaged.
     pub fn register_actor(&mut self, actor: &ActorDef) {
         self.actor_defs
             .insert(actor.name.name.clone(), actor.clone());
+    }
+
+    pub fn register_actor_in_namespace(&mut self, namespace: Option<&str>, actor: &ActorDef) {
+        self.register_actor(actor);
+        if let Some(namespace) = namespace {
+            let mut qualified = actor.clone();
+            qualified.name.name = format!("{namespace}.{}", actor.name.name);
+            self.register_actor(&qualified);
+        }
     }
 
     /// Register a user-defined bitfield so it can be constructed and its
@@ -429,10 +459,32 @@ impl Interpreter {
             .insert(bitfield.name.name.clone(), bitfield.clone());
     }
 
+    pub fn register_bitfield_in_namespace(
+        &mut self,
+        namespace: Option<&str>,
+        bitfield: &BitfieldDef,
+    ) {
+        self.register_bitfield(bitfield);
+        if let Some(namespace) = namespace {
+            let mut qualified = bitfield.clone();
+            qualified.name.name = format!("{namespace}.{}", bitfield.name.name);
+            self.register_bitfield(&qualified);
+        }
+    }
+
     /// Register an enum definition so runtime bitfield conversions can map
     /// between stored integers and named variants.
     pub fn register_enum(&mut self, enm: &EnumDef) {
         self.enums.insert(enm.name.name.clone(), enm.clone());
+    }
+
+    pub fn register_enum_in_namespace(&mut self, namespace: Option<&str>, enm: &EnumDef) {
+        self.register_enum(enm);
+        if let Some(namespace) = namespace {
+            let mut qualified = enm.clone();
+            qualified.name.name = format!("{namespace}.{}", enm.name.name);
+            self.register_enum(&qualified);
+        }
     }
 
     /// Register an interface declaration. Interfaces carry no runtime state,
@@ -464,6 +516,15 @@ impl Interpreter {
             .insert(machine.name.name.clone(), machine.clone());
     }
 
+    pub fn register_machine_in_namespace(&mut self, namespace: Option<&str>, machine: &MachineDef) {
+        self.register_machine(machine);
+        if let Some(namespace) = namespace {
+            let mut qualified = machine.clone();
+            qualified.name.name = format!("{namespace}.{}", machine.name.name);
+            self.register_machine(&qualified);
+        }
+    }
+
     /// Register a type alias so the interpreter can validate refinement
     /// constraints when values are assigned to the type.
     pub fn register_type_alias(&mut self, alias: &TypeAlias) {
@@ -476,6 +537,15 @@ impl Interpreter {
             constraint: c.clone(),
         });
         self.type_aliases.insert(alias.name.name.clone(), def);
+    }
+
+    pub fn register_type_alias_in_namespace(&mut self, namespace: Option<&str>, alias: &TypeAlias) {
+        self.register_type_alias(alias);
+        if let Some(namespace) = namespace {
+            let mut qualified = alias.clone();
+            qualified.name.name = format!("{namespace}.{}", alias.name.name);
+            self.register_type_alias(&qualified);
+        }
     }
 
     /// Check a value against a refinement type's constraint.
@@ -715,6 +785,15 @@ impl Interpreter {
 
             // Field access: struct field access, or enum variant like `Color.red`
             Expr::FieldAccess(obj, field, _) => {
+                if let Some(owner_name) = Self::dotted_expr_name(obj) {
+                    if self.enums.contains_key(&owner_name) {
+                        return Ok(ExprFlow::Value(Value::Enum {
+                            type_name: owner_name,
+                            variant: field.name.clone(),
+                            fields: vec![],
+                        }));
+                    }
+                }
                 match obj.as_ref() {
                     Expr::Ident(ident) => {
                         if let Some(value) = self.get_variable(&ident.name).cloned() {
@@ -907,9 +986,14 @@ impl Interpreter {
                 return Ok(ExprFlow::Value(self.construct_machine(&ident.name, args)?));
             }
             Expr::FieldAccess(obj, field, _) => {
-                if let Expr::Ident(ident) = obj.as_ref() {
-                    if field.name == "transition" && self.machines.contains_key(&ident.name) {
-                        return Ok(ExprFlow::Value(self.machine_transition(&ident.name, args)?));
+                if let Some(name) = Self::extract_dotted_name(obj, &field.name) {
+                    if self.machines.contains_key(&name) {
+                        return Ok(ExprFlow::Value(self.construct_machine(&name, args)?));
+                    }
+                }
+                if let Some(owner_name) = Self::dotted_expr_name(obj) {
+                    if field.name == "transition" && self.machines.contains_key(&owner_name) {
+                        return Ok(ExprFlow::Value(self.machine_transition(&owner_name, args)?));
                     }
                 }
             }
@@ -944,6 +1028,16 @@ impl Interpreter {
             Expr::FieldAccess(obj, field, _) => {
                 let dotted = Self::extract_dotted_name(obj, &field.name);
                 if let Some(ref name) = dotted {
+                    if self.structs.contains_key(name.as_str()) {
+                        return Ok(ExprFlow::Value(
+                            self.construct_struct(name, args, arg_values)?,
+                        ));
+                    }
+                    if self.bitfields.contains_key(name.as_str()) {
+                        return Ok(ExprFlow::Value(
+                            self.construct_bitfield(name, args, arg_values)?,
+                        ));
+                    }
                     // Try higher-order built-ins first (require &mut self).
                     if let Some(result) = self.call_higher_order_builtin(name, arg_values.clone()) {
                         return Ok(ExprFlow::Value(result?));
@@ -968,6 +1062,15 @@ impl Interpreter {
                 }
                 // Fall through to enum variant construction if no built-in or
                 // user function matched.
+                if let Some(owner_name) = Self::dotted_expr_name(obj) {
+                    if self.enums.contains_key(&owner_name) {
+                        return Ok(ExprFlow::Value(Value::Enum {
+                            type_name: owner_name,
+                            variant: field.name.clone(),
+                            fields: arg_values,
+                        }));
+                    }
+                }
                 if let Expr::Ident(ident) = obj.as_ref() {
                     return Ok(ExprFlow::Value(Value::Enum {
                         type_name: ident.name.clone(),
@@ -1530,6 +1633,14 @@ impl Interpreter {
                 let inner_name = Self::extract_dotted_name(inner, &field.name)?;
                 Some(format!("{inner_name}.{suffix}"))
             }
+            _ => None,
+        }
+    }
+
+    fn dotted_expr_name(expr: &Expr) -> Option<String> {
+        match expr {
+            Expr::Ident(ident) => Some(ident.name.clone()),
+            Expr::FieldAccess(inner, field, _) => Self::extract_dotted_name(inner, &field.name),
             _ => None,
         }
     }

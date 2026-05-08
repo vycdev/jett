@@ -411,6 +411,10 @@ impl<'a> TypeChecker<'a> {
         names
     }
 
+    fn type_lookup_names(namespace: Option<&str>, name: &str) -> Vec<String> {
+        Self::function_lookup_names(namespace, name)
+    }
+
     fn declaration_def_id(&self, span: Span) -> Option<DefId> {
         self.resolve
             .resolutions
@@ -430,17 +434,21 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn is_struct_type_name_expr(&self, expr: &Expr) -> bool {
-        matches!(
-            expr,
-            Expr::Ident(ident) if self.ident_def_kind(ident) == Some(DefKind::Struct)
-        )
+        let Some(name) = Self::extract_dotted_name(expr) else {
+            return false;
+        };
+        self.named_types
+            .get(&name)
+            .is_some_and(|ty| matches!(self.interner.resolve(*ty), Type::Struct(_)))
     }
 
     fn is_bitfield_type_name_expr(&self, expr: &Expr) -> bool {
-        matches!(
-            expr,
-            Expr::Ident(ident) if self.ident_def_kind(ident) == Some(DefKind::Bitfield)
-        )
+        let Some(name) = Self::extract_dotted_name(expr) else {
+            return false;
+        };
+        self.named_types
+            .get(&name)
+            .is_some_and(|ty| matches!(self.interner.resolve(*ty), Type::Bitfield(_)))
     }
 
     /// Returns true if the type is numeric (any integer or float type).
@@ -1897,19 +1905,27 @@ impl<'a> TypeChecker<'a> {
 
         // First pass: predeclare all user-defined types so function signatures,
         // fields, and methods can refer to them by name.
+        let mut current_file = None;
+        let mut current_namespace = None;
         for item in &module.items {
+            Self::update_current_namespace(item, &mut current_file, &mut current_namespace);
             match item {
-                Item::Interface(def) => self.predeclare_interface(def),
-                Item::Struct(def) => self.predeclare_struct(def),
-                Item::Bitfield(def) => self.predeclare_bitfield(def),
-                Item::Enum(def) => self.predeclare_enum(def),
-                Item::Actor(def) => self.predeclare_actor(def),
+                Item::Interface(def) => {
+                    self.predeclare_interface(def, current_namespace.as_deref())
+                }
+                Item::Struct(def) => self.predeclare_struct(def, current_namespace.as_deref()),
+                Item::Bitfield(def) => self.predeclare_bitfield(def, current_namespace.as_deref()),
+                Item::Enum(def) => self.predeclare_enum(def, current_namespace.as_deref()),
+                Item::Actor(def) => self.predeclare_actor(def, current_namespace.as_deref()),
                 _ => {}
             }
         }
 
         // Second pass: fill in the struct/enum contents now that all names exist.
+        let mut current_file = None;
+        let mut current_namespace = None;
         for item in &module.items {
+            Self::update_current_namespace(item, &mut current_file, &mut current_namespace);
             match item {
                 Item::Interface(def) => self.finish_interface(def),
                 Item::Struct(def) => self.finish_struct(def),
@@ -1970,17 +1986,25 @@ impl<'a> TypeChecker<'a> {
                 }
                 Item::Interface(def) => {
                     for method in &def.methods {
-                        let dotted = format!("{}.{}", def.name.name, method.name.name);
                         let is_pure = Self::params_are_pure(&method.params);
-                        self.purity_map.insert(dotted, is_pure);
+                        for owner_name in
+                            Self::type_lookup_names(current_namespace.as_deref(), &def.name.name)
+                        {
+                            self.purity_map
+                                .insert(format!("{owner_name}.{}", method.name.name), is_pure);
+                        }
                     }
                 }
                 Item::Implement(block) => self.register_implement_block(block),
                 Item::Struct(def) => {
                     for method in &def.methods {
-                        let dotted = format!("{}.{}", def.name.name, method.name.name);
                         let is_pure = Self::function_is_pure(method);
-                        self.purity_map.insert(dotted, is_pure);
+                        for owner_name in
+                            Self::type_lookup_names(current_namespace.as_deref(), &def.name.name)
+                        {
+                            self.purity_map
+                                .insert(format!("{owner_name}.{}", method.name.name), is_pure);
+                        }
                     }
                 }
                 Item::Bitfield(_) => {}
@@ -1992,7 +2016,10 @@ impl<'a> TypeChecker<'a> {
         self.validate_implement_blocks(module);
 
         // Fourth pass: type-check function bodies, methods, and verify blocks.
+        let mut current_file = None;
+        let mut current_namespace = None;
         for item in &module.items {
+            Self::update_current_namespace(item, &mut current_file, &mut current_namespace);
             match item {
                 Item::TypeAlias(alias) => self.check_type_alias(alias),
                 Item::Function(func) => {
@@ -2003,8 +2030,13 @@ impl<'a> TypeChecker<'a> {
                 }
                 Item::Implement(block) => self.check_implement_block(block),
                 Item::Struct(def) => {
+                    let owner_name = Self::namespace_qualified_name(
+                        current_namespace.as_deref(),
+                        &def.name.name,
+                    )
+                    .unwrap_or_else(|| def.name.name.clone());
                     for method in &def.methods {
-                        self.check_method(&def.name.name, method);
+                        self.check_method(&owner_name, method);
                     }
                 }
                 Item::Bitfield(_) => {}
@@ -2018,13 +2050,17 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn collect_type_aliases(&mut self, module: &Module) {
-        self.type_aliases
-            .extend(module.items.iter().filter_map(|item| {
-                let Item::TypeAlias(alias) = item else {
-                    return None;
-                };
-                Some((alias.name.name.clone(), alias.clone()))
-            }));
+        let mut current_file = None;
+        let mut current_namespace = None;
+        for item in &module.items {
+            Self::update_current_namespace(item, &mut current_file, &mut current_namespace);
+            let Item::TypeAlias(alias) = item else {
+                continue;
+            };
+            for name in Self::type_lookup_names(current_namespace.as_deref(), &alias.name.name) {
+                self.type_aliases.insert(name, alias.clone());
+            }
+        }
     }
 
     /// Returns true if a function has no capability-type parameters (i.e. is pure).
@@ -2076,7 +2112,7 @@ impl<'a> TypeChecker<'a> {
     // Actors
     // ------------------------------------------------------------------
 
-    fn predeclare_actor(&mut self, def: &ast::ActorDef) {
+    fn predeclare_actor(&mut self, def: &ast::ActorDef, namespace: Option<&str>) {
         let aid = self.interner.add_actor(TypeActorDef {
             name: def.name.name.clone(),
             capability_params: Vec::new(),
@@ -2084,7 +2120,9 @@ impl<'a> TypeChecker<'a> {
             messages: Vec::new(),
         });
         let ty = self.interner.intern(Type::Actor(aid));
-        self.named_types.insert(def.name.name.clone(), ty);
+        for name in Self::type_lookup_names(namespace, &def.name.name) {
+            self.named_types.insert(name, ty);
+        }
         if let Some(def_id) = self.declaration_def_id(def.name.span) {
             self.type_env.insert(def_id, ty);
         }
@@ -2225,11 +2263,12 @@ impl<'a> TypeChecker<'a> {
         self.current_function_name = prev_function_name;
     }
 
-    fn predeclare_struct(&mut self, def: &ast::StructDef) {
+    fn predeclare_struct(&mut self, def: &ast::StructDef, namespace: Option<&str>) {
         if !def.type_params.is_empty() {
             // Generic struct — store the template for later monomorphization.
-            self.generic_struct_templates
-                .insert(def.name.name.clone(), def.clone());
+            for name in Self::type_lookup_names(namespace, &def.name.name) {
+                self.generic_struct_templates.insert(name, def.clone());
+            }
             return;
         }
 
@@ -2239,34 +2278,40 @@ impl<'a> TypeChecker<'a> {
             methods: Vec::new(),
         });
         let ty = self.interner.intern(Type::Struct(sid));
-        self.named_types.insert(def.name.name.clone(), ty);
+        for name in Self::type_lookup_names(namespace, &def.name.name) {
+            self.named_types.insert(name, ty);
+        }
 
         if let Some(def_id) = self.declaration_def_id(def.name.span) {
             self.type_env.insert(def_id, ty);
         }
     }
 
-    fn predeclare_interface(&mut self, def: &ast::InterfaceDecl) {
+    fn predeclare_interface(&mut self, def: &ast::InterfaceDecl, namespace: Option<&str>) {
         let iid = self.interner.add_interface(TypeInterfaceDef {
             name: def.name.name.clone(),
             methods: Vec::new(),
         });
         let ty = self.interner.intern(Type::Interface(iid));
-        self.named_types.insert(def.name.name.clone(), ty);
+        for name in Self::type_lookup_names(namespace, &def.name.name) {
+            self.named_types.insert(name, ty);
+        }
 
         if let Some(def_id) = self.declaration_def_id(def.name.span) {
             self.type_env.insert(def_id, ty);
         }
     }
 
-    fn predeclare_bitfield(&mut self, def: &ast::BitfieldDef) {
+    fn predeclare_bitfield(&mut self, def: &ast::BitfieldDef, namespace: Option<&str>) {
         let bid = self.interner.add_bitfield(TypeBitfieldDef {
             name: def.name.name.clone(),
             network_order: def.network_order,
             fields: Vec::new(),
         });
         let ty = self.interner.intern(Type::Bitfield(bid));
-        self.named_types.insert(def.name.name.clone(), ty);
+        for name in Self::type_lookup_names(namespace, &def.name.name) {
+            self.named_types.insert(name, ty);
+        }
 
         if let Some(def_id) = self.declaration_def_id(def.name.span) {
             self.type_env.insert(def_id, ty);
@@ -2457,13 +2502,15 @@ impl<'a> TypeChecker<'a> {
         );
     }
 
-    fn predeclare_enum(&mut self, def: &ast::EnumDef) {
+    fn predeclare_enum(&mut self, def: &ast::EnumDef, namespace: Option<&str>) {
         let eid = self.interner.add_enum(TypeEnumDef {
             name: def.name.name.clone(),
             variants: Vec::new(),
         });
         let ty = self.interner.intern(Type::Enum(eid));
-        self.named_types.insert(def.name.name.clone(), ty);
+        for name in Self::type_lookup_names(namespace, &def.name.name) {
+            self.named_types.insert(name, ty);
+        }
 
         if let Some(def_id) = self.declaration_def_id(def.name.span) {
             self.type_env.insert(def_id, ty);
@@ -4191,14 +4238,13 @@ impl<'a> TypeChecker<'a> {
 
         // Check for generic struct construction: `Name[T, U](fields...)`.
         if !type_args.is_empty() {
-            if let Expr::Ident(ident) = callee {
-                if self.generic_struct_templates.contains_key(&ident.name) {
+            if let Some(struct_name) = callee_name.as_deref() {
+                if self.generic_struct_templates.contains_key(struct_name) {
                     let concrete_args: Vec<TypeId> = type_args
                         .iter()
                         .map(|a| self.resolve_type_expr(a))
                         .collect();
-                    let name_clone = ident.name.clone();
-                    let mono_ty = self.monomorphize_struct(&name_clone, &concrete_args, span);
+                    let mono_ty = self.monomorphize_struct(struct_name, &concrete_args, span);
                     if mono_ty != TypeInterner::ERROR {
                         let sid = match self.interner.resolve(mono_ty) {
                             Type::Struct(sid) => *sid,
@@ -4207,6 +4253,20 @@ impl<'a> TypeChecker<'a> {
                         return self.check_struct_constructor(sid, args, span);
                     }
                     return TypeInterner::ERROR;
+                }
+            }
+        }
+
+        if type_args.is_empty() {
+            if let Some(type_name) = callee_name.as_deref() {
+                if let Some(type_id) = self.named_types.get(type_name).copied() {
+                    match self.interner.resolve(type_id).clone() {
+                        Type::Struct(sid) => return self.check_struct_constructor(sid, args, span),
+                        Type::Bitfield(bid) => {
+                            return self.check_bitfield_constructor(bid, args, span);
+                        }
+                        _ => {}
+                    }
                 }
             }
         }
@@ -4488,6 +4548,19 @@ impl<'a> TypeChecker<'a> {
             }
         }
 
+        if !matches!(base, Expr::Ident(_)) {
+            if let Some(type_name) = Self::extract_dotted_name(base) {
+                if let Some(type_id) = self.named_types.get(&type_name).copied() {
+                    if matches!(self.interner.resolve(type_id), Type::Enum(_)) {
+                        return self.check_enum_variant_by_type(type_id, field, &[], span);
+                    }
+                    if let Some(method_ty) = self.check_type_module_method(type_id, field, span) {
+                        return method_ty;
+                    }
+                }
+            }
+        }
+
         let base_ty = self.check_expr(base);
         if base_ty == TypeInterner::ERROR {
             return TypeInterner::ERROR;
@@ -4683,7 +4756,16 @@ impl<'a> TypeChecker<'a> {
         if enum_ty == TypeInterner::ERROR {
             return TypeInterner::ERROR;
         }
+        self.check_enum_variant_by_type(enum_ty, variant, args, span)
+    }
 
+    fn check_enum_variant_by_type(
+        &mut self,
+        enum_ty: TypeId,
+        variant: &ast::Ident,
+        args: &[ast::CallArg],
+        span: Span,
+    ) -> TypeId {
         let Type::Enum(eid) = *self.interner.resolve(enum_ty) else {
             self.sink.emit(errors::type_has_no_member(
                 &self.type_name(enum_ty),

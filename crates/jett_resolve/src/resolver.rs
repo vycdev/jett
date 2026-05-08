@@ -627,12 +627,12 @@ impl Resolver {
             TypeExpr::Named(ident) => {
                 // Builtin types are not resolved against the scope table.
                 if !is_builtin_type(&ident.name) {
-                    self.resolve_name(&ident.name, ident.span, item_index);
+                    self.resolve_type_name(&ident.name, ident.span, item_index);
                 }
             }
             TypeExpr::Generic(ident, args, _) => {
                 if !is_builtin_type(&ident.name) {
-                    self.resolve_name(&ident.name, ident.span, item_index);
+                    self.resolve_type_name(&ident.name, ident.span, item_index);
                 }
                 for arg in args {
                     self.resolve_type_expr(arg, item_index);
@@ -647,6 +647,16 @@ impl Resolver {
                 }
                 self.resolve_type_expr(return_type, item_index);
             }
+        }
+    }
+
+    fn resolve_type_name(&mut self, name: &str, span: Span, item_index: usize) {
+        if let Some((namespace, _type_name)) = name.rsplit_once('.') {
+            if !is_builtin_module(namespace) {
+                self.resolve_name(namespace, span, item_index);
+            }
+        } else {
+            self.resolve_name(name, span, item_index);
         }
     }
 
@@ -725,7 +735,7 @@ impl Resolver {
             }
             Expr::EnumVariant(type_name, _, _) => {
                 // Resolve the type name; variant name is checked during type checking.
-                self.resolve_name(&type_name.name, type_name.span, item_index);
+                self.resolve_type_name(&type_name.name, type_name.span, item_index);
             }
             Expr::StringInterpolation(parts, _) => {
                 for part in parts {
