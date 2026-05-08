@@ -56,9 +56,11 @@ for field in type.fields[T]():
         ...
 ```
 
-For structs, construction of the final `T` from those typed field values is now
-available through `TypeConstruction`. The remaining work is integration in a
-`.jett` decoder plus enum construction support. That is tracked in
+For structs and bitfields, construction of the final `T` from those typed field
+values is now available through `TypeConstruction`. The nested decoder proof
+uses that path and treats absent optional fields as `none`; the remaining work
+is enum construction support and hardening the prototype into stdlib code. That
+is tracked in
 `docs/type_construction_design.md` and `docs/reflected_construction_staging.md`.
 The first flat and nested struct proofs live in
 `tests/run_pass/json_reflection_flat_decoder.jett` and

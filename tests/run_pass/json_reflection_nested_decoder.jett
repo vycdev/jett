@@ -123,6 +123,10 @@ function decode_reflected[T](raw: JsonValue) returns result[T, string]:
         for field in type.fields[T]():
             comptime type Field = field.type_info:
                 JsonValue raw_field = json.field(raw, field.serialize_name) handle:
+                    if field.type_info.kind == "optional":
+                        JsonValue missing_optional = json.parse_raw("null") handle error:
+                            return fail(error)
+                        default missing_optional
                     return fail("missing field '{field.serialize_name}'")
                 Field decoded = decode_reflected[Field](raw_field) handle error:
                     return fail("{field.serialize_name}: {error}")
@@ -133,7 +137,7 @@ function decode_reflected[T](raw: JsonValue) returns result[T, string]:
     return fail("unsupported reflected JSON type: {type_name}")
 
 function decoded_nested_summary() returns string:
-    JsonValue root = json.parse_raw("{{\"userId\":\"u1\",\"active\":true,\"profile\":{{\"city\":\"Cluj\",\"visits\":[3,5]}},\"header\":{{\"version\":4,\"header_length\":5}},\"tags\":[\"admin\",\"beta\"],\"nickname\":\"ally\",\"missing\":null,\"scores\":{{\"wins\":3,\"losses\":1}},\"lucky\":[11,13],\"display\":\"ready\",\"outcome\":{{\"ok\":7}},\"failed\":{{\"fail\":\"bad\"}}}}") handle error:
+    JsonValue root = json.parse_raw("{{\"userId\":\"u1\",\"active\":true,\"profile\":{{\"city\":\"Cluj\",\"visits\":[3,5]}},\"header\":{{\"version\":4,\"header_length\":5}},\"tags\":[\"admin\",\"beta\"],\"nickname\":\"ally\",\"scores\":{{\"wins\":3,\"losses\":1}},\"lucky\":[11,13],\"display\":\"ready\",\"outcome\":{{\"ok\":7}},\"failed\":{{\"fail\":\"bad\"}}}}") handle error:
         return error
     User user = decode_reflected[User](root) handle error:
         return error

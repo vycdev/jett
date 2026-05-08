@@ -40,8 +40,9 @@ Implemented reflection primitives:
   after checking that the metadata belongs to `T` and that `U` matches the
   reflected field type.
 - `type.construct_start[T]()`, `type.construct_put[T, Field](builder, field,
-  value)`, and `type.construct_finish[T](builder)` provide a struct-only opaque
-  construction builder for turning checked field values back into `T`.
+  value)`, and `type.construct_finish[T](builder)` provide an opaque
+  construction builder for turning checked struct and bitfield field values back
+  into `T`.
 - `comptime type Name = type.info[T]():` binds a direct reflected root as a
   scoped type, and `comptime type Field = field.type_info:` works inside direct
   `for field in type.fields[T]():` loops and direct active enum payload loops
@@ -71,8 +72,8 @@ flat-struct path, and `tests/run_pass/json_reflection_nested_decoder.jett`
 recursively handles primitives, nested structs, lists, sets, maps with string
 keys, optionals, results, aliases/refinements, and `serialize_name` by walking
 raw `JsonValue` and finishing structs/bitfields with `TypeConstruction`.
-Enum construction, enum-annotated bitfields, secret/public policy, and
-missing-optional-field defaults are still future work.
+It treats absent optional fields as `none`; enum construction,
+enum-annotated bitfields, and secret/public policy are still future work.
 
 `json.parse[T](raw)` has a Rust-backed bridge: it requires one type argument,
 accepts a string, returns `result[T, string]`, and supports core primitives,
@@ -82,7 +83,8 @@ from JSON objects with width and enum-annotation validation, generic structs,
 aliases, and refinement validation, including refinements over generic shapes
 such as `list[string]`. The long-term goal is still to replace this bridge with
 stdlib code; struct construction is now available through `TypeConstruction`,
-while bitfields, enums, and the final syntax remain future work.
+bitfield construction is available through the same builder, and enum
+construction plus the final syntax remain future work.
 
 `json.parse_raw(raw)` now exposes an opaque `JsonValue` tree with explicit
 accessors for kind checks, object fields, array indexes, scalar casts, object
@@ -133,10 +135,10 @@ reflection. See `docs/comptime_type_bind.md` for the current type-bind proposal.
 Deserialization currently has a Rust bridge that mirrors field access: given
 parsed field values, it builds `T` in declaration order while validating missing
 fields, `serialize` names, secret wrappers, optionals, results, refinements, and
-nested structs. Stdlib code can now build nested structs with primitive,
-list/set/map, optional, result, alias, and refinement fields through
-`TypeConstruction`, but a full replacement still needs enum construction,
-enum-annotated bitfield decoding, and the remaining format policy.
+nested structs. Stdlib-shaped code can now build nested structs and bitfields
+with primitive, list/set/map, optional, result, alias, and refinement fields
+through `TypeConstruction`, but a full replacement still needs enum
+construction, enum-annotated bitfield decoding, and the remaining format policy.
 
 Current nuance: refinement fields are validated at `construct_finish`, but the
 generic decoder should still grow a cleaner direct boundary for top-level
@@ -192,9 +194,8 @@ for the decoded value. See `docs/bitfield_reflection_metadata.md`.
 ## Suggested Next Steps
 
 1. Extend reflected construction and the `.jett` decoder prototype to enums.
-2. Harden the `.jett` serializer prototype toward stdlib quality: escaping,
+2. Add public/secret policy to the decoder prototype.
+3. Harden the `.jett` serializer prototype toward stdlib quality: escaping,
    enum/bitfield policy, alias/refinement behavior, and public/secret modes.
-3. Add missing-optional-field defaults and public/secret policy to the decoder
-   prototype.
 4. Harden top-level alias/refinement decoding so it validates outside struct
    construction too.
