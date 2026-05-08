@@ -105,9 +105,9 @@ For the eventual block syntax:
 
 ## Recommendation
 
-Use the opaque builder in a `.jett` decoder prototype next. It is not the final
-language shape, but it proves the hard semantic part while staying inside
-existing syntax. Once that decoder can walk `JsonValue`, decode each field with
-trusted `comptime type` binding, and finish a typed struct, the case for a
+Extend the `.jett` decoder prototype beyond flat primitive structs next. The
+opaque builder is not the final language shape, but it proves the hard semantic
+part while staying inside existing syntax. As the decoder grows through nested
+structs, wrappers, aliases/refinements, bitfields, and enums, the case for a
 cleaner `type.construct[T]:` block will be grounded in real usage instead of
 guesswork.

@@ -65,6 +65,14 @@ element/value types. The prototype also covers basic string escaping for quotes,
 backslashes, newlines, and tabs. It is a proof of language capability, not yet a
 stdlib replacement for the Rust-backed builtin.
 
+There is also a `.jett` decoder prototype in
+`tests/run_pass/json_reflection_flat_decoder.jett`. It parses a raw `JsonValue`,
+walks `type.fields[T]()` for a flat struct, honors `serialize_name`, decodes
+primitive field values through typed raw JSON accessors, and uses
+`TypeConstruction` to finish `T`. It covers the first real deserialization path;
+nested structs, wrappers, aliases/refinements, bitfields, and enums are still
+future work.
+
 `json.parse[T](raw)` has a Rust-backed bridge: it requires one type argument,
 accepts a string, returns `result[T, string]`, and supports core primitives,
 structs with `serialize` names, lists, sets, `map[string, V]`, optionals,
@@ -124,9 +132,9 @@ reflection. See `docs/comptime_type_bind.md` for the current type-bind proposal.
 Deserialization currently has a Rust bridge that mirrors field access: given
 parsed field values, it builds `T` in declaration order while validating missing
 fields, `serialize` names, secret wrappers, optionals, results, refinements, and
-nested structs. Stdlib code can now build structs with `TypeConstruction`, but a
-full replacement still needs bitfield and enum construction plus a decoder
-prototype that exercises the builder against raw `JsonValue`.
+nested structs. Stdlib code can now build flat primitive structs with
+`TypeConstruction`, but a full replacement still needs recursive struct/wrapper
+decoding plus bitfield and enum construction.
 
 Options:
 
@@ -177,8 +185,8 @@ for the decoded value. See `docs/bitfield_reflection_metadata.md`.
 
 ## Suggested Next Steps
 
-1. Use the struct-only `TypeConstruction` builder in a `.jett` decoder
-   prototype over `JsonValue`.
+1. Extend the `.jett` decoder prototype beyond flat primitive structs:
+   nested structs, lists, optionals, results, aliases, and refinements.
 2. Harden the `.jett` serializer prototype toward stdlib quality: escaping,
    enum/bitfield policy, alias/refinement behavior, and public/secret modes.
 3. Extend trusted type-argument binding to less direct but still compiler-owned

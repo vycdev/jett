@@ -60,6 +60,8 @@ For structs, construction of the final `T` from those typed field values is now
 available through `TypeConstruction`. The remaining work is integration in a
 `.jett` decoder plus bitfield and enum construction support. That is tracked in
 `docs/type_construction_design.md` and `docs/reflected_construction_staging.md`.
+The first flat-struct proof lives in
+`tests/run_pass/json_reflection_flat_decoder.jett`.
 
 ## Open Questions
 
