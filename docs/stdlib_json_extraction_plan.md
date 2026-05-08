@@ -66,7 +66,11 @@ Together they cover the shape needed for a future stdlib module:
   JSON bridge for representative public serialization and typed parse.
 
 The Rust-backed JSON bridge remains the compatibility oracle. It still owns the
-public `json.parse`, `json.serialize`, and `json.serialize_public` names.
+public typechecker policy for `json.parse`, `json.serialize`, and
+`json.serialize_public`. In the interpreter, `json.parse` and
+`json.serialize_public` now delegate to reflected stdlib implementations when
+the bundled stdlib functions are registered; full `json.serialize` remains
+Rust-backed.
 
 ## Blockers
 
@@ -136,10 +140,10 @@ the module cleanly probably needs an export rule or another visibility story.
    - `json_decode_reflected[T](raw: JsonValue)` exists in stdlib.
    - `json_parse_reflected[T](raw: string)` exists in stdlib as the raw-string
      wrapper around `json.parse_raw` and the reflected decoder.
-3. Decide how compiler policy checks hand off from the hardcoded public
-   `json.parse`, `json.serialize`, and `json.serialize_public` bridge to
-   stdlib functions. See `docs/json_public_bridge_handoff.md` for the current
-   recommendation.
+3. Continue the public bridge handoff. `json.parse` and
+   `json.serialize_public` now use compiler-owned typechecker policy with
+   stdlib-owned interpreter bodies; full `json.serialize` remains pending. See
+   `docs/json_public_bridge_handoff.md`.
 4. Move the extracted functions into `namespace json` behind the real public
    names, while retaining compiler policy checks for secrets, `view`, map keys,
    and handled results.

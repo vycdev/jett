@@ -241,5 +241,5 @@ verify json_parse:
     assert parse_invalid_bytes_error() == "expected hex bytes string"
     assert parse_top_level_secret_redaction() == "***"
     assert parse_secret_field_redaction() == "svc:***"
-    assert parse_secret_field_type_error() == "expected string, got number"
+    assert parse_secret_field_type_error() == "token: expected string, got number"
     assert parse_missing_secret_field_error() == "missing required field 'token' for Credential"

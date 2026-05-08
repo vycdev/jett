@@ -199,7 +199,7 @@ function json_decode_reflected[T](raw: JsonValue) returns result[T, string]:
         string raw_hex = json.as_string(raw) handle error:
             return fail(error)
         bytes item = bytes.from_hex(raw_hex) handle error:
-            return fail(error)
+            return fail("expected hex bytes string")
         return ok(item)
 
     if type_name == "nothing":
@@ -340,7 +340,7 @@ function json_decode_reflected[T](raw: JsonValue) returns result[T, string]:
                         JsonValue missing_optional = json.parse_raw("null") handle error:
                             return fail(error)
                         default missing_optional
-                    return fail("missing field '{field.serialize_name}'")
+                    return fail("missing required field '{field.serialize_name}' for {type_name}")
                 Field decoded = json_decode_reflected[Field](raw_field) handle error:
                     return fail("{field.serialize_name}: {error}")
                 builder = type.construct_put[T, Field](builder, view field, decoded) handle error:

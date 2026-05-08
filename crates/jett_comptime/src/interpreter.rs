@@ -2249,6 +2249,13 @@ impl Interpreter {
                 if let Some(err) = check_args(name, 1, args) {
                     return Some(err);
                 }
+                if self.functions.contains_key("json.json_parse_reflected") {
+                    return Some(self.call_function_with_type_args(
+                        "json.json_parse_reflected",
+                        type_args,
+                        args.to_vec(),
+                    ));
+                }
                 match &args[0] {
                     Value::String(raw) => match serde_json::from_str::<JsonValue>(raw) {
                         Ok(json) => match self.json_to_value_typed(&json, &ty) {

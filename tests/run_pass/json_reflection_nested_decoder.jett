@@ -230,7 +230,7 @@ verify json_reflection_nested_decoder:
     assert decoded_nested_summary() == "u1:Cluj:4:5:true:true:7:2:2:ally:none:3:2:true:ready:7:true"
     assert decoded_result_failure() == "bad"
     assert string.contains(invalid_refinement_message(), "refinement type constraint failed") == true
-    assert missing_nested_message() == "profile: missing field 'city'"
+    assert missing_nested_message() == "profile: missing required field 'city' for Profile"
     assert string.contains(wrong_list_item_message(), "tags: 0: expected string") == true
     assert string.contains(invalid_bitfield_message(), "header: bitfield 'Header' field 'version'") == true
     assert string.contains(invalid_enum_payload_message(), "shape: enum variant 'Shape.point' expects 2 payload field(s), got 1") == true
@@ -244,8 +244,8 @@ verify json_reflection_nested_decoder:
     assert invalid_nothing_message() == "expected null, got number"
     assert decoded_top_level_bytes_length() == 2
     assert decoded_blob_bytes_first() == 72
-    assert invalid_bytes_message() == "bytes.from_hex: expected hex string"
+    assert invalid_bytes_message() == "expected hex bytes string"
     assert decoded_top_level_secret_redaction() == "***"
     assert decoded_secret_field_summary() == "svc:***"
     assert string.contains(invalid_secret_field_message(), "token: expected string") == true
-    assert missing_secret_field_message() == "missing field 'token'"
+    assert missing_secret_field_message() == "missing required field 'token' for Credential"

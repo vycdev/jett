@@ -22,5 +22,5 @@ function reflected_parse_wrapper_raw_error() returns string:
 
 verify json_reflection_parse_wrapper:
     assert reflected_parse_wrapper_summary() == "u1:true:2"
-    assert reflected_parse_wrapper_error() == "missing field 'active'"
+    assert reflected_parse_wrapper_error() == "missing required field 'active' for TinyUser"
     assert string.contains(reflected_parse_wrapper_raw_error(), "EOF") == true

@@ -13,6 +13,9 @@ implementation can own public names such as `json.parse[T](raw)` and
   - `json.json_parse_reflected[T](raw)`
 - The public `json.parse`, `json.serialize`, and `json.serialize_public` names
   are still compiler-known builtins.
+- The interpreter delegates `json.parse[T]` and `json.serialize_public[T]` to
+  the reflected stdlib implementations when the compiler-shipped stdlib module
+  is registered. Full `json.serialize[T]` remains Rust-backed.
 - The typechecker enforces policy for those public names:
   - `json.parse[T]` must have one type argument and returns `result[T, string]`.
   - non-string JSON map keys are rejected.
@@ -95,16 +98,17 @@ Suggested sequence:
 1. Keep the Rust-backed `json.parse_raw` and `JsonValue` accessors.
 2. Change the interpreter's public `json.serialize_public[T]` path to delegate
    to `json.json_serialize_public_reflected[T]` when the stdlib function is
-   registered.
-3. Keep typechecker policy for `json.serialize_public[T]` unchanged.
-4. Add parity tests for nested structs, aliases/refinements, enums, bitfields,
+   registered. Done.
+3. Keep typechecker policy for `json.serialize_public[T]` unchanged. Done.
+4. Change the interpreter's public `json.parse[T]` path to delegate to
+   `json.json_parse_reflected[T]` after preserving public-facing error
+   expectations while retaining useful field-path context. Done.
+5. Keep typechecker policy for `json.parse[T]` unchanged. Done.
+6. Add parity tests for nested structs, aliases/refinements, enums, bitfields,
    bytes, secrets, optionals, results, lists, sets, and `map[string, V]`.
-5. Repeat for `json.parse[T]` after deciding whether the reflected decoder
-   should preserve the Rust bridge's terse error strings or keep its richer
-   field-path context.
-6. Leave full `json.serialize[T]` Rust-backed until the reflected full
+7. Leave full `json.serialize[T]` Rust-backed until the reflected full
    serializer exists and the secret rejection policy remains compiler-enforced.
-7. Later, after visibility/export and policy-bearing stdlib declarations exist,
+8. Later, after visibility/export and policy-bearing stdlib declarations exist,
    reconsider whether `parse`, `serialize`, and `serialize_public` can become
    ordinary exported functions.
 
@@ -116,5 +120,6 @@ Suggested sequence:
   or should there be an internal, non-user-callable hook name?
 - Should compile-time and future runtime/codegen use the same delegation path,
   or should codegen lower public JSON calls differently?
-- How much error-message parity is required before switching the default
-  interpreter path?
+- Should public parse keep the reflected decoder's richer field-path context as
+  the stable user-facing contract, or should it exactly preserve the older
+  Rust bridge messages?

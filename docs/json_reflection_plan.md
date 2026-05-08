@@ -109,8 +109,11 @@ public serializer with the Rust-backed `json.serialize_public[T]` bridge and
 compares reflected parsing with Rust-backed `json.parse[T]` by summarizing both
 decoded values for the same input.
 
-`json.parse[T](raw)` has a Rust-backed bridge: it requires one type argument,
-accepts a string, returns `result[T, string]`, and supports core primitives,
+`json.parse[T](raw)` remains a compiler-known public bridge: it requires one
+type argument, accepts a string, returns `result[T, string]`, and the
+typechecker still enforces the public JSON policies. In the interpreter, the
+body now delegates to `json.json_parse_reflected[T](raw)` when the bundled
+stdlib module is registered. The reflected path supports core primitives,
 structs with `serialize` names, lists, sets, `map[string, V]`, optionals,
 results, `secret[T]` wrappers, enums using the serializer's string/object
 payload shape, bitfields from JSON objects with width and enum-annotation
@@ -119,10 +122,14 @@ refinements over generic shapes such as `list[string]`. The long-term goal is
 still to replace this bridge with stdlib code; struct construction is now
 available through `TypeConstruction`, bitfield construction is available through
 the same builder, and enum construction is available through
-`type.construct_variant_start`; the final syntax remains future work.
-Moving the prototypes into an actual public `json.*` API now mostly needs the
-handoff from the hardcoded builtin bridge; see
-`docs/stdlib_json_extraction_plan.md` and
+`type.construct_variant_start`.
+
+`json.serialize_public[T](view value)` follows the same staged bridge pattern:
+the typechecker keeps the public policy checks, while the interpreter delegates
+the body to `json.json_serialize_public_reflected[T](view value)` when the
+bundled stdlib function is registered. Full `json.serialize[T]` is still
+Rust-backed because the reflected full serializer and secret rejection handoff
+are not done yet. See `docs/stdlib_json_extraction_plan.md` and
 `docs/json_public_bridge_handoff.md`.
 
 `json.parse_raw(raw)` now exposes an opaque `JsonValue` tree with explicit
@@ -235,7 +242,8 @@ for the decoded value. See `docs/bitfield_reflection_metadata.md`.
 
 1. Add a staged stdlib loader so extracted `.jett` helpers can be tested outside
    single-file fixtures.
-2. Resolve the public `json.*` bridge/handoff, then move the reflected
-   JSON prototypes behind real `json.*` APIs.
+2. Continue the public `json.*` bridge handoff: full serialization, broader
+   parity, and eventually ordinary exported APIs once policy-bearing stdlib
+   declarations exist.
 3. Keep hardening format policy with parity tests against the Rust bridge:
    unknown fields, enum/bitfield shape, public/secret modes, and error messages.
