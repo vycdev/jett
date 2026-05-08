@@ -35,6 +35,9 @@ Implemented reflection primitives:
 - `comptime type Name = type.info[T]():` binds a direct reflected root as a
   scoped type, and `comptime type Field = field.type_info:` works inside direct
   `for field in type.fields[T]():` loops.
+- Trusted `TypeInfo.args` loops can bind nested type arguments, enabling
+  recursive dispatch for wrappers such as `list[T]` and `optional[T]` without
+  trusting user-constructed metadata.
 
 JSON serialization is still Rust-backed, but it now consumes the same field
 metadata exposed to Jett code. The active tests cover nested structs, bitfields,
@@ -144,7 +147,7 @@ for the decoded value. See `docs/bitfield_reflection_metadata.md`.
 
 1. Implement a nested `.jett` serializer prototype for primitives, structs,
    lists, maps with string keys, optionals, and results.
-2. Extend trusted `comptime type` binding from direct fields to nested
-   `TypeInfo.args`.
+2. Extend trusted type-argument binding to less direct but still compiler-owned
+   metadata flows if the serializer prototype exposes ergonomic gaps.
 3. Prototype the reflected construction path described in
    `docs/type_construction_design.md`.

@@ -7,6 +7,9 @@ struct User:
     id: string
     age: int64
 
+struct ListBox:
+    values: list[int64]
+
 function bound_type_name() returns string:
     string found = "missing"
     comptime type Bound = type.info[int64]():
@@ -53,9 +56,40 @@ function bound_reflected_generic_field_type() returns string:
             found = type.name[Field]()
     return found
 
+function bound_direct_arg_type() returns string:
+    string found = "missing"
+    for arg in type.info[list[string]]().args:
+        comptime type Arg = arg:
+            found = type.name[Arg]()
+    return found
+
+function bound_nested_arg_type() returns string:
+    string found = "missing"
+    for outer in type.info[list[optional[string]]]().args:
+        comptime type Outer = outer:
+            for inner in outer.args:
+                comptime type Inner = inner:
+                    found = type.name[Inner]()
+    return found
+
+function bound_field_arg_type() returns string:
+    ListBox box = ListBox(values: list(1, 2, 3))
+    string found = "missing"
+    for field in type.fields[ListBox]():
+        for arg in field.type_info.args:
+            comptime type Arg = arg:
+                list[Arg] values = type.field_value[ListBox, list[Arg]](view box, view field)
+                string type_name = type.name[Arg]()
+                int64 length = list.length(values)
+                found = "{type_name}:{length}"
+    return found
+
 verify comptime_type_bind:
     assert bound_type_name() == "int64"
     assert bound_generic_field_kind() == "primitive"
     assert bound_generic_field_type_name() == "string"
     assert bound_reflected_field_types() == "id:string;age:int64"
     assert bound_reflected_generic_field_type() == "list[int64]"
+    assert bound_direct_arg_type() == "string"
+    assert bound_nested_arg_type() == "string"
+    assert bound_field_arg_type() == "int64:3"

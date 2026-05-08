@@ -97,6 +97,8 @@ struct TypeChecker<'a> {
     type_var_subst: HashMap<String, TypeId>,
     /// Trusted field types currently available from direct `type.fields[T]()` loops.
     reflected_field_type_scopes: Vec<HashMap<String, Vec<TypeId>>>,
+    /// Trusted TypeInfo types currently available from direct reflected `args` loops.
+    reflected_type_info_scopes: Vec<HashMap<String, Vec<TypeId>>>,
 
     // -- Generic function support --
     /// AST templates for user-defined generic functions (have type_params).
@@ -141,6 +143,7 @@ impl<'a> TypeChecker<'a> {
             monomorphized_structs: HashMap::new(),
             type_var_subst: HashMap::new(),
             reflected_field_type_scopes: Vec::new(),
+            reflected_type_info_scopes: Vec::new(),
             generic_function_templates: HashMap::new(),
             current_respond_type: None,
         };
@@ -2524,6 +2527,17 @@ impl<'a> TypeChecker<'a> {
             }
         }
 
+        if let Some(info_name) = reflected_type_info_binding(&bind.value) {
+            if let Some(info_types) = self.reflected_type_info_types_for_name(info_name) {
+                for info_ty in info_types {
+                    if info_ty != TypeInterner::ERROR {
+                        self.check_comptime_type_bind_body(&bind.name.name, info_ty, &bind.body);
+                    }
+                }
+                return;
+            }
+        }
+
         self.sink
             .emit(errors::invalid_comptime_type_binding(bind.value.span()));
         self.check_block(&bind.body);
@@ -2541,6 +2555,14 @@ impl<'a> TypeChecker<'a> {
 
     fn reflected_field_types_for_name(&self, name: &str) -> Option<Vec<TypeId>> {
         self.reflected_field_type_scopes
+            .iter()
+            .rev()
+            .find_map(|scope| scope.get(name))
+            .cloned()
+    }
+
+    fn reflected_type_info_types_for_name(&self, name: &str) -> Option<Vec<TypeId>> {
+        self.reflected_type_info_scopes
             .iter()
             .rev()
             .find_map(|scope| scope.get(name))
@@ -2567,6 +2589,48 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn reflected_type_info_arg_types_for_iterable(
+        &mut self,
+        iterable: &Expr,
+    ) -> Option<Vec<TypeId>> {
+        let source = reflected_type_info_args_source(iterable)?;
+        let source_types = match source {
+            ReflectedTypeInfoSource::Direct(ty) => vec![self.resolve_type_expr(ty)],
+            ReflectedTypeInfoSource::Field(field_name) => {
+                self.reflected_field_types_for_name(field_name)?
+            }
+            ReflectedTypeInfoSource::TypeInfo(info_name) => {
+                self.reflected_type_info_types_for_name(info_name)?
+            }
+        };
+
+        Some(
+            source_types
+                .into_iter()
+                .flat_map(|ty| self.type_info_arg_types_for_type(ty))
+                .collect(),
+        )
+    }
+
+    fn type_info_arg_types_for_type(&self, ty: TypeId) -> Vec<TypeId> {
+        match self.interner.resolve(ty) {
+            Type::List(inner) | Type::Set(inner) | Type::Optional(inner) | Type::Secret(inner) => {
+                vec![*inner]
+            }
+            Type::Map(key, value) | Type::Result(key, value) => vec![*key, *value],
+            Type::Refinement { base, .. } => vec![*base],
+            Type::Function {
+                params,
+                return_type,
+            } => params
+                .iter()
+                .copied()
+                .chain(std::iter::once(*return_type))
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
     fn push_reflected_field_type_scope(&mut self, field_name: &str, field_types: Vec<TypeId>) {
         let mut scope = HashMap::new();
         scope.insert(field_name.to_string(), field_types);
@@ -2575,6 +2639,16 @@ impl<'a> TypeChecker<'a> {
 
     fn pop_reflected_field_type_scope(&mut self) {
         self.reflected_field_type_scopes.pop();
+    }
+
+    fn push_reflected_type_info_scope(&mut self, info_name: &str, info_types: Vec<TypeId>) {
+        let mut scope = HashMap::new();
+        scope.insert(info_name.to_string(), info_types);
+        self.reflected_type_info_scopes.push(scope);
+    }
+
+    fn pop_reflected_type_info_scope(&mut self) {
+        self.reflected_type_info_scopes.pop();
     }
 
     fn check_trace(&mut self, trace_stmt: &ast::TraceStmt) {
@@ -2860,18 +2934,36 @@ impl<'a> TypeChecker<'a> {
             }
         }
 
-        if let Some(owner_ty_expr) = comptime_type_fields_binding(&for_stmt.iterable) {
-            let owner_ty = self.resolve_type_expr(owner_ty_expr);
-            let field_types = if owner_ty == TypeInterner::ERROR {
-                Vec::new()
+        let pushed_field_scope =
+            if let Some(owner_ty_expr) = comptime_type_fields_binding(&for_stmt.iterable) {
+                let owner_ty = self.resolve_type_expr(owner_ty_expr);
+                let field_types = if owner_ty == TypeInterner::ERROR {
+                    Vec::new()
+                } else {
+                    self.reflected_field_types_for_owner(owner_ty)
+                };
+                self.push_reflected_field_type_scope(&for_stmt.variable.name, field_types);
+                true
             } else {
-                self.reflected_field_types_for_owner(owner_ty)
+                false
             };
-            self.push_reflected_field_type_scope(&for_stmt.variable.name, field_types);
-            self.check_block(&for_stmt.body);
-            self.pop_reflected_field_type_scope();
+
+        let pushed_type_info_scope = if let Some(info_types) =
+            self.reflected_type_info_arg_types_for_iterable(&for_stmt.iterable)
+        {
+            self.push_reflected_type_info_scope(&for_stmt.variable.name, info_types);
+            true
         } else {
-            self.check_block(&for_stmt.body);
+            false
+        };
+
+        self.check_block(&for_stmt.body);
+
+        if pushed_type_info_scope {
+            self.pop_reflected_type_info_scope();
+        }
+        if pushed_field_scope {
+            self.pop_reflected_field_type_scope();
         }
     }
 
@@ -4694,6 +4786,35 @@ fn reflected_field_type_info_binding(expr: &Expr) -> Option<&str> {
         return None;
     }
     let Expr::Ident(ident) = base.as_ref() else {
+        return None;
+    };
+    Some(&ident.name)
+}
+
+enum ReflectedTypeInfoSource<'a> {
+    Direct(&'a TypeExpr),
+    Field(&'a str),
+    TypeInfo(&'a str),
+}
+
+fn reflected_type_info_args_source(expr: &Expr) -> Option<ReflectedTypeInfoSource<'_>> {
+    let Expr::FieldAccess(base, field, _) = expr else {
+        return None;
+    };
+    if field.name != "args" {
+        return None;
+    }
+    if let Some(ty) = comptime_type_info_binding(base) {
+        return Some(ReflectedTypeInfoSource::Direct(ty));
+    }
+    if let Some(field_name) = reflected_field_type_info_binding(base) {
+        return Some(ReflectedTypeInfoSource::Field(field_name));
+    }
+    reflected_type_info_binding(base).map(ReflectedTypeInfoSource::TypeInfo)
+}
+
+fn reflected_type_info_binding(expr: &Expr) -> Option<&str> {
+    let Expr::Ident(ident) = expr else {
         return None;
     };
     Some(&ident.name)

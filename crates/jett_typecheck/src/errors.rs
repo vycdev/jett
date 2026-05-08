@@ -559,7 +559,8 @@ pub fn json_serialize_requires_view(
 pub fn invalid_comptime_type_binding(span: Span) -> Diagnostic {
     Diagnostic::error(
         345,
-        "`comptime type` currently requires direct `type.info[T]()` or `field.type_info` from a direct `type.fields[T]()` loop".to_string(),
+        "`comptime type` currently requires direct `type.info[T]()` or trusted reflected metadata"
+            .to_string(),
         span,
     )
 }

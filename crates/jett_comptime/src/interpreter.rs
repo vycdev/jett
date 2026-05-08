@@ -109,6 +109,11 @@ struct ReflectedFieldBinding {
 }
 
 #[derive(Debug, Clone)]
+struct ReflectedTypeInfoBinding {
+    ty: TypeExpr,
+}
+
+#[derive(Debug, Clone)]
 struct ReflectionVariant {
     name: String,
     discriminant: i64,
@@ -155,6 +160,8 @@ pub struct Interpreter {
     type_arg_scopes: Vec<HashMap<String, TypeExpr>>,
     /// Trusted field metadata currently produced by direct `type.fields[T]()` loops.
     reflected_field_scopes: Vec<HashMap<String, ReflectedFieldBinding>>,
+    /// Trusted TypeInfo metadata currently produced by direct reflected `args` loops.
+    reflected_type_info_scopes: Vec<HashMap<String, ReflectedTypeInfoBinding>>,
     /// Live actor instances keyed by unique ID.
     actor_instances: HashMap<u64, ActorInstance>,
     /// Next actor instance ID.
@@ -191,6 +198,7 @@ impl Interpreter {
             actor_defs: HashMap::new(),
             type_arg_scopes: Vec::new(),
             reflected_field_scopes: Vec::new(),
+            reflected_type_info_scopes: Vec::new(),
             actor_instances: HashMap::new(),
             next_actor_id: 0,
             debug_output: Vec::new(),
@@ -1025,8 +1033,10 @@ impl Interpreter {
                     self.substitute_type_expr(bound_type_expr)
                 } else if let Some(field_name) = reflected_field_type_info_binding(&bind.value) {
                     self.bound_reflected_field_type(field_name)?
+                } else if let Some(info_name) = reflected_type_info_binding(&bind.value) {
+                    self.bound_reflected_type_info_type(info_name)?
                 } else {
-                    return Err("`comptime type` currently requires a direct `type.info[T]()` initializer or trusted reflected field metadata".to_string());
+                    return Err("`comptime type` currently requires a direct `type.info[T]()` initializer or trusted reflected metadata".to_string());
                 };
                 let mut scope = HashMap::new();
                 scope.insert(bind.name.name.clone(), bound_type_expr);
@@ -1097,6 +1107,8 @@ impl Interpreter {
             Stmt::For(for_stmt) => {
                 let reflected_field_bindings =
                     self.reflected_field_loop_bindings(&for_stmt.iterable);
+                let reflected_type_info_bindings =
+                    self.reflected_type_info_arg_loop_bindings(&for_stmt.iterable)?;
                 let iterable = match self.eval_expr_flow(&for_stmt.iterable)? {
                     ExprFlow::Value(value) => value,
                     ExprFlow::Signal(signal) => return Ok(Some(signal)),
@@ -1116,8 +1128,20 @@ impl Interpreter {
                                     self.reflected_field_scopes.push(scope);
                                 })
                                 .is_some();
+                            let pushed_type_info_scope = reflected_type_info_bindings
+                                .as_ref()
+                                .and_then(|bindings| bindings.get(index))
+                                .map(|binding| {
+                                    let mut scope = HashMap::new();
+                                    scope.insert(for_stmt.variable.name.clone(), binding.clone());
+                                    self.reflected_type_info_scopes.push(scope);
+                                })
+                                .is_some();
 
                             let signal = self.exec_block_inner(&for_stmt.body);
+                            if pushed_type_info_scope {
+                                self.reflected_type_info_scopes.pop();
+                            }
                             if pushed_field_scope {
                                 self.reflected_field_scopes.pop();
                             }
@@ -2438,16 +2462,56 @@ impl Interpreter {
         )
     }
 
+    fn reflected_type_info_arg_loop_bindings(
+        &self,
+        iterable: &Expr,
+    ) -> Result<Option<Vec<ReflectedTypeInfoBinding>>, String> {
+        let Some(source_ty) = reflected_type_info_args_source(iterable) else {
+            return Ok(None);
+        };
+        let ty = match source_ty {
+            ReflectedTypeInfoSource::Direct(ty) => self.substitute_type_expr(ty),
+            ReflectedTypeInfoSource::Field(field_name) => {
+                let Some(ty) = self.maybe_bound_reflected_field_type(field_name)? else {
+                    return Ok(None);
+                };
+                ty
+            }
+            ReflectedTypeInfoSource::TypeInfo(info_name) => {
+                let Some(ty) = self.maybe_bound_reflected_type_info_type(info_name)? else {
+                    return Ok(None);
+                };
+                ty
+            }
+        };
+        Ok(Some(
+            self.type_info_arg_types(&ty)
+                .into_iter()
+                .map(|ty| ReflectedTypeInfoBinding { ty })
+                .collect(),
+        ))
+    }
+
     fn bound_reflected_field_type(&self, field_name: &str) -> Result<TypeExpr, String> {
+        self.maybe_bound_reflected_field_type(field_name)?
+            .ok_or_else(|| {
+                "`comptime type` can only bind field.type_info inside a direct `type.fields[T]()` loop"
+                    .to_string()
+            })
+    }
+
+    fn maybe_bound_reflected_field_type(
+        &self,
+        field_name: &str,
+    ) -> Result<Option<TypeExpr>, String> {
         let binding = self
             .reflected_field_scopes
             .iter()
             .rev()
-            .find_map(|scope| scope.get(field_name))
-            .ok_or_else(|| {
-                "`comptime type` can only bind field.type_info inside a direct `type.fields[T]()` loop"
-                    .to_string()
-            })?;
+            .find_map(|scope| scope.get(field_name));
+        let Some(binding) = binding else {
+            return Ok(None);
+        };
         let current_value = self.get_variable(field_name).ok_or_else(|| {
             format!("`comptime type` reflected field '{field_name}' is not in scope")
         })?;
@@ -2459,7 +2523,66 @@ impl Interpreter {
         if index != binding.index || name != binding.name || type_name != expected_type_name {
             return Err("`comptime type` reflected field metadata no longer matches the trusted `type.fields[T]()` loop item".to_string());
         }
-        Ok(self.substitute_type_expr(&binding.ty))
+        Ok(Some(self.substitute_type_expr(&binding.ty)))
+    }
+
+    fn bound_reflected_type_info_type(&self, info_name: &str) -> Result<TypeExpr, String> {
+        self.maybe_bound_reflected_type_info_type(info_name)?
+            .ok_or_else(|| {
+                "`comptime type` can only bind TypeInfo values from trusted reflected `args` loops"
+                    .to_string()
+            })
+    }
+
+    fn maybe_bound_reflected_type_info_type(
+        &self,
+        info_name: &str,
+    ) -> Result<Option<TypeExpr>, String> {
+        let binding = self
+            .reflected_type_info_scopes
+            .iter()
+            .rev()
+            .find_map(|scope| scope.get(info_name));
+        let Some(binding) = binding else {
+            return Ok(None);
+        };
+        let current_value = self.get_variable(info_name).ok_or_else(|| {
+            format!("`comptime type` reflected TypeInfo '{info_name}' is not in scope")
+        })?;
+        let type_name = Self::type_info_metadata(current_value).map_err(|_| {
+            "`comptime type` reflected TypeInfo binding requires the current TypeInfo value"
+                .to_string()
+        })?;
+        let expected_type_name = type_expr_display(&binding.ty);
+        if type_name != expected_type_name {
+            return Err("`comptime type` reflected TypeInfo metadata no longer matches the trusted `args` loop item".to_string());
+        }
+        Ok(Some(self.substitute_type_expr(&binding.ty)))
+    }
+
+    fn type_info_arg_types(&self, ty: &TypeExpr) -> Vec<TypeExpr> {
+        let ty = self.substitute_type_expr(ty);
+        if let TypeExpr::View(inner, _) = &ty {
+            return self.type_info_arg_types(inner);
+        }
+
+        match &ty {
+            TypeExpr::Named(ident) if self.type_aliases.contains_key(&ident.name) => self
+                .type_alias_bases
+                .get(&ident.name)
+                .map(|base_ty| vec![self.substitute_type_expr(base_ty)])
+                .unwrap_or_default(),
+            TypeExpr::Generic(_, args, _) => args
+                .iter()
+                .map(|arg| self.substitute_type_expr(arg))
+                .collect(),
+            TypeExpr::Function(params, return_type, _) => params
+                .iter()
+                .chain(std::iter::once(return_type.as_ref()))
+                .map(|arg| self.substitute_type_expr(arg))
+                .collect(),
+            _ => Vec::new(),
+        }
     }
 
     fn type_bitfield_value(&self, bitfield: ReflectionBitfield) -> Value {
@@ -2678,6 +2801,25 @@ impl Interpreter {
         };
 
         Ok((index, name, type_name))
+    }
+
+    fn type_info_metadata(value: &Value) -> Result<String, String> {
+        let Value::Struct { type_name, fields } = value else {
+            return Err(format!("expected TypeInfo, got {value}"));
+        };
+        if type_name != "TypeInfo" {
+            return Err(format!("expected TypeInfo, got {type_name}"));
+        }
+
+        match fields
+            .iter()
+            .find(|(field_name, _)| field_name == "type_name")
+            .map(|(_, field_value)| field_value)
+        {
+            Some(Value::String(type_name)) => Ok(type_name.clone()),
+            Some(other) => Err(format!("TypeInfo.type_name must be string, got {other}")),
+            None => Err("TypeInfo is missing 'type_name'".to_string()),
+        }
     }
 
     fn json_to_value_typed(&mut self, json: &JsonValue, ty: &TypeExpr) -> Result<Value, String> {
@@ -6491,6 +6633,35 @@ fn reflected_field_type_info_binding(expr: &Expr) -> Option<&str> {
         return None;
     }
     let Expr::Ident(ident) = base.as_ref() else {
+        return None;
+    };
+    Some(&ident.name)
+}
+
+enum ReflectedTypeInfoSource<'a> {
+    Direct(&'a TypeExpr),
+    Field(&'a str),
+    TypeInfo(&'a str),
+}
+
+fn reflected_type_info_args_source(expr: &Expr) -> Option<ReflectedTypeInfoSource<'_>> {
+    let Expr::FieldAccess(base, field, _) = expr else {
+        return None;
+    };
+    if field.name != "args" {
+        return None;
+    }
+    if let Some(ty) = comptime_type_info_binding(base) {
+        return Some(ReflectedTypeInfoSource::Direct(ty));
+    }
+    if let Some(field_name) = reflected_field_type_info_binding(base) {
+        return Some(ReflectedTypeInfoSource::Field(field_name));
+    }
+    reflected_type_info_binding(base).map(ReflectedTypeInfoSource::TypeInfo)
+}
+
+fn reflected_type_info_binding(expr: &Expr) -> Option<&str> {
+    let Expr::Ident(ident) = expr else {
         return None;
     };
     Some(&ident.name)

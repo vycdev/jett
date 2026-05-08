@@ -99,13 +99,16 @@ The current implementation supports:
 - direct roots such as `comptime type Root = type.info[T]():`
 - `field.type_info` when `field` is the loop variable of a direct
   `for field in type.fields[T]():` loop
+- `TypeInfo` values produced by direct reflected `args` loops, such as
+  `for arg in type.info[list[T]]().args:` or nested `for inner in arg.args:`
 
 The field form is intentionally narrow. Binding through an intermediate list,
 through reassigned metadata, or from user-constructed `TypeInfo` is rejected or
 fails runtime validation. Bitfield fields share the same `type.fields[T]()` path;
 bitfield-specific metadata such as width and enum annotations is still exposed
-separately. Binding nested `TypeInfo.args` remains pending until provenance can
-be represented cleanly through recursive metadata.
+separately. The trusted `args` form currently follows direct `type.info[T]()`,
+trusted field metadata, and previously trusted `args` loop variables; storing
+metadata in ordinary variables still drops provenance.
 
 ## Tests
 
@@ -116,7 +119,8 @@ Run-pass:
 - Nested fields: `list[User]`, `optional[User]`, `result[int64, string]`,
   `map[string, int64]`.
 - Generic structs: `Box[list[int64]]`.
-- Alias/refinement metadata: bind the base type from `TypeInfo.args[0]`.
+- Alias/refinement metadata: bind the base type from a trusted `TypeInfo.args`
+  loop.
 - Secret filtering still uses `TypeInfo.has_secret` before field reads.
 
 Compile-fail:
@@ -127,6 +131,8 @@ Compile-fail:
 - `type.field_value[T, Wrong]` still rejects mismatched metadata.
 - Binding through an intermediate `list[TypeField]` rather than a direct
   `type.fields[T]()` loop.
+- Binding through an intermediate `TypeInfo` variable rather than a direct
+  reflected `args` loop.
 - Binding a field from one owner and reading it from another owner remains
   rejected.
 

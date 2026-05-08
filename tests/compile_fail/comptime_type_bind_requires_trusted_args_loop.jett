@@ -1,0 +1,10 @@
+# ERROR: E0345
+namespace test
+
+function bad() returns string:
+    TypeInfo info = type.info[list[int64]]()
+    string found = "missing"
+    for arg in info.args:
+        comptime type Arg = arg:
+            found = type.name[Arg]()
+    return found
