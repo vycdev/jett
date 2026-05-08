@@ -99,6 +99,7 @@ impl Resolver {
             "secret",
             "TypeInfo",
             "TypeKind",
+            "TypePrimitive",
             "TypeField",
             "TypeBitfield",
             "TypeBitfieldField",
@@ -1007,6 +1008,7 @@ fn is_builtin_type(name: &str) -> bool {
             | "TypeConstruction"
             | "TypeInfo"
             | "TypeKind"
+            | "TypePrimitive"
             | "TypeField"
             | "TypeBitfield"
             | "TypeBitfieldField"

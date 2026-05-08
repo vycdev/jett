@@ -13,7 +13,8 @@ Implemented reflection primitives:
   the string kind API available for compatibility.
 - `type.has_secret[T]()` reports whether a type contains secret data.
 - `type.info[T]()` returns recursive `TypeInfo` metadata with `type_name`,
-  `kind`, `kind_tag`, `has_secret`, and nested `args`.
+  `kind`, `kind_tag`, optional `primitive_tag`, `has_secret`, and nested
+  `args`.
 - `type.arg[T](index)` returns the indexed type argument as `TypeInfo`, and
   direct literal-index calls can be used as trusted `comptime type` binders.
 - Alias and refinement `TypeInfo` values expose their base type as the first

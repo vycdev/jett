@@ -1091,7 +1091,7 @@ The boundary between compiler-generated code and stdlib-implemented code is a cr
 | `type.name[T]()` | Comptime reflection | Stable display name for `T` |
 | `type.kind[T]()` | Comptime reflection | Category such as `primitive`, `list`, `struct`, `secret` |
 | `type.has_secret[T]()` | Comptime reflection | Whether `T` contains secret data |
-| `type.info[T]()` | Comptime reflection | Recursive `TypeInfo` metadata for `T`, including nested type arguments |
+| `type.info[T]()` | Comptime reflection | Recursive `TypeInfo` metadata for `T`, including nested type arguments, structured kind tags, and optional primitive tags |
 | `type.arg[T](index)` | Comptime reflection | Indexed `TypeInfo` argument for generic wrappers; direct literal indexes can bind scoped comptime types |
 | `type.fields[T]()` | Struct/bitfield reflection | Ordered `list[TypeField]` metadata for struct and bitfield fields, including `serialize` names for structs |
 | `type.bitfield_layout[T]()` | Bitfield reflection | `TypeBitfield` metadata for byte order and field-level layout |
@@ -1109,7 +1109,7 @@ The boundary between compiler-generated code and stdlib-implemented code is a cr
 | `clone` for structs | `clone value` on a struct | Field-by-field recursive deep copy |
 | Refinement type constraint functions | `type Port = int64 where ...` | Synthesized boolean check function |
 
-Format-specific modules such as `json` should live in `.jett` stdlib code as the reflection API matures. Current interpreter implementations may still bootstrap JSON in Rust, but should consume the same type metadata (`TypeInfo`, `TypeField`, `TypeBitfieldField`, `TypeVariant`, `serialize_name`, field values, layout information, and secret information) that user comptime code can inspect.
+Format-specific modules such as `json` should live in `.jett` stdlib code as the reflection API matures. Current interpreter implementations may still bootstrap JSON in Rust, but should consume the same type metadata (`TypeInfo`, `TypeKind`, `TypePrimitive`, `TypeField`, `TypeBitfieldField`, `TypeVariant`, `serialize_name`, field values, layout information, and secret information) that user comptime code can inspect.
 
 **2. Stdlib functions** — normal Jett code shipped in `stdlib/`:
 

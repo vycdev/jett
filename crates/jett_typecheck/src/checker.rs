@@ -182,6 +182,32 @@ impl<'a> TypeChecker<'a> {
         self.named_types
             .insert("TypeKind".to_string(), type_kind_ty);
 
+        let type_primitive_eid = self.interner.add_enum(TypeEnumDef {
+            name: "TypePrimitive".to_string(),
+            variants: Self::metadata_unit_variants(&[
+                "int8_type",
+                "int16_type",
+                "int32_type",
+                "int64_type",
+                "uint8_type",
+                "uint16_type",
+                "uint32_type",
+                "uint64_type",
+                "float32_type",
+                "float64_type",
+                "string_type",
+                "bool_type",
+                "bytes_type",
+                "nothing_type",
+                "json_value_type",
+                "type_construction_type",
+                "unknown_type",
+            ]),
+        });
+        let type_primitive_ty = self.interner.intern(Type::Enum(type_primitive_eid));
+        self.named_types
+            .insert("TypePrimitive".to_string(), type_primitive_ty);
+
         let bitfield_shape_eid = self.interner.add_enum(TypeEnumDef {
             name: "TypeBitfieldFieldShape".to_string(),
             variants: Self::metadata_unit_variants(&["bits_field", "payload_field"]),
@@ -197,6 +223,7 @@ impl<'a> TypeChecker<'a> {
         });
         let type_info_ty = self.interner.intern(Type::Struct(type_info_sid));
         let type_info_args_ty = self.interner.intern(Type::List(type_info_ty));
+        let optional_type_primitive_ty = self.interner.intern(Type::Optional(type_primitive_ty));
         self.interner.update_struct(
             type_info_sid,
             TypeStructDef {
@@ -205,6 +232,7 @@ impl<'a> TypeChecker<'a> {
                     ("type_name".to_string(), TypeInterner::STRING),
                     ("kind".to_string(), TypeInterner::STRING),
                     ("kind_tag".to_string(), type_kind_ty),
+                    ("primitive_tag".to_string(), optional_type_primitive_ty),
                     ("has_secret".to_string(), TypeInterner::BOOL),
                     ("args".to_string(), type_info_args_ty),
                 ],

@@ -5,9 +5,9 @@ reflection JSON prototypes can become a real `stdlib/json.jett` module.
 
 The important conclusion is that JSON itself is no longer the main blocker.
 Reflection can now read fields, construct structs/bitfields/enums, inspect type
-arguments, use structured kind tags, and walk raw `JsonValue`. The blocker is
-the module and namespace path that would let ordinary `.jett` stdlib code own
-the public `json.*` API.
+arguments, use structured kind and primitive tags, and walk raw `JsonValue`.
+The blocker is the module and namespace path that would let ordinary `.jett`
+stdlib code own the public `json.*` API.
 
 ## Current Architecture
 
@@ -57,7 +57,7 @@ flat decoder prototype:
 
 Together they cover the shape needed for a future stdlib module:
 
-- recursive structured type dispatch through `TypeKind`,
+- recursive structured type dispatch through `TypeKind` and `TypePrimitive`,
 - primitive values, bytes, null, aliases, refinements, secrets,
 - structs, bitfields, enum variants and enum payloads,
 - lists, sets, `map[string, V]`, optionals, and results,

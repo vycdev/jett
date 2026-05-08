@@ -2492,7 +2492,22 @@ impl Interpreter {
                 }
                 if matches!(
                     ident.name.as_str(),
-                    "int64" | "float64" | "string" | "bool" | "bytes" | "nothing" | "JsonValue"
+                    "int8"
+                        | "int16"
+                        | "int32"
+                        | "int64"
+                        | "uint8"
+                        | "uint16"
+                        | "uint32"
+                        | "uint64"
+                        | "float32"
+                        | "float64"
+                        | "string"
+                        | "bool"
+                        | "bytes"
+                        | "nothing"
+                        | "JsonValue"
+                        | "TypeConstruction"
                 ) {
                     "primitive"
                 } else if self.type_aliases.contains_key(&ident.name) {
@@ -2558,6 +2573,46 @@ impl Interpreter {
             variant: variant.to_string(),
             fields: Vec::new(),
         }
+    }
+
+    fn type_primitive_tag_value(&self, ty: &TypeExpr) -> Value {
+        let ty = self.substitute_type_expr(ty);
+        if let TypeExpr::View(inner, _) = &ty {
+            return self.type_primitive_tag_value(inner);
+        }
+
+        let variant = match &ty {
+            TypeExpr::Named(ident) => match ident.name.as_str() {
+                "int8" => Some("int8_type"),
+                "int16" => Some("int16_type"),
+                "int32" => Some("int32_type"),
+                "int64" => Some("int64_type"),
+                "uint8" => Some("uint8_type"),
+                "uint16" => Some("uint16_type"),
+                "uint32" => Some("uint32_type"),
+                "uint64" => Some("uint64_type"),
+                "float32" => Some("float32_type"),
+                "float64" => Some("float64_type"),
+                "string" => Some("string_type"),
+                "bool" => Some("bool_type"),
+                "bytes" => Some("bytes_type"),
+                "nothing" => Some("nothing_type"),
+                "JsonValue" => Some("json_value_type"),
+                "TypeConstruction" => Some("type_construction_type"),
+                _ => None,
+            },
+            _ => None,
+        };
+
+        variant
+            .map(|variant| {
+                Value::OptionalSome(Box::new(Value::Enum {
+                    type_name: "TypePrimitive".to_string(),
+                    variant: variant.to_string(),
+                    fields: Vec::new(),
+                }))
+            })
+            .unwrap_or(Value::OptionalNone)
     }
 
     fn bitfield_shape_tag_value(shape: &str) -> Value {
@@ -3188,6 +3243,10 @@ impl Interpreter {
                 (
                     "kind_tag".to_string(),
                     Self::type_kind_tag_value(self.type_expr_kind(&ty)),
+                ),
+                (
+                    "primitive_tag".to_string(),
+                    self.type_primitive_tag_value(&ty),
                 ),
                 (
                     "has_secret".to_string(),

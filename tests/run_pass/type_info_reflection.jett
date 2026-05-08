@@ -54,6 +54,30 @@ function type_info_kind_tag_is[T](expected: TypeKind) returns bool:
 function direct_type_kind_tag_is[T](expected: TypeKind) returns bool:
     return type.kind_tag[T]() == expected
 
+function type_info_primitive_tag_is[T](expected: TypePrimitive) returns bool:
+    TypeInfo info = type.info[T]()
+    TypePrimitive primitive = info.primitive_tag handle:
+        return false
+    return primitive == expected
+
+function type_info_has_no_primitive_tag[T]() returns bool:
+    TypeInfo info = type.info[T]()
+    TypePrimitive primitive = info.primitive_tag handle:
+        return true
+    return primitive == TypePrimitive.unknown_type
+
+function type_info_arg_primitive_tag_is[T](target: int64, expected: TypePrimitive) returns bool:
+    TypeInfo info = type.info[T]()
+    bool found = false
+    int64 index = 0
+    for arg in info.args:
+        if index == target:
+            TypePrimitive primitive = arg.primitive_tag handle:
+                return false
+            found = primitive == expected
+        index = index + 1
+    return found
+
 function type_info_arg_count[T]() returns int64:
     TypeInfo info = type.info[T]()
     return list.length(info.args)
@@ -316,12 +340,18 @@ function variant_field_type_name[T](variant_name: string, target: int64) returns
 verify type_info_reflection:
     assert type_info_kind[int64]() == "primitive"
     assert direct_type_kind_tag_is[int64](TypeKind.primitive_type) == true
+    assert type_info_primitive_tag_is[int64](TypePrimitive.int64_type) == true
+    assert type_info_primitive_tag_is[string](TypePrimitive.string_type) == true
+    assert type_info_primitive_tag_is[JsonValue](TypePrimitive.json_value_type) == true
     assert type_info_kind[NonEmpty]() == "refinement"
     assert type_info_kind_tag_is[NonEmpty](TypeKind.refinement_type) == true
+    assert type_info_has_no_primitive_tag[NonEmpty]() == true
     assert type_info_arg_count[NonEmpty]() == 1
     assert type_info_arg_kind[NonEmpty](0) == "primitive"
+    assert type_info_arg_primitive_tag_is[NonEmpty](0, TypePrimitive.string_type) == true
     assert type_info_kind[NameList]() == "alias"
     assert type_info_kind_tag_is[NameList](TypeKind.alias_type) == true
+    assert type_info_has_no_primitive_tag[NameList]() == true
     assert type_info_arg_kind[NameList](0) == "list"
     assert type_info_nested_arg_type_name[NameList](0, 0) == "string"
     assert type.has_secret[SecretText]() == true
