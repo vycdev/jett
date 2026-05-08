@@ -77,6 +77,13 @@ function reflected_control_string_json() returns string:
         return error
     return json_stdlib_quote(text)
 
+function reflected_all_control_string_json() returns string:
+    bytes raw = bytes.from_hex("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f") handle error:
+        return error
+    string text = bytes.to_string(raw) handle error:
+        return error
+    return json_stdlib_quote(text)
+
 function reflected_unicode_roundtrip_hex() returns string:
     string source_hex = "c3a9e4bda0e5a5bd"
     bytes raw = bytes.from_hex(source_hex) handle error:
@@ -144,4 +151,5 @@ verify json_reflection_nested_serializer:
 
     string control_raw = reflected_control_string_json()
     assert control_raw == "\"a\\u0001b\\b\\u000b\\f\\u001f\""
+    assert reflected_all_control_string_json() == "\"\\u0000\\u0001\\u0002\\u0003\\u0004\\u0005\\u0006\\u0007\\b\\t\\n\\u000b\\f\\r\\u000e\\u000f\\u0010\\u0011\\u0012\\u0013\\u0014\\u0015\\u0016\\u0017\\u0018\\u0019\\u001a\\u001b\\u001c\\u001d\\u001e\\u001f\""
     assert reflected_unicode_roundtrip_hex() == "c3a9e4bda0e5a5bd"
