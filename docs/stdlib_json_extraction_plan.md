@@ -32,8 +32,15 @@ automatically be callable as `json.parse[T](...)`.
 
 ## JSON-Specific State
 
-The reflected serializer and decoder prototypes currently live in run-pass
-fixtures:
+The reflected public serializer prototype has started moving into stdlib under
+a neutral namespace to avoid colliding with the hardcoded `json` builtin module
+prefix:
+
+- `stdlib/json_reflection.jett`
+- `json_serialize_public_reflected[T](view value)`
+
+The run-pass fixtures still own the test-specific type definitions and the
+decoder prototype:
 
 - `tests/run_pass/json_reflection_nested_serializer.jett`
 - `tests/run_pass/json_reflection_nested_decoder.jett`
@@ -114,17 +121,15 @@ the module cleanly probably needs an export rule or another visibility story.
 ## Minimal Staging Plan
 
 1. Keep the Rust-backed public JSON bridge for now.
-2. Stage extracted prototype code under flat, non-conflicting names, such as:
-   - `json_decode_reflected[T](raw: JsonValue)`
-   - `json_serialize_public_reflected[T](view value: T)`
-3. Add tests that prove stdlib-loaded functions are available in build, run,
-   test, and LSP-like validation paths.
-4. Implement namespace-qualified symbol registration and dotted user-function
+2. Continue staging extracted prototype code under flat, non-conflicting names:
+   - `json_serialize_public_reflected[T](view value: T)` exists in stdlib.
+   - `json_decode_reflected[T](raw: JsonValue)` still lives in a fixture.
+3. Implement namespace-qualified symbol registration and dotted user-function
    calls.
-5. Move the extracted functions into `namespace json` behind the real public
+4. Move the extracted functions into `namespace json` behind the real public
    names, while retaining compiler policy checks for secrets, `view`, map keys,
    and handled results.
-6. Run parity tests against the Rust bridge before removing any Rust-backed
+5. Run parity tests against the Rust bridge before removing any Rust-backed
    implementation paths.
 
 ## Recommended Shape For `stdlib/json.jett`

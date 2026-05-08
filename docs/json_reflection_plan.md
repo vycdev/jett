@@ -62,16 +62,20 @@ metadata exposed to Jett code. The active tests cover nested structs, bitfields,
 lists, sets, maps with string keys, optionals, results, `serialize` names,
 public secret omission, and valid JSON string escaping for control characters.
 
-There is also a `.jett` serializer prototype in
-`tests/run_pass/json_reflection_nested_serializer.jett`. It recursively handles
+There is also a `.jett` public serializer prototype now staged in
+`stdlib/json_reflection.jett` as
+`json_serialize_public_reflected[T](view value)`. It recursively handles
 primitives, structs, lists, sets, `map[string, V]`, optionals, result ok/fail
 objects, alias/refinement base serialization, bitfields, and enums using the
 same string/object shape as the Rust-backed JSON bridge. It relies on reflection
 primitives, trusted `comptime type` binding, and `type.arg[T](index)` for wrapper
 element/value types. The prototype also covers basic string escaping for quotes,
 backslashes, common named control characters, and all other ASCII control bytes
-as `\u00xx` sequences while preserving non-ASCII UTF-8. It is a proof of
-language capability, not yet a stdlib replacement for the Rust-backed builtin.
+as `\u00xx` sequences while preserving non-ASCII UTF-8.
+`tests/run_pass/json_reflection_nested_serializer.jett` exercises that stdlib
+function against nested user-defined types. This is still not the public
+`json.serialize_public` replacement; namespace-qualified user functions and API
+policy still need to land first.
 
 There are also `.jett` decoder prototypes:
 `tests/run_pass/json_reflection_flat_decoder.jett` covers the first
