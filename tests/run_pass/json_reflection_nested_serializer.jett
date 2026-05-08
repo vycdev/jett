@@ -47,7 +47,9 @@ function json_quote(raw: string) returns string:
     string escaped = string.replace(raw, "\\", "\\\\")
     escaped = string.replace(escaped, "\"", "\\\"")
     escaped = string.replace(escaped, "\n", "\\n")
+    escaped = string.replace(escaped, "\r", "\\r")
     escaped = string.replace(escaped, "\t", "\\t")
+    escaped = string.replace(escaped, "\0", "\\u0000")
     return "\"{escaped}\""
 
 function serialize_reflected[T](view value: T) returns string:
@@ -156,7 +158,7 @@ function reflected_user_json() returns string:
     lucky = set.add[int64](lucky, 13)
     secret[string] audit_a = "audit-a"
     secret[string] audit_b = "audit-b"
-    User user = User(id: "u1", active: true, note: "quote \" slash \\ newline \n tab \t", payload: payload, profile: profile, tags: list("admin", "beta"), lucky: lucky, scores: map("wins": 3, "losses": 1), nickname: some("ally"), missing: none, outcome: ok(7), failed: fail("bad"), token: "secret-token", audit_tokens: list(audit_a, audit_b))
+    User user = User(id: "u1", active: true, note: "quote \" slash \\ newline \n carriage \r tab \t nul \0", payload: payload, profile: profile, tags: list("admin", "beta"), lucky: lucky, scores: map("wins": 3, "losses": 1), nickname: some("ally"), missing: none, outcome: ok(7), failed: fail("bad"), token: "secret-token", audit_tokens: list(audit_a, audit_b))
     return serialize_reflected[User](view user)
 
 function reflected_alias_refinement_json() returns string:
@@ -181,7 +183,7 @@ verify json_reflection_nested_serializer:
     assert string.contains(raw, "u1") == true
     assert string.contains(raw, "active") == true
     assert string.contains(raw, "true") == true
-    assert string.contains(raw, "quote \\\" slash \\\\ newline \\n tab \\t") == true
+    assert string.contains(raw, "quote \\\" slash \\\\ newline \\n carriage \\r tab \\t nul \\u0000") == true
     assert string.contains(raw, "payload") == true
     assert string.contains(raw, "0x4869") == true
     assert string.contains(raw, "profile") == true
