@@ -197,4 +197,5 @@ This keeps `type.construct` from becoming `json.construct` in disguise.
   construction.
 
 See `docs/reflected_construction_staging.md` for the current builder surface and
-the remaining path toward block syntax.
+`docs/type_construction_block_syntax.md` for the recommended long-term block
+syntax direction.
