@@ -2,21 +2,27 @@
 
 This note captures the remaining decision before the reflected `.jett`
 implementation can own public names such as `json.parse[T](raw)` and
-`json.serialize_public[T](view value)`.
+`json.serialize_public[T](view value)` without losing the compiler-owned policy
+gate around those calls.
 
 ## Current State
 
 - `stdlib/json.jett` now declares `namespace json`.
-- The staged functions still use prefixed names:
+- The implementation hooks still use prefixed names:
   - `json.json_serialize_reflected[T](view value)`
   - `json.json_serialize_public_reflected[T](view value)`
   - `json.json_decode_reflected[T](raw)`
   - `json.json_parse_reflected[T](raw)`
+- The module also declares public wrapper names:
+  - `json.parse[T](raw)`
+  - `json.serialize[T](view value)`
+  - `json.serialize_public[T](view value)`
 - The public `json.parse`, `json.serialize`, and `json.serialize_public` names
-  are still compiler-known builtins.
+  are still compiler-known builtins for typechecking and call dispatch.
 - The interpreter delegates `json.parse[T]`, `json.serialize[T]`, and
-  `json.serialize_public[T]` to the reflected stdlib implementations when the
-  compiler-shipped stdlib module is registered.
+  `json.serialize_public[T]` through the stdlib wrapper names when the
+  compiler-shipped stdlib module is registered, then falls back to the prefixed
+  hooks or Rust paths for bootstrap compatibility.
 - The typechecker enforces policy for those public names:
   - `json.parse[T]` must have one type argument and returns `result[T, string]`.
   - non-string JSON map keys are rejected.
@@ -24,8 +30,9 @@ implementation can own public names such as `json.parse[T](raw)` and
   - full serialization rejects secret-containing values.
   - public serialization rejects a top-level secret wrapper and omits secret
     fields in the implementation.
-- Qualified user functions now typecheck and run, but the interpreter still
-  tries hardcoded builtins before dotted user functions.
+- Qualified user functions now typecheck and run. Compiler-owned builtins win
+  over ordinary functions with the same dotted name, matching the interpreter's
+  hardcoded dispatch order.
 
 That split is intentional for now: ordinary user or stdlib code should not
 silently replace the security-sensitive public JSON bridge.
@@ -62,7 +69,7 @@ Define ordinary stdlib functions named `parse`, `serialize`, and
 `serialize_public`, then make user functions win over builtins for dotted
 calls.
 
-This is clean from a module-purity perspective, but it is too risky right now:
+This remains too risky:
 the public JSON names would stop being compiler-owned policy boundaries before
 the language has a way to express all of those policies in ordinary function
 types.
@@ -115,7 +122,10 @@ Suggested sequence:
    Done.
 7. Add parity tests for nested structs, aliases/refinements, enums, bitfields,
    bytes, secrets, optionals, results, lists, sets, and `map[string, V]`.
-8. Later, after visibility/export and policy-bearing stdlib declarations exist,
+   Done for the representative bridge set.
+8. Add public wrapper names in `stdlib/json.jett`, but keep compiler-owned
+   builtin precedence in the typechecker and interpreter. Done.
+9. Later, after visibility/export and policy-bearing stdlib declarations exist,
    reconsider whether `parse`, `serialize`, and `serialize_public` can become
    ordinary exported functions.
 
@@ -123,8 +133,9 @@ Suggested sequence:
 
 - How should the interpreter distinguish trusted compiler-shipped stdlib
   functions from user-defined `namespace json` functions with the same names?
-- Should public JSON builtins delegate by calling the prefixed staged functions,
-  or should there be an internal, non-user-callable hook name?
+- Should public JSON builtins continue delegating through callable stdlib
+  wrapper names, or should there eventually be an internal, non-user-callable
+  hook name once visibility exists?
 - Should compile-time and future runtime/codegen use the same delegation path,
   or should codegen lower public JSON calls differently?
 - Should public parse keep the reflected decoder's richer field-path context as

@@ -28,7 +28,9 @@ stdlib code own the public `json.*` API.
 - `use` declarations bind aliases or final path segments, but they do not yet
   import a namespace registry.
 - Builtin module prefixes such as `json`, `type`, `list`, `string`, and `bytes`
-  are hardcoded in resolver/typechecker/interpreter paths.
+  are hardcoded in resolver/typechecker/interpreter paths. The typechecker now
+  gives compiler-owned builtin signatures precedence over ordinary functions,
+  matching the interpreter's builtin-first runtime dispatch.
 
 That means a physical `stdlib/json.jett` file is available to single-file
 builds, but ordinary `namespace json` functions still do not automatically own
@@ -37,8 +39,7 @@ policy-bearing public calls such as `json.parse[T](...)`.
 ## JSON-Specific State
 
 The reflected JSON implementation has started moving into stdlib under the
-`json` namespace while keeping prefixed staging function names so it does not
-collide with the compiler-owned public bridge:
+`json` namespace. Prefixed hook names hold the implementation bodies:
 
 - `stdlib/json.jett`
 - `json_serialize_reflected[T](view value)`
@@ -46,8 +47,13 @@ collide with the compiler-owned public bridge:
 - `json_decode_reflected[T](raw: JsonValue)`
 - `json_parse_reflected[T](raw: string)`
 
-The raw-string wrapper is also exercised through its qualified stdlib staging
-name, `json.json_parse_reflected[T](raw)`.
+The module also declares the public wrapper names `parse`, `serialize`, and
+`serialize_public`. Calls such as `json.parse[T](raw)` still pass through the
+compiler-owned policy gate first, then the interpreter delegates to the stdlib
+wrapper when the bundled module is registered.
+
+The raw-string hook remains directly exercised through its qualified stdlib
+staging name, `json.json_parse_reflected[T](raw)`.
 
 The run-pass fixtures still own the test-specific type definitions and the
 flat decoder prototype:
@@ -102,11 +108,12 @@ namespace name such as `helpers.wrap[T](value)` or
 
 Moving JSON into `.jett` still needs the public API handoff:
 
-- the Rust-backed `json.parse`, `json.serialize`, and
+- the compiler-owned `json.parse`, `json.serialize`, and
   `json.serialize_public` paths still carry compiler-enforced policy checks,
 - `use` still resolves only a namespace-looking binding rather than importing a
   real namespace registry,
-- types are not yet registered under qualified namespace names.
+- qualified names are still an alias-based staging model rather than a full
+  namespace/export registry.
 
 This is larger than JSON and should be staged carefully.
 
@@ -149,9 +156,8 @@ the module cleanly probably needs an export rule or another visibility story.
 3. Continue the public bridge handoff. `json.parse`, `json.serialize`, and
    `json.serialize_public` now use compiler-owned typechecker policy with
    stdlib-owned interpreter bodies. See `docs/json_public_bridge_handoff.md`.
-4. Move the extracted functions into `namespace json` behind the real public
-   names, while retaining compiler policy checks for secrets, `view`, map keys,
-   and handled results.
+4. Keep the real public wrapper names in `namespace json`, while retaining
+   compiler policy checks for secrets, `view`, map keys, and handled results.
 5. Keep broad bridge/parity tests before removing any Rust-backed fallback
    implementation paths.
 

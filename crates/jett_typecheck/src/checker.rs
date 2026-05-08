@@ -4236,6 +4236,7 @@ impl<'a> TypeChecker<'a> {
                 }
             })
             .unwrap_or(false);
+        let builtin_signature = self.builtin_signature(callee, type_args, span);
 
         // -- Capability / purity check --
         // Extract the callee name so we can look it up in the purity map.
@@ -4262,7 +4263,7 @@ impl<'a> TypeChecker<'a> {
         }
 
         // Check for generic function call: `name[T](args...)`.
-        if !type_args.is_empty() {
+        if builtin_signature.is_none() && !type_args.is_empty() {
             if let Some(function_name) = callee_name.as_deref() {
                 if let Some(template) = self.generic_function_templates.get(function_name).cloned()
                 {
@@ -4370,22 +4371,20 @@ impl<'a> TypeChecker<'a> {
         }
 
         let user_function_signature = if type_args.is_empty() {
-            callee_name
-                .as_deref()
-                .and_then(|name| self.function_signatures.get(name).cloned())
+            if builtin_signature.is_none() {
+                callee_name
+                    .as_deref()
+                    .and_then(|name| self.function_signatures.get(name).cloned())
+            } else {
+                None
+            }
         } else {
             None
         };
 
-        let builtin_signature = if user_function_signature.is_none() {
-            self.builtin_signature(callee, type_args, span)
-        } else {
-            None
-        };
-
-        let (param_types, return_type) = if let Some(signature) = user_function_signature {
+        let (param_types, return_type) = if let Some(signature) = builtin_signature {
             signature
-        } else if let Some(signature) = builtin_signature {
+        } else if let Some(signature) = user_function_signature {
             signature
         } else {
             let callee_ty = self.check_expr(callee);

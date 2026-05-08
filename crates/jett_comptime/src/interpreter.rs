@@ -2415,8 +2415,15 @@ impl Interpreter {
                 if let Some(err) = check_args(name, 1, args) {
                     return Some(err);
                 }
+                if self.functions.contains_key("json.parse") {
+                    return Some(self.call_user_function_with_type_args(
+                        "json.parse",
+                        type_args,
+                        args.to_vec(),
+                    ));
+                }
                 if self.functions.contains_key("json.json_parse_reflected") {
-                    return Some(self.call_function_with_type_args(
+                    return Some(self.call_user_function_with_type_args(
                         "json.json_parse_reflected",
                         type_args,
                         args.to_vec(),
@@ -2443,11 +2450,27 @@ impl Interpreter {
                         type_expr_display(&ty)
                     )));
                 }
+                if name == "json.serialize" && self.functions.contains_key("json.serialize") {
+                    return Some(self.call_user_function_with_type_args(
+                        "json.serialize",
+                        type_args,
+                        args.to_vec(),
+                    ));
+                }
                 if name == "json.serialize"
                     && self.functions.contains_key("json.json_serialize_reflected")
                 {
-                    return Some(self.call_function_with_type_args(
+                    return Some(self.call_user_function_with_type_args(
                         "json.json_serialize_reflected",
+                        type_args,
+                        args.to_vec(),
+                    ));
+                }
+                if name == "json.serialize_public"
+                    && self.functions.contains_key("json.serialize_public")
+                {
+                    return Some(self.call_user_function_with_type_args(
+                        "json.serialize_public",
                         type_args,
                         args.to_vec(),
                     ));
@@ -2457,7 +2480,7 @@ impl Interpreter {
                         .functions
                         .contains_key("json.json_serialize_public_reflected")
                 {
-                    return Some(self.call_function_with_type_args(
+                    return Some(self.call_user_function_with_type_args(
                         "json.json_serialize_public_reflected",
                         type_args,
                         args.to_vec(),
@@ -7000,6 +7023,15 @@ impl Interpreter {
             return result;
         }
 
+        self.call_user_function_with_type_args(name, type_args, args)
+    }
+
+    fn call_user_function_with_type_args(
+        &mut self,
+        name: &str,
+        type_args: &[TypeExpr],
+        args: Vec<Value>,
+    ) -> Result<Value, String> {
         // Check if the name refers to a variable holding a function value (closure).
         if let Some(fn_val) = self.get_variable(name).cloned() {
             if matches!(fn_val, Value::Function { .. }) {

@@ -114,9 +114,11 @@ full serialization, public serialization, and typed parse calls.
 
 `json.parse[T](raw)` remains a compiler-known public bridge: it requires one
 type argument, accepts a string, returns `result[T, string]`, and the
-typechecker still enforces the public JSON policies. In the interpreter, the
-body now delegates to `json.json_parse_reflected[T](raw)` when the bundled
-stdlib module is registered. The reflected path supports core primitives,
+typechecker still enforces the public JSON policies. The stdlib module now also
+declares `json.parse[T](raw)` as a wrapper around the reflected hook; in the
+interpreter, the compiler-known bridge delegates through that wrapper when the
+bundled stdlib module is registered, with `json.json_parse_reflected[T](raw)` as
+the bootstrap fallback. The reflected path supports core primitives,
 structs with `serialize` names, lists, sets, `map[string, V]`, optionals,
 results, `secret[T]` wrappers, enums using the serializer's string/object
 payload shape, bitfields from JSON objects with width and enum-annotation
@@ -129,11 +131,12 @@ the same builder, and enum construction is available through
 
 `json.serialize_public[T](view value)` follows the same staged bridge pattern:
 the typechecker keeps the public policy checks, while the interpreter delegates
-the body to `json.json_serialize_public_reflected[T](view value)` when the
-bundled stdlib function is registered. Full `json.serialize[T](view value)` now
-delegates to `json.json_serialize_reflected[T](view value)` for
-non-secret-containing types; the typechecker still owns secret rejection, and
-the interpreter keeps a defensive guard before delegation. See
+the body through the stdlib `json.serialize_public[T](view value)` wrapper when
+the bundled stdlib function is registered. Full
+`json.serialize[T](view value)` delegates through the stdlib
+`json.serialize[T](view value)` wrapper for non-secret-containing types; the
+typechecker still owns secret rejection, and the interpreter keeps a defensive
+guard before delegation. See
 `docs/stdlib_json_extraction_plan.md` and `docs/json_public_bridge_handoff.md`.
 
 `json.parse_raw(raw)` now exposes an opaque `JsonValue` tree with explicit

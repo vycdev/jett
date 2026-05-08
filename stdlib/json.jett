@@ -379,3 +379,12 @@ function json_parse_reflected[T](raw: string) returns result[T, string]:
     JsonValue value = json.parse_raw(raw) handle error:
         return fail(error)
     return json_decode_reflected[T](value)
+
+function parse[T](raw: string) returns result[T, string]:
+    return json_parse_reflected[T](raw)
+
+function serialize[T](view value: T) returns string:
+    return json_serialize_reflected[T](view value)
+
+function serialize_public[T](view value: T) returns string:
+    return json_serialize_public_reflected[T](view value)
