@@ -282,11 +282,15 @@ function json_decode_reflected[T](raw: JsonValue) returns result[T, string]:
             return ok(some(item))
 
     if kind == TypeKind.result_type:
+        list[string] keys = json.object_keys(raw) handle error:
+            return fail(error)
+        if list.length[string](keys) != 1:
+            return fail("expected result object with exactly one key")
         comptime type Ok = type.arg[T](0):
             JsonValue ok_raw = json.field(raw, "ok") handle:
                 comptime type Err = type.arg[T](1):
                     JsonValue fail_raw = json.field(raw, "fail") handle:
-                        return fail("expected result object with ok or fail")
+                        return fail("expected result object with key 'ok' or 'fail'")
                     Err failure = json_decode_reflected[Err](fail_raw) handle error:
                         return fail("fail: {error}")
                     return ok(fail(failure))
