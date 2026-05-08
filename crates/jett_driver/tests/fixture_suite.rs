@@ -357,8 +357,20 @@ compile_fail_fixture!(
     "type_variant_value_wrong_arity.jett"
 );
 compile_fail_fixture!(
+    compile_fail_type_variant_value_wrong_value_arg,
+    "type_variant_value_wrong_value_arg.jett"
+);
+compile_fail_fixture!(
     compile_fail_type_variant_field_value_wrong_arity,
     "type_variant_field_value_wrong_arity.jett"
+);
+compile_fail_fixture!(
+    compile_fail_type_variant_field_value_wrong_field_arg,
+    "type_variant_field_value_wrong_field_arg.jett"
+);
+compile_fail_fixture!(
+    compile_fail_type_variant_field_value_wrong_requested_type,
+    "type_variant_field_value_wrong_requested_type.jett"
 );
 compile_fail_fixture!(
     compile_fail_type_bitfield_layout_wrong_arity,

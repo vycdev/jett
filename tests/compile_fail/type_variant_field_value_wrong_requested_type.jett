@@ -1,0 +1,15 @@
+# ERROR: E9000
+namespace test
+
+enum Shape:
+    circle(radius: float64)
+
+function bad_variant_field_value_requested_type() returns int64:
+    Shape shape = Shape.circle(2.5)
+    int64 found = 0
+    for field in type.variant_value[Shape](view shape).fields:
+        found = type.variant_field_value[Shape, int64](view shape, view field)
+    return found
+
+verify type_variant_field_value_wrong_requested_type:
+    assert bad_variant_field_value_requested_type() == 0

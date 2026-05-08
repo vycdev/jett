@@ -1,0 +1,9 @@
+# ERROR: E0304
+namespace test
+
+enum Shape:
+    circle(radius: float64)
+
+function bad_variant_field_value_field_arg() returns float64:
+    Shape shape = Shape.circle(2.5)
+    return type.variant_field_value[Shape, float64](view shape, "radius")

@@ -1,0 +1,9 @@
+# ERROR: E0304
+namespace test
+
+enum Direction:
+    north
+
+function bad_variant_value_value_arg() returns string:
+    TypeVariant variant = type.variant_value[Direction](42)
+    return variant.name
