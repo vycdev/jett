@@ -79,8 +79,9 @@ policy still need to land first.
 
 There are also `.jett` decoder prototypes:
 `tests/run_pass/json_reflection_flat_decoder.jett` covers the first
-flat-struct path, and `tests/run_pass/json_reflection_nested_decoder.jett`
-recursively handles core primitives (`string`, `int64`, `float64`, `bool`,
+flat-struct path, and `stdlib/json_reflection.jett` now stages the nested
+decoder as `json_decode_reflected[T](raw)`. It recursively handles core
+primitives (`string`, `int64`, `float64`, `bool`,
 `bytes` as hex strings, and JSON null as `nothing`), nested structs, lists,
 sets, maps with string keys, optionals, results, aliases/refinements, and
 `serialize_name` by walking raw `JsonValue` and finishing structs, bitfields,
@@ -90,10 +91,12 @@ including refinements over generic shapes, and decodes enum-annotated bitfields
 through the ordinary enum branch plus bitfield finish validation. It also
 decodes `secret[T]` by parsing the inner `T` and assigning the result into the
 secret wrapper, matching the Rust-backed `json.parse[T]` input policy while
-keeping output exposure blocked by the ordinary secret type rules. See
-`docs/json_public_parse_policy.md` for the current recommendation: avoid a
-public parse API for now, and keep public JSON as an output projection unless a
-future audit-oriented API rejects secret-containing targets outright.
+keeping output exposure blocked by the ordinary secret type rules.
+`tests/run_pass/json_reflection_nested_decoder.jett` exercises that stdlib
+function against nested user-defined types. See `docs/json_public_parse_policy.md`
+for the current recommendation: avoid a public parse API for now, and keep
+public JSON as an output projection unless a future audit-oriented API rejects
+secret-containing targets outright.
 
 `json.parse[T](raw)` has a Rust-backed bridge: it requires one type argument,
 accepts a string, returns `result[T, string]`, and supports core primitives,

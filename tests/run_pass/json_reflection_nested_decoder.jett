@@ -48,188 +48,10 @@ struct User:
     outcome: result[int64, string]
     failed: result[int64, string]
 
-function decode_reflected[T](raw: JsonValue) returns result[T, string]:
-    TypeKind kind = type.kind_tag[T]()
-    string type_name = type.name[T]()
-
-    if type_name == "string":
-        string item = json.as_string(raw) handle error:
-            return fail(error)
-        return ok(item)
-
-    if type_name == "int64":
-        int64 item = json.as_int64(raw) handle error:
-            return fail(error)
-        return ok(item)
-
-    if type_name == "float64":
-        float64 item = json.as_float64(raw) handle error:
-            return fail(error)
-        return ok(item)
-
-    if type_name == "bool":
-        bool item = json.as_bool(raw) handle error:
-            return fail(error)
-        return ok(item)
-
-    if type_name == "bytes":
-        string raw_hex = json.as_string(raw) handle error:
-            return fail(error)
-        bytes item = bytes.from_hex(raw_hex) handle error:
-            return fail(error)
-        return ok(item)
-
-    if type_name == "nothing":
-        if json.is_null(raw) == true:
-            return ok(nothing)
-        return fail("expected null, got {json.kind(raw)}")
-
-    if kind == TypeKind.alias_type:
-        comptime type Base = type.arg[T](0):
-            Base item = decode_reflected[Base](raw) handle error:
-                return fail(error)
-            T alias_value = item
-            return ok(alias_value)
-
-    if kind == TypeKind.refinement_type:
-        comptime type Base = type.arg[T](0):
-            Base item = decode_reflected[Base](raw) handle error:
-                return fail(error)
-            T refined = item
-            return ok(refined)
-
-    if kind == TypeKind.secret_type:
-        comptime type Inner = type.arg[T](0):
-            Inner item = decode_reflected[Inner](raw) handle error:
-                return fail(error)
-            T secret_value = item
-            return ok(secret_value)
-
-    if kind == TypeKind.list_type:
-        comptime type Elem = type.arg[T](0):
-            int64 length = json.array_length(raw) handle error:
-                return fail(error)
-            mutable list[Elem] items = list.new[Elem]()
-            for index in range(length):
-                JsonValue raw_item = json.index(raw, index) handle:
-                    return fail("missing array item {index}")
-                Elem item = decode_reflected[Elem](raw_item) handle error:
-                    return fail("{index}: {error}")
-                items = list.append[Elem](items, item)
-            return ok(items)
-
-    if kind == TypeKind.set_type:
-        comptime type Elem = type.arg[T](0):
-            int64 length = json.array_length(raw) handle error:
-                return fail(error)
-            mutable set[Elem] items = set.new[Elem]()
-            for index in range(length):
-                JsonValue raw_item = json.index(raw, index) handle:
-                    return fail("missing array item {index}")
-                Elem item = decode_reflected[Elem](raw_item) handle error:
-                    return fail("{index}: {error}")
-                items = set.add[Elem](items, item)
-            return ok(items)
-
-    if kind == TypeKind.map_type:
-        comptime type Val = type.arg[T](1):
-            list[string] keys = json.object_keys(raw) handle error:
-                return fail(error)
-            mutable map[string, Val] entries = map.new[string, Val]()
-            for key in keys:
-                JsonValue raw_item = json.field(raw, key) handle:
-                    return fail("missing object field '{key}'")
-                Val item = decode_reflected[Val](raw_item) handle error:
-                    return fail("{key}: {error}")
-                entries = map.insert[string, Val](entries, key, item)
-            return ok(entries)
-
-    if kind == TypeKind.optional_type:
-        if json.is_null(raw) == true:
-            return ok(none)
-        comptime type Inner = type.arg[T](0):
-            Inner item = decode_reflected[Inner](raw) handle error:
-                return fail(error)
-            return ok(some(item))
-
-    if kind == TypeKind.result_type:
-        comptime type Ok = type.arg[T](0):
-            JsonValue ok_raw = json.field(raw, "ok") handle:
-                comptime type Err = type.arg[T](1):
-                    JsonValue fail_raw = json.field(raw, "fail") handle:
-                        return fail("expected result object with ok or fail")
-                    Err failure = decode_reflected[Err](fail_raw) handle error:
-                        return fail("fail: {error}")
-                    return ok(fail(failure))
-            Ok item = decode_reflected[Ok](ok_raw) handle error:
-                return fail("ok: {error}")
-            return ok(ok(item))
-
-    if kind == TypeKind.enum_type:
-        if json.kind(raw) == "string":
-            string variant_name = json.as_string(raw) handle error:
-                return fail(error)
-            for variant in type.variants[T]():
-                if variant.name == variant_name:
-                    if list.length[TypeField](variant.fields) != 0:
-                        return fail("enum variant '{type_name}.{variant_name}' expects {list.length[TypeField](variant.fields)} payload field(s)")
-                    TypeConstruction builder = type.construct_variant_start[T](view variant) handle error:
-                        return fail(error)
-                    return type.construct_finish[T](builder)
-            return fail("unknown enum variant '{type_name}.{variant_name}'")
-
-        list[string] keys = json.object_keys(raw) handle error:
-            return fail("expected enum string or object, got {json.kind(raw)}")
-        if list.length[string](keys) != 1:
-            return fail("expected enum object with exactly one variant key")
-        string variant_name = list.get[string](keys, 0) handle:
-            return fail("expected enum object with exactly one variant key")
-        JsonValue payload = json.field(raw, variant_name) handle:
-            return fail("missing enum payload for '{variant_name}'")
-        int64 payload_count = json.array_length(payload) handle error:
-            return fail("expected array payload for enum variant '{type_name}.{variant_name}', got {json.kind(payload)}")
-        for variant in type.variants[T]():
-            if variant.name == variant_name:
-                int64 expected_count = list.length[TypeField](variant.fields)
-                if payload_count != expected_count:
-                    return fail("enum variant '{type_name}.{variant_name}' expects {expected_count} payload field(s), got {payload_count}")
-                mutable TypeConstruction builder = type.construct_variant_start[T](view variant) handle error:
-                    return fail(error)
-                mutable int64 index = 0
-                for field in variant.fields:
-                    comptime type Field = field.type_info:
-                        JsonValue raw_item = json.index(payload, index) handle:
-                            return fail("missing enum payload item {index}")
-                        Field decoded = decode_reflected[Field](raw_item) handle error:
-                            return fail("{variant_name}.{field.name}: {error}")
-                        builder = type.construct_put[T, Field](builder, view field, decoded) handle error:
-                            return fail(error)
-                    index = index + 1
-                return type.construct_finish[T](builder)
-        return fail("unknown enum variant '{type_name}.{variant_name}'")
-
-    if kind == TypeKind.struct_type or kind == TypeKind.bitfield_type:
-        mutable TypeConstruction builder = type.construct_start[T]()
-        for field in type.fields[T]():
-            comptime type Field = field.type_info:
-                JsonValue raw_field = json.field(raw, field.serialize_name) handle:
-                    if field.type_info.kind_tag == TypeKind.optional_type:
-                        JsonValue missing_optional = json.parse_raw("null") handle error:
-                            return fail(error)
-                        default missing_optional
-                    return fail("missing field '{field.serialize_name}'")
-                Field decoded = decode_reflected[Field](raw_field) handle error:
-                    return fail("{field.serialize_name}: {error}")
-                builder = type.construct_put[T, Field](builder, view field, decoded) handle error:
-                    return fail(error)
-        return type.construct_finish[T](builder)
-
-    return fail("unsupported reflected JSON type: {type_name}")
-
 function decoded_nested_summary() returns string:
     JsonValue root = json.parse_raw("{{\"userId\":\"u1\",\"active\":true,\"profile\":{{\"city\":\"Cluj\",\"visits\":[3,5]}},\"header\":{{\"version\":4,\"header_length\":5,\"protocol\":\"tcp\"}},\"direction\":\"south\",\"shape\":{{\"point\":[3,4]}},\"tags\":[\"admin\",\"beta\"],\"nickname\":\"ally\",\"scores\":{{\"wins\":3,\"losses\":1}},\"lucky\":[11,13],\"display\":\"ready\",\"outcome\":{{\"ok\":7}},\"failed\":{{\"fail\":\"bad\"}}}}") handle error:
         return error
-    User user = decode_reflected[User](root) handle error:
+    User user = json_decode_reflected[User](root) handle error:
         return error
     bool south = user.direction == Direction.south
     bool tcp = user.header.protocol == Protocol.tcp
@@ -254,7 +76,7 @@ function decoded_nested_summary() returns string:
 function decoded_result_failure() returns string:
     JsonValue root = json.parse_raw("{{\"userId\":\"u1\",\"active\":true,\"profile\":{{\"city\":\"Cluj\",\"visits\":[3]}},\"header\":{{\"version\":4,\"header_length\":5,\"protocol\":\"tcp\"}},\"direction\":\"south\",\"shape\":{{\"point\":[3,4]}},\"tags\":[],\"nickname\":null,\"missing\":null,\"scores\":{{\"wins\":3}},\"lucky\":[13],\"display\":\"ready\",\"outcome\":{{\"ok\":7}},\"failed\":{{\"fail\":\"bad\"}}}}") handle error:
         return error
-    User user = decode_reflected[User](root) handle error:
+    User user = json_decode_reflected[User](root) handle error:
         return error
     int64 ignored = user.failed handle error:
         return error
@@ -263,63 +85,63 @@ function decoded_result_failure() returns string:
 function invalid_refinement_message() returns string:
     JsonValue root = json.parse_raw("{{\"userId\":\"u1\",\"active\":true,\"profile\":{{\"city\":\"Cluj\",\"visits\":[3]}},\"header\":{{\"version\":4,\"header_length\":5,\"protocol\":\"tcp\"}},\"direction\":\"south\",\"shape\":{{\"point\":[3,4]}},\"tags\":[],\"nickname\":null,\"missing\":null,\"scores\":{{\"wins\":3}},\"lucky\":[13],\"display\":\"\",\"outcome\":{{\"ok\":7}},\"failed\":{{\"fail\":\"bad\"}}}}") handle error:
         return error
-    User user = decode_reflected[User](root) handle error:
+    User user = json_decode_reflected[User](root) handle error:
         return error
     return user.id
 
 function missing_nested_message() returns string:
     JsonValue root = json.parse_raw("{{\"userId\":\"u1\",\"active\":true,\"profile\":{{\"visits\":[3]}},\"header\":{{\"version\":4,\"header_length\":5,\"protocol\":\"tcp\"}},\"direction\":\"south\",\"shape\":{{\"point\":[3,4]}},\"tags\":[],\"nickname\":null,\"missing\":null,\"scores\":{{\"wins\":3}},\"lucky\":[13],\"display\":\"ready\",\"outcome\":{{\"ok\":7}},\"failed\":{{\"fail\":\"bad\"}}}}") handle error:
         return error
-    User user = decode_reflected[User](root) handle error:
+    User user = json_decode_reflected[User](root) handle error:
         return error
     return user.id
 
 function wrong_list_item_message() returns string:
     JsonValue root = json.parse_raw("{{\"userId\":\"u1\",\"active\":true,\"profile\":{{\"city\":\"Cluj\",\"visits\":[3]}},\"header\":{{\"version\":4,\"header_length\":5,\"protocol\":\"tcp\"}},\"direction\":\"south\",\"shape\":{{\"point\":[3,4]}},\"tags\":[1],\"nickname\":null,\"missing\":null,\"scores\":{{\"wins\":3}},\"lucky\":[13],\"display\":\"ready\",\"outcome\":{{\"ok\":7}},\"failed\":{{\"fail\":\"bad\"}}}}") handle error:
         return error
-    User user = decode_reflected[User](root) handle error:
+    User user = json_decode_reflected[User](root) handle error:
         return error
     return user.id
 
 function invalid_bitfield_message() returns string:
     JsonValue root = json.parse_raw("{{\"userId\":\"u1\",\"active\":true,\"profile\":{{\"city\":\"Cluj\",\"visits\":[3]}},\"header\":{{\"version\":16,\"header_length\":5,\"protocol\":\"tcp\"}},\"direction\":\"south\",\"shape\":{{\"point\":[3,4]}},\"tags\":[],\"nickname\":null,\"missing\":null,\"scores\":{{\"wins\":3}},\"lucky\":[13],\"display\":\"ready\",\"outcome\":{{\"ok\":7}},\"failed\":{{\"fail\":\"bad\"}}}}") handle error:
         return error
-    User user = decode_reflected[User](root) handle error:
+    User user = json_decode_reflected[User](root) handle error:
         return error
     return "{user.header.version}"
 
 function invalid_enum_payload_message() returns string:
     JsonValue root = json.parse_raw("{{\"userId\":\"u1\",\"active\":true,\"profile\":{{\"city\":\"Cluj\",\"visits\":[3]}},\"header\":{{\"version\":4,\"header_length\":5,\"protocol\":\"tcp\"}},\"direction\":\"south\",\"shape\":{{\"point\":[3]}},\"tags\":[],\"nickname\":null,\"missing\":null,\"scores\":{{\"wins\":3}},\"lucky\":[13],\"display\":\"ready\",\"outcome\":{{\"ok\":7}},\"failed\":{{\"fail\":\"bad\"}}}}") handle error:
         return error
-    User user = decode_reflected[User](root) handle error:
+    User user = json_decode_reflected[User](root) handle error:
         return error
     return "{user.active}"
 
 function invalid_bitfield_enum_message() returns string:
     JsonValue root = json.parse_raw("{{\"userId\":\"u1\",\"active\":true,\"profile\":{{\"city\":\"Cluj\",\"visits\":[3]}},\"header\":{{\"version\":4,\"header_length\":5,\"protocol\":\"bogus\"}},\"direction\":\"south\",\"shape\":{{\"point\":[3,4]}},\"tags\":[],\"nickname\":null,\"missing\":null,\"scores\":{{\"wins\":3}},\"lucky\":[13],\"display\":\"ready\",\"outcome\":{{\"ok\":7}},\"failed\":{{\"fail\":\"bad\"}}}}") handle error:
         return error
-    User user = decode_reflected[User](root) handle error:
+    User user = json_decode_reflected[User](root) handle error:
         return error
     return "unexpected success"
 
 function decoded_top_level_refinement() returns string:
     JsonValue root = json.parse_raw("\"ready\"") handle error:
         return error
-    NonEmpty value = decode_reflected[NonEmpty](root) handle error:
+    NonEmpty value = json_decode_reflected[NonEmpty](root) handle error:
         return error
     return coarsen value
 
 function invalid_top_level_refinement_message() returns string:
     JsonValue root = json.parse_raw("\"\"") handle error:
         return error
-    NonEmpty value = decode_reflected[NonEmpty](root) handle error:
+    NonEmpty value = json_decode_reflected[NonEmpty](root) handle error:
         return error
     return coarsen value
 
 function decoded_refined_list_count() returns int64:
     JsonValue root = json.parse_raw("[3,5]") handle error:
         return -1
-    NonEmptyNumbers value = decode_reflected[NonEmptyNumbers](root) handle error:
+    NonEmptyNumbers value = json_decode_reflected[NonEmptyNumbers](root) handle error:
         return -1
     list[int64] raw = coarsen value
     return list.length[int64](raw)
@@ -327,7 +149,7 @@ function decoded_refined_list_count() returns int64:
 function invalid_refined_list_message() returns string:
     JsonValue root = json.parse_raw("[]") handle error:
         return error
-    NonEmptyNumbers value = decode_reflected[NonEmptyNumbers](root) handle error:
+    NonEmptyNumbers value = json_decode_reflected[NonEmptyNumbers](root) handle error:
         return error
     list[int64] raw = coarsen value
     return "{list.length[int64](raw)}"
@@ -335,35 +157,35 @@ function invalid_refined_list_message() returns string:
 function decoded_top_level_float() returns float64:
     JsonValue root = json.parse_raw("2.5") handle error:
         return -1.0
-    float64 value = decode_reflected[float64](root) handle error:
+    float64 value = json_decode_reflected[float64](root) handle error:
         return -1.0
     return value
 
 function decoded_null_as_nothing() returns string:
     JsonValue root = json.parse_raw("null") handle error:
         return error
-    nothing value = decode_reflected[nothing](root) handle error:
+    nothing value = json_decode_reflected[nothing](root) handle error:
         return error
     return "null"
 
 function invalid_nothing_message() returns string:
     JsonValue root = json.parse_raw("0") handle error:
         return error
-    nothing value = decode_reflected[nothing](root) handle error:
+    nothing value = json_decode_reflected[nothing](root) handle error:
         return error
     return "unexpected"
 
 function decoded_top_level_bytes_length() returns int64:
     JsonValue root = json.parse_raw("\"0x4869\"") handle error:
         return -1
-    bytes value = decode_reflected[bytes](root) handle error:
+    bytes value = json_decode_reflected[bytes](root) handle error:
         return -1
     return bytes.length(value)
 
 function decoded_blob_bytes_first() returns int64:
     JsonValue root = json.parse_raw("{{\"data\":\"0x4869\"}}") handle error:
         return -1
-    Blob blob = decode_reflected[Blob](root) handle error:
+    Blob blob = json_decode_reflected[Blob](root) handle error:
         return -1
     int64 first = bytes.get(blob.data, 0) handle:
         default -1
@@ -372,35 +194,35 @@ function decoded_blob_bytes_first() returns int64:
 function invalid_bytes_message() returns string:
     JsonValue root = json.parse_raw("\"0xzz\"") handle error:
         return error
-    bytes value = decode_reflected[bytes](root) handle error:
+    bytes value = json_decode_reflected[bytes](root) handle error:
         return error
     return "{bytes.length(value)}"
 
 function decoded_top_level_secret_redaction() returns string:
     JsonValue root = json.parse_raw("\"secret-token\"") handle error:
         return error
-    secret[string] value = decode_reflected[secret[string]](root) handle error:
+    secret[string] value = json_decode_reflected[secret[string]](root) handle error:
         return error
     return secret.redact(value)
 
 function decoded_secret_field_summary() returns string:
     JsonValue root = json.parse_raw("{{\"name\":\"svc\",\"token\":\"secret-token\"}}") handle error:
         return error
-    Credential credential = decode_reflected[Credential](root) handle error:
+    Credential credential = json_decode_reflected[Credential](root) handle error:
         return error
     return "{credential.name}:{secret.redact(credential.token)}"
 
 function invalid_secret_field_message() returns string:
     JsonValue root = json.parse_raw("{{\"name\":\"svc\",\"token\":7}}") handle error:
         return error
-    Credential credential = decode_reflected[Credential](root) handle error:
+    Credential credential = json_decode_reflected[Credential](root) handle error:
         return error
     return credential.name
 
 function missing_secret_field_message() returns string:
     JsonValue root = json.parse_raw("{{\"name\":\"svc\"}}") handle error:
         return error
-    Credential credential = decode_reflected[Credential](root) handle error:
+    Credential credential = json_decode_reflected[Credential](root) handle error:
         return error
     return credential.name
 

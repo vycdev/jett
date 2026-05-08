@@ -38,9 +38,10 @@ prefix:
 
 - `stdlib/json_reflection.jett`
 - `json_serialize_public_reflected[T](view value)`
+- `json_decode_reflected[T](raw: JsonValue)`
 
 The run-pass fixtures still own the test-specific type definitions and the
-decoder prototype:
+flat decoder prototype:
 
 - `tests/run_pass/json_reflection_nested_serializer.jett`
 - `tests/run_pass/json_reflection_nested_decoder.jett`
@@ -123,7 +124,7 @@ the module cleanly probably needs an export rule or another visibility story.
 1. Keep the Rust-backed public JSON bridge for now.
 2. Continue staging extracted prototype code under flat, non-conflicting names:
    - `json_serialize_public_reflected[T](view value: T)` exists in stdlib.
-   - `json_decode_reflected[T](raw: JsonValue)` still lives in a fixture.
+   - `json_decode_reflected[T](raw: JsonValue)` exists in stdlib.
 3. Implement namespace-qualified symbol registration and dotted user-function
    calls.
 4. Move the extracted functions into `namespace json` behind the real public
