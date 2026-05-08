@@ -143,6 +143,8 @@ Recommendation: prefer a comptime type switch or visitor over an opaque
 `TypedValue`. The goal of Jett is to keep type information precise and useful
 to the checker; opaque dynamic values would pull the design toward untyped
 reflection. See `docs/comptime_type_bind.md` for the current type-bind proposal.
+For replacing stringly kind checks with structured tags, see
+`docs/type_kind_design.md`.
 
 ### 2. Constructing `T` During `json.parse[T]`
 

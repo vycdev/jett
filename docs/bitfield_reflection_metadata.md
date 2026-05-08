@@ -146,7 +146,9 @@ Compile-fail:
 ## Open Questions
 
 - Should `shape` be a string, or should Jett grow a small reflected enum such
-  as `TypeBitfieldFieldShape.bits` and `.payload`?
+  as `TypeBitfieldFieldShape.bits` and `.payload`? Current recommendation:
+  keep the string for compatibility and add `shape_tag`; see
+  `docs/type_kind_design.md`.
 - Should `enum_type` be `optional[TypeInfo]`, or should enum annotation be
   encoded only through `type_info.kind == "enum"`?
 - Should `TypeBitfield` also expose derived facts such as total fixed bit width,
