@@ -1,0 +1,11 @@
+namespace app
+
+function qualified_project_summary() returns string:
+    shared.models.Account account = shared.models.Account(id: "a1", visits: list(2, 3))
+    string raw = json.serialize[shared.models.Account](view account)
+    shared.models.Account decoded = json.parse[shared.models.Account](raw) handle error:
+        return error
+    return shared.models.account_summary(view decoded)
+
+verify project_sibling_verify:
+    assert qualified_project_summary() == "a1:2"

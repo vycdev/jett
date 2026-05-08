@@ -490,6 +490,20 @@ fn multifile_cross_file_calls() {
 }
 
 #[test]
+fn test_file_loads_project_siblings() {
+    let path = workspace_root()
+        .join("tests")
+        .join("multifile_verify")
+        .join("checks.jett");
+    let result = test_file(&path)
+        .unwrap_or_else(|err| panic!("expected project verify test to run successfully: {err}"));
+
+    assert_eq!(result.total, 1);
+    assert_eq!(result.passed, 1);
+    assert_eq!(result.failed, 0);
+}
+
+#[test]
 fn stdlib_loaded_for_build_source() {
     let source = r#"
 namespace app

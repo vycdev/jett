@@ -615,7 +615,22 @@ pub fn test_file(path: &Path) -> Result<TestResult, String> {
         return Err(format!("parse errors:\n{}", msgs.join("\n")));
     }
 
-    prepend_support_modules(&mut parse_result.module, discover_stdlib_modules());
+    let mut support_modules = discover_stdlib_modules();
+    support_modules.extend(discover_project_modules(path));
+    strip_test_items_from_support_modules(&mut support_modules);
+    prepend_support_modules(&mut parse_result.module, support_modules);
+
+    let resolve_result = resolve(&parse_result.module);
+    let resolve_errors = error_messages_from_diagnostics(&resolve_result.diagnostics);
+    if !resolve_errors.is_empty() {
+        return Err(format!("resolution errors:\n{}", resolve_errors.join("\n")));
+    }
+
+    let check_result = check(&parse_result.module, &resolve_result);
+    let type_errors = error_messages_from_diagnostics(&check_result.diagnostics);
+    if !type_errors.is_empty() {
+        return Err(format!("type errors:\n{}", type_errors.join("\n")));
+    }
 
     let results = run_verify_blocks_detailed(&parse_result.module);
 
@@ -641,6 +656,22 @@ pub fn test_file(path: &Path) -> Result<TestResult, String> {
         file_path: path.display().to_string(),
         blocks,
     })
+}
+
+fn strip_test_items_from_support_modules(modules: &mut [Module]) {
+    for module in modules {
+        module
+            .items
+            .retain(|item| !matches!(item, Item::Verify(_) | Item::Property(_)));
+    }
+}
+
+fn error_messages_from_diagnostics(diagnostics: &[Diagnostic]) -> Vec<String> {
+    diagnostics
+        .iter()
+        .filter(|d| d.severity == jett_diagnostics::Severity::Error)
+        .map(|d| format!("{}: {}", d.code, d.message))
+        .collect()
 }
 
 /// Discover all `.jett` files under a project root (walks up from `start_dir`

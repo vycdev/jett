@@ -18,10 +18,13 @@ the public `json.*` API.
   sibling project modules, and the entry module in the interpreter.
 - `build_source` and `test_file` also prepend stdlib modules, so LSP-style
   validation and `jett test file` exercise the same prelude path.
-- Namespaces are parsed and resolved as declarations. Top-level functions are
-  now registered under both their historical flat name and a
-  `namespace.name` qualified name for typechecking and interpretation; types
-  are still effectively registered by flat names.
+- `test_file` now also loads sibling project modules for cross-file verify
+  blocks, while stripping verify/property blocks from support modules so a
+  single-file test report stays focused on the requested file.
+- Namespaces are parsed and resolved as declarations. Top-level functions and
+  named types are now registered under both their historical flat name and a
+  `namespace.name` qualified name for typechecking and interpretation. This is
+  still an alias-based staging model rather than a full namespace registry.
 - `use` declarations bind aliases or final path segments, but they do not yet
   import a namespace registry.
 - Builtin module prefixes such as `json`, `type`, `list`, `string`, and `bytes`
