@@ -947,7 +947,8 @@ impl<'a> TypeChecker<'a> {
                 self.check_builtin_type_arg_count(&name, type_args, 0, span);
                 Some((vec![TypeInterner::JSON_VALUE], TypeInterner::STRING))
             }
-            "json.is_null" => {
+            "json.is_null" | "json.is_bool" | "json.is_number" | "json.is_string"
+            | "json.is_array" | "json.is_object" => {
                 self.check_builtin_type_arg_count(&name, type_args, 0, span);
                 Some((vec![TypeInterner::JSON_VALUE], TypeInterner::BOOL))
             }

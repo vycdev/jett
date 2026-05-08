@@ -4535,11 +4535,20 @@ impl Interpreter {
                 }
             }
 
-            "json.is_null" => {
+            "json.is_null" | "json.is_bool" | "json.is_number" | "json.is_string"
+            | "json.is_array" | "json.is_object" => {
                 require_args!(name, 1, args);
                 match &args[0] {
-                    Value::Json(json) => Some(Ok(Value::Bool(json.is_null()))),
-                    other => Some(Err(format!("json.is_null expects JsonValue, got {other}"))),
+                    Value::Json(json) => Some(Ok(Value::Bool(match name {
+                        "json.is_null" => json.is_null(),
+                        "json.is_bool" => json.is_boolean(),
+                        "json.is_number" => json.is_number(),
+                        "json.is_string" => json.is_string(),
+                        "json.is_array" => json.is_array(),
+                        "json.is_object" => json.is_object(),
+                        _ => false,
+                    }))),
+                    other => Some(Err(format!("{name} expects JsonValue, got {other}"))),
                 }
             }
 

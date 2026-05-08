@@ -39,6 +39,23 @@ function raw_object_keys() returns int64:
         return 0
     return list.length[string](keys)
 
+function raw_kind_predicates() returns string:
+    JsonValue root = json.parse_raw("{{\"name\":\"Ada\",\"score\":5,\"ratio\":2.5,\"active\":true,\"items\":[1],\"missing\":null}}") handle error:
+        return error
+    JsonValue name = json.field(root, "name") handle:
+        return "missing name"
+    JsonValue score = json.field(root, "score") handle:
+        return "missing score"
+    JsonValue ratio = json.field(root, "ratio") handle:
+        return "missing ratio"
+    JsonValue active = json.field(root, "active") handle:
+        return "missing active"
+    JsonValue items = json.field(root, "items") handle:
+        return "missing items"
+    JsonValue missing = json.field(root, "missing") handle:
+        return "missing null"
+    return "{json.is_object(root)}:{json.is_string(name)}:{json.is_number(score)}:{json.is_number(ratio)}:{json.is_bool(active)}:{json.is_array(items)}:{json.is_null(missing)}"
+
 function raw_invalid_message() returns string:
     JsonValue root = json.parse_raw("{{\"name\":\"Ada\"}}") handle error:
         return error
@@ -54,5 +71,6 @@ function raw_roundtrip() returns string:
 verify json_parse_raw:
     assert raw_summary() == "Ada:2:5:true"
     assert raw_object_keys() == 2
+    assert raw_kind_predicates() == "true:true:true:true:true:true:true"
     assert raw_invalid_message() == "expected array, got object"
     assert string.contains(raw_roundtrip(), "\"name\":\"Ada\"") == true

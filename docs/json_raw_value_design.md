@@ -15,7 +15,8 @@ Implemented accessors:
 - `json.serialize_raw(value: JsonValue)` returns a compact JSON string.
 - `json.kind(value: JsonValue)` returns `null`, `bool`, `number`, `string`,
   `array`, or `object`.
-- `json.is_null(value: JsonValue)` returns `bool`.
+- `json.is_null`, `json.is_bool`, `json.is_number`, `json.is_string`,
+  `json.is_array`, and `json.is_object` return `bool`.
 - `json.field(value: JsonValue, key: string)` returns `optional[JsonValue]`.
 - `json.index(value: JsonValue, index: int64)` returns `optional[JsonValue]`.
 - `json.array_length(value: JsonValue)` returns `result[int64, string]`.

@@ -307,7 +307,7 @@ function json_decode_reflected[T](raw: JsonValue) returns result[T, string]:
             return ok(ok(item))
 
     if kind == TypeKind.enum_type:
-        if json.kind(raw) == "string":
+        if json.is_string(raw) == true:
             string variant_name = json.as_string(raw) handle error:
                 return fail(error)
             for variant in type.variants[T]():
