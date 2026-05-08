@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use jett_common::FileId;
 use jett_diagnostics::Severity;
-use jett_driver::{build_file, run_file};
+use jett_driver::{build_file, build_source, run_file, test_file};
 use jett_parser::ast::Item;
 use jett_parser::parse;
 
@@ -188,6 +188,7 @@ run_pass_fixture!(run_pass_simple, "simple.jett");
 run_pass_fixture!(run_pass_fibonacci, "fibonacci.jett");
 run_pass_fixture!(run_pass_hello_print, "hello_print.jett");
 run_pass_fixture!(run_pass_string_interpolation, "string_interpolation.jett");
+run_pass_fixture!(run_pass_stdlib_loading, "stdlib_loading.jett");
 run_pass_fixture!(run_pass_verify_test, "verify_test.jett");
 run_pass_fixture!(run_pass_multi_verify, "multi_verify.jett");
 run_pass_fixture!(
@@ -466,4 +467,36 @@ fn multifile_cross_file_calls() {
         .join("main.jett");
     run_file(&path)
         .unwrap_or_else(|err| panic!("expected multifile test to run successfully: {err}"));
+}
+
+#[test]
+fn stdlib_loaded_for_build_source() {
+    let source = r#"
+namespace app
+
+verify stdlib_source:
+    assert jett_stdlib_loaded() == true
+"#;
+    let result = build_source(source, "memory.jett");
+    assert!(
+        !result.has_errors,
+        "expected in-memory source to see stdlib marker:\n{}",
+        result
+            .diagnostics
+            .iter()
+            .map(|diagnostic| format!("{}: {}", diagnostic.code, diagnostic.message))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+}
+
+#[test]
+fn stdlib_loaded_for_test_file() {
+    let path = workspace_root()
+        .join("tests")
+        .join("run_pass")
+        .join("stdlib_loading.jett");
+    let result = test_file(&path)
+        .unwrap_or_else(|err| panic!("expected jett test path to load stdlib: {err}"));
+    assert_eq!(result.failed, 0);
 }

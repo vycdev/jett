@@ -1,0 +1,4 @@
+namespace stdlib
+
+function jett_stdlib_loaded() returns bool:
+    return true

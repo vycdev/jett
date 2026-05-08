@@ -3,12 +3,12 @@ use jett_comptime::value::Value;
 use jett_comptime::verify::{run_verify_blocks, run_verify_blocks_detailed};
 use jett_diagnostics::Diagnostic;
 use jett_fmt::{FormatResult, format_source};
-use jett_parser::ast::{FunctionDef, Item, Param, TypeExpr};
+use jett_parser::ast::{FunctionDef, Item, Module, Param, TypeExpr};
 use jett_parser::parse;
 use jett_resolve::resolve;
 use jett_typecheck::check;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Result of compiling a single file.
 pub struct BuildResult {
@@ -27,7 +27,7 @@ pub fn build_source(source: &str, file_path: &str) -> BuildResult {
     let mut all_diagnostics = Vec::new();
 
     // Phase 1+2: Lex + Parse
-    let parse_result = parse(source, file_id);
+    let mut parse_result = parse(source, file_id);
     all_diagnostics.extend(parse_result.errors.clone());
 
     let has_parse_errors = all_diagnostics
@@ -43,6 +43,8 @@ pub fn build_source(source: &str, file_path: &str) -> BuildResult {
     }
 
     // Phase 3: Resolve names
+    prepend_support_modules(&mut parse_result.module, discover_stdlib_modules());
+
     let resolve_result = resolve(&parse_result.module);
     all_diagnostics.extend(resolve_result.diagnostics.clone());
 
@@ -99,7 +101,7 @@ pub fn hover_type(source: &str, line: u32, col: u32) -> Option<String> {
     // Convert 1-based (line, col) to a byte offset.
     let offset = line_col_to_offset(source, line, col)?;
 
-    let parse_result = parse(source, file_id);
+    let mut parse_result = parse(source, file_id);
     if parse_result
         .errors
         .iter()
@@ -107,6 +109,8 @@ pub fn hover_type(source: &str, line: u32, col: u32) -> Option<String> {
     {
         return None;
     }
+
+    prepend_support_modules(&mut parse_result.module, discover_stdlib_modules());
 
     let resolve_result = resolve(&parse_result.module);
     if resolve_result
@@ -122,7 +126,7 @@ pub fn hover_type(source: &str, line: u32, col: u32) -> Option<String> {
     // Find the smallest span in type_map that contains `offset`.
     let mut best: Option<(u32, jett_types::TypeId)> = None;
     for (span, ty_id) in &check_result.type_map {
-        if span.start <= offset && offset <= span.end {
+        if span.file == file_id && span.start <= offset && offset <= span.end {
             let len = span.end - span.start;
             if best.is_none() || len < best.unwrap().0 {
                 best = Some((len, *ty_id));
@@ -137,7 +141,7 @@ pub fn hover_type(source: &str, line: u32, col: u32) -> Option<String> {
 /// Runs parse + resolve and collects all definitions from the scope table.
 pub fn completions(source: &str) -> Vec<(String, jett_resolve::scope::DefKind)> {
     let file_id = FileId::new(0);
-    let parse_result = parse(source, file_id);
+    let mut parse_result = parse(source, file_id);
     if parse_result
         .errors
         .iter()
@@ -145,6 +149,8 @@ pub fn completions(source: &str) -> Vec<(String, jett_resolve::scope::DefKind)> 
     {
         return Vec::new();
     }
+    prepend_support_modules(&mut parse_result.module, discover_stdlib_modules());
+
     let resolve_result = resolve(&parse_result.module);
     resolve_result
         .scope_table
@@ -161,7 +167,7 @@ pub fn goto_definition(source: &str, line: u32, col: u32) -> Option<(u32, u32)> 
 
     let offset = line_col_to_offset(source, line, col)?;
 
-    let parse_result = parse(source, file_id);
+    let mut parse_result = parse(source, file_id);
     if parse_result
         .errors
         .iter()
@@ -170,12 +176,14 @@ pub fn goto_definition(source: &str, line: u32, col: u32) -> Option<(u32, u32)> 
         return None;
     }
 
+    prepend_support_modules(&mut parse_result.module, discover_stdlib_modules());
+
     let resolve_result = resolve(&parse_result.module);
 
     // Find the reference span that covers `offset`.
     let mut best_def: Option<(u32, jett_resolve::scope::DefId)> = None;
     for (span, def_id) in &resolve_result.resolutions {
-        if span.start <= offset && offset <= span.end {
+        if span.file == file_id && span.start <= offset && offset <= span.end {
             let len = span.end - span.start;
             if best_def.is_none() || len < best_def.unwrap().0 {
                 best_def = Some((len, *def_id));
@@ -183,9 +191,13 @@ pub fn goto_definition(source: &str, line: u32, col: u32) -> Option<(u32, u32)> 
         }
     }
 
-    best_def.map(|(_, def_id)| {
+    best_def.and_then(|(_, def_id)| {
         let def_info = resolve_result.scope_table.def(def_id);
-        (def_info.span.start, def_info.span.end)
+        if def_info.span.file == file_id {
+            Some((def_info.span.start, def_info.span.end))
+        } else {
+            None
+        }
     })
 }
 
@@ -262,19 +274,14 @@ fn build_file_inner(path: &Path, include_project: bool) -> BuildResult {
         };
     }
 
-    // Multi-file: prepend items from sibling project files so resolver/typechecker
-    // can see cross-file definitions (functions, types, etc.).
+    // Multi-file: prepend stdlib and sibling project modules so
+    // resolver/typechecker can see cross-file definitions (functions, types,
+    // etc.).
+    let mut support_modules = discover_stdlib_modules();
     if include_project {
-        let sibling_modules = discover_project_modules(path);
-        if !sibling_modules.is_empty() {
-            let mut merged_items = Vec::new();
-            for module in sibling_modules {
-                merged_items.extend(module.items);
-            }
-            merged_items.append(&mut parse_result.module.items);
-            parse_result.module.items = merged_items;
-        }
+        support_modules.extend(discover_project_modules(path));
     }
+    prepend_support_modules(&mut parse_result.module, support_modules);
 
     // Phase 3: Resolve names
     let resolve_result = resolve(&parse_result.module);
@@ -344,31 +351,64 @@ fn register_module_items(
     }
 }
 
+fn prepend_support_modules(module: &mut Module, support_modules: Vec<Module>) {
+    if support_modules.is_empty() {
+        return;
+    }
+
+    let mut merged_items = Vec::new();
+    for support in support_modules {
+        merged_items.extend(support.items);
+    }
+    merged_items.append(&mut module.items);
+    module.items = merged_items;
+}
+
+/// Discover and parse compiler-shipped stdlib modules.
+fn discover_stdlib_modules() -> Vec<Module> {
+    discover_modules_in_dir(&stdlib_root(), None, 10_000)
+}
+
+fn stdlib_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("stdlib")
+}
+
 /// Discover and parse all sibling .jett files in the project (if a jett.proj exists).
 /// Returns parsed modules for files other than the entry file.
-fn discover_project_modules(entry_path: &Path) -> Vec<jett_parser::ast::Module> {
+fn discover_project_modules(entry_path: &Path) -> Vec<Module> {
     let canon = entry_path.canonicalize().ok();
     let project_root = find_project_root(entry_path).ok();
     let Some(root) = project_root else {
         return Vec::new();
     };
+    discover_modules_in_dir(&root, canon.as_deref(), 1)
+}
+
+fn discover_modules_in_dir(
+    root: &Path,
+    skip_canon: Option<&Path>,
+    start_file_id: u32,
+) -> Vec<Module> {
     let mut files = Vec::new();
-    if collect_jett_files(&root, &mut files).is_err() {
+    if collect_jett_files(root, &mut files).is_err() {
         return Vec::new();
     }
     files.sort();
 
     let mut modules = Vec::new();
     for (idx, file_path) in files.iter().enumerate() {
-        // Skip the entry file — it will be registered separately.
-        let is_entry = canon
-            .as_ref()
-            .map_or(false, |c| file_path.canonicalize().ok().as_ref() == Some(c));
-        if is_entry {
+        // Skip the entry file when parsing project siblings.
+        let should_skip = skip_canon
+            .map(|skip| file_path.canonicalize().ok().as_deref() == Some(skip))
+            .unwrap_or(false);
+        if should_skip {
             continue;
         }
         if let Ok(source) = fs::read_to_string(file_path) {
-            let file_id = FileId::new((idx + 1) as u32);
+            let file_id = FileId::new(start_file_id + idx as u32);
             let parsed = parse(&source, file_id);
             // Only include files that parse without errors.
             let has_errors = parsed
@@ -407,16 +447,13 @@ pub fn run_file(path: &Path) -> Result<(), String> {
         .map_err(|e| format!("failed to read {}: {}", path.display(), e))?;
     let file_id = FileId::new(0);
     let parse_result = parse(&source, file_id);
+    let module = parse_result.module;
 
     // Find main()
-    let main_func = parse_result
-        .module
-        .items
-        .iter()
-        .find_map(|item| match item {
-            Item::Function(func) if func.name.name == "main" => Some(func),
-            _ => None,
-        });
+    let main_func = module.items.iter().find_map(|item| match item {
+        Item::Function(func) if func.name.name == "main" => Some(func),
+        _ => None,
+    });
 
     let Some(main_func) = main_func else {
         return Err("runtime error: no `main` function found".to_string());
@@ -427,6 +464,11 @@ pub fn run_file(path: &Path) -> Result<(), String> {
     use jett_comptime::interpreter::Interpreter;
     let mut interp = Interpreter::new_runtime();
 
+    // Register compiler-shipped stdlib modules before project and entry files.
+    for module in discover_stdlib_modules() {
+        register_module_items(&mut interp, &module);
+    }
+
     // Register items from sibling project files first (so they're available to main file).
     let sibling_modules = discover_project_modules(path);
     for module in &sibling_modules {
@@ -434,7 +476,7 @@ pub fn run_file(path: &Path) -> Result<(), String> {
     }
 
     // Register items from the entry file (may override sibling definitions).
-    register_module_items(&mut interp, &parse_result.module);
+    register_module_items(&mut interp, &module);
 
     // Call main()
     match interp.call_function("main", main_args) {
@@ -568,7 +610,7 @@ pub fn test_file(path: &Path) -> Result<TestResult, String> {
         .map_err(|e| format!("failed to read {}: {}", path.display(), e))?;
 
     let file_id = FileId::new(0);
-    let parse_result = parse(&source, file_id);
+    let mut parse_result = parse(&source, file_id);
 
     // If there are parse errors, report and bail.
     let has_parse_errors = parse_result
@@ -584,6 +626,8 @@ pub fn test_file(path: &Path) -> Result<TestResult, String> {
             .collect();
         return Err(format!("parse errors:\n{}", msgs.join("\n")));
     }
+
+    prepend_support_modules(&mut parse_result.module, discover_stdlib_modules());
 
     let results = run_verify_blocks_detailed(&parse_result.module);
 

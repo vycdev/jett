@@ -11,14 +11,14 @@ the public `json.*` API.
 
 ## Current Architecture
 
-- `stdlib/` exists as a repo concept, but compiler-driven stdlib loading is not
-  wired yet.
-- `build_file` parses the requested file, then prepends sibling project modules
-  only when a `jett.proj` is discovered.
-- `run_file` validates through `build_file`, then registers sibling project
-  modules plus the entry module in the interpreter.
-- `jett test file` and project test execution still use mostly single-file
-  paths, so they do not exercise a shared prelude or stdlib module set.
+- `stdlib/` now has a bootstrap loader and marker module, but real stdlib JSON
+  extraction has not happened yet.
+- `build_file` parses the requested file, then prepends stdlib modules and, when
+  a `jett.proj` is discovered, sibling project modules.
+- `run_file` validates through `build_file`, then registers stdlib modules,
+  sibling project modules, and the entry module in the interpreter.
+- `build_source` and `test_file` also prepend stdlib modules, so LSP-style
+  validation and `jett test file` exercise the same prelude path.
 - Namespaces are parsed and resolved as declarations, but top-level functions
   and types are still effectively registered by flat names.
 - `use` declarations bind aliases or final path segments, but they do not yet
@@ -56,8 +56,8 @@ public `json.parse`, `json.serialize`, and `json.serialize_public` names.
 
 ### 1. Stdlib Loading
 
-The driver needs a consistent way to load stdlib `.jett` files before user
-modules for:
+The driver has a first bootstrap path for loading stdlib `.jett` files before
+user modules for:
 
 - `jett build`,
 - `jett run`,
@@ -66,9 +66,9 @@ modules for:
 - LSP validation paths,
 - future query/agent tooling.
 
-The initial loader can be simple: parse a fixed set of repo-local stdlib files
-as prelude modules before project modules. Dependency ordering can be explicit
-at first.
+This is still intentionally simple: files are collected from repo-local
+`stdlib/` and prepended before project modules. Dependency ordering is lexical
+for now.
 
 ### 2. Qualified User Functions
 
@@ -114,18 +114,17 @@ the module cleanly probably needs an export rule or another visibility story.
 ## Minimal Staging Plan
 
 1. Keep the Rust-backed public JSON bridge for now.
-2. Add a stdlib loader that can inject `.jett` files before user modules.
-3. Stage extracted prototype code under flat, non-conflicting names, such as:
+2. Stage extracted prototype code under flat, non-conflicting names, such as:
    - `json_decode_reflected[T](raw: JsonValue)`
    - `json_serialize_public_reflected[T](view value: T)`
-4. Add tests that prove stdlib-loaded functions are available in build, run,
+3. Add tests that prove stdlib-loaded functions are available in build, run,
    test, and LSP-like validation paths.
-5. Implement namespace-qualified symbol registration and dotted user-function
+4. Implement namespace-qualified symbol registration and dotted user-function
    calls.
-6. Move the extracted functions into `namespace json` behind the real public
+5. Move the extracted functions into `namespace json` behind the real public
    names, while retaining compiler policy checks for secrets, `view`, map keys,
    and handled results.
-7. Run parity tests against the Rust bridge before removing any Rust-backed
+6. Run parity tests against the Rust bridge before removing any Rust-backed
    implementation paths.
 
 ## Recommended Shape For `stdlib/json.jett`
