@@ -60,6 +60,16 @@ function json_bytes_test() returns string:
 verify json_bytes_test:
     assert json_bytes_test() == "\"0x4869\""
 
+function json_value_test() returns string:
+    JsonValue root = json.parse_raw("{{\"name\":\"Ada\",\"score\":5}}") handle error:
+        return error
+    return json.serialize[JsonValue](view root)
+
+verify json_value_test:
+    string raw = json_value_test()
+    assert string.contains(raw, "\"name\":\"Ada\"") == true
+    assert string.contains(raw, "\"score\":5") == true
+
 function json_string_escape_test() returns string:
     return json.serialize[string]("quote \" backslash \\ newline \n tab \t nul \0")
 

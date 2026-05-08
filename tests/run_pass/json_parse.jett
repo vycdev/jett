@@ -202,6 +202,14 @@ function parse_bytes_without_prefix_first() returns int64:
         default -1
     return first
 
+function parse_json_value_field() returns string:
+    JsonValue root = json.parse[JsonValue]("{{\"name\":\"Ada\",\"score\":5}}") handle error:
+        return error
+    JsonValue name_raw = json.field(root, "name") handle:
+        return "missing name"
+    return json.as_string(name_raw) handle error:
+        default error
+
 function parse_invalid_bytes_error() returns string:
     bytes value = json.parse[bytes]("\"0xzz\"") handle error:
         return error
@@ -254,6 +262,7 @@ verify json_parse:
     assert parse_invalid_nothing_error() == "expected null, got number"
     assert parse_bytes_length() == 2
     assert parse_bytes_without_prefix_first() == 72
+    assert parse_json_value_field() == "Ada"
     assert parse_invalid_bytes_error() == "expected hex bytes string"
     assert parse_top_level_secret_redaction() == "***"
     assert parse_secret_field_redaction() == "svc:***"

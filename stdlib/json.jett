@@ -100,6 +100,10 @@ function json_serialize_public_reflected[T](view value: T) returns string:
         bytes item = value
         return json_stdlib_quote("0x{bytes.to_hex(item)}")
 
+    if type_name == "JsonValue":
+        JsonValue item = value
+        return json.serialize_raw(item)
+
     if kind == TypeKind.alias_type:
         comptime type Base = type.arg[T](0):
             Base item = value
@@ -206,6 +210,10 @@ function json_decode_reflected[T](raw: JsonValue) returns result[T, string]:
             return fail(error)
         bytes item = bytes.from_hex(raw_hex) handle error:
             return fail("expected hex bytes string")
+        return ok(item)
+
+    if type_name == "JsonValue":
+        JsonValue item = raw
         return ok(item)
 
     if type_name == "nothing":
