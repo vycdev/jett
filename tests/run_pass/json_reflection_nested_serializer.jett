@@ -33,6 +33,7 @@ struct User:
     note: string
     profile: Profile
     tags: list[string]
+    lucky: set[int64]
     scores: map[string, int64]
     nickname: optional[string]
     missing: optional[string]
@@ -99,6 +100,15 @@ function serialize_reflected[T](view value: T) returns string:
             string body = string.join(parts, ",")
             return "[{body}]"
 
+    if kind == "set":
+        comptime type Elem = type.arg[T](0):
+            set[Elem] items = value
+            list[string] parts = list.new[string]()
+            for item in items:
+                parts = list.append[string](parts, serialize_reflected[Elem](view item))
+            string body = string.join(parts, ",")
+            return "[{body}]"
+
     if kind == "map":
         comptime type Val = type.arg[T](1):
             map[string, Val] entries = value
@@ -117,8 +127,10 @@ function serialize_reflected[T](view value: T) returns string:
     if kind == "result":
         comptime type Ok = type.arg[T](0):
             Ok item = value handle error:
-                return json_quote("fail")
-            return serialize_reflected[Ok](view item)
+                comptime type Err = type.arg[T](1):
+                    Err failure = error
+                    return "{{{json_quote("fail")}:{serialize_reflected[Err](view failure)}}}"
+            return "{{{json_quote("ok")}:{serialize_reflected[Ok](view item)}}}"
 
     list[string] fields = list.new[string]()
     for field in type.fields[T]():
@@ -132,7 +144,10 @@ function serialize_reflected[T](view value: T) returns string:
 
 function reflected_user_json() returns string:
     Profile profile = Profile(city: "Cluj", visits: list(3, 5))
-    User user = User(id: "u1", active: true, note: "quote \" slash \\ newline \n tab \t", profile: profile, tags: list("admin", "beta"), scores: map("wins": 3, "losses": 1), nickname: some("ally"), missing: none, outcome: ok(7), failed: fail("bad"), token: "secret-token")
+    mutable set[int64] lucky = set.new[int64]()
+    lucky = set.add[int64](lucky, 11)
+    lucky = set.add[int64](lucky, 13)
+    User user = User(id: "u1", active: true, note: "quote \" slash \\ newline \n tab \t", profile: profile, tags: list("admin", "beta"), lucky: lucky, scores: map("wins": 3, "losses": 1), nickname: some("ally"), missing: none, outcome: ok(7), failed: fail("bad"), token: "secret-token")
     return serialize_reflected[User](view user)
 
 function reflected_alias_refinement_json() returns string:
@@ -164,6 +179,9 @@ verify json_reflection_nested_serializer:
     assert string.contains(raw, "[3,5]") == true
     assert string.contains(raw, "tags") == true
     assert string.contains(raw, "[\"admin\",\"beta\"]") == true
+    assert string.contains(raw, "lucky") == true
+    assert string.contains(raw, "11") == true
+    assert string.contains(raw, "13") == true
     assert string.contains(raw, "scores") == true
     assert string.contains(raw, "wins") == true
     assert string.contains(raw, "nickname") == true
@@ -171,9 +189,9 @@ verify json_reflection_nested_serializer:
     assert string.contains(raw, "missing") == true
     assert string.contains(raw, "null") == true
     assert string.contains(raw, "outcome") == true
-    assert string.contains(raw, "7") == true
+    assert string.contains(raw, "\"ok\":7") == true
     assert string.contains(raw, "failed") == true
-    assert string.contains(raw, "fail") == true
+    assert string.contains(raw, "\"fail\":\"bad\"") == true
     assert string.contains(raw, "token") == false
     assert string.contains(raw, "secret-token") == false
 

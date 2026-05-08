@@ -49,13 +49,13 @@ Implemented reflection primitives:
 
 JSON serialization is still Rust-backed, but it now consumes the same field
 metadata exposed to Jett code. The active tests cover nested structs, bitfields,
-lists, maps with string keys, optionals, results, `serialize` names, public
-secret omission, and valid JSON string escaping for control characters.
+lists, sets, maps with string keys, optionals, results, `serialize` names,
+public secret omission, and valid JSON string escaping for control characters.
 
 There is also a `.jett` serializer prototype in
 `tests/run_pass/json_reflection_nested_serializer.jett`. It recursively handles
-primitives, structs, lists, `map[string, V]`, optionals, and result-ok/fail
-shapes, alias/refinement base serialization, bitfields, and enums using the
+primitives, structs, lists, sets, `map[string, V]`, optionals, result ok/fail
+objects, alias/refinement base serialization, bitfields, and enums using the
 same string/object shape as the Rust-backed JSON bridge. It relies on reflection
 primitives, trusted `comptime type` binding, and `type.arg[T](index)` for wrapper
 element/value types. The prototype also covers basic string escaping for quotes,
