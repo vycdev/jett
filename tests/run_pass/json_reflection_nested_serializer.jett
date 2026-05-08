@@ -40,6 +40,7 @@ struct User:
     outcome: result[int64, string]
     failed: result[int64, string]
     token: secret[string]
+    audit_tokens: list[secret[string]]
 
 function json_quote(raw: string) returns string:
     string escaped = string.replace(raw, "\\", "\\\\")
@@ -147,7 +148,9 @@ function reflected_user_json() returns string:
     mutable set[int64] lucky = set.new[int64]()
     lucky = set.add[int64](lucky, 11)
     lucky = set.add[int64](lucky, 13)
-    User user = User(id: "u1", active: true, note: "quote \" slash \\ newline \n tab \t", profile: profile, tags: list("admin", "beta"), lucky: lucky, scores: map("wins": 3, "losses": 1), nickname: some("ally"), missing: none, outcome: ok(7), failed: fail("bad"), token: "secret-token")
+    secret[string] audit_a = "audit-a"
+    secret[string] audit_b = "audit-b"
+    User user = User(id: "u1", active: true, note: "quote \" slash \\ newline \n tab \t", profile: profile, tags: list("admin", "beta"), lucky: lucky, scores: map("wins": 3, "losses": 1), nickname: some("ally"), missing: none, outcome: ok(7), failed: fail("bad"), token: "secret-token", audit_tokens: list(audit_a, audit_b))
     return serialize_reflected[User](view user)
 
 function reflected_alias_refinement_json() returns string:
@@ -194,6 +197,8 @@ verify json_reflection_nested_serializer:
     assert string.contains(raw, "\"fail\":\"bad\"") == true
     assert string.contains(raw, "token") == false
     assert string.contains(raw, "secret-token") == false
+    assert string.contains(raw, "audit_tokens") == false
+    assert string.contains(raw, "audit-a") == false
 
     string alias_raw = reflected_alias_refinement_json()
     assert string.contains(alias_raw, "labels") == true

@@ -37,6 +37,10 @@ struct Box[T]:
 struct RefinedUser:
     name: NonEmpty
 
+struct Credential:
+    name: string
+    token: secret[string]
+
 function parse_user_id() returns string:
     string raw = "{{\"id\":\"u1\",\"profileData\":{{\"displayName\":\"Alice\",\"note\":\"ok\"}},\"tags\":[\"admin\",\"beta\"],\"scores\":{{\"wins\":3}},\"nickname\":\"ally\"}}"
     User user = json.parse[User](raw) handle error:
@@ -157,6 +161,26 @@ function parse_missing_required_error() returns string:
         return error
     return user.id
 
+function parse_top_level_secret_redaction() returns string:
+    secret[string] token = json.parse[secret[string]]("\"secret-token\"") handle error:
+        return error
+    return secret.redact(token)
+
+function parse_secret_field_redaction() returns string:
+    Credential credential = json.parse[Credential]("{{\"name\":\"svc\",\"token\":\"secret-token\"}}") handle error:
+        return error
+    return "{credential.name}:{secret.redact(credential.token)}"
+
+function parse_secret_field_type_error() returns string:
+    Credential credential = json.parse[Credential]("{{\"name\":\"svc\",\"token\":7}}") handle error:
+        return error
+    return credential.name
+
+function parse_missing_secret_field_error() returns string:
+    Credential credential = json.parse[Credential]("{{\"name\":\"svc\"}}") handle error:
+        return error
+    return credential.name
+
 verify json_parse:
     assert parse_user_id() == "u1"
     assert parse_nested_serialize_name() == "Alice"
@@ -177,3 +201,7 @@ verify json_parse:
     assert parse_bitfield_protocol() == true
     assert parse_bitfield_width_error() == "bitfield 'Header' field 'version' is 4 bit(s) wide and cannot hold '16'"
     assert parse_missing_required_error() == "missing required field 'profileData' for User"
+    assert parse_top_level_secret_redaction() == "***"
+    assert parse_secret_field_redaction() == "svc:***"
+    assert parse_secret_field_type_error() == "expected string, got number"
+    assert parse_missing_secret_field_error() == "missing required field 'token' for Credential"

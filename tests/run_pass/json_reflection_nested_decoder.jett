@@ -20,6 +20,10 @@ struct Profile:
     city: string
     visits: list[int64]
 
+struct Credential:
+    name: string
+    token: secret[string]
+
 bitfield Header:
     version: 4 bits
     header_length: 4 bits
@@ -73,6 +77,13 @@ function decode_reflected[T](raw: JsonValue) returns result[T, string]:
                 return fail(error)
             T refined = item
             return ok(refined)
+
+    if kind == "secret":
+        comptime type Inner = type.arg[T](0):
+            Inner item = decode_reflected[Inner](raw) handle error:
+                return fail(error)
+            T secret_value = item
+            return ok(secret_value)
 
     if kind == "list":
         comptime type Elem = type.arg[T](0):
@@ -301,6 +312,34 @@ function invalid_refined_list_message() returns string:
     list[int64] raw = coarsen value
     return "{list.length[int64](raw)}"
 
+function decoded_top_level_secret_redaction() returns string:
+    JsonValue root = json.parse_raw("\"secret-token\"") handle error:
+        return error
+    secret[string] value = decode_reflected[secret[string]](root) handle error:
+        return error
+    return secret.redact(value)
+
+function decoded_secret_field_summary() returns string:
+    JsonValue root = json.parse_raw("{{\"name\":\"svc\",\"token\":\"secret-token\"}}") handle error:
+        return error
+    Credential credential = decode_reflected[Credential](root) handle error:
+        return error
+    return "{credential.name}:{secret.redact(credential.token)}"
+
+function invalid_secret_field_message() returns string:
+    JsonValue root = json.parse_raw("{{\"name\":\"svc\",\"token\":7}}") handle error:
+        return error
+    Credential credential = decode_reflected[Credential](root) handle error:
+        return error
+    return credential.name
+
+function missing_secret_field_message() returns string:
+    JsonValue root = json.parse_raw("{{\"name\":\"svc\"}}") handle error:
+        return error
+    Credential credential = decode_reflected[Credential](root) handle error:
+        return error
+    return credential.name
+
 verify json_reflection_nested_decoder:
     assert decoded_nested_summary() == "u1:Cluj:4:5:true:true:7:2:2:ally:none:3:2:true:ready:7:true"
     assert decoded_result_failure() == "bad"
@@ -314,3 +353,7 @@ verify json_reflection_nested_decoder:
     assert string.contains(invalid_top_level_refinement_message(), "refinement type constraint failed for 'NonEmpty'") == true
     assert decoded_refined_list_count() == 2
     assert string.contains(invalid_refined_list_message(), "refinement type constraint failed for 'NonEmptyNumbers'") == true
+    assert decoded_top_level_secret_redaction() == "***"
+    assert decoded_secret_field_summary() == "svc:***"
+    assert string.contains(invalid_secret_field_message(), "token: expected string") == true
+    assert missing_secret_field_message() == "missing field 'token'"

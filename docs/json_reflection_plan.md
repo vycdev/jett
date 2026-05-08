@@ -79,19 +79,22 @@ raw `JsonValue` and finishing structs, bitfields, and enums with
 `TypeConstruction`. It treats absent optional fields as `none`, validates
 top-level refinements including refinements over generic shapes, and decodes
 enum-annotated bitfields through the ordinary enum branch plus bitfield finish
-validation. Secret/public policy is still future work.
+validation. It also decodes `secret[T]` by parsing the inner `T` and assigning
+the result into the secret wrapper, matching the Rust-backed `json.parse[T]`
+input policy while keeping output exposure blocked by the ordinary secret type
+rules. Public-mode parsing policy is still future work.
 
 `json.parse[T](raw)` has a Rust-backed bridge: it requires one type argument,
 accepts a string, returns `result[T, string]`, and supports core primitives,
 structs with `serialize` names, lists, sets, `map[string, V]`, optionals,
-results, enums using the serializer's string/object payload shape, bitfields
-from JSON objects with width and enum-annotation validation, generic structs,
-aliases, and refinement validation, including refinements over generic shapes
-such as `list[string]`. The long-term goal is still to replace this bridge with
-stdlib code; struct construction is now available through `TypeConstruction`,
-bitfield construction is available through the same builder, and enum
-construction is available through `type.construct_variant_start`; the final
-syntax remains future work.
+results, `secret[T]` wrappers, enums using the serializer's string/object
+payload shape, bitfields from JSON objects with width and enum-annotation
+validation, generic structs, aliases, and refinement validation, including
+refinements over generic shapes such as `list[string]`. The long-term goal is
+still to replace this bridge with stdlib code; struct construction is now
+available through `TypeConstruction`, bitfield construction is available through
+the same builder, and enum construction is available through
+`type.construct_variant_start`; the final syntax remains future work.
 
 `json.parse_raw(raw)` now exposes an opaque `JsonValue` tree with explicit
 accessors for kind checks, object fields, array indexes, scalar casts, object
@@ -199,6 +202,7 @@ for the decoded value. See `docs/bitfield_reflection_metadata.md`.
 
 ## Suggested Next Steps
 
-1. Add public/secret policy to the decoder prototype.
+1. Decide whether a public parse mode is needed, and if so whether it should
+   reject, ignore, or require absent secret fields.
 2. Harden the `.jett` serializer prototype toward stdlib quality: escaping,
    enum/bitfield policy, alias/refinement behavior, and public/secret modes.
