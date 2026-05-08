@@ -153,6 +153,8 @@ struct ReflectionBitfield {
 pub struct Interpreter {
     /// Stack of lexical scopes. The last element is the innermost scope.
     scopes: Vec<Environment>,
+    /// Stack of block-scoped namespace aliases introduced by `use`.
+    namespace_alias_scopes: Vec<HashMap<String, String>>,
     /// User-defined functions available for calling.
     functions: HashMap<String, FunctionDef>,
     /// Registered user-defined structs available for construction and field access.
@@ -206,6 +208,7 @@ impl Interpreter {
     pub fn new() -> Self {
         Self {
             scopes: vec![HashMap::new()],
+            namespace_alias_scopes: vec![HashMap::new()],
             functions: HashMap::new(),
             structs: HashMap::new(),
             bitfields: HashMap::new(),
@@ -243,10 +246,12 @@ impl Interpreter {
 
     fn push_scope(&mut self) {
         self.scopes.push(HashMap::new());
+        self.namespace_alias_scopes.push(HashMap::new());
     }
 
     fn pop_scope(&mut self) {
         self.scopes.pop();
+        self.namespace_alias_scopes.pop();
     }
 
     fn set_variable(&mut self, name: &str, value: Value) {
@@ -307,9 +312,39 @@ impl Interpreter {
     }
 
     fn registry_name<T>(&self, registry: &HashMap<String, T>, name: &str) -> Option<String> {
-        self.current_qualified_name(name)
-            .filter(|qualified| registry.contains_key(qualified))
+        self.expand_namespace_alias_name(name)
+            .filter(|expanded| registry.contains_key(expanded))
+            .or_else(|| {
+                self.current_qualified_name(name)
+                    .filter(|qualified| registry.contains_key(qualified))
+            })
             .or_else(|| registry.contains_key(name).then(|| name.to_string()))
+    }
+
+    fn use_bound_name(path: &str, alias: Option<&Ident>) -> String {
+        alias
+            .map(|ident| ident.name.clone())
+            .unwrap_or_else(|| path.rsplit('.').next().unwrap_or(path).to_string())
+    }
+
+    fn set_namespace_alias(&mut self, bound_name: String, target: String) {
+        if let Some(scope) = self.namespace_alias_scopes.last_mut() {
+            scope.insert(bound_name, target);
+        }
+    }
+
+    fn expand_namespace_alias_name(&self, name: &str) -> Option<String> {
+        let (prefix, suffix) = name.split_once('.')?;
+        self.namespace_alias_scopes
+            .iter()
+            .rev()
+            .find_map(|scope| scope.get(prefix))
+            .map(|target| format!("{target}.{suffix}"))
+    }
+
+    fn runtime_name(&self, name: &str) -> String {
+        self.expand_namespace_alias_name(name)
+            .unwrap_or_else(|| name.to_string())
     }
 
     fn hit_breakpoint(&mut self) {
@@ -806,7 +841,9 @@ impl Interpreter {
 
             // Enum variant reference: `Color.red`
             Expr::EnumVariant(type_name, variant, _) => Ok(ExprFlow::Value(Value::Enum {
-                type_name: type_name.name.clone(),
+                type_name: self
+                    .registry_name(&self.enums, &type_name.name)
+                    .unwrap_or_else(|| type_name.name.clone()),
                 variant: variant.name.clone(),
                 fields: vec![],
             })),
@@ -1062,7 +1099,9 @@ impl Interpreter {
             }
             // Handle enum variant construction: Type.variant(args)
             Expr::EnumVariant(type_name, variant, _) => Ok(ExprFlow::Value(Value::Enum {
-                type_name: type_name.name.clone(),
+                type_name: self
+                    .registry_name(&self.enums, &type_name.name)
+                    .unwrap_or_else(|| type_name.name.clone()),
                 variant: variant.name.clone(),
                 fields: arg_values,
             })),
@@ -1071,15 +1110,19 @@ impl Interpreter {
             Expr::FieldAccess(obj, field, _) => {
                 let dotted = Self::extract_dotted_name(obj, &field.name);
                 if let Some(ref name) = dotted {
-                    if self.structs.contains_key(name.as_str()) {
-                        return Ok(ExprFlow::Value(
-                            self.construct_struct(name, args, arg_values)?,
-                        ));
+                    if let Some(struct_name) = self.registry_name(&self.structs, name) {
+                        return Ok(ExprFlow::Value(self.construct_struct(
+                            &struct_name,
+                            args,
+                            arg_values,
+                        )?));
                     }
-                    if self.bitfields.contains_key(name.as_str()) {
-                        return Ok(ExprFlow::Value(
-                            self.construct_bitfield(name, args, arg_values)?,
-                        ));
+                    if let Some(bitfield_name) = self.registry_name(&self.bitfields, name) {
+                        return Ok(ExprFlow::Value(self.construct_bitfield(
+                            &bitfield_name,
+                            args,
+                            arg_values,
+                        )?));
                     }
                     // Try higher-order built-ins first (require &mut self).
                     if let Some(result) = self.call_higher_order_builtin(name, arg_values.clone()) {
@@ -1095,12 +1138,17 @@ impl Interpreter {
                         return Ok(ExprFlow::Value(result?));
                     }
                     // Try user-defined dotted functions.
-                    if self.functions.contains_key(name.as_str())
-                        || self.resolve_interface_dispatch(name, &arg_values).is_some()
+                    let runtime_name = self.runtime_name(name);
+                    if self.functions.contains_key(runtime_name.as_str())
+                        || self
+                            .resolve_interface_dispatch(&runtime_name, &arg_values)
+                            .is_some()
                     {
-                        return Ok(ExprFlow::Value(
-                            self.call_function_with_type_args(name, type_args, arg_values)?,
-                        ));
+                        return Ok(ExprFlow::Value(self.call_function_with_type_args(
+                            &runtime_name,
+                            type_args,
+                            arg_values,
+                        )?));
                     }
                 }
                 // Fall through to enum variant construction if no built-in or
@@ -1163,12 +1211,20 @@ impl Interpreter {
                     if let Some(result) = self.call_builtin(name, &arg_values) {
                         return Ok(ExprFlow::Value(result?));
                     }
-                    if self.functions.contains_key(name.as_str()) {
-                        return Ok(ExprFlow::Value(self.call_function(name, arg_values)?));
+                    let runtime_name = self.runtime_name(name);
+                    if self.functions.contains_key(runtime_name.as_str()) {
+                        return Ok(ExprFlow::Value(
+                            self.call_function(&runtime_name, arg_values)?,
+                        ));
                     }
                 }
                 match dotted {
-                    Some(name) => Ok(ExprFlow::Value(self.call_function(&name, arg_values)?)),
+                    Some(name) => {
+                        let runtime_name = self.runtime_name(&name);
+                        Ok(ExprFlow::Value(
+                            self.call_function(&runtime_name, arg_values)?,
+                        ))
+                    }
                     None => {
                         Err("only named function calls are supported in pipeline steps".to_string())
                     }
@@ -1621,8 +1677,9 @@ impl Interpreter {
             Stmt::Break(_) => Ok(Some(Signal::Break)),
             Stmt::Continue(_) => Ok(Some(Signal::Continue)),
 
-            Stmt::Use(_) => {
-                // use declarations are a no-op during comptime evaluation
+            Stmt::Use(use_decl) => {
+                let bound_name = Self::use_bound_name(&use_decl.path.name, use_decl.alias.as_ref());
+                self.set_namespace_alias(bound_name, use_decl.path.name.clone());
                 Ok(None)
             }
         }
@@ -2504,29 +2561,66 @@ impl Interpreter {
     }
 
     fn substitute_type_expr(&self, ty: &TypeExpr) -> TypeExpr {
+        self.substitute_type_expr_in_namespace(ty, self.current_namespace.as_deref())
+    }
+
+    fn substitute_type_expr_in_namespace(
+        &self,
+        ty: &TypeExpr,
+        namespace: Option<&str>,
+    ) -> TypeExpr {
         match ty {
-            TypeExpr::Named(ident) => self
-                .current_type_binding(&ident.name)
-                .unwrap_or_else(|| ty.clone()),
+            TypeExpr::Named(ident) => {
+                if let Some(bound) = self.current_type_binding(&ident.name) {
+                    self.substitute_type_expr_in_namespace(&bound, namespace)
+                } else {
+                    TypeExpr::Named(self.expand_type_ident(ident, namespace))
+                }
+            }
             TypeExpr::Generic(ident, args, span) => TypeExpr::Generic(
-                ident.clone(),
+                self.expand_type_ident(ident, namespace),
                 args.iter()
-                    .map(|arg| self.substitute_type_expr(arg))
+                    .map(|arg| self.substitute_type_expr_in_namespace(arg, namespace))
                     .collect(),
                 *span,
             ),
-            TypeExpr::View(inner, span) => {
-                TypeExpr::View(Box::new(self.substitute_type_expr(inner)), *span)
-            }
+            TypeExpr::View(inner, span) => TypeExpr::View(
+                Box::new(self.substitute_type_expr_in_namespace(inner, namespace)),
+                *span,
+            ),
             TypeExpr::Function(params, return_type, span) => TypeExpr::Function(
                 params
                     .iter()
-                    .map(|param| self.substitute_type_expr(param))
+                    .map(|param| self.substitute_type_expr_in_namespace(param, namespace))
                     .collect(),
-                Box::new(self.substitute_type_expr(return_type)),
+                Box::new(self.substitute_type_expr_in_namespace(return_type, namespace)),
                 *span,
             ),
         }
+    }
+
+    fn expand_type_ident(&self, ident: &Ident, namespace: Option<&str>) -> Ident {
+        let mut expanded = ident.clone();
+        if let Some(name) = self.expand_namespace_alias_name(&ident.name) {
+            expanded.name = name;
+        } else if !ident.name.contains('.') {
+            if let Some(namespace) = namespace {
+                let qualified = format!("{namespace}.{}", ident.name);
+                if self.type_name_is_registered(&qualified) {
+                    expanded.name = qualified;
+                }
+            }
+        }
+        expanded
+    }
+
+    fn type_name_is_registered(&self, name: &str) -> bool {
+        self.structs.contains_key(name)
+            || self.bitfields.contains_key(name)
+            || self.enums.contains_key(name)
+            || self.type_alias_bases.contains_key(name)
+            || self.type_aliases.contains_key(name)
+            || self.actor_defs.contains_key(name)
     }
 
     fn substitute_type_expr_with_map(
@@ -2534,29 +2628,72 @@ impl Interpreter {
         ty: &TypeExpr,
         substitutions: &HashMap<String, TypeExpr>,
     ) -> TypeExpr {
+        self.substitute_type_expr_with_map_in_namespace(
+            ty,
+            substitutions,
+            self.current_namespace.as_deref(),
+        )
+    }
+
+    fn substitute_type_expr_with_map_in_namespace(
+        &self,
+        ty: &TypeExpr,
+        substitutions: &HashMap<String, TypeExpr>,
+        namespace: Option<&str>,
+    ) -> TypeExpr {
         match ty {
-            TypeExpr::Named(ident) => substitutions
-                .get(&ident.name)
-                .cloned()
-                .or_else(|| self.current_type_binding(&ident.name))
-                .unwrap_or_else(|| ty.clone()),
+            TypeExpr::Named(ident) => {
+                if let Some(bound) = substitutions
+                    .get(&ident.name)
+                    .cloned()
+                    .or_else(|| self.current_type_binding(&ident.name))
+                {
+                    self.substitute_type_expr_with_map_in_namespace(
+                        &bound,
+                        substitutions,
+                        namespace,
+                    )
+                } else {
+                    TypeExpr::Named(self.expand_type_ident(ident, namespace))
+                }
+            }
             TypeExpr::Generic(ident, args, span) => TypeExpr::Generic(
-                ident.clone(),
+                self.expand_type_ident(ident, namespace),
                 args.iter()
-                    .map(|arg| self.substitute_type_expr_with_map(arg, substitutions))
+                    .map(|arg| {
+                        self.substitute_type_expr_with_map_in_namespace(
+                            arg,
+                            substitutions,
+                            namespace,
+                        )
+                    })
                     .collect(),
                 *span,
             ),
             TypeExpr::View(inner, span) => TypeExpr::View(
-                Box::new(self.substitute_type_expr_with_map(inner, substitutions)),
+                Box::new(self.substitute_type_expr_with_map_in_namespace(
+                    inner,
+                    substitutions,
+                    namespace,
+                )),
                 *span,
             ),
             TypeExpr::Function(params, return_type, span) => TypeExpr::Function(
                 params
                     .iter()
-                    .map(|param| self.substitute_type_expr_with_map(param, substitutions))
+                    .map(|param| {
+                        self.substitute_type_expr_with_map_in_namespace(
+                            param,
+                            substitutions,
+                            namespace,
+                        )
+                    })
                     .collect(),
-                Box::new(self.substitute_type_expr_with_map(return_type, substitutions)),
+                Box::new(self.substitute_type_expr_with_map_in_namespace(
+                    return_type,
+                    substitutions,
+                    namespace,
+                )),
                 *span,
             ),
         }
@@ -2724,33 +2861,45 @@ impl Interpreter {
                     return false;
                 }
                 if let Some(strukt) = self.structs.get(&ident.name) {
+                    let namespace = Self::type_name_namespace(&ident.name)
+                        .or(self.current_namespace.as_deref());
                     return strukt.fields.iter().any(|field| {
                         self.type_expr_has_secret_inner(
-                            &self.substitute_type_expr(&field.ty),
+                            &self.substitute_type_expr_in_namespace(&field.ty, namespace),
                             visited,
                         )
                     });
                 }
                 if let Some(enum_def) = self.enums.get(&ident.name) {
+                    let namespace = Self::type_name_namespace(&ident.name)
+                        .or(self.current_namespace.as_deref());
                     return enum_def
                         .variants
                         .iter()
                         .flat_map(|variant| variant.fields.iter())
                         .any(|field| {
                             self.type_expr_has_secret_inner(
-                                &self.substitute_type_expr(&field.ty),
+                                &self.substitute_type_expr_in_namespace(&field.ty, namespace),
                                 visited,
                             )
                         });
                 }
                 if let Some(bitfield) = self.bitfields.get(&ident.name) {
+                    let namespace = Self::type_name_namespace(&ident.name)
+                        .or(self.current_namespace.as_deref());
                     return bitfield.fields.iter().any(|field| match &field.kind {
-                        BitfieldFieldKind::Bits { as_type, .. } => as_type
-                            .as_ref()
-                            .is_some_and(|ty| self.type_expr_has_secret_inner(ty, visited)),
-                        BitfieldFieldKind::Payload(ty) => {
-                            self.type_expr_has_secret_inner(ty, visited)
+                        BitfieldFieldKind::Bits { as_type, .. } => {
+                            as_type.as_ref().is_some_and(|ty| {
+                                self.type_expr_has_secret_inner(
+                                    &self.substitute_type_expr_in_namespace(ty, namespace),
+                                    visited,
+                                )
+                            })
                         }
+                        BitfieldFieldKind::Payload(ty) => self.type_expr_has_secret_inner(
+                            &self.substitute_type_expr_in_namespace(ty, namespace),
+                            visited,
+                        ),
                     });
                 }
                 false
@@ -2763,10 +2912,15 @@ impl Interpreter {
                     if !visited.insert(type_expr_display(ty)) {
                         return false;
                     }
-                    let substitutions = self.generic_type_substitutions(strukt, args);
+                    let namespace = Self::type_name_namespace(&ident.name)
+                        .or(self.current_namespace.as_deref());
+                    let substitutions = self.generic_type_substitutions(strukt, args, namespace);
                     return strukt.fields.iter().any(|field| {
-                        let field_ty =
-                            self.substitute_type_expr_with_map(&field.ty, &substitutions);
+                        let field_ty = self.substitute_type_expr_with_map_in_namespace(
+                            &field.ty,
+                            &substitutions,
+                            namespace,
+                        );
                         self.type_expr_has_secret_inner(&field_ty, visited)
                     });
                 }
@@ -2787,12 +2941,14 @@ impl Interpreter {
         match ty {
             TypeExpr::Named(ident) => {
                 if let Some(strukt) = self.structs.get(&ident.name) {
+                    let namespace = Self::type_name_namespace(&ident.name)
+                        .or(self.current_namespace.as_deref());
                     return strukt
                         .fields
                         .iter()
                         .map(|field| ReflectionField {
                             name: field.name.name.clone(),
-                            ty: self.substitute_type_expr(&field.ty),
+                            ty: self.substitute_type_expr_in_namespace(&field.ty, namespace),
                             serialize_name: field
                                 .serialize_name
                                 .clone()
@@ -2801,6 +2957,8 @@ impl Interpreter {
                         .collect();
                 }
                 if let Some(bitfield) = self.bitfields.get(&ident.name) {
+                    let namespace = Self::type_name_namespace(&ident.name)
+                        .or(self.current_namespace.as_deref());
                     return bitfield
                         .fields
                         .iter()
@@ -2815,7 +2973,9 @@ impl Interpreter {
                                         })
                                     })
                                 }
-                                BitfieldFieldKind::Payload(ty) => self.substitute_type_expr(ty),
+                                BitfieldFieldKind::Payload(ty) => {
+                                    self.substitute_type_expr_in_namespace(ty, namespace)
+                                }
                             },
                             serialize_name: field.name.name.clone(),
                         })
@@ -2827,13 +2987,19 @@ impl Interpreter {
                 .structs
                 .get(&ident.name)
                 .map(|strukt| {
-                    let substitutions = self.generic_type_substitutions(strukt, args);
+                    let namespace = Self::type_name_namespace(&ident.name)
+                        .or(self.current_namespace.as_deref());
+                    let substitutions = self.generic_type_substitutions(strukt, args, namespace);
                     strukt
                         .fields
                         .iter()
                         .map(|field| ReflectionField {
                             name: field.name.name.clone(),
-                            ty: self.substitute_type_expr_with_map(&field.ty, &substitutions),
+                            ty: self.substitute_type_expr_with_map_in_namespace(
+                                &field.ty,
+                                &substitutions,
+                                namespace,
+                            ),
                             serialize_name: field
                                 .serialize_name
                                 .clone()
@@ -2854,7 +3020,11 @@ impl Interpreter {
                 .get(&ident.name)
                 .map(|bitfield| ReflectionBitfield {
                     network_order: bitfield.network_order,
-                    fields: self.reflection_bitfield_fields(bitfield),
+                    fields: self.reflection_bitfield_fields(
+                        bitfield,
+                        Self::type_name_namespace(&ident.name)
+                            .or(self.current_namespace.as_deref()),
+                    ),
                 })
                 .unwrap_or_else(|| ReflectionBitfield {
                     network_order: false,
@@ -2872,7 +3042,11 @@ impl Interpreter {
         self.type_expr_bitfield(ty).fields
     }
 
-    fn reflection_bitfield_fields(&self, bitfield: &BitfieldDef) -> Vec<ReflectionBitfieldField> {
+    fn reflection_bitfield_fields(
+        &self,
+        bitfield: &BitfieldDef,
+        namespace: Option<&str>,
+    ) -> Vec<ReflectionBitfieldField> {
         bitfield
             .fields
             .iter()
@@ -2888,15 +3062,17 @@ impl Interpreter {
                         name: field.name.name.clone(),
                         shape: "bits".to_string(),
                         width: *width as i64,
-                        ty: self.substitute_type_expr(&ty),
-                        enum_ty: as_type.as_ref().map(|ty| self.substitute_type_expr(ty)),
+                        ty: self.substitute_type_expr_in_namespace(&ty, namespace),
+                        enum_ty: as_type
+                            .as_ref()
+                            .map(|ty| self.substitute_type_expr_in_namespace(ty, namespace)),
                     }
                 }
                 BitfieldFieldKind::Payload(ty) => ReflectionBitfieldField {
                     name: field.name.name.clone(),
                     shape: "payload".to_string(),
                     width: 0,
-                    ty: self.substitute_type_expr(ty),
+                    ty: self.substitute_type_expr_in_namespace(ty, namespace),
                     enum_ty: None,
                 },
             })
@@ -2909,6 +3085,8 @@ impl Interpreter {
                 .enums
                 .get(&ident.name)
                 .map(|enum_def| {
+                    let namespace = Self::type_name_namespace(&ident.name)
+                        .or(self.current_namespace.as_deref());
                     let mut next_discriminant = 0_i64;
                     enum_def
                         .variants
@@ -2924,7 +3102,9 @@ impl Interpreter {
                                     .iter()
                                     .map(|field| ReflectionField {
                                         name: field.name.name.clone(),
-                                        ty: self.substitute_type_expr(&field.ty),
+                                        ty: self.substitute_type_expr_in_namespace(
+                                            &field.ty, namespace,
+                                        ),
                                         serialize_name: field
                                             .serialize_name
                                             .clone()
@@ -2945,13 +3125,23 @@ impl Interpreter {
         &self,
         strukt: &StructDef,
         args: &[TypeExpr],
+        namespace: Option<&str>,
     ) -> HashMap<String, TypeExpr> {
         strukt
             .type_params
             .iter()
             .zip(args.iter())
-            .map(|(param, arg)| (param.name.clone(), self.substitute_type_expr(arg)))
+            .map(|(param, arg)| {
+                (
+                    param.name.clone(),
+                    self.substitute_type_expr_in_namespace(arg, namespace),
+                )
+            })
             .collect()
+    }
+
+    fn type_name_namespace(name: &str) -> Option<&str> {
+        name.rsplit_once('.').map(|(namespace, _)| namespace)
     }
 
     fn type_field_value(&self, index: usize, field: ReflectionField) -> Value {
@@ -4095,7 +4285,9 @@ impl Interpreter {
                 let Some(strukt) = self.structs.get(&ident.name).cloned() else {
                     return Err(format!("unknown struct '{}'", ident.name));
                 };
-                let substitutions = self.generic_type_substitutions(&strukt, args);
+                let namespace =
+                    Self::type_name_namespace(&ident.name).or(self.current_namespace.as_deref());
+                let substitutions = self.generic_type_substitutions(&strukt, args, namespace);
                 self.json_to_struct_value(json, &ident.name, &substitutions)
             }
             TypeExpr::Generic(ident, args, _) => match ident.name.as_str() {

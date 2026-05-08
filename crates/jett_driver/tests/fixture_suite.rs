@@ -207,6 +207,7 @@ run_pass_fixture!(
     run_pass_namespace_duplicate_leaf_types,
     "namespace_duplicate_leaf_types.jett"
 );
+run_pass_fixture!(run_pass_namespace_use_alias, "namespace_use_alias.jett");
 run_pass_fixture!(
     run_pass_handle_result_optional,
     "handle_result_optional.jett"
@@ -329,6 +330,10 @@ compile_fail_fixture!(
 compile_fail_fixture!(compile_fail_unhandled_optional, "unhandled_optional.jett");
 compile_fail_fixture!(compile_fail_trace_unknown, "trace_unknown.jett");
 compile_fail_fixture!(compile_fail_unknown_type, "unknown_type.jett");
+compile_fail_fixture!(
+    compile_fail_namespace_use_alias_unknown_target,
+    "namespace_use_alias_unknown_target.jett"
+);
 compile_fail_fixture!(compile_fail_duplicate_field, "duplicate_field.jett");
 compile_fail_fixture!(
     compile_fail_json_serialize_secret_struct_blocked,

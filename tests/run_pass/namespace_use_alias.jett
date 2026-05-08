@@ -1,0 +1,31 @@
+namespace models
+
+enum Color:
+    active
+    inactive
+
+struct User:
+    id: string
+    color: Color
+
+function make[T](value: T) returns T:
+    return value
+
+function color_name(color: Color) returns string:
+    if color == Color.active:
+        return "active"
+    return "inactive"
+
+namespace app
+
+function namespace_alias_summary() returns string:
+    use models as m
+    m.User user = m.User(id: "u1", color: m.Color.active)
+    string made = m.make[string]("ok")
+    string raw = json.serialize[m.User](view user)
+    m.User decoded = json.parse[m.User](raw) handle error:
+        return error
+    return "{m.color_name(decoded.color)}:{made}:{type.name[m.User]()}:{decoded.id}:{decoded.color == m.Color.active}"
+
+verify namespace_use_alias:
+    assert namespace_alias_summary() == "active:ok:models.User:u1:true"

@@ -1,0 +1,5 @@
+namespace app
+
+function bad_namespace_alias() returns string:
+    use missing as m
+    return m.make[string]("nope")

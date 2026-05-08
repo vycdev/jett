@@ -19,6 +19,8 @@ pub struct ResolveResult {
     pub scope_table: ScopeTable,
     /// Map from AST node spans to the `DefId` they resolved to.
     pub resolutions: HashMap<Span, DefId>,
+    /// Map from namespace import definitions to their fully qualified targets.
+    pub namespace_aliases: HashMap<DefId, String>,
     /// Diagnostics emitted during resolution.
     pub diagnostics: Vec<Diagnostic>,
 }
@@ -31,6 +33,7 @@ pub fn resolve(module: &Module) -> ResolveResult {
     ResolveResult {
         scope_table: resolver.scope_table,
         resolutions: resolver.resolutions,
+        namespace_aliases: resolver.namespace_aliases,
         diagnostics: resolver.sink.into_diagnostics(),
     }
 }
@@ -42,6 +45,7 @@ pub fn resolve(module: &Module) -> ResolveResult {
 struct Resolver {
     scope_table: ScopeTable,
     resolutions: HashMap<Span, DefId>,
+    namespace_aliases: HashMap<DefId, String>,
     sink: DiagnosticSink,
     /// The current scope during the walk.
     current_scope: ScopeId,
@@ -136,6 +140,7 @@ impl Resolver {
         Self {
             scope_table,
             resolutions: HashMap::new(),
+            namespace_aliases: HashMap::new(),
             sink: DiagnosticSink::new(),
             current_scope: root,
             current_namespace: None,
@@ -692,10 +697,35 @@ impl Resolver {
             last_segment(&u.path.name)
         };
 
+        let valid_namespace = self.use_target_is_namespace(&u.path.name);
+        if !valid_namespace {
+            self.sink
+                .emit(errors::undefined_name(&u.path.name, u.path.span));
+        }
+
         let def_id = self.declare_local_use(&bound_name, DefKind::Namespace, u.span);
         if let Some(id) = def_id {
             self.use_defs.insert(id);
+            if valid_namespace {
+                self.namespace_aliases.insert(id, u.path.name.clone());
+            }
         }
+    }
+
+    fn use_target_is_namespace(&self, path: &str) -> bool {
+        if is_builtin_module(path) {
+            return true;
+        }
+        if path
+            .split_once('.')
+            .is_some_and(|(prefix, _)| is_builtin_module(prefix))
+        {
+            return true;
+        }
+
+        self.scope_table
+            .lookup(self.current_scope, path)
+            .is_some_and(|def_id| self.scope_table.def(def_id).kind == DefKind::Namespace)
     }
 
     fn resolve_assert(&mut self, a: &AssertStmt, item_index: usize) {

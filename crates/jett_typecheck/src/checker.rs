@@ -498,8 +498,41 @@ impl<'a> TypeChecker<'a> {
             .unwrap_or_else(|| name.to_string())
     }
 
+    fn resolved_or_expanded_name(&self, name: &str, span: Span) -> String {
+        let Some((prefix, suffix)) = name.split_once('.') else {
+            return self.resolved_symbol_name(name, span);
+        };
+
+        let Some(def_id) = self
+            .resolve
+            .resolutions
+            .get(&span)
+            .copied()
+            .or_else(|| self.decl_defs.get(&span).copied())
+        else {
+            return name.to_string();
+        };
+
+        let def = self.resolve.scope_table.def(def_id);
+        if def.kind == DefKind::Namespace {
+            if def.name == prefix {
+                if let Some(target) = self.resolve.namespace_aliases.get(&def_id) {
+                    return format!("{target}.{suffix}");
+                }
+            }
+            return name.to_string();
+        }
+
+        def.name.clone()
+    }
+
+    fn expanded_dotted_expr_name(&self, expr: &Expr) -> Option<String> {
+        let name = Self::extract_dotted_name(expr)?;
+        Some(self.resolved_or_expanded_name(&name, expr.span()))
+    }
+
     fn is_struct_type_name_expr(&self, expr: &Expr) -> bool {
-        let Some(name) = Self::extract_dotted_name(expr) else {
+        let Some(name) = self.expanded_dotted_expr_name(expr) else {
             return false;
         };
         self.named_types
@@ -508,7 +541,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn is_bitfield_type_name_expr(&self, expr: &Expr) -> bool {
-        let Some(name) = Self::extract_dotted_name(expr) else {
+        let Some(name) = self.expanded_dotted_expr_name(expr) else {
             return false;
         };
         self.named_types
@@ -882,10 +915,7 @@ impl<'a> TypeChecker<'a> {
     fn resolved_expr_name(&self, expr: &Expr) -> Option<String> {
         match expr {
             Expr::Ident(ident) => Some(self.resolved_symbol_name(&ident.name, ident.span)),
-            Expr::FieldAccess(inner, field, _) => {
-                let prefix = Self::extract_dotted_name(inner)?;
-                Some(format!("{prefix}.{}", field.name))
-            }
+            Expr::FieldAccess(_, _, _) => self.expanded_dotted_expr_name(expr),
             _ => None,
         }
     }
@@ -896,7 +926,7 @@ impl<'a> TypeChecker<'a> {
         type_args: &[TypeExpr],
         span: Span,
     ) -> Option<(Vec<TypeId>, TypeId)> {
-        let name = Self::extract_dotted_name(callee)?;
+        let name = self.resolved_expr_name(callee)?;
         if let Some((type_name, method_name)) = name.rsplit_once('.') {
             if let Some(&type_id) = self.named_types.get(type_name) {
                 if matches!(self.interner.resolve(type_id), Type::Bitfield(_)) {
@@ -4647,6 +4677,7 @@ impl<'a> TypeChecker<'a> {
 
         if !matches!(base, Expr::Ident(_)) {
             if let Some(type_name) = Self::extract_dotted_name(base) {
+                let type_name = self.resolved_or_expanded_name(&type_name, span);
                 if let Some(type_id) = self.named_types.get(&type_name).copied() {
                     if matches!(self.interner.resolve(type_id), Type::Enum(_)) {
                         return self.check_enum_variant_by_type(type_id, field, &[], span);
@@ -5278,7 +5309,7 @@ impl<'a> TypeChecker<'a> {
         if let Some(&ty) = self.type_var_subst.get(name) {
             return ty;
         }
-        let lookup_name = self.resolved_symbol_name(name, span);
+        let lookup_name = self.resolved_or_expanded_name(name, span);
         match name {
             "int8" => TypeInterner::INT8,
             "int16" => TypeInterner::INT16,
@@ -5343,7 +5374,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn resolve_generic_type(&mut self, name: &str, args: &[TypeExpr], span: Span) -> TypeId {
-        let lookup_name = self.resolved_symbol_name(name, span);
+        let lookup_name = self.resolved_or_expanded_name(name, span);
         match name {
             "list" => {
                 if args.len() == 1 {
@@ -5775,6 +5806,7 @@ mod tests {
             ResolveResult {
                 scope_table: self.scope_table,
                 resolutions: self.resolutions,
+                namespace_aliases: HashMap::new(),
                 diagnostics: Vec::new(),
             }
         }

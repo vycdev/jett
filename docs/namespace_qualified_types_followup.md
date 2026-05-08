@@ -16,6 +16,9 @@ existing flat declaration model:
   interfaces, and actors.
 - The comptime interpreter registers both leaf and qualified runtime
   definitions, so reflection and JSON can use qualified type arguments.
+- Function-local namespace aliases from `use models as m` now expand qualified
+  references such as `m.User`, `m.make[T](...)`, and `m.Color.active` back to
+  the canonical `models.*` symbols. Reflection still reports canonical names.
 
 That was the right first bite because it unblocks stdlib-style reflection and
 JSON code without changing the language's broader namespace semantics.
@@ -26,8 +29,8 @@ JSON code without changing the language's broader namespace semantics.
   qualified names such as `a.User` and `b.User`.
 - Unqualified flat aliases remain a compatibility path and should not be treated
   as the final namespace model.
-- `use models as m` does not make `m.User` a type alias. The registered spelling
-  is still `models.User`.
+- `use models as m` is a local namespace alias, not a type alias. The registered
+  spelling and reflected metadata remain `models.User`.
 - Interfaces, implementations, actors, and state machines still have some
   leaf-name-oriented paths. Qualified struct, enum, bitfield, generic struct,
   reflection, and JSON paths are covered first because they are the JSON
@@ -85,33 +88,33 @@ Cons:
 - Needs a clear rule for local shorthand and `use`.
 - Existing tests and diagnostics that assume leaf names may need updates.
 
-### Option C: Qualified Canonical Symbols, No Import Aliases For Types
+### Option C: Qualified Canonical Symbols, Local Namespace Aliases
 
-Adopt Option B for canonical symbols, but require external type references to
-use the full namespace path. `use` can remain an expression/function convenience
-or be deferred.
+Adopt Option B for canonical symbols, while allowing function-local namespace
+aliases to shorten repeated references. Aliases expand back to canonical symbols
+before typechecking and runtime lookup.
 
 Pros:
 
 - Strong canonicality for LLM generation.
-- Avoids `m.User` versus `models.User` ambiguity.
+- Keeps reflection and diagnostics on canonical names.
 - Renames and searches remain straightforward.
 
 Cons:
 
-- More verbose external references.
-- Existing `use` semantics become asymmetrical unless documented carefully.
+- Introduces a second local spelling inside functions.
+- Requires alias expansion to stay local and explicit.
 
 ## Recommendation
 
 Prefer Option C if Jett wants namespaces to become real isolation boundaries.
-It matches the language's "one obvious spelling" philosophy better than alias
-heavy imports, and it keeps agent search behavior clean.
+Local aliases are acceptable as a function-scoped readability tool because they
+do not change canonical symbol names, reflection metadata, or public API
+identity.
 
-The next implementation step should not be more ad hoc aliasing. It should be a
-resolver-level change that stores fully qualified top-level symbols, defines
-when unqualified local names are in scope, and makes typechecker/interpreter
-metadata consume those canonical names.
+The next implementation step should be to keep replacing flat fallback paths
+with canonical qualified symbols, while treating alias expansion as a local
+front-end convenience.
 
 ## Suggested Next Tests
 
@@ -121,5 +124,5 @@ metadata consume those canonical names.
 - `type.fields[a.User]()` reports field metadata with owner `a.User`.
 - `json.parse[a.User]` and `json.serialize[a.User]` roundtrip only the intended
   type.
-- `use a as alias` with `alias.User` is either accepted intentionally or
-  rejected with a clear diagnostic.
+- Broader `use a as alias` coverage for bitfields, interfaces, actors, and
+  same-leaf functions.
