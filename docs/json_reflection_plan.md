@@ -49,9 +49,10 @@ secret omission, and valid JSON string escaping for control characters.
 There is also a `.jett` serializer prototype in
 `tests/run_pass/json_reflection_nested_serializer.jett`. It recursively handles
 primitives, structs, lists, `map[string, V]`, optionals, and result-ok/fail
-shapes using reflection primitives, trusted `comptime type` binding, and
-`type.arg[T](index)` for wrapper element/value types. It is a proof of language
-capability, not yet a stdlib replacement for the Rust-backed builtin.
+shapes, plus alias/refinement base serialization, using reflection primitives,
+trusted `comptime type` binding, and `type.arg[T](index)` for wrapper
+element/value types. It is a proof of language capability, not yet a stdlib
+replacement for the Rust-backed builtin.
 
 `json.parse[T](raw)` has a Rust-backed bridge: it requires one type argument,
 accepts a string, returns `result[T, string]`, and supports core primitives,

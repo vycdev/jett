@@ -1,8 +1,15 @@
 namespace test
 
+type Labels = list[string]
+type NonEmpty = string where string.char_count(value) > 0
+
 struct Profile:
     city: string
     visits: list[int64]
+
+struct AliasRefined:
+    labels: Labels
+    display: NonEmpty
 
 struct User:
     id: string serialize "userId"
@@ -35,6 +42,16 @@ function serialize_reflected[T](view value: T) returns string:
     if type_name == "bool":
         bool item = value
         return "{item}"
+
+    if kind == "alias":
+        comptime type Base = type.arg[T](0):
+            Base item = value
+            return serialize_reflected[Base](view item)
+
+    if kind == "refinement":
+        comptime type Base = type.arg[T](0):
+            Base item = coarsen value
+            return serialize_reflected[Base](view item)
 
     if kind == "list":
         comptime type Elem = type.arg[T](0):
@@ -81,6 +98,14 @@ function reflected_user_json() returns string:
     User user = User(id: "u1", active: true, profile: profile, tags: list("admin", "beta"), scores: map("wins": 3, "losses": 1), nickname: some("ally"), missing: none, outcome: ok(7), failed: fail("bad"), token: "secret-token")
     return serialize_reflected[User](view user)
 
+function reflected_alias_refinement_json() returns string:
+    Labels labels = list("core", "edge")
+    NonEmpty display = "ready" handle error:
+        return "invalid"
+    AliasRefined payload = AliasRefined(labels: labels, display: display) handle error:
+        return "invalid"
+    return serialize_reflected[AliasRefined](view payload)
+
 verify json_reflection_nested_serializer:
     string raw = reflected_user_json()
     assert string.contains(raw, "userId") == true
@@ -105,3 +130,9 @@ verify json_reflection_nested_serializer:
     assert string.contains(raw, "fail") == true
     assert string.contains(raw, "token") == false
     assert string.contains(raw, "secret-token") == false
+
+    string alias_raw = reflected_alias_refinement_json()
+    assert string.contains(alias_raw, "labels") == true
+    assert string.contains(alias_raw, "[\"core\",\"edge\"]") == true
+    assert string.contains(alias_raw, "display") == true
+    assert string.contains(alias_raw, "\"ready\"") == true
