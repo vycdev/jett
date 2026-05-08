@@ -124,6 +124,7 @@ impl<'a> OwnershipChecker<'a> {
                 | Type::String
                 | Type::Bool
                 | Type::Nothing
+                | Type::JsonValue
                 | Type::Error
         )
     }
@@ -604,6 +605,7 @@ impl<'a> OwnershipChecker<'a> {
                 "string" => TypeInterner::STRING,
                 "bool" => TypeInterner::BOOL,
                 "nothing" => TypeInterner::NOTHING,
+                "JsonValue" => TypeInterner::JSON_VALUE,
                 // Any other named type is a struct/enum — not copyable.
                 _ => TypeInterner::BYTES, // Use BYTES as a non-copyable stand-in
             },

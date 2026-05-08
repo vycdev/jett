@@ -2204,7 +2204,7 @@ impl Interpreter {
                 }
                 if matches!(
                     ident.name.as_str(),
-                    "int64" | "float64" | "string" | "bool" | "bytes" | "nothing"
+                    "int64" | "float64" | "string" | "bool" | "bytes" | "nothing" | "JsonValue"
                 ) {
                     "primitive"
                 } else if self.type_aliases.contains_key(&ident.name) {
@@ -3071,6 +3071,7 @@ impl Interpreter {
                         }
                     }
                     "bytes" => self.json_to_bytes_value(json),
+                    "JsonValue" => Ok(Value::Json(json.clone())),
                     name if self.structs.contains_key(name) => {
                         self.json_to_struct_value(json, name, &HashMap::new())
                     }
@@ -3453,6 +3454,7 @@ impl Interpreter {
             Value::String(s) => json_string(s),
             Value::Bool(b) => b.to_string(),
             Value::Nothing | Value::OptionalNone => "null".to_string(),
+            Value::Json(json) => json.to_string(),
             Value::OptionalSome(inner) => self.value_to_json_reflected(inner, public_only),
             Value::ResultOk(inner) => {
                 format!(
@@ -3616,6 +3618,146 @@ impl Interpreter {
             }
 
             // -- JSON operations ---------------------------------------------
+            "json.parse_raw" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::String(raw) => match serde_json::from_str::<JsonValue>(raw) {
+                        Ok(json) => Some(Ok(result_ok(Value::Json(json)))),
+                        Err(err) => Some(Ok(result_fail(err.to_string()))),
+                    },
+                    other => Some(Err(format!("json.parse_raw expects a string, got {other}"))),
+                }
+            }
+
+            "json.serialize_raw" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::Json(json) => Some(Ok(Value::String(json.to_string()))),
+                    other => Some(Err(format!(
+                        "json.serialize_raw expects JsonValue, got {other}"
+                    ))),
+                }
+            }
+
+            "json.kind" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::Json(json) => Some(Ok(Value::String(json_type_name(json).to_string()))),
+                    other => Some(Err(format!("json.kind expects JsonValue, got {other}"))),
+                }
+            }
+
+            "json.is_null" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::Json(json) => Some(Ok(Value::Bool(json.is_null()))),
+                    other => Some(Err(format!("json.is_null expects JsonValue, got {other}"))),
+                }
+            }
+
+            "json.field" => {
+                require_args!(name, 2, args);
+                match (&args[0], &args[1]) {
+                    (Value::Json(json), Value::String(key)) => {
+                        let value = json
+                            .as_object()
+                            .and_then(|object| object.get(key))
+                            .cloned()
+                            .map(|value| Value::OptionalSome(Box::new(Value::Json(value))))
+                            .unwrap_or(Value::OptionalNone);
+                        Some(Ok(value))
+                    }
+                    (Value::Json(_), other) => {
+                        Some(Err(format!("json.field expects a string key, got {other}")))
+                    }
+                    (other, _) => Some(Err(format!("json.field expects JsonValue, got {other}"))),
+                }
+            }
+
+            "json.index" => {
+                require_args!(name, 2, args);
+                match (&args[0], &args[1]) {
+                    (Value::Json(json), Value::Int64(index)) => {
+                        let value = if *index >= 0 {
+                            json.as_array()
+                                .and_then(|array| array.get(*index as usize))
+                                .cloned()
+                                .map(|value| Value::OptionalSome(Box::new(Value::Json(value))))
+                                .unwrap_or(Value::OptionalNone)
+                        } else {
+                            Value::OptionalNone
+                        };
+                        Some(Ok(value))
+                    }
+                    (Value::Json(_), other) => Some(Err(format!(
+                        "json.index expects an int64 index, got {other}"
+                    ))),
+                    (other, _) => Some(Err(format!("json.index expects JsonValue, got {other}"))),
+                }
+            }
+
+            "json.array_length" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::Json(json) => match json.as_array() {
+                        Some(array) => Some(Ok(result_ok(Value::Int64(array.len() as i64)))),
+                        None => Some(Ok(result_fail(format!(
+                            "expected array, got {}",
+                            json_type_name(json)
+                        )))),
+                    },
+                    other => Some(Err(format!(
+                        "json.array_length expects JsonValue, got {other}"
+                    ))),
+                }
+            }
+
+            "json.object_keys" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::Json(json) => match json.as_object() {
+                        Some(object) => Some(Ok(result_ok(Value::List(
+                            object.keys().cloned().map(Value::String).collect(),
+                        )))),
+                        None => Some(Ok(result_fail(format!(
+                            "expected object, got {}",
+                            json_type_name(json)
+                        )))),
+                    },
+                    other => Some(Err(format!(
+                        "json.object_keys expects JsonValue, got {other}"
+                    ))),
+                }
+            }
+
+            "json.as_string" => {
+                require_args!(name, 1, args);
+                Some(json_cast_result(&args[0], "string", |json| {
+                    json.as_str().map(|value| Value::String(value.to_string()))
+                }))
+            }
+
+            "json.as_int64" => {
+                require_args!(name, 1, args);
+                Some(json_cast_result(&args[0], "int64", |json| {
+                    json.as_i64().map(Value::Int64)
+                }))
+            }
+
+            "json.as_float64" => {
+                require_args!(name, 1, args);
+                Some(json_cast_result(&args[0], "float64", |json| {
+                    json.as_f64().map(Value::Float64)
+                }))
+            }
+
+            "json.as_bool" => {
+                require_args!(name, 1, args);
+                Some(json_cast_result(&args[0], "bool", |json| {
+                    json.as_bool().map(Value::Bool)
+                }))
+            }
+
             "json.serialize" | "json.serialize_public" => {
                 require_args!(name, 1, args);
                 Some(Ok(Value::String(self.value_to_json_reflected(
@@ -6957,6 +7099,31 @@ fn json_type_name(value: &JsonValue) -> &'static str {
     }
 }
 
+fn result_ok(value: Value) -> Value {
+    Value::ResultOk(Box::new(value))
+}
+
+fn result_fail(message: String) -> Value {
+    Value::ResultFail(Box::new(Value::String(message)))
+}
+
+fn json_cast_result<F>(value: &Value, expected: &str, cast: F) -> Result<Value, String>
+where
+    F: FnOnce(&JsonValue) -> Option<Value>,
+{
+    let Value::Json(json) = value else {
+        return Err(format!("json.as_{expected} expects JsonValue, got {value}"));
+    };
+
+    match cast(json) {
+        Some(value) => Ok(result_ok(value)),
+        None => Ok(result_fail(format!(
+            "expected {expected}, got {}",
+            json_type_name(json)
+        ))),
+    }
+}
+
 fn json_string(s: &str) -> String {
     let mut escaped = String::with_capacity(s.len());
     for ch in s.chars() {
@@ -7005,6 +7172,7 @@ fn runtime_type_name(value: &Value) -> Option<String> {
         Value::ResultOk(_) | Value::ResultFail(_) => Some("result".to_string()),
         Value::OptionalSome(_) | Value::OptionalNone => Some("optional".to_string()),
         Value::Nothing => Some("nothing".to_string()),
+        Value::Json(_) => Some("JsonValue".to_string()),
         Value::Struct { type_name, .. }
         | Value::Enum { type_name, .. }
         | Value::Machine { type_name, .. } => Some(type_name.clone()),

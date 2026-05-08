@@ -46,27 +46,29 @@ impl TypeInterner {
     pub const BYTES: TypeId = TypeId(12);
     pub const NOTHING: TypeId = TypeId(13);
     pub const ERROR: TypeId = TypeId(14);
+    pub const JSON_VALUE: TypeId = TypeId(15);
 }
 
 impl TypeInterner {
     /// Creates a new interner with all primitive types pre-registered.
     pub fn new() -> Self {
         let primitives = vec![
-            Type::Int8,    // 0
-            Type::Int16,   // 1
-            Type::Int32,   // 2
-            Type::Int64,   // 3
-            Type::Uint8,   // 4
-            Type::Uint16,  // 5
-            Type::Uint32,  // 6
-            Type::Uint64,  // 7
-            Type::Float32, // 8
-            Type::Float64, // 9
-            Type::String,  // 10
-            Type::Bool,    // 11
-            Type::Bytes,   // 12
-            Type::Nothing, // 13
-            Type::Error,   // 14
+            Type::Int8,      // 0
+            Type::Int16,     // 1
+            Type::Int32,     // 2
+            Type::Int64,     // 3
+            Type::Uint8,     // 4
+            Type::Uint16,    // 5
+            Type::Uint32,    // 6
+            Type::Uint64,    // 7
+            Type::Float32,   // 8
+            Type::Float64,   // 9
+            Type::String,    // 10
+            Type::Bool,      // 11
+            Type::Bytes,     // 12
+            Type::Nothing,   // 13
+            Type::Error,     // 14
+            Type::JsonValue, // 15
         ];
 
         let mut map = HashMap::with_capacity(primitives.len());
@@ -216,6 +218,7 @@ impl TypeInterner {
             Type::Bool => "bool".to_string(),
             Type::Bytes => "bytes".to_string(),
             Type::Nothing => "nothing".to_string(),
+            Type::JsonValue => "JsonValue".to_string(),
             Type::List(inner) => format!("list[{}]", self.type_name(*inner)),
             Type::Map(k, v) => format!("map[{}, {}]", self.type_name(*k), self.type_name(*v)),
             Type::Set(inner) => format!("set[{}]", self.type_name(*inner)),
@@ -287,6 +290,7 @@ mod tests {
         assert_eq!(*interner.resolve(TypeInterner::BYTES), Type::Bytes);
         assert_eq!(*interner.resolve(TypeInterner::NOTHING), Type::Nothing);
         assert_eq!(*interner.resolve(TypeInterner::ERROR), Type::Error);
+        assert_eq!(*interner.resolve(TypeInterner::JSON_VALUE), Type::JsonValue);
     }
 
     // -- Basic interning ------------------------------------------------------
@@ -521,8 +525,9 @@ mod tests {
     #[test]
     fn interner_len_includes_primitives() {
         let interner = TypeInterner::new();
-        // 15 primitives: int8..uint64 (8) + float32/64 (2) + string, bool, bytes, nothing, error (5)
-        assert_eq!(interner.len(), 15);
+        // 16 built-in leaves: int8..uint64 (8) + float32/64 (2) +
+        // string, bool, bytes, nothing, error, JsonValue (6)
+        assert_eq!(interner.len(), 16);
     }
 
     #[test]

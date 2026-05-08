@@ -71,6 +71,12 @@ aliases, and refinement validation, including refinements over generic shapes
 such as `list[string]`. The long-term goal is still to replace this bridge with
 stdlib code plus a general construction primitive.
 
+`json.parse_raw(raw)` now exposes an opaque `JsonValue` tree with explicit
+accessors for kind checks, object fields, array indexes, scalar casts, object
+keys, array length, null checks, and compact raw serialization. This gives a
+future `.jett` decoder a safe raw input representation without adding an
+unchecked `any` lane. See `docs/json_raw_value_design.md`.
+
 ## Design Pressure
 
 A real `stdlib/json.jett` serializer needs more than field metadata. It needs a

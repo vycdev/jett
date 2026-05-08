@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 use jett_parser::ast::{Block, Param};
+use serde_json::Value as JsonValue;
 
 /// Runtime value for the compile-time interpreter.
 #[derive(Debug, Clone)]
@@ -28,6 +29,8 @@ pub enum Value {
     OptionalNone,
     /// The `nothing` value (Jett's unit type).
     Nothing,
+    /// An opaque parsed JSON tree.
+    Json(JsonValue),
     /// A user-defined struct instance: `Point(x: 1, y: 2)`.
     Struct {
         type_name: String,
@@ -77,6 +80,7 @@ impl PartialEq for Value {
             (Value::OptionalSome(a), Value::OptionalSome(b)) => a == b,
             (Value::OptionalNone, Value::OptionalNone) => true,
             (Value::Nothing, Value::Nothing) => true,
+            (Value::Json(a), Value::Json(b)) => a == b,
             (
                 Value::Struct {
                     type_name: t1,
@@ -155,6 +159,7 @@ impl fmt::Display for Value {
             Value::OptionalSome(value) => write!(f, "some({value})"),
             Value::OptionalNone => write!(f, "none"),
             Value::Nothing => write!(f, "nothing"),
+            Value::Json(json) => write!(f, "{json}"),
             Value::Struct { type_name, fields } => {
                 write!(f, "{type_name}(")?;
                 for (i, (name, value)) in fields.iter().enumerate() {

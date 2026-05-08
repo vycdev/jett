@@ -37,6 +37,7 @@ pub enum Type {
     Bool,
     Bytes,
     Nothing,
+    JsonValue,
 
     // -- Generic built-in types ----------------------------------------------
     /// `list[T]`

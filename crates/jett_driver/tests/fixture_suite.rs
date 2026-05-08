@@ -215,6 +215,7 @@ run_pass_fixture!(
     "json_serialize_public_omits_secret_fields.jett"
 );
 run_pass_fixture!(run_pass_json_parse, "json_parse.jett");
+run_pass_fixture!(run_pass_json_parse_raw, "json_parse_raw.jett");
 run_pass_fixture!(run_pass_json_roundtrip_user, "json_roundtrip_user.jett");
 run_pass_fixture!(
     run_pass_json_parse_refinement_valid,
@@ -311,6 +312,10 @@ compile_fail_fixture!(
 compile_fail_fixture!(
     compile_fail_json_parse_requires_handle,
     "json_parse_requires_handle.jett"
+);
+compile_fail_fixture!(
+    compile_fail_json_parse_raw_requires_handle,
+    "json_parse_raw_requires_handle.jett"
 );
 compile_fail_fixture!(
     compile_fail_serialize_annotation_requires_string,

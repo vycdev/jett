@@ -259,6 +259,7 @@ impl<'a> TypeChecker<'a> {
             Type::Bool => "bool".to_string(),
             Type::Bytes => "bytes".to_string(),
             Type::Nothing => "nothing".to_string(),
+            Type::JsonValue => "JsonValue".to_string(),
             Type::List(inner) => format!("list[{}]", self.type_name(*inner)),
             Type::Map(k, v) => format!("map[{}, {}]", self.type_name(*k), self.type_name(*v)),
             Type::Set(inner) => format!("set[{}]", self.type_name(*inner)),
@@ -352,6 +353,7 @@ impl<'a> TypeChecker<'a> {
             | Type::String
             | Type::Bool
             | Type::Nothing
+            | Type::JsonValue
             | Type::Error => false,
             Type::Refinement { base, .. } => self.json_read_requires_view(*base),
             _ => true,
@@ -466,6 +468,7 @@ impl<'a> TypeChecker<'a> {
             "Stdout.write"
                 | "json.serialize"
                 | "json.serialize_public"
+                | "json.serialize_raw"
                 | "Filesystem.write_file"
                 | "log"
                 | "http.respond"
@@ -801,6 +804,58 @@ impl<'a> TypeChecker<'a> {
                     .intern(Type::Result(value_ty, TypeInterner::STRING));
                 Some((vec![TypeInterner::STRING], result_ty))
             }
+            "json.parse_raw" => Some((
+                vec![TypeInterner::STRING],
+                self.interner
+                    .intern(Type::Result(TypeInterner::JSON_VALUE, TypeInterner::STRING)),
+            )),
+            "json.serialize_raw" | "json.kind" => {
+                Some((vec![TypeInterner::JSON_VALUE], TypeInterner::STRING))
+            }
+            "json.is_null" => Some((vec![TypeInterner::JSON_VALUE], TypeInterner::BOOL)),
+            "json.field" => Some((
+                vec![TypeInterner::JSON_VALUE, TypeInterner::STRING],
+                self.interner
+                    .intern(Type::Optional(TypeInterner::JSON_VALUE)),
+            )),
+            "json.index" => Some((
+                vec![TypeInterner::JSON_VALUE, TypeInterner::INT64],
+                self.interner
+                    .intern(Type::Optional(TypeInterner::JSON_VALUE)),
+            )),
+            "json.array_length" => Some((
+                vec![TypeInterner::JSON_VALUE],
+                self.interner
+                    .intern(Type::Result(TypeInterner::INT64, TypeInterner::STRING)),
+            )),
+            "json.object_keys" => {
+                let list_string = self.interner.intern(Type::List(TypeInterner::STRING));
+                Some((
+                    vec![TypeInterner::JSON_VALUE],
+                    self.interner
+                        .intern(Type::Result(list_string, TypeInterner::STRING)),
+                ))
+            }
+            "json.as_string" => Some((
+                vec![TypeInterner::JSON_VALUE],
+                self.interner
+                    .intern(Type::Result(TypeInterner::STRING, TypeInterner::STRING)),
+            )),
+            "json.as_int64" => Some((
+                vec![TypeInterner::JSON_VALUE],
+                self.interner
+                    .intern(Type::Result(TypeInterner::INT64, TypeInterner::STRING)),
+            )),
+            "json.as_float64" => Some((
+                vec![TypeInterner::JSON_VALUE],
+                self.interner
+                    .intern(Type::Result(TypeInterner::FLOAT64, TypeInterner::STRING)),
+            )),
+            "json.as_bool" => Some((
+                vec![TypeInterner::JSON_VALUE],
+                self.interner
+                    .intern(Type::Result(TypeInterner::BOOL, TypeInterner::STRING)),
+            )),
             "json.serialize" | "json.serialize_public" => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
@@ -4636,6 +4691,7 @@ impl<'a> TypeChecker<'a> {
             "bool" => TypeInterner::BOOL,
             "bytes" => TypeInterner::BYTES,
             "nothing" => TypeInterner::NOTHING,
+            "JsonValue" => TypeInterner::JSON_VALUE,
             _ if self.named_types.contains_key(name) => self.named_types[name],
             _ if self.type_aliases.contains_key(name) => self.resolve_type_alias(name, span),
             // Capability types are recognised but opaque — no further type
