@@ -47,7 +47,8 @@ verify json_null_test:
     assert json_null_test() == "null"
 
 function json_list_test() returns string:
-    return json.serialize[list[int64]](list(1, 2, 3))
+    list[int64] values = list(1, 2, 3)
+    return json.serialize[list[int64]](view values)
 
 verify json_list_test:
     assert json_list_test() == "[1,2,3]"

@@ -3,4 +3,4 @@ namespace test
 
 function bad_json_map_key() returns string:
     map[int64, string] values = map(1: "one")
-    return json.serialize[map[int64, string]](values)
+    return json.serialize[map[int64, string]](view values)

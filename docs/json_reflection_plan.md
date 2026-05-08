@@ -114,16 +114,14 @@ json.serialize[User](view user)
 ```
 
 The builtin checker now requires `view` for non-copy compound values passed to
-`json.serialize_public[T]`, while copy primitive conveniences remain allowed.
-`json.serialize[T]` still accepts owned arguments in some tests. Tightening the
-remaining surface should be done deliberately:
+`json.serialize[T]` and `json.serialize_public[T]`, while copy primitive
+conveniences remain allowed.
 
 - allow literals and copy primitives without explicit `view`, or
 - require `view` uniformly and update tests/docs together.
 
-Recommendation: keep the `json.serialize_public[T]` rule, then decide whether
-`json.serialize[T]` should follow the same non-copy compound rule or require
-`view` uniformly.
+Remaining decision: whether to keep copy primitives ergonomic or require `view`
+uniformly for every JSON serialization call.
 
 ### 5. Bitfield-Specific Metadata
 

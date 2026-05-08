@@ -3536,13 +3536,16 @@ impl<'a> TypeChecker<'a> {
             }
         }
 
-        if matches!(callee_name.as_deref(), Some("json.serialize_public"))
-            && !checked_arg_types.is_empty()
+        if matches!(
+            callee_name.as_deref(),
+            Some("json.serialize" | "json.serialize_public")
+        ) && !checked_arg_types.is_empty()
             && !matches!(&args[0].value, Expr::View(_, _))
         {
             let value_ty = checked_arg_types[0];
             if self.json_read_requires_view(value_ty) {
-                self.sink.emit(errors::json_serialize_public_requires_view(
+                self.sink.emit(errors::json_serialize_requires_view(
+                    callee_name.as_deref().unwrap_or("json.serialize"),
                     &self.type_name(value_ty),
                     args[0].value.span(),
                 ));

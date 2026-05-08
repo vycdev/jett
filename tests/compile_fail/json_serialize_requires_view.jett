@@ -1,0 +1,10 @@
+# ERROR: E0344
+namespace test
+
+struct User:
+    id: string
+    name: string
+
+function main() returns string:
+    User user = User(id: "123", name: "alice")
+    return json.serialize[User](user)
