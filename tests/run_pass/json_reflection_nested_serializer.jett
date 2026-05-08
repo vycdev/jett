@@ -11,6 +11,10 @@ enum Shape:
     circle(radius: float64)
     rect(width: float64, height: float64)
 
+bitfield Packet:
+    version: 4 bits
+    direction: 8 bits as Direction
+
 struct Profile:
     city: string
     visits: list[int64]
@@ -139,6 +143,10 @@ function reflected_enum_json() returns string:
     EnumPayload payload = EnumPayload(direction: Direction.north, shape: Shape.circle(2.5))
     return serialize_reflected[EnumPayload](view payload)
 
+function reflected_bitfield_json() returns string:
+    Packet packet = Packet(version: 4, direction: Direction.south)
+    return serialize_reflected[Packet](view packet)
+
 verify json_reflection_nested_serializer:
     string raw = reflected_user_json()
     assert string.contains(raw, "userId") == true
@@ -176,3 +184,9 @@ verify json_reflection_nested_serializer:
     assert string.contains(enum_raw, "shape") == true
     assert string.contains(enum_raw, "circle") == true
     assert string.contains(enum_raw, "[2.5]") == true
+
+    string bitfield_raw = reflected_bitfield_json()
+    assert string.contains(bitfield_raw, "version") == true
+    assert string.contains(bitfield_raw, "4") == true
+    assert string.contains(bitfield_raw, "direction") == true
+    assert string.contains(bitfield_raw, "\"south\"") == true
