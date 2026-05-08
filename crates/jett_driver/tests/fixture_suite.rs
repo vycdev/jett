@@ -204,6 +204,10 @@ run_pass_fixture!(
     run_pass_type_construction_builder,
     "type_construction_builder.jett"
 );
+run_pass_fixture!(
+    run_pass_type_construction_bitfield,
+    "type_construction_bitfield.jett"
+);
 run_pass_fixture!(run_pass_actor_counter, "actor_counter.jett");
 run_pass_fixture!(
     run_pass_structured_concurrency,

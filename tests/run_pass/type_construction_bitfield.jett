@@ -1,0 +1,44 @@
+namespace test
+
+enum IpProtocol:
+    icmp = 1
+    tcp = 6
+    udp = 17
+
+bitfield network Header:
+    version: 4 bits
+    header_length: 4 bits
+    protocol: 8 bits as IpProtocol
+
+function clone_header_by_reflection() returns bool:
+    Header source = Header(version: 4, header_length: 5, protocol: IpProtocol.tcp)
+    mutable TypeConstruction builder = type.construct_start[Header]()
+    for field in type.fields[Header]():
+        comptime type Field = field.type_info:
+            Field value = type.field_value[Header, Field](view source, view field)
+            builder = type.construct_put[Header, Field](builder, view field, value) handle error:
+                return false
+    Header built = type.construct_finish[Header](builder) handle error:
+        return false
+    return built.version == 4 and built.header_length == 5 and built.protocol == IpProtocol.tcp
+
+function bitfield_width_message() returns string:
+    Header source = Header(version: 4, header_length: 5, protocol: IpProtocol.tcp)
+    mutable TypeConstruction builder = type.construct_start[Header]()
+    TypeField version = list.get[TypeField](type.fields[Header](), 0) handle:
+        return "missing version"
+    builder = type.construct_put[Header, int64](builder, view version, 16) handle error:
+        return error
+    for field in type.fields[Header]():
+        if field.name != "version":
+            comptime type Field = field.type_info:
+                Field value = type.field_value[Header, Field](view source, view field)
+                builder = type.construct_put[Header, Field](builder, view field, value) handle error:
+                    return error
+    Header built = type.construct_finish[Header](builder) handle error:
+        return error
+    return "{built.version}"
+
+verify type_construction_bitfield:
+    assert clone_header_by_reflection() == true
+    assert string.contains(bitfield_width_message(), "4 bit(s) wide") == true

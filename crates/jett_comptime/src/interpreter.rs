@@ -3020,9 +3020,10 @@ impl Interpreter {
                 type_name, expected_owner
             )));
         }
-        if self.type_expr_kind(owner_ty) != "struct" {
+        let owner_kind = self.type_expr_kind(owner_ty);
+        if !matches!(owner_kind, "struct" | "bitfield") {
             return Ok(result_fail(format!(
-                "type.construct_put supports only structs, got '{}'",
+                "type.construct_put supports only structs and bitfields, got '{}'",
                 type_expr_display(owner_ty)
             )));
         }
@@ -3099,11 +3100,16 @@ impl Interpreter {
                 type_name, expected_owner
             )));
         }
-        if self.type_expr_kind(owner_ty) != "struct" {
+        let owner_kind = self.type_expr_kind(owner_ty);
+        if !matches!(owner_kind, "struct" | "bitfield") {
             return Ok(result_fail(format!(
-                "type.construct_finish supports only structs, got '{}'",
+                "type.construct_finish supports only structs and bitfields, got '{}'",
                 type_expr_display(owner_ty)
             )));
+        }
+
+        if owner_kind == "bitfield" {
+            return self.reflected_construct_finish_bitfield(owner_ty, fields, &expected_owner);
         }
 
         let reflected_fields = self.type_expr_fields(owner_ty);
@@ -3129,6 +3135,54 @@ impl Interpreter {
         Ok(result_ok(Value::Struct {
             type_name: type_expr_name(owner_ty),
             fields: struct_fields,
+        }))
+    }
+
+    fn reflected_construct_finish_bitfield(
+        &self,
+        owner_ty: &TypeExpr,
+        fields: &[(usize, String, String, Value)],
+        expected_owner: &str,
+    ) -> Result<Value, String> {
+        let bitfield_name = type_expr_name(owner_ty);
+        let bitfield =
+            self.bitfields.get(&bitfield_name).cloned().ok_or_else(|| {
+                format!("type.construct_finish: unknown bitfield '{bitfield_name}'")
+            })?;
+        let reflected_fields = self.type_expr_fields(owner_ty);
+        let mut bitfield_fields = Vec::with_capacity(reflected_fields.len());
+
+        for (index, field) in reflected_fields.iter().enumerate() {
+            let Some((_, _, _, value)) = fields
+                .iter()
+                .find(|(field_index, _, _, _)| *field_index == index)
+            else {
+                return Ok(result_fail(format!(
+                    "type.construct_finish: '{}' is missing required field '{}'",
+                    expected_owner, field.name
+                )));
+            };
+
+            if let Some(field_def) = bitfield.fields.get(index) {
+                if let BitfieldFieldKind::Bits { width, as_type } = &field_def.kind {
+                    if let Err(message) = self.bitfield_field_numeric_value(
+                        &bitfield,
+                        &field_def.name.name,
+                        *width,
+                        as_type.as_ref(),
+                        value,
+                    ) {
+                        return Ok(result_fail(message));
+                    }
+                }
+            }
+
+            bitfield_fields.push((field.name.clone(), value.clone()));
+        }
+
+        Ok(result_ok(Value::Struct {
+            type_name: bitfield_name,
+            fields: bitfield_fields,
         }))
     }
 

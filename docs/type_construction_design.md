@@ -15,8 +15,8 @@ value = type.field_value[T, Field](view item, view field)
 
 Deserialization needs the reverse operation: given checked field values, build a
 `T` while preserving the exact same rules as ordinary source constructors. The
-first struct-only form now exists as the opaque `TypeConstruction` builder; the
-broader bitfield, enum, and final syntax story is still open.
+first form now exists as the opaque `TypeConstruction` builder for structs and
+bitfields; enum construction and the final syntax story are still open.
 
 The missing operation is not JSON-specific. JSON happens to be the current
 pressure point, but the same primitive should serve:
@@ -135,8 +135,8 @@ Verdict: preferred direction, pending syntax.
    `docs/reflected_construction_staging.md`, with `construct_put` returning
    `result[TypeConstruction, string]` and `construct_finish` returning
    `result[T, string]`.
-3. Extend construction to bitfields using `type.bitfield_layout[T]()` for width,
-   enum, payload, and byte-order facts.
+3. Done for bitfields: reuse reflected `TypeField` values and validate bit
+   widths on `construct_finish`.
 4. Add enum variant construction only after variant payload typing has the same
    trusted metadata story.
 5. Replace pieces of Rust-backed `json.parse[T]` with `.jett` code as each

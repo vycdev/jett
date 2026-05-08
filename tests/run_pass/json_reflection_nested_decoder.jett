@@ -7,10 +7,15 @@ struct Profile:
     city: string
     visits: list[int64]
 
+bitfield Header:
+    version: 4 bits
+    header_length: 4 bits
+
 struct User:
     id: string serialize "userId"
     active: bool
     profile: Profile
+    header: Header
     tags: list[string]
     nickname: optional[string]
     missing: optional[string]
@@ -113,7 +118,7 @@ function decode_reflected[T](raw: JsonValue) returns result[T, string]:
                 return fail("ok: {error}")
             return ok(ok(item))
 
-    if kind == "struct":
+    if kind == "struct" or kind == "bitfield":
         mutable TypeConstruction builder = type.construct_start[T]()
         for field in type.fields[T]():
             comptime type Field = field.type_info:
@@ -128,7 +133,7 @@ function decode_reflected[T](raw: JsonValue) returns result[T, string]:
     return fail("unsupported reflected JSON type: {type_name}")
 
 function decoded_nested_summary() returns string:
-    JsonValue root = json.parse_raw("{{\"userId\":\"u1\",\"active\":true,\"profile\":{{\"city\":\"Cluj\",\"visits\":[3,5]}},\"tags\":[\"admin\",\"beta\"],\"nickname\":\"ally\",\"missing\":null,\"scores\":{{\"wins\":3,\"losses\":1}},\"lucky\":[11,13],\"display\":\"ready\",\"outcome\":{{\"ok\":7}},\"failed\":{{\"fail\":\"bad\"}}}}") handle error:
+    JsonValue root = json.parse_raw("{{\"userId\":\"u1\",\"active\":true,\"profile\":{{\"city\":\"Cluj\",\"visits\":[3,5]}},\"header\":{{\"version\":4,\"header_length\":5}},\"tags\":[\"admin\",\"beta\"],\"nickname\":\"ally\",\"missing\":null,\"scores\":{{\"wins\":3,\"losses\":1}},\"lucky\":[11,13],\"display\":\"ready\",\"outcome\":{{\"ok\":7}},\"failed\":{{\"fail\":\"bad\"}}}}") handle error:
         return error
     User user = decode_reflected[User](root) handle error:
         return error
@@ -142,10 +147,10 @@ function decoded_nested_summary() returns string:
     bool lucky = set.contains[int64](user.lucky, 13)
     int64 outcome = user.outcome handle error:
         default -1
-    return "{user.id}:{user.profile.city}:{list.length[int64](user.profile.visits)}:{list.length[string](user.tags)}:{nick}:{missing}:{wins}:{lucky_count}:{lucky}:{coarsen user.display}:{outcome}:{user.active}"
+    return "{user.id}:{user.profile.city}:{user.header.version}:{user.header.header_length}:{list.length[int64](user.profile.visits)}:{list.length[string](user.tags)}:{nick}:{missing}:{wins}:{lucky_count}:{lucky}:{coarsen user.display}:{outcome}:{user.active}"
 
 function decoded_result_failure() returns string:
-    JsonValue root = json.parse_raw("{{\"userId\":\"u1\",\"active\":true,\"profile\":{{\"city\":\"Cluj\",\"visits\":[3]}},\"tags\":[],\"nickname\":null,\"missing\":null,\"scores\":{{\"wins\":3}},\"lucky\":[13],\"display\":\"ready\",\"outcome\":{{\"ok\":7}},\"failed\":{{\"fail\":\"bad\"}}}}") handle error:
+    JsonValue root = json.parse_raw("{{\"userId\":\"u1\",\"active\":true,\"profile\":{{\"city\":\"Cluj\",\"visits\":[3]}},\"header\":{{\"version\":4,\"header_length\":5}},\"tags\":[],\"nickname\":null,\"missing\":null,\"scores\":{{\"wins\":3}},\"lucky\":[13],\"display\":\"ready\",\"outcome\":{{\"ok\":7}},\"failed\":{{\"fail\":\"bad\"}}}}") handle error:
         return error
     User user = decode_reflected[User](root) handle error:
         return error
@@ -154,29 +159,37 @@ function decoded_result_failure() returns string:
     return "{ignored}"
 
 function invalid_refinement_message() returns string:
-    JsonValue root = json.parse_raw("{{\"userId\":\"u1\",\"active\":true,\"profile\":{{\"city\":\"Cluj\",\"visits\":[3]}},\"tags\":[],\"nickname\":null,\"missing\":null,\"scores\":{{\"wins\":3}},\"lucky\":[13],\"display\":\"\",\"outcome\":{{\"ok\":7}},\"failed\":{{\"fail\":\"bad\"}}}}") handle error:
+    JsonValue root = json.parse_raw("{{\"userId\":\"u1\",\"active\":true,\"profile\":{{\"city\":\"Cluj\",\"visits\":[3]}},\"header\":{{\"version\":4,\"header_length\":5}},\"tags\":[],\"nickname\":null,\"missing\":null,\"scores\":{{\"wins\":3}},\"lucky\":[13],\"display\":\"\",\"outcome\":{{\"ok\":7}},\"failed\":{{\"fail\":\"bad\"}}}}") handle error:
         return error
     User user = decode_reflected[User](root) handle error:
         return error
     return user.id
 
 function missing_nested_message() returns string:
-    JsonValue root = json.parse_raw("{{\"userId\":\"u1\",\"active\":true,\"profile\":{{\"visits\":[3]}},\"tags\":[],\"nickname\":null,\"missing\":null,\"scores\":{{\"wins\":3}},\"lucky\":[13],\"display\":\"ready\",\"outcome\":{{\"ok\":7}},\"failed\":{{\"fail\":\"bad\"}}}}") handle error:
+    JsonValue root = json.parse_raw("{{\"userId\":\"u1\",\"active\":true,\"profile\":{{\"visits\":[3]}},\"header\":{{\"version\":4,\"header_length\":5}},\"tags\":[],\"nickname\":null,\"missing\":null,\"scores\":{{\"wins\":3}},\"lucky\":[13],\"display\":\"ready\",\"outcome\":{{\"ok\":7}},\"failed\":{{\"fail\":\"bad\"}}}}") handle error:
         return error
     User user = decode_reflected[User](root) handle error:
         return error
     return user.id
 
 function wrong_list_item_message() returns string:
-    JsonValue root = json.parse_raw("{{\"userId\":\"u1\",\"active\":true,\"profile\":{{\"city\":\"Cluj\",\"visits\":[3]}},\"tags\":[1],\"nickname\":null,\"missing\":null,\"scores\":{{\"wins\":3}},\"lucky\":[13],\"display\":\"ready\",\"outcome\":{{\"ok\":7}},\"failed\":{{\"fail\":\"bad\"}}}}") handle error:
+    JsonValue root = json.parse_raw("{{\"userId\":\"u1\",\"active\":true,\"profile\":{{\"city\":\"Cluj\",\"visits\":[3]}},\"header\":{{\"version\":4,\"header_length\":5}},\"tags\":[1],\"nickname\":null,\"missing\":null,\"scores\":{{\"wins\":3}},\"lucky\":[13],\"display\":\"ready\",\"outcome\":{{\"ok\":7}},\"failed\":{{\"fail\":\"bad\"}}}}") handle error:
         return error
     User user = decode_reflected[User](root) handle error:
         return error
     return user.id
 
+function invalid_bitfield_message() returns string:
+    JsonValue root = json.parse_raw("{{\"userId\":\"u1\",\"active\":true,\"profile\":{{\"city\":\"Cluj\",\"visits\":[3]}},\"header\":{{\"version\":16,\"header_length\":5}},\"tags\":[],\"nickname\":null,\"missing\":null,\"scores\":{{\"wins\":3}},\"lucky\":[13],\"display\":\"ready\",\"outcome\":{{\"ok\":7}},\"failed\":{{\"fail\":\"bad\"}}}}") handle error:
+        return error
+    User user = decode_reflected[User](root) handle error:
+        return error
+    return "{user.header.version}"
+
 verify json_reflection_nested_decoder:
-    assert decoded_nested_summary() == "u1:Cluj:2:2:ally:none:3:2:true:ready:7:true"
+    assert decoded_nested_summary() == "u1:Cluj:4:5:2:2:ally:none:3:2:true:ready:7:true"
     assert decoded_result_failure() == "bad"
     assert string.contains(invalid_refinement_message(), "refinement type constraint failed") == true
     assert missing_nested_message() == "profile: missing field 'city'"
     assert string.contains(wrong_list_item_message(), "tags: 0: expected string") == true
+    assert string.contains(invalid_bitfield_message(), "header: bitfield 'Header' field 'version'") == true

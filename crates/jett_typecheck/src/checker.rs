@@ -983,10 +983,13 @@ impl<'a> TypeChecker<'a> {
                     return Some((vec![], TypeInterner::ERROR));
                 }
                 let target_ty = self.resolve_type_expr(&type_args[0]);
-                if !matches!(self.interner.resolve(target_ty), Type::Struct(_)) {
+                if !matches!(
+                    self.interner.resolve(target_ty),
+                    Type::Struct(_) | Type::Bitfield(_)
+                ) {
                     self.sink.emit(errors::unknown_type(
                         &format!(
-                            "{name} supports only structs, got {}",
+                            "{name} supports only structs and bitfields, got {}",
                             self.type_name(target_ty)
                         ),
                         span,
@@ -1016,10 +1019,13 @@ impl<'a> TypeChecker<'a> {
                     ));
                 }
                 let target_ty = self.resolve_type_expr(&type_args[0]);
-                if !matches!(self.interner.resolve(target_ty), Type::Struct(_)) {
+                if !matches!(
+                    self.interner.resolve(target_ty),
+                    Type::Struct(_) | Type::Bitfield(_)
+                ) {
                     self.sink.emit(errors::unknown_type(
                         &format!(
-                            "{name} supports only structs, got {}",
+                            "{name} supports only structs and bitfields, got {}",
                             self.type_name(target_ty)
                         ),
                         span,
@@ -1048,10 +1054,13 @@ impl<'a> TypeChecker<'a> {
                     return Some((vec![TypeInterner::TYPE_CONSTRUCTION], TypeInterner::ERROR));
                 }
                 let target_ty = self.resolve_type_expr(&type_args[0]);
-                if !matches!(self.interner.resolve(target_ty), Type::Struct(_)) {
+                if !matches!(
+                    self.interner.resolve(target_ty),
+                    Type::Struct(_) | Type::Bitfield(_)
+                ) {
                     self.sink.emit(errors::unknown_type(
                         &format!(
-                            "{name} supports only structs, got {}",
+                            "{name} supports only structs and bitfields, got {}",
                             self.type_name(target_ty)
                         ),
                         span,

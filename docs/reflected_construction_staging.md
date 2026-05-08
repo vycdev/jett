@@ -63,9 +63,9 @@ code can add typed values, but cannot read heterogeneous values back out.
 
 ## Guardrails For The Prototype
 
-The current implementation is deliberately narrow:
+The current implementation is still deliberately narrow:
 
-- Supports structs first; bitfields remain future work.
+- Supports structs and bitfields; enum construction remains future work.
 - Require `construct_put` field metadata to match `T` by index, name, and
   reflected type. This is not full provenance, but it matches the current
   `type.field_value` safety model.
@@ -92,7 +92,8 @@ For the no-syntax builder:
   builder should share more of the ordinary constructor helper path directly.
 - Fixture tests cover successful struct construction, missing fields,
   duplicate fields, wrong field metadata, wrong value type, generic structs, and
-  refinement fields.
+  refinement fields. They also cover bitfield construction and bit-width
+  validation.
 
 For the eventual block syntax:
 
@@ -105,8 +106,8 @@ For the eventual block syntax:
 
 ## Recommendation
 
-Extend reflected construction to bitfields and enums next. The opaque builder is
-not the final language shape, but it proves the hard semantic part while staying
-inside existing syntax. As the decoder grows through the remaining cases, the
-case for a cleaner `type.construct[T]:` block will be grounded in real usage
-instead of guesswork.
+Extend reflected construction to enums next. The opaque builder is not the final
+language shape, but it proves the hard semantic part while staying inside
+existing syntax. As the decoder grows through the remaining cases, the case for
+a cleaner `type.construct[T]:` block will be grounded in real usage instead of
+guesswork.
