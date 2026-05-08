@@ -2175,6 +2175,7 @@ impl Interpreter {
             "type.name"
                 | "type.kind"
                 | "type.kind_tag"
+                | "type.primitive_tag"
                 | "type.has_secret"
                 | "type.info"
                 | "type.arg"
@@ -2230,6 +2231,12 @@ impl Interpreter {
                     return Some(err);
                 }
                 Ok(Self::type_kind_tag_value(self.type_expr_kind(&ty)))
+            }
+            "type.primitive_tag" => {
+                if let Some(err) = check_args(name, 0, args) {
+                    return Some(err);
+                }
+                Ok(self.type_primitive_tag_value(&ty))
             }
             "type.has_secret" => {
                 if let Some(err) = check_args(name, 0, args) {

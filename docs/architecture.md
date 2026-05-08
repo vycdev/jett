@@ -1090,6 +1090,8 @@ The boundary between compiler-generated code and stdlib-implemented code is a cr
 |---|---|---|
 | `type.name[T]()` | Comptime reflection | Stable display name for `T` |
 | `type.kind[T]()` | Comptime reflection | Category such as `primitive`, `list`, `struct`, `secret` |
+| `type.kind_tag[T]()` | Comptime reflection | Structured `TypeKind` tag for `T` |
+| `type.primitive_tag[T]()` | Comptime reflection | Optional structured `TypePrimitive` tag for primitive `T` |
 | `type.has_secret[T]()` | Comptime reflection | Whether `T` contains secret data |
 | `type.info[T]()` | Comptime reflection | Recursive `TypeInfo` metadata for `T`, including nested type arguments, structured kind tags, and optional primitive tags |
 | `type.arg[T](index)` | Comptime reflection | Indexed `TypeInfo` argument for generic wrappers; direct literal indexes can bind scoped comptime types |

@@ -54,7 +54,7 @@
 |---|---|---|---|
 | Comptime interpreter | `jett_comptime` | 134 | Done |
 | Verify blocks (compile-time) | `jett_comptime/verify` | — | Done |
-| Comptime type reflection (`type.name`, `type.kind`, `type.kind_tag`, `type.has_secret`, `type.info`, `type.arg`, `type.fields`, `type.bitfield_layout`, `type.bitfield_fields`, `type.variants`, `type.variant_value`, `type.field_value`, `type.variant_field_value`, `type.construct_start`, `type.construct_variant_start`, `type.construct_put`, `type.construct_finish`, trusted `comptime type` binding for roots, type args, struct/enum field loops, `TypeInfo.args`, and `TypeInfo.primitive_tag`) | `jett_comptime` | — | Partial (struct/bitfield/enum construction via `TypeConstruction`; structured `TypeKind` and `TypePrimitive` tags available; canonical checked metadata source still pending) |
+| Comptime type reflection (`type.name`, `type.kind`, `type.kind_tag`, `type.primitive_tag`, `type.has_secret`, `type.info`, `type.arg`, `type.fields`, `type.bitfield_layout`, `type.bitfield_fields`, `type.variants`, `type.variant_value`, `type.field_value`, `type.variant_field_value`, `type.construct_start`, `type.construct_variant_start`, `type.construct_put`, `type.construct_finish`, trusted `comptime type` binding for roots, type args, struct/enum field loops, `TypeInfo.args`, and `TypeInfo.primitive_tag`) | `jett_comptime` | — | Partial (struct/bitfield/enum construction via `TypeConstruction`; structured `TypeKind` and `TypePrimitive` tags available; canonical checked metadata source still pending) |
 | 25+ stdlib builtins in interpreter | `jett_comptime` | — | Done |
 
 ### Phase F: Interpreter — COMPLETE

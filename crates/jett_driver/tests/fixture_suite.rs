@@ -463,6 +463,10 @@ compile_fail_fixture!(
     "type_kind_tag_wrong_arity.jett"
 );
 compile_fail_fixture!(
+    compile_fail_type_primitive_tag_wrong_arity,
+    "type_primitive_tag_wrong_arity.jett"
+);
+compile_fail_fixture!(
     compile_fail_type_construct_put_wrong_value_type,
     "type_construct_put_wrong_value_type.jett"
 );

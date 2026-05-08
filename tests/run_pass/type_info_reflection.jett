@@ -60,6 +60,11 @@ function type_info_primitive_tag_is[T](expected: TypePrimitive) returns bool:
         return false
     return primitive == expected
 
+function direct_type_primitive_tag_is[T](expected: TypePrimitive) returns bool:
+    TypePrimitive primitive = type.primitive_tag[T]() handle:
+        return false
+    return primitive == expected
+
 function type_info_has_no_primitive_tag[T]() returns bool:
     TypeInfo info = type.info[T]()
     TypePrimitive primitive = info.primitive_tag handle:
@@ -341,6 +346,7 @@ verify type_info_reflection:
     assert type_info_kind[int64]() == "primitive"
     assert direct_type_kind_tag_is[int64](TypeKind.primitive_type) == true
     assert type_info_primitive_tag_is[int64](TypePrimitive.int64_type) == true
+    assert direct_type_primitive_tag_is[int64](TypePrimitive.int64_type) == true
     assert type_info_primitive_tag_is[string](TypePrimitive.string_type) == true
     assert type_info_primitive_tag_is[JsonValue](TypePrimitive.json_value_type) == true
     assert type_info_kind[NonEmpty]() == "refinement"

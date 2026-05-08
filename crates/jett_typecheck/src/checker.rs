@@ -1085,6 +1085,22 @@ impl<'a> TypeChecker<'a> {
                         .unwrap_or(TypeInterner::ERROR),
                 ))
             }
+            "type.primitive_tag" => {
+                if type_args.len() != 1 {
+                    self.sink.emit(errors::unknown_type(
+                        &format!("{name} (expected 1 type argument, got {})", type_args.len()),
+                        span,
+                    ));
+                    return Some((vec![], TypeInterner::ERROR));
+                }
+                let _ = self.resolve_type_expr(&type_args[0]);
+                let primitive_ty = self
+                    .named_types
+                    .get("TypePrimitive")
+                    .copied()
+                    .unwrap_or(TypeInterner::ERROR);
+                Some((vec![], self.interner.intern(Type::Optional(primitive_ty))))
+            }
             "type.has_secret" => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(

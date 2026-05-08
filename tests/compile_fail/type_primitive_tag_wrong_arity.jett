@@ -1,0 +1,5 @@
+# ERROR: E0309
+namespace test
+
+function bad_primitive_tag() returns optional[TypePrimitive]:
+    return type.primitive_tag[int64, string]()

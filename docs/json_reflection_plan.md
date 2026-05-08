@@ -11,6 +11,8 @@ Implemented reflection primitives:
 - `type.kind[T]()` returns a broad kind string.
 - `type.kind_tag[T]()` returns a structured `TypeKind` enum tag while keeping
   the string kind API available for compatibility.
+- `type.primitive_tag[T]()` returns `optional[TypePrimitive]` for
+  primitive-specific dispatch without comparing type-name strings.
 - `type.has_secret[T]()` reports whether a type contains secret data.
 - `type.info[T]()` returns recursive `TypeInfo` metadata with `type_name`,
   `kind`, `kind_tag`, optional `primitive_tag`, `has_secret`, and nested
