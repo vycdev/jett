@@ -96,6 +96,13 @@ function missing_nested_message() returns string:
         return error
     return user.id
 
+function wrong_struct_shape_message() returns string:
+    JsonValue root = json.parse_raw("[1,2,3]") handle error:
+        return error
+    User user = json_decode_reflected[User](root) handle error:
+        return error
+    return user.id
+
 function wrong_list_item_message() returns string:
     JsonValue root = json.parse_raw("{{\"userId\":\"u1\",\"active\":true,\"profile\":{{\"city\":\"Cluj\",\"visits\":[3]}},\"header\":{{\"version\":4,\"header_length\":5,\"protocol\":\"tcp\"}},\"direction\":\"south\",\"shape\":{{\"point\":[3,4]}},\"tags\":[1],\"nickname\":null,\"missing\":null,\"scores\":{{\"wins\":3}},\"lucky\":[13],\"display\":\"ready\",\"outcome\":{{\"ok\":7}},\"failed\":{{\"fail\":\"bad\"}}}}") handle error:
         return error
@@ -231,6 +238,7 @@ verify json_reflection_nested_decoder:
     assert decoded_result_failure() == "bad"
     assert string.contains(invalid_refinement_message(), "refinement type constraint failed") == true
     assert missing_nested_message() == "profile: missing required field 'city' for Profile"
+    assert wrong_struct_shape_message() == "expected object, got array"
     assert string.contains(wrong_list_item_message(), "tags: 0: expected string") == true
     assert string.contains(invalid_bitfield_message(), "header: bitfield 'Header' field 'version'") == true
     assert string.contains(invalid_enum_payload_message(), "shape: enum variant 'Shape.point' expects 2 payload field(s), got 1") == true

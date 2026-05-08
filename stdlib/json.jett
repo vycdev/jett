@@ -356,6 +356,8 @@ function json_decode_reflected[T](raw: JsonValue) returns result[T, string]:
         return fail("unknown enum variant '{type_name}.{variant_name}'")
 
     if kind == TypeKind.struct_type or kind == TypeKind.bitfield_type:
+        if json.is_object(raw) == false:
+            return fail("expected object, got {json.kind(raw)}")
         mutable TypeConstruction builder = type.construct_start[T]()
         for field in type.fields[T]():
             comptime type Field = field.type_info:
