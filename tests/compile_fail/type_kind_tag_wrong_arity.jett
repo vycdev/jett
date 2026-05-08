@@ -1,0 +1,5 @@
+namespace test
+
+function bad_type_kind_tag_arity() returns TypeKind:
+    return type.kind_tag[int64, string]()
+

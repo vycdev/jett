@@ -155,6 +155,37 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn install_builtin_metadata_types(&mut self) {
+        let type_kind_eid = self.interner.add_enum(TypeEnumDef {
+            name: "TypeKind".to_string(),
+            variants: Self::metadata_unit_variants(&[
+                "primitive_type",
+                "alias_type",
+                "refinement_type",
+                "struct_type",
+                "bitfield_type",
+                "enum_type",
+                "list_type",
+                "set_type",
+                "map_type",
+                "optional_type",
+                "result_type",
+                "secret_type",
+                "function_type",
+                "unknown_type",
+            ]),
+        });
+        let type_kind_ty = self.interner.intern(Type::Enum(type_kind_eid));
+        self.named_types
+            .insert("TypeKind".to_string(), type_kind_ty);
+
+        let bitfield_shape_eid = self.interner.add_enum(TypeEnumDef {
+            name: "TypeBitfieldFieldShape".to_string(),
+            variants: Self::metadata_unit_variants(&["bits_field", "payload_field"]),
+        });
+        let bitfield_shape_ty = self.interner.intern(Type::Enum(bitfield_shape_eid));
+        self.named_types
+            .insert("TypeBitfieldFieldShape".to_string(), bitfield_shape_ty);
+
         let type_info_sid = self.interner.add_struct(TypeStructDef {
             name: "TypeInfo".to_string(),
             fields: Vec::new(),
@@ -169,6 +200,7 @@ impl<'a> TypeChecker<'a> {
                 fields: vec![
                     ("type_name".to_string(), TypeInterner::STRING),
                     ("kind".to_string(), TypeInterner::STRING),
+                    ("kind_tag".to_string(), type_kind_ty),
                     ("has_secret".to_string(), TypeInterner::BOOL),
                     ("args".to_string(), type_info_args_ty),
                 ],
@@ -185,6 +217,7 @@ impl<'a> TypeChecker<'a> {
                 ("name".to_string(), TypeInterner::STRING),
                 ("type_name".to_string(), TypeInterner::STRING),
                 ("kind".to_string(), TypeInterner::STRING),
+                ("kind_tag".to_string(), type_kind_ty),
                 ("serialize_name".to_string(), TypeInterner::STRING),
                 ("has_secret".to_string(), TypeInterner::BOOL),
                 ("type_info".to_string(), type_info_ty),
@@ -202,6 +235,7 @@ impl<'a> TypeChecker<'a> {
                 ("index".to_string(), TypeInterner::INT64),
                 ("name".to_string(), TypeInterner::STRING),
                 ("shape".to_string(), TypeInterner::STRING),
+                ("shape_tag".to_string(), bitfield_shape_ty),
                 ("width".to_string(), TypeInterner::INT64),
                 ("type_info".to_string(), type_info_ty),
                 ("enum_type".to_string(), optional_type_info_ty),
@@ -240,6 +274,18 @@ impl<'a> TypeChecker<'a> {
         let type_variant_ty = self.interner.intern(Type::Struct(type_variant_sid));
         self.named_types
             .insert("TypeVariant".to_string(), type_variant_ty);
+    }
+
+    fn metadata_unit_variants(names: &[&str]) -> Vec<VariantDef> {
+        names
+            .iter()
+            .enumerate()
+            .map(|(index, name)| VariantDef {
+                name: (*name).to_string(),
+                fields: Vec::new(),
+                discriminant: index as i64,
+            })
+            .collect()
     }
 
     // ------------------------------------------------------------------
@@ -933,6 +979,23 @@ impl<'a> TypeChecker<'a> {
                 }
                 let _ = self.resolve_type_expr(&type_args[0]);
                 Some((vec![], TypeInterner::STRING))
+            }
+            "type.kind_tag" => {
+                if type_args.len() != 1 {
+                    self.sink.emit(errors::unknown_type(
+                        &format!("{name} (expected 1 type argument, got {})", type_args.len()),
+                        span,
+                    ));
+                    return Some((vec![], TypeInterner::ERROR));
+                }
+                let _ = self.resolve_type_expr(&type_args[0]);
+                Some((
+                    vec![],
+                    self.named_types
+                        .get("TypeKind")
+                        .copied()
+                        .unwrap_or(TypeInterner::ERROR),
+                ))
             }
             "type.has_secret" => {
                 if type_args.len() != 1 {
@@ -4311,6 +4374,9 @@ impl<'a> TypeChecker<'a> {
                 }
             }
             if let Some(type_id) = self.named_types.get(&base_ident.name).copied() {
+                if matches!(self.interner.resolve(type_id), Type::Enum(_)) {
+                    return self.check_enum_variant(base_ident, field, &[], span);
+                }
                 if let Some(method_ty) = self.check_type_module_method(type_id, field, span) {
                     return method_ty;
                 }

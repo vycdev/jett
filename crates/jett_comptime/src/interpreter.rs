@@ -1994,6 +1994,7 @@ impl Interpreter {
             name,
             "type.name"
                 | "type.kind"
+                | "type.kind_tag"
                 | "type.has_secret"
                 | "type.info"
                 | "type.arg"
@@ -2043,6 +2044,12 @@ impl Interpreter {
                     return Some(err);
                 }
                 Ok(Value::String(self.type_expr_kind(&ty).to_string()))
+            }
+            "type.kind_tag" => {
+                if let Some(err) = check_args(name, 0, args) {
+                    return Some(err);
+                }
+                Ok(Self::type_kind_tag_value(self.type_expr_kind(&ty)))
             }
             "type.has_secret" => {
                 if let Some(err) = check_args(name, 0, args) {
@@ -2316,6 +2323,42 @@ impl Interpreter {
         }
     }
 
+    fn type_kind_tag_value(kind: &str) -> Value {
+        let variant = match kind {
+            "primitive" => "primitive_type",
+            "alias" => "alias_type",
+            "refinement" => "refinement_type",
+            "struct" => "struct_type",
+            "bitfield" => "bitfield_type",
+            "enum" => "enum_type",
+            "list" => "list_type",
+            "set" => "set_type",
+            "map" => "map_type",
+            "optional" => "optional_type",
+            "result" => "result_type",
+            "secret" => "secret_type",
+            "function" => "function_type",
+            _ => "unknown_type",
+        };
+        Value::Enum {
+            type_name: "TypeKind".to_string(),
+            variant: variant.to_string(),
+            fields: Vec::new(),
+        }
+    }
+
+    fn bitfield_shape_tag_value(shape: &str) -> Value {
+        let variant = match shape {
+            "payload" => "payload_field",
+            _ => "bits_field",
+        };
+        Value::Enum {
+            type_name: "TypeBitfieldFieldShape".to_string(),
+            variant: variant.to_string(),
+            fields: Vec::new(),
+        }
+    }
+
     fn type_expr_has_secret(&self, ty: &TypeExpr) -> bool {
         let ty = self.substitute_type_expr(ty);
         self.type_expr_has_secret_inner(&ty, &mut HashSet::new())
@@ -2567,6 +2610,7 @@ impl Interpreter {
 
     fn type_field_value(&self, index: usize, field: ReflectionField) -> Value {
         let kind = self.type_expr_kind(&field.ty).to_string();
+        let kind_tag = Self::type_kind_tag_value(&kind);
         let has_secret = self.type_expr_has_secret(&field.ty);
         let type_info = self.type_info_value(&field.ty);
         Value::Struct {
@@ -2579,6 +2623,7 @@ impl Interpreter {
                     Value::String(type_expr_display(&field.ty)),
                 ),
                 ("kind".to_string(), Value::String(kind)),
+                ("kind_tag".to_string(), kind_tag),
                 (
                     "serialize_name".to_string(),
                     Value::String(field.serialize_name),
@@ -2853,7 +2898,11 @@ impl Interpreter {
             fields: vec![
                 ("index".to_string(), Value::Int64(index as i64)),
                 ("name".to_string(), Value::String(field.name)),
-                ("shape".to_string(), Value::String(field.shape)),
+                ("shape".to_string(), Value::String(field.shape.clone())),
+                (
+                    "shape_tag".to_string(),
+                    Self::bitfield_shape_tag_value(&field.shape),
+                ),
                 ("width".to_string(), Value::Int64(field.width)),
                 ("type_info".to_string(), self.type_info_value(&field.ty)),
                 ("enum_type".to_string(), enum_type),
@@ -2922,6 +2971,10 @@ impl Interpreter {
                 (
                     "kind".to_string(),
                     Value::String(self.type_expr_kind(&ty).to_string()),
+                ),
+                (
+                    "kind_tag".to_string(),
+                    Self::type_kind_tag_value(self.type_expr_kind(&ty)),
                 ),
                 (
                     "has_secret".to_string(),

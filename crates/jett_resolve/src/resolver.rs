@@ -98,9 +98,11 @@ impl Resolver {
             "result",
             "secret",
             "TypeInfo",
+            "TypeKind",
             "TypeField",
             "TypeBitfield",
             "TypeBitfieldField",
+            "TypeBitfieldFieldShape",
             "TypeVariant",
             "json",
             "type",
@@ -957,9 +959,11 @@ fn is_builtin_type(name: &str) -> bool {
             | "JsonValue"
             | "TypeConstruction"
             | "TypeInfo"
+            | "TypeKind"
             | "TypeField"
             | "TypeBitfield"
             | "TypeBitfieldField"
+            | "TypeBitfieldFieldShape"
             | "TypeVariant"
     )
 }

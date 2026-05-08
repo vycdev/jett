@@ -43,6 +43,7 @@ struct TypeBitfieldField:
     index: int64
     name: string
     shape: string
+    shape_tag: TypeBitfieldFieldShape
     width: int64
     type_info: TypeInfo
     enum_type: optional[TypeInfo]
@@ -62,6 +63,7 @@ Rules:
 - `index` and `name` match the corresponding `TypeField`.
 - `shape == "bits"` for fixed-width bitfields, including single-bit fields.
 - `shape == "payload"` for variable payload fields.
+- `shape_tag` provides the structured equivalent of `shape`.
 - `width` is the declared width for fixed fields and `0` for payload fields.
 - `type_info` is the semantic field type: `int64` for unannotated bits, the
   enum type for `bits as EnumType`, and `list[uint8]` for payloads.
@@ -146,7 +148,7 @@ Compile-fail:
 ## Open Questions
 
 - Should `shape` be a string, or should Jett grow a small reflected enum such
-  as `TypeBitfieldFieldShape.bits` and `.payload`? Current recommendation:
+  as `TypeBitfieldFieldShape.bits_field` and `.payload_field`? Current recommendation:
   keep the string for compatibility and add `shape_tag`; see
   `docs/type_kind_design.md`.
 - Should `enum_type` be `optional[TypeInfo]`, or should enum annotation be

@@ -47,6 +47,13 @@ function type_info_kind[T]() returns string:
     TypeInfo info = type.info[T]()
     return info.kind
 
+function type_info_kind_tag_is[T](expected: TypeKind) returns bool:
+    TypeInfo info = type.info[T]()
+    return info.kind_tag == expected
+
+function direct_type_kind_tag_is[T](expected: TypeKind) returns bool:
+    return type.kind_tag[T]() == expected
+
 function type_info_arg_count[T]() returns int64:
     TypeInfo info = type.info[T]()
     return list.length(info.args)
@@ -117,6 +124,14 @@ function field_kind[T](field_name: string) returns string:
     for field in fields:
         if field.name == field_name:
             found = field.kind
+    return found
+
+function field_kind_tag_is[T](field_name: string, expected: TypeKind) returns bool:
+    list[TypeField] fields = type.fields[T]()
+    bool found = false
+    for field in fields:
+        if field.name == field_name:
+            found = field.kind_tag == expected
     return found
 
 function complex_field_arg_kind(field_name: string, target: int64) returns string:
@@ -202,6 +217,14 @@ function bitfield_field_shape[T](field_name: string) returns string:
     for field in fields:
         if field.name == field_name:
             found = field.shape
+    return found
+
+function bitfield_field_shape_tag_is[T](field_name: string, expected: TypeBitfieldFieldShape) returns bool:
+    list[TypeBitfieldField] fields = type.bitfield_fields[T]()
+    bool found = false
+    for field in fields:
+        if field.name == field_name:
+            found = field.shape_tag == expected
     return found
 
 function bitfield_field_width[T](field_name: string) returns int64:
@@ -292,29 +315,38 @@ function variant_field_type_name[T](variant_name: string, target: int64) returns
 
 verify type_info_reflection:
     assert type_info_kind[int64]() == "primitive"
+    assert direct_type_kind_tag_is[int64](TypeKind.primitive_type) == true
     assert type_info_kind[NonEmpty]() == "refinement"
+    assert type_info_kind_tag_is[NonEmpty](TypeKind.refinement_type) == true
     assert type_info_arg_count[NonEmpty]() == 1
     assert type_info_arg_kind[NonEmpty](0) == "primitive"
     assert type_info_kind[NameList]() == "alias"
+    assert type_info_kind_tag_is[NameList](TypeKind.alias_type) == true
     assert type_info_arg_kind[NameList](0) == "list"
     assert type_info_nested_arg_type_name[NameList](0, 0) == "string"
     assert type.has_secret[SecretText]() == true
     assert type_info_arg_kind[SecretText](0) == "secret"
+    assert type_info_kind_tag_is[SecretText](TypeKind.alias_type) == true
     assert type_info_kind[Direction]() == "enum"
+    assert type_info_kind_tag_is[Direction](TypeKind.enum_type) == true
     assert type_info_kind[Header]() == "bitfield"
+    assert type_info_kind_tag_is[Header](TypeKind.bitfield_type) == true
     assert field_count[Header]() == 1
     assert field_kind[Header]("version") == "primitive"
+    assert field_kind_tag_is[Complex]("names", TypeKind.list_type) == true
     assert header_version_by_reflection() == 4
     assert bitfield_field_count[Packet]() == 4
     assert bitfield_metadata_field_count[Packet]() == 4
     assert bitfield_metadata_network_order[Packet]() == false
     assert bitfield_metadata_network_order[NetworkPacket]() == true
     assert bitfield_field_shape[Packet]("version") == "bits"
+    assert bitfield_field_shape_tag_is[Packet]("version", TypeBitfieldFieldShape.bits_field) == true
     assert bitfield_field_width[Packet]("version") == 4
     assert bitfield_field_type_kind[Packet]("protocol") == "enum"
     assert bitfield_field_enum_kind[Packet]("protocol") == "enum"
     assert bitfield_field_enum_kind[Packet]("version") == "primitive"
     assert bitfield_field_shape[Packet]("payload") == "payload"
+    assert bitfield_field_shape_tag_is[Packet]("payload", TypeBitfieldFieldShape.payload_field) == true
     assert bitfield_field_width[Packet]("payload") == 0
     assert bitfield_field_type_name[Packet]("payload") == "list[uint8]"
     assert type_info_arg_count[int64]() == 0

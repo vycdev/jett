@@ -9,9 +9,11 @@ Implemented reflection primitives:
 
 - `type.name[T]()` returns a stable display name.
 - `type.kind[T]()` returns a broad kind string.
+- `type.kind_tag[T]()` returns a structured `TypeKind` enum tag while keeping
+  the string kind API available for compatibility.
 - `type.has_secret[T]()` reports whether a type contains secret data.
 - `type.info[T]()` returns recursive `TypeInfo` metadata with `type_name`,
-  `kind`, `has_secret`, and nested `args`.
+  `kind`, `kind_tag`, `has_secret`, and nested `args`.
 - `type.arg[T](index)` returns the indexed type argument as `TypeInfo`, and
   direct literal-index calls can be used as trusted `comptime type` binders.
 - Alias and refinement `TypeInfo` values expose their base type as the first
@@ -19,13 +21,13 @@ Implemented reflection primitives:
   `string`, or an alias such as `NameList` back to `list[string]`.
 - `type.fields[T]()` returns ordered `TypeField` metadata for structs and
   bitfields.
-- `TypeField` includes `index`, `name`, `type_name`, `kind`,
+- `TypeField` includes `index`, `name`, `type_name`, `kind`, `kind_tag`,
   `serialize_name`, `has_secret`, and `type_info`. For bitfields,
   `serialize_name` currently equals `name`; bitfield field renaming is not
   supported.
 - `type.bitfield_fields[T]()` returns ordered `TypeBitfieldField` metadata for
-  bitfields, including `shape`, `width`, semantic `type_info`, and optional
-  enum annotation metadata.
+  bitfields, including `shape`, `shape_tag`, `width`, semantic `type_info`, and
+  optional enum annotation metadata.
 - `type.bitfield_layout[T]()` returns `TypeBitfield` metadata with
   `network_order` and the same ordered `list[TypeBitfieldField]` layout.
 - `type.variants[T]()` returns ordered `TypeVariant` metadata for enums.

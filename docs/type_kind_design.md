@@ -34,32 +34,33 @@ not necessarily to break the current API immediately.
 - Keep the migration incremental; current `.jett` fixtures should not need a
   flag day rewrite.
 
-## Proposed Surface
+## Surface
 
 Add builtin reflected enums:
 
 ```jett
 enum TypeKind:
-    primitive
-    alias
-    refinement
-    struct
-    bitfield
-    enum
-    list
-    set
-    map
-    optional
-    result
-    secret
-    function
+    primitive_type
+    alias_type
+    refinement_type
+    struct_type
+    bitfield_type
+    enum_type
+    list_type
+    set_type
+    map_type
+    optional_type
+    result_type
+    secret_type
+    function_type
+    unknown_type
 
 enum TypeBitfieldFieldShape:
-    bits
-    payload
+    bits_field
+    payload_field
 ```
 
-Then extend metadata structs without removing existing string fields:
+Metadata structs are extended without removing existing string fields:
 
 ```jett
 struct TypeInfo:
@@ -89,9 +90,8 @@ struct TypeBitfieldField:
     enum_type: optional[TypeInfo]
 ```
 
-`type.kind[T]()` can keep returning `string` for compatibility. A later
-`type.kind_tag[T]()` can return `TypeKind`, or the language can wait until the
-metadata fields have proven useful before adding a top-level helper.
+`type.kind[T]()` keeps returning `string` for compatibility.
+`type.kind_tag[T]()` returns `TypeKind`.
 
 ## Why Add Fields Instead Of Replacing `kind`
 
@@ -114,9 +114,9 @@ stdlib code can use:
 
 ```jett
 match info.kind_tag:
-    primitive:
+    primitive_type:
         ...
-    list:
+    list_type:
         ...
     other:
         return fail("unsupported type kind {info.kind}")
@@ -130,6 +130,10 @@ and new variants can be reviewed deliberately.
 
 - Should the structured field be named `kind_tag`, `kind_value`, or `tag`?
   Recommendation: `kind_tag`, because it reads clearly beside existing `kind`.
+- Why do enum variants use names such as `struct_type` and `list_type` instead
+  of `struct` and `list`?
+  Because many natural kind names are Jett keywords or builtin type names.
+  Variant names must be source-friendly.
 - Should `type.kind_tag[T]()` exist immediately?
   Recommendation: not required for the first migration; `type.info[T]().kind_tag`
   is enough, but the helper is harmless if call-site ergonomics matter.
@@ -141,15 +145,14 @@ and new variants can be reviewed deliberately.
   Recommendation: no. Field shape answers a different question from semantic
   value type. Keep `TypeBitfieldFieldShape`.
 
-## Suggested Staging
+## Staging
 
-1. Add `TypeKind` and `TypeBitfieldFieldShape` as builtin metadata enums in the
-   checker/interpreter metadata installation path.
-2. Add `kind_tag` and `shape_tag` fields while preserving the existing string
-   fields.
-3. Extend `type_info_reflection.jett` with structured-kind assertions.
+1. Done: add `TypeKind` and `TypeBitfieldFieldShape` as builtin metadata enums
+   in the checker/interpreter metadata installation path.
+2. Done: add `type.kind_tag[T]()`, `kind_tag`, and `shape_tag` while preserving
+   the existing string fields.
+3. Done: extend `type_info_reflection.jett` with structured-kind assertions.
 4. Migrate the JSON reflection fixtures to branch on structured tags where it
    improves clarity.
 5. Decide later whether `type.kind[T]()` should stay forever as a string helper
-   or gain a parallel `type.kind_tag[T]()` API.
-
+   now that the parallel `type.kind_tag[T]()` API exists.
