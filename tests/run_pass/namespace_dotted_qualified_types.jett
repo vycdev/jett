@@ -1,0 +1,30 @@
+namespace outer.models
+
+struct User:
+    id: string
+    visits: list[int64]
+
+struct Box[T]:
+    value: T
+
+enum Color:
+    blue
+    rgb(red: int64, green: int64, blue: int64)
+
+function double(value: int64) returns int64:
+    return value * 2
+
+namespace app
+
+function dotted_namespace_summary() returns string:
+    outer.models.User user = outer.models.User(id: "u1", visits: list(2, 3))
+    outer.models.Box[outer.models.User] box = outer.models.Box[outer.models.User](value: user)
+    outer.models.Color color = outer.models.Color.blue
+    outer.models.Color rich = outer.models.Color.rgb(1, 2, 3)
+    string raw = json.serialize[outer.models.User](view box.value)
+    outer.models.User decoded = json.parse[outer.models.User](raw) handle error:
+        return error
+    return "{decoded.id}:{list.length[int64](decoded.visits)}:{outer.models.double(21)}:{color == outer.models.Color.blue}:{rich == outer.models.Color.rgb(1, 2, 3)}:{type.name[outer.models.User]()}:{type.name[outer.models.Box[outer.models.User]]()}"
+
+verify namespace_dotted_qualified_types:
+    assert dotted_namespace_summary() == "u1:2:42:true:true:outer.models.User:outer.models.Box[outer.models.User]"

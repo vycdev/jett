@@ -677,6 +677,12 @@ impl Resolver {
                 self.resolve_expr(operand, item_index);
             }
             Expr::FieldAccess(object, _, _) => {
+                if let Some(path) = dotted_expr_name(expr) {
+                    if self.resolve_namespace_prefix(&path, expr.span(), item_index) {
+                        return;
+                    }
+                }
+
                 // Only resolve the object; the field is resolved during type checking.
                 self.resolve_expr(object, item_index);
             }
@@ -832,6 +838,27 @@ impl Resolver {
         }
     }
 
+    fn resolve_namespace_prefix(&mut self, path: &str, span: Span, item_index: usize) -> bool {
+        for (index, _) in path.match_indices('.').rev() {
+            let prefix = &path[..index];
+            if is_builtin_module(prefix) {
+                return true;
+            }
+
+            let Some(def_id) = self.scope_table.lookup(self.current_scope, prefix) else {
+                continue;
+            };
+            if self.scope_table.def(def_id).kind != DefKind::Namespace {
+                continue;
+            }
+
+            self.resolve_name(prefix, span, item_index);
+            return true;
+        }
+
+        false
+    }
+
     // ------------------------------------------------------------------
     // Scope management
     // ------------------------------------------------------------------
@@ -948,6 +975,17 @@ impl Resolver {
 
 fn last_segment(path: &str) -> String {
     path.rsplit('.').next().unwrap_or(path).to_string()
+}
+
+fn dotted_expr_name(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::Ident(ident) => Some(ident.name.clone()),
+        Expr::FieldAccess(base, field, _) => {
+            let base_name = dotted_expr_name(base)?;
+            Some(format!("{base_name}.{}", field.name))
+        }
+        _ => None,
+    }
 }
 
 fn is_builtin_type(name: &str) -> bool {
