@@ -1243,6 +1243,36 @@ impl<'a> TypeChecker<'a> {
                 ],
                 TypeInterner::BOOL,
             )),
+            "bytes.new" => Some((vec![], TypeInterner::BYTES)),
+            "bytes.length" => Some((vec![TypeInterner::BYTES], TypeInterner::INT64)),
+            "bytes.slice" => Some((
+                vec![
+                    TypeInterner::BYTES,
+                    TypeInterner::INT64,
+                    TypeInterner::INT64,
+                ],
+                TypeInterner::BYTES,
+            )),
+            "bytes.concat" => Some((
+                vec![TypeInterner::BYTES, TypeInterner::BYTES],
+                TypeInterner::BYTES,
+            )),
+            "bytes.from_string" => Some((vec![TypeInterner::STRING], TypeInterner::BYTES)),
+            "bytes.to_string" => Some((
+                vec![TypeInterner::BYTES],
+                self.interner
+                    .intern(Type::Result(TypeInterner::STRING, TypeInterner::STRING)),
+            )),
+            "bytes.get" => Some((
+                vec![TypeInterner::BYTES, TypeInterner::INT64],
+                self.interner.intern(Type::Optional(TypeInterner::INT64)),
+            )),
+            "bytes.to_hex" => Some((vec![TypeInterner::BYTES], TypeInterner::STRING)),
+            "bytes.from_hex" => Some((
+                vec![TypeInterner::STRING],
+                self.interner
+                    .intern(Type::Result(TypeInterner::BYTES, TypeInterner::STRING)),
+            )),
             "list.new" => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(

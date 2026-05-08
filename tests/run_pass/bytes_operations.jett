@@ -115,6 +115,49 @@ function roundtrip_test() returns string:
 verify roundtrip_test:
     assert roundtrip_test() == "Jett language"
 
+# --- hex conversion ---
+
+function to_hex_test() returns string:
+    bytes b = bytes.from_string("Hi")
+    return bytes.to_hex(b)
+
+verify to_hex_test:
+    assert to_hex_test() == "4869"
+
+function from_hex_length_test() returns int64:
+    bytes b = bytes.from_hex("4869") handle error:
+        return -1
+    return bytes.length(b)
+
+verify from_hex_length_test:
+    assert from_hex_length_test() == 2
+
+function from_hex_prefix_test() returns int64:
+    bytes b = bytes.from_hex("0x4869") handle error:
+        return -1
+    int64 first = bytes.get(b, 0) handle:
+        default -1
+    return first
+
+verify from_hex_prefix_test:
+    assert from_hex_prefix_test() == 72
+
+function from_hex_invalid_message() returns string:
+    bytes b = bytes.from_hex("0xzz") handle error:
+        return error
+    return "{bytes.length(b)}"
+
+verify from_hex_invalid_message:
+    assert from_hex_invalid_message() == "bytes.from_hex: expected hex string"
+
+function from_hex_odd_message() returns string:
+    bytes b = bytes.from_hex("abc") handle error:
+        return error
+    return "{bytes.length(b)}"
+
+verify from_hex_odd_message:
+    assert from_hex_odd_message() == "bytes.from_hex: expected even-length hex string"
+
 # --- empty concat ---
 
 function concat_empty_test() returns int64:

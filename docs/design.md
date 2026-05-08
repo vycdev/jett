@@ -1358,7 +1358,8 @@ string hashed = crypto.sha256(password)
 string b64 = encoding.base64_encode(data)
 string decoded = encoding.base64_decode(b64)
 string url_safe = encoding.url_encode(query)
-string hex = encoding.hex_encode(bytes)
+bytes raw = bytes.from_string(data)
+string hex = bytes.to_hex(raw)
 ```
 
 **Validation — standard library refinement types:**

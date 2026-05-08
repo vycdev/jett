@@ -73,10 +73,11 @@ stdlib replacement for the Rust-backed builtin.
 There are also `.jett` decoder prototypes:
 `tests/run_pass/json_reflection_flat_decoder.jett` covers the first
 flat-struct path, and `tests/run_pass/json_reflection_nested_decoder.jett`
-recursively handles core primitives (`string`, `int64`, `float64`, `bool`, and
-JSON null as `nothing`), nested structs, lists, sets, maps with string keys,
-optionals, results, aliases/refinements, and `serialize_name` by walking raw
-`JsonValue` and finishing structs, bitfields, and enums with `TypeConstruction`.
+recursively handles core primitives (`string`, `int64`, `float64`, `bool`,
+`bytes` as hex strings, and JSON null as `nothing`), nested structs, lists,
+sets, maps with string keys, optionals, results, aliases/refinements, and
+`serialize_name` by walking raw `JsonValue` and finishing structs, bitfields,
+and enums with `TypeConstruction`.
 It treats absent optional fields as `none`, validates top-level refinements
 including refinements over generic shapes, and decodes enum-annotated bitfields
 through the ordinary enum branch plus bitfield finish validation. It also

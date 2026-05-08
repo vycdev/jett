@@ -3942,17 +3942,33 @@ impl Interpreter {
         let raw = json
             .as_str()
             .ok_or_else(|| format!("expected bytes string, got {}", json_type_name(json)))?;
+        Self::parse_hex_bytes(
+            raw,
+            "expected even-length hex bytes string",
+            "expected hex bytes string",
+        )
+        .map(Value::Bytes)
+    }
+
+    fn parse_hex_bytes(
+        raw: &str,
+        even_length_error: &str,
+        invalid_hex_error: &str,
+    ) -> Result<Vec<u8>, String> {
         let hex = raw.strip_prefix("0x").unwrap_or(raw);
         if hex.len() % 2 != 0 {
-            return Err("expected even-length hex bytes string".to_string());
+            return Err(even_length_error.to_string());
+        }
+        if !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(invalid_hex_error.to_string());
         }
         let mut bytes = Vec::with_capacity(hex.len() / 2);
-        for index in (0..hex.len()).step_by(2) {
-            let byte = u8::from_str_radix(&hex[index..index + 2], 16)
-                .map_err(|_| "expected hex bytes string".to_string())?;
+        for pair in hex.as_bytes().chunks_exact(2) {
+            let pair = std::str::from_utf8(pair).map_err(|_| invalid_hex_error.to_string())?;
+            let byte = u8::from_str_radix(pair, 16).map_err(|_| invalid_hex_error.to_string())?;
             bytes.push(byte);
         }
-        Ok(Value::Bytes(bytes))
+        Ok(bytes)
     }
 
     fn value_to_json_typed(&self, value: &Value, ty: &TypeExpr, public_only: bool) -> String {
@@ -6515,6 +6531,32 @@ impl Interpreter {
                         )))))),
                     },
                     _ => Some(Err(format!("{name} expects a bytes argument"))),
+                }
+            }
+
+            "bytes.to_hex" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::Bytes(b) => {
+                        let hex: String = b.iter().map(|byte| format!("{byte:02x}")).collect();
+                        Some(Ok(Value::String(hex)))
+                    }
+                    _ => Some(Err(format!("{name} expects a bytes argument"))),
+                }
+            }
+
+            "bytes.from_hex" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::String(raw) => match Self::parse_hex_bytes(
+                        raw,
+                        "bytes.from_hex: expected even-length hex string",
+                        "bytes.from_hex: expected hex string",
+                    ) {
+                        Ok(bytes) => Some(Ok(Value::ResultOk(Box::new(Value::Bytes(bytes))))),
+                        Err(error) => Some(Ok(Value::ResultFail(Box::new(Value::String(error))))),
+                    },
+                    _ => Some(Err(format!("{name} expects a string argument"))),
                 }
             }
 

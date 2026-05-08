@@ -53,6 +53,13 @@ function json_list_test() returns string:
 verify json_list_test:
     assert json_list_test() == "[1,2,3]"
 
+function json_bytes_test() returns string:
+    bytes value = bytes.from_string("Hi")
+    return json.serialize[bytes](view value)
+
+verify json_bytes_test:
+    assert json_bytes_test() == "\"0x4869\""
+
 function json_string_escape_test() returns string:
     return json.serialize[string]("quote \" backslash \\ newline \n tab \t nul \0")
 

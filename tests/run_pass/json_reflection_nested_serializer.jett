@@ -31,6 +31,7 @@ struct User:
     id: string serialize "userId"
     active: bool
     note: string
+    payload: bytes
     profile: Profile
     tags: list[string]
     lucky: set[int64]
@@ -68,6 +69,10 @@ function serialize_reflected[T](view value: T) returns string:
     if type_name == "bool":
         bool item = value
         return "{item}"
+
+    if type_name == "bytes":
+        bytes item = value
+        return json_quote("0x{bytes.to_hex(item)}")
 
     if kind == "alias":
         comptime type Base = type.arg[T](0):
@@ -145,12 +150,13 @@ function serialize_reflected[T](view value: T) returns string:
 
 function reflected_user_json() returns string:
     Profile profile = Profile(city: "Cluj", visits: list(3, 5))
+    bytes payload = bytes.from_string("Hi")
     mutable set[int64] lucky = set.new[int64]()
     lucky = set.add[int64](lucky, 11)
     lucky = set.add[int64](lucky, 13)
     secret[string] audit_a = "audit-a"
     secret[string] audit_b = "audit-b"
-    User user = User(id: "u1", active: true, note: "quote \" slash \\ newline \n tab \t", profile: profile, tags: list("admin", "beta"), lucky: lucky, scores: map("wins": 3, "losses": 1), nickname: some("ally"), missing: none, outcome: ok(7), failed: fail("bad"), token: "secret-token", audit_tokens: list(audit_a, audit_b))
+    User user = User(id: "u1", active: true, note: "quote \" slash \\ newline \n tab \t", payload: payload, profile: profile, tags: list("admin", "beta"), lucky: lucky, scores: map("wins": 3, "losses": 1), nickname: some("ally"), missing: none, outcome: ok(7), failed: fail("bad"), token: "secret-token", audit_tokens: list(audit_a, audit_b))
     return serialize_reflected[User](view user)
 
 function reflected_alias_refinement_json() returns string:
@@ -176,6 +182,8 @@ verify json_reflection_nested_serializer:
     assert string.contains(raw, "active") == true
     assert string.contains(raw, "true") == true
     assert string.contains(raw, "quote \\\" slash \\\\ newline \\n tab \\t") == true
+    assert string.contains(raw, "payload") == true
+    assert string.contains(raw, "0x4869") == true
     assert string.contains(raw, "profile") == true
     assert string.contains(raw, "Cluj") == true
     assert string.contains(raw, "visits") == true

@@ -24,6 +24,9 @@ struct Credential:
     name: string
     token: secret[string]
 
+struct Blob:
+    data: bytes
+
 bitfield Header:
     version: 4 bits
     header_length: 4 bits
@@ -66,6 +69,13 @@ function decode_reflected[T](raw: JsonValue) returns result[T, string]:
 
     if type_name == "bool":
         bool item = json.as_bool(raw) handle error:
+            return fail(error)
+        return ok(item)
+
+    if type_name == "bytes":
+        string raw_hex = json.as_string(raw) handle error:
+            return fail(error)
+        bytes item = bytes.from_hex(raw_hex) handle error:
             return fail(error)
         return ok(item)
 
@@ -343,6 +353,29 @@ function invalid_nothing_message() returns string:
         return error
     return "unexpected"
 
+function decoded_top_level_bytes_length() returns int64:
+    JsonValue root = json.parse_raw("\"0x4869\"") handle error:
+        return -1
+    bytes value = decode_reflected[bytes](root) handle error:
+        return -1
+    return bytes.length(value)
+
+function decoded_blob_bytes_first() returns int64:
+    JsonValue root = json.parse_raw("{{\"data\":\"0x4869\"}}") handle error:
+        return -1
+    Blob blob = decode_reflected[Blob](root) handle error:
+        return -1
+    int64 first = bytes.get(blob.data, 0) handle:
+        default -1
+    return first
+
+function invalid_bytes_message() returns string:
+    JsonValue root = json.parse_raw("\"0xzz\"") handle error:
+        return error
+    bytes value = decode_reflected[bytes](root) handle error:
+        return error
+    return "{bytes.length(value)}"
+
 function decoded_top_level_secret_redaction() returns string:
     JsonValue root = json.parse_raw("\"secret-token\"") handle error:
         return error
@@ -387,6 +420,9 @@ verify json_reflection_nested_decoder:
     assert decoded_top_level_float() == 2.5
     assert decoded_null_as_nothing() == "null"
     assert invalid_nothing_message() == "expected null, got number"
+    assert decoded_top_level_bytes_length() == 2
+    assert decoded_blob_bytes_first() == 72
+    assert invalid_bytes_message() == "bytes.from_hex: expected hex string"
     assert decoded_top_level_secret_redaction() == "***"
     assert decoded_secret_field_summary() == "svc:***"
     assert string.contains(invalid_secret_field_message(), "token: expected string") == true

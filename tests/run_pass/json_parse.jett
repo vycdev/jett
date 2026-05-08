@@ -176,6 +176,23 @@ function parse_invalid_nothing_error() returns string:
         return error
     return "unexpected"
 
+function parse_bytes_length() returns int64:
+    bytes value = json.parse[bytes]("\"0x4869\"") handle error:
+        return -1
+    return bytes.length(value)
+
+function parse_bytes_without_prefix_first() returns int64:
+    bytes value = json.parse[bytes]("\"4869\"") handle error:
+        return -1
+    int64 first = bytes.get(value, 0) handle:
+        default -1
+    return first
+
+function parse_invalid_bytes_error() returns string:
+    bytes value = json.parse[bytes]("\"0xzz\"") handle error:
+        return error
+    return "{bytes.length(value)}"
+
 function parse_top_level_secret_redaction() returns string:
     secret[string] token = json.parse[secret[string]]("\"secret-token\"") handle error:
         return error
@@ -219,6 +236,9 @@ verify json_parse:
     assert parse_top_level_float() == 2.5
     assert parse_null_as_nothing() == "null"
     assert parse_invalid_nothing_error() == "expected null, got number"
+    assert parse_bytes_length() == 2
+    assert parse_bytes_without_prefix_first() == 72
+    assert parse_invalid_bytes_error() == "expected hex bytes string"
     assert parse_top_level_secret_redaction() == "***"
     assert parse_secret_field_redaction() == "svc:***"
     assert parse_secret_field_type_error() == "expected string, got number"
