@@ -44,6 +44,13 @@ metadata exposed to Jett code. The active tests cover nested structs, bitfields,
 lists, maps with string keys, optionals, results, `serialize` names, public
 secret omission, and valid JSON string escaping for control characters.
 
+There is also a `.jett` serializer prototype in
+`tests/run_pass/json_reflection_nested_serializer.jett`. It recursively handles
+primitives, structs, lists, `map[string, V]`, optionals, and result-ok/fail
+shapes using reflection primitives and trusted `comptime type` binding. It is a
+proof of language capability, not yet a stdlib replacement for the Rust-backed
+builtin.
+
 `json.parse[T](raw)` has a Rust-backed bridge: it requires one type argument,
 accepts a string, returns `result[T, string]`, and supports core primitives,
 structs with `serialize` names, lists, sets, `map[string, V]`, optionals,
@@ -145,8 +152,8 @@ for the decoded value. See `docs/bitfield_reflection_metadata.md`.
 
 ## Suggested Next Steps
 
-1. Implement a nested `.jett` serializer prototype for primitives, structs,
-   lists, maps with string keys, optionals, and results.
+1. Harden the `.jett` serializer prototype toward stdlib quality: escaping,
+   enum/bitfield policy, alias/refinement behavior, and public/secret modes.
 2. Extend trusted type-argument binding to less direct but still compiler-owned
    metadata flows if the serializer prototype exposes ergonomic gaps.
 3. Prototype the reflected construction path described in

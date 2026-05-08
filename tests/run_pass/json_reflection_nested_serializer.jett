@@ -1,0 +1,117 @@
+namespace test
+
+struct Profile:
+    city: string
+    visits: list[int64]
+
+struct User:
+    id: string serialize "userId"
+    active: bool
+    profile: Profile
+    tags: list[string]
+    scores: map[string, int64]
+    nickname: optional[string]
+    missing: optional[string]
+    outcome: result[int64, string]
+    failed: result[int64, string]
+    token: secret[string]
+
+function json_quote(raw: string) returns string:
+    string quote = "\""
+    return "{quote}{raw}{quote}"
+
+function serialize_reflected[T](view value: T) returns string:
+    string kind = type.kind[T]()
+    string type_name = type.name[T]()
+
+    if type_name == "string":
+        string item = value
+        return json_quote(item)
+
+    if type_name == "int64":
+        int64 item = value
+        return "{item}"
+
+    if type_name == "bool":
+        bool item = value
+        return "{item}"
+
+    if kind == "list":
+        for arg in type.info[T]().args:
+            comptime type Elem = arg:
+                list[Elem] items = value
+                list[string] parts = list.new[string]()
+                for item in items:
+                    parts = list.append[string](parts, serialize_reflected[Elem](view item))
+                string body = string.join(parts, ",")
+                return "[{body}]"
+
+    if kind == "map":
+        int64 index = 0
+        for arg in type.info[T]().args:
+            if index == 1:
+                comptime type Val = arg:
+                    map[string, Val] entries = value
+                    list[string] parts = list.new[string]()
+                    for key, item in entries:
+                        parts = list.append[string](parts, "{json_quote(key)}:{serialize_reflected[Val](view item)}")
+                    string body = string.join(parts, ",")
+                    return "{{{body}}}"
+            index = index + 1
+
+    if kind == "optional":
+        for arg in type.info[T]().args:
+            comptime type Inner = arg:
+                Inner item = value handle:
+                    return "null"
+                return serialize_reflected[Inner](view item)
+
+    if kind == "result":
+        int64 index = 0
+        for arg in type.info[T]().args:
+            if index == 0:
+                comptime type Ok = arg:
+                    Ok item = value handle error:
+                        return json_quote("fail")
+                    return serialize_reflected[Ok](view item)
+            index = index + 1
+
+    list[string] fields = list.new[string]()
+    for field in type.fields[T]():
+        if field.has_secret == false:
+            comptime type Field = field.type_info:
+                Field item = type.field_value[T, Field](view value, view field)
+                string encoded = serialize_reflected[Field](view item)
+                fields = list.append[string](fields, "{json_quote(field.serialize_name)}:{encoded}")
+    string body = string.join(fields, ",")
+    return "{{{body}}}"
+
+function reflected_user_json() returns string:
+    Profile profile = Profile(city: "Cluj", visits: list(3, 5))
+    User user = User(id: "u1", active: true, profile: profile, tags: list("admin", "beta"), scores: map("wins": 3, "losses": 1), nickname: some("ally"), missing: none, outcome: ok(7), failed: fail("bad"), token: "secret-token")
+    return serialize_reflected[User](view user)
+
+verify json_reflection_nested_serializer:
+    string raw = reflected_user_json()
+    assert string.contains(raw, "userId") == true
+    assert string.contains(raw, "u1") == true
+    assert string.contains(raw, "active") == true
+    assert string.contains(raw, "true") == true
+    assert string.contains(raw, "profile") == true
+    assert string.contains(raw, "Cluj") == true
+    assert string.contains(raw, "visits") == true
+    assert string.contains(raw, "[3,5]") == true
+    assert string.contains(raw, "tags") == true
+    assert string.contains(raw, "[\"admin\",\"beta\"]") == true
+    assert string.contains(raw, "scores") == true
+    assert string.contains(raw, "wins") == true
+    assert string.contains(raw, "nickname") == true
+    assert string.contains(raw, "ally") == true
+    assert string.contains(raw, "missing") == true
+    assert string.contains(raw, "null") == true
+    assert string.contains(raw, "outcome") == true
+    assert string.contains(raw, "7") == true
+    assert string.contains(raw, "failed") == true
+    assert string.contains(raw, "fail") == true
+    assert string.contains(raw, "token") == false
+    assert string.contains(raw, "secret-token") == false
