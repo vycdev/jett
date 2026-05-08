@@ -73,16 +73,17 @@ stdlib replacement for the Rust-backed builtin.
 There are also `.jett` decoder prototypes:
 `tests/run_pass/json_reflection_flat_decoder.jett` covers the first
 flat-struct path, and `tests/run_pass/json_reflection_nested_decoder.jett`
-recursively handles primitives, nested structs, lists, sets, maps with string
-keys, optionals, results, aliases/refinements, and `serialize_name` by walking
-raw `JsonValue` and finishing structs, bitfields, and enums with
-`TypeConstruction`. It treats absent optional fields as `none`, validates
-top-level refinements including refinements over generic shapes, and decodes
-enum-annotated bitfields through the ordinary enum branch plus bitfield finish
-validation. It also decodes `secret[T]` by parsing the inner `T` and assigning
-the result into the secret wrapper, matching the Rust-backed `json.parse[T]`
-input policy while keeping output exposure blocked by the ordinary secret type
-rules. Public-mode parsing policy is still future work.
+recursively handles core primitives (`string`, `int64`, `float64`, `bool`, and
+JSON null as `nothing`), nested structs, lists, sets, maps with string keys,
+optionals, results, aliases/refinements, and `serialize_name` by walking raw
+`JsonValue` and finishing structs, bitfields, and enums with `TypeConstruction`.
+It treats absent optional fields as `none`, validates top-level refinements
+including refinements over generic shapes, and decodes enum-annotated bitfields
+through the ordinary enum branch plus bitfield finish validation. It also
+decodes `secret[T]` by parsing the inner `T` and assigning the result into the
+secret wrapper, matching the Rust-backed `json.parse[T]` input policy while
+keeping output exposure blocked by the ordinary secret type rules. Public-mode
+parsing policy is still future work.
 
 `json.parse[T](raw)` has a Rust-backed bridge: it requires one type argument,
 accepts a string, returns `result[T, string]`, and supports core primitives,

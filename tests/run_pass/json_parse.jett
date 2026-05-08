@@ -161,6 +161,21 @@ function parse_missing_required_error() returns string:
         return error
     return user.id
 
+function parse_top_level_float() returns float64:
+    float64 value = json.parse[float64]("2.5") handle error:
+        return -1.0
+    return value
+
+function parse_null_as_nothing() returns string:
+    nothing value = json.parse[nothing]("null") handle error:
+        return error
+    return "null"
+
+function parse_invalid_nothing_error() returns string:
+    nothing value = json.parse[nothing]("0") handle error:
+        return error
+    return "unexpected"
+
 function parse_top_level_secret_redaction() returns string:
     secret[string] token = json.parse[secret[string]]("\"secret-token\"") handle error:
         return error
@@ -201,6 +216,9 @@ verify json_parse:
     assert parse_bitfield_protocol() == true
     assert parse_bitfield_width_error() == "bitfield 'Header' field 'version' is 4 bit(s) wide and cannot hold '16'"
     assert parse_missing_required_error() == "missing required field 'profileData' for User"
+    assert parse_top_level_float() == 2.5
+    assert parse_null_as_nothing() == "null"
+    assert parse_invalid_nothing_error() == "expected null, got number"
     assert parse_top_level_secret_redaction() == "***"
     assert parse_secret_field_redaction() == "svc:***"
     assert parse_secret_field_type_error() == "expected string, got number"

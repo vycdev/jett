@@ -59,10 +59,20 @@ function decode_reflected[T](raw: JsonValue) returns result[T, string]:
             return fail(error)
         return ok(item)
 
+    if type_name == "float64":
+        float64 item = json.as_float64(raw) handle error:
+            return fail(error)
+        return ok(item)
+
     if type_name == "bool":
         bool item = json.as_bool(raw) handle error:
             return fail(error)
         return ok(item)
+
+    if type_name == "nothing":
+        if json.is_null(raw) == true:
+            return ok(nothing)
+        return fail("expected null, got {json.kind(raw)}")
 
     if kind == "alias":
         comptime type Base = type.arg[T](0):
@@ -312,6 +322,27 @@ function invalid_refined_list_message() returns string:
     list[int64] raw = coarsen value
     return "{list.length[int64](raw)}"
 
+function decoded_top_level_float() returns float64:
+    JsonValue root = json.parse_raw("2.5") handle error:
+        return -1.0
+    float64 value = decode_reflected[float64](root) handle error:
+        return -1.0
+    return value
+
+function decoded_null_as_nothing() returns string:
+    JsonValue root = json.parse_raw("null") handle error:
+        return error
+    nothing value = decode_reflected[nothing](root) handle error:
+        return error
+    return "null"
+
+function invalid_nothing_message() returns string:
+    JsonValue root = json.parse_raw("0") handle error:
+        return error
+    nothing value = decode_reflected[nothing](root) handle error:
+        return error
+    return "unexpected"
+
 function decoded_top_level_secret_redaction() returns string:
     JsonValue root = json.parse_raw("\"secret-token\"") handle error:
         return error
@@ -353,6 +384,9 @@ verify json_reflection_nested_decoder:
     assert string.contains(invalid_top_level_refinement_message(), "refinement type constraint failed for 'NonEmpty'") == true
     assert decoded_refined_list_count() == 2
     assert string.contains(invalid_refined_list_message(), "refinement type constraint failed for 'NonEmptyNumbers'") == true
+    assert decoded_top_level_float() == 2.5
+    assert decoded_null_as_nothing() == "null"
+    assert invalid_nothing_message() == "expected null, got number"
     assert decoded_top_level_secret_redaction() == "***"
     assert decoded_secret_field_summary() == "svc:***"
     assert string.contains(invalid_secret_field_message(), "token: expected string") == true
