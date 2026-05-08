@@ -69,7 +69,8 @@ objects, alias/refinement base serialization, bitfields, and enums using the
 same string/object shape as the Rust-backed JSON bridge. It relies on reflection
 primitives, trusted `comptime type` binding, and `type.arg[T](index)` for wrapper
 element/value types. The prototype also covers basic string escaping for quotes,
-backslashes, newlines, carriage returns, tabs, and null bytes. It is a proof of
+backslashes, common named control characters, and all other ASCII control bytes
+as `\u00xx` sequences while preserving non-ASCII UTF-8. It is a proof of
 language capability, not yet a stdlib replacement for the Rust-backed builtin.
 
 There are also `.jett` decoder prototypes:

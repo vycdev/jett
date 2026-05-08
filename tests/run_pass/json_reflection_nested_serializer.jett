@@ -43,13 +43,77 @@ struct User:
     token: secret[string]
     audit_tokens: list[secret[string]]
 
+function json_hex_digit(value: int64) returns string:
+    if value == 0:
+        return "0"
+    if value == 1:
+        return "1"
+    if value == 2:
+        return "2"
+    if value == 3:
+        return "3"
+    if value == 4:
+        return "4"
+    if value == 5:
+        return "5"
+    if value == 6:
+        return "6"
+    if value == 7:
+        return "7"
+    if value == 8:
+        return "8"
+    if value == 9:
+        return "9"
+    if value == 10:
+        return "a"
+    if value == 11:
+        return "b"
+    if value == 12:
+        return "c"
+    if value == 13:
+        return "d"
+    if value == 14:
+        return "e"
+    return "f"
+
+function json_escape_byte(byte: int64) returns optional[string]:
+    if byte == 34:
+        return some("\\\"")
+    if byte == 92:
+        return some("\\\\")
+    if byte == 8:
+        return some("\\b")
+    if byte == 12:
+        return some("\\f")
+    if byte == 10:
+        return some("\\n")
+    if byte == 13:
+        return some("\\r")
+    if byte == 9:
+        return some("\\t")
+    if byte < 32:
+        string high = json_hex_digit(byte / 16)
+        string low = json_hex_digit(byte modulo 16)
+        return some("\\u00{high}{low}")
+    return none
+
 function json_quote(raw: string) returns string:
-    string escaped = string.replace(raw, "\\", "\\\\")
-    escaped = string.replace(escaped, "\"", "\\\"")
-    escaped = string.replace(escaped, "\n", "\\n")
-    escaped = string.replace(escaped, "\r", "\\r")
-    escaped = string.replace(escaped, "\t", "\\t")
-    escaped = string.replace(escaped, "\0", "\\u0000")
+    bytes input = bytes.from_string(raw)
+    mutable bytes output = bytes.new()
+    int64 length = bytes.length(view input)
+    mutable int64 chunk_start = 0
+    for index in range(length):
+        int64 byte = bytes.get(view input, index) handle:
+            default -1
+        string escaped = json_escape_byte(byte) handle:
+            default ""
+        if escaped != "":
+            output = bytes.concat(output, bytes.slice(view input, chunk_start, index))
+            output = bytes.concat(output, bytes.from_string(escaped))
+            chunk_start = index + 1
+    output = bytes.concat(output, bytes.slice(view input, chunk_start, length))
+    string escaped = bytes.to_string(output) handle error:
+        default error
     return "\"{escaped}\""
 
 function serialize_reflected[T](view value: T) returns string:
@@ -177,6 +241,26 @@ function reflected_bitfield_json() returns string:
     Packet packet = Packet(version: 4, direction: Direction.south)
     return serialize_reflected[Packet](view packet)
 
+function reflected_control_string_json() returns string:
+    bytes raw = bytes.from_hex("610162080b0c1f") handle error:
+        return error
+    string text = bytes.to_string(raw) handle error:
+        return error
+    return json_quote(text)
+
+function reflected_unicode_roundtrip_hex() returns string:
+    string source_hex = "c3a9e4bda0e5a5bd"
+    bytes raw = bytes.from_hex(source_hex) handle error:
+        return error
+    string text = bytes.to_string(raw) handle error:
+        return error
+    string quoted = json_quote(text)
+    JsonValue parsed = json.parse_raw(quoted) handle error:
+        return error
+    string decoded = json.as_string(parsed) handle error:
+        return error
+    return bytes.to_hex(bytes.from_string(decoded))
+
 verify json_reflection_nested_serializer:
     string raw = reflected_user_json()
     assert string.contains(raw, "userId") == true
@@ -228,3 +312,7 @@ verify json_reflection_nested_serializer:
     assert string.contains(bitfield_raw, "4") == true
     assert string.contains(bitfield_raw, "direction") == true
     assert string.contains(bitfield_raw, "\"south\"") == true
+
+    string control_raw = reflected_control_string_json()
+    assert control_raw == "\"a\\u0001b\\b\\u000b\\f\\u001f\""
+    assert reflected_unicode_roundtrip_hex() == "c3a9e4bda0e5a5bd"
