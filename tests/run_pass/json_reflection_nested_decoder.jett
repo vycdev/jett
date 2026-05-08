@@ -1,0 +1,97 @@
+namespace test
+
+struct Profile:
+    city: string
+    visits: list[int64]
+
+struct User:
+    id: string serialize "userId"
+    active: bool
+    profile: Profile
+    tags: list[string]
+    nickname: optional[string]
+    missing: optional[string]
+
+function decode_reflected[T](raw: JsonValue) returns result[T, string]:
+    string kind = type.kind[T]()
+    string type_name = type.name[T]()
+
+    if type_name == "string":
+        string item = json.as_string(raw) handle error:
+            return fail(error)
+        return ok(item)
+
+    if type_name == "int64":
+        int64 item = json.as_int64(raw) handle error:
+            return fail(error)
+        return ok(item)
+
+    if type_name == "bool":
+        bool item = json.as_bool(raw) handle error:
+            return fail(error)
+        return ok(item)
+
+    if kind == "list":
+        comptime type Elem = type.arg[T](0):
+            int64 length = json.array_length(raw) handle error:
+                return fail(error)
+            mutable list[Elem] items = list.new[Elem]()
+            for index in range(length):
+                JsonValue raw_item = json.index(raw, index) handle:
+                    return fail("missing array item {index}")
+                Elem item = decode_reflected[Elem](raw_item) handle error:
+                    return fail("{index}: {error}")
+                items = list.append[Elem](items, item)
+            return ok(items)
+
+    if kind == "optional":
+        if json.is_null(raw) == true:
+            return ok(none)
+        comptime type Inner = type.arg[T](0):
+            Inner item = decode_reflected[Inner](raw) handle error:
+                return fail(error)
+            return ok(some(item))
+
+    if kind == "struct":
+        mutable TypeConstruction builder = type.construct_start[T]()
+        for field in type.fields[T]():
+            comptime type Field = field.type_info:
+                JsonValue raw_field = json.field(raw, field.serialize_name) handle:
+                    return fail("missing field '{field.serialize_name}'")
+                Field decoded = decode_reflected[Field](raw_field) handle error:
+                    return fail("{field.serialize_name}: {error}")
+                builder = type.construct_put[T, Field](builder, view field, decoded) handle error:
+                    return fail(error)
+        return type.construct_finish[T](builder)
+
+    return fail("unsupported reflected JSON type: {type_name}")
+
+function decoded_nested_summary() returns string:
+    JsonValue root = json.parse_raw("{{\"userId\":\"u1\",\"active\":true,\"profile\":{{\"city\":\"Cluj\",\"visits\":[3,5]}},\"tags\":[\"admin\",\"beta\"],\"nickname\":\"ally\",\"missing\":null}}") handle error:
+        return error
+    User user = decode_reflected[User](root) handle error:
+        return error
+    string nick = user.nickname handle:
+        default "none"
+    string missing = user.missing handle:
+        default "none"
+    return "{user.id}:{user.profile.city}:{list.length[int64](user.profile.visits)}:{list.length[string](user.tags)}:{nick}:{missing}:{user.active}"
+
+function missing_nested_message() returns string:
+    JsonValue root = json.parse_raw("{{\"userId\":\"u1\",\"active\":true,\"profile\":{{\"visits\":[3]}},\"tags\":[],\"nickname\":null,\"missing\":null}}") handle error:
+        return error
+    User user = decode_reflected[User](root) handle error:
+        return error
+    return user.id
+
+function wrong_list_item_message() returns string:
+    JsonValue root = json.parse_raw("{{\"userId\":\"u1\",\"active\":true,\"profile\":{{\"city\":\"Cluj\",\"visits\":[3]}},\"tags\":[1],\"nickname\":null,\"missing\":null}}") handle error:
+        return error
+    User user = decode_reflected[User](root) handle error:
+        return error
+    return user.id
+
+verify json_reflection_nested_decoder:
+    assert decoded_nested_summary() == "u1:Cluj:2:2:ally:none:true"
+    assert missing_nested_message() == "profile: missing field 'city'"
+    assert string.contains(wrong_list_item_message(), "tags: 0: expected string") == true

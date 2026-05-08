@@ -105,9 +105,9 @@ For the eventual block syntax:
 
 ## Recommendation
 
-Extend the `.jett` decoder prototype beyond flat primitive structs next. The
-opaque builder is not the final language shape, but it proves the hard semantic
-part while staying inside existing syntax. As the decoder grows through nested
-structs, wrappers, aliases/refinements, bitfields, and enums, the case for a
+Extend the `.jett` decoder prototype through aliases/refinements, result/map
+shapes, bitfields, and enums next. The opaque builder is not the final language
+shape, but it proves the hard semantic part while staying inside existing
+syntax. As the decoder grows through the remaining cases, the case for a
 cleaner `type.construct[T]:` block will be grounded in real usage instead of
 guesswork.
