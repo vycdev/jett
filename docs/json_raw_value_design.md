@@ -58,6 +58,7 @@ for field in type.fields[T]():
 
 The remaining missing piece is still construction of the final `T` from those
 typed field values. That is tracked in `docs/type_construction_design.md`.
+The current staging recommendation is in `docs/reflected_construction_staging.md`.
 
 ## Open Questions
 

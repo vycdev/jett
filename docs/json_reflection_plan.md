@@ -175,3 +175,5 @@ for the decoded value. See `docs/bitfield_reflection_metadata.md`.
    metadata flows if the serializer prototype exposes ergonomic gaps.
 3. Prototype the reflected construction path described in
    `docs/type_construction_design.md`.
+   The current staging recommendation is the no-syntax opaque builder in
+   `docs/reflected_construction_staging.md`.

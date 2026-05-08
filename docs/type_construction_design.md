@@ -129,7 +129,8 @@ Verdict: preferred direction, pending syntax.
 
 1. Implement the trusted `comptime type Name = info:` binding from
    `docs/comptime_type_bind.md`.
-2. Prototype generated construction for structs only, returning
+2. Prototype the no-syntax opaque builder described in
+   `docs/reflected_construction_staging.md` for structs only, returning
    `result[T, string]` uniformly.
 3. Extend construction to bitfields using `type.bitfield_layout[T]()` for width,
    enum, payload, and byte-order facts.
@@ -178,3 +179,7 @@ This keeps `type.construct` from becoming `json.construct` in disguise.
 - How should extra input fields be handled? The construction primitive should
   probably ignore that policy and let each format module decide before calling
   construction.
+
+See `docs/reflected_construction_staging.md` for the current recommendation:
+prove the semantics with an opaque `TypeConstruction` builder before committing
+to new block syntax.
