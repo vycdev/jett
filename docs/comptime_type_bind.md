@@ -94,23 +94,25 @@ Rules:
 - The compiler lowers the block once per concrete type binding.
 - No runtime `TypeInfo -> type` conversion exists.
 
-Initial implementation can support only `field.type_info` inside loops over
-`type.fields[T]()` plus `type.info[T]()` for root tests. That covers struct and
-bitfield fields uniformly, though bitfield-specific metadata such as width and
-enum annotations is a separate reflection question. Support for nested `args`
-can follow once the trust provenance is represented cleanly.
+The current implementation supports:
 
-Current implementation status: the first compiler slice supports direct
-`type.info[T]()` initializers only. Binding from `field.type_info` and nested
-`TypeInfo.args` still needs trusted provenance and comptime loop/type
-specialization.
+- direct roots such as `comptime type Root = type.info[T]():`
+- `field.type_info` when `field` is the loop variable of a direct
+  `for field in type.fields[T]():` loop
+
+The field form is intentionally narrow. Binding through an intermediate list,
+through reassigned metadata, or from user-constructed `TypeInfo` is rejected or
+fails runtime validation. Bitfield fields share the same `type.fields[T]()` path;
+bitfield-specific metadata such as width and enum annotations is still exposed
+separately. Binding nested `TypeInfo.args` remains pending until provenance can
+be represented cleanly through recursive metadata.
 
 ## Tests
 
 Run-pass:
 
 - A reflection-driven serializer that handles primitive struct and bitfield
-  fields without comparing `field.type_name` strings.
+  fields with `comptime type Field = field.type_info:`.
 - Nested fields: `list[User]`, `optional[User]`, `result[int64, string]`,
   `map[string, int64]`.
 - Generic structs: `Box[list[int64]]`.
@@ -123,16 +125,15 @@ Compile-fail:
 - Binding from non-`TypeInfo` values.
 - Using the bound type outside the block.
 - `type.field_value[T, Wrong]` still rejects mismatched metadata.
+- Binding through an intermediate `list[TypeField]` rather than a direct
+  `type.fields[T]()` loop.
 - Binding a field from one owner and reading it from another owner remains
   rejected.
 
 ## Open Questions
 
-- What is the exact syntax? `comptime type Field = info:` is readable and
-  matches existing indentation, but it reserves a new statement form.
-- How should trust provenance be represented? A hidden runtime tag on
-  interpreter `Value::Struct`, an AST provenance side table, or a dedicated
-  internal reflection value could all work.
+- Should broader trust provenance use hidden tags on interpreter `Value::Struct`,
+  an AST provenance side table, or a dedicated internal reflection value?
 - Should nested `TypeInfo.args` preserve provenance automatically, or should
   there be explicit helper functions such as `type.arg(info, index)`?
 - Can the same primitive bind enum variant payload fields from

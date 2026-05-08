@@ -95,6 +95,8 @@ struct TypeChecker<'a> {
     monomorphized_structs: HashMap<(String, Vec<TypeId>), TypeId>,
     /// Active type variable substitution during monomorphization (type_param_name → TypeId).
     type_var_subst: HashMap<String, TypeId>,
+    /// Trusted field types currently available from direct `type.fields[T]()` loops.
+    reflected_field_type_scopes: Vec<HashMap<String, Vec<TypeId>>>,
 
     // -- Generic function support --
     /// AST templates for user-defined generic functions (have type_params).
@@ -138,6 +140,7 @@ impl<'a> TypeChecker<'a> {
             generic_struct_templates: HashMap::new(),
             monomorphized_structs: HashMap::new(),
             type_var_subst: HashMap::new(),
+            reflected_field_type_scopes: Vec::new(),
             generic_function_templates: HashMap::new(),
             current_respond_type: None,
         };
@@ -2499,26 +2502,79 @@ impl<'a> TypeChecker<'a> {
     fn check_comptime_type_bind(&mut self, bind: &ast::ComptimeTypeBindStmt) {
         self.check_expr(&bind.value);
 
-        let Some(bound_type_expr) = comptime_type_info_binding(&bind.value) else {
-            self.sink
-                .emit(errors::invalid_comptime_type_binding(bind.value.span()));
-            self.check_block(&bind.body);
-            return;
-        };
+        if let Some(bound_type_expr) = comptime_type_info_binding(&bind.value) {
+            let bound_ty = self.resolve_type_expr(bound_type_expr);
+            if bound_ty == TypeInterner::ERROR {
+                self.check_block(&bind.body);
+                return;
+            }
 
-        let bound_ty = self.resolve_type_expr(bound_type_expr);
-        if bound_ty == TypeInterner::ERROR {
-            self.check_block(&bind.body);
+            self.check_comptime_type_bind_body(&bind.name.name, bound_ty, &bind.body);
             return;
         }
 
-        let previous = self.type_var_subst.insert(bind.name.name.clone(), bound_ty);
+        if let Some(field_name) = reflected_field_type_info_binding(&bind.value) {
+            if let Some(field_types) = self.reflected_field_types_for_name(field_name) {
+                for field_ty in field_types {
+                    if field_ty != TypeInterner::ERROR {
+                        self.check_comptime_type_bind_body(&bind.name.name, field_ty, &bind.body);
+                    }
+                }
+                return;
+            }
+        }
+
+        self.sink
+            .emit(errors::invalid_comptime_type_binding(bind.value.span()));
         self.check_block(&bind.body);
+    }
+
+    fn check_comptime_type_bind_body(&mut self, name: &str, bound_ty: TypeId, body: &Block) {
+        let previous = self.type_var_subst.insert(name.to_string(), bound_ty);
+        self.check_block(body);
         if let Some(previous) = previous {
-            self.type_var_subst.insert(bind.name.name.clone(), previous);
+            self.type_var_subst.insert(name.to_string(), previous);
         } else {
-            self.type_var_subst.remove(&bind.name.name);
+            self.type_var_subst.remove(name);
         }
+    }
+
+    fn reflected_field_types_for_name(&self, name: &str) -> Option<Vec<TypeId>> {
+        self.reflected_field_type_scopes
+            .iter()
+            .rev()
+            .find_map(|scope| scope.get(name))
+            .cloned()
+    }
+
+    fn reflected_field_types_for_owner(&self, owner_ty: TypeId) -> Vec<TypeId> {
+        match self.interner.resolve(owner_ty) {
+            Type::Struct(sid) => self
+                .interner
+                .resolve_struct(*sid)
+                .fields
+                .iter()
+                .map(|(_, ty)| *ty)
+                .collect(),
+            Type::Bitfield(bid) => self
+                .interner
+                .resolve_bitfield(*bid)
+                .fields
+                .iter()
+                .map(|field| field.ty)
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    fn push_reflected_field_type_scope(&mut self, field_name: &str, field_types: Vec<TypeId>) {
+        let mut scope = HashMap::new();
+        scope.insert(field_name.to_string(), field_types);
+        self.reflected_field_type_scopes.push(scope);
+    }
+
+    fn pop_reflected_field_type_scope(&mut self) {
+        self.reflected_field_type_scopes.pop();
     }
 
     fn check_trace(&mut self, trace_stmt: &ast::TraceStmt) {
@@ -2804,7 +2860,19 @@ impl<'a> TypeChecker<'a> {
             }
         }
 
-        self.check_block(&for_stmt.body);
+        if let Some(owner_ty_expr) = comptime_type_fields_binding(&for_stmt.iterable) {
+            let owner_ty = self.resolve_type_expr(owner_ty_expr);
+            let field_types = if owner_ty == TypeInterner::ERROR {
+                Vec::new()
+            } else {
+                self.reflected_field_types_for_owner(owner_ty)
+            };
+            self.push_reflected_field_type_scope(&for_stmt.variable.name, field_types);
+            self.check_block(&for_stmt.body);
+            self.pop_reflected_field_type_scope();
+        } else {
+            self.check_block(&for_stmt.body);
+        }
     }
 
     fn check_while(&mut self, while_stmt: &ast::WhileStmt) {
@@ -4608,11 +4676,41 @@ fn comptime_type_info_binding(expr: &Expr) -> Option<&TypeExpr> {
     type_args.first()
 }
 
+fn comptime_type_fields_binding(expr: &Expr) -> Option<&TypeExpr> {
+    let Expr::GenericCall(callee, type_args, args, _) = expr else {
+        return None;
+    };
+    if type_args.len() != 1 || !args.is_empty() || !is_type_fields_callee(callee) {
+        return None;
+    }
+    type_args.first()
+}
+
+fn reflected_field_type_info_binding(expr: &Expr) -> Option<&str> {
+    let Expr::FieldAccess(base, field, _) = expr else {
+        return None;
+    };
+    if field.name != "type_info" {
+        return None;
+    }
+    let Expr::Ident(ident) = base.as_ref() else {
+        return None;
+    };
+    Some(&ident.name)
+}
+
 fn is_type_info_callee(callee: &Expr) -> bool {
     let Expr::FieldAccess(base, field, _) = callee else {
         return false;
     };
     field.name == "info" && matches!(base.as_ref(), Expr::Ident(ident) if ident.name == "type")
+}
+
+fn is_type_fields_callee(callee: &Expr) -> bool {
+    let Expr::FieldAccess(base, field, _) = callee else {
+        return false;
+    };
+    field.name == "fields" && matches!(base.as_ref(), Expr::Ident(ident) if ident.name == "type")
 }
 
 // ---------------------------------------------------------------------------

@@ -1,0 +1,13 @@
+# ERROR: E0345
+namespace test
+
+struct User:
+    id: string
+
+function bad() returns string:
+    list[TypeField] fields = type.fields[User]()
+    string found = "missing"
+    for field in fields:
+        comptime type Field = field.type_info:
+            found = type.name[Field]()
+    return found

@@ -32,6 +32,9 @@ Implemented reflection primitives:
 - `type.field_value[T, U](view value, view field)` reads a field by metadata
   after checking that the metadata belongs to `T` and that `U` matches the
   reflected field type.
+- `comptime type Name = type.info[T]():` binds a direct reflected root as a
+  scoped type, and `comptime type Field = field.type_info:` works inside direct
+  `for field in type.fields[T]():` loops.
 
 JSON serialization is still Rust-backed, but it now consumes the same field
 metadata exposed to Jett code. The active tests cover nested structs, bitfields,
@@ -139,9 +142,9 @@ for the decoded value. See `docs/bitfield_reflection_metadata.md`.
 
 ## Suggested Next Steps
 
-1. Extend `comptime type` binding from direct `type.info[T]()` roots to trusted
-   reflected field metadata and nested `TypeInfo.args`.
-2. Implement a nested `.jett` serializer prototype for primitives, structs,
+1. Implement a nested `.jett` serializer prototype for primitives, structs,
    lists, maps with string keys, optionals, and results.
-3. Implement the trusted `comptime type` binding, then prototype the reflected
-   construction path described in `docs/type_construction_design.md`.
+2. Extend trusted `comptime type` binding from direct fields to nested
+   `TypeInfo.args`.
+3. Prototype the reflected construction path described in
+   `docs/type_construction_design.md`.

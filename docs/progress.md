@@ -54,7 +54,7 @@
 |---|---|---|---|
 | Comptime interpreter | `jett_comptime` | 134 | Done |
 | Verify blocks (compile-time) | `jett_comptime/verify` | — | Done |
-| Comptime type reflection (`type.name`, `type.kind`, `type.has_secret`, `type.info`, `type.fields`, `type.bitfield_layout`, `type.bitfield_fields`, `type.variants`, `type.field_value`, direct `comptime type` binding) | `jett_comptime` | — | Partial (construction and richer typed dispatch pending) |
+| Comptime type reflection (`type.name`, `type.kind`, `type.has_secret`, `type.info`, `type.fields`, `type.bitfield_layout`, `type.bitfield_fields`, `type.variants`, `type.field_value`, direct and field-loop `comptime type` binding) | `jett_comptime` | — | Partial (construction and richer typed dispatch pending) |
 | 25+ stdlib builtins in interpreter | `jett_comptime` | — | Done |
 
 ### Phase F: Interpreter — COMPLETE

@@ -3,6 +3,10 @@ namespace test
 struct Box[T]:
     value: T
 
+struct User:
+    id: string
+    age: int64
+
 function bound_type_name() returns string:
     string found = "missing"
     comptime type Bound = type.info[int64]():
@@ -27,7 +31,31 @@ function bound_generic_field_type_name() returns string:
                 found = field.type_info.type_name
     return found
 
+function bound_reflected_field_types_for[T](view value: T) returns string:
+    list[string] parts = list.new[string]()
+    for field in type.fields[T]():
+        comptime type Field = field.type_info:
+            Field field_value = type.field_value[T, Field](view value, view field)
+            string type_name = type.name[Field]()
+            parts = list.append[string](parts, "{field.name}:{type_name}")
+    return string.join(parts, ";")
+
+function bound_reflected_field_types() returns string:
+    User user = User(id: "u1", age: 42)
+    return bound_reflected_field_types_for[User](view user)
+
+function bound_reflected_generic_field_type() returns string:
+    Box[list[int64]] box = Box[list[int64]](value: list(1, 2, 3))
+    string found = "missing"
+    for field in type.fields[Box[list[int64]]]():
+        comptime type Field = field.type_info:
+            Field field_value = type.field_value[Box[list[int64]], Field](view box, view field)
+            found = type.name[Field]()
+    return found
+
 verify comptime_type_bind:
     assert bound_type_name() == "int64"
     assert bound_generic_field_kind() == "primitive"
     assert bound_generic_field_type_name() == "string"
+    assert bound_reflected_field_types() == "id:string;age:int64"
+    assert bound_reflected_generic_field_type() == "list[int64]"
