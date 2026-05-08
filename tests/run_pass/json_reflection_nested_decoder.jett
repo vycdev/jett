@@ -2,6 +2,7 @@ namespace test
 
 type Scores = map[string, int64]
 type NonEmpty = string where string.char_count(value) > 0
+type NonEmptyNumbers = list[int64] where list.length(value) > 0
 
 enum Direction:
     north
@@ -270,6 +271,36 @@ function invalid_bitfield_enum_message() returns string:
         return error
     return "unexpected success"
 
+function decoded_top_level_refinement() returns string:
+    JsonValue root = json.parse_raw("\"ready\"") handle error:
+        return error
+    NonEmpty value = decode_reflected[NonEmpty](root) handle error:
+        return error
+    return coarsen value
+
+function invalid_top_level_refinement_message() returns string:
+    JsonValue root = json.parse_raw("\"\"") handle error:
+        return error
+    NonEmpty value = decode_reflected[NonEmpty](root) handle error:
+        return error
+    return coarsen value
+
+function decoded_refined_list_count() returns int64:
+    JsonValue root = json.parse_raw("[3,5]") handle error:
+        return -1
+    NonEmptyNumbers value = decode_reflected[NonEmptyNumbers](root) handle error:
+        return -1
+    list[int64] raw = coarsen value
+    return list.length[int64](raw)
+
+function invalid_refined_list_message() returns string:
+    JsonValue root = json.parse_raw("[]") handle error:
+        return error
+    NonEmptyNumbers value = decode_reflected[NonEmptyNumbers](root) handle error:
+        return error
+    list[int64] raw = coarsen value
+    return "{list.length[int64](raw)}"
+
 verify json_reflection_nested_decoder:
     assert decoded_nested_summary() == "u1:Cluj:4:5:true:true:7:2:2:ally:none:3:2:true:ready:7:true"
     assert decoded_result_failure() == "bad"
@@ -279,3 +310,7 @@ verify json_reflection_nested_decoder:
     assert string.contains(invalid_bitfield_message(), "header: bitfield 'Header' field 'version'") == true
     assert string.contains(invalid_enum_payload_message(), "shape: enum variant 'Shape.point' expects 2 payload field(s), got 1") == true
     assert string.contains(invalid_bitfield_enum_message(), "header: protocol: unknown enum variant 'Protocol.bogus'") == true
+    assert decoded_top_level_refinement() == "ready"
+    assert string.contains(invalid_top_level_refinement_message(), "refinement type constraint failed for 'NonEmpty'") == true
+    assert decoded_refined_list_count() == 2
+    assert string.contains(invalid_refined_list_message(), "refinement type constraint failed for 'NonEmptyNumbers'") == true

@@ -76,9 +76,10 @@ flat-struct path, and `tests/run_pass/json_reflection_nested_decoder.jett`
 recursively handles primitives, nested structs, lists, sets, maps with string
 keys, optionals, results, aliases/refinements, and `serialize_name` by walking
 raw `JsonValue` and finishing structs, bitfields, and enums with
-`TypeConstruction`. It treats absent optional fields as `none`;
-enum-annotated bitfields are decoded through the ordinary enum branch plus
-bitfield finish validation. Secret/public policy is still future work.
+`TypeConstruction`. It treats absent optional fields as `none`, validates
+top-level refinements including refinements over generic shapes, and decodes
+enum-annotated bitfields through the ordinary enum branch plus bitfield finish
+validation. Secret/public policy is still future work.
 
 `json.parse[T](raw)` has a Rust-backed bridge: it requires one type argument,
 accepts a string, returns `result[T, string]`, and supports core primitives,
@@ -146,9 +147,8 @@ enums with primitive, list/set/map, optional, result, alias, and refinement
 fields through `TypeConstruction`, but a full replacement still needs the
 remaining format policy.
 
-Current nuance: refinement fields are validated at `construct_finish`, but the
-generic decoder should still grow a cleaner direct boundary for top-level
-refinement targets.
+Refinement fields are validated at `construct_finish`; direct top-level
+refinement targets validate through the decoder's refinement branch.
 
 Options:
 
@@ -202,5 +202,3 @@ for the decoded value. See `docs/bitfield_reflection_metadata.md`.
 1. Add public/secret policy to the decoder prototype.
 2. Harden the `.jett` serializer prototype toward stdlib quality: escaping,
    enum/bitfield policy, alias/refinement behavior, and public/secret modes.
-3. Harden top-level alias/refinement decoding so it validates outside struct
-   construction too.
