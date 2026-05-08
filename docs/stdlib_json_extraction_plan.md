@@ -19,8 +19,10 @@ the public `json.*` API.
   sibling project modules, and the entry module in the interpreter.
 - `build_source` and `test_file` also prepend stdlib modules, so LSP-style
   validation and `jett test file` exercise the same prelude path.
-- Namespaces are parsed and resolved as declarations, but top-level functions
-  and types are still effectively registered by flat names.
+- Namespaces are parsed and resolved as declarations. Top-level functions are
+  now registered under both their historical flat name and a
+  `namespace.name` qualified name for typechecking and interpretation; types
+  are still effectively registered by flat names.
 - `use` declarations bind aliases or final path segments, but they do not yet
   import a namespace registry.
 - Builtin module prefixes such as `json`, `type`, `list`, `string`, and `bytes`
@@ -40,6 +42,9 @@ prefix:
 - `json_serialize_public_reflected[T](view value)`
 - `json_decode_reflected[T](raw: JsonValue)`
 - `json_parse_reflected[T](raw: string)`
+
+The raw-string wrapper is also exercised through its qualified stdlib staging
+name, `stdlib_json.json_parse_reflected[T](raw)`.
 
 The run-pass fixtures still own the test-specific type definitions and the
 flat decoder prototype:
@@ -79,18 +84,21 @@ This is still intentionally simple: files are collected from repo-local
 `stdlib/` and prepended before project modules. Dependency ordering is lexical
 for now.
 
-### 2. Qualified User Functions
+### 2. Public `namespace json`
 
-Today, generic user functions are easiest to call by simple identifier, while
-public JSON APIs are dotted calls such as `json.parse[T](raw)`.
+Generic and non-generic user functions can now be called through a qualified
+namespace name such as `helpers.wrap[T](value)` or
+`stdlib_json.json_parse_reflected[T](raw)`.
 
-Moving JSON into `.jett` needs namespace-qualified symbols:
+Moving JSON into `.jett` still needs the public `json` namespace handoff:
 
-- functions and types should be registered under `namespace.name`,
-- dotted generic calls should resolve to user functions before falling back to
-  hardcoded builtins,
-- `use` should resolve against known namespaces rather than only binding a
-  decorative alias.
+- `namespace json` still collides with the compiler's hardcoded `json` builtin
+  module binding,
+- the Rust-backed `json.parse`, `json.serialize`, and
+  `json.serialize_public` paths still carry compiler-enforced policy checks,
+- `use` still resolves only a namespace-looking binding rather than importing a
+  real namespace registry,
+- types are not yet registered under qualified namespace names.
 
 This is larger than JSON and should be staged carefully.
 
@@ -128,8 +136,9 @@ the module cleanly probably needs an export rule or another visibility story.
    - `json_decode_reflected[T](raw: JsonValue)` exists in stdlib.
    - `json_parse_reflected[T](raw: string)` exists in stdlib as the raw-string
      wrapper around `json.parse_raw` and the reflected decoder.
-3. Implement namespace-qualified symbol registration and dotted user-function
-   calls.
+3. Resolve the public `namespace json` collision with the hardcoded builtin
+   module binding and decide how compiler policy checks hand off to stdlib
+   functions.
 4. Move the extracted functions into `namespace json` behind the real public
    names, while retaining compiler policy checks for secrets, `view`, map keys,
    and handled results.

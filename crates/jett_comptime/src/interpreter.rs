@@ -3,10 +3,11 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use rand::Rng;
 use serde_json::Value as JsonValue;
 
+use jett_common::FileId;
 use jett_parser::ast::{
     ActorDef, BinOp, BitfieldDef, BitfieldFieldKind, Block, CallArg, EnumDef, Expr, FunctionDef,
-    Ident, ImplementBlock, InterfaceDecl, MachineDef, Pattern, PipelineStep, Stmt, StringPart,
-    StructDef, TypeAlias, TypeExpr, UnaryOp,
+    Ident, ImplementBlock, InterfaceDecl, Item, MachineDef, Module, Pattern, PipelineStep, Stmt,
+    StringPart, StructDef, TypeAlias, TypeExpr, UnaryOp,
 };
 
 use crate::value::Value;
@@ -331,6 +332,74 @@ impl Interpreter {
     /// Register a function definition so it can be called later.
     pub fn register_function(&mut self, func: &FunctionDef) {
         self.functions.insert(func.name.name.clone(), func.clone());
+    }
+
+    /// Register a function under both the historical flat name and the current
+    /// namespace-qualified name.
+    pub fn register_function_in_namespace(&mut self, namespace: Option<&str>, func: &FunctionDef) {
+        self.register_function(func);
+        if let Some(namespace) = namespace {
+            self.functions
+                .insert(format!("{namespace}.{}", func.name.name), func.clone());
+        }
+    }
+
+    /// Register all runtime-visible declarations from a parsed module.
+    pub fn register_module(&mut self, module: &Module) {
+        let mut current_file = None;
+        let mut current_namespace = None;
+        for item in &module.items {
+            Self::update_current_namespace(item, &mut current_file, &mut current_namespace);
+            match item {
+                Item::Function(func) => {
+                    self.register_function_in_namespace(current_namespace.as_deref(), func)
+                }
+                Item::TypeAlias(alias) => self.register_type_alias(alias),
+                Item::Interface(interface) => self.register_interface(interface),
+                Item::Implement(block) => self.register_implement_block(block),
+                Item::Struct(strukt) => self.register_struct(strukt),
+                Item::Enum(enm) => self.register_enum(enm),
+                Item::Bitfield(bitfield) => self.register_bitfield(bitfield),
+                Item::Machine(machine) => self.register_machine(machine),
+                Item::Actor(actor) => self.register_actor(actor),
+                _ => {}
+            }
+        }
+    }
+
+    fn item_file(item: &Item) -> FileId {
+        match item {
+            Item::Namespace(ns) => ns.span.file,
+            Item::Function(func) => func.span.file,
+            Item::Mutual(block) => block.span.file,
+            Item::Interface(interface) => interface.span.file,
+            Item::Implement(block) => block.span.file,
+            Item::Struct(strukt) => strukt.span.file,
+            Item::Bitfield(bitfield) => bitfield.span.file,
+            Item::Enum(enm) => enm.span.file,
+            Item::Machine(machine) => machine.span.file,
+            Item::Actor(actor) => actor.span.file,
+            Item::VarDecl(decl) => decl.span.file,
+            Item::Verify(verify) => verify.span.file,
+            Item::Property(prop) => prop.span.file,
+            Item::TypeAlias(alias) => alias.span.file,
+        }
+    }
+
+    fn update_current_namespace(
+        item: &Item,
+        current_file: &mut Option<FileId>,
+        current_namespace: &mut Option<String>,
+    ) {
+        let item_file = Self::item_file(item);
+        if current_file.is_some_and(|file| file != item_file) {
+            *current_namespace = None;
+        }
+        *current_file = Some(item_file);
+
+        if let Item::Namespace(ns) = item {
+            *current_namespace = Some(ns.name.name.clone());
+        }
     }
 
     /// Register a user-defined struct so it can be constructed and its methods

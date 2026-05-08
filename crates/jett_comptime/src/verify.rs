@@ -93,46 +93,22 @@ pub fn run_verify_blocks_detailed(module: &Module) -> Vec<VerifyResult> {
 
     // First pass: register all functions and type aliases so verify blocks
     // can call them and use refinement types.
+    interp.register_module(module);
     let mut legacy_verify_functions: Vec<FunctionDef> = Vec::new();
     let mut verify_blocks: Vec<VerifyBlock> = Vec::new();
     let mut property_blocks: Vec<PropertyBlock> = Vec::new();
     for item in &module.items {
         match item {
             Item::Function(func) => {
-                interp.register_function(func);
                 if has_assert_stmts(func) && func.params.is_empty() && func.name.name != "main" {
                     legacy_verify_functions.push(func.clone());
                 }
-            }
-            Item::Interface(interface) => {
-                interp.register_interface(interface);
-            }
-            Item::Implement(block) => {
-                interp.register_implement_block(block);
-            }
-            Item::Struct(strukt) => {
-                interp.register_struct(strukt);
-            }
-            Item::Enum(enm) => {
-                interp.register_enum(enm);
-            }
-            Item::Bitfield(bitfield) => {
-                interp.register_bitfield(bitfield);
             }
             Item::Verify(vb) => {
                 verify_blocks.push(vb.clone());
             }
             Item::Property(pb) => {
                 property_blocks.push(pb.clone());
-            }
-            Item::TypeAlias(alias) => {
-                interp.register_type_alias(alias);
-            }
-            Item::Machine(machine) => {
-                interp.register_machine(machine);
-            }
-            Item::Actor(actor) => {
-                interp.register_actor(actor);
             }
             _ => {}
         }

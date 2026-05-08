@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use jett_common::Span;
+use jett_common::{FileId, Span};
 use jett_diagnostics::{Diagnostic, DiagnosticSink};
 use jett_parser::ast::{
     self, BinOp, Block, Expr, FunctionDef, Item, Module, Stmt, StringPart, TypeExpr, UnaryOp,
@@ -75,6 +75,9 @@ struct TypeChecker<'a> {
     // -- Capability / purity tracking --
     /// Function name → is_pure.  Built during the first pass over the module.
     purity_map: HashMap<String, bool>,
+    /// User-defined function name -> parameter and return types. Entries are
+    /// registered under both the historical flat name and `namespace.name`.
+    function_signatures: HashMap<String, (Vec<TypeId>, TypeId)>,
     /// Name of the function currently being type-checked (None outside functions).
     current_function_name: Option<String>,
     /// Whether the function currently being type-checked is pure.
@@ -135,6 +138,7 @@ impl<'a> TypeChecker<'a> {
             interface_impls: HashMap::new(),
             impl_methods_by_type: HashMap::new(),
             purity_map: HashMap::new(),
+            function_signatures: HashMap::new(),
             current_function_name: None,
             current_function_pure: false,
             in_verify_block: false,
@@ -358,6 +362,53 @@ impl<'a> TypeChecker<'a> {
             span,
         ));
         false
+    }
+
+    fn item_file(item: &Item) -> FileId {
+        match item {
+            Item::Namespace(ns) => ns.span.file,
+            Item::Function(func) => func.span.file,
+            Item::Mutual(block) => block.span.file,
+            Item::Interface(interface) => interface.span.file,
+            Item::Implement(block) => block.span.file,
+            Item::Struct(strukt) => strukt.span.file,
+            Item::Bitfield(bitfield) => bitfield.span.file,
+            Item::Enum(enm) => enm.span.file,
+            Item::Machine(machine) => machine.span.file,
+            Item::Actor(actor) => actor.span.file,
+            Item::VarDecl(decl) => decl.span.file,
+            Item::Verify(verify) => verify.span.file,
+            Item::Property(prop) => prop.span.file,
+            Item::TypeAlias(alias) => alias.span.file,
+        }
+    }
+
+    fn update_current_namespace(
+        item: &Item,
+        current_file: &mut Option<FileId>,
+        current_namespace: &mut Option<String>,
+    ) {
+        let item_file = Self::item_file(item);
+        if current_file.is_some_and(|file| file != item_file) {
+            *current_namespace = None;
+        }
+        *current_file = Some(item_file);
+
+        if let Item::Namespace(ns) = item {
+            *current_namespace = Some(ns.name.name.clone());
+        }
+    }
+
+    fn namespace_qualified_name(namespace: Option<&str>, name: &str) -> Option<String> {
+        namespace.map(|ns| format!("{ns}.{name}"))
+    }
+
+    fn function_lookup_names(namespace: Option<&str>, name: &str) -> Vec<String> {
+        let mut names = vec![name.to_string()];
+        if let Some(qualified) = Self::namespace_qualified_name(namespace, name) {
+            names.push(qualified);
+        }
+        names
     }
 
     fn declaration_def_id(&self, span: Span) -> Option<DefId> {
@@ -1871,25 +1922,51 @@ impl<'a> TypeChecker<'a> {
 
         // Third pass: register all top-level function signatures into the type env
         // and build the purity map.
+        let mut current_file = None;
+        let mut current_namespace = None;
         for item in &module.items {
+            Self::update_current_namespace(item, &mut current_file, &mut current_namespace);
             match item {
                 Item::Mutual(block) => {
                     for decl in &block.declarations {
                         self.register_function_decl_sig(decl);
                         let is_pure = Self::params_are_pure(&decl.params);
-                        self.purity_map.insert(decl.name.name.clone(), is_pure);
+                        let signature = self.function_decl_signature(decl);
+                        for name in Self::function_lookup_names(
+                            current_namespace.as_deref(),
+                            &decl.name.name,
+                        ) {
+                            self.function_signatures
+                                .insert(name.clone(), signature.clone());
+                            self.purity_map.insert(name, is_pure);
+                        }
                     }
                 }
                 Item::Function(func) => {
                     if func.type_params.is_empty() {
                         self.register_function_sig(func);
+                        let signature = self.function_signature(func);
+                        for name in Self::function_lookup_names(
+                            current_namespace.as_deref(),
+                            &func.name.name,
+                        ) {
+                            self.function_signatures.insert(name, signature.clone());
+                        }
                     } else {
                         // Generic function — store the template; type checking happens at call sites.
-                        self.generic_function_templates
-                            .insert(func.name.name.clone(), func.clone());
+                        for name in Self::function_lookup_names(
+                            current_namespace.as_deref(),
+                            &func.name.name,
+                        ) {
+                            self.generic_function_templates.insert(name, func.clone());
+                        }
                     }
                     let is_pure = Self::function_is_pure(func);
-                    self.purity_map.insert(func.name.name.clone(), is_pure);
+                    for name in
+                        Self::function_lookup_names(current_namespace.as_deref(), &func.name.name)
+                    {
+                        self.purity_map.insert(name, is_pure);
+                    }
                 }
                 Item::Interface(def) => {
                     for method in &def.methods {
@@ -2502,6 +2579,20 @@ impl<'a> TypeChecker<'a> {
             return_type,
             is_pure: Self::params_are_pure(&decl.params),
         }
+    }
+
+    fn function_signature(&mut self, func: &FunctionDef) -> (Vec<TypeId>, TypeId) {
+        let params = func
+            .params
+            .iter()
+            .map(|p| self.resolve_type_expr(&p.ty))
+            .collect();
+        let return_type = func
+            .return_type
+            .as_ref()
+            .map(|t| self.resolve_type_expr(t))
+            .unwrap_or(TypeInterner::NOTHING);
+        (params, return_type)
     }
 
     fn function_decl_signature(&mut self, decl: &ast::FunctionDecl) -> (Vec<TypeId>, TypeId) {
@@ -4027,9 +4118,9 @@ impl<'a> TypeChecker<'a> {
 
         // Check for generic function call: `name[T](args...)`.
         if !type_args.is_empty() {
-            if let Expr::Ident(ident) = callee {
-                if self.generic_function_templates.contains_key(&ident.name) {
-                    let template = self.generic_function_templates[&ident.name].clone();
+            if let Some(function_name) = callee_name.as_deref() {
+                if let Some(template) = self.generic_function_templates.get(function_name).cloned()
+                {
                     let concrete_args: Vec<TypeId> = type_args
                         .iter()
                         .map(|a| self.resolve_type_expr(a))
@@ -4039,7 +4130,7 @@ impl<'a> TypeChecker<'a> {
                         self.sink.emit(errors::unknown_type(
                             &format!(
                                 "{} (expected {} type argument(s), got {})",
-                                ident.name,
+                                function_name,
                                 template.type_params.len(),
                                 concrete_args.len()
                             ),
@@ -4073,7 +4164,7 @@ impl<'a> TypeChecker<'a> {
                     // Check argument count and types.
                     if args.len() != param_types.len() {
                         self.sink.emit(errors::argument_count_mismatch(
-                            &ident.name,
+                            function_name,
                             param_types.len(),
                             args.len(),
                             span,
@@ -4120,9 +4211,23 @@ impl<'a> TypeChecker<'a> {
             }
         }
 
-        let builtin_signature = self.builtin_signature(callee, type_args, span);
+        let user_function_signature = if type_args.is_empty() {
+            callee_name
+                .as_deref()
+                .and_then(|name| self.function_signatures.get(name).cloned())
+        } else {
+            None
+        };
 
-        let (param_types, return_type) = if let Some(signature) = builtin_signature {
+        let builtin_signature = if user_function_signature.is_none() {
+            self.builtin_signature(callee, type_args, span)
+        } else {
+            None
+        };
+
+        let (param_types, return_type) = if let Some(signature) = user_function_signature {
+            signature
+        } else if let Some(signature) = builtin_signature {
             signature
         } else {
             let callee_ty = self.check_expr(callee);

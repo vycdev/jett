@@ -336,19 +336,7 @@ fn register_module_items(
     interp: &mut jett_comptime::interpreter::Interpreter,
     module: &jett_parser::ast::Module,
 ) {
-    for item in &module.items {
-        match item {
-            Item::Function(func) => interp.register_function(func),
-            Item::TypeAlias(alias) => interp.register_type_alias(alias),
-            Item::Interface(interface) => interp.register_interface(interface),
-            Item::Implement(block) => interp.register_implement_block(block),
-            Item::Struct(strukt) => interp.register_struct(strukt),
-            Item::Enum(enm) => interp.register_enum(enm),
-            Item::Bitfield(bitfield) => interp.register_bitfield(bitfield),
-            Item::Actor(actor) => interp.register_actor(actor),
-            _ => {}
-        }
-    }
+    interp.register_module(module);
 }
 
 fn prepend_support_modules(module: &mut Module, support_modules: Vec<Module>) {

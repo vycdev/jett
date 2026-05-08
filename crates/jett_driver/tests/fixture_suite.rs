@@ -192,6 +192,10 @@ run_pass_fixture!(run_pass_stdlib_loading, "stdlib_loading.jett");
 run_pass_fixture!(run_pass_verify_test, "verify_test.jett");
 run_pass_fixture!(run_pass_multi_verify, "multi_verify.jett");
 run_pass_fixture!(
+    run_pass_namespace_qualified_functions,
+    "namespace_qualified_functions.jett"
+);
+run_pass_fixture!(
     run_pass_handle_result_optional,
     "handle_result_optional.jett"
 );

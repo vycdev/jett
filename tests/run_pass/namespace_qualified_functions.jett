@@ -1,0 +1,18 @@
+namespace helpers
+
+function double(value: int64) returns int64:
+    return value * 2
+
+function wrap[T](value: T) returns optional[T]:
+    return some(value)
+
+namespace app
+
+function qualified_summary() returns string:
+    optional[string] maybe = helpers.wrap[string]("ok")
+    string unwrapped = maybe handle:
+        default "none"
+    return "{helpers.double(21)}:{unwrapped}"
+
+verify namespace_qualified_functions:
+    assert qualified_summary() == "42:ok"

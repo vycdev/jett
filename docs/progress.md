@@ -102,6 +102,7 @@
 | Closure captures (inline functions capture immutable enclosing scope) | Done |
 | Function type expressions (`function(T) returns U` in type annotations) | Done |
 | Dotted `use` paths (`use net.http`) | Done |
+| Namespace-qualified user function calls (`helpers.f()`, `helpers.f[T]()`) | Done |
 | Multi-file compilation (project-aware build/run with `jett.proj`) | Done |
 | `range()` builtin (1, 2, or 3 args) | Done |
 | For-in over strings, maps (with `key, value` destructuring), sets | Done |
@@ -154,7 +155,7 @@
 | `set` | Partial (12 builtins: new, add, remove, contains, length, is_empty, to_list, union, intersection, difference) |
 | `map` | Partial (12 builtins: new, length, has/contains_key, get, get_or, insert/set, remove, keys, values, is_empty, merge) |
 | `math` | Partial (20+ builtins: abs, sqrt, pow, floor, ceil, round, clamp, log, log2, log10, min, max, average, median, pi, e, sin, cos, tan, mod, is_even, is_odd, sum) |
-| `json` | Partial (json.serialize, json.serialize_public, json.parse_raw/JsonValue accessors, Rust-backed json.parse bridge with enum, bitfield, secret wrapper, and alias/refinement validation; stdlib-loaded `.jett` public serializer, nested decoder, and raw-string parse wrapper prototypes; decoder uses `TypeConstruction` for nested structs, enum-annotated bitfields, enums, core primitives including bytes/float64/null, secret wrappers, other wrappers, top-level refinements, and missing optional-field defaults) |
+| `json` | Partial (json.serialize, json.serialize_public, json.parse_raw/JsonValue accessors, Rust-backed json.parse bridge with enum, bitfield, secret wrapper, and alias/refinement validation; stdlib-loaded `.jett` public serializer, nested decoder, and raw-string parse wrapper prototypes, including qualified `stdlib_json.json_parse_reflected[T]`; decoder uses `TypeConstruction` for nested structs, enum-annotated bitfields, enums, core primitives including bytes/float64/null, secret wrappers, other wrappers, top-level refinements, and missing optional-field defaults) |
 | `random` | Partial (5 builtins: int64, float64, bool, choice, shuffle) |
 | `crypto` | Partial (sha256, md5) |
 | `encoding` | Partial (6 builtins: base64_encode, base64_decode, hex_encode, hex_decode, url_encode, url_decode) |
