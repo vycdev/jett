@@ -541,3 +541,12 @@ pub fn json_map_key_must_be_string(key_type: &str, span: Span) -> Diagnostic {
         span,
     )
 }
+
+/// E0344: JSON public serialization of compound values must borrow by view.
+pub fn json_serialize_public_requires_view(type_name: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        344,
+        format!("`json.serialize_public[{type_name}]` requires `view` for non-copy values"),
+        span,
+    )
+}

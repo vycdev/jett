@@ -113,14 +113,17 @@ The design says JSON serialization reads by view:
 json.serialize[User](view user)
 ```
 
-The current builtin checker accepts owned arguments too, and active primitive
-tests still use literals. Tightening this should be done deliberately:
+The builtin checker now requires `view` for non-copy compound values passed to
+`json.serialize_public[T]`, while copy primitive conveniences remain allowed.
+`json.serialize[T]` still accepts owned arguments in some tests. Tightening the
+remaining surface should be done deliberately:
 
 - allow literals and copy primitives without explicit `view`, or
 - require `view` uniformly and update tests/docs together.
 
-Recommendation: enforce `view` for non-copy compound values first, then decide
-whether literals and primitives should remain ergonomic exceptions.
+Recommendation: keep the `json.serialize_public[T]` rule, then decide whether
+`json.serialize[T]` should follow the same non-copy compound rule or require
+`view` uniformly.
 
 ### 5. Bitfield-Specific Metadata
 

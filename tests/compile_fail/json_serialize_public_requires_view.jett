@@ -1,4 +1,6 @@
-# SPEC: JSON serialization is read-only and requires `view` at the call site.
+# ERROR: E0344
+namespace test
+
 struct User:
     id: string
     name: string

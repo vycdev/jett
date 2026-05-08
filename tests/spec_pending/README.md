@@ -14,4 +14,4 @@ yet. They are a spec backlog:
 
 Current pending batch:
 
-- `json.serialize_public[T]` requiring `view` for non-copy compound values
+- None

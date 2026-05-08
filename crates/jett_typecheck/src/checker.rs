@@ -301,6 +301,27 @@ impl<'a> TypeChecker<'a> {
         )
     }
 
+    fn json_read_requires_view(&self, id: TypeId) -> bool {
+        match self.interner.resolve(id) {
+            Type::Int8
+            | Type::Int16
+            | Type::Int32
+            | Type::Int64
+            | Type::Uint8
+            | Type::Uint16
+            | Type::Uint32
+            | Type::Uint64
+            | Type::Float32
+            | Type::Float64
+            | Type::String
+            | Type::Bool
+            | Type::Nothing
+            | Type::Error => false,
+            Type::Refinement { base, .. } => self.json_read_requires_view(*base),
+            _ => true,
+        }
+    }
+
     fn is_secret_type(&self, id: TypeId) -> bool {
         matches!(self.interner.resolve(id), Type::Secret(_))
     }
@@ -3510,6 +3531,19 @@ impl<'a> TypeChecker<'a> {
                     "json.serialize",
                     &self.type_name(value_ty),
                     &self.secret_field_names(value_ty),
+                    args[0].value.span(),
+                ));
+            }
+        }
+
+        if matches!(callee_name.as_deref(), Some("json.serialize_public"))
+            && !checked_arg_types.is_empty()
+            && !matches!(&args[0].value, Expr::View(_, _))
+        {
+            let value_ty = checked_arg_types[0];
+            if self.json_read_requires_view(value_ty) {
+                self.sink.emit(errors::json_serialize_public_requires_view(
+                    &self.type_name(value_ty),
                     args[0].value.span(),
                 ));
             }
