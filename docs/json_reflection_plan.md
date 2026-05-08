@@ -83,8 +83,10 @@ including refinements over generic shapes, and decodes enum-annotated bitfields
 through the ordinary enum branch plus bitfield finish validation. It also
 decodes `secret[T]` by parsing the inner `T` and assigning the result into the
 secret wrapper, matching the Rust-backed `json.parse[T]` input policy while
-keeping output exposure blocked by the ordinary secret type rules. Public-mode
-parsing policy is still future work.
+keeping output exposure blocked by the ordinary secret type rules. See
+`docs/json_public_parse_policy.md` for the current recommendation: avoid a
+public parse API for now, and keep public JSON as an output projection unless a
+future audit-oriented API rejects secret-containing targets outright.
 
 `json.parse[T](raw)` has a Rust-backed bridge: it requires one type argument,
 accepts a string, returns `result[T, string]`, and supports core primitives,
@@ -205,6 +207,7 @@ for the decoded value. See `docs/bitfield_reflection_metadata.md`.
 ## Suggested Next Steps
 
 1. Decide whether a public parse mode is needed, and if so whether it should
-   reject, ignore, or require absent secret fields.
+   reject, ignore, or require absent secret fields. The current recommendation
+   is documented in `docs/json_public_parse_policy.md`.
 2. Harden the `.jett` serializer prototype toward stdlib quality: escaping,
    enum/bitfield policy, alias/refinement behavior, and public/secret modes.
