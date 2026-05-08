@@ -3,6 +3,14 @@ namespace test
 type Labels = list[string]
 type NonEmpty = string where string.char_count(value) > 0
 
+enum Direction:
+    north
+    south
+
+enum Shape:
+    circle(radius: float64)
+    rect(width: float64, height: float64)
+
 struct Profile:
     city: string
     visits: list[int64]
@@ -10,6 +18,10 @@ struct Profile:
 struct AliasRefined:
     labels: Labels
     display: NonEmpty
+
+struct EnumPayload:
+    direction: Direction
+    shape: Shape
 
 struct User:
     id: string serialize "userId"
@@ -39,6 +51,10 @@ function serialize_reflected[T](view value: T) returns string:
         int64 item = value
         return "{item}"
 
+    if type_name == "float64":
+        float64 item = value
+        return "{item}"
+
     if type_name == "bool":
         bool item = value
         return "{item}"
@@ -52,6 +68,19 @@ function serialize_reflected[T](view value: T) returns string:
         comptime type Base = type.arg[T](0):
             Base item = coarsen value
             return serialize_reflected[Base](view item)
+
+    if kind == "enum":
+        TypeVariant variant = type.variant_value[T](view value)
+        if list.length(variant.fields) == 0:
+            return json_quote(variant.name)
+
+        list[string] parts = list.new[string]()
+        for field in type.variant_value[T](view value).fields:
+            comptime type Field = field.type_info:
+                Field item = type.variant_field_value[T, Field](view value, view field)
+                parts = list.append[string](parts, serialize_reflected[Field](view item))
+        string body = string.join(parts, ",")
+        return "{{{json_quote(variant.name)}:[{body}]}}"
 
     if kind == "list":
         comptime type Elem = type.arg[T](0):
@@ -106,6 +135,10 @@ function reflected_alias_refinement_json() returns string:
         return "invalid"
     return serialize_reflected[AliasRefined](view payload)
 
+function reflected_enum_json() returns string:
+    EnumPayload payload = EnumPayload(direction: Direction.north, shape: Shape.circle(2.5))
+    return serialize_reflected[EnumPayload](view payload)
+
 verify json_reflection_nested_serializer:
     string raw = reflected_user_json()
     assert string.contains(raw, "userId") == true
@@ -136,3 +169,10 @@ verify json_reflection_nested_serializer:
     assert string.contains(alias_raw, "[\"core\",\"edge\"]") == true
     assert string.contains(alias_raw, "display") == true
     assert string.contains(alias_raw, "\"ready\"") == true
+
+    string enum_raw = reflected_enum_json()
+    assert string.contains(enum_raw, "direction") == true
+    assert string.contains(enum_raw, "\"north\"") == true
+    assert string.contains(enum_raw, "shape") == true
+    assert string.contains(enum_raw, "circle") == true
+    assert string.contains(enum_raw, "[2.5]") == true

@@ -1,0 +1,9 @@
+# ERROR: E0309
+namespace test
+
+enum Direction:
+    north
+
+function bad_variant_value_arity() returns string:
+    TypeVariant variant = type.variant_value[Direction, string](Direction.north)
+    return variant.name

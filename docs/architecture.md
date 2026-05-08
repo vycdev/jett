@@ -1097,6 +1097,8 @@ The boundary between compiler-generated code and stdlib-implemented code is a cr
 | `type.bitfield_layout[T]()` | Bitfield reflection | `TypeBitfield` metadata for byte order and field-level layout |
 | `type.bitfield_fields[T]()` | Bitfield reflection | Ordered `list[TypeBitfieldField]` metadata for bit widths, payload shape, and enum annotations |
 | `type.variants[T]()` | Enum reflection | Ordered `list[TypeVariant]` metadata for enum variants, discriminants, and payload fields |
+| `type.variant_value[T](view value)` | Enum reflection | Active `TypeVariant` metadata for an enum value |
+| `type.variant_field_value[T, U](view value, view field)` | Enum reflection | Checked payload field read by reflected `TypeField` metadata |
 | `type.field_value[T, U](view value, view field)` | Struct/bitfield reflection | Checked field read by reflected `TypeField` metadata |
 | `T.to_bytes()` / `T.from_bytes()` | Binary serialization | Field-by-field binary packing/unpacking |
 | `Displayable.display()` for structs | Struct implementing `Displayable` | Field-by-field string representation |

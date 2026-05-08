@@ -1,0 +1,12 @@
+# ERROR: E0309
+namespace test
+
+enum Shape:
+    circle(radius: float64)
+
+function bad_variant_field_value_arity() returns string:
+    Shape shape = Shape.circle(2.5)
+    string found = "missing"
+    for field in type.variant_value[Shape](view shape).fields:
+        found = type.variant_field_value[Shape](view shape, view field)
+    return found

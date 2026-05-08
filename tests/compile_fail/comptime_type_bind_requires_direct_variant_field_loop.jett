@@ -1,0 +1,14 @@
+# ERROR: E0345
+namespace test
+
+enum Shape:
+    circle(radius: float64)
+
+function bad() returns string:
+    Shape shape = Shape.circle(2.5)
+    TypeVariant variant = type.variant_value[Shape](view shape)
+    string found = "missing"
+    for field in variant.fields:
+        comptime type Field = field.type_info:
+            found = type.name[Field]()
+    return found

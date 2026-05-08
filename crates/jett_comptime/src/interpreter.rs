@@ -1118,6 +1118,8 @@ impl Interpreter {
             Stmt::For(for_stmt) => {
                 let reflected_field_bindings =
                     self.reflected_field_loop_bindings(&for_stmt.iterable);
+                let reflected_variant_field_owner =
+                    self.reflected_variant_field_loop_owner(&for_stmt.iterable);
                 let reflected_type_info_bindings =
                     self.reflected_type_info_arg_loop_bindings(&for_stmt.iterable)?;
                 let iterable = match self.eval_expr_flow(&for_stmt.iterable)? {
@@ -1128,6 +1130,7 @@ impl Interpreter {
                     Value::List(items) => {
                         for (index, item) in items.into_iter().enumerate() {
                             self.push_scope();
+                            let loop_item = item.clone();
                             self.set_variable(&for_stmt.variable.name, item);
 
                             let pushed_field_scope = reflected_field_bindings
@@ -1136,6 +1139,20 @@ impl Interpreter {
                                 .map(|binding| {
                                     let mut scope = HashMap::new();
                                     scope.insert(for_stmt.variable.name.clone(), binding.clone());
+                                    self.reflected_field_scopes.push(scope);
+                                })
+                                .is_some();
+                            let pushed_variant_field_scope = reflected_variant_field_owner
+                                .as_ref()
+                                .map(|owner_ty| {
+                                    self.reflected_variant_field_binding_for_value(
+                                        owner_ty, &loop_item,
+                                    )
+                                })
+                                .transpose()?
+                                .map(|binding| {
+                                    let mut scope = HashMap::new();
+                                    scope.insert(for_stmt.variable.name.clone(), binding);
                                     self.reflected_field_scopes.push(scope);
                                 })
                                 .is_some();
@@ -1152,6 +1169,9 @@ impl Interpreter {
                             let signal = self.exec_block_inner(&for_stmt.body);
                             if pushed_type_info_scope {
                                 self.reflected_type_info_scopes.pop();
+                            }
+                            if pushed_variant_field_scope {
+                                self.reflected_field_scopes.pop();
                             }
                             if pushed_field_scope {
                                 self.reflected_field_scopes.pop();
@@ -1948,7 +1968,9 @@ impl Interpreter {
                 | "type.bitfield_layout"
                 | "type.bitfield_fields"
                 | "type.variants"
+                | "type.variant_value"
                 | "type.field_value"
+                | "type.variant_field_value"
                 | "json.parse"
                 | "json.serialize"
                 | "json.serialize_public"
@@ -1956,7 +1978,12 @@ impl Interpreter {
         if !is_typed_builtin {
             return None;
         }
-        let expected_type_arg_count = if name == "type.field_value" { 2 } else { 1 };
+        let expected_type_arg_count =
+            if matches!(name, "type.field_value" | "type.variant_field_value") {
+                2
+            } else {
+                1
+            };
         if type_args.len() != expected_type_arg_count {
             return Some(Err(format!(
                 "{name} expects {expected_type_arg_count} type argument(s), got {}",
@@ -2054,12 +2081,25 @@ impl Interpreter {
                         .collect(),
                 ))
             }
+            "type.variant_value" => {
+                if let Some(err) = check_args(name, 1, args) {
+                    return Some(err);
+                }
+                self.reflected_variant_value(&args[0], &ty)
+            }
             "type.field_value" => {
                 if let Some(err) = check_args(name, 2, args) {
                     return Some(err);
                 }
                 let expected_field_ty = self.substitute_type_expr(&type_args[1]);
                 self.reflected_field_value(&args[0], &ty, &args[1], &expected_field_ty)
+            }
+            "type.variant_field_value" => {
+                if let Some(err) = check_args(name, 2, args) {
+                    return Some(err);
+                }
+                let expected_field_ty = self.substitute_type_expr(&type_args[1]);
+                self.reflected_variant_field_value(&args[0], &ty, &args[1], &expected_field_ty)
             }
             "json.parse" => {
                 if let Some(err) = check_args(name, 1, args) {
@@ -2496,6 +2536,36 @@ impl Interpreter {
         )
     }
 
+    fn reflected_variant_field_loop_owner(&self, iterable: &Expr) -> Option<TypeExpr> {
+        comptime_type_variant_fields_binding(iterable).map(|ty| self.substitute_type_expr(ty))
+    }
+
+    fn reflected_variant_field_binding_for_value(
+        &self,
+        owner_ty: &TypeExpr,
+        field_metadata: &Value,
+    ) -> Result<ReflectedFieldBinding, String> {
+        let (field_index, metadata_name, metadata_type_name) =
+            Self::type_field_metadata(field_metadata)?;
+        for variant in self.type_expr_variants(owner_ty) {
+            let Some(field) = variant.fields.get(field_index) else {
+                continue;
+            };
+            if field.name == metadata_name && type_expr_display(&field.ty) == metadata_type_name {
+                return Ok(ReflectedFieldBinding {
+                    index: field_index,
+                    name: field.name.clone(),
+                    ty: field.ty.clone(),
+                });
+            }
+        }
+        Err(format!(
+            "`comptime type` reflected enum field metadata '{}' does not match any payload field on type '{}'",
+            metadata_name,
+            type_expr_display(owner_ty)
+        ))
+    }
+
     fn reflected_type_info_arg_loop_bindings(
         &self,
         iterable: &Expr,
@@ -2787,6 +2857,115 @@ impl Interpreter {
                 type_expr_display(owner_ty)
             )),
         }
+    }
+
+    fn reflected_variant_value(&self, value: &Value, owner_ty: &TypeExpr) -> Result<Value, String> {
+        let Value::Enum {
+            type_name, variant, ..
+        } = value
+        else {
+            return Err(format!(
+                "type.variant_value: expected enum value for '{}', got {value}",
+                type_expr_display(owner_ty)
+            ));
+        };
+
+        let expected_type_name = type_expr_name(owner_ty);
+        if type_name != &expected_type_name {
+            return Err(format!(
+                "type.variant_value: expected enum '{}', got '{}'",
+                expected_type_name, type_name
+            ));
+        }
+
+        self.type_expr_variants(owner_ty)
+            .into_iter()
+            .enumerate()
+            .find(|(_, candidate)| candidate.name == *variant)
+            .map(|(index, variant)| self.type_variant_value(index, variant))
+            .ok_or_else(|| {
+                format!(
+                    "type.variant_value: enum '{}' has no variant '{}'",
+                    expected_type_name, variant
+                )
+            })
+    }
+
+    fn reflected_variant_field_value(
+        &self,
+        value: &Value,
+        owner_ty: &TypeExpr,
+        field_metadata: &Value,
+        expected_field_ty: &TypeExpr,
+    ) -> Result<Value, String> {
+        let (field_index, metadata_name, metadata_type_name) =
+            Self::type_field_metadata(field_metadata)?;
+        let Value::Enum {
+            type_name,
+            variant,
+            fields,
+        } = value
+        else {
+            return Err(format!(
+                "type.variant_field_value: expected enum value for '{}', got {value}",
+                type_expr_display(owner_ty)
+            ));
+        };
+
+        let expected_type_name = type_expr_name(owner_ty);
+        if type_name != &expected_type_name {
+            return Err(format!(
+                "type.variant_field_value: expected enum '{}', got '{}'",
+                expected_type_name, type_name
+            ));
+        }
+
+        let variants = self.type_expr_variants(owner_ty);
+        let variant_metadata = variants
+            .iter()
+            .find(|candidate| candidate.name == *variant)
+            .ok_or_else(|| {
+                format!(
+                    "type.variant_field_value: enum '{}' has no variant '{}'",
+                    expected_type_name, variant
+                )
+            })?;
+        let field = variant_metadata.fields.get(field_index).ok_or_else(|| {
+            format!(
+                "type.variant_field_value: variant '{}.{}' has no payload field at index {}",
+                expected_type_name, variant, field_index
+            )
+        })?;
+
+        if field.name != metadata_name {
+            return Err(format!(
+                "type.variant_field_value: field metadata '{}' does not match payload field '{}' on variant '{}.{}'",
+                metadata_name, field.name, expected_type_name, variant
+            ));
+        }
+
+        let actual_type_name = type_expr_display(&field.ty);
+        if actual_type_name != metadata_type_name {
+            return Err(format!(
+                "type.variant_field_value: field metadata for '{}' has type '{}', but variant '{}.{}' reports '{}'",
+                metadata_name, metadata_type_name, expected_type_name, variant, actual_type_name
+            ));
+        }
+
+        let expected_field_type_name = type_expr_display(expected_field_ty);
+        if actual_type_name != expected_field_type_name {
+            return Err(format!(
+                "type.variant_field_value: field '{}' has type '{}', requested '{}'",
+                metadata_name, actual_type_name, expected_field_type_name
+            ));
+        }
+
+        fields.get(field_index).cloned().ok_or_else(|| {
+            format!(
+                "type.variant_field_value: value is missing payload field '{}'",
+                field.name
+            )
+        })
     }
 
     fn type_field_metadata(value: &Value) -> Result<(usize, String, String), String> {
@@ -6676,6 +6855,26 @@ fn comptime_type_fields_binding(expr: &Expr) -> Option<&TypeExpr> {
     type_args.first()
 }
 
+fn comptime_type_variant_value_binding(expr: &Expr) -> Option<&TypeExpr> {
+    let Expr::GenericCall(callee, type_args, args, _) = expr else {
+        return None;
+    };
+    if type_args.len() != 1 || args.len() != 1 || !is_type_variant_value_callee(callee) {
+        return None;
+    }
+    type_args.first()
+}
+
+fn comptime_type_variant_fields_binding(expr: &Expr) -> Option<&TypeExpr> {
+    let Expr::FieldAccess(base, field, _) = expr else {
+        return None;
+    };
+    if field.name != "fields" {
+        return None;
+    }
+    comptime_type_variant_value_binding(base)
+}
+
 fn reflected_field_type_info_binding(expr: &Expr) -> Option<&str> {
     let Expr::FieldAccess(base, field, _) = expr else {
         return None;
@@ -6737,6 +6936,14 @@ fn is_type_fields_callee(callee: &Expr) -> bool {
         return false;
     };
     field.name == "fields" && matches!(base.as_ref(), Expr::Ident(ident) if ident.name == "type")
+}
+
+fn is_type_variant_value_callee(callee: &Expr) -> bool {
+    let Expr::FieldAccess(base, field, _) = callee else {
+        return false;
+    };
+    field.name == "variant_value"
+        && matches!(base.as_ref(), Expr::Ident(ident) if ident.name == "type")
 }
 
 fn json_type_name(value: &JsonValue) -> &'static str {

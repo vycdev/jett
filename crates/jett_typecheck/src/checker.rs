@@ -934,7 +934,45 @@ impl<'a> TypeChecker<'a> {
                     .unwrap_or(TypeInterner::ERROR);
                 Some((vec![], self.interner.intern(Type::List(type_variant_ty))))
             }
+            "type.variant_value" => {
+                if type_args.len() != 1 {
+                    self.sink.emit(errors::unknown_type(
+                        &format!("{name} (expected 1 type argument, got {})", type_args.len()),
+                        span,
+                    ));
+                    return Some((vec![TypeInterner::ERROR], TypeInterner::ERROR));
+                }
+
+                let value_ty = self.resolve_type_expr(&type_args[0]);
+                let type_variant_ty = self
+                    .named_types
+                    .get("TypeVariant")
+                    .copied()
+                    .unwrap_or(TypeInterner::ERROR);
+                Some((vec![value_ty], type_variant_ty))
+            }
             "type.field_value" => {
+                if type_args.len() != 2 {
+                    self.sink.emit(errors::unknown_type(
+                        &format!(
+                            "{name} (expected 2 type arguments, got {})",
+                            type_args.len()
+                        ),
+                        span,
+                    ));
+                    return Some((vec![TypeInterner::ERROR], TypeInterner::ERROR));
+                }
+
+                let value_ty = self.resolve_type_expr(&type_args[0]);
+                let return_ty = self.resolve_type_expr(&type_args[1]);
+                let type_field_ty = self
+                    .named_types
+                    .get("TypeField")
+                    .copied()
+                    .unwrap_or(TypeInterner::ERROR);
+                Some((vec![value_ty, type_field_ty], return_ty))
+            }
+            "type.variant_field_value" => {
                 if type_args.len() != 2 {
                     self.sink.emit(errors::unknown_type(
                         &format!(
@@ -2626,6 +2664,19 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn reflected_variant_field_types_for_owner(&self, owner_ty: TypeId) -> Vec<TypeId> {
+        match self.interner.resolve(owner_ty) {
+            Type::Enum(eid) => self
+                .interner
+                .resolve_enum(*eid)
+                .variants
+                .iter()
+                .flat_map(|variant| variant.fields.iter().map(|(_, ty)| *ty))
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
     fn reflected_type_info_arg_types_for_iterable(
         &mut self,
         iterable: &Expr,
@@ -2997,19 +3048,30 @@ impl<'a> TypeChecker<'a> {
             }
         }
 
-        let pushed_field_scope =
-            if let Some(owner_ty_expr) = comptime_type_fields_binding(&for_stmt.iterable) {
-                let owner_ty = self.resolve_type_expr(owner_ty_expr);
-                let field_types = if owner_ty == TypeInterner::ERROR {
-                    Vec::new()
-                } else {
-                    self.reflected_field_types_for_owner(owner_ty)
-                };
-                self.push_reflected_field_type_scope(&for_stmt.variable.name, field_types);
-                true
+        let pushed_field_scope = if let Some(owner_ty_expr) =
+            comptime_type_fields_binding(&for_stmt.iterable)
+        {
+            let owner_ty = self.resolve_type_expr(owner_ty_expr);
+            let field_types = if owner_ty == TypeInterner::ERROR {
+                Vec::new()
             } else {
-                false
+                self.reflected_field_types_for_owner(owner_ty)
             };
+            self.push_reflected_field_type_scope(&for_stmt.variable.name, field_types);
+            true
+        } else if let Some(owner_ty_expr) = comptime_type_variant_fields_binding(&for_stmt.iterable)
+        {
+            let owner_ty = self.resolve_type_expr(owner_ty_expr);
+            let field_types = if owner_ty == TypeInterner::ERROR {
+                Vec::new()
+            } else {
+                self.reflected_variant_field_types_for_owner(owner_ty)
+            };
+            self.push_reflected_field_type_scope(&for_stmt.variable.name, field_types);
+            true
+        } else {
+            false
+        };
 
         let pushed_type_info_scope = if let Some(info_types) =
             self.reflected_type_info_arg_types_for_iterable(&for_stmt.iterable)
@@ -4858,6 +4920,26 @@ fn comptime_type_fields_binding(expr: &Expr) -> Option<&TypeExpr> {
     type_args.first()
 }
 
+fn comptime_type_variant_value_binding(expr: &Expr) -> Option<&TypeExpr> {
+    let Expr::GenericCall(callee, type_args, args, _) = expr else {
+        return None;
+    };
+    if type_args.len() != 1 || args.len() != 1 || !is_type_variant_value_callee(callee) {
+        return None;
+    }
+    type_args.first()
+}
+
+fn comptime_type_variant_fields_binding(expr: &Expr) -> Option<&TypeExpr> {
+    let Expr::FieldAccess(base, field, _) = expr else {
+        return None;
+    };
+    if field.name != "fields" {
+        return None;
+    }
+    comptime_type_variant_value_binding(base)
+}
+
 fn reflected_field_type_info_binding(expr: &Expr) -> Option<&str> {
     let Expr::FieldAccess(base, field, _) = expr else {
         return None;
@@ -4919,6 +5001,14 @@ fn is_type_fields_callee(callee: &Expr) -> bool {
         return false;
     };
     field.name == "fields" && matches!(base.as_ref(), Expr::Ident(ident) if ident.name == "type")
+}
+
+fn is_type_variant_value_callee(callee: &Expr) -> bool {
+    let Expr::FieldAccess(base, field, _) = callee else {
+        return false;
+    };
+    field.name == "variant_value"
+        && matches!(base.as_ref(), Expr::Ident(ident) if ident.name == "type")
 }
 
 // ---------------------------------------------------------------------------

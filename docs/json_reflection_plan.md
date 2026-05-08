@@ -31,12 +31,18 @@ Implemented reflection primitives:
 - `type.variants[T]()` returns ordered `TypeVariant` metadata for enums.
   `TypeVariant` includes `index`, `name`, `discriminant`, `has_secret`, and
   payload `fields` as `list[TypeField]`.
+- `type.variant_value[T](view value)` returns the active `TypeVariant`
+  metadata for an enum value.
+- `type.variant_field_value[T, U](view value, view field)` reads an active
+  enum payload field by metadata after checking that `U` matches the reflected
+  field type.
 - `type.field_value[T, U](view value, view field)` reads a field by metadata
   after checking that the metadata belongs to `T` and that `U` matches the
   reflected field type.
 - `comptime type Name = type.info[T]():` binds a direct reflected root as a
   scoped type, and `comptime type Field = field.type_info:` works inside direct
-  `for field in type.fields[T]():` loops.
+  `for field in type.fields[T]():` loops and direct active enum payload loops
+  over `type.variant_value[T](view value).fields`.
 - Trusted `TypeInfo.args` loops can bind nested type arguments, enabling
   recursive dispatch for wrappers such as `list[T]` and `optional[T]` without
   trusting user-constructed metadata.
@@ -49,10 +55,11 @@ secret omission, and valid JSON string escaping for control characters.
 There is also a `.jett` serializer prototype in
 `tests/run_pass/json_reflection_nested_serializer.jett`. It recursively handles
 primitives, structs, lists, `map[string, V]`, optionals, and result-ok/fail
-shapes, plus alias/refinement base serialization, using reflection primitives,
-trusted `comptime type` binding, and `type.arg[T](index)` for wrapper
-element/value types. It is a proof of language capability, not yet a stdlib
-replacement for the Rust-backed builtin.
+shapes, alias/refinement base serialization, and enums using the same
+string/object shape as the Rust-backed JSON bridge. It relies on reflection
+primitives, trusted `comptime type` binding, and `type.arg[T](index)` for
+wrapper element/value types. It is a proof of language capability, not yet a
+stdlib replacement for the Rust-backed builtin.
 
 `json.parse[T](raw)` has a Rust-backed bridge: it requires one type argument,
 accepts a string, returns `result[T, string]`, and supports core primitives,
