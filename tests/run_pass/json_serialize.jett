@@ -14,6 +14,14 @@ struct User:
     outcome: result[int64, string]
     failed: result[int64, string]
 
+enum Protocol:
+    tcp = 6
+    udp = 17
+
+bitfield Header:
+    version: 4 bits
+    protocol: 8 bits as Protocol
+
 function json_int_test() returns string:
     return json.serialize[int64](42)
 
@@ -57,3 +65,10 @@ function json_nested_struct_test() returns string:
 
 verify json_nested_struct_test:
     assert json_nested_struct_test() == "{{\"id\":\"u1\",\"profileData\":{{\"displayName\":\"Alice\",\"note\":\"line\\nbreak\"}},\"tags\":[\"admin\",\"beta\"],\"scores\":{{\"wins\":3,\"losses\":1}},\"maybeName\":\"ally\",\"missing\":null,\"outcome\":{{\"ok\":7}},\"failed\":{{\"fail\":\"bad\"}}}}"
+
+function json_bitfield_test() returns string:
+    Header header = Header(version: 4, protocol: Protocol.tcp)
+    return json.serialize[Header](view header)
+
+verify json_bitfield_test:
+    assert json_bitfield_test() == "{{\"version\":4,\"protocol\":\"tcp\"}}"

@@ -2847,7 +2847,7 @@ impl Interpreter {
             _ => {}
         }
 
-        if self.type_expr_kind(&ty) == "struct" {
+        if matches!(self.type_expr_kind(&ty), "struct" | "bitfield") {
             if let Value::Struct { fields, .. } = value {
                 let reflected_fields = self.type_expr_fields(&ty);
                 let pairs: Vec<String> = reflected_fields

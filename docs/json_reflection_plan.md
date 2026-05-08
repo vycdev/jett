@@ -29,9 +29,9 @@ Implemented reflection primitives:
   reflected field type.
 
 JSON serialization is still Rust-backed, but it now consumes the same field
-metadata exposed to Jett code. The active tests cover nested structs, lists,
-maps with string keys, optionals, results, `serialize` names, public secret
-omission, and valid JSON string escaping for control characters.
+metadata exposed to Jett code. The active tests cover nested structs, bitfields,
+lists, maps with string keys, optionals, results, `serialize` names, public
+secret omission, and valid JSON string escaping for control characters.
 
 `json.parse[T](raw)` has a Rust-backed bridge: it requires one type argument,
 accepts a string, returns `result[T, string]`, and supports core primitives,
