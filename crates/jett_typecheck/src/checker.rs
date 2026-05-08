@@ -879,6 +879,17 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn resolved_expr_name(&self, expr: &Expr) -> Option<String> {
+        match expr {
+            Expr::Ident(ident) => Some(self.resolved_symbol_name(&ident.name, ident.span)),
+            Expr::FieldAccess(inner, field, _) => {
+                let prefix = Self::extract_dotted_name(inner)?;
+                Some(format!("{prefix}.{}", field.name))
+            }
+            _ => None,
+        }
+    }
+
     fn builtin_signature(
         &mut self,
         callee: &Expr,
@@ -4214,7 +4225,7 @@ impl<'a> TypeChecker<'a> {
         args: &[ast::CallArg],
         span: Span,
     ) -> TypeId {
-        let callee_name = Self::extract_dotted_name(callee);
+        let callee_name = self.resolved_expr_name(callee);
         let callee_is_pure = callee_name
             .as_deref()
             .map(|name| {
@@ -5242,8 +5253,8 @@ impl<'a> TypeChecker<'a> {
     pub fn resolve_type_expr(&mut self, type_expr: &TypeExpr) -> TypeId {
         match type_expr {
             TypeExpr::Named(ident) => self.resolve_named_type(&ident.name, ident.span),
-            TypeExpr::Generic(name, args, span) => {
-                self.resolve_generic_type(&name.name, args, *span)
+            TypeExpr::Generic(name, args, _span) => {
+                self.resolve_generic_type(&name.name, args, name.span)
             }
             TypeExpr::View(inner, _span) => {
                 // View types are transparent for type checking purposes.

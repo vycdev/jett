@@ -173,6 +173,8 @@ pub struct Interpreter {
     actor_defs: HashMap<String, ActorDef>,
     /// Active generic type argument substitutions for interpreted generic functions.
     type_arg_scopes: Vec<HashMap<String, TypeExpr>>,
+    /// Namespace of the qualified function body currently executing.
+    current_namespace: Option<String>,
     /// Trusted field metadata currently produced by direct `type.fields[T]()` loops.
     reflected_field_scopes: Vec<HashMap<String, ReflectedFieldBinding>>,
     /// Trusted TypeInfo metadata currently produced by direct reflected `args` loops.
@@ -214,6 +216,7 @@ impl Interpreter {
             machines: HashMap::new(),
             actor_defs: HashMap::new(),
             type_arg_scopes: Vec::new(),
+            current_namespace: None,
             reflected_field_scopes: Vec::new(),
             reflected_type_info_scopes: Vec::new(),
             reflected_variant_scopes: Vec::new(),
@@ -287,6 +290,26 @@ impl Interpreter {
             .ok_or_else(|| format!("undefined variable '{name}'"))?;
         self.emit_debug_line(format!("trace {name} = {value}"));
         Ok(())
+    }
+
+    fn function_namespace(name: &str) -> Option<String> {
+        name.rsplit_once('.')
+            .map(|(namespace, _)| namespace.to_string())
+    }
+
+    fn current_qualified_name(&self, name: &str) -> Option<String> {
+        if name.contains('.') {
+            return None;
+        }
+        self.current_namespace
+            .as_ref()
+            .map(|namespace| format!("{namespace}.{name}"))
+    }
+
+    fn registry_name<T>(&self, registry: &HashMap<String, T>, name: &str) -> Option<String> {
+        self.current_qualified_name(name)
+            .filter(|qualified| registry.contains_key(qualified))
+            .or_else(|| registry.contains_key(name).then(|| name.to_string()))
     }
 
     fn hit_breakpoint(&mut self) {
@@ -678,7 +701,12 @@ impl Interpreter {
             Expr::Ident(ident) => {
                 if let Some(val) = self.get_variable(&ident.name).cloned() {
                     Ok(ExprFlow::Value(val))
-                } else if let Some(func) = self.functions.get(&ident.name).cloned() {
+                } else if let Some(func_name) = self.registry_name(&self.functions, &ident.name) {
+                    let func = self
+                        .functions
+                        .get(&func_name)
+                        .expect("registry lookup returned an existing function")
+                        .clone();
                     // Named function reference — wrap as a function value.
                     Ok(ExprFlow::Value(Value::Function {
                         params: func.params.clone(),
@@ -786,9 +814,9 @@ impl Interpreter {
             // Field access: struct field access, or enum variant like `Color.red`
             Expr::FieldAccess(obj, field, _) => {
                 if let Some(owner_name) = Self::dotted_expr_name(obj) {
-                    if self.enums.contains_key(&owner_name) {
+                    if let Some(enum_name) = self.registry_name(&self.enums, &owner_name) {
                         return Ok(ExprFlow::Value(Value::Enum {
-                            type_name: owner_name,
+                            type_name: enum_name,
                             variant: field.name.clone(),
                             fields: vec![],
                         }));
@@ -800,11 +828,19 @@ impl Interpreter {
                             self.eval_value_field_access(value, &field.name)
                         } else {
                             // Treat as enum variant: Type.variant
-                            Ok(ExprFlow::Value(Value::Enum {
-                                type_name: ident.name.clone(),
-                                variant: field.name.clone(),
-                                fields: vec![],
-                            }))
+                            if let Some(enum_name) = self.registry_name(&self.enums, &ident.name) {
+                                Ok(ExprFlow::Value(Value::Enum {
+                                    type_name: enum_name,
+                                    variant: field.name.clone(),
+                                    fields: vec![],
+                                }))
+                            } else {
+                                Ok(ExprFlow::Value(Value::Enum {
+                                    type_name: ident.name.clone(),
+                                    variant: field.name.clone(),
+                                    fields: vec![],
+                                }))
+                            }
                         }
                     }
                     _ => {
@@ -1006,17 +1042,24 @@ impl Interpreter {
         }
 
         match callee {
-            Expr::Ident(ident) if self.structs.contains_key(&ident.name) => Ok(ExprFlow::Value(
-                self.construct_struct(&ident.name, args, arg_values)?,
-            )),
-            Expr::Ident(ident) if self.bitfields.contains_key(&ident.name) => Ok(ExprFlow::Value(
-                self.construct_bitfield(&ident.name, args, arg_values)?,
-            )),
-            Expr::Ident(ident) => Ok(ExprFlow::Value(self.call_function_with_type_args(
-                &ident.name,
-                type_args,
-                arg_values,
-            )?)),
+            Expr::Ident(ident) => {
+                if let Some(name) = self.registry_name(&self.structs, &ident.name) {
+                    return Ok(ExprFlow::Value(
+                        self.construct_struct(&name, args, arg_values)?,
+                    ));
+                }
+                if let Some(name) = self.registry_name(&self.bitfields, &ident.name) {
+                    return Ok(ExprFlow::Value(
+                        self.construct_bitfield(&name, args, arg_values)?,
+                    ));
+                }
+                let name = self
+                    .registry_name(&self.functions, &ident.name)
+                    .unwrap_or_else(|| ident.name.clone());
+                Ok(ExprFlow::Value(self.call_function_with_type_args(
+                    &name, type_args, arg_values,
+                )?))
+            }
             // Handle enum variant construction: Type.variant(args)
             Expr::EnumVariant(type_name, variant, _) => Ok(ExprFlow::Value(Value::Enum {
                 type_name: type_name.name.clone(),
@@ -1063,20 +1106,22 @@ impl Interpreter {
                 // Fall through to enum variant construction if no built-in or
                 // user function matched.
                 if let Some(owner_name) = Self::dotted_expr_name(obj) {
-                    if self.enums.contains_key(&owner_name) {
+                    if let Some(enum_name) = self.registry_name(&self.enums, &owner_name) {
                         return Ok(ExprFlow::Value(Value::Enum {
-                            type_name: owner_name,
+                            type_name: enum_name,
                             variant: field.name.clone(),
                             fields: arg_values,
                         }));
                     }
                 }
                 if let Expr::Ident(ident) = obj.as_ref() {
-                    return Ok(ExprFlow::Value(Value::Enum {
-                        type_name: ident.name.clone(),
-                        variant: field.name.clone(),
-                        fields: arg_values,
-                    }));
+                    if let Some(enum_name) = self.registry_name(&self.enums, &ident.name) {
+                        return Ok(ExprFlow::Value(Value::Enum {
+                            type_name: enum_name,
+                            variant: field.name.clone(),
+                            fields: arg_values,
+                        }));
+                    }
                 }
                 match dotted {
                     Some(name) => Ok(ExprFlow::Value(
@@ -1102,9 +1147,12 @@ impl Interpreter {
 
         // Resolve the function name from the expression.
         match &step.function {
-            Expr::Ident(ident) => Ok(ExprFlow::Value(
-                self.call_function(&ident.name, arg_values)?,
-            )),
+            Expr::Ident(ident) => {
+                let name = self
+                    .registry_name(&self.functions, &ident.name)
+                    .unwrap_or_else(|| ident.name.clone());
+                Ok(ExprFlow::Value(self.call_function(&name, arg_values)?))
+            }
             Expr::FieldAccess(obj, field, _) => {
                 let dotted = Self::extract_dotted_name(obj, &field.name);
                 if let Some(ref name) = dotted {
@@ -6999,9 +7047,12 @@ impl Interpreter {
             return Err(message);
         }
 
+        let saved_namespace = self.current_namespace.clone();
+        self.current_namespace = Self::function_namespace(&resolved_name);
         let result = self.exec_block_inner(&func.body);
         self.pop_scope();
         self.type_arg_scopes.pop();
+        self.current_namespace = saved_namespace;
         let result = result?;
 
         let value = match result {
