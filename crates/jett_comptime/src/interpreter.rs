@@ -2264,6 +2264,17 @@ impl Interpreter {
                 if let Some(err) = check_args(name, 1, args) {
                     return Some(err);
                 }
+                if name == "json.serialize_public"
+                    && self
+                        .functions
+                        .contains_key("json.json_serialize_public_reflected")
+                {
+                    return Some(self.call_function_with_type_args(
+                        "json.json_serialize_public_reflected",
+                        type_args,
+                        args.to_vec(),
+                    ));
+                }
                 Ok(Value::String(self.value_to_json_typed(
                     &args[0],
                     &ty,

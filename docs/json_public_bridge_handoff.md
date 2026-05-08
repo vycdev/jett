@@ -93,12 +93,15 @@ public JSON surface.
 Suggested sequence:
 
 1. Keep the Rust-backed `json.parse_raw` and `JsonValue` accessors.
-2. Change the interpreter's public `json.parse[T]` path to delegate to
-   `json.json_parse_reflected[T]` when the stdlib function is registered.
-3. Keep typechecker policy for `json.parse[T]` unchanged.
+2. Change the interpreter's public `json.serialize_public[T]` path to delegate
+   to `json.json_serialize_public_reflected[T]` when the stdlib function is
+   registered.
+3. Keep typechecker policy for `json.serialize_public[T]` unchanged.
 4. Add parity tests for nested structs, aliases/refinements, enums, bitfields,
    bytes, secrets, optionals, results, lists, sets, and `map[string, V]`.
-5. Repeat for `json.serialize_public[T]`.
+5. Repeat for `json.parse[T]` after deciding whether the reflected decoder
+   should preserve the Rust bridge's terse error strings or keep its richer
+   field-path context.
 6. Leave full `json.serialize[T]` Rust-backed until the reflected full
    serializer exists and the secret rejection policy remains compiler-enforced.
 7. Later, after visibility/export and policy-bearing stdlib declarations exist,
