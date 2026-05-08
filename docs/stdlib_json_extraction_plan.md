@@ -34,11 +34,11 @@ automatically be callable as `json.parse[T](...)`.
 
 ## JSON-Specific State
 
-The reflected public serializer prototype has started moving into stdlib under
-the `json` namespace while keeping prefixed staging function names so it does
-not collide with the compiler-owned public bridge:
+The reflected JSON implementation has started moving into stdlib under the
+`json` namespace while keeping prefixed staging function names so it does not
+collide with the compiler-owned public bridge:
 
-- `stdlib/json_reflection.jett`
+- `stdlib/json.jett`
 - `json_serialize_reflected[T](view value)`
 - `json_serialize_public_reflected[T](view value)`
 - `json_decode_reflected[T](raw: JsonValue)`

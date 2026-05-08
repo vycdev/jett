@@ -46,7 +46,7 @@
 | MIR (control flow graph) | `jett_mir` | — | Not started |
 | LLVM native codegen | `jett_codegen_llvm` | — | Not started |
 | Runtime library | `jett_runtime` | — | Not started |
-| Core stdlib (.jett files) | `stdlib/` | — | Partial (bootstrap loader plus marker module; real modules still Rust-backed) |
+| Core stdlib (.jett files) | `stdlib/` | — | Partial (bootstrap loader plus marker module and draft `json` module; many modules still Rust-backed) |
 
 ### Phase E: Comptime and Verification — COMPLETE
 

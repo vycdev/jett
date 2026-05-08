@@ -6,7 +6,7 @@ implementation can own public names such as `json.parse[T](raw)` and
 
 ## Current State
 
-- `stdlib/json_reflection.jett` now declares `namespace json`.
+- `stdlib/json.jett` now declares `namespace json`.
 - The staged functions still use prefixed names:
   - `json.json_serialize_reflected[T](view value)`
   - `json.json_serialize_public_reflected[T](view value)`

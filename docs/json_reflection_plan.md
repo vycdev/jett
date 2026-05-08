@@ -63,7 +63,7 @@ lists, sets, maps with string keys, optionals, results, `serialize` names,
 public secret omission, and valid JSON string escaping for control characters.
 
 There are also `.jett` serializer hooks now staged in
-`stdlib/json_reflection.jett` as
+`stdlib/json.jett` as
 `json_serialize_reflected[T](view value)` and
 `json_serialize_public_reflected[T](view value)`. They recursively handle
 primitives, structs, lists, sets, `map[string, V]`, optionals, result ok/fail
@@ -80,7 +80,7 @@ interpreter after the typechecker keeps the public policy checks.
 
 There are also `.jett` decoder prototypes:
 `tests/run_pass/json_reflection_flat_decoder.jett` covers the first
-flat-struct path, and `stdlib/json_reflection.jett` now stages the nested
+flat-struct path, and `stdlib/json.jett` now stages the nested
 decoder as `json_decode_reflected[T](raw)`, plus
 `json_parse_reflected[T](raw: string)` as a thin staged wrapper over
 `json.parse_raw` and the reflected decoder. It recursively handles core
