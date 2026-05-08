@@ -58,8 +58,9 @@ primitives, structs, lists, `map[string, V]`, optionals, and result-ok/fail
 shapes, alias/refinement base serialization, bitfields, and enums using the
 same string/object shape as the Rust-backed JSON bridge. It relies on reflection
 primitives, trusted `comptime type` binding, and `type.arg[T](index)` for wrapper
-element/value types. It is a proof of language capability, not yet a stdlib
-replacement for the Rust-backed builtin.
+element/value types. The prototype also covers basic string escaping for quotes,
+backslashes, newlines, and tabs. It is a proof of language capability, not yet a
+stdlib replacement for the Rust-backed builtin.
 
 `json.parse[T](raw)` has a Rust-backed bridge: it requires one type argument,
 accepts a string, returns `result[T, string]`, and supports core primitives,
