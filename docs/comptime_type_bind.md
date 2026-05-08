@@ -3,6 +3,9 @@
 This note sketches the next reflection primitive needed to move JSON and other
 format libraries out of Rust builtins and into `.jett` stdlib code.
 
+For the reverse direction, where reflected code needs to build a `T` from typed
+field values, see `docs/type_construction_design.md`.
+
 ## Problem
 
 Jett code can inspect a field:

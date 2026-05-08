@@ -100,7 +100,8 @@ Options:
 
 Recommendation: avoid a permanent JSON-specific intrinsic. A
 `type.construct[T]` or comptime-generated constructor path would also help CSV,
-binary formats, config loaders, and test data generation.
+binary formats, config loaders, and test data generation. See
+`docs/type_construction_design.md` for the current options and staging plan.
 
 ### 3. JSON Map Keys
 
@@ -141,5 +142,5 @@ for the decoded value. See `docs/bitfield_reflection_metadata.md`.
 1. Design the comptime type-switch or typed field visitor primitive.
 2. Implement a nested `.jett` serializer prototype for primitives, structs,
    lists, maps with string keys, optionals, and results.
-3. Design `type.construct[T]` before replacing the Rust-backed
-   `json.parse[T]` bridge.
+3. Implement the trusted `comptime type` binding, then prototype the reflected
+   construction path described in `docs/type_construction_design.md`.
