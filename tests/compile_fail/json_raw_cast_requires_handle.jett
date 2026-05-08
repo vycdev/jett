@@ -1,0 +1,8 @@
+# ERROR: E0316
+namespace test
+
+function bad_raw_cast() returns string:
+    JsonValue raw = json.parse_raw("\"Ada\"") handle error:
+        return error
+    string name = json.as_string(raw)
+    return name

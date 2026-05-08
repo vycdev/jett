@@ -318,6 +318,14 @@ compile_fail_fixture!(
     "json_parse_raw_requires_handle.jett"
 );
 compile_fail_fixture!(
+    compile_fail_json_parse_raw_wrong_type_arg,
+    "json_parse_raw_wrong_type_arg.jett"
+);
+compile_fail_fixture!(
+    compile_fail_json_raw_cast_requires_handle,
+    "json_raw_cast_requires_handle.jett"
+);
+compile_fail_fixture!(
     compile_fail_serialize_annotation_requires_string,
     "serialize_annotation_requires_string.jett"
 );

@@ -289,6 +289,27 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn check_builtin_type_arg_count(
+        &mut self,
+        name: &str,
+        type_args: &[TypeExpr],
+        expected: usize,
+        span: Span,
+    ) -> bool {
+        if type_args.len() == expected {
+            return true;
+        }
+
+        self.sink.emit(errors::unknown_type(
+            &format!(
+                "{name} (expected {expected} type argument(s), got {})",
+                type_args.len()
+            ),
+            span,
+        ));
+        false
+    }
+
     fn declaration_def_id(&self, span: Span) -> Option<DefId> {
         self.resolve
             .resolutions
@@ -806,29 +827,47 @@ impl<'a> TypeChecker<'a> {
             }
             "json.parse_raw" => Some((
                 vec![TypeInterner::STRING],
-                self.interner
-                    .intern(Type::Result(TypeInterner::JSON_VALUE, TypeInterner::STRING)),
+                if self.check_builtin_type_arg_count(&name, type_args, 0, span) {
+                    self.interner
+                        .intern(Type::Result(TypeInterner::JSON_VALUE, TypeInterner::STRING))
+                } else {
+                    TypeInterner::ERROR
+                },
             )),
             "json.serialize_raw" | "json.kind" => {
+                self.check_builtin_type_arg_count(&name, type_args, 0, span);
                 Some((vec![TypeInterner::JSON_VALUE], TypeInterner::STRING))
             }
-            "json.is_null" => Some((vec![TypeInterner::JSON_VALUE], TypeInterner::BOOL)),
-            "json.field" => Some((
-                vec![TypeInterner::JSON_VALUE, TypeInterner::STRING],
-                self.interner
-                    .intern(Type::Optional(TypeInterner::JSON_VALUE)),
-            )),
-            "json.index" => Some((
-                vec![TypeInterner::JSON_VALUE, TypeInterner::INT64],
-                self.interner
-                    .intern(Type::Optional(TypeInterner::JSON_VALUE)),
-            )),
-            "json.array_length" => Some((
-                vec![TypeInterner::JSON_VALUE],
-                self.interner
-                    .intern(Type::Result(TypeInterner::INT64, TypeInterner::STRING)),
-            )),
+            "json.is_null" => {
+                self.check_builtin_type_arg_count(&name, type_args, 0, span);
+                Some((vec![TypeInterner::JSON_VALUE], TypeInterner::BOOL))
+            }
+            "json.field" => {
+                self.check_builtin_type_arg_count(&name, type_args, 0, span);
+                Some((
+                    vec![TypeInterner::JSON_VALUE, TypeInterner::STRING],
+                    self.interner
+                        .intern(Type::Optional(TypeInterner::JSON_VALUE)),
+                ))
+            }
+            "json.index" => {
+                self.check_builtin_type_arg_count(&name, type_args, 0, span);
+                Some((
+                    vec![TypeInterner::JSON_VALUE, TypeInterner::INT64],
+                    self.interner
+                        .intern(Type::Optional(TypeInterner::JSON_VALUE)),
+                ))
+            }
+            "json.array_length" => {
+                self.check_builtin_type_arg_count(&name, type_args, 0, span);
+                Some((
+                    vec![TypeInterner::JSON_VALUE],
+                    self.interner
+                        .intern(Type::Result(TypeInterner::INT64, TypeInterner::STRING)),
+                ))
+            }
             "json.object_keys" => {
+                self.check_builtin_type_arg_count(&name, type_args, 0, span);
                 let list_string = self.interner.intern(Type::List(TypeInterner::STRING));
                 Some((
                     vec![TypeInterner::JSON_VALUE],
@@ -836,26 +875,38 @@ impl<'a> TypeChecker<'a> {
                         .intern(Type::Result(list_string, TypeInterner::STRING)),
                 ))
             }
-            "json.as_string" => Some((
-                vec![TypeInterner::JSON_VALUE],
-                self.interner
-                    .intern(Type::Result(TypeInterner::STRING, TypeInterner::STRING)),
-            )),
-            "json.as_int64" => Some((
-                vec![TypeInterner::JSON_VALUE],
-                self.interner
-                    .intern(Type::Result(TypeInterner::INT64, TypeInterner::STRING)),
-            )),
-            "json.as_float64" => Some((
-                vec![TypeInterner::JSON_VALUE],
-                self.interner
-                    .intern(Type::Result(TypeInterner::FLOAT64, TypeInterner::STRING)),
-            )),
-            "json.as_bool" => Some((
-                vec![TypeInterner::JSON_VALUE],
-                self.interner
-                    .intern(Type::Result(TypeInterner::BOOL, TypeInterner::STRING)),
-            )),
+            "json.as_string" => {
+                self.check_builtin_type_arg_count(&name, type_args, 0, span);
+                Some((
+                    vec![TypeInterner::JSON_VALUE],
+                    self.interner
+                        .intern(Type::Result(TypeInterner::STRING, TypeInterner::STRING)),
+                ))
+            }
+            "json.as_int64" => {
+                self.check_builtin_type_arg_count(&name, type_args, 0, span);
+                Some((
+                    vec![TypeInterner::JSON_VALUE],
+                    self.interner
+                        .intern(Type::Result(TypeInterner::INT64, TypeInterner::STRING)),
+                ))
+            }
+            "json.as_float64" => {
+                self.check_builtin_type_arg_count(&name, type_args, 0, span);
+                Some((
+                    vec![TypeInterner::JSON_VALUE],
+                    self.interner
+                        .intern(Type::Result(TypeInterner::FLOAT64, TypeInterner::STRING)),
+                ))
+            }
+            "json.as_bool" => {
+                self.check_builtin_type_arg_count(&name, type_args, 0, span);
+                Some((
+                    vec![TypeInterner::JSON_VALUE],
+                    self.interner
+                        .intern(Type::Result(TypeInterner::BOOL, TypeInterner::STRING)),
+                ))
+            }
             "json.serialize" | "json.serialize_public" => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
