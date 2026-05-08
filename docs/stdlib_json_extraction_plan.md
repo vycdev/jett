@@ -138,7 +138,8 @@ the module cleanly probably needs an export rule or another visibility story.
      wrapper around `json.parse_raw` and the reflected decoder.
 3. Decide how compiler policy checks hand off from the hardcoded public
    `json.parse`, `json.serialize`, and `json.serialize_public` bridge to
-   stdlib functions.
+   stdlib functions. See `docs/json_public_bridge_handoff.md` for the current
+   recommendation.
 4. Move the extracted functions into `namespace json` behind the real public
    names, while retaining compiler policy checks for secrets, `view`, map keys,
    and handled results.

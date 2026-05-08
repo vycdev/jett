@@ -122,7 +122,8 @@ the same builder, and enum construction is available through
 `type.construct_variant_start`; the final syntax remains future work.
 Moving the prototypes into an actual public `json.*` API now mostly needs the
 handoff from the hardcoded builtin bridge; see
-`docs/stdlib_json_extraction_plan.md`.
+`docs/stdlib_json_extraction_plan.md` and
+`docs/json_public_bridge_handoff.md`.
 
 `json.parse_raw(raw)` now exposes an opaque `JsonValue` tree with explicit
 accessors for kind checks, object fields, array indexes, scalar casts, object
