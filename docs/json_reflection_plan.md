@@ -132,7 +132,8 @@ needs metadata that `TypeField` does not yet expose: bit width, whether a field
 is `bit`/`bits` or payload, enum annotations, payload positioning, and byte
 order. For `bits as EnumType`, the reflected field type should remain the enum
 type rather than the storage integer, matching `type.field_value[T, U]` and JSON
-enum rendering.
+enum rendering. See `docs/bitfield_reflection_metadata.md` for the current
+proposal.
 
 ## Suggested Next Steps
 
