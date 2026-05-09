@@ -13,6 +13,9 @@ struct JsonTreeScan:
 struct JsonTreeObjectField:
     key: string
     value: JsonTree
+struct JsonTreeStringEscape:
+    value: string
+    next_index: int64
 function json_stdlib_hex_digit(value: int64) returns string:
     if value < 10:
         return "{value}"
@@ -80,7 +83,10 @@ mutual:
     function json_tree_parse_string(raw: string) returns result[string, string]
     function json_tree_is_quoted_string(view input: bytes, length: int64) returns bool
     function json_tree_parse_string_body(view input: bytes, end: int64) returns result[string, string]
-    function json_tree_parse_string_escape_at(view input: bytes, index: int64, end: int64) returns result[string, string]
+    function json_tree_parse_string_escape_at(view input: bytes, index: int64, end: int64) returns result[JsonTreeStringEscape, string]
+    function json_tree_parse_unicode_escape_at(view input: bytes, index: int64, end: int64) returns result[JsonTreeStringEscape, string]
+    function json_tree_unicode_ascii_escape_value(view input: bytes, digit_start: int64) returns result[string, string]
+    function json_tree_hex_digit_value(byte: int64) returns int64
     function json_tree_escape_string(byte: int64) returns result[string, string]
     function json_tree_has_delimiters(view input: bytes, length: int64, open_byte: int64, close_byte: int64) returns bool
     function json_tree_span_to_trimmed_string(view input: bytes, start: int64, end: int64) returns result[string, string]
@@ -280,23 +286,57 @@ function json_tree_parse_string_body(view input: bytes, end: int64) returns resu
             return fail("unexpected quote in JSON string")
         if byte == 92:
             index = index + 1
-            string decoded = json_tree_parse_string_escape_at(view input, index, end) handle error:
+            JsonTreeStringEscape decoded = json_tree_parse_string_escape_at(view input, index, end) handle error:
                 return fail(error)
-            output = bytes.concat(output, bytes.from_string(decoded))
+            output = bytes.concat(output, bytes.from_string(decoded.value))
+            index = decoded.next_index
         else:
             output = bytes.concat(output, bytes.slice(view input, index, index + 1))
         index = index + 1
     string value = bytes.to_string(output) handle error:
         return fail(error)
     return ok(value)
-function json_tree_parse_string_escape_at(view input: bytes, index: int64, end: int64) returns result[string, string]:
+function json_tree_parse_string_escape_at(view input: bytes, index: int64, end: int64) returns result[JsonTreeStringEscape, string]:
     if index >= end:
         return fail("unterminated escape in JSON string")
     int64 escape = bytes.get(view input, index) handle:
         default -1
+    if escape == 117:
+        return json_tree_parse_unicode_escape_at(view input, index, end)
     string decoded = json_tree_escape_string(escape) handle error:
         return fail(error)
+    return ok(JsonTreeStringEscape(value: decoded, next_index: index))
+function json_tree_parse_unicode_escape_at(view input: bytes, index: int64, end: int64) returns result[JsonTreeStringEscape, string]:
+    if index + 4 >= end:
+        return fail("unterminated unicode escape in JSON string")
+    string decoded = json_tree_unicode_ascii_escape_value(view input, index + 1) handle error:
+        return fail(error)
+    return ok(JsonTreeStringEscape(value: decoded, next_index: index + 4))
+function json_tree_unicode_ascii_escape_value(view input: bytes, digit_start: int64) returns result[string, string]:
+    int64 first = json_tree_hex_digit_value(json_tree_byte_at(view input, digit_start))
+    int64 second = json_tree_hex_digit_value(json_tree_byte_at(view input, digit_start + 1))
+    int64 high = json_tree_hex_digit_value(json_tree_byte_at(view input, digit_start + 2))
+    int64 low = json_tree_hex_digit_value(json_tree_byte_at(view input, digit_start + 3))
+    if first < 0 or second < 0 or high < 0 or low < 0:
+        return fail("invalid unicode escape in JSON string")
+    if first != 0 or second != 0:
+        return fail("non-ASCII unicode escapes are not supported yet")
+    int64 code = high * 16 + low
+    if code > 127:
+        return fail("non-ASCII unicode escapes are not supported yet")
+    bytes raw = bytes.from_hex("{json_stdlib_hex_digit(high)}{json_stdlib_hex_digit(low)}") handle error:
+        return fail(error)
+    string decoded = bytes.to_string(raw) handle error:
+        return fail(error)
     return ok(decoded)
+function json_tree_hex_digit_value(byte: int64) returns int64:
+    if byte >= 48 and byte <= 57:
+        return byte - 48
+    if byte >= 65 and byte <= 70:
+        return byte - 55
+    if byte >= 97 and byte <= 102:
+        return byte - 87
+    return -1
 function json_tree_escape_string(byte: int64) returns result[string, string]:
     if byte == 34:
         return ok("\"")
@@ -310,8 +350,6 @@ function json_tree_escape_string(byte: int64) returns result[string, string]:
         return ok("\r")
     if byte == 116:
         return ok("\t")
-    if byte == 117:
-        return fail("unicode escapes are not supported yet")
     return fail("unsupported JSON string escape")
 function json_tree_has_delimiters(view input: bytes, length: int64, open_byte: int64, close_byte: int64) returns bool:
     if length < 2:

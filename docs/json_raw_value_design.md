@@ -47,8 +47,9 @@ This is intentionally staged alongside, not instead of, the opaque `JsonValue`
 primitive. `JsonTree` gives the self-hosted parser a stdlib-owned target
 without breaking existing `json.parse_raw`, raw accessors, or the reflected
 decoder that currently walks `JsonValue`. The staged parser is not yet a full
-replacement for `json.parse_raw`; unicode escape decoding and broader malformed
-input diagnostics still need hardening before that handoff.
+replacement for `json.parse_raw`; non-ASCII unicode escape decoding and broader
+malformed-input diagnostics still need hardening before that handoff. ASCII
+unicode escapes such as `\u0041` and `\u000a` are already decoded.
 
 ## Design Intent
 
