@@ -250,6 +250,7 @@ run_pass_fixture!(
     run_pass_json_raw_value_access_edges,
     "json_raw_value_access_edges.jett"
 );
+run_pass_fixture!(run_pass_json_raw_tree_parity, "json_raw_tree_parity.jett");
 run_pass_fixture!(run_pass_json_enum_shapes, "json_enum_shapes.jett");
 run_pass_fixture!(run_pass_json_bitfield_shapes, "json_bitfield_shapes.jett");
 run_pass_fixture!(run_pass_json_roundtrip_user, "json_roundtrip_user.jett");

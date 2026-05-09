@@ -300,34 +300,34 @@ function json_tree_as_int64(view value: JsonTree) returns result[int64, string]:
     match value:
         number_value(raw):
             int64 item = int64.from_string(raw) handle error:
-                return fail(error)
+                return fail("expected int64, got number")
             return ok(item)
         null:
-            return fail(json_tree_kind_error(view value, "number"))
+            return fail(json_tree_kind_error(view value, "int64"))
         bool_value(item):
-            return fail(json_tree_kind_error(view value, "number"))
+            return fail(json_tree_kind_error(view value, "int64"))
         string_value(item):
-            return fail(json_tree_kind_error(view value, "number"))
+            return fail(json_tree_kind_error(view value, "int64"))
         array_value(items):
-            return fail(json_tree_kind_error(view value, "number"))
+            return fail(json_tree_kind_error(view value, "int64"))
         object_value(fields):
-            return fail(json_tree_kind_error(view value, "number"))
+            return fail(json_tree_kind_error(view value, "int64"))
 function json_tree_as_float64(view value: JsonTree) returns result[float64, string]:
     match value:
         number_value(raw):
             float64 item = float64.from_string(raw) handle error:
-                return fail(error)
+                return fail("expected float64, got number")
             return ok(item)
         null:
-            return fail(json_tree_kind_error(view value, "number"))
+            return fail(json_tree_kind_error(view value, "float64"))
         bool_value(item):
-            return fail(json_tree_kind_error(view value, "number"))
+            return fail(json_tree_kind_error(view value, "float64"))
         string_value(item):
-            return fail(json_tree_kind_error(view value, "number"))
+            return fail(json_tree_kind_error(view value, "float64"))
         array_value(items):
-            return fail(json_tree_kind_error(view value, "number"))
+            return fail(json_tree_kind_error(view value, "float64"))
         object_value(fields):
-            return fail(json_tree_kind_error(view value, "number"))
+            return fail(json_tree_kind_error(view value, "float64"))
 function json_tree_as_bool(view value: JsonTree) returns result[bool, string]:
     match value:
         bool_value(item):

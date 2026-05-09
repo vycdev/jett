@@ -1,0 +1,140 @@
+namespace test
+
+function raw_tree_array_serialize_summary() returns string:
+    string body = "[1,true,null,\"Ada\"]"
+    JsonValue raw = json.parse_raw(body) handle error:
+        return "raw parse: {error}"
+    json.JsonTree tree = json.json_tree_parse(body) handle error:
+        return "tree parse: {error}"
+    return "{json.serialize_raw(raw)}|{json.json_tree_serialize(tree)}"
+
+function raw_tree_object_kind_summary() returns string:
+    string body = "{{\"name\":\"Ada\",\"active\":true}}"
+    JsonValue raw = json.parse_raw(body) handle error:
+        return "raw parse: {error}"
+    json.JsonTree tree = json.json_tree_parse(body) handle error:
+        return "tree parse: {error}"
+    return "{json.kind(raw)}:{json.is_object(raw)}|{json.json_tree_kind(view tree)}:{json.json_tree_is_object(view tree)}"
+
+function raw_tree_string_field_summary() returns string:
+    string body = "{{\"name\":\"Ada\"}}"
+    JsonValue raw = json.parse_raw(body) handle error:
+        return "raw parse: {error}"
+    json.JsonTree tree = json.json_tree_parse(body) handle error:
+        return "tree parse: {error}"
+    JsonValue raw_name = json.field(raw, "name") handle:
+        return "raw missing name"
+    json.JsonTree tree_name = json.json_tree_field(view tree, "name") handle:
+        return "tree missing name"
+    string raw_name_text = json.as_string(raw_name) handle error:
+        return "raw name: {error}"
+    string tree_name_text = json.json_tree_as_string(view tree_name) handle error:
+        return "tree name: {error}"
+    return "{raw_name_text}|{tree_name_text}"
+
+function raw_array_field_summary() returns string:
+    string body = "{{\"scores\":[3,5]}}"
+    JsonValue raw = json.parse_raw(body) handle error:
+        return "raw parse: {error}"
+    JsonValue raw_scores = json.field(raw, "scores") handle:
+        return "raw missing scores"
+    int64 raw_score_count = json.array_length(raw_scores) handle error:
+        return "raw score length: {error}"
+    JsonValue raw_second = json.index(raw_scores, 1) handle:
+        return "raw missing second"
+    int64 raw_second_score = json.as_int64(raw_second) handle error:
+        return "raw second: {error}"
+    return "{raw_score_count}:{raw_second_score}"
+
+function tree_array_field_summary() returns string:
+    string body = "{{\"scores\":[3,5]}}"
+    json.JsonTree tree = json.json_tree_parse(body) handle error:
+        return "tree parse: {error}"
+    json.JsonTree tree_scores = json.json_tree_field(view tree, "scores") handle:
+        return "tree missing scores"
+    int64 tree_score_count = json.json_tree_array_length(view tree_scores) handle error:
+        return "tree score length: {error}"
+    json.JsonTree tree_second = json.json_tree_index(view tree_scores, 1) handle:
+        return "tree missing second"
+    int64 tree_second_score = json.json_tree_as_int64(view tree_second) handle error:
+        return "tree second: {error}"
+    return "{tree_score_count}:{tree_second_score}"
+
+function raw_scalar_field_summary() returns string:
+    string body = "{{\"active\":true,\"missing\":null,\"ratio\":2.5}}"
+    JsonValue raw = json.parse_raw(body) handle error:
+        return "raw parse: {error}"
+    JsonValue raw_active = json.field(raw, "active") handle:
+        return "raw missing active"
+    JsonValue raw_missing = json.field(raw, "missing") handle:
+        return "raw missing null"
+    JsonValue raw_ratio = json.field(raw, "ratio") handle:
+        return "raw missing ratio"
+    bool raw_active_value = json.as_bool(raw_active) handle error:
+        return "raw active: {error}"
+    float64 raw_ratio_value = json.as_float64(raw_ratio) handle error:
+        return "raw ratio: {error}"
+    return "{raw_active_value}:{json.is_null(raw_missing)}:{raw_ratio_value}"
+
+function tree_scalar_field_summary() returns string:
+    string body = "{{\"active\":true,\"missing\":null,\"ratio\":2.5}}"
+    json.JsonTree tree = json.json_tree_parse(body) handle error:
+        return "tree parse: {error}"
+    json.JsonTree tree_active = json.json_tree_field(view tree, "active") handle:
+        return "tree missing active"
+    json.JsonTree tree_missing = json.json_tree_field(view tree, "missing") handle:
+        return "tree missing null"
+    json.JsonTree tree_ratio = json.json_tree_field(view tree, "ratio") handle:
+        return "tree missing ratio"
+    bool tree_active_value = json.json_tree_as_bool(view tree_active) handle error:
+        return "tree active: {error}"
+    float64 tree_ratio_value = json.json_tree_as_float64(view tree_ratio) handle error:
+        return "tree ratio: {error}"
+    return "{tree_active_value}:{json.json_tree_is_null(view tree_missing)}:{tree_ratio_value}"
+
+function raw_tree_key_count_summary() returns string:
+    string body = "{{\"name\":\"Ada\",\"active\":true,\"scores\":[3]}}"
+    JsonValue raw = json.parse_raw(body) handle error:
+        return "raw parse: {error}"
+    json.JsonTree tree = json.json_tree_parse(body) handle error:
+        return "tree parse: {error}"
+    list[string] raw_keys = json.object_keys(raw) handle error:
+        return "raw keys: {error}"
+    list[string] tree_keys = json.json_tree_object_keys(view tree) handle error:
+        return "tree keys: {error}"
+    return "{list.length[string](view raw_keys)}|{list.length[string](view tree_keys)}"
+
+function raw_tree_absent_lookup_summary() returns string:
+    JsonValue raw = json.parse_raw("\"Ada\"") handle error:
+        return "raw parse: {error}"
+    json.JsonTree tree = json.json_tree_parse("\"Ada\"") handle error:
+        return "tree parse: {error}"
+    JsonValue raw_field = json.field(raw, "name") handle:
+        json.JsonTree tree_field = json.json_tree_field(view tree, "name") handle:
+            return "raw absent:tree absent"
+        return "raw absent:tree present {json.json_tree_kind(view tree_field)}"
+    return "raw present {json.kind(raw_field)}"
+
+function raw_wrong_shape_error() returns string:
+    JsonValue raw = json.parse_raw("\"Ada\"") handle error:
+        return "raw parse: {error}"
+    int64 raw_length = json.array_length(raw) handle error:
+        return error
+    return "raw length {raw_length}"
+
+function tree_wrong_shape_error() returns string:
+    json.JsonTree tree = json.json_tree_parse("\"Ada\"") handle error:
+        return "tree parse: {error}"
+    int64 tree_length = json.json_tree_array_length(view tree) handle error:
+        return error
+    return "tree length {tree_length}"
+
+verify json_raw_tree_parity:
+    assert raw_tree_object_kind_summary() == "object:true|object:true"
+    assert raw_tree_string_field_summary() == "Ada|Ada"
+    assert "{raw_array_field_summary()}|{tree_array_field_summary()}" == "2:5|2:5"
+    assert "{raw_scalar_field_summary()}|{tree_scalar_field_summary()}" == "true:true:2.5|true:true:2.5"
+    assert raw_tree_key_count_summary() == "3|3"
+    assert raw_tree_absent_lookup_summary() == "raw absent:tree absent"
+    assert "{raw_wrong_shape_error()}|{tree_wrong_shape_error()}" == "expected array, got string|expected array, got string"
+    assert raw_tree_array_serialize_summary() == "[1,true,null,\"Ada\"]|[1,true,null,\"Ada\"]"

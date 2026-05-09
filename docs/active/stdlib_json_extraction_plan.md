@@ -91,7 +91,10 @@ and `json.serialize_public`. In the interpreter, all three public calls now
 delegate to reflected stdlib hook implementations only when the current hook
 registry entries came from compiler-shipped stdlib files. The old typed Rust
 fallback paths for public parse/serialize have been removed; Rust-backed paths
-remain for raw JSON access and bootstrap primitives.
+remain only as fallback storage for raw JSON compatibility. Public `json.parse_raw`
+now delegates to the trusted self-hosted `JsonTree` parser when bundled stdlib
+is loaded, and raw helper calls dispatch native `JsonTree` runtime values
+through trusted `json_tree_*` hooks.
 
 ## Blockers
 

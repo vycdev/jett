@@ -4262,7 +4262,7 @@ impl Interpreter {
     /// Try to call a built-in function.  Returns `None` if the name does not
     /// match any built-in, allowing the caller to fall through to
     /// user-defined function lookup.
-    fn call_builtin(&self, name: &str, args: &[Value]) -> Option<Result<Value, String>> {
+    fn call_builtin(&mut self, name: &str, args: &[Value]) -> Option<Result<Value, String>> {
         if let Some(result) = self.call_bitfield_builtin(name, args) {
             return Some(result);
         }
@@ -4300,6 +4300,11 @@ impl Interpreter {
             // -- JSON operations ---------------------------------------------
             "json.parse_raw" => {
                 require_args!(name, 1, args);
+                if let Some(result) =
+                    self.call_trusted_stdlib_function("json.json_tree_parse", args)
+                {
+                    return Some(result);
+                }
                 match &args[0] {
                     Value::String(raw) => match serde_json::from_str::<JsonValue>(raw) {
                         Ok(json) => Some(Ok(result_ok(Value::Json(json)))),
@@ -4311,6 +4316,13 @@ impl Interpreter {
 
             "json.serialize_raw" => {
                 require_args!(name, 1, args);
+                if is_json_tree_value(&args[0]) {
+                    if let Some(result) =
+                        self.call_trusted_stdlib_function("json.json_tree_serialize", args)
+                    {
+                        return Some(result);
+                    }
+                }
                 match &args[0] {
                     Value::Json(json) => Some(Ok(Value::String(json.to_string()))),
                     other => Some(Err(format!(
@@ -4321,6 +4333,13 @@ impl Interpreter {
 
             "json.kind" => {
                 require_args!(name, 1, args);
+                if is_json_tree_value(&args[0]) {
+                    if let Some(result) =
+                        self.call_trusted_stdlib_function("json.json_tree_kind", args)
+                    {
+                        return Some(result);
+                    }
+                }
                 match &args[0] {
                     Value::Json(json) => Some(Ok(Value::String(json_type_name(json).to_string()))),
                     other => Some(Err(format!("json.kind expects JsonValue, got {other}"))),
@@ -4330,6 +4349,20 @@ impl Interpreter {
             "json.is_null" | "json.is_bool" | "json.is_number" | "json.is_string"
             | "json.is_array" | "json.is_object" => {
                 require_args!(name, 1, args);
+                if is_json_tree_value(&args[0]) {
+                    let hook = match name {
+                        "json.is_null" => "json.json_tree_is_null",
+                        "json.is_bool" => "json.json_tree_is_bool",
+                        "json.is_number" => "json.json_tree_is_number",
+                        "json.is_string" => "json.json_tree_is_string",
+                        "json.is_array" => "json.json_tree_is_array",
+                        "json.is_object" => "json.json_tree_is_object",
+                        _ => unreachable!(),
+                    };
+                    if let Some(result) = self.call_trusted_stdlib_function(hook, args) {
+                        return Some(result);
+                    }
+                }
                 match &args[0] {
                     Value::Json(json) => Some(Ok(Value::Bool(match name {
                         "json.is_null" => json.is_null(),
@@ -4346,6 +4379,22 @@ impl Interpreter {
 
             "json.field" => {
                 require_args!(name, 2, args);
+                if is_json_tree_value(&args[0]) {
+                    match &args[1] {
+                        Value::String(_) => {
+                            if let Some(result) =
+                                self.call_trusted_stdlib_function("json.json_tree_field", args)
+                            {
+                                return Some(result);
+                            }
+                        }
+                        other => {
+                            return Some(Err(format!(
+                                "json.field expects a string key, got {other}"
+                            )));
+                        }
+                    }
+                }
                 match (&args[0], &args[1]) {
                     (Value::Json(json), Value::String(key)) => {
                         let value = json
@@ -4365,6 +4414,22 @@ impl Interpreter {
 
             "json.index" => {
                 require_args!(name, 2, args);
+                if is_json_tree_value(&args[0]) {
+                    match &args[1] {
+                        Value::Int64(_) => {
+                            if let Some(result) =
+                                self.call_trusted_stdlib_function("json.json_tree_index", args)
+                            {
+                                return Some(result);
+                            }
+                        }
+                        other => {
+                            return Some(Err(format!(
+                                "json.index expects an int64 index, got {other}"
+                            )));
+                        }
+                    }
+                }
                 match (&args[0], &args[1]) {
                     (Value::Json(json), Value::Int64(index)) => {
                         let value = if *index >= 0 {
@@ -4387,6 +4452,13 @@ impl Interpreter {
 
             "json.array_length" => {
                 require_args!(name, 1, args);
+                if is_json_tree_value(&args[0]) {
+                    if let Some(result) =
+                        self.call_trusted_stdlib_function("json.json_tree_array_length", args)
+                    {
+                        return Some(result);
+                    }
+                }
                 match &args[0] {
                     Value::Json(json) => match json.as_array() {
                         Some(array) => Some(Ok(result_ok(Value::Int64(array.len() as i64)))),
@@ -4403,6 +4475,13 @@ impl Interpreter {
 
             "json.object_keys" => {
                 require_args!(name, 1, args);
+                if is_json_tree_value(&args[0]) {
+                    if let Some(result) =
+                        self.call_trusted_stdlib_function("json.json_tree_object_keys", args)
+                    {
+                        return Some(result);
+                    }
+                }
                 match &args[0] {
                     Value::Json(json) => match json.as_object() {
                         Some(object) => Some(Ok(result_ok(Value::List(
@@ -4421,6 +4500,13 @@ impl Interpreter {
 
             "json.as_string" => {
                 require_args!(name, 1, args);
+                if is_json_tree_value(&args[0]) {
+                    if let Some(result) =
+                        self.call_trusted_stdlib_function("json.json_tree_as_string", args)
+                    {
+                        return Some(result);
+                    }
+                }
                 Some(json_cast_result(&args[0], "string", |json| {
                     json.as_str().map(|value| Value::String(value.to_string()))
                 }))
@@ -4428,6 +4514,13 @@ impl Interpreter {
 
             "json.as_int64" => {
                 require_args!(name, 1, args);
+                if is_json_tree_value(&args[0]) {
+                    if let Some(result) =
+                        self.call_trusted_stdlib_function("json.json_tree_as_int64", args)
+                    {
+                        return Some(result);
+                    }
+                }
                 Some(json_cast_result(&args[0], "int64", |json| {
                     json.as_i64().map(Value::Int64)
                 }))
@@ -4435,6 +4528,13 @@ impl Interpreter {
 
             "json.as_float64" => {
                 require_args!(name, 1, args);
+                if is_json_tree_value(&args[0]) {
+                    if let Some(result) =
+                        self.call_trusted_stdlib_function("json.json_tree_as_float64", args)
+                    {
+                        return Some(result);
+                    }
+                }
                 Some(json_cast_result(&args[0], "float64", |json| {
                     json.as_f64().map(Value::Float64)
                 }))
@@ -4442,6 +4542,13 @@ impl Interpreter {
 
             "json.as_bool" => {
                 require_args!(name, 1, args);
+                if is_json_tree_value(&args[0]) {
+                    if let Some(result) =
+                        self.call_trusted_stdlib_function("json.json_tree_as_bool", args)
+                    {
+                        return Some(result);
+                    }
+                }
                 Some(json_cast_result(&args[0], "bool", |json| {
                     json.as_bool().map(Value::Bool)
                 }))
@@ -6685,6 +6792,18 @@ impl Interpreter {
         self.trusted_stdlib_functions.contains(name) && self.functions.contains_key(name)
     }
 
+    fn call_trusted_stdlib_function(
+        &mut self,
+        name: &str,
+        args: &[Value],
+    ) -> Option<Result<Value, String>> {
+        if self.has_trusted_stdlib_function(name) {
+            Some(self.call_user_function_with_type_args(name, &[], args.to_vec()))
+        } else {
+            None
+        }
+    }
+
     fn call_user_function_with_type_args(
         &mut self,
         name: &str,
@@ -7852,6 +7971,13 @@ fn json_type_name(value: &JsonValue) -> &'static str {
     }
 }
 
+fn is_json_tree_value(value: &Value) -> bool {
+    matches!(
+        value,
+        Value::Enum { type_name, .. } if type_name == "JsonTree" || type_name == "json.JsonTree"
+    )
+}
+
 fn result_ok(value: Value) -> Value {
     Value::ResultOk(Box::new(value))
 }
@@ -8520,6 +8646,52 @@ mod tests {
             .unwrap();
 
         assert_eq!(value, Value::String("trusted".to_string()));
+    }
+
+    #[test]
+    fn json_parse_raw_delegates_to_trusted_json_tree_parse() {
+        let mut interp = Interpreter::new();
+        let mut trusted_hook = func_def(
+            "json_tree_parse",
+            vec![("raw", "string")],
+            block(vec![return_stmt(string("trusted raw"))]),
+        );
+        trusted_hook.span = stdlib_sp();
+        interp.register_function_in_namespace(Some("json"), &trusted_hook);
+
+        let value = interp
+            .call_function(
+                "json.parse_raw",
+                vec![Value::String("not json".to_string())],
+            )
+            .unwrap();
+
+        assert_eq!(value, Value::String("trusted raw".to_string()));
+    }
+
+    #[test]
+    fn json_raw_helpers_delegate_native_json_tree_values() {
+        let mut interp = Interpreter::new();
+        let mut trusted_hook = func_def(
+            "json_tree_serialize",
+            vec![("value", "JsonTree")],
+            block(vec![return_stmt(string("trusted tree"))]),
+        );
+        trusted_hook.span = stdlib_sp();
+        interp.register_function_in_namespace(Some("json"), &trusted_hook);
+
+        let value = interp
+            .call_function(
+                "json.serialize_raw",
+                vec![Value::Enum {
+                    type_name: "json.JsonTree".to_string(),
+                    variant: "null".to_string(),
+                    fields: vec![],
+                }],
+            )
+            .unwrap();
+
+        assert_eq!(value, Value::String("trusted tree".to_string()));
     }
 
     #[test]

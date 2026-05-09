@@ -38,10 +38,14 @@ about: two names, two traversal surfaces, one conceptual data model.
   `JsonTree`.
 - Public typed `json.parse[T]` now routes through `JsonTree`, except
   `json.parse[JsonValue]`.
-- `json.parse_raw`, `json.serialize_raw`, `json.kind`, `json.field`,
-  `json.index`, scalar casts, `json.array_length`, and `json.object_keys` still
-  operate on the Rust-backed `JsonValue`.
-- The comptime interpreter still has `Value::Json(serde_json::Value)`.
+- `json.parse_raw` keeps its public `JsonValue` signature but delegates to the
+  trusted stdlib `json_tree_parse` hook when bundled stdlib is loaded.
+- `json.serialize_raw`, `json.kind`, `json.field`, `json.index`, scalar casts,
+  `json.array_length`, and `json.object_keys` delegate native `JsonTree`
+  runtime values to trusted stdlib `json_tree_*` hooks while preserving the
+  existing Rust-backed fallback for old `Value::Json` values.
+- The comptime interpreter still has `Value::Json(serde_json::Value)` as a
+  bootstrap/compatibility fallback.
 - The type system still treats `JsonValue` as a built-in primitive.
 
 ## Compatibility Principle
@@ -109,6 +113,11 @@ Important implementation note: view-friendly serialization currently needs
 either iteration over viewed lists/maps or a deliberate materialization/cloning
 primitive. Do not paper over that with host magic.
 
+Status: first parity fixture is in place in
+`tests/run_pass/json_raw_tree_parity.jett`, covering object traversal, array
+lookup, nulls, booleans, strings, numbers, wrong-shape errors, absent lookup,
+and raw serialization against the native tree helpers.
+
 ### 2. Route Public Raw Functions Through Trusted Stdlib Hooks
 
 Keep compiler/typechecker signatures stable, but make interpreter execution
@@ -121,6 +130,11 @@ delegate to trusted stdlib functions where possible:
 
 At this stage the typechecker may still say the parameter/return type is
 `JsonValue`, but the interpreter should hold a native tree value.
+
+Status: first pass implemented. The interpreter delegates `json.parse_raw` to
+trusted `json.json_tree_parse`, and raw helpers dispatch native `JsonTree`
+values through trusted `json.json_tree_*` hooks. The serde-backed `Value::Json`
+path remains as a fallback until the runtime representation is fully replaced.
 
 ### 3. Change Runtime Representation
 
@@ -201,13 +215,13 @@ Add tests before each behavior change:
 
 ## Recommended Next Implementation Bite
 
-Start with parity, not representation surgery:
+Start replacing the runtime representation:
 
-1. Add a `json_raw_tree_parity.jett` fixture comparing `json.parse_raw` and
-   `json_tree_parse` behavior on objects, arrays, nulls, numbers, strings, and
-   wrong-shape access.
-2. Make `json.serialize_raw` parity explicit against `json_tree_serialize`.
-3. Add a small design note or issue for view-friendly `JsonTree` serialization.
-
-Once parity is pinned, route one raw helper at a time through native `JsonTree`
-while preserving the current public signatures.
+1. Introduce an internal conversion boundary that can turn native `JsonTree`
+   runtime values into the compatibility `JsonValue` lane only where truly
+   needed.
+2. Remove remaining ordinary-language dependence on `serde_json::Value`, keeping
+   serde only as a bootstrap fallback until all raw tests exercise native tree
+   values.
+3. Decide the exact `JsonValue` alias/type-compatibility story before changing
+   typechecker metadata.
