@@ -187,7 +187,9 @@ bridge spoofing, not helper visibility.
    toward replacing the raw `JsonValue` compatibility surface.
 7. Decide whether `JsonValue` becomes a type alias/replacement or remains an
    opaque compatibility substrate. Direct `JsonTree` typed decoding is staged;
-   see `docs/json_tree_decoder_blocker.md`.
+   see `docs/json_tree_decoder_blocker.md`. Decision: `JsonValue` should become
+   a compatibility spelling for native `JsonTree`, not a permanent Rust-backed
+   tree. See `docs/json_value_transition_plan.md`.
 
 ## Recommended Shape For `stdlib/json.jett`
 

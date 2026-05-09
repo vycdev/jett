@@ -64,3 +64,6 @@ The stable boundary is now:
   targets;
 - public `json.parse[JsonValue]` and `json.parse_raw` still use the Rust-backed
   raw `JsonValue` parser.
+
+Long term, `JsonValue` should become a compatibility spelling for the native
+`JsonTree` representation. See `docs/json_value_transition_plan.md`.

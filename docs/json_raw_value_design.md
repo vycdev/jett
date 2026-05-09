@@ -3,6 +3,10 @@
 This note records the first raw JSON surface in Jett. It is meant as a bridge
 toward stdlib `json.parse[T]`, not as a replacement for typed parsing.
 
+Long term, `JsonValue` should become a compatibility spelling for the native
+`JsonTree` representation rather than a separate Rust-backed tree. See
+`docs/json_value_transition_plan.md`.
+
 ## Current Primitive
 
 `JsonValue` is an opaque built-in value that stores a parsed JSON tree. It is not
@@ -111,8 +115,8 @@ The first flat and nested struct proofs live in
   `json.object_keys` plus `json.field` enough?
 - Should `json.field` and `json.index` return `result[optional[JsonValue],
   string]` to distinguish wrong-shape access from ordinary absence?
-- Should `JsonValue` stay copyable for ergonomics, or eventually become a
-  non-copy value that raw accessors read by `view`?
+- During the transition, should `JsonValue` stay copyable for ergonomics, or
+  become a non-copy compatibility spelling whose raw accessors read by `view`?
 - Should `JsonTree.number_value` keep raw number text for round-tripping, or
   split into integer/float variants once numeric parsing is self-hosted?
 - Should unicode escape handling live in the parser itself or in a shared
