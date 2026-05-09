@@ -1,0 +1,32 @@
+namespace test
+function parse_tree_summary(raw: string) returns string:
+    json.JsonTree tree = json.json_tree_parse(raw) handle error:
+        return error
+    return json.json_tree_serialize(tree)
+function parse_string_value(raw: string) returns string:
+    json.JsonTree tree = json.json_tree_parse(raw) handle error:
+        return error
+    match tree:
+        string_value(value):
+            return value
+        null:
+            return "not string"
+        bool_value(value):
+            return "not string"
+        number_value(value):
+            return "not string"
+        array_value(items):
+            return "not string"
+        object_value(fields):
+            return "not string"
+verify json_tree_parse_scalar:
+    assert parse_tree_summary(" null ") == "null"
+    assert parse_tree_summary("true") == "true"
+    assert parse_tree_summary("false") == "false"
+    assert parse_tree_summary(" -12.5 ") == "-12.5"
+    assert parse_tree_summary("\"Ada\"") == "\"Ada\""
+    assert parse_tree_summary("\"line\\nnext\"") == "\"line\\nnext\""
+    assert parse_string_value("\"line\\nnext\"") == "line\nnext"
+    assert parse_tree_summary("\"bad") == "expected JSON string"
+    assert parse_tree_summary("\"\\u0041\"") == "unicode escapes are not supported yet"
+    assert parse_tree_summary("nope") == "expected JSON scalar"

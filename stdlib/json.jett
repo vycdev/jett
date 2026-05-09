@@ -59,6 +59,17 @@ function json_stdlib_quote(raw: string) returns string:
         default error
     return "\"{escaped}\""
 mutual:
+    function json_tree_parse(raw: string) returns result[JsonTree, string]
+    function json_tree_parse_scalar(raw: string) returns result[JsonTree, string]
+    function json_tree_parse_string(raw: string) returns result[string, string]
+    function json_tree_is_quoted_string(view input: bytes, length: int64) returns bool
+    function json_tree_parse_string_body(view input: bytes, end: int64) returns result[string, string]
+    function json_tree_parse_string_escape_at(view input: bytes, index: int64, end: int64) returns result[string, string]
+    function json_tree_escape_string(byte: int64) returns result[string, string]
+    function json_tree_is_number_candidate(raw: string) returns bool
+    function json_tree_is_digit_byte(byte: int64) returns bool
+    function json_tree_is_number_byte(byte: int64) returns bool
+    function json_tree_is_number_punctuation(byte: int64) returns bool
     function json_tree_serialize(value: JsonTree) returns string
     function json_tree_serialize_array(items: list[JsonTree]) returns string
     function json_tree_serialize_object(fields: map[string, JsonTree]) returns string
@@ -88,6 +99,120 @@ mutual:
     function json_decode_enum_payload_reflected[T](payload: JsonValue, type_name: string, variant_name: string, payload_count: int64) returns result[T, string]
     function json_missing_field_reflected(view field: TypeField, owner_name: string) returns result[JsonValue, string]
     function json_decode_record_reflected[T](raw: JsonValue, type_name: string) returns result[T, string]
+function json_tree_parse(raw: string) returns result[JsonTree, string]:
+    string trimmed = string.trim(raw)
+    if trimmed == "":
+        return fail("expected JSON value")
+    JsonTree value = json_tree_parse_scalar(trimmed) handle error:
+        return fail(error)
+    return ok(value)
+function json_tree_parse_scalar(raw: string) returns result[JsonTree, string]:
+    if raw == "null":
+        return ok(JsonTree.null)
+    if raw == "true":
+        return ok(JsonTree.bool_value(true))
+    if raw == "false":
+        return ok(JsonTree.bool_value(false))
+    if string.starts_with(raw, "\"") == true:
+        string value = json_tree_parse_string(raw) handle error:
+            return fail(error)
+        return ok(JsonTree.string_value(value))
+    if json_tree_is_number_candidate(raw) == true:
+        return ok(JsonTree.number_value(raw))
+    return fail("expected JSON scalar")
+function json_tree_parse_string(raw: string) returns result[string, string]:
+    bytes input = bytes.from_string(raw)
+    int64 length = bytes.length(view input)
+    if json_tree_is_quoted_string(view input, length) == false:
+        return fail("expected JSON string")
+    return json_tree_parse_string_body(view input, length - 1)
+function json_tree_is_quoted_string(view input: bytes, length: int64) returns bool:
+    if length < 2:
+        return false
+    int64 first = bytes.get(view input, 0) handle:
+        default -1
+    int64 last = bytes.get(view input, length - 1) handle:
+        default -1
+    if first != 34:
+        return false
+    return last == 34
+function json_tree_parse_string_body(view input: bytes, end: int64) returns result[string, string]:
+    mutable bytes output = bytes.new()
+    mutable int64 index = 1
+    while index < end:
+        int64 byte = bytes.get(view input, index) handle:
+            default -1
+        if byte == 34:
+            return fail("unexpected quote in JSON string")
+        if byte == 92:
+            index = index + 1
+            string decoded = json_tree_parse_string_escape_at(view input, index, end) handle error:
+                return fail(error)
+            output = bytes.concat(output, bytes.from_string(decoded))
+        else:
+            output = bytes.concat(output, bytes.slice(view input, index, index + 1))
+        index = index + 1
+    string value = bytes.to_string(output) handle error:
+        return fail(error)
+    return ok(value)
+function json_tree_parse_string_escape_at(view input: bytes, index: int64, end: int64) returns result[string, string]:
+    if index >= end:
+        return fail("unterminated escape in JSON string")
+    int64 escape = bytes.get(view input, index) handle:
+        default -1
+    string decoded = json_tree_escape_string(escape) handle error:
+        return fail(error)
+    return ok(decoded)
+function json_tree_escape_string(byte: int64) returns result[string, string]:
+    if byte == 34:
+        return ok("\"")
+    if byte == 92:
+        return ok("\\")
+    if byte == 47:
+        return ok("/")
+    if byte == 110:
+        return ok("\n")
+    if byte == 114:
+        return ok("\r")
+    if byte == 116:
+        return ok("\t")
+    if byte == 117:
+        return fail("unicode escapes are not supported yet")
+    return fail("unsupported JSON string escape")
+function json_tree_is_number_candidate(raw: string) returns bool:
+    bytes input = bytes.from_string(raw)
+    int64 length = bytes.length(view input)
+    if length == 0:
+        return false
+    mutable bool seen_digit = false
+    mutable int64 index = 0
+    while index < length:
+        int64 byte = bytes.get(view input, index) handle:
+            default -1
+        if json_tree_is_digit_byte(byte) == true:
+            seen_digit = true
+        if json_tree_is_number_byte(byte) == false:
+            return false
+        index = index + 1
+    return seen_digit
+function json_tree_is_digit_byte(byte: int64) returns bool:
+    return byte >= 48 and byte <= 57
+function json_tree_is_number_byte(byte: int64) returns bool:
+    if json_tree_is_digit_byte(byte) == true:
+        return true
+    return json_tree_is_number_punctuation(byte)
+function json_tree_is_number_punctuation(byte: int64) returns bool:
+    if byte == 45:
+        return true
+    if byte == 43:
+        return true
+    if byte == 46:
+        return true
+    if byte == 69:
+        return true
+    if byte == 101:
+        return true
+    return false
 function json_tree_serialize(value: JsonTree) returns string:
     match value:
         null:

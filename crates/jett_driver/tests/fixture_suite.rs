@@ -291,6 +291,10 @@ run_pass_fixture!(
     "json_stdlib_bridge_delegation.jett"
 );
 run_pass_fixture!(run_pass_json_tree_value, "json_tree_value.jett");
+run_pass_fixture!(
+    run_pass_json_tree_parse_scalar,
+    "json_tree_parse_scalar.jett"
+);
 run_pass_fixture!(run_pass_escape_sequences, "escape_sequences.jett");
 run_pass_fixture!(run_pass_list_higher_order, "list_higher_order.jett");
 run_pass_fixture!(run_pass_inline_functions, "inline_functions.jett");
