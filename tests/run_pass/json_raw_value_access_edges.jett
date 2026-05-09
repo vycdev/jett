@@ -1,0 +1,53 @@
+namespace test
+
+function missing_key_and_present_null() returns string:
+    JsonValue root = json.parse_raw("{{\"present\":null}}") handle error:
+        return error
+    JsonValue missing = json.field(root, "missing") handle:
+        JsonValue present = json.field(root, "present") handle:
+            return "present missing"
+        return "missing absent:present null {json.is_null(present)}"
+    return "missing present:{json.kind(missing)}"
+
+function index_out_of_bounds_is_absent() returns string:
+    JsonValue values = json.parse_raw("[1,2]") handle error:
+        return error
+    JsonValue item = json.index(values, 9) handle:
+        return "absent"
+    return "present:{json.kind(item)}"
+
+function field_on_non_object_is_absent() returns string:
+    JsonValue text = json.parse_raw("\"Ada\"") handle error:
+        return error
+    JsonValue field = json.field(text, "name") handle:
+        return "absent"
+    return "present:{json.kind(field)}"
+
+function index_on_non_array_is_absent() returns string:
+    JsonValue text = json.parse_raw("\"Ada\"") handle error:
+        return error
+    JsonValue item = json.index(text, 0) handle:
+        return "absent"
+    return "present:{json.kind(item)}"
+
+function object_keys_wrong_shape_error() returns string:
+    JsonValue text = json.parse_raw("\"Ada\"") handle error:
+        return error
+    list[string] keys = json.object_keys(text) handle error:
+        return error
+    return "{list.length(keys)}"
+
+function scalar_cast_wrong_shape_error() returns string:
+    JsonValue text = json.parse_raw("\"Ada\"") handle error:
+        return error
+    int64 value = json.as_int64(text) handle error:
+        return error
+    return "{value}"
+
+verify json_raw_value_access_edges:
+    assert missing_key_and_present_null() == "missing absent:present null true"
+    assert index_out_of_bounds_is_absent() == "absent"
+    assert field_on_non_object_is_absent() == "absent"
+    assert index_on_non_array_is_absent() == "absent"
+    assert object_keys_wrong_shape_error() == "expected object, got string"
+    assert scalar_cast_wrong_shape_error() == "expected int64, got string"

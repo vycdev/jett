@@ -254,3 +254,6 @@ for the decoded value. See `docs/bitfield_reflection_metadata.md`.
    declarations exist.
 3. Keep hardening format policy with parity tests against the Rust bridge:
    unknown fields, enum/bitfield shape, public/secret modes, and error messages.
+4. Start the canonical reflection metadata migration described in
+   `docs/canonical_reflection_metadata_plan.md` so JSON sees the same type view
+   as the checker.

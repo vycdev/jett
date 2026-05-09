@@ -246,6 +246,12 @@ run_pass_fixture!(
 );
 run_pass_fixture!(run_pass_json_parse, "json_parse.jett");
 run_pass_fixture!(run_pass_json_parse_raw, "json_parse_raw.jett");
+run_pass_fixture!(
+    run_pass_json_raw_value_access_edges,
+    "json_raw_value_access_edges.jett"
+);
+run_pass_fixture!(run_pass_json_enum_shapes, "json_enum_shapes.jett");
+run_pass_fixture!(run_pass_json_bitfield_shapes, "json_bitfield_shapes.jett");
 run_pass_fixture!(run_pass_json_roundtrip_user, "json_roundtrip_user.jett");
 run_pass_fixture!(
     run_pass_json_parse_refinement_valid,
@@ -274,6 +280,15 @@ run_pass_fixture!(
 run_pass_fixture!(
     run_pass_json_reflection_parse_wrapper,
     "json_reflection_parse_wrapper.jett"
+);
+run_pass_fixture!(
+    run_pass_json_public_secret_policy,
+    "json_public_secret_policy.jett"
+);
+run_pass_fixture!(run_pass_json_unknown_fields, "json_unknown_fields.jett");
+run_pass_fixture!(
+    run_pass_json_stdlib_bridge_delegation,
+    "json_stdlib_bridge_delegation.jett"
 );
 run_pass_fixture!(run_pass_escape_sequences, "escape_sequences.jett");
 run_pass_fixture!(run_pass_list_higher_order, "list_higher_order.jett");
@@ -356,12 +371,24 @@ compile_fail_fixture!(
     "json_serialize_map_key_must_be_string.jett"
 );
 compile_fail_fixture!(
+    compile_fail_json_serialize_public_map_key_must_be_string,
+    "json_serialize_public_map_key_must_be_string.jett"
+);
+compile_fail_fixture!(
     compile_fail_json_serialize_requires_view,
     "json_serialize_requires_view.jett"
 );
 compile_fail_fixture!(
     compile_fail_json_serialize_public_requires_view,
     "json_serialize_public_requires_view.jett"
+);
+compile_fail_fixture!(
+    compile_fail_json_serialize_public_top_level_secret_blocked,
+    "json_serialize_public_top_level_secret_blocked.jett"
+);
+compile_fail_fixture!(
+    compile_fail_json_serialize_secret_generic_blocked,
+    "json_serialize_secret_generic_blocked.jett"
 );
 compile_fail_fixture!(
     compile_fail_json_parse_map_key_must_be_string,

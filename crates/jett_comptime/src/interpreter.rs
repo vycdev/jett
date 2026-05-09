@@ -2472,13 +2472,6 @@ impl Interpreter {
                 if let Some(err) = check_args(name, 1, args) {
                     return Some(err);
                 }
-                if self.functions.contains_key("json.parse") {
-                    return Some(self.call_user_function_with_type_args(
-                        "json.parse",
-                        type_args,
-                        args.to_vec(),
-                    ));
-                }
                 if self.functions.contains_key("json.json_parse_reflected") {
                     return Some(self.call_user_function_with_type_args(
                         "json.json_parse_reflected",
@@ -2486,16 +2479,7 @@ impl Interpreter {
                         args.to_vec(),
                     ));
                 }
-                match &args[0] {
-                    Value::String(raw) => match serde_json::from_str::<JsonValue>(raw) {
-                        Ok(json) => match self.json_to_value_typed(&json, &ty) {
-                            Ok(value) => Ok(Value::ResultOk(Box::new(value))),
-                            Err(message) => Ok(Value::ResultFail(Box::new(Value::String(message)))),
-                        },
-                        Err(err) => Ok(Value::ResultFail(Box::new(Value::String(err.to_string())))),
-                    },
-                    other => Err(format!("json.parse expects a string, got {other}")),
-                }
+                Err("json.parse requires stdlib hook 'json.json_parse_reflected'".to_string())
             }
             "json.serialize" | "json.serialize_public" => {
                 if let Some(err) = check_args(name, 1, args) {
@@ -2507,27 +2491,11 @@ impl Interpreter {
                         type_expr_display(&ty)
                     )));
                 }
-                if name == "json.serialize" && self.functions.contains_key("json.serialize") {
-                    return Some(self.call_user_function_with_type_args(
-                        "json.serialize",
-                        type_args,
-                        args.to_vec(),
-                    ));
-                }
                 if name == "json.serialize"
                     && self.functions.contains_key("json.json_serialize_reflected")
                 {
                     return Some(self.call_user_function_with_type_args(
                         "json.json_serialize_reflected",
-                        type_args,
-                        args.to_vec(),
-                    ));
-                }
-                if name == "json.serialize_public"
-                    && self.functions.contains_key("json.serialize_public")
-                {
-                    return Some(self.call_user_function_with_type_args(
-                        "json.serialize_public",
                         type_args,
                         args.to_vec(),
                     ));
@@ -2543,11 +2511,12 @@ impl Interpreter {
                         args.to_vec(),
                     ));
                 }
-                Ok(Value::String(self.value_to_json_typed(
-                    &args[0],
-                    &ty,
-                    name == "json.serialize_public",
-                )))
+                let hook = if name == "json.serialize" {
+                    "json.json_serialize_reflected"
+                } else {
+                    "json.json_serialize_public_reflected"
+                };
+                Err(format!("{name} requires stdlib hook '{hook}'"))
             }
             _ => return None,
         })
@@ -4237,317 +4206,6 @@ impl Interpreter {
         }
     }
 
-    fn json_to_value_typed(&mut self, json: &JsonValue, ty: &TypeExpr) -> Result<Value, String> {
-        let ty = self.substitute_type_expr(ty);
-        match &ty {
-            TypeExpr::View(inner, _) => self.json_to_value_typed(json, inner),
-            TypeExpr::Named(ident) => {
-                if let Some(base_ty) = self.type_alias_bases.get(&ident.name).cloned() {
-                    let value = self.json_to_value_typed(json, &base_ty)?;
-                    self.check_refinement(&ident.name, &value)?;
-                    return Ok(value);
-                }
-
-                match ident.name.as_str() {
-                    "int64" => json
-                        .as_i64()
-                        .map(Value::Int64)
-                        .ok_or_else(|| format!("expected int64, got {}", json_type_name(json))),
-                    "float64" => json
-                        .as_f64()
-                        .map(Value::Float64)
-                        .ok_or_else(|| format!("expected float64, got {}", json_type_name(json))),
-                    "string" => json
-                        .as_str()
-                        .map(|value| Value::String(value.to_string()))
-                        .ok_or_else(|| format!("expected string, got {}", json_type_name(json))),
-                    "bool" => json
-                        .as_bool()
-                        .map(Value::Bool)
-                        .ok_or_else(|| format!("expected bool, got {}", json_type_name(json))),
-                    "nothing" => {
-                        if json.is_null() {
-                            Ok(Value::Nothing)
-                        } else {
-                            Err(format!("expected null, got {}", json_type_name(json)))
-                        }
-                    }
-                    "bytes" => self.json_to_bytes_value(json),
-                    "JsonValue" => Ok(Value::Json(json.clone())),
-                    name if self.structs.contains_key(name) => {
-                        self.json_to_struct_value(json, name, &HashMap::new())
-                    }
-                    name if self.enums.contains_key(name) => self.json_to_enum_value(json, name),
-                    name if self.bitfields.contains_key(name) => {
-                        self.json_to_bitfield_value(json, name)
-                    }
-                    other => Err(format!("json.parse does not support type '{other}' yet")),
-                }
-            }
-            TypeExpr::Generic(ident, args, _) if self.structs.contains_key(&ident.name) => {
-                let Some(strukt) = self.structs.get(&ident.name).cloned() else {
-                    return Err(format!("unknown struct '{}'", ident.name));
-                };
-                let namespace =
-                    Self::type_name_namespace(&ident.name).or(self.current_namespace.as_deref());
-                let substitutions = self.generic_type_substitutions(&strukt, args, namespace);
-                self.json_to_struct_value(json, &ident.name, &substitutions)
-            }
-            TypeExpr::Generic(ident, args, _) => match ident.name.as_str() {
-                "list" if args.len() == 1 => {
-                    let items = json
-                        .as_array()
-                        .ok_or_else(|| format!("expected array, got {}", json_type_name(json)))?;
-                    let mut values = Vec::with_capacity(items.len());
-                    for item in items {
-                        values.push(self.json_to_value_typed(item, &args[0])?);
-                    }
-                    Ok(Value::List(values))
-                }
-                "set" if args.len() == 1 => {
-                    let items = json
-                        .as_array()
-                        .ok_or_else(|| format!("expected array, got {}", json_type_name(json)))?;
-                    let mut values = Vec::with_capacity(items.len());
-                    for item in items {
-                        let value = self.json_to_value_typed(item, &args[0])?;
-                        if !values.contains(&value) {
-                            values.push(value);
-                        }
-                    }
-                    Ok(Value::Set(values))
-                }
-                "map" if args.len() == 2 => {
-                    if type_expr_display(&args[0]) != "string" {
-                        return Err("json.parse supports only map[string, V]".to_string());
-                    }
-                    let object = json
-                        .as_object()
-                        .ok_or_else(|| format!("expected object, got {}", json_type_name(json)))?;
-                    let mut entries = Vec::with_capacity(object.len());
-                    for (key, value) in object {
-                        entries.push((
-                            Value::String(key.clone()),
-                            self.json_to_value_typed(value, &args[1])?,
-                        ));
-                    }
-                    Ok(Value::Map(entries))
-                }
-                "optional" if args.len() == 1 => {
-                    if json.is_null() {
-                        Ok(Value::OptionalNone)
-                    } else {
-                        Ok(Value::OptionalSome(Box::new(
-                            self.json_to_value_typed(json, &args[0])?,
-                        )))
-                    }
-                }
-                "result" if args.len() == 2 => {
-                    let object = json
-                        .as_object()
-                        .ok_or_else(|| format!("expected object, got {}", json_type_name(json)))?;
-                    if object.len() != 1 {
-                        return Err("expected result object with exactly one key".to_string());
-                    }
-                    if let Some(value) = object.get("ok") {
-                        Ok(Value::ResultOk(Box::new(
-                            self.json_to_value_typed(value, &args[0])?,
-                        )))
-                    } else if let Some(value) = object.get("fail") {
-                        Ok(Value::ResultFail(Box::new(
-                            self.json_to_value_typed(value, &args[1])?,
-                        )))
-                    } else {
-                        Err("expected result object with key 'ok' or 'fail'".to_string())
-                    }
-                }
-                "secret" if args.len() == 1 => self.json_to_value_typed(json, &args[0]),
-                _ => Err(format!(
-                    "json.parse does not support type '{}' yet",
-                    type_expr_display(&ty)
-                )),
-            },
-            TypeExpr::Function(_, _, _) => {
-                Err("json.parse does not support function types".to_string())
-            }
-        }
-    }
-
-    fn json_to_struct_value(
-        &mut self,
-        json: &JsonValue,
-        struct_name: &str,
-        substitutions: &HashMap<String, TypeExpr>,
-    ) -> Result<Value, String> {
-        let object = json
-            .as_object()
-            .ok_or_else(|| format!("expected object, got {}", json_type_name(json)))?;
-        let strukt = self
-            .structs
-            .get(struct_name)
-            .cloned()
-            .ok_or_else(|| format!("unknown struct '{struct_name}'"))?;
-        let mut fields = Vec::with_capacity(strukt.fields.len());
-
-        for field in &strukt.fields {
-            let field_ty = self.substitute_type_expr_with_map(&field.ty, substitutions);
-            let json_name = field.serialize_name.as_ref().unwrap_or(&field.name.name);
-            let value = match object.get(json_name) {
-                Some(raw) => self.json_to_value_typed(raw, &field_ty)?,
-                None if type_expr_is_optional(&field_ty) => Value::OptionalNone,
-                None => {
-                    return Err(format!(
-                        "missing required field '{}' for {}",
-                        json_name, struct_name
-                    ));
-                }
-            };
-            fields.push((field.name.name.clone(), value));
-        }
-
-        Ok(Value::Struct {
-            type_name: struct_name.to_string(),
-            fields,
-        })
-    }
-
-    fn json_to_enum_value(&mut self, json: &JsonValue, enum_name: &str) -> Result<Value, String> {
-        let enum_def = self
-            .enums
-            .get(enum_name)
-            .cloned()
-            .ok_or_else(|| format!("unknown enum '{enum_name}'"))?;
-
-        if let Some(variant_name) = json.as_str() {
-            let variant = enum_def
-                .variants
-                .iter()
-                .find(|variant| variant.name.name == variant_name)
-                .ok_or_else(|| format!("unknown enum variant '{enum_name}.{variant_name}'"))?;
-            if !variant.fields.is_empty() {
-                return Err(format!(
-                    "enum variant '{}.{}' expects {} payload field(s)",
-                    enum_name,
-                    variant_name,
-                    variant.fields.len()
-                ));
-            }
-            return Ok(Value::Enum {
-                type_name: enum_name.to_string(),
-                variant: variant_name.to_string(),
-                fields: Vec::new(),
-            });
-        }
-
-        let object = json.as_object().ok_or_else(|| {
-            format!(
-                "expected enum string or object, got {}",
-                json_type_name(json)
-            )
-        })?;
-        if object.len() != 1 {
-            return Err("expected enum object with exactly one variant key".to_string());
-        }
-
-        let (variant_name, payload) = object.iter().next().expect("object has one entry");
-        let variant = enum_def
-            .variants
-            .iter()
-            .find(|variant| variant.name.name == *variant_name)
-            .ok_or_else(|| format!("unknown enum variant '{enum_name}.{variant_name}'"))?;
-        let items = payload.as_array().ok_or_else(|| {
-            format!(
-                "expected array payload for enum variant '{}.{}', got {}",
-                enum_name,
-                variant_name,
-                json_type_name(payload)
-            )
-        })?;
-        if items.len() != variant.fields.len() {
-            return Err(format!(
-                "enum variant '{}.{}' expects {} payload field(s), got {}",
-                enum_name,
-                variant_name,
-                variant.fields.len(),
-                items.len()
-            ));
-        }
-
-        let mut fields = Vec::with_capacity(items.len());
-        for (field, raw) in variant.fields.iter().zip(items.iter()) {
-            fields.push(self.json_to_value_typed(raw, &field.ty)?);
-        }
-
-        Ok(Value::Enum {
-            type_name: enum_name.to_string(),
-            variant: variant_name.to_string(),
-            fields,
-        })
-    }
-
-    fn json_to_bitfield_value(
-        &mut self,
-        json: &JsonValue,
-        bitfield_name: &str,
-    ) -> Result<Value, String> {
-        let object = json
-            .as_object()
-            .ok_or_else(|| format!("expected object, got {}", json_type_name(json)))?;
-        let bitfield = self
-            .bitfields
-            .get(bitfield_name)
-            .cloned()
-            .ok_or_else(|| format!("unknown bitfield '{bitfield_name}'"))?;
-        let mut fields = Vec::with_capacity(bitfield.fields.len());
-
-        for field in &bitfield.fields {
-            let raw = object.get(&field.name.name).ok_or_else(|| {
-                format!(
-                    "missing required field '{}' for {}",
-                    field.name.name, bitfield_name
-                )
-            })?;
-            let value = match &field.kind {
-                BitfieldFieldKind::Bits { width, as_type } => {
-                    let ty = as_type.as_ref().cloned().unwrap_or_else(|| {
-                        TypeExpr::Named(Ident {
-                            name: "int64".to_string(),
-                            span: field.span,
-                        })
-                    });
-                    let value = self.json_to_value_typed(raw, &ty)?;
-                    self.bitfield_field_numeric_value(
-                        &bitfield,
-                        &field.name.name,
-                        *width,
-                        as_type.as_ref(),
-                        &value,
-                    )?;
-                    value
-                }
-                BitfieldFieldKind::Payload(ty) => self.json_to_value_typed(raw, ty)?,
-            };
-            fields.push((field.name.name.clone(), value));
-        }
-
-        Ok(Value::Struct {
-            type_name: bitfield_name.to_string(),
-            fields,
-        })
-    }
-
-    fn json_to_bytes_value(&self, json: &JsonValue) -> Result<Value, String> {
-        let raw = json
-            .as_str()
-            .ok_or_else(|| format!("expected bytes string, got {}", json_type_name(json)))?;
-        Self::parse_hex_bytes(
-            raw,
-            "expected even-length hex bytes string",
-            "expected hex bytes string",
-        )
-        .map(Value::Bytes)
-    }
-
     fn parse_hex_bytes(
         raw: &str,
         even_length_error: &str,
@@ -4567,221 +4225,6 @@ impl Interpreter {
             bytes.push(byte);
         }
         Ok(bytes)
-    }
-
-    fn value_to_json_typed(&self, value: &Value, ty: &TypeExpr, public_only: bool) -> String {
-        let ty = self.substitute_type_expr(ty);
-        match &ty {
-            TypeExpr::View(inner, _) => {
-                return self.value_to_json_typed(value, inner, public_only);
-            }
-            TypeExpr::Generic(ident, args, _) if ident.name == "list" && args.len() == 1 => {
-                if let Value::List(items) = value {
-                    let elems: Vec<String> = items
-                        .iter()
-                        .map(|item| self.value_to_json_typed(item, &args[0], public_only))
-                        .collect();
-                    return format!("[{}]", elems.join(","));
-                }
-            }
-            TypeExpr::Generic(ident, args, _) if ident.name == "set" && args.len() == 1 => {
-                if let Value::Set(items) = value {
-                    let elems: Vec<String> = items
-                        .iter()
-                        .map(|item| self.value_to_json_typed(item, &args[0], public_only))
-                        .collect();
-                    return format!("[{}]", elems.join(","));
-                }
-            }
-            TypeExpr::Generic(ident, args, _) if ident.name == "map" && args.len() == 2 => {
-                if let Value::Map(entries) = value {
-                    let pairs: Vec<String> = entries
-                        .iter()
-                        .map(|(key, val)| {
-                            format!(
-                                "{}:{}",
-                                self.value_to_json_typed(key, &args[0], public_only),
-                                self.value_to_json_typed(val, &args[1], public_only)
-                            )
-                        })
-                        .collect();
-                    return format!("{{{}}}", pairs.join(","));
-                }
-            }
-            TypeExpr::Generic(ident, args, _) if ident.name == "optional" && args.len() == 1 => {
-                return match value {
-                    Value::OptionalNone => "null".to_string(),
-                    Value::OptionalSome(inner) => {
-                        self.value_to_json_typed(inner, &args[0], public_only)
-                    }
-                    _ => self.value_to_json_reflected(value, public_only),
-                };
-            }
-            TypeExpr::Generic(ident, args, _) if ident.name == "result" && args.len() == 2 => {
-                return match value {
-                    Value::ResultOk(inner) => format!(
-                        "{{\"ok\":{}}}",
-                        self.value_to_json_typed(inner, &args[0], public_only)
-                    ),
-                    Value::ResultFail(inner) => format!(
-                        "{{\"fail\":{}}}",
-                        self.value_to_json_typed(inner, &args[1], public_only)
-                    ),
-                    _ => self.value_to_json_reflected(value, public_only),
-                };
-            }
-            TypeExpr::Generic(ident, args, _) if ident.name == "secret" && args.len() == 1 => {
-                return self.value_to_json_typed(value, &args[0], public_only);
-            }
-            _ => {}
-        }
-
-        if matches!(self.type_expr_kind(&ty), "struct" | "bitfield") {
-            if let Value::Struct { fields, .. } = value {
-                let reflected_fields = self.type_expr_fields(&ty);
-                let pairs: Vec<String> = reflected_fields
-                    .iter()
-                    .filter(|field| !public_only || !self.type_expr_has_secret(&field.ty))
-                    .filter_map(|field| {
-                        fields.iter().find(|(name, _)| name == &field.name).map(
-                            |(_, field_value)| {
-                                format!(
-                                    "{}:{}",
-                                    json_string(&field.serialize_name),
-                                    self.value_to_json_typed(field_value, &field.ty, public_only)
-                                )
-                            },
-                        )
-                    })
-                    .collect();
-                return format!("{{{}}}", pairs.join(","));
-            }
-        }
-
-        self.value_to_json_reflected(value, public_only)
-    }
-
-    fn value_to_json_reflected(&self, value: &Value, public_only: bool) -> String {
-        match value {
-            Value::Int64(n) => n.to_string(),
-            Value::Float64(f) => {
-                if f.fract() == 0.0 && f.is_finite() {
-                    format!("{f:.1}")
-                } else {
-                    f.to_string()
-                }
-            }
-            Value::String(s) => json_string(s),
-            Value::Bool(b) => b.to_string(),
-            Value::Nothing | Value::OptionalNone => "null".to_string(),
-            Value::Json(json) => json.to_string(),
-            Value::OptionalSome(inner) => self.value_to_json_reflected(inner, public_only),
-            Value::ResultOk(inner) => {
-                format!(
-                    "{{\"ok\":{}}}",
-                    self.value_to_json_reflected(inner, public_only)
-                )
-            }
-            Value::ResultFail(inner) => {
-                format!(
-                    "{{\"fail\":{}}}",
-                    self.value_to_json_reflected(inner, public_only)
-                )
-            }
-            Value::List(items) => {
-                let elems: Vec<String> = items
-                    .iter()
-                    .map(|item| self.value_to_json_reflected(item, public_only))
-                    .collect();
-                format!("[{}]", elems.join(","))
-            }
-            Value::Map(entries) => {
-                let pairs: Vec<String> = entries
-                    .iter()
-                    .map(|(k, v)| {
-                        format!(
-                            "{}:{}",
-                            self.value_to_json_reflected(k, public_only),
-                            self.value_to_json_reflected(v, public_only)
-                        )
-                    })
-                    .collect();
-                format!("{{{}}}", pairs.join(","))
-            }
-            Value::Set(items) => {
-                let elems: Vec<String> = items
-                    .iter()
-                    .map(|item| self.value_to_json_reflected(item, public_only))
-                    .collect();
-                format!("[{}]", elems.join(","))
-            }
-            Value::Struct { type_name, fields } => {
-                let pairs: Vec<String> = fields
-                    .iter()
-                    .filter(|(name, _)| {
-                        !public_only || !self.struct_field_has_secret(type_name, name)
-                    })
-                    .map(|(name, value)| {
-                        format!(
-                            "{}:{}",
-                            json_string(&self.struct_field_serialize_name(type_name, name)),
-                            self.value_to_json_reflected(value, public_only)
-                        )
-                    })
-                    .collect();
-                format!("{{{}}}", pairs.join(","))
-            }
-            Value::Enum {
-                type_name: _,
-                variant,
-                fields,
-            } => {
-                if fields.is_empty() {
-                    format!("\"{}\"", variant)
-                } else {
-                    let elems: Vec<String> = fields
-                        .iter()
-                        .map(|field| self.value_to_json_reflected(field, public_only))
-                        .collect();
-                    format!("{{\"{}\":[{}]}}", variant, elems.join(","))
-                }
-            }
-            Value::Bytes(bytes) => {
-                let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
-                format!("\"0x{hex}\"")
-            }
-            Value::Error(msg) => format!(
-                "{{\"error\":{}}}",
-                self.value_to_json_reflected(&Value::String(msg.clone()), public_only)
-            ),
-            _ => "null".to_string(),
-        }
-    }
-
-    fn struct_field_has_secret(&self, type_name: &str, field_name: &str) -> bool {
-        self.structs
-            .get(type_name)
-            .and_then(|strukt| {
-                strukt
-                    .fields
-                    .iter()
-                    .find(|field| field.name.name == field_name)
-            })
-            .map(|field| self.type_expr_has_secret(&field.ty))
-            .unwrap_or(false)
-    }
-
-    fn struct_field_serialize_name(&self, type_name: &str, field_name: &str) -> String {
-        self.structs
-            .get(type_name)
-            .and_then(|strukt| {
-                strukt
-                    .fields
-                    .iter()
-                    .find(|field| field.name.name == field_name)
-            })
-            .and_then(|field| field.serialize_name.clone())
-            .unwrap_or_else(|| field_name.to_string())
     }
 
     // =========================================================================
@@ -4985,14 +4428,6 @@ impl Interpreter {
                 Some(json_cast_result(&args[0], "bool", |json| {
                     json.as_bool().map(Value::Bool)
                 }))
-            }
-
-            "json.serialize" | "json.serialize_public" => {
-                require_args!(name, 1, args);
-                Some(Ok(Value::String(self.value_to_json_reflected(
-                    &args[0],
-                    name == "json.serialize_public",
-                ))))
             }
 
             // -- Random operations (stdlib/random.jett) -----------------------
@@ -8227,14 +7662,6 @@ fn type_expr_name(ty: &TypeExpr) -> String {
     }
 }
 
-fn type_expr_is_optional(ty: &TypeExpr) -> bool {
-    match ty {
-        TypeExpr::Generic(ident, _, _) => ident.name == "optional",
-        TypeExpr::View(inner, _) => type_expr_is_optional(inner),
-        _ => false,
-    }
-}
-
 fn comptime_type_info_binding(expr: &Expr) -> Option<&TypeExpr> {
     let Expr::GenericCall(callee, type_args, args, _) = expr else {
         return None;
@@ -8429,24 +7856,6 @@ where
     }
 }
 
-fn json_string(s: &str) -> String {
-    let mut escaped = String::with_capacity(s.len());
-    for ch in s.chars() {
-        match ch {
-            '"' => escaped.push_str("\\\""),
-            '\\' => escaped.push_str("\\\\"),
-            '\n' => escaped.push_str("\\n"),
-            '\r' => escaped.push_str("\\r"),
-            '\t' => escaped.push_str("\\t"),
-            '\u{08}' => escaped.push_str("\\b"),
-            '\u{0c}' => escaped.push_str("\\f"),
-            ch if ch <= '\u{1f}' => escaped.push_str(&format!("\\u{:04x}", ch as u32)),
-            ch => escaped.push(ch),
-        }
-    }
-    format!("\"{escaped}\"")
-}
-
 fn type_expr_display(ty: &TypeExpr) -> String {
     match ty {
         TypeExpr::Named(ident) => ident.name.clone(),
@@ -8533,16 +7942,6 @@ mod tests {
     /// Helper: create a bool literal expression.
     fn bool_expr(b: bool) -> Expr {
         Expr::BoolLiteral(b, sp())
-    }
-
-    #[test]
-    fn json_string_escapes_control_characters() {
-        assert_eq!(
-            json_string(
-                "quote \" slash \\ newline\n tab\t backspace\u{08} formfeed\u{0c} nul\0 unit\u{1f}"
-            ),
-            "\"quote \\\" slash \\\\ newline\\n tab\\t backspace\\b formfeed\\f nul\\u0000 unit\\u001f\""
-        );
     }
 
     /// Helper: create an identifier expression.

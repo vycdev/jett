@@ -20,9 +20,10 @@ gate around those calls.
 - The public `json.parse`, `json.serialize`, and `json.serialize_public` names
   are still compiler-known builtins for typechecking and call dispatch.
 - The interpreter delegates `json.parse[T]`, `json.serialize[T]`, and
-  `json.serialize_public[T]` through the stdlib wrapper names when the
-  compiler-shipped stdlib module is registered, then falls back to the prefixed
-  hooks or Rust paths for bootstrap compatibility.
+  `json.serialize_public[T]` through the internal reflected hook names when the
+  compiler-shipped stdlib module is registered. The old typed Rust fallback has
+  been removed; Rust remains the substrate for raw `JsonValue` parsing and
+  accessors.
 - The typechecker enforces policy for those public names:
   - `json.parse[T]` must have one type argument and returns `result[T, string]`.
   - non-string JSON map keys are rejected.
@@ -125,6 +126,14 @@ Suggested sequence:
    Done for the representative bridge set.
 8. Add public wrapper names in `stdlib/json.jett`, but keep compiler-owned
    builtin precedence in the typechecker and interpreter. Done.
+9. Route the compiler-owned interpreter bridge through the internal reflected
+   hook names rather than through public wrapper names. This keeps public
+   wrappers readable in source while avoiding any future ambiguity between
+   trusted compiler-shipped stdlib functions and user/project `namespace json`
+   declarations. Done.
+10. Remove the old typed Rust parse/serialize fallback from public JSON calls.
+    Public typed JSON now depends on the stdlib reflected hooks; raw JSON
+    primitives stay Rust-backed. Done.
 9. Later, after visibility/export and policy-bearing stdlib declarations exist,
    reconsider whether `parse`, `serialize`, and `serialize_public` can become
    ordinary exported functions.

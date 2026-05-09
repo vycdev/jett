@@ -1,0 +1,35 @@
+namespace test
+
+enum Protocol:
+    tcp = 6
+    udp = 17
+
+bitfield Header:
+    version: 4 bits
+    protocol: 8 bits as Protocol
+
+function bitfield_requires_object_error() returns string:
+    Header header = json.parse[Header]("[1,2]") handle error:
+        return error
+    return "{header.version}"
+
+function bitfield_missing_field_error() returns string:
+    Header header = json.parse[Header]("{{\"version\":4}}") handle error:
+        return error
+    return "{header.version}"
+
+function bitfield_extra_field_ignored() returns bool:
+    Header header = json.parse[Header]("{{\"version\":4,\"protocol\":\"tcp\",\"extra\":9}}") handle error:
+        return false
+    return header.version == 4 && header.protocol == Protocol.tcp
+
+function bitfield_enum_numeric_shape_error() returns string:
+    Header header = json.parse[Header]("{{\"version\":4,\"protocol\":6}}") handle error:
+        return error
+    return "{header.version}"
+
+verify json_bitfield_shapes:
+    assert bitfield_requires_object_error() == "expected object, got array"
+    assert bitfield_missing_field_error() == "missing required field 'protocol' for Header"
+    assert bitfield_extra_field_ignored() == true
+    assert bitfield_enum_numeric_shape_error() == "protocol: expected enum string or object, got number"

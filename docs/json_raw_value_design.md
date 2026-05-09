@@ -38,6 +38,10 @@ The raw API deliberately keeps these properties:
   handle malformed input and type mismatches.
 - **Missing data is visible.** Field and index lookup return `optional`, which
   lets format code distinguish absent values from present JSON `null`.
+- **Wrong-shape traversal is absence for lookup.** `json.field` on a non-object
+  and `json.index` on a non-array return `none`; shape-requiring operations such
+  as `json.object_keys`, `json.array_length`, and scalar casts return
+  `result` errors.
 - **Format policy remains in `json`.** Optional defaults, unknown key handling,
   enum object shape, and `serialize_name` lookup stay outside any eventual
   `type.construct[T]` primitive.

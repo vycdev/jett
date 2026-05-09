@@ -160,10 +160,9 @@ The current code already has most of the semantic checks in one place:
 - runtime/interpreter struct construction: `construct_struct`,
 - runtime/interpreter bitfield construction: `construct_bitfield`,
 - runtime/interpreter enum construction: `Value::Enum` construction and
-  `json_to_enum_value`,
-- JSON behavior oracle while replacing the Rust bridge:
-  `json_to_value_typed`, `json_to_struct_value`, `json_to_bitfield_value`, and
-  `json_to_enum_value`.
+  `reflected_construct_finish`,
+- JSON behavior oracle after replacing the typed Rust bridge:
+  `stdlib/json.jett` plus the JSON run-pass/parity fixtures.
 
 A reflected construction implementation should route through these same paths
 or share their core helpers. Duplicating the checks risks subtle drift, especially

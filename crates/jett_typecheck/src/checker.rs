@@ -864,6 +864,77 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn check_json_public_call_policy(
+        &mut self,
+        callee_name: Option<&str>,
+        checked_arg_types: &[TypeId],
+        args: &[ast::CallArg],
+        return_type: TypeId,
+    ) {
+        let Some(callee_name) = callee_name else {
+            return;
+        };
+
+        match callee_name {
+            "json.serialize" => {
+                let Some((&value_ty, arg)) = checked_arg_types.first().zip(args.first()) else {
+                    return;
+                };
+                if self.type_contains_secret_data(value_ty) {
+                    self.sink.emit(errors::type_contains_secret_data(
+                        "json.serialize",
+                        &self.type_name(value_ty),
+                        &self.secret_field_names(value_ty),
+                        arg.value.span(),
+                    ));
+                }
+                self.check_json_public_serialize_policy(callee_name, value_ty, arg);
+            }
+            "json.serialize_public" => {
+                let Some((&value_ty, arg)) = checked_arg_types.first().zip(args.first()) else {
+                    return;
+                };
+                self.check_json_public_serialize_policy(callee_name, value_ty, arg);
+            }
+            "json.parse" => {
+                let Some(arg) = args.first() else {
+                    return;
+                };
+                if let Type::Result(parsed_ty, _) = self.interner.resolve(return_type) {
+                    for key_type in self.json_non_string_map_key_types(*parsed_ty) {
+                        self.sink.emit(errors::json_map_key_must_be_string(
+                            &key_type,
+                            arg.value.span(),
+                        ));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn check_json_public_serialize_policy(
+        &mut self,
+        function_name: &str,
+        value_ty: TypeId,
+        arg: &ast::CallArg,
+    ) {
+        if !matches!(&arg.value, Expr::View(_, _)) && self.json_read_requires_view(value_ty) {
+            self.sink.emit(errors::json_serialize_requires_view(
+                function_name,
+                &self.type_name(value_ty),
+                arg.value.span(),
+            ));
+        }
+
+        for key_type in self.json_non_string_map_key_types(value_ty) {
+            self.sink.emit(errors::json_map_key_must_be_string(
+                &key_type,
+                arg.value.span(),
+            ));
+        }
+    }
+
     fn types_compatible(&self, expected: TypeId, got: TypeId) -> bool {
         if expected == got || expected == TypeInterner::ERROR || got == TypeInterner::ERROR {
             return true;
@@ -4671,58 +4742,12 @@ impl<'a> TypeChecker<'a> {
             }
         }
 
-        if matches!(callee_name.as_deref(), Some("json.serialize")) && !checked_arg_types.is_empty()
-        {
-            let value_ty = checked_arg_types[0];
-            if self.type_contains_secret_data(value_ty) {
-                self.sink.emit(errors::type_contains_secret_data(
-                    "json.serialize",
-                    &self.type_name(value_ty),
-                    &self.secret_field_names(value_ty),
-                    args[0].value.span(),
-                ));
-            }
-        }
-
-        if matches!(
+        self.check_json_public_call_policy(
             callee_name.as_deref(),
-            Some("json.serialize" | "json.serialize_public")
-        ) && !checked_arg_types.is_empty()
-            && !matches!(&args[0].value, Expr::View(_, _))
-        {
-            let value_ty = checked_arg_types[0];
-            if self.json_read_requires_view(value_ty) {
-                self.sink.emit(errors::json_serialize_requires_view(
-                    callee_name.as_deref().unwrap_or("json.serialize"),
-                    &self.type_name(value_ty),
-                    args[0].value.span(),
-                ));
-            }
-        }
-
-        if matches!(
-            callee_name.as_deref(),
-            Some("json.serialize" | "json.serialize_public")
-        ) && !checked_arg_types.is_empty()
-        {
-            for key_type in self.json_non_string_map_key_types(checked_arg_types[0]) {
-                self.sink.emit(errors::json_map_key_must_be_string(
-                    &key_type,
-                    args[0].value.span(),
-                ));
-            }
-        }
-
-        if matches!(callee_name.as_deref(), Some("json.parse")) {
-            if let Type::Result(parsed_ty, _) = self.interner.resolve(return_type) {
-                for key_type in self.json_non_string_map_key_types(*parsed_ty) {
-                    self.sink.emit(errors::json_map_key_must_be_string(
-                        &key_type,
-                        args[0].value.span(),
-                    ));
-                }
-            }
-        }
+            &checked_arg_types,
+            args,
+            return_type,
+        );
 
         if let Some(callee_name) = callee_name.as_deref() {
             if tainted_return && Self::is_secret_liftable_call(callee_name, callee_is_pure) {
