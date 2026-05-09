@@ -1297,9 +1297,14 @@ function json_tree_parse_reflected[T](raw: string) returns result[T, string]:
         return fail(error)
     return json_decode_tree_reflected[T](view value)
 function json_parse_reflected[T](raw: string) returns result[T, string]:
-    JsonValue value = json.parse_raw(raw) handle error:
-        return fail(error)
-    return json_decode_reflected[T](value)
+    TypeInfo info = type.info[T]()
+    TypePrimitive primitive = info.primitive_tag handle:
+        default TypePrimitive.unknown_type
+    if primitive == TypePrimitive.json_value_type:
+        JsonValue value = json.parse_raw(raw) handle error:
+            return fail(error)
+        return ok(value)
+    return json_tree_parse_reflected[T](raw)
 function parse[T](raw: string) returns result[T, string]:
     return json_parse_reflected[T](raw)
 function serialize[T](view value: T) returns string:

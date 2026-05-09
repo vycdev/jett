@@ -60,5 +60,7 @@ The stable boundary is now:
 
 - self-hosted `JsonTree` parse/serialize/traversal in `.jett`;
 - typed `json_tree_parse_reflected[T]` over `JsonTree`;
-- existing public `json.parse[T]` still delegates to the Rust-backed
-  `JsonValue` parser until we deliberately switch that public entry point.
+- public `json.parse[T]` delegates to the `JsonTree` reflected path for typed
+  targets;
+- public `json.parse[JsonValue]` and `json.parse_raw` still use the Rust-backed
+  raw `JsonValue` parser.
