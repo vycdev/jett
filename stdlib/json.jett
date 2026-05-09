@@ -160,6 +160,23 @@ mutual:
     function json_decode_enum_payload_reflected[T](payload: JsonValue, type_name: string, variant_name: string, payload_count: int64) returns result[T, string]
     function json_missing_field_reflected(view field: TypeField, owner_name: string) returns result[JsonValue, string]
     function json_decode_record_reflected[T](raw: JsonValue, type_name: string) returns result[T, string]
+    function json_decode_tree_reflected[T](view raw: JsonTree) returns result[T, string]
+    function json_decode_tree_primitive_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[T, string]
+    function json_decode_tree_scalar_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[T, string]
+    function json_decode_tree_other_primitive_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[T, string]
+    function json_decode_tree_structured_reflected[T](view raw: JsonTree, kind: TypeKind, type_name: string) returns result[T, string]
+    function json_decode_tree_list_reflected[T](view raw: JsonTree) returns result[T, string]
+    function json_decode_tree_set_reflected[T](view raw: JsonTree) returns result[T, string]
+    function json_decode_tree_map_reflected[T](view raw: JsonTree) returns result[T, string]
+    function json_decode_tree_optional_reflected[T](view raw: JsonTree) returns result[T, string]
+    function json_decode_tree_result_reflected[T](view raw: JsonTree) returns result[T, string]
+    function json_decode_tree_enum_reflected[T](view raw: JsonTree, type_name: string) returns result[T, string]
+    function json_decode_tree_enum_string_reflected[T](view raw: JsonTree, type_name: string) returns result[T, string]
+    function json_decode_tree_enum_object_reflected[T](view raw: JsonTree, type_name: string) returns result[T, string]
+    function json_decode_tree_enum_payload_reflected[T](view payload: JsonTree, type_name: string, variant_name: string, payload_count: int64) returns result[T, string]
+    function json_tree_missing_field_reflected(view field: TypeField, owner_name: string) returns result[JsonTree, string]
+    function json_decode_tree_record_reflected[T](view raw: JsonTree, type_name: string) returns result[T, string]
+    function json_tree_parse_reflected[T](raw: string) returns result[T, string]
 function json_tree_parse(raw: string) returns result[JsonTree, string]:
     string trimmed = string.trim(raw)
     if trimmed == "":
@@ -1066,8 +1083,219 @@ function json_decode_record_reflected[T](raw: JsonValue, type_name: string) retu
             builder = type.construct_put[T, Field](builder, view field, decoded) handle error:
                 return fail(error)
     return type.construct_finish[T](builder)
+function json_decode_tree_reflected[T](view raw: JsonTree) returns result[T, string]:
+    TypeInfo info = type.info[T]()
+    TypeKind kind = info.kind_tag
+    string type_name = info.type_name
+    TypePrimitive primitive = info.primitive_tag handle:
+        default TypePrimitive.unknown_type
+    if primitive != TypePrimitive.unknown_type:
+        return json_decode_tree_primitive_reflected[T](view raw, primitive)
+    if kind == TypeKind.alias_type:
+        comptime type Base = type.arg[T](0):
+            Base item = json_decode_tree_reflected[Base](view raw) handle error:
+                return fail(error)
+            T alias_value = item
+            return ok(alias_value)
+    if kind == TypeKind.refinement_type:
+        comptime type Base = type.arg[T](0):
+            Base item = json_decode_tree_reflected[Base](view raw) handle error:
+                return fail(error)
+            T refined = item
+            return ok(refined)
+    if kind == TypeKind.secret_type:
+        comptime type Inner = type.arg[T](0):
+            Inner item = json_decode_tree_reflected[Inner](view raw) handle error:
+                return fail(error)
+            T secret_value = item
+            return ok(secret_value)
+    return json_decode_tree_structured_reflected[T](view raw, kind, type_name)
+function json_decode_tree_primitive_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[T, string]:
+    if primitive == TypePrimitive.string_type or primitive == TypePrimitive.int64_type or primitive == TypePrimitive.float64_type or primitive == TypePrimitive.bool_type:
+        return json_decode_tree_scalar_reflected[T](view raw, primitive)
+    return json_decode_tree_other_primitive_reflected[T](view raw, primitive)
+function json_decode_tree_scalar_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[T, string]:
+    if primitive == TypePrimitive.string_type:
+        string item = json_tree_as_string(view raw) handle error:
+            return fail(error)
+        return ok(item)
+    if primitive == TypePrimitive.int64_type:
+        int64 item = json_tree_as_int64(view raw) handle error:
+            return fail(error)
+        return ok(item)
+    if primitive == TypePrimitive.float64_type:
+        float64 item = json_tree_as_float64(view raw) handle error:
+            return fail(error)
+        return ok(item)
+    if primitive == TypePrimitive.bool_type:
+        bool item = json_tree_as_bool(view raw) handle error:
+            return fail(error)
+        return ok(item)
+    return fail("unsupported reflected JSON primitive")
+function json_decode_tree_other_primitive_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[T, string]:
+    if primitive == TypePrimitive.bytes_type:
+        string raw_hex = json_tree_as_string(view raw) handle error:
+            return fail(error)
+        bytes item = bytes.from_hex(raw_hex) handle error:
+            return fail("expected hex bytes string")
+        return ok(item)
+    if primitive == TypePrimitive.json_value_type:
+        return fail("unsupported reflected JSON primitive")
+    if primitive == TypePrimitive.nothing_type:
+        if json_tree_is_null(view raw) == false:
+            return fail("expected null, got {json_tree_kind(view raw)}")
+        return ok(nothing)
+    return fail("unsupported reflected JSON primitive")
+function json_decode_tree_structured_reflected[T](view raw: JsonTree, kind: TypeKind, type_name: string) returns result[T, string]:
+    if kind == TypeKind.list_type:
+        return json_decode_tree_list_reflected[T](view raw)
+    if kind == TypeKind.set_type:
+        return json_decode_tree_set_reflected[T](view raw)
+    if kind == TypeKind.map_type:
+        return json_decode_tree_map_reflected[T](view raw)
+    if kind == TypeKind.optional_type:
+        return json_decode_tree_optional_reflected[T](view raw)
+    if kind == TypeKind.result_type:
+        return json_decode_tree_result_reflected[T](view raw)
+    if kind == TypeKind.enum_type:
+        return json_decode_tree_enum_reflected[T](view raw, type_name)
+    if kind == TypeKind.struct_type or kind == TypeKind.bitfield_type:
+        return json_decode_tree_record_reflected[T](view raw, type_name)
+    return fail("unsupported reflected JSON type: {type_name}")
+function json_decode_tree_list_reflected[T](view raw: JsonTree) returns result[T, string]:
+    comptime type Elem = type.arg[T](0):
+        int64 length = json_tree_array_length(view raw) handle error:
+            return fail(error)
+        mutable list[Elem] items = list.new[Elem]()
+        for index in range(length):
+            JsonTree raw_item = json_tree_index(view raw, index) handle:
+                return fail("missing array item {index}")
+            Elem item = json_decode_tree_reflected[Elem](view raw_item) handle error:
+                return fail("{index}: {error}")
+            items = list.append[Elem](items, item)
+        return ok(items)
+function json_decode_tree_set_reflected[T](view raw: JsonTree) returns result[T, string]:
+    comptime type Elem = type.arg[T](0):
+        int64 length = json_tree_array_length(view raw) handle error:
+            return fail(error)
+        mutable set[Elem] items = set.new[Elem]()
+        for index in range(length):
+            JsonTree raw_item = json_tree_index(view raw, index) handle:
+                return fail("missing array item {index}")
+            Elem item = json_decode_tree_reflected[Elem](view raw_item) handle error:
+                return fail("{index}: {error}")
+            items = set.add[Elem](items, item)
+        return ok(items)
+function json_decode_tree_map_reflected[T](view raw: JsonTree) returns result[T, string]:
+    comptime type Val = type.arg[T](1):
+        list[string] keys = json_tree_object_keys(view raw) handle error:
+            return fail(error)
+        mutable map[string, Val] entries = map.new[string, Val]()
+        for key in keys:
+            JsonTree raw_item = json_tree_field(view raw, key) handle:
+                return fail("missing object field '{key}'")
+            Val item = json_decode_tree_reflected[Val](view raw_item) handle error:
+                return fail("{key}: {error}")
+            entries = map.insert[string, Val](entries, key, item)
+        return ok(entries)
+function json_decode_tree_optional_reflected[T](view raw: JsonTree) returns result[T, string]:
+    if json_tree_is_null(view raw) == true:
+        return ok(none)
+    comptime type Inner = type.arg[T](0):
+        Inner item = json_decode_tree_reflected[Inner](view raw) handle error:
+            return fail(error)
+        return ok(some(item))
+function json_decode_tree_result_reflected[T](view raw: JsonTree) returns result[T, string]:
+    list[string] keys = json_tree_object_keys(view raw) handle error:
+        return fail(error)
+    if list.length[string](keys) != 1:
+        return fail("expected result object with exactly one key")
+    comptime type Ok = type.arg[T](0):
+        JsonTree ok_raw = json_tree_field(view raw, "ok") handle:
+            comptime type Err = type.arg[T](1):
+                JsonTree fail_raw = json_tree_field(view raw, "fail") handle:
+                    return fail("expected result object with key 'ok' or 'fail'")
+                Err failure = json_decode_tree_reflected[Err](view fail_raw) handle error:
+                    return fail("fail: {error}")
+                return ok(fail(failure))
+        Ok item = json_decode_tree_reflected[Ok](view ok_raw) handle error:
+            return fail("ok: {error}")
+        return ok(ok(item))
+function json_decode_tree_enum_reflected[T](view raw: JsonTree, type_name: string) returns result[T, string]:
+    if json_tree_is_string(view raw) == true:
+        return json_decode_tree_enum_string_reflected[T](view raw, type_name)
+    return json_decode_tree_enum_object_reflected[T](view raw, type_name)
+function json_decode_tree_enum_string_reflected[T](view raw: JsonTree, type_name: string) returns result[T, string]:
+    string variant_name = json_tree_as_string(view raw) handle error:
+        return fail(error)
+    for variant in type.variants[T]():
+        if variant.name != variant_name:
+            continue
+        int64 expected_count = list.length[TypeField](variant.fields)
+        if expected_count != 0:
+            return fail("enum variant '{type_name}.{variant_name}' expects {expected_count} payload field(s)")
+        TypeConstruction builder = type.construct_variant_start[T](view variant) handle error:
+            return fail(error)
+        return type.construct_finish[T](builder)
+    return fail("unknown enum variant '{type_name}.{variant_name}'")
+function json_decode_tree_enum_object_reflected[T](view raw: JsonTree, type_name: string) returns result[T, string]:
+    list[string] keys = json_tree_object_keys(view raw) handle error:
+        return fail("expected enum string or object, got {json_tree_kind(view raw)}")
+    if list.length[string](keys) != 1:
+        return fail("expected enum object with exactly one variant key")
+    string variant_name = list.get[string](keys, 0) handle:
+        return fail("expected enum object with exactly one variant key")
+    JsonTree payload = json_tree_field(view raw, variant_name) handle:
+        return fail("missing enum payload for '{variant_name}'")
+    int64 payload_count = json_tree_array_length(view payload) handle error:
+        return fail("expected array payload for enum variant '{type_name}.{variant_name}', got {json_tree_kind(view payload)}")
+    return json_decode_tree_enum_payload_reflected[T](view payload, type_name, variant_name, payload_count)
+function json_decode_tree_enum_payload_reflected[T](view payload: JsonTree, type_name: string, variant_name: string, payload_count: int64) returns result[T, string]:
+    for variant in type.variants[T]():
+        if variant.name != variant_name:
+            continue
+        int64 expected_count = list.length[TypeField](variant.fields)
+        if payload_count != expected_count:
+            return fail("enum variant '{type_name}.{variant_name}' expects {expected_count} payload field(s), got {payload_count}")
+        mutable TypeConstruction builder = type.construct_variant_start[T](view variant) handle error:
+            return fail(error)
+        mutable int64 index = 0
+        for field in variant.fields:
+            comptime type Field = field.type_info:
+                JsonTree raw_item = json_tree_index(view payload, index) handle:
+                    return fail("missing enum payload item {index}")
+                Field decoded = json_decode_tree_reflected[Field](view raw_item) handle error:
+                    return fail("{variant_name}.{field.name}: {error}")
+                builder = type.construct_put[T, Field](builder, view field, decoded) handle error:
+                    return fail(error)
+            index = index + 1
+        return type.construct_finish[T](builder)
+    return fail("unknown enum variant '{type_name}.{variant_name}'")
+function json_tree_missing_field_reflected(view field: TypeField, owner_name: string) returns result[JsonTree, string]:
+    if field.type_info.kind_tag == TypeKind.optional_type:
+        return ok(JsonTree.null)
+    return fail("missing required field '{field.serialize_name}' for {owner_name}")
+function json_decode_tree_record_reflected[T](view raw: JsonTree, type_name: string) returns result[T, string]:
+    if json_tree_is_object(view raw) == false:
+        return fail("expected object, got {json_tree_kind(view raw)}")
+    mutable TypeConstruction builder = type.construct_start[T]()
+    for field in type.fields[T]():
+        comptime type Field = field.type_info:
+            JsonTree raw_field = json_tree_field(view raw, field.serialize_name) handle:
+                JsonTree missing = json_tree_missing_field_reflected(view field, type_name) handle error:
+                    return fail(error)
+                default missing
+            Field decoded = json_decode_tree_reflected[Field](view raw_field) handle error:
+                return fail("{field.serialize_name}: {error}")
+            builder = type.construct_put[T, Field](builder, view field, decoded) handle error:
+                return fail(error)
+    return type.construct_finish[T](builder)
 function json_serialize_reflected[T](view value: T) returns string:
     return json_serialize_public_reflected[T](view value)
+function json_tree_parse_reflected[T](raw: string) returns result[T, string]:
+    JsonTree value = json_tree_parse(raw) handle error:
+        return fail(error)
+    return json_decode_tree_reflected[T](view value)
 function json_parse_reflected[T](raw: string) returns result[T, string]:
     JsonValue value = json.parse_raw(raw) handle error:
         return fail(error)

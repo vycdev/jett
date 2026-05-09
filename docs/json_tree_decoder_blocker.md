@@ -1,30 +1,33 @@
-# JsonTree Decoder Blocker
+# JsonTree Decoder Staging Notes
 
-This note records the next JSON handoff problem found while staging a typed
-decoder over the self-hosted `JsonTree` parser.
+This note records the JSON handoff problem found while staging a typed decoder
+over the self-hosted `JsonTree` parser, plus the current resolution.
 
-## Attempted Shape
+## Current Shape
 
-The intended next layer mirrors the current `JsonValue` decoder:
+The staged layer mirrors the current `JsonValue` decoder:
 
 ```jett
 function json_decode_tree_reflected[T](view raw: JsonTree) returns result[T, string]:
     ...
 ```
 
-It would use the stdlib `json_tree_*` accessors instead of Rust-backed
-`json.*` raw accessors, then feed typed values into `TypeConstruction` for
-structs, bitfields, and enum payloads.
+It uses the stdlib `json_tree_*` accessors instead of Rust-backed `json.*` raw
+accessors, then feeds typed values into `TypeConstruction` for structs,
+bitfields, and enum payloads.
 
 ## What Worked
 
 - `json_tree_parse(raw)` handles scalar, array, and object trees.
 - `json_tree_*` traversal helpers work for kind checks, field/index lookup,
   lengths, keys, and scalar casts.
-- Direct scalar decoding through a generic helper body works when the caller
-  already has a `JsonTree` value.
+- Direct scalar decoding through a generic helper body works when the caller has
+  a `JsonTree` value.
+- `json_tree_parse_reflected[T](raw)` now covers nested structs, serialize-name
+  mapping, lists, maps, sets, optionals, results, secrets, refinements, enums,
+  and bitfields in the run-pass suite.
 
-## What Failed
+## Original Failure
 
 Two wrapper/decoder shapes caused interpreter stack overflows:
 
@@ -38,16 +41,24 @@ so the likely issue is not the JSON scanner itself. The failure appears around
 the interaction of recursive user enum values (`JsonTree`), generic reflected
 decoding, and/or construction inside the comptime interpreter.
 
-## Recommended Next Investigation
+## Resolution
 
-1. Add a Rust unit test in `jett_comptime` that calls a minimal generic stdlib
-   function taking `view JsonTree` and returning `T`.
-2. Minimize from scalar `T = string` to struct `T = Profile` to find whether the
-   overflow begins at generic dispatch, `type.fields[T]()`, `TypeConstruction`,
-   or recursive `JsonTree` value cloning.
-3. Only after that, reintroduce `json_decode_tree_reflected[T]` in stdlib.
+The overflow was reproduced on the normal `run_file` path with compound
+`JsonTree` parsing before reflected decoding was involved. Verify blocks already
+ran on an explicit larger stack; runtime `main` did not. Running `main` through
+the same explicit stack strategy removed that blocker, and the reflected tree
+decoder now passes fixture coverage.
 
-Until this is isolated, keep the stable boundary as:
+## Remaining Edge
 
-- self-hosted `JsonTree` parse/serialize/traversal in `.jett`,
-- existing typed `json.parse[T]` decoder over Rust-backed `JsonValue`.
+`json_decode_tree_reflected[JsonValue](view tree)` is intentionally unsupported
+for now. Bridging a borrowed recursive `JsonTree` back to Rust-backed
+`JsonValue` would need either a view-friendly tree serializer over lists/maps or
+an explicit clone/materialization primitive.
+
+The stable boundary is now:
+
+- self-hosted `JsonTree` parse/serialize/traversal in `.jett`;
+- typed `json_tree_parse_reflected[T]` over `JsonTree`;
+- existing public `json.parse[T]` still delegates to the Rust-backed
+  `JsonValue` parser until we deliberately switch that public entry point.

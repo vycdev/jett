@@ -304,6 +304,10 @@ run_pass_fixture!(
     run_pass_json_tree_parse_runtime,
     "json_tree_parse_runtime.jett"
 );
+run_pass_fixture!(
+    run_pass_json_tree_reflection_parse_wrapper,
+    "json_tree_reflection_parse_wrapper.jett"
+);
 run_pass_fixture!(run_pass_escape_sequences, "escape_sequences.jett");
 run_pass_fixture!(run_pass_list_higher_order, "list_higher_order.jett");
 run_pass_fixture!(run_pass_inline_functions, "inline_functions.jett");
