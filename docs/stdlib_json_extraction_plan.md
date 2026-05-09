@@ -50,10 +50,10 @@ The reflected JSON implementation has started moving into stdlib under the
 The module also declares the public wrapper names `parse`, `serialize`, and
 `serialize_public`. Calls such as `json.parse[T](raw)` still pass through the
 compiler-owned policy gate first, then the interpreter delegates to the
-internal reflected stdlib hook when the bundled module is registered. The public
-wrappers remain readable source-level declarations, but the bridge target stays
-on internal hook names until the language has an explicit trusted-stdlib or
-visibility model.
+internal reflected stdlib hook when the bundled module is registered as trusted
+compiler-shipped stdlib. The public wrappers remain readable source-level
+declarations, but the bridge target stays on internal hook names until the
+language has an explicit visibility/export model.
 
 The raw-string hook remains directly exercised through its qualified stdlib
 staging name, `json.json_parse_reflected[T](raw)`.
@@ -81,10 +81,10 @@ Together they cover the shape needed for a future stdlib module:
 The compiler-known JSON bridge remains the compatibility and policy facade. It
 still owns the public typechecker policy for `json.parse`, `json.serialize`,
 and `json.serialize_public`. In the interpreter, all three public calls now
-delegate to reflected stdlib hook implementations when the bundled stdlib
-functions are registered. The old typed Rust fallback paths for public
-parse/serialize have been removed; Rust-backed paths remain for raw JSON access
-and bootstrap primitives.
+delegate to reflected stdlib hook implementations only when the current hook
+registry entries came from compiler-shipped stdlib files. The old typed Rust
+fallback paths for public parse/serialize have been removed; Rust-backed paths
+remain for raw JSON access and bootstrap primitives.
 
 ## Blockers
 
@@ -148,6 +148,11 @@ public/private module visibility.
 Until visibility exists, extraction should avoid pretending helper names are
 private. A first stdlib experiment can use internal-looking names, but shipping
 the module cleanly probably needs an export rule or another visibility story.
+
+The first trusted-origin staging piece is in place: interpreter function
+registry entries parsed from the reserved stdlib file-id range are marked
+trusted, and public JSON bridges require trusted hook entries. This solves
+bridge spoofing, not helper visibility.
 
 ## Minimal Staging Plan
 

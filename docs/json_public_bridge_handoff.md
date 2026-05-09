@@ -20,10 +20,10 @@ gate around those calls.
 - The public `json.parse`, `json.serialize`, and `json.serialize_public` names
   are still compiler-known builtins for typechecking and call dispatch.
 - The interpreter delegates `json.parse[T]`, `json.serialize[T]`, and
-  `json.serialize_public[T]` through the internal reflected hook names when the
-  compiler-shipped stdlib module is registered. The old typed Rust fallback has
-  been removed; Rust remains the substrate for raw `JsonValue` parsing and
-  accessors.
+  `json.serialize_public[T]` through the internal reflected hook names only
+  when those registry entries are trusted compiler-shipped stdlib functions.
+  The old typed Rust fallback has been removed; Rust remains the substrate for
+  raw `JsonValue` parsing and accessors.
 - The typechecker enforces policy for those public names:
   - `json.parse[T]` must have one type argument and returns `result[T, string]`.
   - non-string JSON map keys are rejected.
@@ -134,14 +134,15 @@ Suggested sequence:
 10. Remove the old typed Rust parse/serialize fallback from public JSON calls.
     Public typed JSON now depends on the stdlib reflected hooks; raw JSON
     primitives stay Rust-backed. Done.
-9. Later, after visibility/export and policy-bearing stdlib declarations exist,
+11. Require the bridge target to be a trusted compiler-shipped stdlib registry
+    entry, not just any function with the same qualified name. Done for the
+    interpreter.
+12. Later, after visibility/export and policy-bearing stdlib declarations exist,
    reconsider whether `parse`, `serialize`, and `serialize_public` can become
    ordinary exported functions.
 
 ## Open Questions
 
-- How should the interpreter distinguish trusted compiler-shipped stdlib
-  functions from user-defined `namespace json` functions with the same names?
 - Should public JSON builtins continue delegating through callable stdlib
   wrapper names, or should there eventually be an internal, non-user-callable
   hook name once visibility exists?

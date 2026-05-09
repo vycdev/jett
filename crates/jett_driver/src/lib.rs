@@ -1,4 +1,4 @@
-use jett_common::FileId;
+use jett_common::{FileId, STDLIB_FILE_ID_START};
 use jett_comptime::value::Value;
 use jett_comptime::verify::{run_verify_blocks, run_verify_blocks_detailed};
 use jett_diagnostics::Diagnostic;
@@ -354,7 +354,7 @@ fn prepend_support_modules(module: &mut Module, support_modules: Vec<Module>) {
 
 /// Discover and parse compiler-shipped stdlib modules.
 fn discover_stdlib_modules() -> Vec<Module> {
-    discover_modules_in_dir(&stdlib_root(), None, 10_000)
+    discover_modules_in_dir(&stdlib_root(), None, STDLIB_FILE_ID_START)
 }
 
 fn stdlib_root() -> PathBuf {

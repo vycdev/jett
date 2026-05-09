@@ -157,6 +157,8 @@ pub struct Interpreter {
     namespace_alias_scopes: Vec<HashMap<String, String>>,
     /// User-defined functions available for calling.
     functions: HashMap<String, FunctionDef>,
+    /// Function registry entries that came from compiler-shipped stdlib files.
+    trusted_stdlib_functions: HashSet<String>,
     /// Registered user-defined structs available for construction and field access.
     structs: HashMap<String, StructDef>,
     /// Registered user-defined bitfields available for construction and field access.
@@ -210,6 +212,7 @@ impl Interpreter {
             scopes: vec![HashMap::new()],
             namespace_alias_scopes: vec![HashMap::new()],
             functions: HashMap::new(),
+            trusted_stdlib_functions: HashSet::new(),
             structs: HashMap::new(),
             bitfields: HashMap::new(),
             enums: HashMap::new(),
@@ -389,16 +392,29 @@ impl Interpreter {
 
     /// Register a function definition so it can be called later.
     pub fn register_function(&mut self, func: &FunctionDef) {
-        self.functions.insert(func.name.name.clone(), func.clone());
+        self.register_function_named(&func.name.name, func, func.span.file.is_stdlib());
+    }
+
+    fn register_function_named(&mut self, name: &str, func: &FunctionDef, trusted_stdlib: bool) {
+        self.functions.insert(name.to_string(), func.clone());
+        if trusted_stdlib {
+            self.trusted_stdlib_functions.insert(name.to_string());
+        } else {
+            self.trusted_stdlib_functions.remove(name);
+        }
     }
 
     /// Register a function under both the historical flat name and the current
     /// namespace-qualified name.
     pub fn register_function_in_namespace(&mut self, namespace: Option<&str>, func: &FunctionDef) {
-        self.register_function(func);
+        let trusted_stdlib = func.span.file.is_stdlib();
+        self.register_function_named(&func.name.name, func, trusted_stdlib);
         if let Some(namespace) = namespace {
-            self.functions
-                .insert(format!("{namespace}.{}", func.name.name), func.clone());
+            self.register_function_named(
+                &format!("{namespace}.{}", func.name.name),
+                func,
+                trusted_stdlib,
+            );
         }
     }
 
@@ -2472,14 +2488,17 @@ impl Interpreter {
                 if let Some(err) = check_args(name, 1, args) {
                     return Some(err);
                 }
-                if self.functions.contains_key("json.json_parse_reflected") {
+                if self.has_trusted_stdlib_function("json.json_parse_reflected") {
                     return Some(self.call_user_function_with_type_args(
                         "json.json_parse_reflected",
                         type_args,
                         args.to_vec(),
                     ));
                 }
-                Err("json.parse requires stdlib hook 'json.json_parse_reflected'".to_string())
+                Err(
+                    "json.parse requires trusted stdlib hook 'json.json_parse_reflected'"
+                        .to_string(),
+                )
             }
             "json.serialize" | "json.serialize_public" => {
                 if let Some(err) = check_args(name, 1, args) {
@@ -2492,7 +2511,7 @@ impl Interpreter {
                     )));
                 }
                 if name == "json.serialize"
-                    && self.functions.contains_key("json.json_serialize_reflected")
+                    && self.has_trusted_stdlib_function("json.json_serialize_reflected")
                 {
                     return Some(self.call_user_function_with_type_args(
                         "json.json_serialize_reflected",
@@ -2501,9 +2520,7 @@ impl Interpreter {
                     ));
                 }
                 if name == "json.serialize_public"
-                    && self
-                        .functions
-                        .contains_key("json.json_serialize_public_reflected")
+                    && self.has_trusted_stdlib_function("json.json_serialize_public_reflected")
                 {
                     return Some(self.call_user_function_with_type_args(
                         "json.json_serialize_public_reflected",
@@ -2516,7 +2533,7 @@ impl Interpreter {
                 } else {
                     "json.json_serialize_public_reflected"
                 };
-                Err(format!("{name} requires stdlib hook '{hook}'"))
+                Err(format!("{name} requires trusted stdlib hook '{hook}'"))
             }
             _ => return None,
         })
@@ -6661,7 +6678,11 @@ impl Interpreter {
     }
 
     fn is_stdlib_internal_function(&self, name: &str) -> bool {
-        name.starts_with("json.json_") && self.functions.contains_key(name)
+        name.starts_with("json.json_") && self.has_trusted_stdlib_function(name)
+    }
+
+    fn has_trusted_stdlib_function(&self, name: &str) -> bool {
+        self.trusted_stdlib_functions.contains(name) && self.functions.contains_key(name)
     }
 
     fn call_user_function_with_type_args(
@@ -7906,7 +7927,7 @@ fn runtime_type_name(value: &Value) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use jett_common::{FileId, Span};
+    use jett_common::{FileId, STDLIB_FILE_ID_START, Span};
     use jett_parser::ast::*;
 
     use super::*;
@@ -7914,6 +7935,10 @@ mod tests {
     /// Helper: create a dummy span for test AST nodes.
     fn sp() -> Span {
         Span::new(FileId::new(0), 0, 0)
+    }
+
+    fn stdlib_sp() -> Span {
+        Span::new(FileId::new(STDLIB_FILE_ID_START), 0, 0)
     }
 
     /// Helper: create an Ident.
@@ -8040,6 +8065,23 @@ mod tests {
                     span: sp(),
                 })
                 .collect(),
+            return_type: None,
+            body,
+            span: sp(),
+        }
+    }
+
+    fn generic_json_hook(name: &str, body: Block) -> FunctionDef {
+        FunctionDef {
+            name: ident(name),
+            type_params: vec![ident("T")],
+            params: vec![Param {
+                view: false,
+                mutable: false,
+                name: ident("raw"),
+                ty: type_named("string"),
+                span: sp(),
+            }],
             return_type: None,
             body,
             span: sp(),
@@ -8429,6 +8471,84 @@ mod tests {
         assert_eq!(
             interp.eval_expr(&expr).unwrap(),
             Value::String("abc".to_string())
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Trusted stdlib hooks
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn json_parse_bridge_requires_trusted_stdlib_hook() {
+        let mut interp = Interpreter::new();
+        let fake_hook = generic_json_hook(
+            "json_parse_reflected",
+            block(vec![return_stmt(string("fake"))]),
+        );
+        interp.register_function_named("json.json_parse_reflected", &fake_hook, false);
+
+        let err = interp
+            .call_function_with_type_args(
+                "json.parse",
+                &[type_named("string")],
+                vec![Value::String("\"value\"".to_string())],
+            )
+            .unwrap_err();
+
+        assert_eq!(
+            err,
+            "json.parse requires trusted stdlib hook 'json.json_parse_reflected'"
+        );
+    }
+
+    #[test]
+    fn json_parse_bridge_uses_trusted_stdlib_hook() {
+        let mut interp = Interpreter::new();
+        let mut trusted_hook = generic_json_hook(
+            "json_parse_reflected",
+            block(vec![return_stmt(string("trusted"))]),
+        );
+        trusted_hook.span = stdlib_sp();
+        interp.register_function_in_namespace(Some("json"), &trusted_hook);
+
+        let value = interp
+            .call_function_with_type_args(
+                "json.parse",
+                &[type_named("string")],
+                vec![Value::String("\"value\"".to_string())],
+            )
+            .unwrap();
+
+        assert_eq!(value, Value::String("trusted".to_string()));
+    }
+
+    #[test]
+    fn untrusted_registration_removes_previous_json_hook_trust() {
+        let mut interp = Interpreter::new();
+        let mut trusted_hook = generic_json_hook(
+            "json_parse_reflected",
+            block(vec![return_stmt(string("trusted"))]),
+        );
+        trusted_hook.span = stdlib_sp();
+        interp.register_function_in_namespace(Some("json"), &trusted_hook);
+
+        let fake_hook = generic_json_hook(
+            "json_parse_reflected",
+            block(vec![return_stmt(string("fake"))]),
+        );
+        interp.register_function_named("json.json_parse_reflected", &fake_hook, false);
+
+        let err = interp
+            .call_function_with_type_args(
+                "json.parse",
+                &[type_named("string")],
+                vec![Value::String("\"value\"".to_string())],
+            )
+            .unwrap_err();
+
+        assert_eq!(
+            err,
+            "json.parse requires trusted stdlib hook 'json.json_parse_reflected'"
         );
     }
 

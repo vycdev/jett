@@ -5,8 +5,10 @@ This note records the visibility work that blocks a fully ordinary
 
 ## Problem
 
-Jett currently has namespaces, but it does not yet have public/private exports
-or a trusted-source identity for compiler-shipped stdlib modules.
+Jett currently has namespaces, but it does not yet have public/private exports.
+The interpreter now has a narrow trusted-source identity for functions parsed
+from compiler-shipped stdlib files, but that identity is not yet a full module
+visibility system.
 
 That matters for JSON because the module needs both:
 
@@ -32,10 +34,9 @@ That is useful during bootstrap, but it is not the long-term export model:
 
 - a helper from `namespace json` can appear as an unqualified global name,
 - helpers are public by convention rather than by declaration,
-- compiler-shipped stdlib and project code are not identified differently once
-  registered in the interpreter,
-- a future change that lets ordinary functions override builtins could weaken
-  JSON policy if there is no trusted-origin check.
+- helper visibility is not represented in the language,
+- trusted origin currently exists only as interpreter staging metadata, not as a
+  source-level visibility or export rule.
 
 ## Requirements
 
@@ -91,12 +92,17 @@ compiler-shipped modules in a separate trusted registry.
 This directly solves public JSON bridge trust, but not helper visibility. It is
 a useful staging step, not the whole module story.
 
+This stage is now implemented for interpreter function calls: file ids at or
+above the reserved stdlib range are marked trusted, and public JSON builtins
+only delegate to reflected hook names when the current registry entry is trusted.
+An untrusted registration of the same name clears that trust.
+
 ## Recommendation
 
 Use two stages:
 
-1. Add trusted stdlib identity before allowing public JSON bridges to target
-   public wrapper names. Until then, bridge to internal hook names only.
+1. Keep the trusted stdlib identity for compiler-owned bridge hooks. Done for
+   the interpreter; future codegen should use the same notion.
 2. Add explicit exports, probably private-by-default within namespaces, before
    treating `stdlib/json.jett` as a clean public module.
 
@@ -110,11 +116,12 @@ For now:
   compiler-owned policy gates,
 - the interpreter delegates to `json.json_parse_reflected`,
   `json.json_serialize_reflected`, and
-  `json.json_serialize_public_reflected`,
+  `json.json_serialize_public_reflected` only when those registry entries came
+  from compiler-shipped stdlib files,
 - public wrappers in `stdlib/json.jett` stay as readable declarations and a
   preview of the eventual API,
 - helper names remain prefixed to reduce collisions, but that is convention,
   not real privacy.
 
-Before changing this, add a trusted stdlib registration path or implement
+Before changing the hook names into ordinary public wrappers, implement
 exports/private helpers.

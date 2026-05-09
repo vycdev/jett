@@ -52,7 +52,7 @@
 
 | Component | Crate | Tests | Status |
 |---|---|---|---|
-| Comptime interpreter | `jett_comptime` | 134 | Done |
+| Comptime interpreter | `jett_comptime` | 137 | Done |
 | Verify blocks (compile-time) | `jett_comptime/verify` | — | Done |
 | Comptime type reflection (`type.name`, `type.kind`, `type.kind_tag`, `type.primitive_tag`, `type.has_secret`, `type.info`, `type.arg`, `type.fields`, `type.bitfield_layout`, `type.bitfield_fields`, `type.variants`, `type.variant_value`, `type.field_value`, `type.variant_field_value`, `type.construct_start`, `type.construct_variant_start`, `type.construct_put`, `type.construct_finish`, trusted `comptime type` binding for roots, type args, struct/enum field loops, `TypeInfo.args`, and `TypeInfo.primitive_tag`) | `jett_comptime` | — | Partial (struct/bitfield/enum construction via `TypeConstruction`; structured `TypeKind` and `TypePrimitive` tags available; canonical checked metadata source still pending) |
 | 25+ stdlib builtins in interpreter | `jett_comptime` | — | Done |
@@ -155,7 +155,7 @@
 | `set` | Partial (12 builtins: new, add, remove, contains, length, is_empty, to_list, union, intersection, difference) |
 | `map` | Partial (12 builtins: new, length, has/contains_key, get, get_or, insert/set, remove, keys, values, is_empty, merge) |
 | `math` | Partial (20+ builtins: abs, sqrt, pow, floor, ceil, round, clamp, log, log2, log10, min, max, average, median, pi, e, sin, cos, tan, mod, is_even, is_odd, sum) |
-| `json` | Partial (json.serialize, json.serialize_public, json.parse_raw/JsonValue accessors, compiler-owned public policy for parse/serialization; interpreter `json.parse`, `json.serialize`, and `json.serialize_public` require stdlib-loaded reflected `.jett` hooks under `namespace json`; decoder uses `TypeConstruction` for nested structs, enum-annotated bitfields, enums, core primitives including bytes/float64/null, secret wrappers, other wrappers, top-level refinements, and missing optional-field defaults; raw `JsonValue` parsing/access remains Rust-backed) |
+| `json` | Partial (json.serialize, json.serialize_public, json.parse_raw/JsonValue accessors, compiler-owned public policy for parse/serialization; interpreter `json.parse`, `json.serialize`, and `json.serialize_public` require trusted stdlib-loaded reflected `.jett` hooks under `namespace json`; decoder uses `TypeConstruction` for nested structs, enum-annotated bitfields, enums, core primitives including bytes/float64/null, secret wrappers, other wrappers, top-level refinements, and missing optional-field defaults; raw `JsonValue` parsing/access remains Rust-backed) |
 | `random` | Partial (5 builtins: int64, float64, bool, choice, shuffle) |
 | `crypto` | Partial (sha256, md5) |
 | `encoding` | Partial (6 builtins: base64_encode, base64_decode, hex_encode, hex_decode, url_encode, url_decode) |
