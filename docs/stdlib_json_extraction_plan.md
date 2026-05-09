@@ -45,6 +45,8 @@ The reflected JSON implementation has started moving into stdlib under the
 - `JsonTree` as a first self-hosted raw JSON tree representation
 - `json_tree_serialize(value: JsonTree)`
 - `json_tree_parse(raw: string)` for staged scalar, array, and object parsing
+- `json_tree_*` traversal helpers for kind checks, field/index lookup, lengths,
+  keys, and scalar casts
 - `json_serialize_reflected[T](view value)`
 - `json_serialize_public_reflected[T](view value)`
 - `json_decode_reflected[T](raw: JsonValue)`
@@ -77,8 +79,8 @@ Together they cover the shape needed for a future stdlib module:
 - missing optional defaults,
 - public secret omission for the serializer prototype,
 - all-control-character JSON string escaping in `.jett`.
-- self-hosted `JsonTree` construction, serialization, and staged scalar,
-  array, and object parsing for the future raw parser target.
+- self-hosted `JsonTree` construction, serialization, staged scalar/array/object
+  parsing, and traversal helpers for the future raw parser target.
 - bridge checks that keep the reflected prototypes aligned with the public JSON
   facade for representative full serialization, public serialization, and
   typed parse.

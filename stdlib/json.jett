@@ -71,6 +71,22 @@ function json_stdlib_quote(raw: string) returns string:
 mutual:
     function json_tree_parse(raw: string) returns result[JsonTree, string]
     function json_tree_parse_value(raw: string) returns result[JsonTree, string]
+    function json_tree_kind(view value: JsonTree) returns string
+    function json_tree_kind_error(view value: JsonTree, expected: string) returns string
+    function json_tree_is_null(view value: JsonTree) returns bool
+    function json_tree_is_bool(view value: JsonTree) returns bool
+    function json_tree_is_number(view value: JsonTree) returns bool
+    function json_tree_is_string(view value: JsonTree) returns bool
+    function json_tree_is_array(view value: JsonTree) returns bool
+    function json_tree_is_object(view value: JsonTree) returns bool
+    function json_tree_field(view value: JsonTree, key: string) returns optional[JsonTree]
+    function json_tree_index(view value: JsonTree, index: int64) returns optional[JsonTree]
+    function json_tree_array_length(view value: JsonTree) returns result[int64, string]
+    function json_tree_object_keys(view value: JsonTree) returns result[list[string], string]
+    function json_tree_as_string(view value: JsonTree) returns result[string, string]
+    function json_tree_as_int64(view value: JsonTree) returns result[int64, string]
+    function json_tree_as_float64(view value: JsonTree) returns result[float64, string]
+    function json_tree_as_bool(view value: JsonTree) returns result[bool, string]
     function json_tree_parse_scalar(raw: string) returns result[JsonTree, string]
     function json_tree_parse_array(raw: string) returns result[JsonTree, string]
     function json_tree_parse_array_body(view input: bytes, start: int64, end: int64) returns result[list[JsonTree], string]
@@ -150,6 +166,151 @@ function json_tree_parse_value(raw: string) returns result[JsonTree, string]:
     if string.starts_with(raw, "{{") == true:
         return json_tree_parse_object(raw)
     return json_tree_parse_scalar(raw)
+function json_tree_kind(view value: JsonTree) returns string:
+    match value:
+        null:
+            return "null"
+        bool_value(item):
+            return "bool"
+        number_value(raw):
+            return "number"
+        string_value(item):
+            return "string"
+        array_value(items):
+            return "array"
+        object_value(fields):
+            return "object"
+function json_tree_kind_error(view value: JsonTree, expected: string) returns string:
+    string actual = json_tree_kind(view value)
+    return "expected {expected}, got {actual}"
+function json_tree_is_null(view value: JsonTree) returns bool:
+    return json_tree_kind(view value) == "null"
+function json_tree_is_bool(view value: JsonTree) returns bool:
+    return json_tree_kind(view value) == "bool"
+function json_tree_is_number(view value: JsonTree) returns bool:
+    return json_tree_kind(view value) == "number"
+function json_tree_is_string(view value: JsonTree) returns bool:
+    return json_tree_kind(view value) == "string"
+function json_tree_is_array(view value: JsonTree) returns bool:
+    return json_tree_kind(view value) == "array"
+function json_tree_is_object(view value: JsonTree) returns bool:
+    return json_tree_kind(view value) == "object"
+function json_tree_field(view value: JsonTree, key: string) returns optional[JsonTree]:
+    match value:
+        object_value(fields):
+            return map.get[string, JsonTree](view fields, key)
+        null:
+            return none
+        bool_value(item):
+            return none
+        number_value(raw):
+            return none
+        string_value(item):
+            return none
+        array_value(items):
+            return none
+function json_tree_index(view value: JsonTree, index: int64) returns optional[JsonTree]:
+    match value:
+        array_value(items):
+            return list.get[JsonTree](view items, index)
+        null:
+            return none
+        bool_value(item):
+            return none
+        number_value(raw):
+            return none
+        string_value(item):
+            return none
+        object_value(fields):
+            return none
+function json_tree_array_length(view value: JsonTree) returns result[int64, string]:
+    match value:
+        array_value(items):
+            return ok(list.length[JsonTree](view items))
+        null:
+            return fail(json_tree_kind_error(view value, "array"))
+        bool_value(item):
+            return fail(json_tree_kind_error(view value, "array"))
+        number_value(raw):
+            return fail(json_tree_kind_error(view value, "array"))
+        string_value(item):
+            return fail(json_tree_kind_error(view value, "array"))
+        object_value(fields):
+            return fail(json_tree_kind_error(view value, "array"))
+function json_tree_object_keys(view value: JsonTree) returns result[list[string], string]:
+    match value:
+        object_value(fields):
+            return ok(map.keys[string, JsonTree](view fields))
+        null:
+            return fail(json_tree_kind_error(view value, "object"))
+        bool_value(item):
+            return fail(json_tree_kind_error(view value, "object"))
+        number_value(raw):
+            return fail(json_tree_kind_error(view value, "object"))
+        string_value(item):
+            return fail(json_tree_kind_error(view value, "object"))
+        array_value(items):
+            return fail(json_tree_kind_error(view value, "object"))
+function json_tree_as_string(view value: JsonTree) returns result[string, string]:
+    match value:
+        string_value(item):
+            return ok(item)
+        null:
+            return fail(json_tree_kind_error(view value, "string"))
+        bool_value(item):
+            return fail(json_tree_kind_error(view value, "string"))
+        number_value(raw):
+            return fail(json_tree_kind_error(view value, "string"))
+        array_value(items):
+            return fail(json_tree_kind_error(view value, "string"))
+        object_value(fields):
+            return fail(json_tree_kind_error(view value, "string"))
+function json_tree_as_int64(view value: JsonTree) returns result[int64, string]:
+    match value:
+        number_value(raw):
+            int64 item = int64.from_string(raw) handle error:
+                return fail(error)
+            return ok(item)
+        null:
+            return fail(json_tree_kind_error(view value, "number"))
+        bool_value(item):
+            return fail(json_tree_kind_error(view value, "number"))
+        string_value(item):
+            return fail(json_tree_kind_error(view value, "number"))
+        array_value(items):
+            return fail(json_tree_kind_error(view value, "number"))
+        object_value(fields):
+            return fail(json_tree_kind_error(view value, "number"))
+function json_tree_as_float64(view value: JsonTree) returns result[float64, string]:
+    match value:
+        number_value(raw):
+            float64 item = float64.from_string(raw) handle error:
+                return fail(error)
+            return ok(item)
+        null:
+            return fail(json_tree_kind_error(view value, "number"))
+        bool_value(item):
+            return fail(json_tree_kind_error(view value, "number"))
+        string_value(item):
+            return fail(json_tree_kind_error(view value, "number"))
+        array_value(items):
+            return fail(json_tree_kind_error(view value, "number"))
+        object_value(fields):
+            return fail(json_tree_kind_error(view value, "number"))
+function json_tree_as_bool(view value: JsonTree) returns result[bool, string]:
+    match value:
+        bool_value(item):
+            return ok(item)
+        null:
+            return fail(json_tree_kind_error(view value, "bool"))
+        number_value(raw):
+            return fail(json_tree_kind_error(view value, "bool"))
+        string_value(item):
+            return fail(json_tree_kind_error(view value, "bool"))
+        array_value(items):
+            return fail(json_tree_kind_error(view value, "bool"))
+        object_value(fields):
+            return fail(json_tree_kind_error(view value, "bool"))
 function json_tree_parse_scalar(raw: string) returns result[JsonTree, string]:
     if raw == "null":
         return ok(JsonTree.null)

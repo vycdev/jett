@@ -1,0 +1,47 @@
+namespace test
+function parsed_tree(raw: string) returns json.JsonTree:
+    return json.json_tree_parse(raw) handle error:
+        default json.JsonTree.string_value(error)
+function tree_access_summary() returns string:
+    json.JsonTree tree = parsed_tree("{{\"name\":\"Ada\",\"active\":true,\"scores\":[3,5]}}")
+    json.JsonTree name_tree = json.json_tree_field(view tree, "name") handle:
+        return "missing name"
+    json.JsonTree active_tree = json.json_tree_field(view tree, "active") handle:
+        return "missing active"
+    json.JsonTree scores_tree = json.json_tree_field(view tree, "scores") handle:
+        return "missing scores"
+    string name = json.json_tree_as_string(view name_tree) handle error:
+        return error
+    bool active = json.json_tree_as_bool(view active_tree) handle error:
+        return error
+    int64 length = json.json_tree_array_length(view scores_tree) handle error:
+        return error
+    json.JsonTree first_tree = json.json_tree_index(view scores_tree, 0) handle:
+        return "missing first score"
+    int64 first = json.json_tree_as_int64(view first_tree) handle error:
+        return error
+    list[string] keys = json.json_tree_object_keys(view tree) handle error:
+        return error
+    int64 key_count = list.length[string](view keys)
+    return "{json.json_tree_kind(view tree)}:{json.json_tree_is_object(view tree)}:{name}:{active}:{length}:{first}:{key_count}"
+function tree_wrong_shape_errors() returns string:
+    json.JsonTree tree = parsed_tree("\"Ada\"")
+    int64 length = json.json_tree_array_length(view tree) handle error:
+        return error
+    return "{length}"
+function tree_absent_lookup() returns string:
+    json.JsonTree tree = parsed_tree("[1]")
+    json.JsonTree field = json.json_tree_field(view tree, "missing") handle:
+        default json.JsonTree.string_value("absent")
+    json.JsonTree item = json.json_tree_index(view tree, 4) handle:
+        default json.JsonTree.string_value("absent")
+    return "{json.json_tree_serialize(field)}:{json.json_tree_serialize(item)}"
+function tree_float_value() returns float64:
+    json.JsonTree tree = parsed_tree("2.5")
+    return json.json_tree_as_float64(view tree) handle error:
+        default 0.0
+verify json_tree_accessors:
+    assert tree_access_summary() == "object:true:Ada:true:2:3:3"
+    assert tree_wrong_shape_errors() == "expected array, got string"
+    assert tree_absent_lookup() == "\"absent\":\"absent\""
+    assert tree_float_value() == 2.5

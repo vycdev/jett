@@ -43,6 +43,12 @@ quoting helper as reflected typed serialization. `json.json_tree_parse(raw)`
 now parses that staged tree shape for nulls, booleans, raw-number tokens,
 strings, arrays, and objects.
 
+The staged tree also has stdlib traversal helpers mirroring the opaque raw API:
+`json_tree_kind`, `json_tree_is_*`, `json_tree_field`, `json_tree_index`,
+`json_tree_array_length`, `json_tree_object_keys`, and scalar casts for string,
+int64, float64, and bool. That gives future decoder work a Rust-free tree
+surface to target.
+
 This is intentionally staged alongside, not instead of, the opaque `JsonValue`
 primitive. `JsonTree` gives the self-hosted parser a stdlib-owned target
 without breaking existing `json.parse_raw`, raw accessors, or the reflected
