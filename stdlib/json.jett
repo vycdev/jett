@@ -93,9 +93,15 @@ mutual:
     function json_tree_scan_step_value(view scan: JsonTreeScan, byte: int64) returns result[JsonTreeScan, string]
     function json_tree_finish_scan(view scan: JsonTreeScan) returns result[nothing, string]
     function json_tree_is_number_candidate(raw: string) returns bool
+    function json_tree_byte_at(view input: bytes, index: int64) returns int64
+    function json_tree_number_read_integer(view input: bytes, index: int64, length: int64) returns int64
+    function json_tree_number_read_digits(view input: bytes, index: int64, length: int64) returns int64
+    function json_tree_number_read_required_digits(view input: bytes, index: int64, length: int64) returns int64
+    function json_tree_number_read_fraction(view input: bytes, index: int64, length: int64) returns int64
+    function json_tree_number_read_exponent(view input: bytes, index: int64, length: int64) returns int64
     function json_tree_is_digit_byte(byte: int64) returns bool
-    function json_tree_is_number_byte(byte: int64) returns bool
-    function json_tree_is_number_punctuation(byte: int64) returns bool
+    function json_tree_is_exponent_byte(byte: int64) returns bool
+    function json_tree_is_sign_byte(byte: int64) returns bool
     function json_tree_serialize(value: JsonTree) returns string
     function json_tree_serialize_array(items: list[JsonTree]) returns string
     function json_tree_serialize_object(fields: map[string, JsonTree]) returns string
@@ -382,35 +388,70 @@ function json_tree_is_number_candidate(raw: string) returns bool:
     int64 length = bytes.length(view input)
     if length == 0:
         return false
-    mutable bool seen_digit = false
     mutable int64 index = 0
-    while index < length:
-        int64 byte = bytes.get(view input, index) handle:
-            default -1
-        if json_tree_is_digit_byte(byte) == true:
-            seen_digit = true
-        if json_tree_is_number_byte(byte) == false:
-            return false
+    if json_tree_byte_at(view input, index) == 45:
         index = index + 1
-    return seen_digit
+        if index >= length:
+            return false
+    index = json_tree_number_read_integer(view input, index, length)
+    if index < 0:
+        return false
+    index = json_tree_number_read_fraction(view input, index, length)
+    if index < 0:
+        return false
+    index = json_tree_number_read_exponent(view input, index, length)
+    return index == length
+function json_tree_byte_at(view input: bytes, index: int64) returns int64:
+    return bytes.get(view input, index) handle:
+        default -1
+function json_tree_number_read_integer(view input: bytes, index: int64, length: int64) returns int64:
+    int64 byte = json_tree_byte_at(view input, index)
+    if byte == 48:
+        return index + 1
+    if byte < 49:
+        return -1
+    if byte > 57:
+        return -1
+    return json_tree_number_read_digits(view input, index + 1, length)
+function json_tree_number_read_digits(view input: bytes, index: int64, length: int64) returns int64:
+    mutable int64 current = index
+    while current < length:
+        int64 byte = json_tree_byte_at(view input, current)
+        if json_tree_is_digit_byte(byte) == false:
+            return current
+        current = current + 1
+    return current
+function json_tree_number_read_required_digits(view input: bytes, index: int64, length: int64) returns int64:
+    if index >= length:
+        return -1
+    if json_tree_is_digit_byte(json_tree_byte_at(view input, index)) == false:
+        return -1
+    return json_tree_number_read_digits(view input, index + 1, length)
+function json_tree_number_read_fraction(view input: bytes, index: int64, length: int64) returns int64:
+    if index >= length:
+        return index
+    if json_tree_byte_at(view input, index) != 46:
+        return index
+    return json_tree_number_read_required_digits(view input, index + 1, length)
+function json_tree_number_read_exponent(view input: bytes, index: int64, length: int64) returns int64:
+    if index >= length:
+        return index
+    if json_tree_is_exponent_byte(json_tree_byte_at(view input, index)) == false:
+        return index
+    mutable int64 digit_start = index + 1
+    if json_tree_is_sign_byte(json_tree_byte_at(view input, digit_start)) == true:
+        digit_start = digit_start + 1
+    return json_tree_number_read_required_digits(view input, digit_start, length)
 function json_tree_is_digit_byte(byte: int64) returns bool:
     return byte >= 48 and byte <= 57
-function json_tree_is_number_byte(byte: int64) returns bool:
-    if json_tree_is_digit_byte(byte) == true:
-        return true
-    return json_tree_is_number_punctuation(byte)
-function json_tree_is_number_punctuation(byte: int64) returns bool:
-    if byte == 45:
-        return true
-    if byte == 43:
-        return true
-    if byte == 46:
-        return true
+function json_tree_is_exponent_byte(byte: int64) returns bool:
     if byte == 69:
         return true
-    if byte == 101:
+    return byte == 101
+function json_tree_is_sign_byte(byte: int64) returns bool:
+    if byte == 43:
         return true
-    return false
+    return byte == 45
 function json_tree_serialize(value: JsonTree) returns string:
     match value:
         null:

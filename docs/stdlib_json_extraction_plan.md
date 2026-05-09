@@ -178,8 +178,8 @@ bridge spoofing, not helper visibility.
    fallback; raw `JsonValue` primitives remain Rust-backed.
 6. Continue hardening the self-hosted `JsonTree` parser, then decide whether
    `JsonValue` becomes a type alias/replacement or remains an opaque
-   compatibility substrate. Current parser gaps include strict JSON number
-   grammar and unicode escape decoding.
+   compatibility substrate. Current parser gaps include unicode escape decoding
+   and broader malformed-input diagnostics.
 
 ## Recommended Shape For `stdlib/json.jett`
 
