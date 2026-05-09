@@ -38,6 +38,7 @@ verify json_tree_parse_scalar:
     assert parse_string_hex("\"\\u20ac\"") == "e282ac"
     assert parse_string_hex("\"\\ud834\\udd1e\"") == "f09d849e"
     assert parse_tree_summary("\"bad") == "expected JSON string"
+    assert parse_tree_summary("\"line\nnext\"") == "unescaped control character in JSON string"
     assert parse_tree_summary("\"\\u00xz\"") == "invalid unicode escape in JSON string"
     assert parse_tree_summary("\"\\u004\"") == "unterminated unicode escape in JSON string"
     assert parse_tree_summary("\"\\ud834\"") == "unterminated surrogate pair in JSON string"

@@ -452,6 +452,8 @@ function json_tree_parse_string_body(view input: bytes, end: int64) returns resu
             default -1
         if byte == 34:
             return fail("unexpected quote in JSON string")
+        if byte < 32:
+            return fail("unescaped control character in JSON string")
         if byte == 92:
             index = index + 1
             JsonTreeStringEscape decoded = json_tree_parse_string_escape_at(view input, index, end) handle error:
