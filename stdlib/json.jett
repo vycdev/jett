@@ -1,5 +1,4 @@
 namespace json
-
 enum JsonTree:
     null
     bool_value(value: bool)
@@ -7,7 +6,6 @@ enum JsonTree:
     string_value(value: string)
     array_value(items: list[JsonTree])
     object_value(fields: map[string, JsonTree])
-
 function json_stdlib_hex_digit(value: int64) returns string:
     if value < 10:
         return "{value}"
@@ -22,7 +20,6 @@ function json_stdlib_hex_digit(value: int64) returns string:
     if value == 14:
         return "e"
     return "f"
-
 function json_stdlib_escape_byte(byte: int64) returns optional[string]:
     if byte == 34:
         return some("\\\"")
@@ -43,7 +40,6 @@ function json_stdlib_escape_byte(byte: int64) returns optional[string]:
         string low = json_stdlib_hex_digit(byte modulo 16)
         return some("\\u00{high}{low}")
     return none
-
 function json_stdlib_quote(raw: string) returns string:
     bytes input = bytes.from_string(raw)
     mutable bytes output = bytes.new()
@@ -62,7 +58,6 @@ function json_stdlib_quote(raw: string) returns string:
     string escaped = bytes.to_string(output) handle error:
         default error
     return "\"{escaped}\""
-
 mutual:
     function json_tree_serialize(value: JsonTree) returns string
     function json_tree_serialize_array(items: list[JsonTree]) returns string
@@ -93,7 +88,6 @@ mutual:
     function json_decode_enum_payload_reflected[T](payload: JsonValue, type_name: string, variant_name: string, payload_count: int64) returns result[T, string]
     function json_missing_field_reflected(view field: TypeField, owner_name: string) returns result[JsonValue, string]
     function json_decode_record_reflected[T](raw: JsonValue, type_name: string) returns result[T, string]
-
 function json_tree_serialize(value: JsonTree) returns string:
     match value:
         null:
@@ -108,14 +102,12 @@ function json_tree_serialize(value: JsonTree) returns string:
             return json_tree_serialize_array(items)
         object_value(fields):
             return json_tree_serialize_object(fields)
-
 function json_tree_serialize_array(items: list[JsonTree]) returns string:
     mutable list[string] parts = list.new[string]()
     for item in items:
         parts = list.append[string](parts, json_tree_serialize(item))
     string body = string.join(parts, ",")
     return "[{body}]"
-
 function json_tree_serialize_object(fields: map[string, JsonTree]) returns string:
     mutable list[string] parts = list.new[string]()
     for key, item in fields:
@@ -123,7 +115,6 @@ function json_tree_serialize_object(fields: map[string, JsonTree]) returns strin
         parts = list.append[string](parts, "{json_stdlib_quote(key)}:{encoded}")
     string body = string.join(parts, ",")
     return "{{{body}}}"
-
 function json_serialize_public_reflected[T](view value: T) returns string:
     TypeInfo info = type.info[T]()
     TypeKind kind = info.kind_tag
@@ -142,7 +133,6 @@ function json_serialize_public_reflected[T](view value: T) returns string:
     if kind == TypeKind.enum_type:
         return json_serialize_public_enum_reflected[T](view value)
     return json_serialize_public_non_enum_reflected[T](view value, kind)
-
 function json_serialize_public_primitive[T](view value: T, primitive: TypePrimitive) returns string:
     if primitive == TypePrimitive.string_type:
         string item = value
@@ -165,7 +155,6 @@ function json_serialize_public_primitive[T](view value: T, primitive: TypePrimit
         JsonValue item = value
         return json.serialize_raw(item)
     return "null"
-
 function json_serialize_public_enum_reflected[T](view value: T) returns string:
     TypeVariant selected = type.variant_value[T](view value)
     for variant in type.variants[T]():
@@ -182,7 +171,6 @@ function json_serialize_public_enum_reflected[T](view value: T) returns string:
         string body = string.join(parts, ",")
         return "{{{json_stdlib_quote(variant.name)}:[{body}]}}"
     return json_stdlib_quote(selected.name)
-
 function json_serialize_public_non_enum_reflected[T](view value: T, kind: TypeKind) returns string:
     if kind == TypeKind.list_type:
         return json_serialize_public_list_reflected[T](view value)
@@ -195,7 +183,6 @@ function json_serialize_public_non_enum_reflected[T](view value: T, kind: TypeKi
     if kind == TypeKind.result_type:
         return json_serialize_public_result_reflected[T](view value)
     return json_serialize_public_record_reflected[T](view value)
-
 function json_serialize_public_list_reflected[T](view value: T) returns string:
     comptime type Elem = type.arg[T](0):
         list[Elem] items = value
@@ -204,7 +191,6 @@ function json_serialize_public_list_reflected[T](view value: T) returns string:
             parts = list.append[string](parts, json_serialize_public_reflected[Elem](view item))
         string body = string.join(parts, ",")
         return "[{body}]"
-
 function json_serialize_public_set_reflected[T](view value: T) returns string:
     comptime type Elem = type.arg[T](0):
         set[Elem] items = value
@@ -213,7 +199,6 @@ function json_serialize_public_set_reflected[T](view value: T) returns string:
             parts = list.append[string](parts, json_serialize_public_reflected[Elem](view item))
         string body = string.join(parts, ",")
         return "[{body}]"
-
 function json_serialize_public_map_reflected[T](view value: T) returns string:
     comptime type Val = type.arg[T](1):
         map[string, Val] entries = value
@@ -223,13 +208,11 @@ function json_serialize_public_map_reflected[T](view value: T) returns string:
             parts = list.append[string](parts, "{json_stdlib_quote(key)}:{encoded}")
         string body = string.join(parts, ",")
         return "{{{body}}}"
-
 function json_serialize_public_optional_reflected[T](view value: T) returns string:
     comptime type Inner = type.arg[T](0):
         Inner item = value handle:
             return "null"
         return json_serialize_public_reflected[Inner](view item)
-
 function json_serialize_public_result_reflected[T](view value: T) returns string:
     comptime type Ok = type.arg[T](0):
         Ok item = value handle error:
@@ -239,7 +222,6 @@ function json_serialize_public_result_reflected[T](view value: T) returns string
                 return "{{{json_stdlib_quote("fail")}:{encoded}}}"
         string encoded = json_serialize_public_reflected[Ok](view item)
         return "{{{json_stdlib_quote("ok")}:{encoded}}}"
-
 function json_serialize_public_record_reflected[T](view value: T) returns string:
     list[string] fields = list.new[string]()
     for field in type.fields[T]():
@@ -251,7 +233,6 @@ function json_serialize_public_record_reflected[T](view value: T) returns string
             fields = list.append[string](fields, "{json_stdlib_quote(field.serialize_name)}:{encoded}")
     string body = string.join(fields, ",")
     return "{{{body}}}"
-
 function json_decode_reflected[T](raw: JsonValue) returns result[T, string]:
     TypeInfo info = type.info[T]()
     TypeKind kind = info.kind_tag
@@ -279,12 +260,10 @@ function json_decode_reflected[T](raw: JsonValue) returns result[T, string]:
             T secret_value = item
             return ok(secret_value)
     return json_decode_structured_reflected[T](raw, kind, type_name)
-
 function json_decode_primitive_reflected[T](raw: JsonValue, primitive: TypePrimitive) returns result[T, string]:
     if primitive == TypePrimitive.string_type or primitive == TypePrimitive.int64_type or primitive == TypePrimitive.float64_type or primitive == TypePrimitive.bool_type:
         return json_decode_scalar_reflected[T](raw, primitive)
     return json_decode_other_primitive_reflected[T](raw, primitive)
-
 function json_decode_scalar_reflected[T](raw: JsonValue, primitive: TypePrimitive) returns result[T, string]:
     if primitive == TypePrimitive.string_type:
         string item = json.as_string(raw) handle error:
@@ -303,7 +282,6 @@ function json_decode_scalar_reflected[T](raw: JsonValue, primitive: TypePrimitiv
             return fail(error)
         return ok(item)
     return fail("unsupported reflected JSON primitive")
-
 function json_decode_other_primitive_reflected[T](raw: JsonValue, primitive: TypePrimitive) returns result[T, string]:
     if primitive == TypePrimitive.bytes_type:
         string raw_hex = json.as_string(raw) handle error:
@@ -319,7 +297,6 @@ function json_decode_other_primitive_reflected[T](raw: JsonValue, primitive: Typ
             return fail("expected null, got {json.kind(raw)}")
         return ok(nothing)
     return fail("unsupported reflected JSON primitive")
-
 function json_decode_structured_reflected[T](raw: JsonValue, kind: TypeKind, type_name: string) returns result[T, string]:
     if kind == TypeKind.list_type:
         return json_decode_list_reflected[T](raw)
@@ -336,7 +313,6 @@ function json_decode_structured_reflected[T](raw: JsonValue, kind: TypeKind, typ
     if kind == TypeKind.struct_type or kind == TypeKind.bitfield_type:
         return json_decode_record_reflected[T](raw, type_name)
     return fail("unsupported reflected JSON type: {type_name}")
-
 function json_decode_list_reflected[T](raw: JsonValue) returns result[T, string]:
     comptime type Elem = type.arg[T](0):
         int64 length = json.array_length(raw) handle error:
@@ -349,7 +325,6 @@ function json_decode_list_reflected[T](raw: JsonValue) returns result[T, string]
                 return fail("{index}: {error}")
             items = list.append[Elem](items, item)
         return ok(items)
-
 function json_decode_set_reflected[T](raw: JsonValue) returns result[T, string]:
     comptime type Elem = type.arg[T](0):
         int64 length = json.array_length(raw) handle error:
@@ -362,7 +337,6 @@ function json_decode_set_reflected[T](raw: JsonValue) returns result[T, string]:
                 return fail("{index}: {error}")
             items = set.add[Elem](items, item)
         return ok(items)
-
 function json_decode_map_reflected[T](raw: JsonValue) returns result[T, string]:
     comptime type Val = type.arg[T](1):
         list[string] keys = json.object_keys(raw) handle error:
@@ -375,7 +349,6 @@ function json_decode_map_reflected[T](raw: JsonValue) returns result[T, string]:
                 return fail("{key}: {error}")
             entries = map.insert[string, Val](entries, key, item)
         return ok(entries)
-
 function json_decode_optional_reflected[T](raw: JsonValue) returns result[T, string]:
     if json.is_null(raw) == true:
         return ok(none)
@@ -383,7 +356,6 @@ function json_decode_optional_reflected[T](raw: JsonValue) returns result[T, str
         Inner item = json_decode_reflected[Inner](raw) handle error:
             return fail(error)
         return ok(some(item))
-
 function json_decode_result_reflected[T](raw: JsonValue) returns result[T, string]:
     list[string] keys = json.object_keys(raw) handle error:
         return fail(error)
@@ -400,12 +372,10 @@ function json_decode_result_reflected[T](raw: JsonValue) returns result[T, strin
         Ok item = json_decode_reflected[Ok](ok_raw) handle error:
             return fail("ok: {error}")
         return ok(ok(item))
-
 function json_decode_enum_reflected[T](raw: JsonValue, type_name: string) returns result[T, string]:
     if json.is_string(raw) == true:
         return json_decode_enum_string_reflected[T](raw, type_name)
     return json_decode_enum_object_reflected[T](raw, type_name)
-
 function json_decode_enum_string_reflected[T](raw: JsonValue, type_name: string) returns result[T, string]:
     string variant_name = json.as_string(raw) handle error:
         return fail(error)
@@ -419,7 +389,6 @@ function json_decode_enum_string_reflected[T](raw: JsonValue, type_name: string)
             return fail(error)
         return type.construct_finish[T](builder)
     return fail("unknown enum variant '{type_name}.{variant_name}'")
-
 function json_decode_enum_object_reflected[T](raw: JsonValue, type_name: string) returns result[T, string]:
     list[string] keys = json.object_keys(raw) handle error:
         return fail("expected enum string or object, got {json.kind(raw)}")
@@ -432,7 +401,6 @@ function json_decode_enum_object_reflected[T](raw: JsonValue, type_name: string)
     int64 payload_count = json.array_length(payload) handle error:
         return fail("expected array payload for enum variant '{type_name}.{variant_name}', got {json.kind(payload)}")
     return json_decode_enum_payload_reflected[T](payload, type_name, variant_name, payload_count)
-
 function json_decode_enum_payload_reflected[T](payload: JsonValue, type_name: string, variant_name: string, payload_count: int64) returns result[T, string]:
     for variant in type.variants[T]():
         if variant.name != variant_name:
@@ -454,14 +422,12 @@ function json_decode_enum_payload_reflected[T](payload: JsonValue, type_name: st
             index = index + 1
         return type.construct_finish[T](builder)
     return fail("unknown enum variant '{type_name}.{variant_name}'")
-
 function json_missing_field_reflected(view field: TypeField, owner_name: string) returns result[JsonValue, string]:
     if field.type_info.kind_tag == TypeKind.optional_type:
         JsonValue missing_optional = json.parse_raw("null") handle error:
             return fail(error)
         return ok(missing_optional)
     return fail("missing required field '{field.serialize_name}' for {owner_name}")
-
 function json_decode_record_reflected[T](raw: JsonValue, type_name: string) returns result[T, string]:
     if json.is_object(raw) == false:
         return fail("expected object, got {json.kind(raw)}")
@@ -477,20 +443,15 @@ function json_decode_record_reflected[T](raw: JsonValue, type_name: string) retu
             builder = type.construct_put[T, Field](builder, view field, decoded) handle error:
                 return fail(error)
     return type.construct_finish[T](builder)
-
 function json_serialize_reflected[T](view value: T) returns string:
     return json_serialize_public_reflected[T](view value)
-
 function json_parse_reflected[T](raw: string) returns result[T, string]:
     JsonValue value = json.parse_raw(raw) handle error:
         return fail(error)
     return json_decode_reflected[T](value)
-
 function parse[T](raw: string) returns result[T, string]:
     return json_parse_reflected[T](raw)
-
 function serialize[T](view value: T) returns string:
     return json_serialize_reflected[T](view value)
-
 function serialize_public[T](view value: T) returns string:
     return json_serialize_public_reflected[T](view value)

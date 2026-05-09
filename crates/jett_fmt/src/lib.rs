@@ -41,16 +41,21 @@ fn reprint_tokens(tokens: &[Token], source: &str) -> String {
     let mut indent_level: u32 = 0;
     let mut at_line_start = true;
     let mut prev_kind: Option<TokenKind> = None;
+    let mut prev_was_unary_minus = false;
     let mut consecutive_newlines: u32 = 0;
 
-    for token in tokens {
+    let mut index = 0usize;
+    while index < tokens.len() {
+        let token = &tokens[index];
         match token.kind {
             TokenKind::Indent => {
                 indent_level += 1;
+                index += 1;
                 continue;
             }
             TokenKind::Dedent => {
                 indent_level = indent_level.saturating_sub(1);
+                index += 1;
                 continue;
             }
             TokenKind::Newline => {
@@ -60,6 +65,8 @@ fn reprint_tokens(tokens: &[Token], source: &str) -> String {
                 }
                 at_line_start = true;
                 prev_kind = Some(token.kind);
+                prev_was_unary_minus = false;
+                index += 1;
                 continue;
             }
             TokenKind::Eof => break,
@@ -73,14 +80,33 @@ fn reprint_tokens(tokens: &[Token], source: &str) -> String {
                 output.push_str("    ");
             }
             at_line_start = false;
+        } else if prev_was_unary_minus {
         } else if needs_space_before(token.kind, prev_kind) {
             output.push(' ');
+        }
+
+        if token.kind == TokenKind::StringStart {
+            let start = token.span.start as usize;
+            let end = find_string_literal_end(source, start).unwrap_or(token.span.end as usize);
+            output.push_str(&source[start..end]);
+            prev_kind = Some(TokenKind::StringLiteral);
+            prev_was_unary_minus = false;
+            index += 1;
+            while index < tokens.len()
+                && tokens[index].kind != TokenKind::Eof
+                && (tokens[index].span.end as usize) <= end
+            {
+                index += 1;
+            }
+            continue;
         }
 
         let text = &source[token.span.start as usize..token.span.end as usize];
         output.push_str(text);
 
+        prev_was_unary_minus = token.kind == TokenKind::Minus && minus_is_unary(prev_kind);
         prev_kind = Some(token.kind);
+        index += 1;
     }
 
     // Ensure trailing newline
@@ -94,6 +120,67 @@ fn reprint_tokens(tokens: &[Token], source: &str) -> String {
     }
 
     output
+}
+
+fn find_string_literal_end(source: &str, start: usize) -> Option<usize> {
+    let bytes = source.as_bytes();
+    if bytes.get(start) != Some(&b'"') {
+        return None;
+    }
+
+    let mut pos = start + 1;
+    while pos < bytes.len() {
+        match bytes[pos] {
+            b'\\' => {
+                pos = pos.saturating_add(2);
+            }
+            b'"' => return Some(pos + 1),
+            b'{' if bytes.get(pos + 1) == Some(&b'{') => {
+                pos += 2;
+            }
+            b'}' if bytes.get(pos + 1) == Some(&b'}') => {
+                pos += 2;
+            }
+            b'{' => {
+                pos = skip_interpolation(source, pos + 1)?;
+            }
+            _ => {
+                pos += 1;
+            }
+        }
+    }
+
+    None
+}
+
+fn skip_interpolation(source: &str, start: usize) -> Option<usize> {
+    let bytes = source.as_bytes();
+    let mut depth = 1u32;
+    let mut pos = start;
+
+    while pos < bytes.len() {
+        match bytes[pos] {
+            b'"' => {
+                pos = find_string_literal_end(source, pos)?;
+            }
+            b'{' => {
+                depth += 1;
+                pos += 1;
+            }
+            b'}' => {
+                depth = depth.saturating_sub(1);
+                pos += 1;
+                if depth == 0 {
+                    return Some(pos);
+                }
+            }
+            _ => {
+                pos += 1;
+            }
+        }
+    }
+
+    None
 }
 
 /// Determine if a space is needed before this token.
@@ -112,13 +199,17 @@ fn needs_space_before(kind: TokenKind, prev: Option<TokenKind>) -> bool {
         );
     }
 
-    // Never space after ( [ or before ) ] , :
+    // Never space after ( [ or before [ ) ] , :
     if matches!(prev, TokenKind::LParen | TokenKind::LBracket) {
         return false;
     }
     if matches!(
         kind,
-        TokenKind::RParen | TokenKind::RBracket | TokenKind::Comma | TokenKind::Colon
+        TokenKind::LBracket
+            | TokenKind::RParen
+            | TokenKind::RBracket
+            | TokenKind::Comma
+            | TokenKind::Colon
     ) {
         return false;
     }
@@ -176,6 +267,34 @@ fn is_binary_op(kind: TokenKind) -> bool {
     )
 }
 
+fn minus_is_unary(prev: Option<TokenKind>) -> bool {
+    matches!(
+        prev,
+        None | Some(
+            TokenKind::Return
+                | TokenKind::Default
+                | TokenKind::Eq
+                | TokenKind::Colon
+                | TokenKind::Comma
+                | TokenKind::LParen
+                | TokenKind::LBracket
+                | TokenKind::Plus
+                | TokenKind::Minus
+                | TokenKind::Star
+                | TokenKind::Slash
+                | TokenKind::Modulo
+                | TokenKind::EqEq
+                | TokenKind::NotEq
+                | TokenKind::Lt
+                | TokenKind::Gt
+                | TokenKind::LtEq
+                | TokenKind::GtEq
+                | TokenKind::AmpAmp
+                | TokenKind::PipePipe
+        )
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,5 +333,40 @@ mod tests {
         let source = "namespace app";
         let formatted = fmt(source);
         assert!(formatted.ends_with('\n'));
+    }
+
+    #[test]
+    fn format_preserves_string_interpolation_text() {
+        let source = "function f(value: int64) returns string:\n    return \"{value}\"\n";
+        let formatted = fmt(source);
+        assert!(formatted.contains("return \"{value}\""));
+        assert!(!formatted.contains("\" value \""));
+    }
+
+    #[test]
+    fn format_preserves_escaped_braces_and_nested_interpolation() {
+        let source = "function f(body: string, key: string, value: string) returns string:\n    return \"{{{key}:{value}}}\"\n";
+        let formatted = fmt(source);
+        assert!(formatted.contains("return \"{{{key}:{value}}}\""));
+        assert!(!formatted.contains(" key "));
+        assert!(!formatted.contains(" value "));
+    }
+
+    #[test]
+    fn format_keeps_generic_brackets_attached() {
+        let source = "function f(items: list[string]) returns string:\n    return list.get[string](items, 0) handle:\n        default \"\"\n";
+        let formatted = fmt(source);
+        assert!(formatted.contains("items: list[string]"));
+        assert!(formatted.contains("list.get[string](items, 0)"));
+        assert!(!formatted.contains("list [string]"));
+        assert!(!formatted.contains("get [string]"));
+    }
+
+    #[test]
+    fn format_keeps_unary_minus_attached() {
+        let source = "function f() returns int64:\n    return -1\n";
+        let formatted = fmt(source);
+        assert!(formatted.contains("return -1"));
+        assert!(!formatted.contains("return - 1"));
     }
 }
