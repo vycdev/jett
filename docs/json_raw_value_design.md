@@ -51,12 +51,13 @@ surface to target.
 
 This is intentionally staged alongside, not instead of, the opaque `JsonValue`
 primitive. `JsonTree` gives the self-hosted parser a stdlib-owned target
-without breaking existing `json.parse_raw`, raw accessors, or the reflected
-decoder that currently walks `JsonValue`. The staged parser is not yet a full
-replacement for `json.parse_raw`; broader malformed-input diagnostics still
-need hardening before that handoff. Unicode escapes including BMP values such as
-`\u0041`, `\u00e9`, `\u20ac`, and surrogate pairs such as `\ud834\udd1e` are
-already decoded.
+without breaking existing `json.parse_raw` or raw accessors. Typed public
+`json.parse[T]` now walks `JsonTree`; `JsonValue` remains the Rust-backed raw
+compatibility surface. The parser now has pinned diagnostics for common
+malformed inputs such as unterminated strings/arrays/objects, trailing
+characters, mismatched delimiters, bad number forms, bad literals, and invalid
+escapes. Unicode escapes including BMP values such as `\u0041`, `\u00e9`,
+`\u20ac`, and surrogate pairs such as `\ud834\udd1e` are decoded.
 
 ## Design Intent
 

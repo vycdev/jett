@@ -180,8 +180,11 @@ bridge spoofing, not helper visibility.
 5. Keep broad bridge/parity tests before removing any Rust-backed fallback
    implementation paths. Done for the old typed public parse/serialize
    fallback; raw `JsonValue` primitives remain Rust-backed.
-6. Continue hardening the self-hosted `JsonTree` parser. The main parser gap is
-   now broader malformed-input diagnostics.
+6. Continue hardening the self-hosted `JsonTree` parser. Common malformed-input
+   diagnostics are pinned for unterminated strings/arrays/objects, trailing
+   characters, mismatched delimiters, bad number forms, bad literals, and
+   invalid escapes; the remaining question is how far `JsonTree` should go
+   toward replacing the raw `JsonValue` compatibility surface.
 7. Decide whether `JsonValue` becomes a type alias/replacement or remains an
    opaque compatibility substrate. Direct `JsonTree` typed decoding is staged;
    see `docs/json_tree_decoder_blocker.md`.
