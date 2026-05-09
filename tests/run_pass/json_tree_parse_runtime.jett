@@ -1,0 +1,7 @@
+namespace test
+
+function main(view stdout: Stdout) returns nothing:
+    json.JsonTree tree = json.json_tree_parse("{{\"city\":\"Cluj\",\"scores\":[1,true,null]}}") handle error:
+        Stdout.write(view stdout, error)
+        return
+    Stdout.write(view stdout, json.json_tree_serialize(tree))

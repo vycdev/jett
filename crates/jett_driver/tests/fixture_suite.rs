@@ -300,6 +300,10 @@ run_pass_fixture!(
     "json_tree_parse_compound.jett"
 );
 run_pass_fixture!(run_pass_json_tree_accessors, "json_tree_accessors.jett");
+run_pass_fixture!(
+    run_pass_json_tree_parse_runtime,
+    "json_tree_parse_runtime.jett"
+);
 run_pass_fixture!(run_pass_escape_sequences, "escape_sequences.jett");
 run_pass_fixture!(run_pass_list_higher_order, "list_higher_order.jett");
 run_pass_fixture!(run_pass_inline_functions, "inline_functions.jett");

@@ -9,6 +9,9 @@ use jett_resolve::resolve;
 use jett_typecheck::check;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::thread;
+
+const RUNTIME_STACK_SIZE: usize = 8 * 1024 * 1024;
 
 /// Result of compiling a single file.
 pub struct BuildResult {
@@ -415,6 +418,22 @@ fn discover_modules_in_dir(
 /// First validates (lex → parse → resolve → typecheck → verify), then executes main().
 /// If a jett.proj exists, also loads sibling .jett files so cross-file calls work.
 pub fn run_file(path: &Path) -> Result<(), String> {
+    let thread_path = path.to_path_buf();
+    let fallback_path = thread_path.clone();
+    match thread::Builder::new()
+        .name("jett-runtime".to_string())
+        .stack_size(RUNTIME_STACK_SIZE)
+        .spawn(move || run_file_inner(&thread_path))
+    {
+        Ok(handle) => match handle.join() {
+            Ok(result) => result,
+            Err(payload) => std::panic::resume_unwind(payload),
+        },
+        Err(_) => run_file_inner(&fallback_path),
+    }
+}
+
+fn run_file_inner(path: &Path) -> Result<(), String> {
     let build = build_file(path);
 
     if build.has_errors {
