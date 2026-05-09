@@ -101,11 +101,14 @@ mutual:
     function json_tree_parse_string_body(view input: bytes, end: int64) returns result[string, string]
     function json_tree_parse_string_escape_at(view input: bytes, index: int64, end: int64) returns result[JsonTreeStringEscape, string]
     function json_tree_parse_unicode_escape_at(view input: bytes, index: int64, end: int64) returns result[JsonTreeStringEscape, string]
-    function json_tree_unicode_escape_value(view input: bytes, digit_start: int64) returns result[string, string]
+    function json_tree_parse_unicode_surrogate_pair_at(view input: bytes, index: int64, end: int64, high_code: int64) returns result[JsonTreeStringEscape, string]
     function json_tree_unicode_codepoint(view input: bytes, digit_start: int64) returns result[int64, string]
+    function json_tree_unicode_codepoint_value(code: int64) returns result[string, string]
     function json_tree_codepoint_to_utf8_hex(code: int64) returns result[string, string]
     function json_tree_byte_hex(byte: int64) returns string
     function json_tree_is_surrogate_codepoint(code: int64) returns bool
+    function json_tree_is_high_surrogate_codepoint(code: int64) returns bool
+    function json_tree_is_low_surrogate_codepoint(code: int64) returns bool
     function json_tree_hex_digit_value(byte: int64) returns int64
     function json_tree_escape_string(byte: int64) returns result[string, string]
     function json_tree_has_delimiters(view input: bytes, length: int64, open_byte: int64, close_byte: int64) returns bool
@@ -474,12 +477,31 @@ function json_tree_parse_string_escape_at(view input: bytes, index: int64, end: 
 function json_tree_parse_unicode_escape_at(view input: bytes, index: int64, end: int64) returns result[JsonTreeStringEscape, string]:
     if index + 4 >= end:
         return fail("unterminated unicode escape in JSON string")
-    string decoded = json_tree_unicode_escape_value(view input, index + 1) handle error:
+    int64 code = json_tree_unicode_codepoint(view input, index + 1) handle error:
+        return fail(error)
+    if json_tree_is_high_surrogate_codepoint(code) == true:
+        return json_tree_parse_unicode_surrogate_pair_at(view input, index, end, code)
+    if json_tree_is_low_surrogate_codepoint(code) == true:
+        return fail("unexpected low surrogate unicode escape")
+    string decoded = json_tree_unicode_codepoint_value(code) handle error:
         return fail(error)
     return ok(JsonTreeStringEscape(value: decoded, next_index: index + 4))
-function json_tree_unicode_escape_value(view input: bytes, digit_start: int64) returns result[string, string]:
-    int64 code = json_tree_unicode_codepoint(view input, digit_start) handle error:
+function json_tree_parse_unicode_surrogate_pair_at(view input: bytes, index: int64, end: int64, high_code: int64) returns result[JsonTreeStringEscape, string]:
+    if index + 10 >= end:
+        return fail("unterminated surrogate pair in JSON string")
+    if json_tree_byte_at(view input, index + 5) != 92:
+        return fail("expected low surrogate unicode escape")
+    if json_tree_byte_at(view input, index + 6) != 117:
+        return fail("expected low surrogate unicode escape")
+    int64 low_code = json_tree_unicode_codepoint(view input, index + 7) handle error:
         return fail(error)
+    if json_tree_is_low_surrogate_codepoint(low_code) == false:
+        return fail("expected low surrogate unicode escape")
+    int64 code = 65536 +(high_code - 55296) * 1024 +(low_code - 56320)
+    string decoded = json_tree_unicode_codepoint_value(code) handle error:
+        return fail(error)
+    return ok(JsonTreeStringEscape(value: decoded, next_index: index + 10))
+function json_tree_unicode_codepoint_value(code: int64) returns result[string, string]:
     string hex = json_tree_codepoint_to_utf8_hex(code) handle error:
         return fail(error)
     bytes raw = bytes.from_hex(hex) handle error:
@@ -507,13 +529,25 @@ function json_tree_codepoint_to_utf8_hex(code: int64) returns result[string, str
     int64 first = 224 + code / 4096
     int64 second = 128 +((code / 64) modulo 64)
     int64 third = 128 +(code modulo 64)
-    return ok("{json_tree_byte_hex(first)}{json_tree_byte_hex(second)}{json_tree_byte_hex(third)}")
+    if code <= 65535:
+        return ok("{json_tree_byte_hex(first)}{json_tree_byte_hex(second)}{json_tree_byte_hex(third)}")
+    if code <= 1114111:
+        int64 fourth_first = 240 + code / 262144
+        int64 fourth_second = 128 +((code / 4096) modulo 64)
+        int64 fourth_third = 128 +((code / 64) modulo 64)
+        int64 fourth = 128 +(code modulo 64)
+        return ok("{json_tree_byte_hex(fourth_first)}{json_tree_byte_hex(fourth_second)}{json_tree_byte_hex(fourth_third)}{json_tree_byte_hex(fourth)}")
+    return fail("unicode escape codepoint out of range")
 function json_tree_byte_hex(byte: int64) returns string:
     string high = json_stdlib_hex_digit(byte / 16)
     string low = json_stdlib_hex_digit(byte modulo 16)
     return "{high}{low}"
 function json_tree_is_surrogate_codepoint(code: int64) returns bool:
     return code >= 55296 and code <= 57343
+function json_tree_is_high_surrogate_codepoint(code: int64) returns bool:
+    return code >= 55296 and code <= 56319
+function json_tree_is_low_surrogate_codepoint(code: int64) returns bool:
+    return code >= 56320 and code <= 57343
 function json_tree_hex_digit_value(byte: int64) returns int64:
     if byte >= 48 and byte <= 57:
         return byte - 48
