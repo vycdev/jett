@@ -168,8 +168,10 @@ bridge spoofing, not helper visibility.
    - `json_serialize_reflected[T](view value: T)` exists in stdlib.
    - `json_serialize_public_reflected[T](view value: T)` exists in stdlib.
    - `json_decode_reflected[T](raw: JsonValue)` exists in stdlib.
-   - `json_parse_reflected[T](raw: string)` exists in stdlib as the raw-string
-     wrapper around `json.parse_raw` and the reflected decoder.
+   - `json_decode_tree_reflected[T](view raw: JsonTree)` exists in stdlib.
+   - `json_parse_reflected[T](raw: string)` now routes typed targets through the
+     self-hosted `JsonTree` parser/decoder, with a `JsonValue` carve-out for
+     the Rust-backed raw compatibility surface.
 3. Continue the public bridge handoff. `json.parse`, `json.serialize`, and
    `json.serialize_public` now use compiler-owned typechecker policy with
    stdlib-owned interpreter bodies. See `docs/json_public_bridge_handoff.md`.
@@ -178,12 +180,11 @@ bridge spoofing, not helper visibility.
 5. Keep broad bridge/parity tests before removing any Rust-backed fallback
    implementation paths. Done for the old typed public parse/serialize
    fallback; raw `JsonValue` primitives remain Rust-backed.
-6. Continue hardening the self-hosted `JsonTree` parser, then decide whether
-   `JsonValue` becomes a type alias/replacement or remains an opaque
-   compatibility substrate. The main parser gap is now broader
-   malformed-input diagnostics.
-7. Investigate the direct typed `JsonTree` decoder blocker before moving the
-   reflected decoder off `JsonValue`. See `docs/json_tree_decoder_blocker.md`.
+6. Continue hardening the self-hosted `JsonTree` parser. The main parser gap is
+   now broader malformed-input diagnostics.
+7. Decide whether `JsonValue` becomes a type alias/replacement or remains an
+   opaque compatibility substrate. Direct `JsonTree` typed decoding is staged;
+   see `docs/json_tree_decoder_blocker.md`.
 
 ## Recommended Shape For `stdlib/json.jett`
 
@@ -192,7 +193,7 @@ The eventual module should keep these layers distinct:
 - `quote(raw: string) returns string`
 - `serialize_value[T](view value: T) returns result[string, string]`
 - `serialize_public_value[T](view value: T) returns result[string, string]`
-- `decode_value[T](raw: JsonValue) returns result[T, string]`
+- `decode_value[T](view raw: JsonTree) returns result[T, string]`
 - `parse[T](raw: string) returns result[T, string]`
 
 The public API can return plain `string` for serialization only if the compiler

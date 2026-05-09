@@ -187,13 +187,12 @@ For replacing stringly kind checks with structured tags, see
 
 ### 2. Constructing `T` During `json.parse[T]`
 
-Deserialization currently has a Rust bridge that mirrors field access: given
+Deserialization now has a stdlib-shaped reflected path over `JsonTree`: given
 parsed field values, it builds `T` in declaration order while validating missing
 fields, `serialize` names, secret wrappers, optionals, results, refinements, and
-nested structs. Stdlib-shaped code can now build nested structs, bitfields, and
+nested structs. The same `TypeConstruction` path builds structs, bitfields, and
 enums with primitive, list/set/map, optional, result, alias, and refinement
-fields through `TypeConstruction`, but a full replacement still needs the
-remaining format policy.
+fields. Raw `JsonValue` parsing/access remains Rust-backed for compatibility.
 
 Refinement fields are validated at `construct_finish`; direct top-level
 refinement targets validate through the decoder's refinement branch.
@@ -204,11 +203,12 @@ Options:
   reflected field values.
 - Generated constructor code from a comptime `for field in type.fields[T]()` loop
   once the language can instantiate per-field type work.
-- Keep parse as a compiler intrinsic.
+- Keep parse as a compiler-checked policy facade over stdlib code.
 
-Recommendation: avoid a permanent JSON-specific intrinsic. A
-`type.construct[T]` or comptime-generated constructor path would also help CSV,
-binary formats, config loaders, and test data generation. See
+Recommendation: avoid a permanent JSON-specific implementation intrinsic. The
+compiler can keep owning policy checks while the body stays in stdlib code. A
+future `type.construct[T]` or comptime-generated constructor path would also
+help CSV, binary formats, config loaders, and test data generation. See
 `docs/type_construction_design.md` for the current options and staging plan.
 
 ### 3. JSON Map Keys
