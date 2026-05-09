@@ -5,7 +5,7 @@ toward stdlib `json.parse[T]`, not as a replacement for typed parsing.
 
 Long term, `JsonValue` should become a compatibility spelling for the native
 `JsonTree` representation rather than a separate Rust-backed tree. See
-`docs/json_value_transition_plan.md`.
+`/docs/active/json_value_transition_plan.md`.
 
 ## Current Primitive
 
@@ -104,7 +104,8 @@ For structs, bitfields, and enums, construction of the final `T` from typed
 field or payload values is now available through `TypeConstruction`. The nested
 decoder proof uses that path and treats absent optional fields as `none`; the
 remaining work is hardening the prototype into stdlib code. That is tracked in
-`docs/type_construction_design.md` and `docs/reflected_construction_staging.md`.
+`/docs/open_design/type_construction_design.md` and
+`/docs/completed/reflected_construction_staging.md`.
 The first flat and nested struct proofs live in
 `tests/run_pass/json_reflection_flat_decoder.jett` and
 `tests/run_pass/json_reflection_nested_decoder.jett`.

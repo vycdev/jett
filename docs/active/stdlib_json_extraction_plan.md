@@ -127,7 +127,7 @@ Moving JSON into `.jett` still needs the public API handoff:
   namespace/export registry.
 
 This is larger than JSON and should be staged carefully.
-See `docs/stdlib_visibility_design.md` for the current visibility and
+See `/docs/active/stdlib_visibility_design.md` for the current visibility and
 trusted-stdlib recommendation.
 
 ### 3. Builtin Policy Boundaries
@@ -174,7 +174,7 @@ bridge spoofing, not helper visibility.
      the Rust-backed raw compatibility surface.
 3. Continue the public bridge handoff. `json.parse`, `json.serialize`, and
    `json.serialize_public` now use compiler-owned typechecker policy with
-   stdlib-owned interpreter bodies. See `docs/json_public_bridge_handoff.md`.
+   stdlib-owned interpreter bodies. See `/docs/completed/json_public_bridge_handoff.md`.
 4. Keep the real public wrapper names in `namespace json`, while retaining
    compiler policy checks for secrets, `view`, map keys, and handled results.
 5. Keep broad bridge/parity tests before removing any Rust-backed fallback
@@ -187,9 +187,9 @@ bridge spoofing, not helper visibility.
    toward replacing the raw `JsonValue` compatibility surface.
 7. Decide whether `JsonValue` becomes a type alias/replacement or remains an
    opaque compatibility substrate. Direct `JsonTree` typed decoding is staged;
-   see `docs/json_tree_decoder_blocker.md`. Decision: `JsonValue` should become
+   see `/docs/completed/json_tree_decoder_blocker.md`. Decision: `JsonValue` should become
    a compatibility spelling for native `JsonTree`, not a permanent Rust-backed
-   tree. See `docs/json_value_transition_plan.md`.
+   tree. See `/docs/active/json_value_transition_plan.md`.
 
 ## Recommended Shape For `stdlib/json.jett`
 

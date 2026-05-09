@@ -131,16 +131,16 @@ constructor call.
 
 This is closest to Jett's principles. It is explicit, indentation-based,
 compile-time-specialized, and avoids opaque values. It also composes naturally
-with `docs/comptime_type_bind.md`.
+with `/docs/completed/comptime_type_bind.md`.
 
 Verdict: preferred direction, pending syntax.
 
 ## Recommended Staging
 
 1. Implement the trusted `comptime type Name = info:` binding from
-   `docs/comptime_type_bind.md`.
+   `/docs/completed/comptime_type_bind.md`.
 2. Done for structs: prototype the no-syntax opaque builder described in
-   `docs/reflected_construction_staging.md`, with `construct_put` returning
+   `/docs/completed/reflected_construction_staging.md`, with `construct_put` returning
    `result[TypeConstruction, string]` and `construct_finish` returning
    `result[T, string]`.
 3. Done for bitfields: reuse reflected `TypeField` values and validate bit
@@ -195,6 +195,6 @@ This keeps `type.construct` from becoming `json.construct` in disguise.
   probably ignore that policy and let each format module decide before calling
   construction.
 
-See `docs/reflected_construction_staging.md` for the current builder surface and
-`docs/type_construction_block_syntax.md` for the recommended long-term block
+See `/docs/completed/reflected_construction_staging.md` for the current builder surface and
+`/docs/open_design/type_construction_block_syntax.md` for the recommended long-term block
 syntax direction.

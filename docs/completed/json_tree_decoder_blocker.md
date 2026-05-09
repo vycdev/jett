@@ -66,4 +66,4 @@ The stable boundary is now:
   raw `JsonValue` parser.
 
 Long term, `JsonValue` should become a compatibility spelling for the native
-`JsonTree` representation. See `docs/json_value_transition_plan.md`.
+`JsonTree` representation. See `/docs/active/json_value_transition_plan.md`.

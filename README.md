@@ -144,12 +144,12 @@ editor/vscode/         VS Code extension
 
 ## Design Documents
 
+- [Docs index](docs/README.md)
 - [Language design](docs/design.md)
 - [Compiler architecture](docs/architecture.md)
 - [Implementation progress](docs/progress.md)
-- [JSON reflection plan](docs/json_reflection_plan.md)
-- [Type kind design](docs/type_kind_design.md)
-- [Reflected construction staging](docs/reflected_construction_staging.md)
+- [JsonValue to JsonTree transition](docs/active/json_value_transition_plan.md)
+- [JSON stdlib extraction plan](docs/active/stdlib_json_extraction_plan.md)
 
 ## Development Notes
 
