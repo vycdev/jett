@@ -182,6 +182,8 @@ bridge spoofing, not helper visibility.
    `JsonValue` becomes a type alias/replacement or remains an opaque
    compatibility substrate. Current parser gaps include non-ASCII unicode
    escape decoding and broader malformed-input diagnostics.
+7. Investigate the direct typed `JsonTree` decoder blocker before moving the
+   reflected decoder off `JsonValue`. See `docs/json_tree_decoder_blocker.md`.
 
 ## Recommended Shape For `stdlib/json.jett`
 
