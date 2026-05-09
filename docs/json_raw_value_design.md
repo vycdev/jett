@@ -39,12 +39,16 @@ enum JsonTree:
 ```
 
 `json.json_tree_serialize(value)` serializes that tree using the same string
-quoting helper as reflected typed serialization.
+quoting helper as reflected typed serialization. `json.json_tree_parse(raw)`
+now parses that staged tree shape for nulls, booleans, raw-number tokens,
+strings, arrays, and objects.
 
 This is intentionally staged alongside, not instead of, the opaque `JsonValue`
-primitive. `JsonTree` gives a future `.jett` parser a stdlib-owned target
+primitive. `JsonTree` gives the self-hosted parser a stdlib-owned target
 without breaking existing `json.parse_raw`, raw accessors, or the reflected
-decoder that currently walks `JsonValue`.
+decoder that currently walks `JsonValue`. The staged parser is not yet a full
+replacement for `json.parse_raw`; number validation and unicode escape decoding
+still need hardening before that handoff.
 
 ## Design Intent
 
@@ -102,3 +106,5 @@ The first flat and nested struct proofs live in
   non-copy value that raw accessors read by `view`?
 - Should `JsonTree.number_value` keep raw number text for round-tripping, or
   split into integer/float variants once numeric parsing is self-hosted?
+- Should unicode escape handling live in the parser itself or in a shared
+  string decoding helper used by JSON and future text formats?

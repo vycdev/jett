@@ -6,6 +6,13 @@ enum JsonTree:
     string_value(value: string)
     array_value(items: list[JsonTree])
     object_value(fields: map[string, JsonTree])
+struct JsonTreeScan:
+    depth: int64
+    in_string: bool
+    escaped: bool
+struct JsonTreeObjectField:
+    key: string
+    value: JsonTree
 function json_stdlib_hex_digit(value: int64) returns string:
     if value < 10:
         return "{value}"
@@ -60,12 +67,31 @@ function json_stdlib_quote(raw: string) returns string:
     return "\"{escaped}\""
 mutual:
     function json_tree_parse(raw: string) returns result[JsonTree, string]
+    function json_tree_parse_value(raw: string) returns result[JsonTree, string]
     function json_tree_parse_scalar(raw: string) returns result[JsonTree, string]
+    function json_tree_parse_array(raw: string) returns result[JsonTree, string]
+    function json_tree_parse_array_body(view input: bytes, start: int64, end: int64) returns result[list[JsonTree], string]
+    function json_tree_append_array_segment(view input: bytes, items: list[JsonTree], start: int64, end: int64) returns result[list[JsonTree], string]
+    function json_tree_parse_object(raw: string) returns result[JsonTree, string]
+    function json_tree_parse_object_body(view input: bytes, start: int64, end: int64) returns result[map[string, JsonTree], string]
+    function json_tree_insert_object_segment(view input: bytes, fields: map[string, JsonTree], start: int64, end: int64) returns result[map[string, JsonTree], string]
+    function json_tree_parse_object_field_span(view input: bytes, start: int64, end: int64) returns result[JsonTreeObjectField, string]
+    function json_tree_find_top_level_colon(view input: bytes, start: int64, end: int64) returns result[int64, string]
     function json_tree_parse_string(raw: string) returns result[string, string]
     function json_tree_is_quoted_string(view input: bytes, length: int64) returns bool
     function json_tree_parse_string_body(view input: bytes, end: int64) returns result[string, string]
     function json_tree_parse_string_escape_at(view input: bytes, index: int64, end: int64) returns result[string, string]
     function json_tree_escape_string(byte: int64) returns result[string, string]
+    function json_tree_has_delimiters(view input: bytes, length: int64, open_byte: int64, close_byte: int64) returns bool
+    function json_tree_span_to_trimmed_string(view input: bytes, start: int64, end: int64) returns result[string, string]
+    function json_tree_span_is_blank(view input: bytes, start: int64, end: int64) returns bool
+    function json_tree_is_whitespace_byte(byte: int64) returns bool
+    function json_tree_scan_start() returns JsonTreeScan
+    function json_tree_scan_is_separator(view scan: JsonTreeScan, byte: int64, separator: int64) returns bool
+    function json_tree_scan_step(view scan: JsonTreeScan, byte: int64) returns result[JsonTreeScan, string]
+    function json_tree_scan_step_string(view scan: JsonTreeScan, byte: int64) returns JsonTreeScan
+    function json_tree_scan_step_value(view scan: JsonTreeScan, byte: int64) returns result[JsonTreeScan, string]
+    function json_tree_finish_scan(view scan: JsonTreeScan) returns result[nothing, string]
     function json_tree_is_number_candidate(raw: string) returns bool
     function json_tree_is_digit_byte(byte: int64) returns bool
     function json_tree_is_number_byte(byte: int64) returns bool
@@ -103,9 +129,15 @@ function json_tree_parse(raw: string) returns result[JsonTree, string]:
     string trimmed = string.trim(raw)
     if trimmed == "":
         return fail("expected JSON value")
-    JsonTree value = json_tree_parse_scalar(trimmed) handle error:
+    JsonTree value = json_tree_parse_value(trimmed) handle error:
         return fail(error)
     return ok(value)
+function json_tree_parse_value(raw: string) returns result[JsonTree, string]:
+    if string.starts_with(raw, "[") == true:
+        return json_tree_parse_array(raw)
+    if string.starts_with(raw, "{{") == true:
+        return json_tree_parse_object(raw)
+    return json_tree_parse_scalar(raw)
 function json_tree_parse_scalar(raw: string) returns result[JsonTree, string]:
     if raw == "null":
         return ok(JsonTree.null)
@@ -120,6 +152,102 @@ function json_tree_parse_scalar(raw: string) returns result[JsonTree, string]:
     if json_tree_is_number_candidate(raw) == true:
         return ok(JsonTree.number_value(raw))
     return fail("expected JSON scalar")
+function json_tree_parse_array(raw: string) returns result[JsonTree, string]:
+    bytes input = bytes.from_string(raw)
+    int64 length = bytes.length(view input)
+    if json_tree_has_delimiters(view input, length, 91, 93) == false:
+        return fail("expected JSON array")
+    list[JsonTree] items = json_tree_parse_array_body(view input, 1, length - 1) handle error:
+        return fail(error)
+    return ok(JsonTree.array_value(items))
+function json_tree_parse_array_body(view input: bytes, start: int64, end: int64) returns result[list[JsonTree], string]:
+    mutable list[JsonTree] items = list.new[JsonTree]()
+    if json_tree_span_is_blank(view input, start, end) == true:
+        return ok(items)
+    mutable JsonTreeScan scan = json_tree_scan_start()
+    mutable int64 segment_start = start
+    mutable int64 index = start
+    while index < end:
+        int64 byte = bytes.get(view input, index) handle:
+            default -1
+        if json_tree_scan_is_separator(view scan, byte, 44) == true:
+            items = json_tree_append_array_segment(view input, items, segment_start, index) handle error:
+                return fail(error)
+            segment_start = index + 1
+        else:
+            scan = json_tree_scan_step(view scan, byte) handle error:
+                return fail(error)
+        index = index + 1
+    nothing checked = json_tree_finish_scan(view scan) handle error:
+        return fail(error)
+    return json_tree_append_array_segment(view input, items, segment_start, end)
+function json_tree_append_array_segment(view input: bytes, items: list[JsonTree], start: int64, end: int64) returns result[list[JsonTree], string]:
+    string raw = json_tree_span_to_trimmed_string(view input, start, end) handle error:
+        return fail(error)
+    if raw == "":
+        return fail("expected JSON value")
+    JsonTree item = json_tree_parse(raw) handle error:
+        return fail(error)
+    return ok(list.append[JsonTree](items, item))
+function json_tree_parse_object(raw: string) returns result[JsonTree, string]:
+    bytes input = bytes.from_string(raw)
+    int64 length = bytes.length(view input)
+    if json_tree_has_delimiters(view input, length, 123, 125) == false:
+        return fail("expected JSON object")
+    map[string, JsonTree] fields = json_tree_parse_object_body(view input, 1, length - 1) handle error:
+        return fail(error)
+    return ok(JsonTree.object_value(fields))
+function json_tree_parse_object_body(view input: bytes, start: int64, end: int64) returns result[map[string, JsonTree], string]:
+    mutable map[string, JsonTree] fields = map.new[string, JsonTree]()
+    if json_tree_span_is_blank(view input, start, end) == true:
+        return ok(fields)
+    mutable JsonTreeScan scan = json_tree_scan_start()
+    mutable int64 segment_start = start
+    mutable int64 index = start
+    while index < end:
+        int64 byte = bytes.get(view input, index) handle:
+            default -1
+        if json_tree_scan_is_separator(view scan, byte, 44) == true:
+            fields = json_tree_insert_object_segment(view input, fields, segment_start, index) handle error:
+                return fail(error)
+            segment_start = index + 1
+        else:
+            scan = json_tree_scan_step(view scan, byte) handle error:
+                return fail(error)
+        index = index + 1
+    nothing checked = json_tree_finish_scan(view scan) handle error:
+        return fail(error)
+    return json_tree_insert_object_segment(view input, fields, segment_start, end)
+function json_tree_insert_object_segment(view input: bytes, fields: map[string, JsonTree], start: int64, end: int64) returns result[map[string, JsonTree], string]:
+    JsonTreeObjectField field = json_tree_parse_object_field_span(view input, start, end) handle error:
+        return fail(error)
+    return ok(map.insert[string, JsonTree](fields, field.key, field.value))
+function json_tree_parse_object_field_span(view input: bytes, start: int64, end: int64) returns result[JsonTreeObjectField, string]:
+    int64 colon = json_tree_find_top_level_colon(view input, start, end) handle error:
+        return fail(error)
+    string raw_key = json_tree_span_to_trimmed_string(view input, start, colon) handle error:
+        return fail(error)
+    string key = json_tree_parse_string(raw_key) handle error:
+        return fail(error)
+    string raw_value = json_tree_span_to_trimmed_string(view input, colon + 1, end) handle error:
+        return fail(error)
+    if raw_value == "":
+        return fail("expected JSON value")
+    JsonTree value = json_tree_parse(raw_value) handle error:
+        return fail(error)
+    return ok(JsonTreeObjectField(key: key, value: value))
+function json_tree_find_top_level_colon(view input: bytes, start: int64, end: int64) returns result[int64, string]:
+    mutable JsonTreeScan scan = json_tree_scan_start()
+    mutable int64 index = start
+    while index < end:
+        int64 byte = bytes.get(view input, index) handle:
+            default -1
+        if json_tree_scan_is_separator(view scan, byte, 58) == true:
+            return ok(index)
+        scan = json_tree_scan_step(view scan, byte) handle error:
+            return fail(error)
+        index = index + 1
+    return fail("expected object field separator")
 function json_tree_parse_string(raw: string) returns result[string, string]:
     bytes input = bytes.from_string(raw)
     int64 length = bytes.length(view input)
@@ -179,6 +307,76 @@ function json_tree_escape_string(byte: int64) returns result[string, string]:
     if byte == 117:
         return fail("unicode escapes are not supported yet")
     return fail("unsupported JSON string escape")
+function json_tree_has_delimiters(view input: bytes, length: int64, open_byte: int64, close_byte: int64) returns bool:
+    if length < 2:
+        return false
+    int64 first = bytes.get(view input, 0) handle:
+        default -1
+    int64 last = bytes.get(view input, length - 1) handle:
+        default -1
+    if first != open_byte:
+        return false
+    return last == close_byte
+function json_tree_span_to_trimmed_string(view input: bytes, start: int64, end: int64) returns result[string, string]:
+    bytes raw = bytes.slice(view input, start, end)
+    string text = bytes.to_string(raw) handle error:
+        return fail(error)
+    return ok(string.trim(text))
+function json_tree_span_is_blank(view input: bytes, start: int64, end: int64) returns bool:
+    mutable int64 index = start
+    while index < end:
+        int64 byte = bytes.get(view input, index) handle:
+            default -1
+        if json_tree_is_whitespace_byte(byte) == false:
+            return false
+        index = index + 1
+    return true
+function json_tree_is_whitespace_byte(byte: int64) returns bool:
+    if byte == 32:
+        return true
+    if byte == 10:
+        return true
+    if byte == 13:
+        return true
+    if byte == 9:
+        return true
+    return false
+function json_tree_scan_start() returns JsonTreeScan:
+    return JsonTreeScan(depth: 0, in_string: false, escaped: false)
+function json_tree_scan_is_separator(view scan: JsonTreeScan, byte: int64, separator: int64) returns bool:
+    if scan.in_string == true:
+        return false
+    if scan.depth != 0:
+        return false
+    return byte == separator
+function json_tree_scan_step(view scan: JsonTreeScan, byte: int64) returns result[JsonTreeScan, string]:
+    if scan.in_string == true:
+        return ok(json_tree_scan_step_string(view scan, byte))
+    return json_tree_scan_step_value(view scan, byte)
+function json_tree_scan_step_string(view scan: JsonTreeScan, byte: int64) returns JsonTreeScan:
+    if scan.escaped == true:
+        return JsonTreeScan(depth: scan.depth, in_string: true, escaped: false)
+    if byte == 92:
+        return JsonTreeScan(depth: scan.depth, in_string: true, escaped: true)
+    if byte == 34:
+        return JsonTreeScan(depth: scan.depth, in_string: false, escaped: false)
+    return JsonTreeScan(depth: scan.depth, in_string: scan.in_string, escaped: scan.escaped)
+function json_tree_scan_step_value(view scan: JsonTreeScan, byte: int64) returns result[JsonTreeScan, string]:
+    if byte == 34:
+        return ok(JsonTreeScan(depth: scan.depth, in_string: true, escaped: false))
+    if byte == 91 or byte == 123:
+        return ok(JsonTreeScan(depth: scan.depth + 1, in_string: false, escaped: false))
+    if byte == 93 or byte == 125:
+        if scan.depth == 0:
+            return fail("unexpected closing delimiter in JSON value")
+        return ok(JsonTreeScan(depth: scan.depth - 1, in_string: false, escaped: false))
+    return ok(JsonTreeScan(depth: scan.depth, in_string: scan.in_string, escaped: scan.escaped))
+function json_tree_finish_scan(view scan: JsonTreeScan) returns result[nothing, string]:
+    if scan.in_string == true:
+        return fail("unterminated string in JSON value")
+    if scan.depth != 0:
+        return fail("unterminated nested JSON value")
+    return ok(nothing)
 function json_tree_is_number_candidate(raw: string) returns bool:
     bytes input = bytes.from_string(raw)
     int64 length = bytes.length(view input)
