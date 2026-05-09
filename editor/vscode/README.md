@@ -1,63 +1,77 @@
-# Jett Language — VS Code Extension
+# Jett Language - VS Code Extension
 
-Syntax highlighting for the [Jett programming language](https://github.com/your-repo/jett).
+Syntax highlighting for the [Jett programming language](https://github.com/vycdev/jett).
 
 ## Features
 
-- Syntax highlighting for all Jett keywords, types, operators, strings, numbers, and comments
+- Syntax highlighting for Jett keywords, types, operators, strings, numbers, and comments
 - String interpolation support (`"hello {name}"`)
+- Richer scopes for custom types, function calls, generic type arguments, parameters, fields, and enum members
+- Optional theme-aware Jett file icons for `.jett` files
 - Auto-closing pairs for parentheses, brackets, braces, and quotes
 - Comment toggling with `#`
 - Indentation rules for colon-terminated blocks
 
-## Installation
+## Build a VSIX
 
-### Option 1: Copy to extensions directory
+From the repository root:
 
-Copy the entire `editor/vscode/` folder to your VS Code extensions directory:
+```sh
+cd editor/vscode
+npm install
+npm run package
+```
+
+This creates `jett-lang-0.1.2.vsix` in this directory.
+
+If `vsce` is already installed globally, you can also run:
+
+```sh
+vsce package
+```
+
+## Install
+
+Install the packaged extension with:
+
+```sh
+code --install-extension jett-lang-0.1.2.vsix
+```
+
+Then reload any open VS Code windows.
+
+To use the bundled file icon, open **File: Preferences: File Icon Theme** from the command palette and select **Jett File Icons**. The icon theme uses the dark logo in dark themes and the light logo in light themes.
+
+## Development Install
+
+For extension development, copy or symlink this folder into your VS Code extensions directory.
 
 **Linux / macOS:**
+
 ```sh
 mkdir -p ~/.vscode/extensions/jett-lang
 cp -r . ~/.vscode/extensions/jett-lang/
 ```
 
 **Windows:**
+
 ```powershell
 Copy-Item -Recurse . "$env:USERPROFILE\.vscode\extensions\jett-lang"
 ```
 
-Then restart VS Code.
+For a live development symlink on Windows, run PowerShell as Administrator:
 
-### Option 2: Symbolic link (for development)
-
-Create a symbolic link so changes to the source are reflected immediately:
-
-**Linux / macOS:**
-```sh
-ln -s "$(pwd)" ~/.vscode/extensions/jett-lang
-```
-
-**Windows (run as Administrator):**
 ```powershell
 New-Item -ItemType SymbolicLink -Path "$env:USERPROFILE\.vscode\extensions\jett-lang" -Target (Get-Location)
 ```
 
 Then restart VS Code or run **Developer: Reload Window**.
 
-### Option 3: Install from VSIX
-
-If a `.vsix` package is available:
-
-```sh
-code --install-extension jett-lang-0.1.0.vsix
-```
-
-## Supported file extensions
+## Supported File Extensions
 
 - `.jett`
 
-## Highlighted elements
+## Highlighted Elements
 
 | Element | Scope | Example |
 |---|---|---|

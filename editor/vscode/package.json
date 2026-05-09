@@ -2,13 +2,37 @@
     "name": "jett-lang",
     "displayName": "Jett Language",
     "description": "Syntax highlighting for the Jett programming language",
-    "version": "0.1.0",
+    "version": "0.1.2",
+    "publisher": "vycdev",
+    "icon": "images/file_logo.png",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/vycdev/jett.git",
+        "directory": "editor/vscode"
+    },
+    "bugs": {
+        "url": "https://github.com/vycdev/jett/issues"
+    },
+    "homepage": "https://github.com/vycdev/jett/tree/main/editor/vscode",
     "engines": {
         "vscode": "^1.70.0"
     },
     "categories": [
         "Programming Languages"
     ],
+    "keywords": [
+        "jett",
+        "language",
+        "syntax",
+        "highlighting"
+    ],
+    "scripts": {
+        "package": "vsce package",
+        "list": "vsce ls"
+    },
+    "devDependencies": {
+        "@vscode/vsce": "^2.15.0"
+    },
     "contributes": {
         "languages": [
             {
@@ -20,6 +44,10 @@
                 "extensions": [
                     ".jett"
                 ],
+                "icon": {
+                    "light": "./images/file_logo_light.png",
+                    "dark": "./images/file_logo_dark.png"
+                },
                 "configuration": "./language-configuration.json"
             }
         ],
@@ -28,6 +56,13 @@
                 "language": "jett",
                 "scopeName": "source.jett",
                 "path": "./syntaxes/jett.tmLanguage.json"
+            }
+        ],
+        "iconThemes": [
+            {
+                "id": "jett-file-icons",
+                "label": "Jett File Icons",
+                "path": "./icons/jett-icon-theme.json"
             }
         ]
     }

@@ -1,0 +1,24 @@
+{
+    "iconDefinitions": {
+        "_jett_dark": {
+            "iconPath": "../images/file_logo_dark.png"
+        },
+        "_jett_light": {
+            "iconPath": "../images/file_logo_light.png"
+        }
+    },
+    "fileExtensions": {
+        "jett": "_jett_dark"
+    },
+    "languageIds": {
+        "jett": "_jett_dark"
+    },
+    "light": {
+        "fileExtensions": {
+            "jett": "_jett_light"
+        },
+        "languageIds": {
+            "jett": "_jett_light"
+        }
+    }
+}
