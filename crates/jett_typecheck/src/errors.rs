@@ -564,3 +564,53 @@ pub fn invalid_comptime_type_binding(span: Span) -> Diagnostic {
         span,
     )
 }
+
+// Diagnostic codes E0800-E0899 are reserved for function complexity limits.
+
+/// E0800: Function body exceeds the statement count limit.
+pub fn function_statement_limit(
+    function_name: &str,
+    current: usize,
+    max: usize,
+    span: Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        800,
+        format!(
+            "function `{function_name}` exceeds the statement limit: {current} statement(s), max {max}"
+        ),
+        span,
+    )
+}
+
+/// E0801: Function body exceeds the nesting depth limit.
+pub fn function_nesting_depth_limit(
+    function_name: &str,
+    current: usize,
+    max: usize,
+    span: Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        801,
+        format!(
+            "function `{function_name}` exceeds the nesting depth limit: depth {current}, max {max}"
+        ),
+        span,
+    )
+}
+
+/// E0802: Function body exceeds the cyclomatic complexity limit.
+pub fn function_cyclomatic_complexity_limit(
+    function_name: &str,
+    current: usize,
+    max: usize,
+    span: Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        802,
+        format!(
+            "function `{function_name}` exceeds the cyclomatic complexity limit: complexity {current}, max {max}"
+        ),
+        span,
+    )
+}

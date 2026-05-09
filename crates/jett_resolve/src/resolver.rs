@@ -501,11 +501,24 @@ impl Resolver {
     // ------------------------------------------------------------------
 
     fn resolve_function_decl(&mut self, decl: &FunctionDecl, item_index: usize) {
+        // Generic mutual/interface declarations need the same type-parameter
+        // scope as full generic function definitions.
+        let added_params: Vec<String> = decl
+            .type_params
+            .iter()
+            .filter(|p| self.active_type_params.insert(p.name.clone()))
+            .map(|p| p.name.clone())
+            .collect();
+
         for param in &decl.params {
             self.resolve_type_expr(&param.ty, item_index);
         }
         if let Some(return_type) = &decl.return_type {
             self.resolve_type_expr(return_type, item_index);
+        }
+
+        for param in added_params {
+            self.active_type_params.remove(&param);
         }
     }
 

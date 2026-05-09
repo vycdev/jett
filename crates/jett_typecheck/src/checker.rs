@@ -34,10 +34,13 @@ pub fn check(module: &Module, resolve: &ResolveResult) -> CheckResult {
     let mut checker = TypeChecker::new(resolve);
     checker.check_module(module);
 
+    let complexity_diagnostics = crate::complexity::check_complexity(module);
+
     // Run ownership analysis (linear type checking) after type checking.
     let ownership_diagnostics = crate::ownership::check_ownership(module, &checker.interner);
 
     let mut diagnostics = checker.sink.into_diagnostics();
+    diagnostics.extend(complexity_diagnostics);
     diagnostics.extend(ownership_diagnostics);
 
     CheckResult {
@@ -2068,16 +2071,23 @@ impl<'a> TypeChecker<'a> {
             match item {
                 Item::Mutual(block) => {
                     for decl in &block.declarations {
-                        self.register_function_decl_sig(decl);
                         let is_pure = Self::params_are_pure(&decl.params);
-                        let signature = self.function_decl_signature(decl);
                         for name in Self::function_lookup_names(
                             current_namespace.as_deref(),
                             &decl.name.name,
                         ) {
-                            self.function_signatures
-                                .insert(name.clone(), signature.clone());
                             self.purity_map.insert(name, is_pure);
+                        }
+
+                        if decl.type_params.is_empty() {
+                            self.register_function_decl_sig(decl);
+                            let signature = self.function_decl_signature(decl);
+                            for name in Self::function_lookup_names(
+                                current_namespace.as_deref(),
+                                &decl.name.name,
+                            ) {
+                                self.function_signatures.insert(name, signature.clone());
+                            }
                         }
                     }
                 }
@@ -3012,6 +3022,10 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn function_matches_decl(&mut self, func: &FunctionDef, decl: &ast::FunctionDecl) -> bool {
+        if !func.type_params.is_empty() || !decl.type_params.is_empty() {
+            return Self::generic_function_matches_decl(func, decl);
+        }
+
         if func.params.len() != decl.params.len() {
             return false;
         }
@@ -3045,6 +3059,102 @@ impl<'a> TypeChecker<'a> {
 
         self.types_compatible(decl_return, func_return)
             && self.types_compatible(func_return, decl_return)
+    }
+
+    fn generic_function_matches_decl(func: &FunctionDef, decl: &ast::FunctionDecl) -> bool {
+        if func.type_params.len() != decl.type_params.len()
+            || func.params.len() != decl.params.len()
+        {
+            return false;
+        }
+
+        let type_params: HashMap<String, String> = decl
+            .type_params
+            .iter()
+            .zip(func.type_params.iter())
+            .map(|(decl_param, func_param)| (decl_param.name.clone(), func_param.name.clone()))
+            .collect();
+
+        for (func_param, decl_param) in func.params.iter().zip(decl.params.iter()) {
+            if func_param.name.name != decl_param.name.name
+                || func_param.view != decl_param.view
+                || func_param.mutable != decl_param.mutable
+                || !Self::type_expr_matches_decl(&func_param.ty, &decl_param.ty, &type_params)
+            {
+                return false;
+            }
+        }
+
+        Self::return_type_matches_decl(
+            func.return_type.as_ref(),
+            decl.return_type.as_ref(),
+            &type_params,
+        )
+    }
+
+    fn return_type_matches_decl(
+        func_ty: Option<&TypeExpr>,
+        decl_ty: Option<&TypeExpr>,
+        type_params: &HashMap<String, String>,
+    ) -> bool {
+        match (func_ty, decl_ty) {
+            (None, None) => true,
+            (Some(func_ty), Some(decl_ty)) => {
+                Self::type_expr_matches_decl(func_ty, decl_ty, type_params)
+            }
+            (None, Some(decl_ty)) => Self::type_expr_is_nothing(decl_ty),
+            (Some(func_ty), None) => Self::type_expr_is_nothing(func_ty),
+        }
+    }
+
+    fn type_expr_is_nothing(ty: &TypeExpr) -> bool {
+        matches!(ty, TypeExpr::Named(name) if name.name == "nothing")
+    }
+
+    fn type_expr_matches_decl(
+        func_ty: &TypeExpr,
+        decl_ty: &TypeExpr,
+        type_params: &HashMap<String, String>,
+    ) -> bool {
+        match (func_ty, decl_ty) {
+            (TypeExpr::Named(func_name), TypeExpr::Named(decl_name)) => {
+                if let Some(expected_func_name) = type_params.get(&decl_name.name) {
+                    func_name.name == *expected_func_name
+                } else {
+                    func_name.name == decl_name.name
+                }
+            }
+            (
+                TypeExpr::Generic(func_name, func_args, _),
+                TypeExpr::Generic(decl_name, decl_args, _),
+            ) => {
+                func_name.name == decl_name.name
+                    && func_args.len() == decl_args.len()
+                    && func_args
+                        .iter()
+                        .zip(decl_args.iter())
+                        .all(|(func_arg, decl_arg)| {
+                            Self::type_expr_matches_decl(func_arg, decl_arg, type_params)
+                        })
+            }
+            (TypeExpr::View(func_inner, _), TypeExpr::View(decl_inner, _)) => {
+                Self::type_expr_matches_decl(func_inner, decl_inner, type_params)
+            }
+            (
+                TypeExpr::Function(func_params, func_return, _),
+                TypeExpr::Function(decl_params, decl_return, _),
+            ) => {
+                func_params.len() == decl_params.len()
+                    && func_params
+                        .iter()
+                        .zip(decl_params.iter())
+                        .all(|(func_param, decl_param)| {
+                            Self::type_expr_matches_decl(func_param, decl_param, type_params)
+                        })
+                    && Self::type_expr_matches_decl(func_return, decl_return, type_params)
+            }
+            _ => false,
+        }
     }
 
     // ------------------------------------------------------------------

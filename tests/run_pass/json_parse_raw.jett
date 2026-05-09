@@ -1,16 +1,16 @@
 namespace test
 
-function raw_summary() returns string:
-    JsonValue root = json.parse_raw("{{\"user\":{{\"name\":\"Ada\",\"scores\":[3,5],\"active\":true,\"missing\":null}},\"version\":1}}") handle error:
-        return error
-
+function raw_user_name(root: JsonValue) returns string:
     JsonValue user = json.field(root, "user") handle:
         return "missing user"
     JsonValue name_raw = json.field(user, "name") handle:
         return "missing name"
-    string name = json.as_string(name_raw) handle error:
-        return error
+    return json.as_string(name_raw) handle error:
+        default error
 
+function raw_user_score_summary(root: JsonValue) returns string:
+    JsonValue user = json.field(root, "user") handle:
+        return "missing user"
     JsonValue scores = json.field(user, "scores") handle:
         return "missing scores"
     int64 score_count = json.array_length(scores) handle error:
@@ -19,18 +19,32 @@ function raw_summary() returns string:
         return "missing score"
     int64 score = json.as_int64(second_score) handle error:
         return error
+    return "{score_count}:{score}"
 
+function raw_user_active(root: JsonValue) returns bool:
+    JsonValue user = json.field(root, "user") handle:
+        return false
     JsonValue active_raw = json.field(user, "active") handle:
-        return "missing active"
-    bool active = json.as_bool(active_raw) handle error:
-        return error
+        return false
+    return json.as_bool(active_raw) handle error:
+        default false
 
+function raw_user_missing_is_null(root: JsonValue) returns bool:
+    JsonValue user = json.field(root, "user") handle:
+        return false
     JsonValue missing_raw = json.field(user, "missing") handle:
-        return "missing null"
-    if json.is_null(missing_raw) == false:
-        return "not null"
+        return false
+    return json.is_null(missing_raw)
 
-    return "{name}:{score_count}:{score}:{active}"
+function raw_summary() returns string:
+    JsonValue root = json.parse_raw("{{\"user\":{{\"name\":\"Ada\",\"scores\":[3,5],\"active\":true,\"missing\":null}},\"version\":1}}") handle error:
+        return error
+    string name = raw_user_name(root)
+    string score = raw_user_score_summary(root)
+    bool active = raw_user_active(root)
+    if raw_user_missing_is_null(root) == false:
+        return "not null"
+    return "{name}:{score}:{active}"
 
 function raw_object_keys() returns int64:
     JsonValue root = json.parse_raw("{{\"user\":{{\"name\":\"Ada\"}},\"version\":1}}") handle error:

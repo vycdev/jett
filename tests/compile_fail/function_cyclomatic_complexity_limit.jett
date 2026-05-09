@@ -1,0 +1,23 @@
+# ERROR: E0802
+function too_complex(flag: bool) returns int64:
+    if flag:
+        return 1
+    if flag:
+        return 2
+    if flag:
+        return 3
+    if flag:
+        return 4
+    if flag:
+        return 5
+    if flag:
+        return 6
+    if flag:
+        return 7
+    if flag:
+        return 8
+    if flag:
+        return 9
+    if flag:
+        return 10
+    return 0

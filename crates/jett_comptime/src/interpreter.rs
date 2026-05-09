@@ -3340,7 +3340,10 @@ impl Interpreter {
         })?;
         let expected_type_name = type_expr_display(&binding.ty);
         if index != binding.index || name != binding.name || type_name != expected_type_name {
-            return Err("`comptime type` reflected field metadata no longer matches the trusted `type.fields[T]()` loop item".to_string());
+            return Err(format!(
+                "`comptime type` reflected field metadata no longer matches the trusted `type.fields[T]()` loop item (expected #{} {}: {}, got #{} {}: {})",
+                binding.index, binding.name, expected_type_name, index, name, type_name
+            ));
         }
         Ok(Some(self.substitute_type_expr(&binding.ty)))
     }
@@ -7203,6 +7206,10 @@ impl Interpreter {
         type_args: &[TypeExpr],
         args: Vec<Value>,
     ) -> Result<Value, String> {
+        if self.is_stdlib_internal_function(name) {
+            return self.call_user_function_with_type_args(name, type_args, args);
+        }
+
         // Check higher-order built-ins first (require &mut self).
         if let Some(result) = self.call_higher_order_builtin(name, args.clone()) {
             return result;
@@ -7216,6 +7223,10 @@ impl Interpreter {
         }
 
         self.call_user_function_with_type_args(name, type_args, args)
+    }
+
+    fn is_stdlib_internal_function(&self, name: &str) -> bool {
+        name.starts_with("json.json_") && self.functions.contains_key(name)
     }
 
     fn call_user_function_with_type_args(

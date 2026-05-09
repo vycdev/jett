@@ -13,6 +13,7 @@ use crate::value::Value;
 
 const PROPERTY_DEFAULT_ITERATIONS: usize = 100;
 const SHRINK_MAX_STEPS: usize = 50;
+const VERIFY_STACK_SIZE: usize = 8 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // Error type
@@ -88,6 +89,21 @@ pub fn run_verify_blocks(module: &Module) -> Vec<Diagnostic> {
 /// Run all verify blocks and return structured results.  Used by the
 /// `jett test` command for per-block reporting.
 pub fn run_verify_blocks_detailed(module: &Module) -> Vec<VerifyResult> {
+    let module_for_thread = module.clone();
+    match std::thread::Builder::new()
+        .name("jett-verify".to_string())
+        .stack_size(VERIFY_STACK_SIZE)
+        .spawn(move || run_verify_blocks_detailed_inner(&module_for_thread))
+    {
+        Ok(handle) => match handle.join() {
+            Ok(results) => results,
+            Err(payload) => std::panic::resume_unwind(payload),
+        },
+        Err(_) => run_verify_blocks_detailed_inner(module),
+    }
+}
+
+fn run_verify_blocks_detailed_inner(module: &Module) -> Vec<VerifyResult> {
     let mut interp = Interpreter::new();
     let mut results = Vec::new();
 

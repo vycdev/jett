@@ -331,6 +331,18 @@ compile_fail_fixture!(compile_fail_unhandled_optional, "unhandled_optional.jett"
 compile_fail_fixture!(compile_fail_trace_unknown, "trace_unknown.jett");
 compile_fail_fixture!(compile_fail_unknown_type, "unknown_type.jett");
 compile_fail_fixture!(
+    compile_fail_function_statement_limit,
+    "function_statement_limit.jett"
+);
+compile_fail_fixture!(
+    compile_fail_function_nesting_depth_limit,
+    "function_nesting_depth_limit.jett"
+);
+compile_fail_fixture!(
+    compile_fail_function_cyclomatic_complexity_limit,
+    "function_cyclomatic_complexity_limit.jett"
+);
+compile_fail_fixture!(
     compile_fail_namespace_use_alias_unknown_target,
     "namespace_use_alias_unknown_target.jett"
 );

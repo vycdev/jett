@@ -175,20 +175,25 @@ function complex_field_arg_kind(field_name: string, target: int64) returns strin
                 index = index + 1
     return found
 
+function nested_arg_kind_from_info(info: TypeInfo, outer_target: int64, inner_target: int64) returns string:
+    string found = "missing"
+    int64 outer_index = 0
+    for outer in info.args:
+        if outer_index == outer_target:
+            int64 inner_index = 0
+            for inner in outer.args:
+                if inner_index == inner_target:
+                    found = inner.kind
+                inner_index = inner_index + 1
+        outer_index = outer_index + 1
+    return found
+
 function complex_field_nested_arg_kind(field_name: string, outer_target: int64, inner_target: int64) returns string:
     list[TypeField] fields = type.fields[Complex]()
     string found = "missing"
     for field in fields:
         if field.name == field_name:
-            int64 outer_index = 0
-            for outer in field.type_info.args:
-                if outer_index == outer_target:
-                    int64 inner_index = 0
-                    for inner in outer.args:
-                        if inner_index == inner_target:
-                            found = inner.kind
-                        inner_index = inner_index + 1
-                outer_index = outer_index + 1
+            found = nested_arg_kind_from_info(field.type_info, outer_target, inner_target)
     return found
 
 function complex_field_type_info_secret(field_name: string) returns bool:

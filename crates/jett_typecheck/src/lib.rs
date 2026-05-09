@@ -2,6 +2,7 @@
 
 pub mod capability;
 pub mod checker;
+pub mod complexity;
 pub mod errors;
 pub mod ownership;
 
