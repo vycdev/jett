@@ -1,0 +1,31 @@
+namespace test
+
+function sample_tree() returns json.JsonTree:
+    mutable list[json.JsonTree] items = list.new[json.JsonTree]()
+    items = list.append[json.JsonTree](items, json.JsonTree.number_value("3"))
+    items = list.append[json.JsonTree](items, json.JsonTree.bool_value(true))
+    items = list.append[json.JsonTree](items, json.JsonTree.null)
+
+    mutable map[string, json.JsonTree] fields = map.new[string, json.JsonTree]()
+    fields = map.insert[string, json.JsonTree](fields, "name", json.JsonTree.string_value("Ada"))
+    fields = map.insert[string, json.JsonTree](fields, "items", json.JsonTree.array_value(items))
+    fields = map.insert[string, json.JsonTree](fields, "quote", json.JsonTree.string_value("line\nnext"))
+    return json.JsonTree.object_value(fields)
+
+function json_tree_summary() returns string:
+    json.JsonTree tree = sample_tree()
+    return json.json_tree_serialize(tree)
+
+function json_tree_roundtrip_through_raw() returns bool:
+    string raw = json_tree_summary()
+    JsonValue parsed = json.parse_raw(raw) handle error:
+        return false
+    JsonValue name = json.field(parsed, "name") handle:
+        return false
+    string decoded = json.as_string(name) handle error:
+        return false
+    return decoded == "Ada"
+
+verify json_tree_value:
+    assert json_tree_summary() == "{{\"name\":\"Ada\",\"items\":[3,true,null],\"quote\":\"line\\nnext\"}}"
+    assert json_tree_roundtrip_through_raw() == true

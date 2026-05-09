@@ -24,6 +24,28 @@ Implemented accessors:
 - `json.as_string`, `json.as_int64`, `json.as_float64`, and `json.as_bool`
   return typed `result` values.
 
+## Stdlib Tree Staging
+
+`stdlib/json.jett` also defines a first self-hosted raw tree shape:
+
+```jett
+enum JsonTree:
+    null
+    bool_value(value: bool)
+    number_value(raw: string)
+    string_value(value: string)
+    array_value(items: list[JsonTree])
+    object_value(fields: map[string, JsonTree])
+```
+
+`json.json_tree_serialize(value)` serializes that tree using the same string
+quoting helper as reflected typed serialization.
+
+This is intentionally staged alongside, not instead of, the opaque `JsonValue`
+primitive. `JsonTree` gives a future `.jett` parser a stdlib-owned target
+without breaking existing `json.parse_raw`, raw accessors, or the reflected
+decoder that currently walks `JsonValue`.
+
 ## Design Intent
 
 Raw JSON values are format data, not reflected Jett values. They should help a
@@ -78,3 +100,5 @@ The first flat and nested struct proofs live in
   string]` to distinguish wrong-shape access from ordinary absence?
 - Should `JsonValue` stay copyable for ergonomics, or eventually become a
   non-copy value that raw accessors read by `view`?
+- Should `JsonTree.number_value` keep raw number text for round-tripping, or
+  split into integer/float variants once numeric parsing is self-hosted?

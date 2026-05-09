@@ -1,5 +1,13 @@
 namespace json
 
+enum JsonTree:
+    null
+    bool_value(value: bool)
+    number_value(raw: string)
+    string_value(value: string)
+    array_value(items: list[JsonTree])
+    object_value(fields: map[string, JsonTree])
+
 function json_stdlib_hex_digit(value: int64) returns string:
     if value < 10:
         return "{value}"
@@ -56,6 +64,9 @@ function json_stdlib_quote(raw: string) returns string:
     return "\"{escaped}\""
 
 mutual:
+    function json_tree_serialize(value: JsonTree) returns string
+    function json_tree_serialize_array(items: list[JsonTree]) returns string
+    function json_tree_serialize_object(fields: map[string, JsonTree]) returns string
     function json_serialize_public_reflected[T](view value: T) returns string
     function json_serialize_public_primitive[T](view value: T, primitive: TypePrimitive) returns string
     function json_serialize_public_enum_reflected[T](view value: T) returns string
@@ -82,6 +93,36 @@ mutual:
     function json_decode_enum_payload_reflected[T](payload: JsonValue, type_name: string, variant_name: string, payload_count: int64) returns result[T, string]
     function json_missing_field_reflected(view field: TypeField, owner_name: string) returns result[JsonValue, string]
     function json_decode_record_reflected[T](raw: JsonValue, type_name: string) returns result[T, string]
+
+function json_tree_serialize(value: JsonTree) returns string:
+    match value:
+        null:
+            return "null"
+        bool_value(item):
+            return "{item}"
+        number_value(raw):
+            return raw
+        string_value(item):
+            return json_stdlib_quote(item)
+        array_value(items):
+            return json_tree_serialize_array(items)
+        object_value(fields):
+            return json_tree_serialize_object(fields)
+
+function json_tree_serialize_array(items: list[JsonTree]) returns string:
+    mutable list[string] parts = list.new[string]()
+    for item in items:
+        parts = list.append[string](parts, json_tree_serialize(item))
+    string body = string.join(parts, ",")
+    return "[{body}]"
+
+function json_tree_serialize_object(fields: map[string, JsonTree]) returns string:
+    mutable list[string] parts = list.new[string]()
+    for key, item in fields:
+        string encoded = json_tree_serialize(item)
+        parts = list.append[string](parts, "{json_stdlib_quote(key)}:{encoded}")
+    string body = string.join(parts, ",")
+    return "{{{body}}}"
 
 function json_serialize_public_reflected[T](view value: T) returns string:
     TypeInfo info = type.info[T]()

@@ -42,6 +42,8 @@ The reflected JSON implementation has started moving into stdlib under the
 `json` namespace. Prefixed hook names hold the implementation bodies:
 
 - `stdlib/json.jett`
+- `JsonTree` as a first self-hosted raw JSON tree representation
+- `json_tree_serialize(value: JsonTree)`
 - `json_serialize_reflected[T](view value)`
 - `json_serialize_public_reflected[T](view value)`
 - `json_decode_reflected[T](raw: JsonValue)`
@@ -74,6 +76,8 @@ Together they cover the shape needed for a future stdlib module:
 - missing optional defaults,
 - public secret omission for the serializer prototype,
 - all-control-character JSON string escaping in `.jett`.
+- self-hosted `JsonTree` construction and serialization for the future raw
+  parser target.
 - bridge checks that keep the reflected prototypes aligned with the public JSON
   facade for representative full serialization, public serialization, and
   typed parse.
@@ -171,6 +175,9 @@ bridge spoofing, not helper visibility.
 5. Keep broad bridge/parity tests before removing any Rust-backed fallback
    implementation paths. Done for the old typed public parse/serialize
    fallback; raw `JsonValue` primitives remain Rust-backed.
+6. Grow the self-hosted `JsonTree` parser in small pieces, then decide whether
+   `JsonValue` becomes a type alias/replacement or remains an opaque
+   compatibility substrate.
 
 ## Recommended Shape For `stdlib/json.jett`
 
