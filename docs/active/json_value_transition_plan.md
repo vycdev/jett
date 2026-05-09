@@ -39,13 +39,11 @@ about: two names, two traversal surfaces, one conceptual data model.
 - Public typed `json.parse[T]` now routes through `JsonTree`, except
   `json.parse[JsonValue]`.
 - `json.parse_raw` keeps its public `JsonValue` signature but delegates to the
-  trusted stdlib `json_tree_parse` hook when bundled stdlib is loaded.
+  trusted stdlib `json_tree_parse` hook.
 - `json.serialize_raw`, `json.kind`, `json.field`, `json.index`, scalar casts,
-  `json.array_length`, and `json.object_keys` delegate native `JsonTree`
-  runtime values to trusted stdlib `json_tree_*` hooks while preserving the
-  existing Rust-backed fallback for old `Value::Json` values.
-- The comptime interpreter still has `Value::Json(serde_json::Value)` as a
-  bootstrap/compatibility fallback.
+  `json.array_length`, and `json.object_keys` dispatch native `JsonTree`
+  runtime values through trusted stdlib `json_tree_*` hooks.
+- `jett_comptime` no longer has `Value::Json` or a `serde_json` dependency.
 - The type system still treats `JsonValue` as a built-in primitive.
 
 ## Compatibility Principle
@@ -131,25 +129,18 @@ delegate to trusted stdlib functions where possible:
 At this stage the typechecker may still say the parameter/return type is
 `JsonValue`, but the interpreter should hold a native tree value.
 
-Status: first pass implemented. The interpreter delegates `json.parse_raw` to
-trusted `json.json_tree_parse`, and raw helpers dispatch native `JsonTree`
-values through trusted `json.json_tree_*` hooks. The serde-backed `Value::Json`
-path remains as a fallback until the runtime representation is fully replaced.
+Status: implemented. The interpreter delegates `json.parse_raw` to trusted
+`json.json_tree_parse`, and raw helpers dispatch native `JsonTree` values
+through trusted `json.json_tree_*` hooks.
 
 ### 3. Change Runtime Representation
 
-Replace `Value::Json(serde_json::Value)` with a representation that stores the
-same value shape as `JsonTree`.
+Runtime raw JSON now reuses the existing enum/struct `Value` shape produced by
+`JsonTree` values. No separate `Value::JsonTree` wrapper was needed, and
+`Value::Json(serde_json::Value)` was removed outright.
 
-Reasonable intermediate options:
-
-- Reuse the existing enum/struct `Value` shape produced by `JsonTree` values.
-- Introduce `Value::JsonTree(...)` only as an interpreter implementation detail.
-- Keep `Value::Json(...)` temporarily but change its payload away from
-  `serde_json::Value`.
-
-The important invariant is that raw JSON operations no longer depend on
-`serde_json::Value`.
+The important invariant now holds: raw JSON operations no longer depend on
+`serde_json::Value` in the comptime interpreter.
 
 ### 4. Make `JsonValue` A Compatibility Name
 
@@ -180,8 +171,8 @@ This should substantially reduce `stdlib/json.jett` duplication.
 
 After parity tests pass with native representation:
 
-- Remove `serde_json::Value` from `jett_comptime::value::Value`.
-- Remove Rust-backed `json.parse_raw` and raw accessor implementations.
+- Done: remove `serde_json::Value` from `jett_comptime::value::Value`.
+- Done: remove Rust-backed `json.parse_raw` and raw accessor implementations.
 - Keep Rust only for tests/dev tooling if useful, not as language semantics.
 
 ## Required Tests
@@ -215,13 +206,12 @@ Add tests before each behavior change:
 
 ## Recommended Next Implementation Bite
 
-Start replacing the runtime representation:
+Move the source-level compatibility surface forward:
 
-1. Introduce an internal conversion boundary that can turn native `JsonTree`
-   runtime values into the compatibility `JsonValue` lane only where truly
-   needed.
-2. Remove remaining ordinary-language dependence on `serde_json::Value`, keeping
-   serde only as a bootstrap fallback until all raw tests exercise native tree
-   values.
-3. Decide the exact `JsonValue` alias/type-compatibility story before changing
+1. Replace old internal `json_decode_reflected[T](raw: JsonValue)` uses with the
+   `json_decode_tree_reflected[T](view raw: JsonTree)` path, leaving only a thin
+   compatibility wrapper if tests still need the old name.
+2. Decide the exact `JsonValue` alias/type-compatibility story before changing
    typechecker metadata.
+3. Update reflection metadata expectations for `JsonValue` once aliasing is
+   settled.

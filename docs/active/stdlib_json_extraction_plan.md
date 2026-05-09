@@ -91,10 +91,10 @@ and `json.serialize_public`. In the interpreter, all three public calls now
 delegate to reflected stdlib hook implementations only when the current hook
 registry entries came from compiler-shipped stdlib files. The old typed Rust
 fallback paths for public parse/serialize have been removed; Rust-backed paths
-remain only as fallback storage for raw JSON compatibility. Public `json.parse_raw`
-now delegates to the trusted self-hosted `JsonTree` parser when bundled stdlib
-is loaded, and raw helper calls dispatch native `JsonTree` runtime values
-through trusted `json_tree_*` hooks.
+have also been removed from raw JSON execution in `jett_comptime`. Public
+`json.parse_raw` now delegates to the trusted self-hosted `JsonTree` parser, and
+raw helper calls dispatch native `JsonTree` runtime values through trusted
+`json_tree_*` hooks.
 
 ## Blockers
 
@@ -174,15 +174,15 @@ bridge spoofing, not helper visibility.
    - `json_decode_tree_reflected[T](view raw: JsonTree)` exists in stdlib.
    - `json_parse_reflected[T](raw: string)` now routes typed targets through the
      self-hosted `JsonTree` parser/decoder, with a `JsonValue` carve-out for
-     the Rust-backed raw compatibility surface.
+     the raw compatibility surface.
 3. Continue the public bridge handoff. `json.parse`, `json.serialize`, and
    `json.serialize_public` now use compiler-owned typechecker policy with
    stdlib-owned interpreter bodies. See `/docs/completed/json_public_bridge_handoff.md`.
 4. Keep the real public wrapper names in `namespace json`, while retaining
    compiler policy checks for secrets, `view`, map keys, and handled results.
 5. Keep broad bridge/parity tests before removing any Rust-backed fallback
-   implementation paths. Done for the old typed public parse/serialize
-   fallback; raw `JsonValue` primitives remain Rust-backed.
+   implementation paths. Done for typed public parse/serialize and raw
+   `JsonValue` execution in `jett_comptime`.
 6. Continue hardening the self-hosted `JsonTree` parser. Common malformed-input
    diagnostics are pinned for unterminated strings/arrays/objects, trailing
    characters, mismatched delimiters, bad number forms, bad literals, and

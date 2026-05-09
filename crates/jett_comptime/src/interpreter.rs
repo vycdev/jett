@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use rand::Rng;
-use serde_json::Value as JsonValue;
 
 use jett_common::FileId;
 use jett_parser::ast::{
@@ -4300,16 +4299,12 @@ impl Interpreter {
             // -- JSON operations ---------------------------------------------
             "json.parse_raw" => {
                 require_args!(name, 1, args);
-                if let Some(result) =
-                    self.call_trusted_stdlib_function("json.json_tree_parse", args)
-                {
-                    return Some(result);
-                }
                 match &args[0] {
-                    Value::String(raw) => match serde_json::from_str::<JsonValue>(raw) {
-                        Ok(json) => Some(Ok(result_ok(Value::Json(json)))),
-                        Err(err) => Some(Ok(result_fail(err.to_string()))),
-                    },
+                    Value::String(_) => Some(self.call_required_trusted_stdlib_function(
+                        name,
+                        "json.json_tree_parse",
+                        args,
+                    )),
                     other => Some(Err(format!("json.parse_raw expects a string, got {other}"))),
                 }
             }
@@ -4317,33 +4312,28 @@ impl Interpreter {
             "json.serialize_raw" => {
                 require_args!(name, 1, args);
                 if is_json_tree_value(&args[0]) {
-                    if let Some(result) =
-                        self.call_trusted_stdlib_function("json.json_tree_serialize", args)
-                    {
-                        return Some(result);
-                    }
+                    return Some(self.call_required_trusted_stdlib_function(
+                        name,
+                        "json.json_tree_serialize",
+                        args,
+                    ));
                 }
-                match &args[0] {
-                    Value::Json(json) => Some(Ok(Value::String(json.to_string()))),
-                    other => Some(Err(format!(
-                        "json.serialize_raw expects JsonValue, got {other}"
-                    ))),
-                }
+                Some(Err(format!(
+                    "json.serialize_raw expects JsonValue, got {}",
+                    args[0]
+                )))
             }
 
             "json.kind" => {
                 require_args!(name, 1, args);
                 if is_json_tree_value(&args[0]) {
-                    if let Some(result) =
-                        self.call_trusted_stdlib_function("json.json_tree_kind", args)
-                    {
-                        return Some(result);
-                    }
+                    return Some(self.call_required_trusted_stdlib_function(
+                        name,
+                        "json.json_tree_kind",
+                        args,
+                    ));
                 }
-                match &args[0] {
-                    Value::Json(json) => Some(Ok(Value::String(json_type_name(json).to_string()))),
-                    other => Some(Err(format!("json.kind expects JsonValue, got {other}"))),
-                }
+                Some(Err(format!("json.kind expects JsonValue, got {}", args[0])))
             }
 
             "json.is_null" | "json.is_bool" | "json.is_number" | "json.is_string"
@@ -4359,22 +4349,9 @@ impl Interpreter {
                         "json.is_object" => "json.json_tree_is_object",
                         _ => unreachable!(),
                     };
-                    if let Some(result) = self.call_trusted_stdlib_function(hook, args) {
-                        return Some(result);
-                    }
+                    return Some(self.call_required_trusted_stdlib_function(name, hook, args));
                 }
-                match &args[0] {
-                    Value::Json(json) => Some(Ok(Value::Bool(match name {
-                        "json.is_null" => json.is_null(),
-                        "json.is_bool" => json.is_boolean(),
-                        "json.is_number" => json.is_number(),
-                        "json.is_string" => json.is_string(),
-                        "json.is_array" => json.is_array(),
-                        "json.is_object" => json.is_object(),
-                        _ => false,
-                    }))),
-                    other => Some(Err(format!("{name} expects JsonValue, got {other}"))),
-                }
+                Some(Err(format!("{name} expects JsonValue, got {}", args[0])))
             }
 
             "json.field" => {
@@ -4382,11 +4359,11 @@ impl Interpreter {
                 if is_json_tree_value(&args[0]) {
                     match &args[1] {
                         Value::String(_) => {
-                            if let Some(result) =
-                                self.call_trusted_stdlib_function("json.json_tree_field", args)
-                            {
-                                return Some(result);
-                            }
+                            return Some(self.call_required_trusted_stdlib_function(
+                                name,
+                                "json.json_tree_field",
+                                args,
+                            ));
                         }
                         other => {
                             return Some(Err(format!(
@@ -4395,21 +4372,10 @@ impl Interpreter {
                         }
                     }
                 }
-                match (&args[0], &args[1]) {
-                    (Value::Json(json), Value::String(key)) => {
-                        let value = json
-                            .as_object()
-                            .and_then(|object| object.get(key))
-                            .cloned()
-                            .map(|value| Value::OptionalSome(Box::new(Value::Json(value))))
-                            .unwrap_or(Value::OptionalNone);
-                        Some(Ok(value))
-                    }
-                    (Value::Json(_), other) => {
-                        Some(Err(format!("json.field expects a string key, got {other}")))
-                    }
-                    (other, _) => Some(Err(format!("json.field expects JsonValue, got {other}"))),
-                }
+                Some(Err(format!(
+                    "json.field expects JsonValue, got {}",
+                    args[0]
+                )))
             }
 
             "json.index" => {
@@ -4417,11 +4383,11 @@ impl Interpreter {
                 if is_json_tree_value(&args[0]) {
                     match &args[1] {
                         Value::Int64(_) => {
-                            if let Some(result) =
-                                self.call_trusted_stdlib_function("json.json_tree_index", args)
-                            {
-                                return Some(result);
-                            }
+                            return Some(self.call_required_trusted_stdlib_function(
+                                name,
+                                "json.json_tree_index",
+                                args,
+                            ));
                         }
                         other => {
                             return Some(Err(format!(
@@ -4430,128 +4396,100 @@ impl Interpreter {
                         }
                     }
                 }
-                match (&args[0], &args[1]) {
-                    (Value::Json(json), Value::Int64(index)) => {
-                        let value = if *index >= 0 {
-                            json.as_array()
-                                .and_then(|array| array.get(*index as usize))
-                                .cloned()
-                                .map(|value| Value::OptionalSome(Box::new(Value::Json(value))))
-                                .unwrap_or(Value::OptionalNone)
-                        } else {
-                            Value::OptionalNone
-                        };
-                        Some(Ok(value))
-                    }
-                    (Value::Json(_), other) => Some(Err(format!(
-                        "json.index expects an int64 index, got {other}"
-                    ))),
-                    (other, _) => Some(Err(format!("json.index expects JsonValue, got {other}"))),
-                }
+                Some(Err(format!(
+                    "json.index expects JsonValue, got {}",
+                    args[0]
+                )))
             }
 
             "json.array_length" => {
                 require_args!(name, 1, args);
                 if is_json_tree_value(&args[0]) {
-                    if let Some(result) =
-                        self.call_trusted_stdlib_function("json.json_tree_array_length", args)
-                    {
-                        return Some(result);
-                    }
+                    return Some(self.call_required_trusted_stdlib_function(
+                        name,
+                        "json.json_tree_array_length",
+                        args,
+                    ));
                 }
-                match &args[0] {
-                    Value::Json(json) => match json.as_array() {
-                        Some(array) => Some(Ok(result_ok(Value::Int64(array.len() as i64)))),
-                        None => Some(Ok(result_fail(format!(
-                            "expected array, got {}",
-                            json_type_name(json)
-                        )))),
-                    },
-                    other => Some(Err(format!(
-                        "json.array_length expects JsonValue, got {other}"
-                    ))),
-                }
+                Some(Err(format!(
+                    "json.array_length expects JsonValue, got {}",
+                    args[0]
+                )))
             }
 
             "json.object_keys" => {
                 require_args!(name, 1, args);
                 if is_json_tree_value(&args[0]) {
-                    if let Some(result) =
-                        self.call_trusted_stdlib_function("json.json_tree_object_keys", args)
-                    {
-                        return Some(result);
-                    }
+                    return Some(self.call_required_trusted_stdlib_function(
+                        name,
+                        "json.json_tree_object_keys",
+                        args,
+                    ));
                 }
-                match &args[0] {
-                    Value::Json(json) => match json.as_object() {
-                        Some(object) => Some(Ok(result_ok(Value::List(
-                            object.keys().cloned().map(Value::String).collect(),
-                        )))),
-                        None => Some(Ok(result_fail(format!(
-                            "expected object, got {}",
-                            json_type_name(json)
-                        )))),
-                    },
-                    other => Some(Err(format!(
-                        "json.object_keys expects JsonValue, got {other}"
-                    ))),
-                }
+                Some(Err(format!(
+                    "json.object_keys expects JsonValue, got {}",
+                    args[0]
+                )))
             }
 
             "json.as_string" => {
                 require_args!(name, 1, args);
                 if is_json_tree_value(&args[0]) {
-                    if let Some(result) =
-                        self.call_trusted_stdlib_function("json.json_tree_as_string", args)
-                    {
-                        return Some(result);
-                    }
+                    return Some(self.call_required_trusted_stdlib_function(
+                        name,
+                        "json.json_tree_as_string",
+                        args,
+                    ));
                 }
-                Some(json_cast_result(&args[0], "string", |json| {
-                    json.as_str().map(|value| Value::String(value.to_string()))
-                }))
+                Some(Err(format!(
+                    "json.as_string expects JsonValue, got {}",
+                    args[0]
+                )))
             }
 
             "json.as_int64" => {
                 require_args!(name, 1, args);
                 if is_json_tree_value(&args[0]) {
-                    if let Some(result) =
-                        self.call_trusted_stdlib_function("json.json_tree_as_int64", args)
-                    {
-                        return Some(result);
-                    }
+                    return Some(self.call_required_trusted_stdlib_function(
+                        name,
+                        "json.json_tree_as_int64",
+                        args,
+                    ));
                 }
-                Some(json_cast_result(&args[0], "int64", |json| {
-                    json.as_i64().map(Value::Int64)
-                }))
+                Some(Err(format!(
+                    "json.as_int64 expects JsonValue, got {}",
+                    args[0]
+                )))
             }
 
             "json.as_float64" => {
                 require_args!(name, 1, args);
                 if is_json_tree_value(&args[0]) {
-                    if let Some(result) =
-                        self.call_trusted_stdlib_function("json.json_tree_as_float64", args)
-                    {
-                        return Some(result);
-                    }
+                    return Some(self.call_required_trusted_stdlib_function(
+                        name,
+                        "json.json_tree_as_float64",
+                        args,
+                    ));
                 }
-                Some(json_cast_result(&args[0], "float64", |json| {
-                    json.as_f64().map(Value::Float64)
-                }))
+                Some(Err(format!(
+                    "json.as_float64 expects JsonValue, got {}",
+                    args[0]
+                )))
             }
 
             "json.as_bool" => {
                 require_args!(name, 1, args);
                 if is_json_tree_value(&args[0]) {
-                    if let Some(result) =
-                        self.call_trusted_stdlib_function("json.json_tree_as_bool", args)
-                    {
-                        return Some(result);
-                    }
+                    return Some(self.call_required_trusted_stdlib_function(
+                        name,
+                        "json.json_tree_as_bool",
+                        args,
+                    ));
                 }
-                Some(json_cast_result(&args[0], "bool", |json| {
-                    json.as_bool().map(Value::Bool)
-                }))
+                Some(Err(format!(
+                    "json.as_bool expects JsonValue, got {}",
+                    args[0]
+                )))
             }
 
             // -- Random operations (stdlib/random.jett) -----------------------
@@ -6792,15 +6730,18 @@ impl Interpreter {
         self.trusted_stdlib_functions.contains(name) && self.functions.contains_key(name)
     }
 
-    fn call_trusted_stdlib_function(
+    fn call_required_trusted_stdlib_function(
         &mut self,
+        public_name: &str,
         name: &str,
         args: &[Value],
-    ) -> Option<Result<Value, String>> {
+    ) -> Result<Value, String> {
         if self.has_trusted_stdlib_function(name) {
-            Some(self.call_user_function_with_type_args(name, &[], args.to_vec()))
+            self.call_user_function_with_type_args(name, &[], args.to_vec())
         } else {
-            None
+            Err(format!(
+                "{public_name} requires trusted stdlib hook '{name}'"
+            ))
         }
     }
 
@@ -7960,17 +7901,6 @@ fn is_type_variant_value_callee(callee: &Expr) -> bool {
         && matches!(base.as_ref(), Expr::Ident(ident) if ident.name == "type")
 }
 
-fn json_type_name(value: &JsonValue) -> &'static str {
-    match value {
-        JsonValue::Null => "null",
-        JsonValue::Bool(_) => "bool",
-        JsonValue::Number(_) => "number",
-        JsonValue::String(_) => "string",
-        JsonValue::Array(_) => "array",
-        JsonValue::Object(_) => "object",
-    }
-}
-
 fn is_json_tree_value(value: &Value) -> bool {
     matches!(
         value,
@@ -7984,23 +7914,6 @@ fn result_ok(value: Value) -> Value {
 
 fn result_fail(message: String) -> Value {
     Value::ResultFail(Box::new(Value::String(message)))
-}
-
-fn json_cast_result<F>(value: &Value, expected: &str, cast: F) -> Result<Value, String>
-where
-    F: FnOnce(&JsonValue) -> Option<Value>,
-{
-    let Value::Json(json) = value else {
-        return Err(format!("json.as_{expected} expects JsonValue, got {value}"));
-    };
-
-    match cast(json) {
-        Some(value) => Ok(result_ok(value)),
-        None => Ok(result_fail(format!(
-            "expected {expected}, got {}",
-            json_type_name(json)
-        ))),
-    }
 }
 
 fn type_expr_display(ty: &TypeExpr) -> String {
@@ -8033,7 +7946,6 @@ fn runtime_type_name(value: &Value) -> Option<String> {
         Value::ResultOk(_) | Value::ResultFail(_) => Some("result".to_string()),
         Value::OptionalSome(_) | Value::OptionalNone => Some("optional".to_string()),
         Value::Nothing => Some("nothing".to_string()),
-        Value::Json(_) => Some("JsonValue".to_string()),
         Value::TypeConstruction { .. } => Some("TypeConstruction".to_string()),
         Value::Struct { type_name, .. }
         | Value::Enum { type_name, .. }
@@ -8646,6 +8558,20 @@ mod tests {
             .unwrap();
 
         assert_eq!(value, Value::String("trusted".to_string()));
+    }
+
+    #[test]
+    fn json_parse_raw_requires_trusted_json_tree_parse() {
+        let mut interp = Interpreter::new();
+
+        let err = interp
+            .call_function("json.parse_raw", vec![Value::String("null".to_string())])
+            .unwrap_err();
+
+        assert_eq!(
+            err,
+            "json.parse_raw requires trusted stdlib hook 'json.json_tree_parse'"
+        );
     }
 
     #[test]
