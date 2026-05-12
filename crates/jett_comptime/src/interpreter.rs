@@ -3502,6 +3502,31 @@ impl Interpreter {
         metadata.get_type_info(&type_name)
     }
 
+    fn checked_type_kind(&self, ty: &TypeExpr) -> Option<&str> {
+        Some(self.checked_type_info(ty)?.kind.as_str())
+    }
+
+    fn checked_construction_kind(&self, ty: &TypeExpr) -> Option<&'static str> {
+        if let Some(kind) = self.checked_type_kind(ty) {
+            return match kind {
+                "struct" => Some("struct"),
+                "bitfield" => Some("bitfield"),
+                "enum" => Some("enum"),
+                _ => None,
+            };
+        }
+
+        if self.checked_type_variants(ty).is_some() {
+            Some("enum")
+        } else if self.checked_bitfield(ty).is_some() {
+            Some("bitfield")
+        } else if self.checked_type_fields(ty).is_some() {
+            Some("struct")
+        } else {
+            None
+        }
+    }
+
     fn checked_type_info_value(&self, ty: &TypeExpr) -> Option<Value> {
         self.checked_type_info(ty)
             .map(Self::reflection_type_info_value)
@@ -4091,7 +4116,9 @@ impl Interpreter {
                 type_name, expected_owner
             )));
         }
-        let owner_kind = self.type_expr_kind(owner_ty);
+        let owner_kind = self
+            .checked_construction_kind(owner_ty)
+            .unwrap_or_else(|| self.type_expr_kind(owner_ty));
         if !matches!(owner_kind, "struct" | "bitfield" | "enum") {
             return Ok(result_fail(format!(
                 "type.construct_put supports only structs, bitfields, and enums, got '{}'",
@@ -4105,24 +4132,50 @@ impl Interpreter {
                 Err(message) => return Ok(result_fail(message)),
             };
 
-        let fields = if owner_kind == "enum" {
+        let (field_name, actual_type_name) = if owner_kind == "enum" {
             let Some(variant_name) = variant.as_ref() else {
                 return Ok(result_fail(
                     "type.construct_put: enum construction requires type.construct_variant_start"
                         .to_string(),
                 ));
             };
-            let Some(variant) = self
-                .type_expr_variants(owner_ty)
-                .into_iter()
-                .find(|candidate| candidate.name == *variant_name)
-            else {
-                return Ok(result_fail(format!(
-                    "type.construct_put: enum '{}' has no variant '{}'",
-                    expected_owner, variant_name
-                )));
-            };
-            variant.fields
+
+            if let Some(variants) = self.checked_type_variants(owner_ty) {
+                let Some(variant) = variants
+                    .iter()
+                    .find(|candidate| candidate.name == *variant_name)
+                else {
+                    return Ok(result_fail(format!(
+                        "type.construct_put: enum '{}' has no variant '{}'",
+                        expected_owner, variant_name
+                    )));
+                };
+                let Some(field) = variant.fields.get(field_index) else {
+                    return Ok(result_fail(format!(
+                        "type.construct_put: variant '{}.{}' has no payload field at index {}",
+                        expected_owner, variant_name, field_index
+                    )));
+                };
+                (field.name.clone(), field.type_name.clone())
+            } else {
+                let Some(variant) = self
+                    .type_expr_variants(owner_ty)
+                    .into_iter()
+                    .find(|candidate| candidate.name == *variant_name)
+                else {
+                    return Ok(result_fail(format!(
+                        "type.construct_put: enum '{}' has no variant '{}'",
+                        expected_owner, variant_name
+                    )));
+                };
+                let Some(field) = variant.fields.get(field_index) else {
+                    return Ok(result_fail(format!(
+                        "type.construct_put: variant '{}.{}' has no payload field at index {}",
+                        expected_owner, variant_name, field_index
+                    )));
+                };
+                (field.name.clone(), type_expr_display(&field.ty))
+            }
         } else {
             if variant.is_some() {
                 return Ok(result_fail(format!(
@@ -4130,38 +4183,41 @@ impl Interpreter {
                     expected_owner
                 )));
             }
-            self.type_expr_fields(owner_ty)
-        };
 
-        let Some(field) = fields.get(field_index) else {
-            if let Some(variant_name) = variant.as_ref() {
-                return Ok(result_fail(format!(
-                    "type.construct_put: variant '{}.{}' has no payload field at index {}",
-                    expected_owner, variant_name, field_index
-                )));
+            if let Some(fields) = self.checked_type_fields(owner_ty) {
+                let Some(field) = fields.get(field_index) else {
+                    return Ok(result_fail(format!(
+                        "type.construct_put: type '{}' has no field at index {}",
+                        expected_owner, field_index
+                    )));
+                };
+                (field.name.clone(), field.type_name.clone())
             } else {
-                return Ok(result_fail(format!(
-                    "type.construct_put: type '{}' has no field at index {}",
-                    expected_owner, field_index
-                )));
+                let fields = self.type_expr_fields(owner_ty);
+                let Some(field) = fields.get(field_index) else {
+                    return Ok(result_fail(format!(
+                        "type.construct_put: type '{}' has no field at index {}",
+                        expected_owner, field_index
+                    )));
+                };
+                (field.name.clone(), type_expr_display(&field.ty))
             }
         };
 
-        if field.name != metadata_name {
+        if field_name != metadata_name {
             if let Some(variant_name) = variant.as_ref() {
                 return Ok(result_fail(format!(
                     "type.construct_put: field metadata '{}' does not match payload field '{}' on variant '{}.{}'",
-                    metadata_name, field.name, expected_owner, variant_name
+                    metadata_name, field_name, expected_owner, variant_name
                 )));
             } else {
                 return Ok(result_fail(format!(
                     "type.construct_put: field metadata '{}' does not match field '{}' on '{}'",
-                    metadata_name, field.name, expected_owner
+                    metadata_name, field_name, expected_owner
                 )));
             }
         }
 
-        let actual_type_name = type_expr_display(&field.ty);
         if actual_type_name != metadata_type_name {
             return Ok(result_fail(format!(
                 "type.construct_put: field metadata for '{}' has type '{}', but '{}' reports '{}'",
@@ -4201,7 +4257,9 @@ impl Interpreter {
         owner_ty: &TypeExpr,
         variant_metadata: &Value,
     ) -> Result<Value, String> {
-        let owner_kind = self.type_expr_kind(owner_ty);
+        let owner_kind = self
+            .checked_construction_kind(owner_ty)
+            .unwrap_or_else(|| self.type_expr_kind(owner_ty));
         if owner_kind != "enum" {
             return Ok(result_fail(format!(
                 "type.construct_variant_start supports only enums, got '{}'",
@@ -4223,51 +4281,97 @@ impl Interpreter {
             Err(message) => return Ok(result_fail(message)),
         };
 
-        let variants = self.type_expr_variants(owner_ty);
-        let Some(variant) = variants.get(variant_index) else {
-            return Ok(result_fail(format!(
-                "type.construct_variant_start: enum '{}' has no variant at index {}",
-                expected_owner, variant_index
-            )));
-        };
-        if variant.name != metadata_name {
-            return Ok(result_fail(format!(
-                "type.construct_variant_start: variant metadata '{}' does not match variant '{}' on '{}'",
-                metadata_name, variant.name, expected_owner
-            )));
-        }
-        if variant.discriminant != metadata_discriminant {
-            return Ok(result_fail(format!(
-                "type.construct_variant_start: variant '{}.{}' has discriminant {}, metadata reports {}",
-                expected_owner, variant.name, variant.discriminant, metadata_discriminant
-            )));
-        }
-        if metadata_fields.len() != variant.fields.len() {
-            return Ok(result_fail(format!(
-                "type.construct_variant_start: variant '{}.{}' expects {} payload field(s), metadata reports {}",
-                expected_owner,
-                variant.name,
-                variant.fields.len(),
-                metadata_fields.len()
-            )));
-        }
-        for (index, field) in variant.fields.iter().enumerate() {
-            let (metadata_index, metadata_field_name, metadata_type_name) = &metadata_fields[index];
-            let actual_type_name = type_expr_display(&field.ty);
-            if *metadata_index != index
-                || metadata_field_name != &field.name
-                || metadata_type_name != &actual_type_name
-            {
+        let variant_name = if let Some(variants) = self.checked_type_variants(owner_ty) {
+            let Some(variant) = variants.get(variant_index) else {
                 return Ok(result_fail(format!(
-                    "type.construct_variant_start: payload field metadata at index {} does not match variant '{}.{}'",
-                    index, expected_owner, variant.name
+                    "type.construct_variant_start: enum '{}' has no variant at index {}",
+                    expected_owner, variant_index
+                )));
+            };
+            if variant.name != metadata_name {
+                return Ok(result_fail(format!(
+                    "type.construct_variant_start: variant metadata '{}' does not match variant '{}' on '{}'",
+                    metadata_name, variant.name, expected_owner
                 )));
             }
-        }
+            if variant.discriminant != metadata_discriminant {
+                return Ok(result_fail(format!(
+                    "type.construct_variant_start: variant '{}.{}' has discriminant {}, metadata reports {}",
+                    expected_owner, variant.name, variant.discriminant, metadata_discriminant
+                )));
+            }
+            if metadata_fields.len() != variant.fields.len() {
+                return Ok(result_fail(format!(
+                    "type.construct_variant_start: variant '{}.{}' expects {} payload field(s), metadata reports {}",
+                    expected_owner,
+                    variant.name,
+                    variant.fields.len(),
+                    metadata_fields.len()
+                )));
+            }
+            for (index, field) in variant.fields.iter().enumerate() {
+                let (metadata_index, metadata_field_name, metadata_type_name) =
+                    &metadata_fields[index];
+                if *metadata_index != index
+                    || metadata_field_name != &field.name
+                    || metadata_type_name != &field.type_name
+                {
+                    return Ok(result_fail(format!(
+                        "type.construct_variant_start: payload field metadata at index {} does not match variant '{}.{}'",
+                        index, expected_owner, variant.name
+                    )));
+                }
+            }
+            variant.name.clone()
+        } else {
+            let variants = self.type_expr_variants(owner_ty);
+            let Some(variant) = variants.get(variant_index) else {
+                return Ok(result_fail(format!(
+                    "type.construct_variant_start: enum '{}' has no variant at index {}",
+                    expected_owner, variant_index
+                )));
+            };
+            if variant.name != metadata_name {
+                return Ok(result_fail(format!(
+                    "type.construct_variant_start: variant metadata '{}' does not match variant '{}' on '{}'",
+                    metadata_name, variant.name, expected_owner
+                )));
+            }
+            if variant.discriminant != metadata_discriminant {
+                return Ok(result_fail(format!(
+                    "type.construct_variant_start: variant '{}.{}' has discriminant {}, metadata reports {}",
+                    expected_owner, variant.name, variant.discriminant, metadata_discriminant
+                )));
+            }
+            if metadata_fields.len() != variant.fields.len() {
+                return Ok(result_fail(format!(
+                    "type.construct_variant_start: variant '{}.{}' expects {} payload field(s), metadata reports {}",
+                    expected_owner,
+                    variant.name,
+                    variant.fields.len(),
+                    metadata_fields.len()
+                )));
+            }
+            for (index, field) in variant.fields.iter().enumerate() {
+                let (metadata_index, metadata_field_name, metadata_type_name) =
+                    &metadata_fields[index];
+                let actual_type_name = type_expr_display(&field.ty);
+                if *metadata_index != index
+                    || metadata_field_name != &field.name
+                    || metadata_type_name != &actual_type_name
+                {
+                    return Ok(result_fail(format!(
+                        "type.construct_variant_start: payload field metadata at index {} does not match variant '{}.{}'",
+                        index, expected_owner, variant.name
+                    )));
+                }
+            }
+            variant.name.clone()
+        };
 
         Ok(result_ok(Value::TypeConstruction {
             type_name: expected_owner,
-            variant: Some(variant.name.clone()),
+            variant: Some(variant_name),
             fields: Vec::new(),
         }))
     }
@@ -8978,6 +9082,194 @@ mod tests {
             .expect("type.variant_field_value should evaluate");
 
         assert_eq!(reflected, Value::String("ok".to_string()));
+    }
+
+    #[test]
+    fn type_construct_put_uses_checked_reflection_metadata_when_available() {
+        let field_type = ReflectionTypeInfo::new(
+            "string",
+            "primitive",
+            Some("string_type".to_string()),
+            false,
+            Vec::new(),
+        );
+        let mut metadata = ReflectionMetadata::new();
+        metadata.insert_type_info(ReflectionTypeInfo::new(
+            "Box",
+            "struct",
+            None,
+            false,
+            Vec::new(),
+        ));
+        metadata.insert_type_fields(
+            "Box",
+            vec![ReflectionFieldInfo::new(
+                0,
+                "value",
+                "string",
+                "primitive",
+                "value",
+                false,
+                field_type,
+            )],
+        );
+
+        let mut interp = Interpreter::new();
+        interp.set_reflection_metadata(Arc::new(metadata));
+
+        let builder = interp
+            .call_builtin_with_type_args("type.construct_start", &[type_named("Box")], &[])
+            .expect("type.construct_start should be a typed builtin")
+            .expect("type.construct_start should evaluate");
+        let type_fields = interp
+            .call_builtin_with_type_args("type.fields", &[type_named("Box")], &[])
+            .expect("type.fields should be a typed builtin")
+            .expect("type.fields should evaluate");
+        let Value::List(type_fields) = type_fields else {
+            panic!("expected list of TypeField values");
+        };
+
+        let updated = interp
+            .call_builtin_with_type_args(
+                "type.construct_put",
+                &[type_named("Box"), type_named("string")],
+                &[
+                    builder,
+                    type_fields[0].clone(),
+                    Value::String("ok".to_string()),
+                ],
+            )
+            .expect("type.construct_put should be a typed builtin")
+            .expect("type.construct_put should evaluate");
+        let Value::ResultOk(updated) = updated else {
+            panic!("expected successful construction update");
+        };
+        let Value::TypeConstruction {
+            type_name,
+            variant,
+            fields,
+        } = *updated
+        else {
+            panic!("expected TypeConstruction");
+        };
+
+        assert_eq!(type_name, "Box");
+        assert_eq!(variant, None);
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].0, 0);
+        assert_eq!(fields[0].1, "value");
+        assert_eq!(fields[0].2, "string");
+        assert_eq!(fields[0].3, Value::String("ok".to_string()));
+    }
+
+    #[test]
+    fn type_construct_enum_payload_uses_checked_reflection_metadata_when_available() {
+        let field_type = ReflectionTypeInfo::new(
+            "string",
+            "primitive",
+            Some("string_type".to_string()),
+            false,
+            Vec::new(),
+        );
+        let mut metadata = ReflectionMetadata::new();
+        metadata.insert_type_info(ReflectionTypeInfo::new(
+            "Choice",
+            "enum",
+            None,
+            false,
+            Vec::new(),
+        ));
+        metadata.insert_type_variants(
+            "Choice",
+            vec![ReflectionVariantInfo::new(
+                0,
+                "token",
+                7,
+                false,
+                vec![ReflectionFieldInfo::new(
+                    0,
+                    "value",
+                    "string",
+                    "primitive",
+                    "value",
+                    false,
+                    field_type,
+                )],
+            )],
+        );
+
+        let mut interp = Interpreter::new();
+        interp.set_reflection_metadata(Arc::new(metadata));
+
+        let variants = interp
+            .call_builtin_with_type_args("type.variants", &[type_named("Choice")], &[])
+            .expect("type.variants should be a typed builtin")
+            .expect("type.variants should evaluate");
+        let Value::List(variants) = variants else {
+            panic!("expected list of TypeVariant values");
+        };
+        let Value::Struct {
+            fields: variant_fields,
+            ..
+        } = &variants[0]
+        else {
+            panic!("expected TypeVariant");
+        };
+        let payload_fields = variant_fields
+            .iter()
+            .find_map(
+                |(name, value)| {
+                    if name == "fields" { Some(value) } else { None }
+                },
+            )
+            .expect("TypeVariant.fields should exist");
+        let Value::List(payload_fields) = payload_fields else {
+            panic!("expected TypeVariant.fields list");
+        };
+
+        let builder = interp
+            .call_builtin_with_type_args(
+                "type.construct_variant_start",
+                &[type_named("Choice")],
+                &[variants[0].clone()],
+            )
+            .expect("type.construct_variant_start should be a typed builtin")
+            .expect("type.construct_variant_start should evaluate");
+        let Value::ResultOk(builder) = builder else {
+            panic!("expected successful enum construction start");
+        };
+
+        let updated = interp
+            .call_builtin_with_type_args(
+                "type.construct_put",
+                &[type_named("Choice"), type_named("string")],
+                &[
+                    *builder,
+                    payload_fields[0].clone(),
+                    Value::String("ok".to_string()),
+                ],
+            )
+            .expect("type.construct_put should be a typed builtin")
+            .expect("type.construct_put should evaluate");
+        let Value::ResultOk(updated) = updated else {
+            panic!("expected successful enum payload update");
+        };
+        let Value::TypeConstruction {
+            type_name,
+            variant,
+            fields,
+        } = *updated
+        else {
+            panic!("expected TypeConstruction");
+        };
+
+        assert_eq!(type_name, "Choice");
+        assert_eq!(variant, Some("token".to_string()));
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].0, 0);
+        assert_eq!(fields[0].1, "value");
+        assert_eq!(fields[0].2, "string");
+        assert_eq!(fields[0].3, Value::String("ok".to_string()));
     }
 
     /// Helper: create a field access expression.

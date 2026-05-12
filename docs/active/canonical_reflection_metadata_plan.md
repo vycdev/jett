@@ -128,8 +128,11 @@ for field provenance and type validation, `type.variant_value[T]` now prefers
 checked `TypeVariant` metadata for active variant lookup, and
 `type.variant_field_value[T, Field]` now prefers checked variant payload
 metadata for payload field provenance and type validation. All retain the AST
-fallback for bootstrap/direct interpreter tests. Construction still uses the
-existing interpreter validation path.
+fallback for bootstrap/direct interpreter tests. `type.construct_variant_start`
+and `type.construct_put` now prefer checked metadata for construction kind,
+field, and variant payload validation while preserving the existing
+`TypeConstruction` builder layout. `type.construct_finish` still uses the
+existing interpreter materialization path.
 
 ### Stage 4: Make Generic Instantiations Canonical
 
@@ -166,4 +169,8 @@ Continue the metadata-only migration:
 4. Add checked enum variant metadata. Done.
 5. Move value-sensitive APIs incrementally. `type.field_value`,
    `type.variant_value`, and `type.variant_field_value` have started;
-   `type.construct_*` still needs separate staging.
+   `type.construct_variant_start` and `type.construct_put` now stage checked
+   construction validation.
+6. Keep `type.construct_finish` conservative until construction metadata has
+   enough canonical layout, refinement, and bitfield/enum numeric semantics to
+   replace the remaining interpreter registries cleanly.
