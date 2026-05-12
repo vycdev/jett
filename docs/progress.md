@@ -27,7 +27,7 @@
 | Component | Crate | Tests | Status |
 |---|---|---|---|
 | Type interning, struct/enum/interface defs | `jett_types` | 18 | Done |
-| Name resolution, scoping, namespace export visibility | `jett_resolve` | 26 | Done |
+| Name resolution, scoping, namespace export visibility | `jett_resolve` | 27 | Done |
 | Type checking (expressions, operators, generics) | `jett_typecheck` | 97 | Done |
 
 ### Phase C: Ownership and Capabilities — COMPLETE
@@ -103,7 +103,7 @@
 | Function type expressions (`function(T) returns U` in type annotations) | Done |
 | Dotted `use` paths (`use net.http`) | Done |
 | Namespace-qualified user function calls (`helpers.f()`, `helpers.f[T]()`) | Done |
-| Namespace-private declarations with explicit `export` for public APIs, including `mutual` declarations | Done |
+| Namespace-private declarations with explicit `export` for public APIs, including `mutual` declarations and qualified-only external access | Done |
 | Multi-file compilation (project-aware build/run with `jett.proj`) | Done |
 | `range()` builtin (1, 2, or 3 args) | Done |
 | For-in over strings, maps (with `key, value` destructuring), sets | Done |

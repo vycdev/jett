@@ -1,0 +1,11 @@
+# ERROR: E0208
+namespace api
+
+export enum Status:
+    active
+    archived
+
+namespace app
+
+function main() returns bool:
+    return Status.active == Status.active

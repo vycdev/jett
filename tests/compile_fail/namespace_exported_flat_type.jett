@@ -1,0 +1,11 @@
+# ERROR: E0208
+namespace models
+
+export struct User:
+    name: string
+
+namespace app
+
+function main() returns string:
+    User user = User(name: "Ada")
+    return user.name

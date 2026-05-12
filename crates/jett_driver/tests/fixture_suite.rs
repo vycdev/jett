@@ -401,6 +401,30 @@ compile_fail_fixture!(
     "namespace_private_alias.jett"
 );
 compile_fail_fixture!(
+    compile_fail_namespace_exported_flat_function,
+    "namespace_exported_flat_function.jett"
+);
+compile_fail_fixture!(
+    compile_fail_namespace_exported_flat_type,
+    "namespace_exported_flat_type.jett"
+);
+compile_fail_fixture!(
+    compile_fail_namespace_exported_flat_type_alias,
+    "namespace_exported_flat_type_alias.jett"
+);
+compile_fail_fixture!(
+    compile_fail_namespace_exported_flat_enum,
+    "namespace_exported_flat_enum.jett"
+);
+compile_fail_fixture!(
+    compile_fail_namespace_exported_flat_bitfield,
+    "namespace_exported_flat_bitfield.jett"
+);
+compile_fail_fixture!(
+    compile_fail_namespace_exported_flat_mutual_function,
+    "namespace_exported_flat_mutual_function.jett"
+);
+compile_fail_fixture!(
     compile_fail_namespace_private_mutual_function,
     "namespace_private_mutual_function.jett"
 );
@@ -624,7 +648,7 @@ fn stdlib_loaded_for_build_source() {
 namespace app
 
 verify stdlib_source:
-    assert jett_stdlib_loaded() == true
+    assert stdlib.jett_stdlib_loaded() == true
 "#;
     let result = build_source(source, "memory.jett");
     assert!(

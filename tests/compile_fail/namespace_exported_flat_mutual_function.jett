@@ -1,0 +1,13 @@
+# ERROR: E0208
+namespace api
+
+mutual:
+    export function helper() returns int64
+
+function helper() returns int64:
+    return 1
+
+namespace app
+
+function main() returns int64:
+    return helper()

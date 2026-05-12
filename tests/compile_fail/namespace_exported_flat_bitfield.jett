@@ -1,0 +1,11 @@
+# ERROR: E0208
+namespace api
+
+export bitfield Header:
+    version: 4 bits
+
+namespace app
+
+function main() returns int64:
+    Header header = Header(version: 4)
+    return header.version

@@ -167,6 +167,8 @@ Implemented:
   declarations from outside their namespace.
 - Namespace-private `mutual` declarations are enforced for qualified, aliased,
   and old flat compatibility references.
+- External unqualified access to exported namespaced declarations is rejected;
+  users must write the qualified path or a namespace alias.
 - Same-namespace private helper access remains allowed.
 - Existing user/project namespace fixtures now mark public cross-namespace API
   with `export`.
@@ -176,8 +178,8 @@ Implemented:
 Still staged:
 
 - The typechecker and interpreter still keep temporary flat compatibility
-  registrations. The resolver now rejects external private flat access, but the
-  registries still need to stop creating those aliases.
+  registrations. The resolver now rejects external flat access, but the
+  registries still need to stop creating those aliases internally.
 - Public JSON policy remains compiler-owned; source `export` is not trusted
   origin.
 
@@ -210,6 +212,8 @@ Still staged:
 - Inside the same namespace, private helpers are callable unqualified and, if
   the resolver supports it, through their qualified local name.
 - Namespaced helpers are no longer visible through accidental flat aliases.
+- Exported namespaced declarations are not visible through accidental flat
+  aliases from outside their namespace.
 - Public JSON policy remains compiler-owned: `view`, secret, map-key, and
   handled-result rules still fire even if public wrapper declarations exist.
 - A project-defined `namespace json function json_parse_reflected...` cannot

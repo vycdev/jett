@@ -508,6 +508,12 @@ impl Resolver {
                 Item::VarDecl(v) => {
                     self.resolve_expr(&v.value, index);
                 }
+                Item::Verify(verify) => {
+                    self.resolve_block(&verify.body, index);
+                }
+                Item::Property(prop) => {
+                    self.resolve_property(prop, index);
+                }
                 Item::Actor(actor) => {
                     self.resolve_actor(actor, index);
                 }
@@ -515,6 +521,16 @@ impl Resolver {
                 _ => {}
             }
         }
+    }
+
+    fn resolve_property(&mut self, prop: &jett_parser::ast::PropertyBlock, item_index: usize) {
+        let scope = self.push_scope();
+        for given in &prop.givens {
+            self.resolve_type_expr(&given.ty, item_index);
+            self.declare_local(&given.name.name, DefKind::Variable, given.name.span);
+        }
+        self.resolve_block(&prop.body, item_index);
+        self.pop_scope(scope);
     }
 
     fn resolve_actor(&mut self, actor: &ActorDef, item_index: usize) {
@@ -616,6 +632,13 @@ impl Resolver {
             .filter(|p| self.active_type_params.insert(p.name.clone()))
             .map(|p| p.name.clone())
             .collect();
+
+        for param in &func.params {
+            self.resolve_type_expr(&param.ty, item_index);
+        }
+        if let Some(return_type) = &func.return_type {
+            self.resolve_type_expr(return_type, item_index);
+        }
 
         // Bind parameters.
         for param in &func.params {
@@ -870,7 +893,7 @@ impl Resolver {
             } else if !is_builtin_module(namespace) {
                 self.resolve_name(namespace, span, item_index);
             }
-        } else {
+        } else if self.scope_table.lookup(self.current_scope, name).is_some() {
             self.resolve_name(name, span, item_index);
         }
     }
@@ -992,8 +1015,14 @@ impl Resolver {
             | Expr::Cancel(inner, _) => {
                 self.resolve_expr(inner, item_index);
             }
-            Expr::InlineFn(params, _return_type, body, _) => {
+            Expr::InlineFn(params, return_type, body, _) => {
                 let scope = self.push_scope();
+                for param in params {
+                    self.resolve_type_expr(&param.ty, item_index);
+                }
+                if let Some(return_type) = return_type {
+                    self.resolve_type_expr(return_type, item_index);
+                }
                 for param in params {
                     self.declare_local(&param.name.name, DefKind::Param, param.name.span);
                 }
@@ -1064,6 +1093,19 @@ impl Resolver {
             return;
         }
 
+        if let Some((namespace, qualified_name, def_span)) =
+            self.unqualified_external_namespace_access(name, def_id)
+        {
+            self.sink.emit(errors::namespace_qualifier_required(
+                name,
+                &namespace,
+                &qualified_name,
+                span,
+                def_span,
+            ));
+            return;
+        }
+
         // Check for forward reference to a top-level item.
         if let Some(&(top_def_id, decl_index)) = self.top_level_order.get(name) {
             if def_id == top_def_id && decl_index > item_index {
@@ -1089,6 +1131,24 @@ impl Resolver {
         }
 
         Some((namespace.clone(), def.span))
+    }
+
+    fn unqualified_external_namespace_access(
+        &self,
+        name: &str,
+        def_id: DefId,
+    ) -> Option<(String, String, Span)> {
+        if name.contains('.') {
+            return None;
+        }
+
+        let def = self.scope_table.def(def_id);
+        let namespace = def.namespace.as_ref()?;
+        if self.current_namespace.as_deref() == Some(namespace.as_str()) {
+            return None;
+        }
+
+        Some((namespace.clone(), def.name.clone(), def.span))
     }
 
     fn lookup_local_non_root(&self, name: &str) -> Option<DefId> {
@@ -1648,6 +1708,32 @@ function main() returns int64:
             "expected no errors, got: {:#?}",
             result.diagnostics
         );
+    }
+
+    #[test]
+    fn exported_namespaced_function_rejects_external_flat_access() {
+        let module = parse_module(
+            r#"
+namespace api
+
+export function helper() returns int64:
+    return 1
+
+namespace app
+
+function main() returns int64:
+    return helper()
+"#,
+        );
+
+        let result = resolve(&module);
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == Severity::Error && d.code.code() == 208)
+            .collect();
+        assert_eq!(errors.len(), 1, "expected namespace qualifier error");
+        assert!(errors[0].message.contains("api.helper"));
     }
 
     #[test]

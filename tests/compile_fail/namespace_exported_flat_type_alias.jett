@@ -1,0 +1,9 @@
+# ERROR: E0208
+namespace api
+
+export type Port = int64
+
+namespace app
+
+function main() returns Port:
+    return 443

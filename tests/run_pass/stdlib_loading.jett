@@ -1,10 +1,10 @@
 namespace app
 
 function main() returns nothing:
-    bool loaded = jett_stdlib_loaded()
+    bool loaded = stdlib.jett_stdlib_loaded()
     if loaded == false:
         println("stdlib marker missing")
     return nothing
 
 verify stdlib_loading:
-    assert jett_stdlib_loaded() == true
+    assert stdlib.jett_stdlib_loaded() == true

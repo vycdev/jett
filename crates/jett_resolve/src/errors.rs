@@ -67,3 +67,19 @@ pub fn private_definition(
     )
     .with_label(def_span, "private declaration defined here")
 }
+
+/// E0208: Namespaced declaration used without a namespace qualifier.
+pub fn namespace_qualifier_required(
+    name: &str,
+    namespace: &str,
+    qualified_name: &str,
+    use_span: Span,
+    def_span: Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        208,
+        format!("`{name}` belongs to namespace `{namespace}`; use `{qualified_name}`"),
+        use_span,
+    )
+    .with_label(def_span, "namespaced declaration defined here")
+}
