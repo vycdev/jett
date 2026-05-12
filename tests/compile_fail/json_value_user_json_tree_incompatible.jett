@@ -1,0 +1,10 @@
+# ERROR: E0311
+namespace test
+
+enum JsonTree:
+    fake
+
+function bad_user_json_tree_bridge() returns JsonValue:
+    JsonTree tree = JsonTree.fake
+    JsonValue raw = tree
+    return raw

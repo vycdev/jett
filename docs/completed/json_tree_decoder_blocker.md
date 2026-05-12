@@ -49,12 +49,14 @@ ran on an explicit larger stack; runtime `main` did not. Running `main` through
 the same explicit stack strategy removed that blocker, and the reflected tree
 decoder now passes fixture coverage.
 
-## Remaining Edge
+## Follow-Up Resolution
 
-`json_decode_tree_reflected[JsonValue](view tree)` is intentionally unsupported
-for now. Bridging a borrowed recursive `JsonTree` back to Rust-backed
-`JsonValue` would need either a view-friendly tree serializer over lists/maps or
-an explicit clone/materialization primitive.
+The raw bridge is no longer Rust-backed in `jett_comptime`: `json.parse_raw`
+delegates to `json_tree_parse`, raw accessors dispatch native `JsonTree` values
+through trusted stdlib hooks, and `JsonValue` is source-compatible with the
+stdlib `json.JsonTree` enum for one compatibility stage. The remaining design
+question is whether that compatibility becomes a real source-level alias once
+stdlib export/alias mechanics are strong enough.
 
 The stable boundary is now:
 
@@ -62,8 +64,8 @@ The stable boundary is now:
 - typed `json_tree_parse_reflected[T]` over `JsonTree`;
 - public `json.parse[T]` delegates to the `JsonTree` reflected path for typed
   targets;
-- public `json.parse[JsonValue]` and `json.parse_raw` still use the Rust-backed
-  raw `JsonValue` parser.
+- public `json.parse[JsonValue]` and `json.parse_raw` preserve the `JsonValue`
+  spelling but execute on native `JsonTree` values.
 
 Long term, `JsonValue` should become a compatibility spelling for the native
 `JsonTree` representation. See `/docs/active/json_value_transition_plan.md`.

@@ -44,7 +44,11 @@ about: two names, two traversal surfaces, one conceptual data model.
   `json.array_length`, and `json.object_keys` dispatch native `JsonTree`
   runtime values through trusted stdlib `json_tree_*` hooks.
 - `jett_comptime` no longer has `Value::Json` or a `serde_json` dependency.
-- The type system still treats `JsonValue` as a built-in primitive.
+- The type system still reports `JsonValue` as a built-in primitive for
+  reflection compatibility, but it accepts `JsonValue` and `json.JsonTree` as
+  compatible source types for assignments, calls, fields, and container wrappers.
+- `json_decode_reflected[T](raw: JsonValue)` is now only a compatibility wrapper
+  around `json_decode_tree_reflected[T](view raw)`.
 
 ## Compatibility Principle
 
@@ -155,6 +159,13 @@ Once the runtime representation is native:
 Recommendation: keep `TypePrimitive.json_value_type` for one compatibility
 stage, but document it as legacy once `JsonTree` is the preferred spelling.
 
+Status: implemented as a narrow typechecker compatibility rule rather than a
+source-level alias. Only the stdlib enum `json.JsonTree` is compatible with the
+built-in `JsonValue`; user-defined enums named `JsonTree` remain unrelated.
+Reflection metadata is intentionally split for now:
+`type.info[JsonValue]()` reports `TypePrimitive.json_value_type`, while
+`type.info[json.JsonTree]()` reports `TypeKind.enum_type`.
+
 ### 5. Move Raw Decoder Code Off `JsonValue`
 
 `stdlib/json.jett` still contains the older `json_decode_reflected[T](raw:
@@ -166,6 +177,10 @@ JsonValue)` path. After raw APIs use `JsonTree`:
   rely on them.
 
 This should substantially reduce `stdlib/json.jett` duplication.
+
+Status: implemented. The old duplicate `JsonValue` decoder helper family was
+removed; the public compatibility entrypoint delegates to the `JsonTree`
+decoder.
 
 ### 6. Remove Rust JSON Fallbacks
 
@@ -206,12 +221,11 @@ Add tests before each behavior change:
 
 ## Recommended Next Implementation Bite
 
-Move the source-level compatibility surface forward:
+Finish the public surface decision:
 
-1. Replace old internal `json_decode_reflected[T](raw: JsonValue)` uses with the
-   `json_decode_tree_reflected[T](view raw: JsonTree)` path, leaving only a thin
-   compatibility wrapper if tests still need the old name.
-2. Decide the exact `JsonValue` alias/type-compatibility story before changing
-   typechecker metadata.
-3. Update reflection metadata expectations for `JsonValue` once aliasing is
-   settled.
+1. Design the real alias/export story needed for `type JsonValue = JsonTree`
+   without relying on a compiler special case forever.
+2. Decide whether raw helper signatures should remain `JsonValue` for source
+   stability or move to `view JsonTree` in a breaking cleanup pass.
+3. Once that decision lands, update reflection metadata so the legacy
+   `TypePrimitive.json_value_type` is either formally deprecated or removed.

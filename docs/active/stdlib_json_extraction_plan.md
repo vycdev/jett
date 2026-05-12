@@ -172,6 +172,9 @@ bridge spoofing, not helper visibility.
    - `json_serialize_public_reflected[T](view value: T)` exists in stdlib.
    - `json_decode_reflected[T](raw: JsonValue)` exists in stdlib.
    - `json_decode_tree_reflected[T](view raw: JsonTree)` exists in stdlib.
+   - `json_decode_reflected[T](raw: JsonValue)` is now a thin compatibility
+     wrapper over the `JsonTree` decoder; the duplicate raw decoder helper
+     family has been removed.
    - `json_parse_reflected[T](raw: string)` now routes typed targets through the
      self-hosted `JsonTree` parser/decoder, with a `JsonValue` carve-out for
      the raw compatibility surface.
@@ -188,11 +191,11 @@ bridge spoofing, not helper visibility.
    characters, mismatched delimiters, bad number forms, bad literals, and
    invalid escapes; the remaining question is how far `JsonTree` should go
    toward replacing the raw `JsonValue` compatibility surface.
-7. Decide whether `JsonValue` becomes a type alias/replacement or remains an
-   opaque compatibility substrate. Direct `JsonTree` typed decoding is staged;
-   see `/docs/completed/json_tree_decoder_blocker.md`. Decision: `JsonValue` should become
-   a compatibility spelling for native `JsonTree`, not a permanent Rust-backed
-   tree. See `/docs/active/json_value_transition_plan.md`.
+7. Decide whether `JsonValue` becomes a source-level type alias/replacement or
+   remains a compiler-recognized compatibility spelling. The current
+   implementation accepts the built-in `JsonValue` and stdlib `json.JsonTree`
+   as compatible types, while preserving separate reflection metadata for one
+   compatibility stage. See `/docs/active/json_value_transition_plan.md`.
 
 ## Recommended Shape For `stdlib/json.jett`
 

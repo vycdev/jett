@@ -354,6 +354,9 @@ verify type_info_reflection:
     assert direct_type_primitive_tag_is[int64](TypePrimitive.int64_type) == true
     assert type_info_primitive_tag_is[string](TypePrimitive.string_type) == true
     assert type_info_primitive_tag_is[JsonValue](TypePrimitive.json_value_type) == true
+    assert type_info_kind[json.JsonTree]() == "enum"
+    assert type_info_kind_tag_is[json.JsonTree](TypeKind.enum_type) == true
+    assert type_info_has_no_primitive_tag[json.JsonTree]() == true
     assert type_info_kind[NonEmpty]() == "refinement"
     assert type_info_kind_tag_is[NonEmpty](TypeKind.refinement_type) == true
     assert type_info_has_no_primitive_tag[NonEmpty]() == true

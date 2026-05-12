@@ -1,0 +1,100 @@
+namespace test
+
+struct RawHolder:
+    raw: JsonValue
+
+function raw_name(raw: JsonValue) returns string:
+    JsonValue name = json.field(raw, "name") handle:
+        return "missing name"
+    return json.as_string(name) handle error:
+        default error
+
+function tree_name(view tree: json.JsonTree) returns string:
+    json.JsonTree name = json.json_tree_field(view tree, "name") handle:
+        return "missing name"
+    return json.json_tree_as_string(view name) handle error:
+        default error
+
+function raw_from_tree_assignment() returns string:
+    json.JsonTree tree = json.json_tree_parse("{{\"name\":\"Ada\"}}") handle error:
+        return error
+    JsonValue raw = tree
+    return raw_name(raw)
+
+function tree_from_raw_assignment() returns string:
+    JsonValue raw = json.parse_raw("{{\"name\":\"Grace\"}}") handle error:
+        return error
+    json.JsonTree tree = raw
+    return tree_name(view tree)
+
+function raw_param_accepts_tree() returns string:
+    json.JsonTree tree = json.json_tree_parse("{{\"name\":\"Lin\"}}") handle error:
+        return error
+    return raw_name(tree)
+
+function tree_param_accepts_raw() returns string:
+    JsonValue raw = json.parse_raw("{{\"name\":\"Edsger\"}}") handle error:
+        return error
+    return tree_name(view raw)
+
+function raw_builtin_accepts_tree() returns string:
+    json.JsonTree tree = json.json_tree_parse("{{\"name\":\"Barbara\"}}") handle error:
+        return error
+    JsonValue name = json.field(tree, "name") handle:
+        return "missing name"
+    return json.as_string(name) handle error:
+        default error
+
+function raw_kind_accepts_tree() returns string:
+    json.JsonTree tree = json.json_tree_parse("{{\"name\":\"Katherine\"}}") handle error:
+        return error
+    return json.kind(tree)
+
+function list_tree_to_raw_compatibility() returns string:
+    json.JsonTree tree = json.json_tree_parse("\"Margaret\"") handle error:
+        return error
+    list[json.JsonTree] trees = list(tree)
+    list[JsonValue] raws = trees
+    JsonValue raw = list.get[JsonValue](view raws, 0) handle:
+        return "missing"
+    return json.as_string(raw) handle error:
+        default error
+
+function optional_tree_to_raw_compatibility() returns string:
+    json.JsonTree tree = json.json_tree_parse("\"Dorothy\"") handle error:
+        return error
+    optional[json.JsonTree] maybe_tree = some(tree)
+    optional[JsonValue] maybe_raw = maybe_tree
+    JsonValue raw = maybe_raw handle:
+        return "none"
+    return json.as_string(raw) handle error:
+        default error
+
+function result_tree_to_raw_compatibility() returns string:
+    json.JsonTree tree = json.json_tree_parse("\"Evelyn\"") handle error:
+        return error
+    result[json.JsonTree, string] tree_result = ok(tree)
+    result[JsonValue, string] raw_result = tree_result
+    JsonValue raw = raw_result handle error:
+        return error
+    return json.as_string(raw) handle error:
+        default error
+
+function struct_field_accepts_tree() returns string:
+    json.JsonTree tree = json.json_tree_parse("\"Joan\"") handle error:
+        return error
+    RawHolder holder = RawHolder(raw: tree)
+    return json.as_string(holder.raw) handle error:
+        default error
+
+verify json_value_tree_compatibility:
+    assert raw_from_tree_assignment() == "Ada"
+    assert tree_from_raw_assignment() == "Grace"
+    assert raw_param_accepts_tree() == "Lin"
+    assert tree_param_accepts_raw() == "Edsger"
+    assert raw_builtin_accepts_tree() == "Barbara"
+    assert raw_kind_accepts_tree() == "object"
+    assert list_tree_to_raw_compatibility() == "Margaret"
+    assert optional_tree_to_raw_compatibility() == "Dorothy"
+    assert result_tree_to_raw_compatibility() == "Evelyn"
+    assert struct_field_accepts_tree() == "Joan"

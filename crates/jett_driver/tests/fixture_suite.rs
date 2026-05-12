@@ -251,6 +251,10 @@ run_pass_fixture!(
     "json_raw_value_access_edges.jett"
 );
 run_pass_fixture!(run_pass_json_raw_tree_parity, "json_raw_tree_parity.jett");
+run_pass_fixture!(
+    run_pass_json_value_tree_compatibility,
+    "json_value_tree_compatibility.jett"
+);
 run_pass_fixture!(run_pass_json_enum_shapes, "json_enum_shapes.jett");
 run_pass_fixture!(run_pass_json_bitfield_shapes, "json_bitfield_shapes.jett");
 run_pass_fixture!(run_pass_json_roundtrip_user, "json_roundtrip_user.jett");
@@ -432,6 +436,10 @@ compile_fail_fixture!(
 compile_fail_fixture!(
     compile_fail_json_raw_cast_requires_handle,
     "json_raw_cast_requires_handle.jett"
+);
+compile_fail_fixture!(
+    compile_fail_json_value_user_json_tree_incompatible,
+    "json_value_user_json_tree_incompatible.jett"
 );
 compile_fail_fixture!(
     compile_fail_serialize_annotation_requires_string,

@@ -939,6 +939,9 @@ impl<'a> TypeChecker<'a> {
         if expected == got || expected == TypeInterner::ERROR || got == TypeInterner::ERROR {
             return true;
         }
+        if self.json_value_tree_compatible(expected, got) {
+            return true;
+        }
 
         match (self.interner.resolve(expected), self.interner.resolve(got)) {
             (Type::Interface(_), Type::Interface(_)) => expected == got,
@@ -958,6 +961,21 @@ impl<'a> TypeChecker<'a> {
             | (Type::Result(expected_key, expected_val), Type::Result(got_key, got_val)) => {
                 self.types_compatible(*expected_key, *got_key)
                     && self.types_compatible(*expected_val, *got_val)
+            }
+            _ => false,
+        }
+    }
+
+    fn json_value_tree_compatible(&self, expected: TypeId, got: TypeId) -> bool {
+        (expected == TypeInterner::JSON_VALUE && self.is_json_tree_type(got))
+            || (got == TypeInterner::JSON_VALUE && self.is_json_tree_type(expected))
+    }
+
+    fn is_json_tree_type(&self, id: TypeId) -> bool {
+        match self.interner.resolve(id) {
+            Type::Enum(enum_id) => {
+                let name = &self.interner.resolve_enum(*enum_id).name;
+                name == "json.JsonTree"
             }
             _ => false,
         }
