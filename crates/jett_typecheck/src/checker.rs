@@ -456,11 +456,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn function_lookup_names(namespace: Option<&str>, name: &str) -> Vec<String> {
-        let mut names = vec![name.to_string()];
-        if let Some(qualified) = Self::namespace_qualified_name(namespace, name) {
-            names.push(qualified);
-        }
-        names
+        vec![Self::canonical_name(namespace, name)]
     }
 
     fn type_lookup_names(namespace: Option<&str>, name: &str) -> Vec<String> {
@@ -470,9 +466,6 @@ impl<'a> TypeChecker<'a> {
     fn register_named_type(&mut self, namespace: Option<&str>, name: &str, ty: TypeId) {
         let canonical = Self::canonical_name(namespace, name);
         self.named_types.insert(canonical, ty);
-        if namespace.is_some() {
-            self.named_types.entry(name.to_string()).or_insert(ty);
-        }
     }
 
     fn register_generic_struct_template(
@@ -482,12 +475,7 @@ impl<'a> TypeChecker<'a> {
         def: ast::StructDef,
     ) {
         let canonical = Self::canonical_name(namespace, name);
-        self.generic_struct_templates.insert(canonical, def.clone());
-        if namespace.is_some() {
-            self.generic_struct_templates
-                .entry(name.to_string())
-                .or_insert(def);
-        }
+        self.generic_struct_templates.insert(canonical, def);
     }
 
     fn declaration_def_id(&self, span: Span) -> Option<DefId> {
@@ -2874,11 +2862,6 @@ impl<'a> TypeChecker<'a> {
             };
             let canonical = Self::canonical_name(current_namespace.as_deref(), &alias.name.name);
             self.type_aliases.insert(canonical, alias.clone());
-            if current_namespace.is_some() {
-                self.type_aliases
-                    .entry(alias.name.name.clone())
-                    .or_insert_with(|| alias.clone());
-            }
         }
     }
 
@@ -3153,12 +3136,6 @@ impl<'a> TypeChecker<'a> {
             .collect();
         let reflection_fields =
             self.reflection_fields_for_struct_def(def, namespace, fields.as_slice());
-        if namespace.is_some() {
-            let leaf_fields = self.reflection_fields_for_struct_def(def, None, fields.as_slice());
-            self.reflection_fields
-                .entry(def.name.name.clone())
-                .or_insert(leaf_fields);
-        }
         self.reflection_fields
             .insert(canonical_name.clone(), reflection_fields);
         let methods = def
@@ -3324,16 +3301,6 @@ impl<'a> TypeChecker<'a> {
             self.reflection_fields_for_bitfield_def(def, namespace, fields.as_slice());
         let reflection_bitfield =
             self.reflection_bitfield_info_for_def(def, namespace, fields.as_slice());
-        if namespace.is_some() {
-            let leaf_fields = self.reflection_fields_for_bitfield_def(def, None, fields.as_slice());
-            let leaf_bitfield = self.reflection_bitfield_info_for_def(def, None, fields.as_slice());
-            self.reflection_fields
-                .entry(def.name.name.clone())
-                .or_insert(leaf_fields);
-            self.reflection_bitfields
-                .entry(def.name.name.clone())
-                .or_insert(leaf_bitfield);
-        }
         self.reflection_fields
             .insert(canonical_name.clone(), reflection_fields);
         self.reflection_bitfields
@@ -3415,13 +3382,6 @@ impl<'a> TypeChecker<'a> {
             .collect();
         let reflection_variants =
             self.reflection_variants_for_enum_def(def, namespace, variants.as_slice());
-        if namespace.is_some() {
-            let leaf_variants =
-                self.reflection_variants_for_enum_def(def, None, variants.as_slice());
-            self.reflection_variants
-                .entry(def.name.name.clone())
-                .or_insert(leaf_variants);
-        }
         self.reflection_variants
             .insert(canonical_name.clone(), reflection_variants);
 
@@ -6331,11 +6291,6 @@ impl<'a> TypeChecker<'a> {
         });
         let ty = self.interner.intern(Type::Struct(sid));
 
-        if let Some((_namespace, leaf_name)) = mono_name.split_once('.') {
-            self.reflection_fields
-                .entry(leaf_name.to_string())
-                .or_insert_with(|| reflection_fields.clone());
-        }
         self.reflection_fields.insert(mono_name, reflection_fields);
         self.monomorphized_structs.insert(cache_key, ty);
         ty

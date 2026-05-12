@@ -494,6 +494,9 @@ impl Resolver {
                 Item::Bitfield(bitfield) => {
                     self.resolve_bitfield(bitfield, index);
                 }
+                Item::Enum(enm) => {
+                    self.resolve_enum(enm, index);
+                }
                 Item::VarDecl(v) => {
                     self.resolve_expr(&v.value, index);
                 }
@@ -606,6 +609,14 @@ impl Resolver {
                 jett_parser::ast::BitfieldFieldKind::Payload(ty) => {
                     self.resolve_type_expr(ty, item_index);
                 }
+            }
+        }
+    }
+
+    fn resolve_enum(&mut self, enm: &jett_parser::ast::EnumDef, item_index: usize) {
+        for variant in &enm.variants {
+            for field in &variant.fields {
+                self.resolve_type_expr(&field.ty, item_index);
             }
         }
     }

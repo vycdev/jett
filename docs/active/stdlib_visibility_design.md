@@ -172,6 +172,9 @@ Implemented:
 - The resolver no longer creates root-scope leaf bindings for namespaced
   declarations; same-namespace shorthand resolves through the canonical
   namespace path.
+- The typechecker now registers namespaced functions, types, aliases, generic
+  struct templates, and reflection metadata under canonical namespace keys
+  instead of leaf aliases.
 - Same-namespace private helper access remains allowed.
 - Existing user/project namespace fixtures now mark public cross-namespace API
   with `export`.
@@ -180,9 +183,9 @@ Implemented:
 
 Still staged:
 
-- The typechecker and interpreter still keep temporary flat compatibility
-  registrations. The resolver no longer creates flat aliases, but the later
-  registries still need to stop creating those aliases internally.
+- The interpreter still keeps temporary flat compatibility registrations. The
+  resolver and typechecker no longer create flat aliases, but runtime registries
+  still need to stop creating those aliases internally.
 - Public JSON policy remains compiler-owned; source `export` is not trusted
   origin.
 
