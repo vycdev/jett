@@ -13,8 +13,9 @@ use jett_types::{
     ActorDef as TypeActorDef, ActorMessageDef, BitfieldDef as TypeBitfieldDef,
     BitfieldFieldDef as TypeBitfieldFieldDef, BitfieldFieldKind as TypeBitfieldFieldKind,
     BitfieldId, EnumDef as TypeEnumDef, FunctionSig, InterfaceDef as TypeInterfaceDef,
-    ReflectionFieldInfo, ReflectionMetadata, ReflectionTypeInfo, StructDef as TypeStructDef,
-    StructId, Type, TypeId, TypeInterner, VariantDef,
+    ReflectionBitfieldFieldInfo, ReflectionBitfieldInfo, ReflectionFieldInfo, ReflectionMetadata,
+    ReflectionTypeInfo, StructDef as TypeStructDef, StructId, Type, TypeId, TypeInterner,
+    VariantDef,
 };
 
 use crate::capability;
@@ -108,6 +109,8 @@ struct TypeChecker<'a> {
     monomorphized_structs: HashMap<(String, Vec<TypeId>), TypeId>,
     /// Checked reflection field snapshots keyed by the public type spelling.
     reflection_fields: HashMap<String, Vec<ReflectionFieldInfo>>,
+    /// Checked bitfield layout snapshots keyed by the public type spelling.
+    reflection_bitfields: HashMap<String, ReflectionBitfieldInfo>,
     /// Active type variable substitution during monomorphization (type_param_name → TypeId).
     type_var_subst: HashMap<String, TypeId>,
     /// Trusted field types currently available from direct `type.fields[T]()` loops.
@@ -160,6 +163,7 @@ impl<'a> TypeChecker<'a> {
             generic_struct_templates: HashMap::new(),
             monomorphized_structs: HashMap::new(),
             reflection_fields: HashMap::new(),
+            reflection_bitfields: HashMap::new(),
             type_var_subst: HashMap::new(),
             reflected_field_type_scopes: Vec::new(),
             reflected_type_info_scopes: Vec::new(),
@@ -835,6 +839,10 @@ impl<'a> TypeChecker<'a> {
             metadata.insert_type_fields(type_name, fields);
         }
 
+        for (type_name, bitfield) in self.reflection_bitfields.clone() {
+            metadata.insert_bitfield(type_name, bitfield);
+        }
+
         metadata
     }
 
@@ -1022,6 +1030,49 @@ impl<'a> TypeChecker<'a> {
                 )
             })
             .collect()
+    }
+
+    fn reflection_bitfield_info_for_def(
+        &mut self,
+        def: &ast::BitfieldDef,
+        namespace: Option<&str>,
+        resolved_fields: &[TypeBitfieldFieldDef],
+    ) -> ReflectionBitfieldInfo {
+        let fields = def
+            .fields
+            .iter()
+            .zip(resolved_fields.iter())
+            .enumerate()
+            .map(|(index, (field, resolved_field))| {
+                let (shape, width, ty, enum_ty) = match &field.kind {
+                    ast::BitfieldFieldKind::Bits { width, as_type } => {
+                        let ty = as_type.clone().unwrap_or_else(|| {
+                            TypeExpr::Named(ast::Ident {
+                                name: "int64".to_string(),
+                                span: field.span,
+                            })
+                        });
+                        ("bits", i64::from(*width), ty, as_type.as_ref())
+                    }
+                    ast::BitfieldFieldKind::Payload(ty) => ("payload", 0, ty.clone(), None),
+                };
+                let type_info =
+                    self.reflection_type_info_for_type_expr(&ty, namespace, resolved_field.ty);
+                let enum_type = enum_ty.map(|ty| {
+                    let enum_ty = self.resolve_type_expr(ty);
+                    self.reflection_type_info_for_type_expr(ty, namespace, enum_ty)
+                });
+                ReflectionBitfieldFieldInfo::new(
+                    index,
+                    &field.name.name,
+                    shape,
+                    width,
+                    type_info,
+                    enum_type,
+                )
+            })
+            .collect();
+        ReflectionBitfieldInfo::new(def.network_order, fields)
     }
 
     fn reflection_field_info_for_type_expr(
@@ -3225,14 +3276,22 @@ impl<'a> TypeChecker<'a> {
 
         let reflection_fields =
             self.reflection_fields_for_bitfield_def(def, namespace, fields.as_slice());
+        let reflection_bitfield =
+            self.reflection_bitfield_info_for_def(def, namespace, fields.as_slice());
         if namespace.is_some() {
             let leaf_fields = self.reflection_fields_for_bitfield_def(def, None, fields.as_slice());
+            let leaf_bitfield = self.reflection_bitfield_info_for_def(def, None, fields.as_slice());
             self.reflection_fields
                 .entry(def.name.name.clone())
                 .or_insert(leaf_fields);
+            self.reflection_bitfields
+                .entry(def.name.name.clone())
+                .or_insert(leaf_bitfield);
         }
         self.reflection_fields
             .insert(canonical_name.clone(), reflection_fields);
+        self.reflection_bitfields
+            .insert(canonical_name.clone(), reflection_bitfield);
 
         self.interner.update_bitfield(
             bid,

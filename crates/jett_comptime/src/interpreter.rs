@@ -9,7 +9,10 @@ use jett_parser::ast::{
     Ident, ImplementBlock, InterfaceDecl, Item, MachineDef, Module, Pattern, PipelineStep, Stmt,
     StringPart, StructDef, TypeAlias, TypeExpr, UnaryOp,
 };
-use jett_types::{ReflectionFieldInfo, ReflectionMetadata, ReflectionTypeInfo};
+use jett_types::{
+    ReflectionBitfieldFieldInfo, ReflectionBitfieldInfo, ReflectionFieldInfo, ReflectionMetadata,
+    ReflectionTypeInfo,
+};
 
 use crate::value::Value;
 
@@ -2455,11 +2458,17 @@ impl Interpreter {
                 if let Some(err) = check_args(name, 0, args) {
                     return Some(err);
                 }
+                if let Some(value) = self.checked_bitfield_value(&ty) {
+                    return Some(Ok(value));
+                }
                 Ok(self.type_bitfield_value(self.type_expr_bitfield(&ty)))
             }
             "type.bitfield_fields" => {
                 if let Some(err) = check_args(name, 0, args) {
                     return Some(err);
+                }
+                if let Some(value) = self.checked_bitfield_fields_value(&ty) {
+                    return Some(Ok(value));
                 }
                 Ok(Value::List(
                     self.type_expr_bitfield_fields(&ty)
@@ -3549,6 +3558,72 @@ impl Interpreter {
                     "type_info".to_string(),
                     Self::reflection_type_info_value(&field.type_info),
                 ),
+            ],
+        }
+    }
+
+    fn checked_bitfield(&self, ty: &TypeExpr) -> Option<&ReflectionBitfieldInfo> {
+        let metadata = self.reflection_metadata.as_ref()?;
+        let type_name = type_expr_display(ty);
+        metadata.get_bitfield(&type_name)
+    }
+
+    fn checked_bitfield_value(&self, ty: &TypeExpr) -> Option<Value> {
+        self.checked_bitfield(ty)
+            .map(Self::reflection_bitfield_info_value)
+    }
+
+    fn checked_bitfield_fields_value(&self, ty: &TypeExpr) -> Option<Value> {
+        let bitfield = self.checked_bitfield(ty)?;
+        Some(Value::List(
+            bitfield
+                .fields
+                .iter()
+                .map(Self::reflection_bitfield_field_info_value)
+                .collect(),
+        ))
+    }
+
+    fn reflection_bitfield_info_value(bitfield: &ReflectionBitfieldInfo) -> Value {
+        let fields = bitfield
+            .fields
+            .iter()
+            .map(Self::reflection_bitfield_field_info_value)
+            .collect();
+        Value::Struct {
+            type_name: "TypeBitfield".to_string(),
+            fields: vec![
+                (
+                    "network_order".to_string(),
+                    Value::Bool(bitfield.network_order),
+                ),
+                ("fields".to_string(), Value::List(fields)),
+            ],
+        }
+    }
+
+    fn reflection_bitfield_field_info_value(field: &ReflectionBitfieldFieldInfo) -> Value {
+        let enum_type = field
+            .enum_type
+            .as_ref()
+            .map(|info| Value::OptionalSome(Box::new(Self::reflection_type_info_value(info))))
+            .unwrap_or(Value::OptionalNone);
+        Value::Struct {
+            type_name: "TypeBitfieldField".to_string(),
+            fields: vec![
+                ("index".to_string(), Value::Int64(field.index as i64)),
+                ("name".to_string(), Value::String(field.name.clone())),
+                ("shape".to_string(), Value::String(field.shape.clone())),
+                (
+                    "shape_tag".to_string(),
+                    Self::bitfield_shape_tag_value(&field.shape),
+                ),
+                ("width".to_string(), Value::Int64(field.width)),
+                (
+                    "type_info".to_string(),
+                    Self::reflection_type_info_value(&field.type_info),
+                ),
+                ("enum_type".to_string(), enum_type),
             ],
         }
     }
@@ -8389,6 +8464,65 @@ mod tests {
             .expect("TypeField.has_secret should exist");
         assert_eq!(serialize_name, &Value::String("jsonValue".to_string()));
         assert_eq!(has_secret, &Value::Bool(true));
+    }
+
+    #[test]
+    fn type_bitfield_uses_checked_reflection_metadata_when_available() {
+        let int_info = ReflectionTypeInfo::new(
+            "int64",
+            "primitive",
+            Some("int64_type".to_string()),
+            false,
+            Vec::new(),
+        );
+        let mut metadata = ReflectionMetadata::new();
+        metadata.insert_bitfield(
+            "Header",
+            ReflectionBitfieldInfo::new(
+                true,
+                vec![ReflectionBitfieldFieldInfo::new(
+                    0, "version", "bits", 3, int_info, None,
+                )],
+            ),
+        );
+
+        let mut interp = Interpreter::new();
+        interp.set_reflection_metadata(Arc::new(metadata));
+
+        let layout = interp
+            .call_builtin_with_type_args("type.bitfield_layout", &[type_named("Header")], &[])
+            .expect("type.bitfield_layout should be a typed builtin")
+            .expect("type.bitfield_layout should evaluate");
+        let Value::Struct { fields, .. } = layout else {
+            panic!("expected TypeBitfield struct");
+        };
+        let network_order = fields
+            .iter()
+            .find_map(|(name, value)| {
+                if name == "network_order" {
+                    Some(value)
+                } else {
+                    None
+                }
+            })
+            .expect("TypeBitfield.network_order should exist");
+        assert_eq!(network_order, &Value::Bool(true));
+
+        let fields = interp
+            .call_builtin_with_type_args("type.bitfield_fields", &[type_named("Header")], &[])
+            .expect("type.bitfield_fields should be a typed builtin")
+            .expect("type.bitfield_fields should evaluate");
+        let Value::List(fields) = fields else {
+            panic!("expected list of TypeBitfieldField values");
+        };
+        let Value::Struct { fields, .. } = &fields[0] else {
+            panic!("expected TypeBitfieldField struct");
+        };
+        let width = fields
+            .iter()
+            .find_map(|(name, value)| if name == "width" { Some(value) } else { None })
+            .expect("TypeBitfieldField.width should exist");
+        assert_eq!(width, &Value::Int64(3));
     }
 
     /// Helper: create a field access expression.
