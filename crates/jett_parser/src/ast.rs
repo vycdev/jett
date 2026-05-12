@@ -43,6 +43,7 @@ pub struct TypeAlias {
     /// The `where` clause expression.  Uses `value` to refer to the value
     /// being constrained.  `None` for simple aliases without a constraint.
     pub constraint: Option<Expr>,
+    pub exported: bool,
     pub span: Span,
 }
 
@@ -101,6 +102,7 @@ pub struct FunctionDef {
     pub params: Vec<Param>,
     pub return_type: Option<TypeExpr>,
     pub body: Block,
+    pub exported: bool,
     pub span: Span,
 }
 
@@ -124,6 +126,7 @@ pub struct FunctionDecl {
 pub struct InterfaceDecl {
     pub name: Ident,
     pub methods: Vec<FunctionDecl>,
+    pub exported: bool,
     pub span: Span,
 }
 
@@ -152,6 +155,7 @@ pub struct StructDef {
     pub type_params: Vec<Ident>,
     pub fields: Vec<FieldDef>,
     pub methods: Vec<FunctionDef>,
+    pub exported: bool,
     pub span: Span,
 }
 
@@ -168,6 +172,7 @@ pub struct BitfieldDef {
     pub name: Ident,
     pub network_order: bool,
     pub fields: Vec<BitfieldFieldDef>,
+    pub exported: bool,
     pub span: Span,
 }
 
@@ -191,6 +196,7 @@ pub enum BitfieldFieldKind {
 pub struct EnumDef {
     pub name: Ident,
     pub variants: Vec<Variant>,
+    pub exported: bool,
     pub span: Span,
 }
 

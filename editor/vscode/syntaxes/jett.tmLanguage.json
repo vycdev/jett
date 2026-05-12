@@ -76,10 +76,11 @@
         "function-definition": {
             "patterns": [
                 {
-                    "match": "\\b(function)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\(|\\[)",
+                    "match": "\\b(?:(export)\\s+)?(function)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\(|\\[)",
                     "captures": {
-                        "1": { "name": "keyword.control.jett" },
-                        "2": { "name": "entity.name.function.jett" }
+                        "1": { "name": "keyword.other.jett" },
+                        "2": { "name": "keyword.control.jett" },
+                        "3": { "name": "entity.name.function.jett" }
                     }
                 }
             ]
@@ -87,10 +88,11 @@
         "type-alias-definition": {
             "patterns": [
                 {
-                    "match": "\\b(type)\\s+([A-Z][a-zA-Z0-9_]*)",
+                    "match": "\\b(?:(export)\\s+)?(type)\\s+([A-Z][a-zA-Z0-9_]*)",
                     "captures": {
                         "1": { "name": "keyword.other.jett" },
-                        "2": { "name": "entity.name.type.jett" }
+                        "2": { "name": "keyword.other.jett" },
+                        "3": { "name": "entity.name.type.jett" }
                     }
                 }
             ]
@@ -98,10 +100,11 @@
         "struct-definition": {
             "patterns": [
                 {
-                    "match": "\\b(struct)\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+                    "match": "\\b(?:(export)\\s+)?(struct)\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
                     "captures": {
-                        "1": { "name": "keyword.control.jett" },
-                        "2": { "name": "entity.name.type.jett" }
+                        "1": { "name": "keyword.other.jett" },
+                        "2": { "name": "keyword.control.jett" },
+                        "3": { "name": "entity.name.type.jett" }
                     }
                 }
             ]
@@ -109,10 +112,11 @@
         "enum-definition": {
             "patterns": [
                 {
-                    "match": "\\b(enum)\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+                    "match": "\\b(?:(export)\\s+)?(enum)\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
                     "captures": {
-                        "1": { "name": "keyword.control.jett" },
-                        "2": { "name": "entity.name.type.jett" }
+                        "1": { "name": "keyword.other.jett" },
+                        "2": { "name": "keyword.control.jett" },
+                        "3": { "name": "entity.name.type.jett" }
                     }
                 }
             ]
@@ -153,10 +157,11 @@
         "interface-definition": {
             "patterns": [
                 {
-                    "match": "\\b(interface)\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+                    "match": "\\b(?:(export)\\s+)?(interface)\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
                     "captures": {
-                        "1": { "name": "keyword.control.jett" },
-                        "2": { "name": "entity.name.type.jett" }
+                        "1": { "name": "keyword.other.jett" },
+                        "2": { "name": "keyword.control.jett" },
+                        "3": { "name": "entity.name.type.jett" }
                     }
                 }
             ]
@@ -164,10 +169,13 @@
         "bitfield-definition": {
             "patterns": [
                 {
-                    "match": "\\b(bitfield)\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+                    "match": "\\b(?:(export)\\s+)?(?:(network)\\s+)?(bitfield)\\s+(?:(network)\\s+)?([a-zA-Z_][a-zA-Z0-9_]*)",
                     "captures": {
-                        "1": { "name": "keyword.control.jett" },
-                        "2": { "name": "entity.name.type.jett" }
+                        "1": { "name": "keyword.other.jett" },
+                        "2": { "name": "keyword.other.jett" },
+                        "3": { "name": "keyword.control.jett" },
+                        "4": { "name": "keyword.other.jett" },
+                        "5": { "name": "entity.name.type.jett" }
                     }
                 }
             ]
@@ -290,7 +298,7 @@
             "patterns": [
                 {
                     "name": "keyword.other.jett",
-                    "match": "\\b(struct|enum|use|mutable|result|ok|fail|clone|view|type|where|machine|states|transitions|to|at|is|actor|receive|send|ask|respond|spawn|run|join|cancel|comptime|verify|property|given|trace|breakpoint|secret|declassify|coarsen|serialize|namespace|bitfield|bit|bits|network|implement|interface|mutual|assert|some|none|nothing|modulo|as|and|within|self|value|transition|optional|other|not)\\b"
+                    "match": "\\b(struct|enum|use|mutable|result|ok|fail|clone|view|type|where|machine|states|transitions|to|at|is|actor|receive|send|ask|respond|spawn|run|join|cancel|comptime|verify|property|given|trace|breakpoint|secret|declassify|coarsen|serialize|namespace|export|bitfield|bit|bits|network|implement|interface|mutual|assert|some|none|nothing|modulo|as|and|within|self|value|transition|optional|other|not)\\b"
                 }
             ]
         },

@@ -734,6 +734,7 @@ mod tests {
                 ],
                 span: sp(20, 64),
             },
+            exported: false,
             span: sp(0, 64),
         };
 
@@ -807,6 +808,7 @@ mod tests {
                 ],
                 span: sp(20, 84),
             },
+            exported: false,
             span: sp(0, 84),
         };
 
@@ -888,6 +890,7 @@ mod tests {
                 ],
                 span: sp(20, 94),
             },
+            exported: false,
             span: sp(0, 94),
         };
 
@@ -958,6 +961,7 @@ mod tests {
                 ],
                 span: sp(20, 65),
             },
+            exported: false,
             span: sp(0, 65),
         };
 
@@ -1051,6 +1055,7 @@ mod tests {
                 ],
                 span: sp(20, 104),
             },
+            exported: false,
             span: sp(0, 104),
         };
 
@@ -1132,6 +1137,7 @@ mod tests {
                 ],
                 span: sp(20, 89),
             },
+            exported: false,
             span: sp(0, 89),
         };
 
@@ -1211,6 +1217,7 @@ mod tests {
                 ],
                 span: sp(20, 94),
             },
+            exported: false,
             span: sp(0, 94),
         };
 
@@ -1264,6 +1271,7 @@ mod tests {
                 ],
                 span: sp(40, 53),
             },
+            exported: false,
             span: sp(0, 53),
         };
 
@@ -1310,6 +1318,7 @@ mod tests {
                 })],
                 span: sp(40, 47),
             },
+            exported: false,
             span: sp(0, 47),
         };
 
@@ -1352,6 +1361,7 @@ mod tests {
                 })],
                 span: sp(30, 37),
             },
+            exported: false,
             span: sp(0, 37),
         };
 

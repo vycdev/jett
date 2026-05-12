@@ -62,6 +62,7 @@ pub enum TokenKind {
     Coarsen,
     Serialize,
     Namespace,
+    Export,
     Bitfield,
     Bit,
     Bits,

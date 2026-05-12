@@ -209,6 +209,10 @@ run_pass_fixture!(
 );
 run_pass_fixture!(run_pass_namespace_use_alias, "namespace_use_alias.jett");
 run_pass_fixture!(
+    run_pass_namespace_exports_syntax,
+    "namespace_exports_syntax.jett"
+);
+run_pass_fixture!(
     run_pass_handle_result_optional,
     "handle_result_optional.jett"
 );

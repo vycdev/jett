@@ -586,6 +586,7 @@ mod tests {
                 .collect(),
             return_type: None,
             body,
+            exported: false,
             span: sp(),
         }
     }
@@ -630,6 +631,7 @@ mod tests {
                 })
                 .collect(),
             methods,
+            exported: false,
             span: sp(),
         }
     }
@@ -659,6 +661,7 @@ mod tests {
                     span: sp(),
                 })
                 .collect(),
+            exported: false,
             span: sp(),
         }
     }
@@ -1010,6 +1013,7 @@ mod tests {
             name: ident(name),
             base_type: type_named(base),
             constraint,
+            exported: false,
             span: sp(),
         }
     }
@@ -1684,6 +1688,7 @@ mod tests {
             }],
             return_type: Some(type_named("bool")),
             body: block(vec![return_stmt(binary(var("x"), BinOp::GtEq, int(0)))]),
+            exported: false,
             span: sp(),
         };
 

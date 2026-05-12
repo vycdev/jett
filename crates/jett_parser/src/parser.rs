@@ -163,32 +163,76 @@ impl<'src> Parser<'src> {
 
     fn parse_item(&mut self) -> Option<Item> {
         self.skip_newlines();
+        let export_span = self.eat(TokenKind::Export).map(|tok| tok.span);
+        let exported = export_span.is_some();
+        if exported
+            && !matches!(
+                self.peek(),
+                TokenKind::Function
+                    | TokenKind::Interface
+                    | TokenKind::Struct
+                    | TokenKind::Bitfield
+                    | TokenKind::Enum
+                    | TokenKind::Type
+            )
+            && !(self.peek() == TokenKind::Network && self.peek_nth(1) == TokenKind::Bitfield)
+        {
+            let tok = self.peek_token().clone();
+            self.error(
+                format!(
+                    "expected exportable item (function, interface, struct, bitfield, enum, or type), found {:?}",
+                    tok.kind
+                ),
+                tok.span,
+            );
+            return None;
+        }
         match self.peek() {
             TokenKind::Namespace => Some(Item::Namespace(self.parse_namespace())),
-            TokenKind::Function => Some(Item::Function(self.parse_function())),
+            TokenKind::Function => Some(Item::Function(self.parse_function(exported, export_span))),
             TokenKind::Mutual => Some(Item::Mutual(self.parse_mutual_block())),
-            TokenKind::Interface => Some(Item::Interface(self.parse_interface())),
-            TokenKind::Implement => Some(Item::Implement(self.parse_implement())),
-            TokenKind::Struct => Some(Item::Struct(self.parse_struct())),
-            TokenKind::Bitfield => Some(Item::Bitfield(self.parse_bitfield(false))),
-            TokenKind::Network if self.peek_nth(1) == TokenKind::Bitfield => {
-                Some(Item::Bitfield(self.parse_bitfield(true)))
+            TokenKind::Interface => {
+                Some(Item::Interface(self.parse_interface(exported, export_span)))
             }
-            TokenKind::Enum => Some(Item::Enum(self.parse_enum())),
+            TokenKind::Implement => Some(Item::Implement(self.parse_implement())),
+            TokenKind::Struct => Some(Item::Struct(self.parse_struct(exported, export_span))),
+            TokenKind::Bitfield => Some(Item::Bitfield(self.parse_bitfield(
+                false,
+                exported,
+                export_span,
+            ))),
+            TokenKind::Network if self.peek_nth(1) == TokenKind::Bitfield => Some(Item::Bitfield(
+                self.parse_bitfield(true, exported, export_span),
+            )),
+            TokenKind::Enum => Some(Item::Enum(self.parse_enum(exported, export_span))),
             TokenKind::Machine => Some(Item::Machine(self.parse_machine())),
             TokenKind::Actor => Some(Item::Actor(self.parse_actor())),
             TokenKind::Verify => Some(Item::Verify(self.parse_verify_block())),
             TokenKind::Property => Some(Item::Property(self.parse_property_block())),
-            TokenKind::Type => Some(Item::TypeAlias(self.parse_type_alias())),
+            TokenKind::Type => Some(Item::TypeAlias(
+                self.parse_type_alias(exported, export_span),
+            )),
             TokenKind::Mutable => Some(Item::VarDecl(self.parse_var_decl())),
             // Could be a variable declaration: `Type name = expr`
-            _ if self.looks_like_var_decl() => Some(Item::VarDecl(self.parse_var_decl())),
+            _ if !exported && self.looks_like_var_decl() => {
+                Some(Item::VarDecl(self.parse_var_decl()))
+            }
             _ => {
                 let tok = self.peek_token().clone();
-                self.error(
-                    format!("expected item (namespace, function, mutual, interface, implement, struct, bitfield, enum, machine, type, property, or variable), found {:?}", tok.kind),
-                    tok.span,
-                );
+                if exported {
+                    self.error(
+                        format!(
+                            "expected exportable item (function, interface, struct, bitfield, enum, or type), found {:?}",
+                            tok.kind
+                        ),
+                        tok.span,
+                    );
+                } else {
+                    self.error(
+                        format!("expected item (namespace, function, mutual, interface, implement, struct, bitfield, enum, machine, type, property, or variable), found {:?}", tok.kind),
+                        tok.span,
+                    );
+                }
                 None
             }
         }
@@ -276,8 +320,9 @@ impl<'src> Parser<'src> {
         }
     }
 
-    fn parse_type_alias(&mut self) -> TypeAlias {
+    fn parse_type_alias(&mut self, exported: bool, export_span: Option<Span>) -> TypeAlias {
         let kw = self.expect(TokenKind::Type);
+        let start_span = export_span.unwrap_or(kw.span);
         let name = self.parse_ident();
         self.expect(TokenKind::Eq);
         let base_type = self.parse_type();
@@ -291,27 +336,30 @@ impl<'src> Parser<'src> {
         let end_span = constraint.as_ref().map_or(base_type.span(), |c| c.span());
 
         TypeAlias {
-            span: kw.span.merge(end_span),
+            span: start_span.merge(end_span),
             name,
             base_type,
             constraint,
+            exported,
         }
     }
 
-    fn parse_function(&mut self) -> FunctionDef {
+    fn parse_function(&mut self, exported: bool, export_span: Option<Span>) -> FunctionDef {
         let kw = self.expect(TokenKind::Function);
+        let start_span = export_span.unwrap_or(kw.span);
         let decl = self.parse_function_decl_rest(kw.span);
         self.expect(TokenKind::Colon);
         let body = self.parse_block();
         let end_span = body.span;
 
         FunctionDef {
-            span: kw.span.merge(end_span),
+            span: start_span.merge(end_span),
             name: decl.name,
             type_params: decl.type_params,
             params: decl.params,
             return_type: decl.return_type,
             body,
+            exported,
         }
     }
 
@@ -382,8 +430,9 @@ impl<'src> Parser<'src> {
         }
     }
 
-    fn parse_interface(&mut self) -> InterfaceDecl {
+    fn parse_interface(&mut self, exported: bool, export_span: Option<Span>) -> InterfaceDecl {
         let kw = self.expect(TokenKind::Interface);
+        let start_span = export_span.unwrap_or(kw.span);
         let name = self.parse_ident();
         self.expect(TokenKind::Colon);
 
@@ -407,7 +456,8 @@ impl<'src> Parser<'src> {
         InterfaceDecl {
             name,
             methods,
-            span: kw.span.merge(last_span),
+            exported,
+            span: start_span.merge(last_span),
         }
     }
 
@@ -425,7 +475,7 @@ impl<'src> Parser<'src> {
 
         self.skip_newlines();
         while self.peek() != TokenKind::Dedent && self.peek() != TokenKind::Eof {
-            let method = self.parse_function();
+            let method = self.parse_function(false, None);
             last_span = method.span;
             methods.push(method);
             self.skip_newlines();
@@ -474,8 +524,9 @@ impl<'src> Parser<'src> {
         }
     }
 
-    fn parse_struct(&mut self) -> StructDef {
+    fn parse_struct(&mut self, exported: bool, export_span: Option<Span>) -> StructDef {
         let kw = self.expect(TokenKind::Struct);
+        let start_span = export_span.unwrap_or(kw.span);
         let name = self.parse_ident();
 
         // Optional generic type parameters: `[T, U, ...]`
@@ -506,7 +557,7 @@ impl<'src> Parser<'src> {
         self.skip_newlines();
         while self.peek() != TokenKind::Dedent && self.peek() != TokenKind::Eof {
             if self.peek() == TokenKind::Function {
-                let func = self.parse_function();
+                let func = self.parse_function(false, None);
                 last_span = func.span;
                 methods.push(func);
             } else {
@@ -522,11 +573,12 @@ impl<'src> Parser<'src> {
         }
 
         StructDef {
-            span: kw.span.merge(last_span),
+            span: start_span.merge(last_span),
             name,
             type_params,
             fields,
             methods,
+            exported,
         }
     }
 
@@ -556,18 +608,25 @@ impl<'src> Parser<'src> {
         }
     }
 
-    fn parse_bitfield(&mut self, leading_network: bool) -> BitfieldDef {
-        let mut start_span = self.peek_token().span;
+    fn parse_bitfield(
+        &mut self,
+        leading_network: bool,
+        exported: bool,
+        export_span: Option<Span>,
+    ) -> BitfieldDef {
+        let mut start_span = export_span.unwrap_or_else(|| self.peek_token().span);
         let mut network_order = false;
 
         if leading_network {
             let network_kw = self.expect(TokenKind::Network);
-            start_span = network_kw.span;
+            if export_span.is_none() {
+                start_span = network_kw.span;
+            }
             network_order = true;
         }
 
         let bitfield_kw = self.expect(TokenKind::Bitfield);
-        if !leading_network {
+        if !leading_network && export_span.is_none() {
             start_span = bitfield_kw.span;
         }
         if self.eat(TokenKind::Network).is_some() {
@@ -598,6 +657,7 @@ impl<'src> Parser<'src> {
             name,
             network_order,
             fields,
+            exported,
         }
     }
 
@@ -639,8 +699,9 @@ impl<'src> Parser<'src> {
         }
     }
 
-    fn parse_enum(&mut self) -> EnumDef {
+    fn parse_enum(&mut self, exported: bool, export_span: Option<Span>) -> EnumDef {
         let kw = self.expect(TokenKind::Enum);
+        let start_span = export_span.unwrap_or(kw.span);
         let name = self.parse_ident();
         self.expect(TokenKind::Colon);
 
@@ -661,9 +722,10 @@ impl<'src> Parser<'src> {
         }
 
         EnumDef {
-            span: kw.span.merge(last_span),
+            span: start_span.merge(last_span),
             name,
             variants,
+            exported,
         }
     }
 
@@ -2487,6 +2549,61 @@ function greet(view stdout: Stdout, name: string) returns nothing:
             }
             other => panic!("expected Function, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn parse_exported_declarations() {
+        let src = "\
+export function exposed() returns nothing:
+    return nothing
+
+export struct User:
+    id: int64
+
+export enum Color:
+    red
+
+export bitfield Flags:
+    active: 1 bit
+
+export network bitfield WireFlags:
+    active: 1 bit
+
+export type Port = int64
+
+export interface Speaker:
+    function speak(view self: Speaker) returns string
+";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        assert_eq!(result.module.items.len(), 7);
+        assert!(matches!(&result.module.items[0], Item::Function(f) if f.exported));
+        assert!(matches!(&result.module.items[1], Item::Struct(s) if s.exported));
+        assert!(matches!(&result.module.items[2], Item::Enum(e) if e.exported));
+        assert!(
+            matches!(&result.module.items[3], Item::Bitfield(b) if b.exported && !b.network_order)
+        );
+        assert!(
+            matches!(&result.module.items[4], Item::Bitfield(b) if b.exported && b.network_order)
+        );
+        assert!(matches!(&result.module.items[5], Item::TypeAlias(t) if t.exported));
+        assert!(matches!(&result.module.items[6], Item::Interface(i) if i.exported));
+    }
+
+    #[test]
+    fn parse_export_rejects_non_exportable_item() {
+        let src = "\
+export namespace app
+";
+        let result = parse_str(src);
+        assert!(!result.errors.is_empty());
+        assert!(
+            result.errors[0]
+                .message
+                .contains("expected exportable item"),
+            "unexpected errors: {:?}",
+            result.errors
+        );
     }
 
     // -----------------------------------------------------------------------

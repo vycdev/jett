@@ -321,6 +321,13 @@ mod tests {
     }
 
     #[test]
+    fn format_exported_function() {
+        let source = "export   function f() returns nothing:\n    return nothing\n";
+        let formatted = fmt(source);
+        assert!(formatted.contains("export function f() returns nothing:"));
+    }
+
+    #[test]
     fn format_preserves_indentation() {
         let source = "function main(stdout: Stdout) returns nothing:\n    if true:\n        return nothing\n";
         let formatted = fmt(source);
