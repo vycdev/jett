@@ -9,7 +9,7 @@ use jett_parser::ast::{
     Ident, ImplementBlock, InterfaceDecl, Item, MachineDef, Module, Pattern, PipelineStep, Stmt,
     StringPart, StructDef, TypeAlias, TypeExpr, UnaryOp,
 };
-use jett_types::{ReflectionMetadata, ReflectionTypeInfo};
+use jett_types::{ReflectionFieldInfo, ReflectionMetadata, ReflectionTypeInfo};
 
 use crate::value::Value;
 
@@ -2440,6 +2440,9 @@ impl Interpreter {
                 if let Some(err) = check_args(name, 0, args) {
                     return Some(err);
                 }
+                if let Some(value) = self.checked_type_fields_value(&ty) {
+                    return Some(Ok(value));
+                }
                 Ok(Value::List(
                     self.type_expr_fields(&ty)
                         .into_iter()
@@ -3504,6 +3507,50 @@ impl Interpreter {
                     )
                 }),
         )
+    }
+
+    fn checked_type_fields(&self, ty: &TypeExpr) -> Option<&[ReflectionFieldInfo]> {
+        let metadata = self.reflection_metadata.as_ref()?;
+        let type_name = type_expr_display(ty);
+        metadata.get_type_fields(&type_name)
+    }
+
+    fn checked_type_fields_value(&self, ty: &TypeExpr) -> Option<Value> {
+        let fields = self.checked_type_fields(ty)?;
+        Some(Value::List(
+            fields
+                .iter()
+                .map(Self::reflection_field_info_value)
+                .collect(),
+        ))
+    }
+
+    fn reflection_field_info_value(field: &ReflectionFieldInfo) -> Value {
+        Value::Struct {
+            type_name: "TypeField".to_string(),
+            fields: vec![
+                ("index".to_string(), Value::Int64(field.index as i64)),
+                ("name".to_string(), Value::String(field.name.clone())),
+                (
+                    "type_name".to_string(),
+                    Value::String(field.type_name.clone()),
+                ),
+                ("kind".to_string(), Value::String(field.kind.clone())),
+                (
+                    "kind_tag".to_string(),
+                    Self::type_kind_tag_value(&field.kind),
+                ),
+                (
+                    "serialize_name".to_string(),
+                    Value::String(field.serialize_name.clone()),
+                ),
+                ("has_secret".to_string(), Value::Bool(field.has_secret)),
+                (
+                    "type_info".to_string(),
+                    Self::reflection_type_info_value(&field.type_info),
+                ),
+            ],
+        }
     }
 
     fn reflection_type_info_value(info: &ReflectionTypeInfo) -> Value {
@@ -8273,6 +8320,74 @@ mod tests {
                 }
             })
             .expect("TypeInfo.has_secret field should exist");
+        assert_eq!(has_secret, &Value::Bool(true));
+    }
+
+    #[test]
+    fn type_fields_uses_checked_reflection_metadata_when_available() {
+        let value_info = ReflectionTypeInfo::new(
+            "secret[string]",
+            "secret",
+            None,
+            true,
+            vec![ReflectionTypeInfo::new(
+                "string",
+                "primitive",
+                Some("string_type".to_string()),
+                false,
+                Vec::new(),
+            )],
+        );
+        let mut metadata = ReflectionMetadata::new();
+        metadata.insert_type_fields(
+            "Box",
+            vec![ReflectionFieldInfo::new(
+                0,
+                "value",
+                "secret[string]",
+                "secret",
+                "jsonValue",
+                true,
+                value_info,
+            )],
+        );
+
+        let mut interp = Interpreter::new();
+        interp.set_reflection_metadata(Arc::new(metadata));
+
+        let value = interp
+            .call_builtin_with_type_args("type.fields", &[type_named("Box")], &[])
+            .expect("type.fields should be a typed builtin")
+            .expect("type.fields should evaluate");
+
+        let Value::List(fields) = value else {
+            panic!("expected list of TypeField values");
+        };
+        assert_eq!(fields.len(), 1);
+        let Value::Struct { fields, .. } = &fields[0] else {
+            panic!("expected TypeField struct");
+        };
+        let serialize_name = fields
+            .iter()
+            .find_map(|(name, value)| {
+                if name == "serialize_name" {
+                    Some(value)
+                } else {
+                    None
+                }
+            })
+            .expect("TypeField.serialize_name should exist");
+        let has_secret = fields
+            .iter()
+            .find_map(|(name, value)| {
+                if name == "has_secret" {
+                    Some(value)
+                } else {
+                    None
+                }
+            })
+            .expect("TypeField.has_secret should exist");
+        assert_eq!(serialize_name, &Value::String("jsonValue".to_string()));
         assert_eq!(has_secret, &Value::Bool(true));
     }
 

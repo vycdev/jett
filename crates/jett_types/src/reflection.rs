@@ -5,6 +5,7 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, Default)]
 pub struct ReflectionMetadata {
     type_infos: HashMap<String, ReflectionTypeInfo>,
+    type_fields: HashMap<String, Vec<ReflectionFieldInfo>>,
 }
 
 impl ReflectionMetadata {
@@ -18,6 +19,18 @@ impl ReflectionMetadata {
 
     pub fn get_type_info(&self, type_name: &str) -> Option<&ReflectionTypeInfo> {
         self.type_infos.get(type_name)
+    }
+
+    pub fn insert_type_fields(
+        &mut self,
+        type_name: impl Into<String>,
+        fields: Vec<ReflectionFieldInfo>,
+    ) {
+        self.type_fields.insert(type_name.into(), fields);
+    }
+
+    pub fn get_type_fields(&self, type_name: &str) -> Option<&[ReflectionFieldInfo]> {
+        self.type_fields.get(type_name).map(Vec::as_slice)
     }
 }
 
@@ -45,6 +58,40 @@ impl ReflectionTypeInfo {
             primitive_tag,
             has_secret,
             args,
+        }
+    }
+}
+
+/// Canonical metadata for `TypeField`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReflectionFieldInfo {
+    pub index: usize,
+    pub name: String,
+    pub type_name: String,
+    pub kind: String,
+    pub serialize_name: String,
+    pub has_secret: bool,
+    pub type_info: ReflectionTypeInfo,
+}
+
+impl ReflectionFieldInfo {
+    pub fn new(
+        index: usize,
+        name: impl Into<String>,
+        type_name: impl Into<String>,
+        kind: impl Into<String>,
+        serialize_name: impl Into<String>,
+        has_secret: bool,
+        type_info: ReflectionTypeInfo,
+    ) -> Self {
+        Self {
+            index,
+            name: name.into(),
+            type_name: type_name.into(),
+            kind: kind.into(),
+            serialize_name: serialize_name.into(),
+            has_secret,
+            type_info,
         }
     }
 }

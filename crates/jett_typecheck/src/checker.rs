@@ -13,8 +13,8 @@ use jett_types::{
     ActorDef as TypeActorDef, ActorMessageDef, BitfieldDef as TypeBitfieldDef,
     BitfieldFieldDef as TypeBitfieldFieldDef, BitfieldFieldKind as TypeBitfieldFieldKind,
     BitfieldId, EnumDef as TypeEnumDef, FunctionSig, InterfaceDef as TypeInterfaceDef,
-    ReflectionMetadata, ReflectionTypeInfo, StructDef as TypeStructDef, StructId, Type, TypeId,
-    TypeInterner, VariantDef,
+    ReflectionFieldInfo, ReflectionMetadata, ReflectionTypeInfo, StructDef as TypeStructDef,
+    StructId, Type, TypeId, TypeInterner, VariantDef,
 };
 
 use crate::capability;
@@ -106,6 +106,8 @@ struct TypeChecker<'a> {
     generic_struct_templates: HashMap<String, ast::StructDef>,
     /// Cache of monomorphized generic struct instances: (name, concrete type args) → TypeId.
     monomorphized_structs: HashMap<(String, Vec<TypeId>), TypeId>,
+    /// Checked reflection field snapshots keyed by the public type spelling.
+    reflection_fields: HashMap<String, Vec<ReflectionFieldInfo>>,
     /// Active type variable substitution during monomorphization (type_param_name → TypeId).
     type_var_subst: HashMap<String, TypeId>,
     /// Trusted field types currently available from direct `type.fields[T]()` loops.
@@ -157,6 +159,7 @@ impl<'a> TypeChecker<'a> {
             handle_body_depth: 0,
             generic_struct_templates: HashMap::new(),
             monomorphized_structs: HashMap::new(),
+            reflection_fields: HashMap::new(),
             type_var_subst: HashMap::new(),
             reflected_field_type_scopes: Vec::new(),
             reflected_type_info_scopes: Vec::new(),
@@ -828,6 +831,10 @@ impl<'a> TypeChecker<'a> {
             }
         }
 
+        for (type_name, fields) in self.reflection_fields.clone() {
+            metadata.insert_type_fields(type_name, fields);
+        }
+
         metadata
     }
 
@@ -937,6 +944,336 @@ impl<'a> TypeChecker<'a> {
             Type::TypeConstruction => Some("type_construction_type"),
             _ => None,
         }
+    }
+
+    fn reflection_fields_for_struct_def(
+        &mut self,
+        def: &ast::StructDef,
+        namespace: Option<&str>,
+        resolved_fields: &[(String, TypeId)],
+    ) -> Vec<ReflectionFieldInfo> {
+        def.fields
+            .iter()
+            .zip(resolved_fields.iter())
+            .enumerate()
+            .map(|(index, (field, (_, field_ty)))| {
+                self.reflection_field_info_for_type_expr(
+                    index,
+                    &field.name.name,
+                    field.serialize_name.as_deref().unwrap_or(&field.name.name),
+                    &field.ty,
+                    namespace,
+                    *field_ty,
+                )
+            })
+            .collect()
+    }
+
+    fn reflection_fields_for_resolved_struct(
+        &self,
+        def: &ast::StructDef,
+        resolved_fields: &[(String, TypeId)],
+    ) -> Vec<ReflectionFieldInfo> {
+        def.fields
+            .iter()
+            .zip(resolved_fields.iter())
+            .enumerate()
+            .map(|(index, (field, (_, field_ty)))| {
+                self.reflection_field_info_for_type_id(
+                    index,
+                    &field.name.name,
+                    field.serialize_name.as_deref().unwrap_or(&field.name.name),
+                    *field_ty,
+                )
+            })
+            .collect()
+    }
+
+    fn reflection_fields_for_bitfield_def(
+        &mut self,
+        def: &ast::BitfieldDef,
+        namespace: Option<&str>,
+        resolved_fields: &[TypeBitfieldFieldDef],
+    ) -> Vec<ReflectionFieldInfo> {
+        def.fields
+            .iter()
+            .zip(resolved_fields.iter())
+            .enumerate()
+            .map(|(index, (field, resolved_field))| {
+                let ty = match &field.kind {
+                    ast::BitfieldFieldKind::Bits {
+                        as_type: Some(ty), ..
+                    } => ty.clone(),
+                    ast::BitfieldFieldKind::Bits { as_type: None, .. } => {
+                        TypeExpr::Named(ast::Ident {
+                            name: "int64".to_string(),
+                            span: field.span,
+                        })
+                    }
+                    ast::BitfieldFieldKind::Payload(ty) => ty.clone(),
+                };
+                self.reflection_field_info_for_type_expr(
+                    index,
+                    &field.name.name,
+                    &field.name.name,
+                    &ty,
+                    namespace,
+                    resolved_field.ty,
+                )
+            })
+            .collect()
+    }
+
+    fn reflection_field_info_for_type_expr(
+        &mut self,
+        index: usize,
+        name: &str,
+        serialize_name: &str,
+        ty: &TypeExpr,
+        namespace: Option<&str>,
+        resolved_ty: TypeId,
+    ) -> ReflectionFieldInfo {
+        let type_info = self.reflection_type_info_for_type_expr(ty, namespace, resolved_ty);
+        Self::reflection_field_info_from_type_info(index, name, serialize_name, type_info)
+    }
+
+    fn reflection_field_info_for_type_id(
+        &self,
+        index: usize,
+        name: &str,
+        serialize_name: &str,
+        ty: TypeId,
+    ) -> ReflectionFieldInfo {
+        let type_info = self.reflection_type_info_for_type(ty);
+        Self::reflection_field_info_from_type_info(index, name, serialize_name, type_info)
+    }
+
+    fn reflection_field_info_from_type_info(
+        index: usize,
+        name: &str,
+        serialize_name: &str,
+        type_info: ReflectionTypeInfo,
+    ) -> ReflectionFieldInfo {
+        ReflectionFieldInfo::new(
+            index,
+            name,
+            type_info.type_name.clone(),
+            type_info.kind.clone(),
+            serialize_name,
+            type_info.has_secret,
+            type_info,
+        )
+    }
+
+    fn reflection_type_info_for_type_expr(
+        &mut self,
+        ty: &TypeExpr,
+        namespace: Option<&str>,
+        resolved_ty: TypeId,
+    ) -> ReflectionTypeInfo {
+        if let TypeExpr::View(inner, _) = ty {
+            return self.reflection_type_info_for_type_expr(inner, namespace, resolved_ty);
+        }
+
+        let type_name = self.reflection_type_expr_display(ty, namespace);
+        let args = self.reflection_type_info_args_for_type_expr(ty, namespace, resolved_ty);
+        ReflectionTypeInfo::new(
+            type_name,
+            self.reflection_kind_for_type_expr(ty, namespace, resolved_ty),
+            self.reflection_primitive_tag_for_type_expr(ty, namespace)
+                .map(str::to_string),
+            resolved_ty != TypeInterner::ERROR && self.type_contains_secret_data(resolved_ty),
+            args,
+        )
+    }
+
+    fn reflection_type_info_args_for_type_expr(
+        &mut self,
+        ty: &TypeExpr,
+        namespace: Option<&str>,
+        resolved_ty: TypeId,
+    ) -> Vec<ReflectionTypeInfo> {
+        match ty {
+            TypeExpr::View(inner, _) => {
+                self.reflection_type_info_args_for_type_expr(inner, namespace, resolved_ty)
+            }
+            TypeExpr::Named(ident) => {
+                let display_name = self.reflection_type_name_in_namespace(ident, namespace);
+                if let Some(alias) = self.type_aliases.get(&display_name).cloned() {
+                    let alias_namespace = display_name
+                        .rsplit_once('.')
+                        .map(|(namespace, _)| namespace)
+                        .or(namespace);
+                    let base_ty = self.resolve_type_expr(&alias.base_type);
+                    if base_ty == TypeInterner::ERROR {
+                        Vec::new()
+                    } else {
+                        vec![self.reflection_type_info_for_type_expr(
+                            &alias.base_type,
+                            alias_namespace,
+                            base_ty,
+                        )]
+                    }
+                } else {
+                    self.type_info_arg_types_for_type(resolved_ty)
+                        .into_iter()
+                        .map(|arg| self.reflection_type_info_for_type(arg))
+                        .collect()
+                }
+            }
+            TypeExpr::Generic(_, args, _) => args
+                .iter()
+                .map(|arg| {
+                    let arg_ty = self.resolve_type_expr(arg);
+                    self.reflection_type_info_for_type_expr(arg, namespace, arg_ty)
+                })
+                .collect(),
+            TypeExpr::Function(params, return_type, _) => params
+                .iter()
+                .chain(std::iter::once(return_type.as_ref()))
+                .map(|arg| {
+                    let arg_ty = self.resolve_type_expr(arg);
+                    self.reflection_type_info_for_type_expr(arg, namespace, arg_ty)
+                })
+                .collect(),
+        }
+    }
+
+    fn reflection_kind_for_type_expr(
+        &self,
+        ty: &TypeExpr,
+        namespace: Option<&str>,
+        resolved_ty: TypeId,
+    ) -> &'static str {
+        match ty {
+            TypeExpr::View(inner, _) => {
+                self.reflection_kind_for_type_expr(inner, namespace, resolved_ty)
+            }
+            TypeExpr::Named(ident) => {
+                let name = self.reflection_type_name_in_namespace(ident, namespace);
+                if Self::reflection_primitive_tag_for_name(&name).is_some() {
+                    "primitive"
+                } else if let Some(alias) = self.type_aliases.get(&name) {
+                    if alias.constraint.is_some() {
+                        "refinement"
+                    } else {
+                        "alias"
+                    }
+                } else {
+                    self.reflection_kind_for_type(resolved_ty)
+                }
+            }
+            TypeExpr::Generic(ident, _, _) => {
+                let name = self.reflection_type_name_in_namespace(ident, namespace);
+                match name.as_str() {
+                    "list" => "list",
+                    "map" => "map",
+                    "set" => "set",
+                    "optional" => "optional",
+                    "result" => "result",
+                    "secret" => "secret",
+                    _ if self.generic_struct_templates.contains_key(&name) => "struct",
+                    _ => self.reflection_kind_for_type(resolved_ty),
+                }
+            }
+            TypeExpr::Function(_, _, _) => "function",
+        }
+    }
+
+    fn reflection_primitive_tag_for_type_expr(
+        &self,
+        ty: &TypeExpr,
+        namespace: Option<&str>,
+    ) -> Option<&'static str> {
+        match ty {
+            TypeExpr::Named(ident) => {
+                let name = self.reflection_type_name_in_namespace(ident, namespace);
+                Self::reflection_primitive_tag_for_name(&name)
+            }
+            TypeExpr::View(inner, _) => {
+                self.reflection_primitive_tag_for_type_expr(inner, namespace)
+            }
+            TypeExpr::Generic(_, _, _) | TypeExpr::Function(_, _, _) => None,
+        }
+    }
+
+    fn reflection_primitive_tag_for_name(name: &str) -> Option<&'static str> {
+        match name {
+            "int8" => Some("int8_type"),
+            "int16" => Some("int16_type"),
+            "int32" => Some("int32_type"),
+            "int64" => Some("int64_type"),
+            "uint8" => Some("uint8_type"),
+            "uint16" => Some("uint16_type"),
+            "uint32" => Some("uint32_type"),
+            "uint64" => Some("uint64_type"),
+            "float32" => Some("float32_type"),
+            "float64" => Some("float64_type"),
+            "string" => Some("string_type"),
+            "bool" => Some("bool_type"),
+            "bytes" => Some("bytes_type"),
+            "nothing" => Some("nothing_type"),
+            "JsonValue" => Some("json_value_type"),
+            "TypeConstruction" => Some("type_construction_type"),
+            _ => None,
+        }
+    }
+
+    fn reflection_type_expr_display(&self, ty: &TypeExpr, namespace: Option<&str>) -> String {
+        match ty {
+            TypeExpr::Named(ident) => self.reflection_type_name_in_namespace(ident, namespace),
+            TypeExpr::Generic(ident, args, _) => {
+                let args = args
+                    .iter()
+                    .map(|arg| self.reflection_type_expr_display(arg, namespace))
+                    .collect::<Vec<_>>();
+                format!(
+                    "{}[{}]",
+                    self.reflection_type_name_in_namespace(ident, namespace),
+                    args.join(", ")
+                )
+            }
+            TypeExpr::View(inner, _) => {
+                format!(
+                    "view {}",
+                    self.reflection_type_expr_display(inner, namespace)
+                )
+            }
+            TypeExpr::Function(params, return_type, _) => {
+                let params = params
+                    .iter()
+                    .map(|param| self.reflection_type_expr_display(param, namespace))
+                    .collect::<Vec<_>>();
+                format!(
+                    "function({}) returns {}",
+                    params.join(", "),
+                    self.reflection_type_expr_display(return_type, namespace)
+                )
+            }
+        }
+    }
+
+    fn reflection_type_name_in_namespace(
+        &self,
+        ident: &ast::Ident,
+        namespace: Option<&str>,
+    ) -> String {
+        if ident.name.contains('.') {
+            return ident.name.clone();
+        }
+        if let Some(namespace) = namespace {
+            let qualified = format!("{namespace}.{}", ident.name);
+            if self.reflection_type_name_is_registered(&qualified) {
+                return qualified;
+            }
+        }
+        ident.name.clone()
+    }
+
+    fn reflection_type_name_is_registered(&self, name: &str) -> bool {
+        self.named_types.contains_key(name)
+            || self.type_aliases.contains_key(name)
+            || self.generic_struct_templates.contains_key(name)
     }
 
     fn secret_field_names(&self, ty: TypeId) -> Vec<String> {
@@ -2712,11 +3049,21 @@ impl<'a> TypeChecker<'a> {
             return;
         };
 
-        let fields = def
+        let fields: Vec<(String, TypeId)> = def
             .fields
             .iter()
             .map(|field| (field.name.name.clone(), self.resolve_type_expr(&field.ty)))
             .collect();
+        let reflection_fields =
+            self.reflection_fields_for_struct_def(def, namespace, fields.as_slice());
+        if namespace.is_some() {
+            let leaf_fields = self.reflection_fields_for_struct_def(def, None, fields.as_slice());
+            self.reflection_fields
+                .entry(def.name.name.clone())
+                .or_insert(leaf_fields);
+        }
+        self.reflection_fields
+            .insert(canonical_name.clone(), reflection_fields);
         let methods = def
             .methods
             .iter()
@@ -2875,6 +3222,17 @@ impl<'a> TypeChecker<'a> {
                 kind,
             });
         }
+
+        let reflection_fields =
+            self.reflection_fields_for_bitfield_def(def, namespace, fields.as_slice());
+        if namespace.is_some() {
+            let leaf_fields = self.reflection_fields_for_bitfield_def(def, None, fields.as_slice());
+            self.reflection_fields
+                .entry(def.name.name.clone())
+                .or_insert(leaf_fields);
+        }
+        self.reflection_fields
+            .insert(canonical_name.clone(), reflection_fields);
 
         self.interner.update_bitfield(
             bid,
@@ -5839,14 +6197,21 @@ impl<'a> TypeChecker<'a> {
         // Build a mangled name, e.g. "Pair[int64, string]".
         let type_arg_names: Vec<String> = type_args.iter().map(|&ty| self.type_name(ty)).collect();
         let mono_name = format!("{}[{}]", name, type_arg_names.join(", "));
+        let reflection_fields = self.reflection_fields_for_resolved_struct(&template, &fields);
 
         let sid = self.interner.add_struct(TypeStructDef {
-            name: mono_name,
+            name: mono_name.clone(),
             fields,
             methods,
         });
         let ty = self.interner.intern(Type::Struct(sid));
 
+        if let Some((_namespace, leaf_name)) = mono_name.split_once('.') {
+            self.reflection_fields
+                .entry(leaf_name.to_string())
+                .or_insert_with(|| reflection_fields.clone());
+        }
+        self.reflection_fields.insert(mono_name, reflection_fields);
         self.monomorphized_structs.insert(cache_key, ty);
         ty
     }
