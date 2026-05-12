@@ -2195,6 +2195,92 @@ impl Interpreter {
         ))
     }
 
+    fn checked_enum_numeric_value(
+        &self,
+        enum_name: &str,
+        variant_name: &str,
+    ) -> Result<u64, String> {
+        if let Some(variants) = self
+            .reflection_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get_type_variants(enum_name))
+        {
+            for variant in variants {
+                if variant.name == variant_name {
+                    if variant.discriminant < 0 {
+                        return Err(format!(
+                            "enum '{}.{}' has negative discriminant {}",
+                            enum_name, variant_name, variant.discriminant
+                        ));
+                    }
+                    return Ok(variant.discriminant as u64);
+                }
+            }
+            return Err(format!(
+                "enum '{}' has no variant '{}'",
+                enum_name, variant_name
+            ));
+        }
+
+        self.enum_numeric_value(enum_name, variant_name)
+    }
+
+    fn checked_bitfield_field_numeric_value(
+        &self,
+        bitfield_name: &str,
+        field_name: &str,
+        width: i64,
+        enum_type: Option<&ReflectionTypeInfo>,
+        value: &Value,
+    ) -> Result<u64, String> {
+        let width = width as u16;
+        if let Some(enum_type) = enum_type {
+            let enum_name = Self::reflection_type_base_name(enum_type);
+            let Value::Enum {
+                type_name,
+                variant,
+                fields,
+            } = value
+            else {
+                return Err(format!(
+                    "field '{}' expects enum '{}'",
+                    field_name, enum_name
+                ));
+            };
+            if !fields.is_empty() {
+                return Err(format!(
+                    "field '{}' enum '{}' must use unit variants",
+                    field_name, enum_name
+                ));
+            }
+            if type_name != &enum_name {
+                return Err(format!(
+                    "field '{}' expects enum '{}', got '{}'",
+                    field_name, enum_name, type_name
+                ));
+            }
+            let numeric = self.checked_enum_numeric_value(type_name, variant)?;
+            if !Self::fits_in_bits(numeric, width) {
+                return Err(format!(
+                    "bitfield '{}' field '{}' is {} bit(s) wide and cannot hold enum variant '{}.{}'",
+                    bitfield_name, field_name, width, type_name, variant
+                ));
+            }
+            return Ok(numeric);
+        }
+
+        let Value::Int64(int_value) = value else {
+            return Err(format!("field '{}' expects int64", field_name));
+        };
+        if *int_value < 0 || !Self::fits_in_bits(*int_value as u64, width) {
+            return Err(format!(
+                "bitfield '{}' field '{}' is {} bit(s) wide and cannot hold '{}'",
+                bitfield_name, field_name, width, int_value
+            ));
+        }
+        Ok(*int_value as u64)
+    }
+
     fn enum_value_from_numeric(&self, enum_name: &str, numeric: u64) -> Result<Value, String> {
         let enm = self
             .enums
@@ -3647,14 +3733,17 @@ impl Interpreter {
     }
 
     fn reflection_field_refinement_name(field: &ReflectionFieldInfo) -> String {
-        if field.kind == "function" {
+        Self::reflection_type_base_name(&field.type_info)
+    }
+
+    fn reflection_type_base_name(info: &ReflectionTypeInfo) -> String {
+        if info.kind == "function" {
             return "function".to_string();
         }
-        field
-            .type_name
+        info.type_name
             .split_once('[')
             .map(|(base, _)| base)
-            .unwrap_or(&field.type_name)
+            .unwrap_or(&info.type_name)
             .to_string()
     }
 
@@ -4415,7 +4504,7 @@ impl Interpreter {
         let owner_kind = match self.checked_construction_kind(owner_ty) {
             Some("struct") => "struct",
             Some("enum") => "enum",
-            Some("bitfield") if ast_owner_kind == "bitfield" => "bitfield",
+            Some("bitfield") => "bitfield",
             _ => ast_owner_kind,
         };
         if !matches!(owner_kind, "struct" | "bitfield" | "enum") {
@@ -4616,6 +4705,40 @@ impl Interpreter {
         expected_owner: &str,
     ) -> Result<Value, String> {
         let bitfield_name = type_expr_name(owner_ty);
+        if let Some(bitfield) = self.checked_bitfield(owner_ty).cloned() {
+            let mut bitfield_fields = Vec::with_capacity(bitfield.fields.len());
+            for (index, field) in bitfield.fields.iter().enumerate() {
+                let Some((_, _, _, value)) = fields
+                    .iter()
+                    .find(|(field_index, _, _, _)| *field_index == index)
+                else {
+                    return Ok(result_fail(format!(
+                        "type.construct_finish: '{}' is missing required field '{}'",
+                        expected_owner, field.name
+                    )));
+                };
+
+                if field.shape == "bits" {
+                    if let Err(message) = self.checked_bitfield_field_numeric_value(
+                        &bitfield_name,
+                        &field.name,
+                        field.width,
+                        field.enum_type.as_ref(),
+                        value,
+                    ) {
+                        return Ok(result_fail(message));
+                    }
+                }
+
+                bitfield_fields.push((field.name.clone(), value.clone()));
+            }
+
+            return Ok(result_ok(Value::Struct {
+                type_name: bitfield_name,
+                fields: bitfield_fields,
+            }));
+        }
+
         let bitfield =
             self.bitfields.get(&bitfield_name).cloned().ok_or_else(|| {
                 format!("type.construct_finish: unknown bitfield '{bitfield_name}'")
@@ -9541,6 +9664,175 @@ mod tests {
             finished,
             result_fail(
                 "type.construct_finish: variant 'Choice.token' is missing required payload field 'value'"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn type_construct_bitfield_finish_uses_checked_reflection_metadata_when_available() {
+        let int_info = ReflectionTypeInfo::new(
+            "int64",
+            "primitive",
+            Some("int64_type".to_string()),
+            false,
+            Vec::new(),
+        );
+        let protocol_info = ReflectionTypeInfo::new("IpProtocol", "enum", None, false, Vec::new());
+        let mut metadata = ReflectionMetadata::new();
+        metadata.insert_type_info(ReflectionTypeInfo::new(
+            "Header",
+            "bitfield",
+            None,
+            false,
+            Vec::new(),
+        ));
+        metadata.insert_type_fields(
+            "Header",
+            vec![
+                ReflectionFieldInfo::new(
+                    0,
+                    "version",
+                    "int64",
+                    "primitive",
+                    "version",
+                    false,
+                    int_info.clone(),
+                ),
+                ReflectionFieldInfo::new(
+                    1,
+                    "protocol",
+                    "IpProtocol",
+                    "enum",
+                    "protocol",
+                    false,
+                    protocol_info.clone(),
+                ),
+            ],
+        );
+        metadata.insert_bitfield(
+            "Header",
+            ReflectionBitfieldInfo::new(
+                true,
+                vec![
+                    ReflectionBitfieldFieldInfo::new(0, "version", "bits", 4, int_info, None),
+                    ReflectionBitfieldFieldInfo::new(
+                        1,
+                        "protocol",
+                        "bits",
+                        8,
+                        protocol_info.clone(),
+                        Some(protocol_info),
+                    ),
+                ],
+            ),
+        );
+        metadata.insert_type_variants(
+            "IpProtocol",
+            vec![ReflectionVariantInfo::new(0, "tcp", 6, false, Vec::new())],
+        );
+
+        let mut interp = Interpreter::new();
+        interp.set_reflection_metadata(Arc::new(metadata));
+
+        let type_fields = interp
+            .call_builtin_with_type_args("type.fields", &[type_named("Header")], &[])
+            .expect("type.fields should be a typed builtin")
+            .expect("type.fields should evaluate");
+        let Value::List(type_fields) = type_fields else {
+            panic!("expected list of TypeField values");
+        };
+        let protocol = Value::Enum {
+            type_name: "IpProtocol".to_string(),
+            variant: "tcp".to_string(),
+            fields: Vec::new(),
+        };
+
+        let builder = interp
+            .call_builtin_with_type_args("type.construct_start", &[type_named("Header")], &[])
+            .expect("type.construct_start should be a typed builtin")
+            .expect("type.construct_start should evaluate");
+        let builder = interp
+            .call_builtin_with_type_args(
+                "type.construct_put",
+                &[type_named("Header"), type_named("int64")],
+                &[builder, type_fields[0].clone(), Value::Int64(4)],
+            )
+            .expect("type.construct_put should be a typed builtin")
+            .expect("type.construct_put should evaluate");
+        let Value::ResultOk(builder) = builder else {
+            panic!("expected successful version field update");
+        };
+        let builder = interp
+            .call_builtin_with_type_args(
+                "type.construct_put",
+                &[type_named("Header"), type_named("IpProtocol")],
+                &[(*builder).clone(), type_fields[1].clone(), protocol.clone()],
+            )
+            .expect("type.construct_put should be a typed builtin")
+            .expect("type.construct_put should evaluate");
+        let Value::ResultOk(builder) = builder else {
+            panic!("expected successful protocol field update");
+        };
+        let finished = interp
+            .call_builtin_with_type_args(
+                "type.construct_finish",
+                &[type_named("Header")],
+                &[(*builder).clone()],
+            )
+            .expect("type.construct_finish should be a typed builtin")
+            .expect("type.construct_finish should evaluate");
+
+        assert_eq!(
+            finished,
+            result_ok(Value::Struct {
+                type_name: "Header".to_string(),
+                fields: vec![
+                    ("version".to_string(), Value::Int64(4)),
+                    ("protocol".to_string(), protocol.clone()),
+                ],
+            })
+        );
+
+        let builder = interp
+            .call_builtin_with_type_args("type.construct_start", &[type_named("Header")], &[])
+            .expect("type.construct_start should be a typed builtin")
+            .expect("type.construct_start should evaluate");
+        let builder = interp
+            .call_builtin_with_type_args(
+                "type.construct_put",
+                &[type_named("Header"), type_named("int64")],
+                &[builder, type_fields[0].clone(), Value::Int64(16)],
+            )
+            .expect("type.construct_put should be a typed builtin")
+            .expect("type.construct_put should evaluate");
+        let Value::ResultOk(builder) = builder else {
+            panic!("expected successful wide version field update");
+        };
+        let builder = interp
+            .call_builtin_with_type_args(
+                "type.construct_put",
+                &[type_named("Header"), type_named("IpProtocol")],
+                &[(*builder).clone(), type_fields[1].clone(), protocol],
+            )
+            .expect("type.construct_put should be a typed builtin")
+            .expect("type.construct_put should evaluate");
+        let Value::ResultOk(builder) = builder else {
+            panic!("expected successful wide protocol field update");
+        };
+        let finished = interp
+            .call_builtin_with_type_args(
+                "type.construct_finish",
+                &[type_named("Header")],
+                &[*builder],
+            )
+            .expect("type.construct_finish should be a typed builtin")
+            .expect("type.construct_finish should evaluate");
+
+        assert_eq!(
+            finished,
+            result_fail(
+                "bitfield 'Header' field 'version' is 4 bit(s) wide and cannot hold '16'"
                     .to_string()
             )
         );
