@@ -3970,6 +3970,53 @@ impl Interpreter {
             ));
         }
 
+        if let Some(variants) = self.checked_type_variants(owner_ty) {
+            let variant_metadata = variants
+                .iter()
+                .find(|candidate| candidate.name == *variant)
+                .ok_or_else(|| {
+                    format!(
+                        "type.variant_field_value: enum '{}' has no variant '{}'",
+                        expected_type_name, variant
+                    )
+                })?;
+            let field = variant_metadata.fields.get(field_index).ok_or_else(|| {
+                format!(
+                    "type.variant_field_value: variant '{}.{}' has no payload field at index {}",
+                    expected_type_name, variant, field_index
+                )
+            })?;
+
+            if field.name != metadata_name {
+                return Err(format!(
+                    "type.variant_field_value: field metadata '{}' does not match payload field '{}' on variant '{}.{}'",
+                    metadata_name, field.name, expected_type_name, variant
+                ));
+            }
+
+            if field.type_name != metadata_type_name {
+                return Err(format!(
+                    "type.variant_field_value: field metadata for '{}' has type '{}', but variant '{}.{}' reports '{}'",
+                    metadata_name, metadata_type_name, expected_type_name, variant, field.type_name
+                ));
+            }
+
+            let expected_field_type_name = type_expr_display(expected_field_ty);
+            if field.type_name != expected_field_type_name {
+                return Err(format!(
+                    "type.variant_field_value: field '{}' has type '{}', requested '{}'",
+                    metadata_name, field.type_name, expected_field_type_name
+                ));
+            }
+
+            return fields.get(field_index).cloned().ok_or_else(|| {
+                format!(
+                    "type.variant_field_value: value is missing payload field '{}'",
+                    field.name
+                )
+            });
+        }
+
         let variants = self.type_expr_variants(owner_ty);
         let variant_metadata = variants
             .iter()
@@ -8859,6 +8906,78 @@ mod tests {
             })
             .expect("TypeVariant.discriminant should exist");
         assert_eq!(discriminant, &Value::Int64(7));
+    }
+
+    #[test]
+    fn type_variant_field_value_uses_checked_reflection_metadata_when_available() {
+        let field_type = ReflectionTypeInfo::new(
+            "string",
+            "primitive",
+            Some("string_type".to_string()),
+            false,
+            Vec::new(),
+        );
+        let mut metadata = ReflectionMetadata::new();
+        metadata.insert_type_variants(
+            "Choice",
+            vec![ReflectionVariantInfo::new(
+                0,
+                "token",
+                7,
+                false,
+                vec![ReflectionFieldInfo::new(
+                    0,
+                    "value",
+                    "string",
+                    "primitive",
+                    "value",
+                    false,
+                    field_type,
+                )],
+            )],
+        );
+
+        let mut interp = Interpreter::new();
+        interp.set_reflection_metadata(Arc::new(metadata));
+
+        let value = Value::Enum {
+            type_name: "Choice".to_string(),
+            variant: "token".to_string(),
+            fields: vec![Value::String("ok".to_string())],
+        };
+        let variant = interp
+            .call_builtin_with_type_args(
+                "type.variant_value",
+                &[type_named("Choice")],
+                &[value.clone()],
+            )
+            .expect("type.variant_value should be a typed builtin")
+            .expect("type.variant_value should evaluate");
+        let Value::Struct { fields, .. } = variant else {
+            panic!("expected TypeVariant struct");
+        };
+        let field = fields
+            .iter()
+            .find_map(
+                |(name, value)| {
+                    if name == "fields" { Some(value) } else { None }
+                },
+            )
+            .expect("TypeVariant.fields should exist");
+        let Value::List(fields) = field else {
+            panic!("expected TypeVariant.fields list");
+        };
+
+        let reflected = interp
+            .call_builtin_with_type_args(
+                "type.variant_field_value",
+                &[type_named("Choice"), type_named("string")],
+                &[value, fields[0].clone()],
+            )
+            .expect("type.variant_field_value should be a typed builtin")
+            .expect("type.variant_field_value should evaluate");
+
+        assert_eq!(reflected, Value::String("ok".to_string()));
     }
 
     /// Helper: create a field access expression.
