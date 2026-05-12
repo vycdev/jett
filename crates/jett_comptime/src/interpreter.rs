@@ -2395,6 +2395,9 @@ impl Interpreter {
                     }
                     None => unreachable!("type.arg argument count was already checked"),
                 };
+                if let Some(result) = self.checked_type_arg_value(&ty, index) {
+                    return Some(result);
+                }
                 let arg_types = self.type_info_arg_types(&ty);
                 let Some(arg_ty) = arg_types.get(index) else {
                     return Some(Err(format!(
@@ -3477,12 +3480,30 @@ impl Interpreter {
         }
     }
 
-    fn checked_type_info_value(&self, ty: &TypeExpr) -> Option<Value> {
+    fn checked_type_info(&self, ty: &TypeExpr) -> Option<&ReflectionTypeInfo> {
         let metadata = self.reflection_metadata.as_ref()?;
         let type_name = type_expr_display(ty);
-        metadata
-            .get_type_info(&type_name)
+        metadata.get_type_info(&type_name)
+    }
+
+    fn checked_type_info_value(&self, ty: &TypeExpr) -> Option<Value> {
+        self.checked_type_info(ty)
             .map(Self::reflection_type_info_value)
+    }
+
+    fn checked_type_arg_value(&self, ty: &TypeExpr, index: usize) -> Option<Result<Value, String>> {
+        let info = self.checked_type_info(ty)?;
+        Some(
+            info.args
+                .get(index)
+                .map(Self::reflection_type_info_value)
+                .ok_or_else(|| {
+                    format!(
+                        "type.arg index {index} is out of range for type '{}'",
+                        type_expr_display(ty)
+                    )
+                }),
+        )
     }
 
     fn reflection_type_info_value(info: &ReflectionTypeInfo) -> Value {
@@ -8196,6 +8217,48 @@ mod tests {
             .call_builtin_with_type_args("type.info", &[type_named("int64")], &[])
             .expect("type.info should be a typed builtin")
             .expect("type.info should evaluate");
+
+        let Value::Struct { fields, .. } = value else {
+            panic!("expected TypeInfo struct");
+        };
+        let has_secret = fields
+            .iter()
+            .find_map(|(name, value)| {
+                if name == "has_secret" {
+                    Some(value)
+                } else {
+                    None
+                }
+            })
+            .expect("TypeInfo.has_secret field should exist");
+        assert_eq!(has_secret, &Value::Bool(true));
+    }
+
+    #[test]
+    fn type_arg_uses_checked_reflection_metadata_when_available() {
+        let mut metadata = ReflectionMetadata::new();
+        metadata.insert_type_info(ReflectionTypeInfo::new(
+            "list[int64]",
+            "list",
+            None,
+            false,
+            vec![ReflectionTypeInfo::new(
+                "int64",
+                "primitive",
+                Some("int64_type".to_string()),
+                true,
+                Vec::new(),
+            )],
+        ));
+
+        let mut interp = Interpreter::new();
+        interp.set_reflection_metadata(Arc::new(metadata));
+
+        let list_int = TypeExpr::Generic(ident("list"), vec![type_named("int64")], sp());
+        let value = interp
+            .call_builtin_with_type_args("type.arg", &[list_int], &[Value::Int64(0)])
+            .expect("type.arg should be a typed builtin")
+            .expect("type.arg should evaluate");
 
         let Value::Struct { fields, .. } = value else {
             panic!("expected TypeInfo struct");

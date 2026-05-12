@@ -104,9 +104,9 @@ Move these APIs first:
 - `type.bitfield_fields`
 - `type.variants`
 
-Status: `type.info[T]()` now prefers the checked snapshot when metadata for the
-requested type name is present, and falls back to the previous AST path during
-bootstrap and direct interpreter tests.
+Status: `type.info[T]()` and `type.arg[T](index)` now prefer the checked
+snapshot when metadata for the requested type name is present, and fall back to
+the previous AST path during bootstrap and direct interpreter tests.
 
 Then move value-sensitive APIs:
 
@@ -144,8 +144,9 @@ the AST reconstruction paths that duplicate typechecker behavior.
 
 Continue the metadata-only migration:
 
-1. Route `type.arg[T](index)` through the checked `TypeInfo.args` snapshot.
-2. Add checked `TypeField` records to `ReflectionMetadata`, then move
+1. Add checked `TypeField` records to `ReflectionMetadata`, then move
    `type.fields[T]()` over while preserving trusted loop provenance.
+2. Route `TypeInfo.args` trusted loop binding through checked metadata once
+   runtime metadata values and typechecker provenance agree on the same source.
 3. Only after metadata-only APIs are stable, revisit value-sensitive APIs such
    as `type.field_value` and `type.construct_*`.
