@@ -96,6 +96,35 @@ current unqualified `JsonValue` spelling. Until that exists, `JsonValue` can sta
 compiler-recognized as a compatibility name whose runtime representation is
 `JsonTree`.
 
+## Alias Direction
+
+Do not implement `JsonValue` by relying on accidental namespace flattening.
+Writing `type JsonValue = JsonTree` inside `namespace json` would naturally
+create `json.JsonValue`, not the existing unqualified compatibility spelling.
+Using the current flat alias leakage would tie a core migration to behavior the
+module system is supposed to remove.
+
+The staged direction is:
+
+1. Keep the current narrow compatibility rule while visibility/export work is
+   still open. `JsonValue` remains a compiler-known legacy spelling and only the
+   bundled `json.JsonTree` enum is compatible with it.
+2. Add an explicit compiler-seeded compatibility alias table entry:
+   `JsonValue -> json.JsonTree`. This should model a future prelude/exported
+   alias without depending on namespace leakage.
+3. Preserve legacy reflection during the compatibility window:
+   `type.info[JsonValue]()` may continue to report
+   `TypePrimitive.json_value_type`, while `type.info[json.JsonTree]()` reports
+   enum metadata.
+4. Once explicit stdlib exports or prelude imports exist, express the
+   compatibility alias as an exported/prelude stdlib symbol.
+5. In a later breaking cleanup, decide whether to deprecate or remove
+   `TypePrimitive.json_value_type` and make `JsonValue` fully identical to
+   `json.JsonTree` in reflection.
+
+This keeps canonical identity clear: `json.JsonTree` is the real type;
+`JsonValue` is a source-compatibility spelling.
+
 ## Staging Plan
 
 ### 1. Add Native Raw Helper Parity
@@ -166,6 +195,10 @@ Reflection metadata is intentionally split for now:
 `type.info[JsonValue]()` reports `TypePrimitive.json_value_type`, while
 `type.info[json.JsonTree]()` reports `TypeKind.enum_type`.
 
+Next status target: replace the ad hoc compatibility rule with a
+compiler-seeded legacy alias record once the typechecker has a small place to
+store compatibility/prelude aliases separately from ordinary source aliases.
+
 ### 5. Move Raw Decoder Code Off `JsonValue`
 
 `stdlib/json.jett` still contains the older `json_decode_reflected[T](raw:
@@ -203,11 +236,19 @@ Add tests before each behavior change:
 - Raw serialization matches `JsonTree` serialization.
 - Malformed-input diagnostics stay pinned.
 - Reflection metadata remains intentional for `JsonValue` and `JsonTree`.
+- A user-defined top-level `enum JsonTree` remains incompatible with
+  `JsonValue`.
+- A compiler-seeded `JsonValue` compatibility alias works recursively in
+  `list`, `map`, `set`, `optional`, `result`, `secret`, struct fields, and
+  function arguments.
+- `type.info[JsonValue]()` and `type.info[json.JsonTree]()` stay pinned during
+  the compatibility stage.
 
 ## Risks And Open Questions
 
-- **Alias mechanics:** the language may need better stdlib export/alias support
-  before `JsonValue = JsonTree` can be expressed cleanly.
+- **Alias mechanics:** ordinary source aliases are not enough for the current
+  unqualified compatibility spelling. We likely need a compiler-seeded prelude
+  alias first, then a real exported/prelude stdlib alias later.
 - **Reflection metadata:** if `JsonValue` is an alias, `type.info[JsonValue]`
   must not surprise existing code.
 - **View iteration:** native raw serialization over `view JsonTree` needs a
@@ -223,9 +264,12 @@ Add tests before each behavior change:
 
 Finish the public surface decision:
 
-1. Design the real alias/export story needed for `type JsonValue = JsonTree`
-   without relying on a compiler special case forever.
+1. Keep the current compatibility rule until namespace exports exist, but
+   design a small compiler-seeded legacy alias table that can represent
+   `JsonValue -> json.JsonTree` explicitly.
 2. Decide whether raw helper signatures should remain `JsonValue` for source
    stability or move to `view JsonTree` in a breaking cleanup pass.
-3. Once that decision lands, update reflection metadata so the legacy
+3. Once explicit exports/prelude imports exist, move the compatibility alias
+   out of compiler special cases and into the stdlib/prelude surface.
+4. Later, update reflection metadata so the legacy
    `TypePrimitive.json_value_type` is either formally deprecated or removed.

@@ -24,6 +24,16 @@ The current staging model keeps public JSON names compiler-owned and routes
 runtime bodies through internal reflected hook names. That is intentionally
 conservative.
 
+Two concepts must stay separate:
+
+- `export` answers: can ordinary source code name this declaration from outside
+  the namespace?
+- trusted stdlib origin answers: may compiler-owned policy code delegate to this
+  implementation?
+
+Do not make trusted origin a source-level keyword. Trust is a property of how a
+module was loaded by the compiler, not a promise a user file can write.
+
 ## Current Namespace Leakage
 
 Namespaced declarations are registered under qualified names, for example
@@ -50,6 +60,11 @@ The eventual module system should support:
 - no accidental global flat aliases for namespaced declarations,
 - compiler policy gates that can call trusted stdlib bodies without trusting
   arbitrary user/project definitions.
+
+For the transition, unnamespaced top-level user declarations can keep their
+current public behavior. The private-by-default rule should apply first to
+declarations inside an explicit `namespace`, where accidental helper leakage is
+the real problem.
 
 ## Options
 
@@ -99,7 +114,7 @@ An untrusted registration of the same name clears that trust.
 
 ## Recommendation
 
-Use two stages:
+Use two stages, with source visibility and compiler trust kept orthogonal:
 
 1. Keep the trusted stdlib identity for compiler-owned bridge hooks. Done for
    the interpreter; future codegen should use the same notion.
@@ -107,6 +122,19 @@ Use two stages:
    treating `stdlib/json.jett` as a clean public module.
 
 Do not remove compiler-owned JSON policy checks until both stages exist.
+
+The long-term JSON bridge should use a compiler-owned hook table, not public
+function name guessing:
+
+```text
+json.parse            -> json.json_parse_reflected
+json.serialize        -> json.json_serialize_reflected
+json.serialize_public -> json.json_serialize_public_reflected
+```
+
+The right-hand side may be private source code as long as it came from a
+trusted compiler-shipped stdlib module. Ordinary user/project code cannot
+satisfy that table merely by declaring the same qualified name.
 
 ## JSON-Specific Staging
 
@@ -125,3 +153,40 @@ For now:
 
 Before changing the hook names into ordinary public wrappers, implement
 exports/private helpers.
+
+## Staged Implementation Plan
+
+1. Add visibility metadata to declarations in AST/resolver/typechecker.
+   Prefer `export function`, `export struct`, `export enum`, `export bitfield`,
+   `export type`, and `export interface` over export lists for the first pass;
+   that keeps the public API mechanically searchable.
+2. Preserve current behavior for declarations outside a namespace.
+3. Make namespace declarations private by default outside their namespace.
+   Within the same namespace, unqualified helper calls continue to resolve
+   locally.
+4. Stop registering every namespaced declaration as a global flat alias. Keep
+   namespace-local lookup instead.
+5. Keep compiler-owned JSON facades builtin-first in the typechecker and
+   interpreter. Export controls whether users can name a declaration; it does
+   not decide whether compiler policy routes through it.
+6. Add the compiler-owned trusted hook table for public JSON facades. The table
+   maps public facade names to private trusted stdlib implementations and is not
+   expressible from source.
+7. Mark only the real stdlib JSON surface as exported. Keep parser walkers,
+   reflected decoders, quoting helpers, and bridge hooks private unless there is
+   a user-facing reason to expose them.
+
+## Required Tests
+
+- Outside a namespace, code can call exported qualified declarations and cannot
+  call private qualified helpers.
+- Inside the same namespace, private helpers are callable unqualified and, if
+  the resolver supports it, through their qualified local name.
+- Namespaced helpers are no longer visible through accidental flat aliases.
+- Public JSON policy remains compiler-owned: `view`, secret, map-key, and
+  handled-result rules still fire even if public wrapper declarations exist.
+- A project-defined `namespace json function json_parse_reflected...` cannot
+  satisfy the trusted public JSON bridge, and an untrusted later registration of
+  a hook name clears trust.
+- `jett build`, `jett run`, `jett test file`, project tests, and LSP-style
+  `build_source` all see the same stdlib exports.

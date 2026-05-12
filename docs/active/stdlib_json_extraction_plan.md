@@ -133,6 +133,12 @@ This is larger than JSON and should be staged carefully.
 See `/docs/active/stdlib_visibility_design.md` for the current visibility and
 trusted-stdlib recommendation.
 
+The important design boundary is now explicit: `export` and trusted stdlib
+origin are separate. `export` controls what ordinary source code can name.
+Trusted origin controls whether compiler-owned JSON policy may delegate to a
+stdlib implementation. A private trusted hook is valid as a compiler target; an
+exported user/project function with the same name is not.
+
 ### 3. Builtin Policy Boundaries
 
 Some JSON rules are typechecker policy, not only implementation:
@@ -196,6 +202,9 @@ bridge spoofing, not helper visibility.
    implementation accepts the built-in `JsonValue` and stdlib `json.JsonTree`
    as compatible types, while preserving separate reflection metadata for one
    compatibility stage. See `/docs/active/json_value_transition_plan.md`.
+   The preferred next shape is an explicit compiler-seeded/prelude
+   compatibility alias `JsonValue -> json.JsonTree`, later moved into the
+   exported stdlib/prelude surface once exports exist.
 
 ## Recommended Shape For `stdlib/json.jett`
 
