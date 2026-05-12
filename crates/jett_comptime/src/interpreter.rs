@@ -3323,7 +3323,8 @@ impl Interpreter {
             }
         };
         Ok(Some(
-            self.type_info_arg_types(&ty)
+            self.checked_type_info_arg_types(&ty)
+                .unwrap_or_else(|| self.type_info_arg_types(&ty))
                 .into_iter()
                 .map(|ty| ReflectedTypeInfoBinding { ty })
                 .collect(),
@@ -3519,6 +3520,61 @@ impl Interpreter {
                     )
                 }),
         )
+    }
+
+    fn checked_type_info_arg_types(&self, ty: &TypeExpr) -> Option<Vec<TypeExpr>> {
+        let info = self.checked_type_info(ty)?;
+        Some(
+            info.args
+                .iter()
+                .map(Self::reflection_type_info_type_expr)
+                .collect(),
+        )
+    }
+
+    fn reflection_type_info_type_expr(info: &ReflectionTypeInfo) -> TypeExpr {
+        let span = Self::reflection_type_span();
+        if info.kind == "function" && !info.args.is_empty() {
+            let mut args = info
+                .args
+                .iter()
+                .map(Self::reflection_type_info_type_expr)
+                .collect::<Vec<_>>();
+            let return_type = args.pop().unwrap_or_else(|| {
+                TypeExpr::Named(Ident {
+                    name: "nothing".to_string(),
+                    span,
+                })
+            });
+            return TypeExpr::Function(args, Box::new(return_type), span);
+        }
+
+        if !matches!(info.kind.as_str(), "alias" | "refinement") && !info.args.is_empty() {
+            if let Some((generic_name, _)) = info.type_name.split_once('[') {
+                let args = info
+                    .args
+                    .iter()
+                    .map(Self::reflection_type_info_type_expr)
+                    .collect();
+                return TypeExpr::Generic(
+                    Ident {
+                        name: generic_name.to_string(),
+                        span,
+                    },
+                    args,
+                    span,
+                );
+            }
+        }
+
+        TypeExpr::Named(Ident {
+            name: info.type_name.clone(),
+            span,
+        })
+    }
+
+    fn reflection_type_span() -> jett_common::Span {
+        jett_common::Span::new(FileId::new(0), 0, 0)
     }
 
     fn checked_type_fields(&self, ty: &TypeExpr) -> Option<&[ReflectionFieldInfo]> {
@@ -8436,6 +8492,43 @@ mod tests {
             })
             .expect("TypeInfo.has_secret field should exist");
         assert_eq!(has_secret, &Value::Bool(true));
+    }
+
+    #[test]
+    fn type_info_arg_loop_uses_checked_reflection_metadata_when_available() {
+        let mut metadata = ReflectionMetadata::new();
+        metadata.insert_type_info(ReflectionTypeInfo::new(
+            "list[int64]",
+            "list",
+            None,
+            false,
+            vec![ReflectionTypeInfo::new(
+                "string",
+                "primitive",
+                Some("string_type".to_string()),
+                false,
+                Vec::new(),
+            )],
+        ));
+
+        let mut interp = Interpreter::new();
+        interp.set_reflection_metadata(Arc::new(metadata));
+
+        let list_int = TypeExpr::Generic(ident("list"), vec![type_named("int64")], sp());
+        let type_info_call = Expr::GenericCall(
+            Box::new(field_access(var("type"), "info")),
+            vec![list_int],
+            Vec::new(),
+            sp(),
+        );
+        let args_iterable = field_access(type_info_call, "args");
+        let bindings = interp
+            .reflected_type_info_arg_loop_bindings(&args_iterable)
+            .expect("type.info args loop should be recognized")
+            .expect("type.info args loop should produce bindings");
+
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(type_expr_display(&bindings[0].ty), "string");
     }
 
     #[test]

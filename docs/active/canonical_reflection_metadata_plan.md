@@ -110,7 +110,8 @@ Status: `type.info[T]()`, `type.arg[T](index)`, `type.fields[T]()`,
 `type.bitfield_layout[T]()`, `type.bitfield_fields[T]()` and
 `type.variants[T]()` now prefer the checked snapshot when metadata for the
 requested type name is present, and fall back to the previous AST path during
-bootstrap and direct interpreter tests.
+bootstrap and direct interpreter tests. Trusted loops over `TypeInfo.args` also
+prefer checked metadata when constructing the compile-time type binding scope.
 
 Then move value-sensitive APIs:
 
@@ -152,6 +153,7 @@ Continue the metadata-only migration:
    `type.fields[T]()` over while preserving trusted loop provenance. Done.
 2. Route `TypeInfo.args` trusted loop binding through checked metadata once
    runtime metadata values and typechecker provenance agree on the same source.
+   Done.
 3. Add checked bitfield layout/field metadata. Done.
 4. Add checked enum variant metadata. Done.
 5. Only after metadata-only APIs are stable, revisit value-sensitive APIs such
