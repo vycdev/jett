@@ -3646,6 +3646,18 @@ impl Interpreter {
         }
     }
 
+    fn reflection_field_refinement_name(field: &ReflectionFieldInfo) -> String {
+        if field.kind == "function" {
+            return "function".to_string();
+        }
+        field
+            .type_name
+            .split_once('[')
+            .map(|(base, _)| base)
+            .unwrap_or(&field.type_name)
+            .to_string()
+    }
+
     fn checked_bitfield(&self, ty: &TypeExpr) -> Option<&ReflectionBitfieldInfo> {
         let metadata = self.reflection_metadata.as_ref()?;
         let type_name = type_expr_display(ty);
@@ -4399,7 +4411,13 @@ impl Interpreter {
                 type_name, expected_owner
             )));
         }
-        let owner_kind = self.type_expr_kind(owner_ty);
+        let ast_owner_kind = self.type_expr_kind(owner_ty);
+        let owner_kind = match self.checked_construction_kind(owner_ty) {
+            Some("struct") => "struct",
+            Some("enum") => "enum",
+            Some("bitfield") if ast_owner_kind == "bitfield" => "bitfield",
+            _ => ast_owner_kind,
+        };
         if !matches!(owner_kind, "struct" | "bitfield" | "enum") {
             return Ok(result_fail(format!(
                 "type.construct_finish supports only structs, bitfields, and enums, got '{}'",
@@ -4431,6 +4449,18 @@ impl Interpreter {
             )));
         }
 
+        if let Some(reflected_fields) = self
+            .checked_type_fields(owner_ty)
+            .map(|fields| fields.to_vec())
+        {
+            return self.reflected_construct_finish_struct_checked(
+                owner_ty,
+                fields,
+                &expected_owner,
+                &reflected_fields,
+            );
+        }
+
         let reflected_fields = self.type_expr_fields(owner_ty);
         let mut struct_fields = Vec::with_capacity(reflected_fields.len());
         for (index, field) in reflected_fields.iter().enumerate() {
@@ -4457,6 +4487,38 @@ impl Interpreter {
         }))
     }
 
+    fn reflected_construct_finish_struct_checked(
+        &mut self,
+        owner_ty: &TypeExpr,
+        fields: &[(usize, String, String, Value)],
+        expected_owner: &str,
+        reflected_fields: &[ReflectionFieldInfo],
+    ) -> Result<Value, String> {
+        let mut struct_fields = Vec::with_capacity(reflected_fields.len());
+        for (index, field) in reflected_fields.iter().enumerate() {
+            let Some((_, _, _, value)) = fields
+                .iter()
+                .find(|(field_index, _, _, _)| *field_index == index)
+            else {
+                return Ok(result_fail(format!(
+                    "type.construct_finish: '{}' is missing required field '{}'",
+                    expected_owner, field.name
+                )));
+            };
+
+            let type_name = Self::reflection_field_refinement_name(field);
+            if let Err(message) = self.check_refinement(&type_name, value) {
+                return Ok(result_fail(message));
+            }
+            struct_fields.push((field.name.clone(), value.clone()));
+        }
+
+        Ok(result_ok(Value::Struct {
+            type_name: type_expr_name(owner_ty),
+            fields: struct_fields,
+        }))
+    }
+
     fn reflected_construct_finish_enum(
         &mut self,
         owner_ty: &TypeExpr,
@@ -4470,6 +4532,46 @@ impl Interpreter {
                     .to_string(),
             ));
         };
+        if let Some(variants) = self
+            .checked_type_variants(owner_ty)
+            .map(|variants| variants.to_vec())
+        {
+            let Some(variant) = variants
+                .into_iter()
+                .find(|candidate| candidate.name == variant_name)
+            else {
+                return Ok(result_fail(format!(
+                    "type.construct_finish: enum '{}' has no variant '{}'",
+                    expected_owner, variant_name
+                )));
+            };
+
+            let mut enum_fields = Vec::with_capacity(variant.fields.len());
+            for (index, field) in variant.fields.iter().enumerate() {
+                let Some((_, _, _, value)) = fields
+                    .iter()
+                    .find(|(field_index, _, _, _)| *field_index == index)
+                else {
+                    return Ok(result_fail(format!(
+                        "type.construct_finish: variant '{}.{}' is missing required payload field '{}'",
+                        expected_owner, variant.name, field.name
+                    )));
+                };
+
+                let type_name = Self::reflection_field_refinement_name(field);
+                if let Err(message) = self.check_refinement(&type_name, value) {
+                    return Ok(result_fail(message));
+                }
+                enum_fields.push(value.clone());
+            }
+
+            return Ok(result_ok(Value::Enum {
+                type_name: type_expr_name(owner_ty),
+                variant: variant.name,
+                fields: enum_fields,
+            }));
+        }
+
         let Some(variant) = self
             .type_expr_variants(owner_ty)
             .into_iter()
@@ -9085,7 +9187,7 @@ mod tests {
     }
 
     #[test]
-    fn type_construct_put_uses_checked_reflection_metadata_when_available() {
+    fn type_construct_put_and_finish_use_checked_reflection_metadata_when_available() {
         let field_type = ReflectionTypeInfo::new(
             "string",
             "primitive",
@@ -9144,6 +9246,30 @@ mod tests {
         let Value::ResultOk(updated) = updated else {
             panic!("expected successful construction update");
         };
+        let finished = interp
+            .call_builtin_with_type_args(
+                "type.construct_finish",
+                &[type_named("Box")],
+                &[(*updated).clone()],
+            )
+            .expect("type.construct_finish should be a typed builtin")
+            .expect("type.construct_finish should evaluate");
+        let Value::ResultOk(finished) = finished else {
+            panic!("expected successful construction finish");
+        };
+        let Value::Struct {
+            type_name: finished_type_name,
+            fields: finished_fields,
+        } = *finished
+        else {
+            panic!("expected constructed struct");
+        };
+        assert_eq!(finished_type_name, "Box");
+        assert_eq!(
+            finished_fields,
+            vec![("value".to_string(), Value::String("ok".to_string()))]
+        );
+
         let Value::TypeConstruction {
             type_name,
             variant,
@@ -9163,7 +9289,7 @@ mod tests {
     }
 
     #[test]
-    fn type_construct_enum_payload_uses_checked_reflection_metadata_when_available() {
+    fn type_construct_enum_payload_and_finish_use_checked_reflection_metadata_when_available() {
         let field_type = ReflectionTypeInfo::new(
             "string",
             "primitive",
@@ -9254,6 +9380,29 @@ mod tests {
         let Value::ResultOk(updated) = updated else {
             panic!("expected successful enum payload update");
         };
+        let finished = interp
+            .call_builtin_with_type_args(
+                "type.construct_finish",
+                &[type_named("Choice")],
+                &[(*updated).clone()],
+            )
+            .expect("type.construct_finish should be a typed builtin")
+            .expect("type.construct_finish should evaluate");
+        let Value::ResultOk(finished) = finished else {
+            panic!("expected successful enum construction finish");
+        };
+        let Value::Enum {
+            type_name: finished_type_name,
+            variant: finished_variant,
+            fields: finished_fields,
+        } = *finished
+        else {
+            panic!("expected constructed enum");
+        };
+        assert_eq!(finished_type_name, "Choice");
+        assert_eq!(finished_variant, "token");
+        assert_eq!(finished_fields, vec![Value::String("ok".to_string())]);
+
         let Value::TypeConstruction {
             type_name,
             variant,
@@ -9270,6 +9419,131 @@ mod tests {
         assert_eq!(fields[0].1, "value");
         assert_eq!(fields[0].2, "string");
         assert_eq!(fields[0].3, Value::String("ok".to_string()));
+    }
+
+    #[test]
+    fn type_construct_finish_checked_struct_reports_missing_field() {
+        let field_type = ReflectionTypeInfo::new(
+            "string",
+            "primitive",
+            Some("string_type".to_string()),
+            false,
+            Vec::new(),
+        );
+        let mut metadata = ReflectionMetadata::new();
+        metadata.insert_type_info(ReflectionTypeInfo::new(
+            "Box",
+            "struct",
+            None,
+            false,
+            Vec::new(),
+        ));
+        metadata.insert_type_fields(
+            "Box",
+            vec![ReflectionFieldInfo::new(
+                0,
+                "value",
+                "string",
+                "primitive",
+                "value",
+                false,
+                field_type,
+            )],
+        );
+
+        let mut interp = Interpreter::new();
+        interp.set_reflection_metadata(Arc::new(metadata));
+
+        let builder = interp
+            .call_builtin_with_type_args("type.construct_start", &[type_named("Box")], &[])
+            .expect("type.construct_start should be a typed builtin")
+            .expect("type.construct_start should evaluate");
+        let finished = interp
+            .call_builtin_with_type_args("type.construct_finish", &[type_named("Box")], &[builder])
+            .expect("type.construct_finish should be a typed builtin")
+            .expect("type.construct_finish should evaluate");
+
+        assert_eq!(
+            finished,
+            result_fail(
+                "type.construct_finish: 'Box' is missing required field 'value'".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn type_construct_finish_checked_enum_reports_missing_payload_field() {
+        let field_type = ReflectionTypeInfo::new(
+            "string",
+            "primitive",
+            Some("string_type".to_string()),
+            false,
+            Vec::new(),
+        );
+        let mut metadata = ReflectionMetadata::new();
+        metadata.insert_type_info(ReflectionTypeInfo::new(
+            "Choice",
+            "enum",
+            None,
+            false,
+            Vec::new(),
+        ));
+        metadata.insert_type_variants(
+            "Choice",
+            vec![ReflectionVariantInfo::new(
+                0,
+                "token",
+                7,
+                false,
+                vec![ReflectionFieldInfo::new(
+                    0,
+                    "value",
+                    "string",
+                    "primitive",
+                    "value",
+                    false,
+                    field_type,
+                )],
+            )],
+        );
+
+        let mut interp = Interpreter::new();
+        interp.set_reflection_metadata(Arc::new(metadata));
+
+        let variants = interp
+            .call_builtin_with_type_args("type.variants", &[type_named("Choice")], &[])
+            .expect("type.variants should be a typed builtin")
+            .expect("type.variants should evaluate");
+        let Value::List(variants) = variants else {
+            panic!("expected list of TypeVariant values");
+        };
+        let builder = interp
+            .call_builtin_with_type_args(
+                "type.construct_variant_start",
+                &[type_named("Choice")],
+                &[variants[0].clone()],
+            )
+            .expect("type.construct_variant_start should be a typed builtin")
+            .expect("type.construct_variant_start should evaluate");
+        let Value::ResultOk(builder) = builder else {
+            panic!("expected successful enum construction start");
+        };
+        let finished = interp
+            .call_builtin_with_type_args(
+                "type.construct_finish",
+                &[type_named("Choice")],
+                &[*builder],
+            )
+            .expect("type.construct_finish should be a typed builtin")
+            .expect("type.construct_finish should evaluate");
+
+        assert_eq!(
+            finished,
+            result_fail(
+                "type.construct_finish: variant 'Choice.token' is missing required payload field 'value'"
+                    .to_string()
+            )
+        );
     }
 
     /// Helper: create a field access expression.

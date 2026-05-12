@@ -131,8 +131,10 @@ metadata for payload field provenance and type validation. All retain the AST
 fallback for bootstrap/direct interpreter tests. `type.construct_variant_start`
 and `type.construct_put` now prefer checked metadata for construction kind,
 field, and variant payload validation while preserving the existing
-`TypeConstruction` builder layout. `type.construct_finish` still uses the
-existing interpreter materialization path.
+`TypeConstruction` builder layout. `type.construct_finish` now uses checked
+metadata to materialize structs and enums, while bitfield finish still uses the
+existing interpreter registry path for numeric width and enum annotation
+validation.
 
 ### Stage 4: Make Generic Instantiations Canonical
 
@@ -170,7 +172,8 @@ Continue the metadata-only migration:
 5. Move value-sensitive APIs incrementally. `type.field_value`,
    `type.variant_value`, and `type.variant_field_value` have started;
    `type.construct_variant_start` and `type.construct_put` now stage checked
-   construction validation.
-6. Keep `type.construct_finish` conservative until construction metadata has
-   enough canonical layout, refinement, and bitfield/enum numeric semantics to
-   replace the remaining interpreter registries cleanly.
+   construction validation. `type.construct_finish` now uses checked metadata
+   for structs and enums.
+6. Keep bitfield `type.construct_finish` conservative until construction
+   metadata has enough numeric width and enum annotation semantics to replace
+   the remaining interpreter registry cleanly.
