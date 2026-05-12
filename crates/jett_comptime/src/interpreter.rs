@@ -1354,7 +1354,8 @@ impl Interpreter {
                     self.substitute_type_expr(bound_type_expr)
                 } else if let Some((source_ty, index)) = comptime_type_arg_binding(&bind.value) {
                     let source_ty = self.substitute_type_expr(source_ty);
-                    self.type_info_arg_types(&source_ty)
+                    self.checked_type_info_arg_types(&source_ty)
+                        .unwrap_or_else(|| self.type_info_arg_types(&source_ty))
                         .get(index)
                         .cloned()
                         .ok_or_else(|| {
@@ -2437,31 +2438,49 @@ impl Interpreter {
                 if let Some(err) = check_args(name, 0, args) {
                     return Some(err);
                 }
-                Ok(Value::String(type_expr_display(&ty)))
+                Ok(Value::String(
+                    self.checked_type_info(&ty)
+                        .map(|info| info.type_name.clone())
+                        .unwrap_or_else(|| type_expr_display(&ty)),
+                ))
             }
             "type.kind" => {
                 if let Some(err) = check_args(name, 0, args) {
                     return Some(err);
                 }
-                Ok(Value::String(self.type_expr_kind(&ty).to_string()))
+                Ok(Value::String(
+                    self.checked_type_kind(&ty)
+                        .unwrap_or_else(|| self.type_expr_kind(&ty))
+                        .to_string(),
+                ))
             }
             "type.kind_tag" => {
                 if let Some(err) = check_args(name, 0, args) {
                     return Some(err);
                 }
-                Ok(Self::type_kind_tag_value(self.type_expr_kind(&ty)))
+                let kind = self
+                    .checked_type_kind(&ty)
+                    .unwrap_or_else(|| self.type_expr_kind(&ty));
+                Ok(Self::type_kind_tag_value(kind))
             }
             "type.primitive_tag" => {
                 if let Some(err) = check_args(name, 0, args) {
                     return Some(err);
                 }
-                Ok(self.type_primitive_tag_value(&ty))
+                Ok(self
+                    .checked_type_info(&ty)
+                    .map(|info| Self::primitive_tag_value(info.primitive_tag.as_deref()))
+                    .unwrap_or_else(|| self.type_primitive_tag_value(&ty)))
             }
             "type.has_secret" => {
                 if let Some(err) = check_args(name, 0, args) {
                     return Some(err);
                 }
-                Ok(Value::Bool(self.type_expr_has_secret(&ty)))
+                Ok(Value::Bool(
+                    self.checked_type_info(&ty)
+                        .map(|info| info.has_secret)
+                        .unwrap_or_else(|| self.type_expr_has_secret(&ty)),
+                ))
             }
             "type.info" => {
                 if let Some(err) = check_args(name, 0, args) {
@@ -3277,8 +3296,22 @@ impl Interpreter {
 
     fn reflected_field_loop_bindings(&self, iterable: &Expr) -> Option<Vec<ReflectedFieldBinding>> {
         let owner_ty = comptime_type_fields_binding(iterable)?;
+        let owner_ty = self.substitute_type_expr(owner_ty);
+        if let Some(fields) = self.checked_type_fields(&owner_ty) {
+            return Some(
+                fields
+                    .iter()
+                    .map(|field| ReflectedFieldBinding {
+                        index: field.index,
+                        name: field.name.clone(),
+                        ty: Self::reflection_type_info_type_expr(&field.type_info),
+                    })
+                    .collect(),
+            );
+        }
+
         Some(
-            self.type_expr_fields(&self.substitute_type_expr(owner_ty))
+            self.type_expr_fields(&owner_ty)
                 .into_iter()
                 .enumerate()
                 .map(|(index, field)| ReflectedFieldBinding {
@@ -3296,6 +3329,20 @@ impl Interpreter {
     ) -> Option<Vec<ReflectedVariantBinding>> {
         let owner_ty = comptime_type_variants_binding(iterable)?;
         let owner_ty = self.substitute_type_expr(owner_ty);
+        if let Some(variants) = self.checked_type_variants(&owner_ty) {
+            return Some(
+                variants
+                    .iter()
+                    .map(|variant| ReflectedVariantBinding {
+                        ty: owner_ty.clone(),
+                        index: variant.index,
+                        name: variant.name.clone(),
+                        discriminant: variant.discriminant,
+                    })
+                    .collect(),
+            );
+        }
+
         Some(
             self.type_expr_variants(&owner_ty)
                 .into_iter()
@@ -3341,6 +3388,29 @@ impl Interpreter {
     ) -> Result<ReflectedFieldBinding, String> {
         let (field_index, metadata_name, metadata_type_name) =
             Self::type_field_metadata_for(field_metadata, "type.field_value")?;
+        if let Some(variants) = self.checked_type_variants(owner_ty) {
+            for variant in variants {
+                if matches!(selected_variant, Some(selected) if selected != variant.name) {
+                    continue;
+                }
+                let Some(field) = variant.fields.get(field_index) else {
+                    continue;
+                };
+                if field.name == metadata_name && field.type_name == metadata_type_name {
+                    return Ok(ReflectedFieldBinding {
+                        index: field_index,
+                        name: field.name.clone(),
+                        ty: Self::reflection_type_info_type_expr(&field.type_info),
+                    });
+                }
+            }
+            return Err(format!(
+                "`comptime type` reflected enum field metadata '{}' does not match any payload field on type '{}'",
+                metadata_name,
+                type_expr_display(owner_ty)
+            ));
+        }
+
         for variant in self.type_expr_variants(owner_ty) {
             if matches!(selected_variant, Some(selected) if selected != variant.name) {
                 continue;
@@ -8873,6 +8943,63 @@ mod tests {
     }
 
     #[test]
+    fn direct_type_reflection_uses_checked_metadata_when_available() {
+        let mut metadata = ReflectionMetadata::new();
+        metadata.insert_type_info(ReflectionTypeInfo::new(
+            "Token",
+            "primitive",
+            Some("string_type".to_string()),
+            true,
+            Vec::new(),
+        ));
+
+        let mut interp = Interpreter::new();
+        interp.set_reflection_metadata(Arc::new(metadata));
+
+        let ty = type_named("Token");
+        let name = interp
+            .call_builtin_with_type_args("type.name", std::slice::from_ref(&ty), &[])
+            .expect("type.name should be a typed builtin")
+            .expect("type.name should evaluate");
+        let kind = interp
+            .call_builtin_with_type_args("type.kind", std::slice::from_ref(&ty), &[])
+            .expect("type.kind should be a typed builtin")
+            .expect("type.kind should evaluate");
+        let kind_tag = interp
+            .call_builtin_with_type_args("type.kind_tag", std::slice::from_ref(&ty), &[])
+            .expect("type.kind_tag should be a typed builtin")
+            .expect("type.kind_tag should evaluate");
+        let primitive_tag = interp
+            .call_builtin_with_type_args("type.primitive_tag", std::slice::from_ref(&ty), &[])
+            .expect("type.primitive_tag should be a typed builtin")
+            .expect("type.primitive_tag should evaluate");
+        let has_secret = interp
+            .call_builtin_with_type_args("type.has_secret", &[ty], &[])
+            .expect("type.has_secret should be a typed builtin")
+            .expect("type.has_secret should evaluate");
+
+        assert_eq!(name, Value::String("Token".to_string()));
+        assert_eq!(kind, Value::String("primitive".to_string()));
+        assert_eq!(
+            kind_tag,
+            Value::Enum {
+                type_name: "TypeKind".to_string(),
+                variant: "primitive_type".to_string(),
+                fields: Vec::new(),
+            }
+        );
+        assert_eq!(
+            primitive_tag,
+            Value::OptionalSome(Box::new(Value::Enum {
+                type_name: "TypePrimitive".to_string(),
+                variant: "string_type".to_string(),
+                fields: Vec::new(),
+            }))
+        );
+        assert_eq!(has_secret, Value::Bool(true));
+    }
+
+    #[test]
     fn type_arg_uses_checked_reflection_metadata_when_available() {
         let mut metadata = ReflectionMetadata::new();
         metadata.insert_type_info(ReflectionTypeInfo::new(
@@ -8952,6 +9079,64 @@ mod tests {
     }
 
     #[test]
+    fn comptime_type_arg_binding_uses_checked_reflection_metadata_when_available() {
+        let mut metadata = ReflectionMetadata::new();
+        metadata.insert_type_info(ReflectionTypeInfo::new(
+            "list[int64]",
+            "list",
+            None,
+            false,
+            vec![ReflectionTypeInfo::new(
+                "string",
+                "primitive",
+                Some("string_type".to_string()),
+                false,
+                Vec::new(),
+            )],
+        ));
+
+        let mut interp = Interpreter::new();
+        interp.set_reflection_metadata(Arc::new(metadata));
+        interp.set_variable("bound_name", Value::String("unset".to_string()));
+
+        let stmt = Stmt::ComptimeTypeBind(ComptimeTypeBindStmt {
+            name: ident("Item"),
+            value: Expr::GenericCall(
+                Box::new(field_access(var("type"), "arg")),
+                vec![TypeExpr::Generic(
+                    ident("list"),
+                    vec![type_named("int64")],
+                    sp(),
+                )],
+                vec![CallArg {
+                    name: None,
+                    value: Expr::IntLiteral(0, sp()),
+                    span: sp(),
+                }],
+                sp(),
+            ),
+            body: block(vec![assign(
+                "bound_name",
+                Expr::GenericCall(
+                    Box::new(field_access(var("type"), "name")),
+                    vec![type_named("Item")],
+                    Vec::new(),
+                    sp(),
+                ),
+            )]),
+            span: sp(),
+        });
+
+        interp.exec_stmt(&stmt).expect("binding should execute");
+        assert_eq!(
+            interp
+                .get_variable("bound_name")
+                .expect("bound_name should be set by the comptime type body"),
+            &Value::String("string".to_string())
+        );
+    }
+
+    #[test]
     fn type_fields_uses_checked_reflection_metadata_when_available() {
         let value_info = ReflectionTypeInfo::new(
             "secret[string]",
@@ -9017,6 +9202,48 @@ mod tests {
             .expect("TypeField.has_secret should exist");
         assert_eq!(serialize_name, &Value::String("jsonValue".to_string()));
         assert_eq!(has_secret, &Value::Bool(true));
+    }
+
+    #[test]
+    fn reflected_field_loop_uses_checked_reflection_metadata_when_available() {
+        let value_info = ReflectionTypeInfo::new(
+            "string",
+            "primitive",
+            Some("string_type".to_string()),
+            false,
+            Vec::new(),
+        );
+        let mut metadata = ReflectionMetadata::new();
+        metadata.insert_type_fields(
+            "Box",
+            vec![ReflectionFieldInfo::new(
+                0,
+                "value",
+                "string",
+                "primitive",
+                "value",
+                false,
+                value_info,
+            )],
+        );
+
+        let mut interp = Interpreter::new();
+        interp.set_reflection_metadata(Arc::new(metadata));
+
+        let iterable = Expr::GenericCall(
+            Box::new(field_access(var("type"), "fields")),
+            vec![type_named("Box")],
+            Vec::new(),
+            sp(),
+        );
+        let bindings = interp
+            .reflected_field_loop_bindings(&iterable)
+            .expect("type.fields loop should be recognized");
+
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].index, 0);
+        assert_eq!(bindings[0].name, "value");
+        assert_eq!(type_expr_display(&bindings[0].ty), "string");
     }
 
     #[test]
@@ -9198,6 +9425,89 @@ mod tests {
             .expect("TypeVariant.has_secret should exist");
         assert_eq!(discriminant, &Value::Int64(7));
         assert_eq!(has_secret, &Value::Bool(true));
+    }
+
+    #[test]
+    fn reflected_variant_loops_use_checked_reflection_metadata_when_available() {
+        let field_info = ReflectionTypeInfo::new(
+            "string",
+            "primitive",
+            Some("string_type".to_string()),
+            false,
+            Vec::new(),
+        );
+        let mut metadata = ReflectionMetadata::new();
+        metadata.insert_type_variants(
+            "Choice",
+            vec![ReflectionVariantInfo::new(
+                0,
+                "token",
+                7,
+                false,
+                vec![ReflectionFieldInfo::new(
+                    0,
+                    "value",
+                    "string",
+                    "primitive",
+                    "value",
+                    false,
+                    field_info,
+                )],
+            )],
+        );
+
+        let mut interp = Interpreter::new();
+        interp.set_reflection_metadata(Arc::new(metadata));
+
+        let variant_iterable = Expr::GenericCall(
+            Box::new(field_access(var("type"), "variants")),
+            vec![type_named("Choice")],
+            Vec::new(),
+            sp(),
+        );
+        let variant_bindings = interp
+            .reflected_variant_loop_bindings(&variant_iterable)
+            .expect("type.variants loop should be recognized");
+        assert_eq!(variant_bindings.len(), 1);
+        assert_eq!(variant_bindings[0].name, "token");
+        assert_eq!(variant_bindings[0].discriminant, 7);
+
+        let variants = interp
+            .call_builtin_with_type_args("type.variants", &[type_named("Choice")], &[])
+            .expect("type.variants should be a typed builtin")
+            .expect("type.variants should evaluate");
+        let Value::List(variants) = variants else {
+            panic!("expected list of TypeVariant values");
+        };
+        let Value::Struct {
+            fields: variant_fields,
+            ..
+        } = &variants[0]
+        else {
+            panic!("expected TypeVariant");
+        };
+        let payload_fields = variant_fields
+            .iter()
+            .find_map(
+                |(name, value)| {
+                    if name == "fields" { Some(value) } else { None }
+                },
+            )
+            .expect("TypeVariant.fields should exist");
+        let Value::List(payload_fields) = payload_fields else {
+            panic!("expected TypeVariant.fields list");
+        };
+
+        let field_binding = interp
+            .reflected_variant_field_binding_for_value(
+                &type_named("Choice"),
+                Some("token"),
+                &payload_fields[0],
+            )
+            .expect("payload field binding should be checked");
+        assert_eq!(field_binding.index, 0);
+        assert_eq!(field_binding.name, "value");
+        assert_eq!(type_expr_display(&field_binding.ty), "string");
     }
 
     #[test]

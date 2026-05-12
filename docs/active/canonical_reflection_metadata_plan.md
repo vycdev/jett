@@ -106,11 +106,14 @@ Move these APIs first:
 - `type.bitfield_fields`
 - `type.variants`
 
-Status: `type.info[T]()`, `type.arg[T](index)`, `type.fields[T]()`,
-`type.bitfield_layout[T]()`, `type.bitfield_fields[T]()` and
-`type.variants[T]()` now prefer the checked snapshot when metadata for the
-requested type name is present, and fall back to the previous AST path during
-bootstrap and direct interpreter tests. Trusted loops over `TypeInfo.args` also
+Status: `type.name[T]()`, `type.kind[T]()`, `type.kind_tag[T]()`,
+`type.primitive_tag[T]()`, `type.has_secret[T]()`, `type.info[T]()`,
+`type.arg[T](index)`, `type.fields[T]()`, `type.bitfield_layout[T]()`,
+`type.bitfield_fields[T]()` and `type.variants[T]()` now prefer the checked
+snapshot when metadata for the requested type name is present, and fall back to
+the previous AST path during bootstrap and direct interpreter tests. Trusted
+`comptime type` bindings over direct `type.arg[T](index)`, `TypeInfo.args`,
+`type.fields[T]()` loops, and `type.variants[T]()` / variant payload loops also
 prefer checked metadata when constructing the compile-time type binding scope.
 
 Then move value-sensitive APIs:
@@ -173,5 +176,8 @@ Continue the metadata-only migration:
    `type.construct_variant_start` and `type.construct_put` now stage checked
    construction validation. `type.construct_finish` now uses checked metadata
    for structs, enums, and bitfields.
-6. Audit the remaining AST fallback users and decide which ones are true
+6. Route trusted `comptime type` binding derivation through checked metadata for
+   direct `type.arg`, field loops, variant loops, and variant payload loops.
+   Done.
+7. Audit the remaining AST fallback users and decide which ones are true
    bootstrap compatibility paths versus metadata gaps that should be closed.
