@@ -4116,6 +4116,15 @@ One namespace, one file. No ambiguity about which `auth` is being imported.
 
 **Third-party namespace collisions:** If a vendored library declares `namespace auth` and your project also has `namespace auth`, this is a compile error. Since dependencies are vendored source files, you own the copy — rename the namespace in the vendored file (e.g. to `namespace authlib.auth`), then `use authlib.auth as auth` at the call site. Library authors should use prefixed namespaces (e.g. `namespace mylib.auth` instead of just `namespace auth`) to minimize collisions.
 
+**TODO: Namespace visibility / exports.** The implementation now has provisional
+private-by-default namespace items with explicit `export` for public APIs. This
+needs to be written into the canonical design before it is considered settled:
+document same-namespace private access, qualified-only external access,
+`export` on functions/types/interfaces/bitfields/enums/type aliases, `export`
+inside `mutual` blocks, examples for stdlib modules, editor syntax
+highlighting expectations, and update the keyword list. Use
+`docs/active/stdlib_visibility_design.md` as the staging reference.
+
 #### Flat File Organization — The LLM Decides
 
 Because the compiler doesn't care about directory structure, the LLM (or developer) can organize files however makes sense:
