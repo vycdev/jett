@@ -3708,22 +3708,31 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn validate_mutual_blocks(&mut self, module: &Module) {
-        let function_defs: HashMap<&str, &FunctionDef> = module
-            .items
-            .iter()
-            .filter_map(|item| match item {
-                Item::Function(func) => Some((func.name.name.as_str(), func)),
-                _ => None,
-            })
-            .collect();
-
+        let mut function_defs: HashMap<String, &FunctionDef> = HashMap::new();
+        let mut current_file = None;
+        let mut current_namespace = None;
         for item in &module.items {
+            Self::update_current_namespace(item, &mut current_file, &mut current_namespace);
+            if let Item::Function(func) = item {
+                function_defs.insert(
+                    Self::canonical_name(current_namespace.as_deref(), &func.name.name),
+                    func,
+                );
+            }
+        }
+
+        let mut current_file = None;
+        let mut current_namespace = None;
+        for item in &module.items {
+            Self::update_current_namespace(item, &mut current_file, &mut current_namespace);
             let Item::Mutual(block) = item else {
                 continue;
             };
 
             for decl in &block.declarations {
-                let Some(func) = function_defs.get(decl.name.name.as_str()).copied() else {
+                let canonical_name =
+                    Self::canonical_name(current_namespace.as_deref(), &decl.name.name);
+                let Some(func) = function_defs.get(&canonical_name).copied() else {
                     self.sink.emit(errors::mutual_function_missing_definition(
                         &decl.name.name,
                         decl.name.span,

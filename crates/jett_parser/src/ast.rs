@@ -119,6 +119,7 @@ pub struct FunctionDecl {
     pub type_params: Vec<Ident>,
     pub params: Vec<Param>,
     pub return_type: Option<TypeExpr>,
+    pub exported: bool,
     pub span: Span,
 }
 

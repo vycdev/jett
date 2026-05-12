@@ -63,8 +63,8 @@ struct Resolver {
     /// at which it was declared so that pass-2 can detect forward references.
     /// The map goes name -> (DefId, declaration order index).
     top_level_order: HashMap<String, (DefId, usize)>,
-    /// Functions predeclared by a `mutual` block: name -> declaration span.
-    mutual_declarations: HashMap<String, Span>,
+    /// Functions predeclared by a `mutual` block: canonical name -> (declaration span, DefId).
+    mutual_declarations: HashMap<String, (Span, DefId)>,
     /// Functions from `mutual` blocks that already have a real body definition.
     mutual_definitions: HashMap<String, Span>,
     /// Type parameter names that are currently in scope (e.g. `T`, `U` in a generic struct).
@@ -191,15 +191,17 @@ impl Resolver {
                 }
                 Item::Mutual(block) => {
                     for decl in &block.declarations {
-                        if let Some(def_id) = self.declare_top_level(
+                        let canonical_name = self.current_symbol_name(&decl.name.name);
+                        if let Some(def_id) = self.declare_namespaced_top_level(
                             &decl.name.name,
                             DefKind::Function,
                             decl.name.span,
                             index,
+                            decl.exported,
                         ) {
                             self.resolutions.insert(decl.name.span, def_id);
                             self.mutual_declarations
-                                .insert(decl.name.name.clone(), decl.name.span);
+                                .insert(canonical_name, (decl.name.span, def_id));
                         }
                     }
                 }
@@ -285,10 +287,11 @@ impl Resolver {
     }
 
     fn declare_function_top_level(&mut self, func: &FunctionDef, order: usize) {
-        if self.mutual_declarations.contains_key(&func.name.name) {
+        let canonical_name = self.current_symbol_name(&func.name.name);
+        if let Some((_, def_id)) = self.mutual_declarations.get(&canonical_name).copied() {
             if let Some(prev_span) = self
                 .mutual_definitions
-                .insert(func.name.name.clone(), func.name.span)
+                .insert(canonical_name, func.name.span)
             {
                 self.sink.emit(errors::duplicate_definition(
                     &func.name.name,
@@ -298,10 +301,6 @@ impl Resolver {
                 return;
             }
 
-            let def_id = self
-                .scope_table
-                .lookup_local(self.current_scope, &func.name.name)
-                .expect("mutual declaration must already be in the current scope");
             self.resolutions.insert(func.name.span, def_id);
             return;
         }
@@ -364,6 +363,11 @@ impl Resolver {
         self.current_namespace
             .as_ref()
             .map(|namespace| format!("{namespace}.{name}"))
+    }
+
+    fn current_symbol_name(&self, name: &str) -> String {
+        self.current_qualified_name(name)
+            .unwrap_or_else(|| name.to_string())
     }
 
     fn reset_namespace_tracking(&mut self) {
@@ -1701,6 +1705,73 @@ function main() returns int64:
         );
     }
 
+    #[test]
+    fn private_namespaced_mutual_function_rejects_external_access() {
+        let module = parse_module(
+            r#"
+namespace api
+
+mutual:
+    export function public_helper() returns int64
+    function private_helper() returns int64
+
+function public_helper() returns int64:
+    return private_helper()
+
+function private_helper() returns int64:
+    return 2
+
+namespace app
+
+function main() returns int64:
+    return api.private_helper()
+"#,
+        );
+
+        let result = resolve(&module);
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == Severity::Error && d.code.code() == 207)
+            .collect();
+        assert_eq!(errors.len(), 1, "expected private mutual access error");
+        assert!(errors[0].message.contains("api.private_helper"));
+    }
+
+    #[test]
+    fn exported_namespaced_mutual_function_allows_external_access() {
+        let module = parse_module(
+            r#"
+namespace api
+
+mutual:
+    export function public_helper() returns int64
+    function private_helper() returns int64
+
+function public_helper() returns int64:
+    return private_helper()
+
+function private_helper() returns int64:
+    return 2
+
+namespace app
+
+function main() returns int64:
+    return api.public_helper()
+"#,
+        );
+
+        let result = resolve(&module);
+        assert!(
+            !result
+                .diagnostics
+                .iter()
+                .any(|d| d.severity == Severity::Error),
+            "expected no errors, got: {:#?}",
+            result.diagnostics
+        );
+    }
+
     // ---- Test: resolve a simple function call ----
 
     #[test]
@@ -1870,6 +1941,7 @@ function main() returns int64:
                                 span: sp(8, 16),
                             }],
                             return_type: Some(named_type("bool", 25)),
+                            exported: false,
                             span: sp(0, 29),
                         },
                         FunctionDecl {
@@ -1883,6 +1955,7 @@ function main() returns int64:
                                 span: sp(42, 50),
                             }],
                             return_type: Some(named_type("bool", 59)),
+                            exported: false,
                             span: sp(35, 63),
                         },
                     ],

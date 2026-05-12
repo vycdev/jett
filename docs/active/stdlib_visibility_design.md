@@ -160,17 +160,21 @@ Implemented:
 
 - `export` syntax for top-level `function`, `struct`, `enum`, `bitfield`,
   `type`, and `interface` declarations.
+- Per-declaration `export function` syntax inside `mutual` blocks, allowing a
+  mixed public/private recursive API surface.
 - Resolver visibility metadata on definitions, including namespace identity.
 - Private-by-default resolver diagnostics for references to namespaced
   declarations from outside their namespace.
+- Namespace-private `mutual` declarations are enforced for qualified, aliased,
+  and old flat compatibility references.
 - Same-namespace private helper access remains allowed.
 - Existing user/project namespace fixtures now mark public cross-namespace API
   with `export`.
+- The public `JsonTree` API in `stdlib/json.jett` is explicitly exported while
+  parser, decoder, serializer, and reflected bridge helpers stay private.
 
 Still staged:
 
-- `mutual` declarations do not yet carry export metadata, so stdlib JSON's
-  large mutual helper block still needs a cleaner public/private story.
 - The typechecker and interpreter still keep temporary flat compatibility
   registrations. The resolver now rejects external private flat access, but the
   registries still need to stop creating those aliases.
@@ -197,7 +201,7 @@ Still staged:
    expressible from source.
 7. Mark only the real stdlib JSON surface as exported. Keep parser walkers,
    reflected decoders, quoting helpers, and bridge hooks private unless there is
-   a user-facing reason to expose them.
+   a user-facing reason to expose them. Done for the current `JsonTree` surface.
 
 ## Required Tests
 

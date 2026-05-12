@@ -49,7 +49,7 @@ struct TreeFull:
     data: bytes
 
 function tree_reflected_parse_summary() returns string:
-    TreeUser user = json.json_tree_parse_reflected[TreeUser]("{{\"userId\":\"u1\",\"active\":true,\"profile\":{{\"city\":\"Cluj\",\"visits\":[3,5]}},\"direction\":\"south\",\"tags\":[\"admin\",\"beta\"],\"nickname\":\"ally\",\"scores\":{{\"wins\":3}}}}") handle error:
+    TreeUser user = json.parse[TreeUser]("{{\"userId\":\"u1\",\"active\":true,\"profile\":{{\"city\":\"Cluj\",\"visits\":[3,5]}},\"direction\":\"south\",\"tags\":[\"admin\",\"beta\"],\"nickname\":\"ally\",\"scores\":{{\"wins\":3}}}}") handle error:
         return error
     string nick = user.nickname handle:
         default "none"
@@ -61,24 +61,22 @@ function tree_reflected_parse_summary() returns string:
     return "{user.id}:{user.active}:{user.profile.city}:{list.length[int64](user.profile.visits)}:{list.length[string](user.tags)}:{nick}:{missing}:{wins}:{south}"
 
 function tree_reflected_missing_error() returns string:
-    TreeUser user = json.json_tree_parse_reflected[TreeUser]("{{\"userId\":\"u1\",\"profile\":{{\"city\":\"Cluj\",\"visits\":[3]}},\"direction\":\"south\",\"tags\":[],\"scores\":{{\"wins\":3}}}}") handle error:
+    TreeUser user = json.parse[TreeUser]("{{\"userId\":\"u1\",\"profile\":{{\"city\":\"Cluj\",\"visits\":[3]}},\"direction\":\"south\",\"tags\":[],\"scores\":{{\"wins\":3}}}}") handle error:
         return error
     return user.id
 
 function tree_reflected_wrong_item_error() returns string:
-    TreeUser user = json.json_tree_parse_reflected[TreeUser]("{{\"userId\":\"u1\",\"active\":true,\"profile\":{{\"city\":\"Cluj\",\"visits\":[3]}},\"direction\":\"south\",\"tags\":[1],\"scores\":{{\"wins\":3}}}}") handle error:
+    TreeUser user = json.parse[TreeUser]("{{\"userId\":\"u1\",\"active\":true,\"profile\":{{\"city\":\"Cluj\",\"visits\":[3]}},\"direction\":\"south\",\"tags\":[1],\"scores\":{{\"wins\":3}}}}") handle error:
         return error
     return user.id
 
 function tree_reflected_decode_existing_tree() returns string:
-    json.JsonTree tree = json.json_tree_parse("\"Ada\"") handle error:
-        return error
-    string value = json.json_decode_tree_reflected[string](view tree) handle error:
+    string value = json.parse[string]("\"Ada\"") handle error:
         return error
     return value
 
 function tree_reflected_full_summary() returns string:
-    TreeFull item = json.json_tree_parse_reflected[TreeFull]("{{\"header\":{{\"version\":4,\"header_length\":5,\"protocol\":\"tcp\"}},\"shape\":{{\"point\":[3,4]}},\"lucky\":[11,13],\"display\":\"ready\",\"outcome\":{{\"ok\":7}},\"failed\":{{\"fail\":\"bad\"}},\"credential\":{{\"name\":\"svc\",\"token\":\"secret-token\"}},\"data\":\"0x4869\"}}") handle error:
+    TreeFull item = json.parse[TreeFull]("{{\"header\":{{\"version\":4,\"header_length\":5,\"protocol\":\"tcp\"}},\"shape\":{{\"point\":[3,4]}},\"lucky\":[11,13],\"display\":\"ready\",\"outcome\":{{\"ok\":7}},\"failed\":{{\"fail\":\"bad\"}},\"credential\":{{\"name\":\"svc\",\"token\":\"secret-token\"}},\"data\":\"0x4869\"}}") handle error:
         return error
     bool tcp = item.header.protocol == TreeProtocol.tcp
     int64 shape_total = 0
@@ -96,19 +94,19 @@ function tree_reflected_full_summary() returns string:
     return "{item.header.version}:{item.header.header_length}:{tcp}:{shape_total}:{lucky_count}:{lucky}:{coarsen item.display}:{outcome}:{secret.redact(item.credential.token)}:{bytes.length(item.data)}:{first}"
 
 function tree_reflected_result_failure() returns string:
-    TreeFull item = json.json_tree_parse_reflected[TreeFull]("{{\"header\":{{\"version\":4,\"header_length\":5,\"protocol\":\"tcp\"}},\"shape\":{{\"point\":[3,4]}},\"lucky\":[11,13],\"display\":\"ready\",\"outcome\":{{\"ok\":7}},\"failed\":{{\"fail\":\"bad\"}},\"credential\":{{\"name\":\"svc\",\"token\":\"secret-token\"}},\"data\":\"0x4869\"}}") handle error:
+    TreeFull item = json.parse[TreeFull]("{{\"header\":{{\"version\":4,\"header_length\":5,\"protocol\":\"tcp\"}},\"shape\":{{\"point\":[3,4]}},\"lucky\":[11,13],\"display\":\"ready\",\"outcome\":{{\"ok\":7}},\"failed\":{{\"fail\":\"bad\"}},\"credential\":{{\"name\":\"svc\",\"token\":\"secret-token\"}},\"data\":\"0x4869\"}}") handle error:
         return error
     int64 ignored = item.failed handle error:
         return error
     return "{ignored}"
 
 function tree_reflected_invalid_refinement_message() returns string:
-    TreeFull item = json.json_tree_parse_reflected[TreeFull]("{{\"header\":{{\"version\":4,\"header_length\":5,\"protocol\":\"tcp\"}},\"shape\":{{\"point\":[3,4]}},\"lucky\":[13],\"display\":\"\",\"outcome\":{{\"ok\":7}},\"failed\":{{\"fail\":\"bad\"}},\"credential\":{{\"name\":\"svc\",\"token\":\"secret-token\"}},\"data\":\"0x4869\"}}") handle error:
+    TreeFull item = json.parse[TreeFull]("{{\"header\":{{\"version\":4,\"header_length\":5,\"protocol\":\"tcp\"}},\"shape\":{{\"point\":[3,4]}},\"lucky\":[13],\"display\":\"\",\"outcome\":{{\"ok\":7}},\"failed\":{{\"fail\":\"bad\"}},\"credential\":{{\"name\":\"svc\",\"token\":\"secret-token\"}},\"data\":\"0x4869\"}}") handle error:
         return error
     return coarsen item.display
 
 function tree_reflected_invalid_bitfield_message() returns string:
-    TreeFull item = json.json_tree_parse_reflected[TreeFull]("{{\"header\":{{\"version\":16,\"header_length\":5,\"protocol\":\"tcp\"}},\"shape\":{{\"point\":[3,4]}},\"lucky\":[13],\"display\":\"ready\",\"outcome\":{{\"ok\":7}},\"failed\":{{\"fail\":\"bad\"}},\"credential\":{{\"name\":\"svc\",\"token\":\"secret-token\"}},\"data\":\"0x4869\"}}") handle error:
+    TreeFull item = json.parse[TreeFull]("{{\"header\":{{\"version\":16,\"header_length\":5,\"protocol\":\"tcp\"}},\"shape\":{{\"point\":[3,4]}},\"lucky\":[13],\"display\":\"ready\",\"outcome\":{{\"ok\":7}},\"failed\":{{\"fail\":\"bad\"}},\"credential\":{{\"name\":\"svc\",\"token\":\"secret-token\"}},\"data\":\"0x4869\"}}") handle error:
         return error
     return "{item.header.version}"
 

@@ -347,7 +347,7 @@ impl<'src> Parser<'src> {
     fn parse_function(&mut self, exported: bool, export_span: Option<Span>) -> FunctionDef {
         let kw = self.expect(TokenKind::Function);
         let start_span = export_span.unwrap_or(kw.span);
-        let decl = self.parse_function_decl_rest(kw.span);
+        let decl = self.parse_function_decl_rest(kw.span, exported);
         self.expect(TokenKind::Colon);
         let body = self.parse_block();
         let end_span = body.span;
@@ -363,7 +363,7 @@ impl<'src> Parser<'src> {
         }
     }
 
-    fn parse_function_decl_rest(&mut self, start_span: Span) -> FunctionDecl {
+    fn parse_function_decl_rest(&mut self, start_span: Span, exported: bool) -> FunctionDecl {
         let name = self.parse_ident();
 
         // Optional generic type parameters: `[T, U, ...]`
@@ -400,6 +400,7 @@ impl<'src> Parser<'src> {
             type_params,
             params,
             return_type,
+            exported,
         }
     }
 
@@ -414,8 +415,11 @@ impl<'src> Parser<'src> {
 
         self.skip_newlines();
         while self.peek() != TokenKind::Dedent && self.peek() != TokenKind::Eof {
+            let export_span = self.eat(TokenKind::Export).map(|tok| tok.span);
+            let exported = export_span.is_some();
             let func_kw = self.expect(TokenKind::Function);
-            let decl = self.parse_function_decl_rest(func_kw.span);
+            let start_span = export_span.unwrap_or(func_kw.span);
+            let decl = self.parse_function_decl_rest(start_span, exported);
             last_span = decl.span;
             declarations.push(decl);
             self.skip_newlines();
@@ -444,7 +448,7 @@ impl<'src> Parser<'src> {
         self.skip_newlines();
         while self.peek() != TokenKind::Dedent && self.peek() != TokenKind::Eof {
             let func_kw = self.expect(TokenKind::Function);
-            let decl = self.parse_function_decl_rest(func_kw.span);
+            let decl = self.parse_function_decl_rest(func_kw.span, false);
             last_span = decl.span;
             methods.push(decl);
             self.skip_newlines();
@@ -2789,10 +2793,32 @@ mutual:
                 assert_eq!(block.declarations.len(), 2);
                 assert_eq!(block.declarations[0].name.name, "is_even");
                 assert_eq!(block.declarations[1].name.name, "is_odd");
+                assert!(!block.declarations[0].exported);
                 assert!(matches!(
                     block.declarations[0].return_type,
                     Some(TypeExpr::Named(ref ident)) if ident.name == "bool"
                 ));
+            }
+            other => panic!("expected Mutual, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_exported_mutual_declaration() {
+        let src = "\
+mutual:
+    export function parse(raw: string) returns int64
+    function parse_value(raw: string) returns int64
+";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        match &result.module.items[0] {
+            Item::Mutual(block) => {
+                assert_eq!(block.declarations.len(), 2);
+                assert!(block.declarations[0].exported);
+                assert_eq!(block.declarations[0].name.name, "parse");
+                assert!(!block.declarations[1].exported);
+                assert_eq!(block.declarations[1].name.name, "parse_value");
             }
             other => panic!("expected Mutual, got {:?}", other),
         }

@@ -400,6 +400,26 @@ compile_fail_fixture!(
     compile_fail_namespace_private_alias,
     "namespace_private_alias.jett"
 );
+compile_fail_fixture!(
+    compile_fail_namespace_private_mutual_function,
+    "namespace_private_mutual_function.jett"
+);
+compile_fail_fixture!(
+    compile_fail_namespace_private_mutual_alias,
+    "namespace_private_mutual_alias.jett"
+);
+compile_fail_fixture!(
+    compile_fail_namespace_private_mutual_flat,
+    "namespace_private_mutual_flat.jett"
+);
+compile_fail_fixture!(
+    compile_fail_json_private_tree_parse_scalar,
+    "json_private_tree_parse_scalar.jett"
+);
+compile_fail_fixture!(
+    compile_fail_json_private_decode_tree_reflected,
+    "json_private_decode_tree_reflected.jett"
+);
 compile_fail_fixture!(compile_fail_duplicate_field, "duplicate_field.jett");
 compile_fail_fixture!(
     compile_fail_json_serialize_secret_struct_blocked,

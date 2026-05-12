@@ -1,0 +1,17 @@
+namespace api
+
+mutual:
+    export function public_helper() returns int64
+    function private_helper() returns int64
+
+function public_helper() returns int64:
+    return private_helper()
+
+function private_helper() returns int64:
+    return 2
+
+namespace app
+
+function main() returns int64:
+    use api as a
+    return a.private_helper()

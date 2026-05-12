@@ -1,0 +1,4 @@
+namespace test
+
+function bad() returns result[json.JsonTree, string]:
+    return json.json_tree_parse_scalar("true")

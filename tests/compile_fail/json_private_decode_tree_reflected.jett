@@ -1,0 +1,6 @@
+namespace test
+
+function bad() returns result[string, string]:
+    json.JsonTree tree = json.json_tree_parse("\"Ada\"") handle error:
+        return fail(error)
+    return json.json_decode_tree_reflected[string](view tree)

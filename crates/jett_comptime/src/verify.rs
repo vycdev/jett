@@ -658,6 +658,7 @@ mod tests {
                         })
                         .collect(),
                     return_type: Some(type_named(return_type)),
+                    exported: false,
                     span: sp(),
                 })
                 .collect(),

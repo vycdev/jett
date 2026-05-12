@@ -277,7 +277,7 @@ VerifyBlock     → 'verify' Name ':' Block
 PropertyBlock   → 'property' Name ':' GivenDecls Block
 InterfaceDef    → 'interface' Name ':' FunctionSignature*
 ImplementBlock  → 'implement' Name 'for' Name ':' FunctionDef*
-MutualBlock     → 'mutual' ':' FunctionSignature*
+MutualBlock     → 'mutual' ':' ('export')? FunctionSignature*
 
 MatchArm        → Pattern ':' Block      // Pattern includes variant destructure or 'other' catch-all
 

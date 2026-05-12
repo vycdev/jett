@@ -17,7 +17,7 @@
 | Diagnostics, error rendering, TOON output | `jett_diagnostics` | 12 | Done |
 | Project discovery, jett.proj parsing | `jett_project` | 7 | Done |
 | Lexer (indentation, interpolation, 90+ tokens) | `jett_lexer` | 62 | Done |
-| Parser (recursive descent + Pratt) | `jett_parser` | 66 | Done |
+| Parser (recursive descent + Pratt) | `jett_parser` | 67 | Done |
 | Formatter (canonical whitespace) | `jett_fmt` | 8 | Done |
 | Pipeline orchestration | `jett_driver` | 36 | Done |
 | CLI (format, build, run, test, lsp) | `jett_cli` | 0 | Done |
@@ -27,7 +27,7 @@
 | Component | Crate | Tests | Status |
 |---|---|---|---|
 | Type interning, struct/enum/interface defs | `jett_types` | 18 | Done |
-| Name resolution, scoping, namespace export visibility | `jett_resolve` | 24 | Done |
+| Name resolution, scoping, namespace export visibility | `jett_resolve` | 26 | Done |
 | Type checking (expressions, operators, generics) | `jett_typecheck` | 97 | Done |
 
 ### Phase C: Ownership and Capabilities — COMPLETE
@@ -103,7 +103,7 @@
 | Function type expressions (`function(T) returns U` in type annotations) | Done |
 | Dotted `use` paths (`use net.http`) | Done |
 | Namespace-qualified user function calls (`helpers.f()`, `helpers.f[T]()`) | Done |
-| Namespace-private declarations with explicit `export` for public APIs | Done |
+| Namespace-private declarations with explicit `export` for public APIs, including `mutual` declarations | Done |
 | Multi-file compilation (project-aware build/run with `jett.proj`) | Done |
 | `range()` builtin (1, 2, or 3 args) | Done |
 | For-in over strings, maps (with `key, value` destructuring), sets | Done |

@@ -69,24 +69,24 @@ function json_stdlib_quote(raw: string) returns string:
         default error
     return "\"{escaped}\""
 mutual:
-    function json_tree_parse(raw: string) returns result[JsonTree, string]
+    export function json_tree_parse(raw: string) returns result[JsonTree, string]
     function json_tree_parse_value(raw: string) returns result[JsonTree, string]
-    function json_tree_kind(view value: JsonTree) returns string
+    export function json_tree_kind(view value: JsonTree) returns string
     function json_tree_kind_error(view value: JsonTree, expected: string) returns string
-    function json_tree_is_null(view value: JsonTree) returns bool
-    function json_tree_is_bool(view value: JsonTree) returns bool
-    function json_tree_is_number(view value: JsonTree) returns bool
-    function json_tree_is_string(view value: JsonTree) returns bool
-    function json_tree_is_array(view value: JsonTree) returns bool
-    function json_tree_is_object(view value: JsonTree) returns bool
-    function json_tree_field(view value: JsonTree, key: string) returns optional[JsonTree]
-    function json_tree_index(view value: JsonTree, index: int64) returns optional[JsonTree]
-    function json_tree_array_length(view value: JsonTree) returns result[int64, string]
-    function json_tree_object_keys(view value: JsonTree) returns result[list[string], string]
-    function json_tree_as_string(view value: JsonTree) returns result[string, string]
-    function json_tree_as_int64(view value: JsonTree) returns result[int64, string]
-    function json_tree_as_float64(view value: JsonTree) returns result[float64, string]
-    function json_tree_as_bool(view value: JsonTree) returns result[bool, string]
+    export function json_tree_is_null(view value: JsonTree) returns bool
+    export function json_tree_is_bool(view value: JsonTree) returns bool
+    export function json_tree_is_number(view value: JsonTree) returns bool
+    export function json_tree_is_string(view value: JsonTree) returns bool
+    export function json_tree_is_array(view value: JsonTree) returns bool
+    export function json_tree_is_object(view value: JsonTree) returns bool
+    export function json_tree_field(view value: JsonTree, key: string) returns optional[JsonTree]
+    export function json_tree_index(view value: JsonTree, index: int64) returns optional[JsonTree]
+    export function json_tree_array_length(view value: JsonTree) returns result[int64, string]
+    export function json_tree_object_keys(view value: JsonTree) returns result[list[string], string]
+    export function json_tree_as_string(view value: JsonTree) returns result[string, string]
+    export function json_tree_as_int64(view value: JsonTree) returns result[int64, string]
+    export function json_tree_as_float64(view value: JsonTree) returns result[float64, string]
+    export function json_tree_as_bool(view value: JsonTree) returns result[bool, string]
     function json_tree_parse_scalar(raw: string) returns result[JsonTree, string]
     function json_tree_parse_array(raw: string) returns result[JsonTree, string]
     function json_tree_parse_array_body(view input: bytes, start: int64, end: int64) returns result[list[JsonTree], string]
@@ -134,7 +134,7 @@ mutual:
     function json_tree_is_digit_byte(byte: int64) returns bool
     function json_tree_is_exponent_byte(byte: int64) returns bool
     function json_tree_is_sign_byte(byte: int64) returns bool
-    function json_tree_serialize(value: JsonTree) returns string
+    export function json_tree_serialize(value: JsonTree) returns string
     function json_tree_serialize_array(items: list[JsonTree]) returns string
     function json_tree_serialize_object(fields: map[string, JsonTree]) returns string
     function json_serialize_public_reflected[T](view value: T) returns string
