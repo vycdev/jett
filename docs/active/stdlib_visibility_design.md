@@ -169,6 +169,9 @@ Implemented:
   and old flat compatibility references.
 - External unqualified access to exported namespaced declarations is rejected;
   users must write the qualified path or a namespace alias.
+- The resolver no longer creates root-scope leaf bindings for namespaced
+  declarations; same-namespace shorthand resolves through the canonical
+  namespace path.
 - Same-namespace private helper access remains allowed.
 - Existing user/project namespace fixtures now mark public cross-namespace API
   with `export`.
@@ -178,7 +181,7 @@ Implemented:
 Still staged:
 
 - The typechecker and interpreter still keep temporary flat compatibility
-  registrations. The resolver now rejects external flat access, but the
+  registrations. The resolver no longer creates flat aliases, but the later
   registries still need to stop creating those aliases internally.
 - Public JSON policy remains compiler-owned; source `export` is not trusted
   origin.

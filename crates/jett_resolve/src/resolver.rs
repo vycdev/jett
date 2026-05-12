@@ -435,17 +435,6 @@ impl Resolver {
             visibility,
         )?;
 
-        if self
-            .scope_table
-            .lookup_local(self.current_scope, name)
-            .is_none()
-        {
-            self.scope_table
-                .bind(self.current_scope, name.to_string(), def_id);
-            self.top_level_order
-                .insert(name.to_string(), (def_id, order));
-        }
-
         Some(def_id)
     }
 
@@ -893,9 +882,18 @@ impl Resolver {
             } else if !is_builtin_module(namespace) {
                 self.resolve_name(namespace, span, item_index);
             }
-        } else if self.scope_table.lookup(self.current_scope, name).is_some() {
+        } else if self.type_name_may_resolve(name) {
             self.resolve_name(name, span, item_index);
         }
+    }
+
+    fn type_name_may_resolve(&self, name: &str) -> bool {
+        self.scope_table.lookup(self.current_scope, name).is_some()
+            || self
+                .current_qualified_name(name)
+                .and_then(|qualified| self.scope_table.lookup(self.current_scope, &qualified))
+                .is_some()
+            || self.unique_external_namespaced_leaf(name).is_some()
     }
 
     // ------------------------------------------------------------------
@@ -1083,7 +1081,41 @@ impl Resolver {
             return;
         }
 
+        if let Some(def_id) = self.unique_external_namespaced_leaf(name) {
+            self.record_resolution(name, span, item_index, def_id);
+            return;
+        }
+
         self.sink.emit(errors::undefined_name(name, span));
+    }
+
+    fn unique_external_namespaced_leaf(&self, name: &str) -> Option<DefId> {
+        if name.contains('.') {
+            return None;
+        }
+
+        let mut found = None;
+        for def in &self.scope_table.definitions {
+            let Some(namespace) = def.namespace.as_ref() else {
+                continue;
+            };
+            if self.current_namespace.as_deref() == Some(namespace.as_str()) {
+                continue;
+            }
+            let leaf_name = def
+                .name
+                .rsplit_once('.')
+                .map_or(def.name.as_str(), |(_, leaf)| leaf);
+            if leaf_name != name {
+                continue;
+            }
+            if found.is_some() {
+                return None;
+            }
+            found = Some(def.id);
+        }
+
+        found
     }
 
     fn record_resolution(&mut self, name: &str, span: Span, item_index: usize, def_id: DefId) {
@@ -1555,7 +1587,7 @@ interface PrivateNamed:
     }
 
     #[test]
-    fn visibility_metadata_preserves_existing_flat_namespace_binding() {
+    fn visibility_metadata_avoids_flat_namespace_binding() {
         let module = parse_module(
             r#"
 namespace api
@@ -1576,8 +1608,8 @@ export struct User:
         );
         assert_eq!(
             result.scope_table.lookup(root, "User"),
-            Some(user.id),
-            "temporary flat compatibility binding should remain unchanged"
+            None,
+            "namespaced declarations should not be bound by leaf name at root"
         );
         assert_eq!(user.visibility, crate::scope::DefVisibility::Public);
         assert_eq!(user.namespace.as_deref(), Some("api"));
