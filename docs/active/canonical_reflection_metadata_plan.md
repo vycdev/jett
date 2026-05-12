@@ -124,9 +124,10 @@ Value-sensitive APIs need both canonical metadata and runtime value layout to
 agree, so they should move after metadata-only APIs are stable.
 
 Status: `type.field_value[T, Field]` now prefers checked `TypeField` metadata
-for field provenance and type validation, while retaining the AST fallback for
-bootstrap/direct interpreter tests. Variant extraction and construction still
-use the existing interpreter validation path.
+for field provenance and type validation, and `type.variant_value[T]` now
+prefers checked `TypeVariant` metadata for active variant lookup. Both retain
+the AST fallback for bootstrap/direct interpreter tests. Variant payload
+extraction and construction still use the existing interpreter validation path.
 
 ### Stage 4: Make Generic Instantiations Canonical
 
@@ -161,6 +162,6 @@ Continue the metadata-only migration:
    Done.
 3. Add checked bitfield layout/field metadata. Done.
 4. Add checked enum variant metadata. Done.
-5. Move value-sensitive APIs incrementally. `type.field_value` has started;
-   `type.variant_value`, `type.variant_field_value`, and `type.construct_*`
-   still need separate staging.
+5. Move value-sensitive APIs incrementally. `type.field_value` and
+   `type.variant_value` have started; `type.variant_field_value` and
+   `type.construct_*` still need separate staging.

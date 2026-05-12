@@ -3915,6 +3915,19 @@ impl Interpreter {
             ));
         }
 
+        if let Some(variants) = self.checked_type_variants(owner_ty) {
+            return variants
+                .iter()
+                .find(|candidate| candidate.name == *variant)
+                .map(Self::reflection_variant_info_value)
+                .ok_or_else(|| {
+                    format!(
+                        "type.variant_value: enum '{}' has no variant '{}'",
+                        expected_type_name, variant
+                    )
+                });
+        }
+
         self.type_expr_variants(owner_ty)
             .into_iter()
             .enumerate()
@@ -8809,6 +8822,43 @@ mod tests {
             .expect("TypeVariant.has_secret should exist");
         assert_eq!(discriminant, &Value::Int64(7));
         assert_eq!(has_secret, &Value::Bool(true));
+    }
+
+    #[test]
+    fn type_variant_value_uses_checked_reflection_metadata_when_available() {
+        let mut metadata = ReflectionMetadata::new();
+        metadata.insert_type_variants(
+            "Choice",
+            vec![ReflectionVariantInfo::new(0, "token", 7, false, Vec::new())],
+        );
+
+        let mut interp = Interpreter::new();
+        interp.set_reflection_metadata(Arc::new(metadata));
+
+        let value = Value::Enum {
+            type_name: "Choice".to_string(),
+            variant: "token".to_string(),
+            fields: Vec::new(),
+        };
+        let variant = interp
+            .call_builtin_with_type_args("type.variant_value", &[type_named("Choice")], &[value])
+            .expect("type.variant_value should be a typed builtin")
+            .expect("type.variant_value should evaluate");
+
+        let Value::Struct { fields, .. } = variant else {
+            panic!("expected TypeVariant struct");
+        };
+        let discriminant = fields
+            .iter()
+            .find_map(|(name, value)| {
+                if name == "discriminant" {
+                    Some(value)
+                } else {
+                    None
+                }
+            })
+            .expect("TypeVariant.discriminant should exist");
+        assert_eq!(discriminant, &Value::Int64(7));
     }
 
     /// Helper: create a field access expression.
