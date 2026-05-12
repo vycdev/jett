@@ -110,6 +110,11 @@ impl TypeInterner {
         &self.types[id.0 as usize]
     }
 
+    /// Iterate all interned type IDs in stable interner order.
+    pub fn type_ids(&self) -> impl Iterator<Item = TypeId> + '_ {
+        (0..self.types.len()).map(|index| TypeId(index as u32))
+    }
+
     /// Register a new struct definition and return its [`StructId`].
     pub fn add_struct(&mut self, def: StructDef) -> StructId {
         let id = StructId(self.structs.len() as u32);

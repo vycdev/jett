@@ -3,6 +3,8 @@ use jett_diagnostics::Diagnostic;
 use jett_parser::ast::{
     FunctionDef, GivenDecl, Item, Module, PropertyBlock, TypeExpr, VerifyBlock,
 };
+use jett_types::ReflectionMetadata;
+use std::sync::Arc;
 
 use crate::interpreter::Interpreter;
 use crate::value::Value;
@@ -64,6 +66,19 @@ pub struct VerifyResult {
 ///    `assert` statements (kept for backward compatibility).
 pub fn run_verify_blocks(module: &Module) -> Vec<Diagnostic> {
     let results = run_verify_blocks_detailed(module);
+    verify_results_to_diagnostics(results)
+}
+
+/// Run all verify blocks with checked reflection metadata from type checking.
+pub fn run_verify_blocks_with_metadata(
+    module: &Module,
+    metadata: Arc<ReflectionMetadata>,
+) -> Vec<Diagnostic> {
+    let results = run_verify_blocks_detailed_with_metadata(module, Some(metadata));
+    verify_results_to_diagnostics(results)
+}
+
+fn verify_results_to_diagnostics(results: Vec<VerifyResult>) -> Vec<Diagnostic> {
     results
         .into_iter()
         .filter_map(|r| {
@@ -89,22 +104,36 @@ pub fn run_verify_blocks(module: &Module) -> Vec<Diagnostic> {
 /// Run all verify blocks and return structured results.  Used by the
 /// `jett test` command for per-block reporting.
 pub fn run_verify_blocks_detailed(module: &Module) -> Vec<VerifyResult> {
+    run_verify_blocks_detailed_with_metadata(module, None)
+}
+
+pub fn run_verify_blocks_detailed_with_metadata(
+    module: &Module,
+    metadata: Option<Arc<ReflectionMetadata>>,
+) -> Vec<VerifyResult> {
     let module_for_thread = module.clone();
+    let thread_metadata = metadata.clone();
     match std::thread::Builder::new()
         .name("jett-verify".to_string())
         .stack_size(VERIFY_STACK_SIZE)
-        .spawn(move || run_verify_blocks_detailed_inner(&module_for_thread))
+        .spawn(move || run_verify_blocks_detailed_inner(&module_for_thread, thread_metadata))
     {
         Ok(handle) => match handle.join() {
             Ok(results) => results,
             Err(payload) => std::panic::resume_unwind(payload),
         },
-        Err(_) => run_verify_blocks_detailed_inner(module),
+        Err(_) => run_verify_blocks_detailed_inner(module, metadata),
     }
 }
 
-fn run_verify_blocks_detailed_inner(module: &Module) -> Vec<VerifyResult> {
+fn run_verify_blocks_detailed_inner(
+    module: &Module,
+    metadata: Option<Arc<ReflectionMetadata>>,
+) -> Vec<VerifyResult> {
     let mut interp = Interpreter::new();
+    if let Some(metadata) = metadata {
+        interp.set_reflection_metadata(metadata);
+    }
     let mut results = Vec::new();
 
     // First pass: register all functions and type aliases so verify blocks

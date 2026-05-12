@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use jett_common::{FileId, Span};
 use jett_diagnostics::{Diagnostic, DiagnosticSink};
@@ -12,7 +13,8 @@ use jett_types::{
     ActorDef as TypeActorDef, ActorMessageDef, BitfieldDef as TypeBitfieldDef,
     BitfieldFieldDef as TypeBitfieldFieldDef, BitfieldFieldKind as TypeBitfieldFieldKind,
     BitfieldId, EnumDef as TypeEnumDef, FunctionSig, InterfaceDef as TypeInterfaceDef,
-    StructDef as TypeStructDef, StructId, Type, TypeId, TypeInterner, VariantDef,
+    ReflectionMetadata, ReflectionTypeInfo, StructDef as TypeStructDef, StructId, Type, TypeId,
+    TypeInterner, VariantDef,
 };
 
 use crate::capability;
@@ -27,6 +29,8 @@ pub struct CheckResult {
     pub type_map: HashMap<Span, TypeId>,
     /// The type interner, containing all types encountered during checking.
     pub interner: TypeInterner,
+    /// Checked reflection metadata snapshot for comptime reflection builtins.
+    pub reflection_metadata: Arc<ReflectionMetadata>,
 }
 
 /// Type-check a resolved module.
@@ -39,6 +43,8 @@ pub fn check(module: &Module, resolve: &ResolveResult) -> CheckResult {
     // Run ownership analysis (linear type checking) after type checking.
     let ownership_diagnostics = crate::ownership::check_ownership(module, &checker.interner);
 
+    let reflection_metadata = Arc::new(checker.build_reflection_metadata());
+
     let mut diagnostics = checker.sink.into_diagnostics();
     diagnostics.extend(complexity_diagnostics);
     diagnostics.extend(ownership_diagnostics);
@@ -47,6 +53,7 @@ pub fn check(module: &Module, resolve: &ResolveResult) -> CheckResult {
         diagnostics,
         type_map: checker.type_map,
         interner: checker.interner,
+        reflection_metadata,
     }
 }
 
@@ -779,6 +786,156 @@ impl<'a> TypeChecker<'a> {
                 .any(|(_, field_ty)| self.type_contains_secret_data_inner(*field_ty, visited)),
             Type::Refinement { base, .. } => self.type_contains_secret_data_inner(*base, visited),
             _ => false,
+        }
+    }
+
+    fn build_reflection_metadata(&mut self) -> ReflectionMetadata {
+        let mut metadata = ReflectionMetadata::new();
+
+        let type_ids = self.interner.type_ids().collect::<Vec<_>>();
+        for type_id in type_ids {
+            metadata.insert_type_info(self.reflection_type_info_for_type(type_id));
+        }
+
+        for (name, type_id) in self.named_types.clone() {
+            let info = if let Some(alias) = self.type_aliases.get(&name).cloned() {
+                self.reflection_type_info_for_alias(&name, &alias)
+            } else {
+                self.reflection_type_info_for_type_named(type_id, name)
+            };
+            metadata.insert_type_info(info);
+        }
+
+        for ((_name, type_args), type_id) in self.monomorphized_structs.clone() {
+            let display_name = self.type_name(type_id);
+            let arg_infos: Vec<ReflectionTypeInfo> = type_args
+                .into_iter()
+                .map(|arg| self.reflection_type_info_for_type(arg))
+                .collect();
+            let info = self.reflection_type_info_for_type_named_with_args(
+                type_id,
+                display_name.clone(),
+                arg_infos.clone(),
+            );
+            metadata.insert_type_info(info);
+
+            if let Some((_namespace, leaf_name)) = display_name.split_once('.') {
+                metadata.insert_type_info(self.reflection_type_info_for_type_named_with_args(
+                    type_id,
+                    leaf_name.to_string(),
+                    arg_infos,
+                ));
+            }
+        }
+
+        metadata
+    }
+
+    fn reflection_type_info_for_alias(
+        &mut self,
+        name: &str,
+        alias: &ast::TypeAlias,
+    ) -> ReflectionTypeInfo {
+        let base_ty = self.resolve_type_expr(&alias.base_type);
+        let args = if base_ty == TypeInterner::ERROR {
+            Vec::new()
+        } else {
+            vec![self.reflection_type_info_for_type(base_ty)]
+        };
+        let kind = if alias.constraint.is_some() {
+            "refinement"
+        } else {
+            "alias"
+        };
+        let has_secret = base_ty != TypeInterner::ERROR && self.type_contains_secret_data(base_ty);
+        ReflectionTypeInfo::new(name, kind, None, has_secret, args)
+    }
+
+    fn reflection_type_info_for_type(&self, type_id: TypeId) -> ReflectionTypeInfo {
+        self.reflection_type_info_for_type_named(type_id, self.type_name(type_id))
+    }
+
+    fn reflection_type_info_for_type_named(
+        &self,
+        type_id: TypeId,
+        type_name: String,
+    ) -> ReflectionTypeInfo {
+        let args = self
+            .type_info_arg_types_for_type(type_id)
+            .into_iter()
+            .map(|arg| self.reflection_type_info_for_type(arg))
+            .collect();
+        self.reflection_type_info_for_type_named_with_args(type_id, type_name, args)
+    }
+
+    fn reflection_type_info_for_type_named_with_args(
+        &self,
+        type_id: TypeId,
+        type_name: String,
+        args: Vec<ReflectionTypeInfo>,
+    ) -> ReflectionTypeInfo {
+        ReflectionTypeInfo::new(
+            type_name,
+            self.reflection_kind_for_type(type_id),
+            self.reflection_primitive_tag_for_type(type_id)
+                .map(str::to_string),
+            self.type_contains_secret_data(type_id),
+            args,
+        )
+    }
+
+    fn reflection_kind_for_type(&self, type_id: TypeId) -> &'static str {
+        match self.interner.resolve(type_id) {
+            Type::Int8
+            | Type::Int16
+            | Type::Int32
+            | Type::Int64
+            | Type::Uint8
+            | Type::Uint16
+            | Type::Uint32
+            | Type::Uint64
+            | Type::Float32
+            | Type::Float64
+            | Type::String
+            | Type::Bool
+            | Type::Bytes
+            | Type::Nothing
+            | Type::JsonValue
+            | Type::TypeConstruction => "primitive",
+            Type::List(_) => "list",
+            Type::Map(_, _) => "map",
+            Type::Set(_) => "set",
+            Type::Optional(_) => "optional",
+            Type::Result(_, _) => "result",
+            Type::Secret(_) => "secret",
+            Type::Struct(_) => "struct",
+            Type::Bitfield(_) => "bitfield",
+            Type::Enum(_) => "enum",
+            Type::Function { .. } => "function",
+            Type::Refinement { .. } => "refinement",
+            Type::Interface(_) | Type::Actor(_) | Type::Error => "unknown",
+        }
+    }
+
+    fn reflection_primitive_tag_for_type(&self, type_id: TypeId) -> Option<&'static str> {
+        match self.interner.resolve(type_id) {
+            Type::Int8 => Some("int8_type"),
+            Type::Int16 => Some("int16_type"),
+            Type::Int32 => Some("int32_type"),
+            Type::Int64 => Some("int64_type"),
+            Type::Uint8 => Some("uint8_type"),
+            Type::Uint16 => Some("uint16_type"),
+            Type::Uint32 => Some("uint32_type"),
+            Type::Uint64 => Some("uint64_type"),
+            Type::Float32 => Some("float32_type"),
+            Type::Float64 => Some("float64_type"),
+            Type::String => Some("string_type"),
+            Type::Bool => Some("bool_type"),
+            Type::Bytes => Some("bytes_type"),
+            Type::Nothing => Some("nothing_type"),
+            Type::JsonValue => Some("json_value_type"),
+            Type::TypeConstruction => Some("type_construction_type"),
+            _ => None,
         }
     }
 

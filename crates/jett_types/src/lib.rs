@@ -2,6 +2,7 @@
 
 mod defs;
 mod interner;
+mod reflection;
 mod types;
 
 pub use defs::{
@@ -10,4 +11,5 @@ pub use defs::{
     VariantDef,
 };
 pub use interner::TypeInterner;
+pub use reflection::{ReflectionMetadata, ReflectionTypeInfo};
 pub use types::{Type, TypeId};

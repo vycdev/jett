@@ -1,6 +1,8 @@
 use jett_common::{FileId, STDLIB_FILE_ID_START};
 use jett_comptime::value::Value;
-use jett_comptime::verify::{run_verify_blocks, run_verify_blocks_detailed};
+use jett_comptime::verify::{
+    run_verify_blocks_detailed_with_metadata, run_verify_blocks_with_metadata,
+};
 use jett_diagnostics::Diagnostic;
 use jett_fmt::{FormatResult, format_source};
 use jett_parser::ast::{FunctionDef, Item, Module, Param, TypeExpr};
@@ -80,7 +82,8 @@ pub fn build_source(source: &str, file_path: &str) -> BuildResult {
     }
 
     // Phase 5: Execute verify blocks at compile time
-    let verify_diagnostics = run_verify_blocks(&parse_result.module);
+    let verify_diagnostics =
+        run_verify_blocks_with_metadata(&parse_result.module, check_result.reflection_metadata);
     all_diagnostics.extend(verify_diagnostics);
 
     let has_errors = all_diagnostics
@@ -319,7 +322,8 @@ fn build_file_inner(path: &Path, include_project: bool) -> BuildResult {
     }
 
     // Phase 5: Execute verify blocks at compile time
-    let verify_diagnostics = run_verify_blocks(&parse_result.module);
+    let verify_diagnostics =
+        run_verify_blocks_with_metadata(&parse_result.module, check_result.reflection_metadata);
     all_diagnostics.extend(verify_diagnostics);
 
     let has_errors = all_diagnostics
@@ -651,7 +655,10 @@ pub fn test_file(path: &Path) -> Result<TestResult, String> {
         return Err(format!("type errors:\n{}", type_errors.join("\n")));
     }
 
-    let results = run_verify_blocks_detailed(&parse_result.module);
+    let results = run_verify_blocks_detailed_with_metadata(
+        &parse_result.module,
+        Some(check_result.reflection_metadata),
+    );
 
     let total = results.len();
     let passed = results.iter().filter(|r| r.passed).count();

@@ -67,6 +67,11 @@ Important constraint: this should not make the interpreter mutate checker
 state. It should receive an immutable snapshot or a purpose-built reflection
 metadata struct.
 
+Status: started. `CheckResult` now carries an immutable
+`ReflectionMetadata` snapshot, and driver verify/test paths pass it into the
+comptime interpreter. Direct interpreter construction still works without a
+snapshot and uses the old fallback path.
+
 ### Stage 2: Build A Reflection Metadata Snapshot
 
 Introduce a small type, likely in `jett_types` or `jett_comptime`, that contains
@@ -83,6 +88,11 @@ only what reflection needs:
 
 This keeps the interpreter from depending directly on every checker internal.
 
+Status: started for `TypeInfo` metadata: display name, kind, primitive tag,
+secret-containment, and nested type arguments are captured from the checked
+type state. Field, bitfield, and variant metadata still use the AST-shaped
+interpreter registries.
+
 ### Stage 3: Route Reflection Builtins Through The Snapshot
 
 Move these APIs first:
@@ -93,6 +103,10 @@ Move these APIs first:
 - `type.bitfield_layout`
 - `type.bitfield_fields`
 - `type.variants`
+
+Status: `type.info[T]()` now prefers the checked snapshot when metadata for the
+requested type name is present, and falls back to the previous AST path during
+bootstrap and direct interpreter tests.
 
 Then move value-sensitive APIs:
 
@@ -128,9 +142,10 @@ the AST reconstruction paths that duplicate typechecker behavior.
 
 ## Recommended Next Bite
 
-Add an immutable `ReflectionMetadata` snapshot built from the typechecker's
-known type definitions, then teach one metadata-only builtin, probably
-`type.info[T]()`, to read through it.
+Continue the metadata-only migration:
 
-That creates the path without forcing every reflection primitive to migrate in
-one risky edit.
+1. Route `type.arg[T](index)` through the checked `TypeInfo.args` snapshot.
+2. Add checked `TypeField` records to `ReflectionMetadata`, then move
+   `type.fields[T]()` over while preserving trusted loop provenance.
+3. Only after metadata-only APIs are stable, revisit value-sensitive APIs such
+   as `type.field_value` and `type.construct_*`.

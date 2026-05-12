@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::Arc;
 
 use rand::Rng;
 
@@ -8,6 +9,7 @@ use jett_parser::ast::{
     Ident, ImplementBlock, InterfaceDecl, Item, MachineDef, Module, Pattern, PipelineStep, Stmt,
     StringPart, StructDef, TypeAlias, TypeExpr, UnaryOp,
 };
+use jett_types::{ReflectionMetadata, ReflectionTypeInfo};
 
 use crate::value::Value;
 
@@ -184,6 +186,8 @@ pub struct Interpreter {
     reflected_type_info_scopes: Vec<HashMap<String, ReflectedTypeInfoBinding>>,
     /// Trusted TypeVariant metadata currently produced by direct `type.variants[T]()` loops.
     reflected_variant_scopes: Vec<HashMap<String, ReflectedVariantBinding>>,
+    /// Checked reflection metadata snapshot, when supplied by the driver.
+    reflection_metadata: Option<Arc<ReflectionMetadata>>,
     /// Live actor instances keyed by unique ID.
     actor_instances: HashMap<u64, ActorInstance>,
     /// Next actor instance ID.
@@ -225,6 +229,7 @@ impl Interpreter {
             reflected_field_scopes: Vec::new(),
             reflected_type_info_scopes: Vec::new(),
             reflected_variant_scopes: Vec::new(),
+            reflection_metadata: None,
             actor_instances: HashMap::new(),
             next_actor_id: 0,
             debug_output: Vec::new(),
@@ -237,6 +242,11 @@ impl Interpreter {
         let mut interp = Self::new();
         interp.emit_runtime_debug = true;
         interp
+    }
+
+    /// Attach checked reflection metadata produced by the typechecker.
+    pub fn set_reflection_metadata(&mut self, metadata: Arc<ReflectionMetadata>) {
+        self.reflection_metadata = Some(metadata);
     }
 
     /// Drain any debug lines recorded so far.
@@ -2368,7 +2378,9 @@ impl Interpreter {
                 if let Some(err) = check_args(name, 0, args) {
                     return Some(err);
                 }
-                Ok(self.type_info_value(&ty))
+                Ok(self
+                    .checked_type_info_value(&ty)
+                    .unwrap_or_else(|| self.type_info_value(&ty)))
             }
             "type.arg" => {
                 if let Some(err) = check_args(name, 1, args) {
@@ -2804,6 +2816,10 @@ impl Interpreter {
             _ => None,
         };
 
+        Self::primitive_tag_value(variant)
+    }
+
+    fn primitive_tag_value(variant: Option<&str>) -> Value {
         variant
             .map(|variant| {
                 Value::OptionalSome(Box::new(Value::Enum {
@@ -3457,6 +3473,42 @@ impl Interpreter {
                 ),
                 ("has_secret".to_string(), Value::Bool(has_secret)),
                 ("fields".to_string(), Value::List(fields)),
+            ],
+        }
+    }
+
+    fn checked_type_info_value(&self, ty: &TypeExpr) -> Option<Value> {
+        let metadata = self.reflection_metadata.as_ref()?;
+        let type_name = type_expr_display(ty);
+        metadata
+            .get_type_info(&type_name)
+            .map(Self::reflection_type_info_value)
+    }
+
+    fn reflection_type_info_value(info: &ReflectionTypeInfo) -> Value {
+        let arg_values = info
+            .args
+            .iter()
+            .map(Self::reflection_type_info_value)
+            .collect();
+        Value::Struct {
+            type_name: "TypeInfo".to_string(),
+            fields: vec![
+                (
+                    "type_name".to_string(),
+                    Value::String(info.type_name.clone()),
+                ),
+                ("kind".to_string(), Value::String(info.kind.clone())),
+                (
+                    "kind_tag".to_string(),
+                    Self::type_kind_tag_value(&info.kind),
+                ),
+                (
+                    "primitive_tag".to_string(),
+                    Self::primitive_tag_value(info.primitive_tag.as_deref()),
+                ),
+                ("has_secret".to_string(), Value::Bool(info.has_secret)),
+                ("args".to_string(), Value::List(arg_values)),
             ],
         }
     }
@@ -8124,6 +8176,41 @@ mod tests {
             body,
             span: sp(),
         }
+    }
+
+    #[test]
+    fn type_info_uses_checked_reflection_metadata_when_available() {
+        let mut metadata = ReflectionMetadata::new();
+        metadata.insert_type_info(ReflectionTypeInfo::new(
+            "int64",
+            "primitive",
+            Some("int64_type".to_string()),
+            true,
+            Vec::new(),
+        ));
+
+        let mut interp = Interpreter::new();
+        interp.set_reflection_metadata(Arc::new(metadata));
+
+        let value = interp
+            .call_builtin_with_type_args("type.info", &[type_named("int64")], &[])
+            .expect("type.info should be a typed builtin")
+            .expect("type.info should evaluate");
+
+        let Value::Struct { fields, .. } = value else {
+            panic!("expected TypeInfo struct");
+        };
+        let has_secret = fields
+            .iter()
+            .find_map(|(name, value)| {
+                if name == "has_secret" {
+                    Some(value)
+                } else {
+                    None
+                }
+            })
+            .expect("TypeInfo.has_secret field should exist");
+        assert_eq!(has_secret, &Value::Bool(true));
     }
 
     /// Helper: create a field access expression.
