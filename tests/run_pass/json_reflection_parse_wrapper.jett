@@ -6,17 +6,17 @@ struct TinyUser:
     visits: list[int64]
 
 function reflected_parse_wrapper_summary() returns string:
-    TinyUser user = json.json_parse_reflected[TinyUser]("{{\"userId\":\"u1\",\"active\":true,\"visits\":[2,3]}}") handle error:
+    TinyUser user = json.parse[TinyUser]("{{\"userId\":\"u1\",\"active\":true,\"visits\":[2,3]}}") handle error:
         return error
     return "{user.id}:{user.active}:{list.length[int64](user.visits)}"
 
 function reflected_parse_wrapper_error() returns string:
-    TinyUser user = json.json_parse_reflected[TinyUser]("{{\"userId\":\"u1\",\"visits\":[2,3]}}") handle error:
+    TinyUser user = json.parse[TinyUser]("{{\"userId\":\"u1\",\"visits\":[2,3]}}") handle error:
         return error
     return user.id
 
 function reflected_parse_wrapper_raw_error() returns string:
-    TinyUser user = json.json_parse_reflected[TinyUser]("{{\"userId\":\"u1\"") handle error:
+    TinyUser user = json.parse[TinyUser]("{{\"userId\":\"u1\"") handle error:
         return error
     return user.id
 

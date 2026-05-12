@@ -1,17 +1,17 @@
 namespace outer.models
 
-struct User:
+export struct User:
     id: string
     visits: list[int64]
 
-struct Box[T]:
+export struct Box[T]:
     value: T
 
-enum Color:
+export enum Color:
     blue
     rgb(red: int64, green: int64, blue: int64)
 
-function double(value: int64) returns int64:
+export function double(value: int64) returns int64:
     return value * 2
 
 namespace app

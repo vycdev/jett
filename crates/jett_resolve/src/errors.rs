@@ -52,3 +52,18 @@ pub fn use_not_at_top(span: Span) -> Diagnostic {
         span,
     )
 }
+
+/// E0207: Private namespaced declaration used outside its namespace.
+pub fn private_definition(
+    name: &str,
+    namespace: &str,
+    use_span: Span,
+    def_span: Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        207,
+        format!("`{name}` is private to namespace `{namespace}`"),
+        use_span,
+    )
+    .with_label(def_span, "private declaration defined here")
+}

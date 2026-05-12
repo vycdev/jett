@@ -1,4 +1,4 @@
 namespace stdlib
 
-function jett_stdlib_loaded() returns bool:
+export function jett_stdlib_loaded() returns bool:
     return true

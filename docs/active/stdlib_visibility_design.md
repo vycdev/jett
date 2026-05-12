@@ -154,6 +154,29 @@ For now:
 Before changing the hook names into ordinary public wrappers, implement
 exports/private helpers.
 
+## Current Implementation Status
+
+Implemented:
+
+- `export` syntax for top-level `function`, `struct`, `enum`, `bitfield`,
+  `type`, and `interface` declarations.
+- Resolver visibility metadata on definitions, including namespace identity.
+- Private-by-default resolver diagnostics for references to namespaced
+  declarations from outside their namespace.
+- Same-namespace private helper access remains allowed.
+- Existing user/project namespace fixtures now mark public cross-namespace API
+  with `export`.
+
+Still staged:
+
+- `mutual` declarations do not yet carry export metadata, so stdlib JSON's
+  large mutual helper block still needs a cleaner public/private story.
+- The typechecker and interpreter still keep temporary flat compatibility
+  registrations. The resolver now rejects external private flat access, but the
+  registries still need to stop creating those aliases.
+- Public JSON policy remains compiler-owned; source `export` is not trusted
+  origin.
+
 ## Staged Implementation Plan
 
 1. Add visibility metadata to declarations in AST/resolver/typechecker.

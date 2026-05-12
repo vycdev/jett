@@ -1,28 +1,28 @@
 namespace models
 
-type NonEmpty = string where string.char_count(value) > 0
+export type NonEmpty = string where string.char_count(value) > 0
 
-enum Color:
+export enum Color:
     blue
     rgb(red: int64, green: int64, blue: int64)
 
-enum HeaderColor:
+export enum HeaderColor:
     blue = 1
     red = 2
 
-bitfield Header:
+export bitfield Header:
     version: 4 bits
     color: 8 bits as models.HeaderColor
 
-struct Profile:
+export struct Profile:
     city: string
     visits: list[int64]
 
-struct User:
+export struct User:
     id: string serialize "userId"
     profile: models.Profile
 
-struct Box[T]:
+export struct Box[T]:
     value: T
 
 namespace app

@@ -1,11 +1,11 @@
 namespace enums
 
-enum Color:
+export enum Color:
     red
     green
     blue
 
-function color_name(c: Color) returns string:
+export function color_name(c: Color) returns string:
     match c:
         red:
             return "red"

@@ -388,6 +388,18 @@ compile_fail_fixture!(
     compile_fail_namespace_use_alias_unknown_target,
     "namespace_use_alias_unknown_target.jett"
 );
+compile_fail_fixture!(
+    compile_fail_namespace_private_function,
+    "namespace_private_function.jett"
+);
+compile_fail_fixture!(
+    compile_fail_namespace_private_type,
+    "namespace_private_type.jett"
+);
+compile_fail_fixture!(
+    compile_fail_namespace_private_alias,
+    "namespace_private_alias.jett"
+);
 compile_fail_fixture!(compile_fail_duplicate_field, "duplicate_field.jett");
 compile_fail_fixture!(
     compile_fail_json_serialize_secret_struct_blocked,

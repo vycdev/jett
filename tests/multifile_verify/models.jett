@@ -1,8 +1,8 @@
 namespace shared.models
 
-struct Account:
+export struct Account:
     id: string serialize "accountId"
     visits: list[int64]
 
-function account_summary(view account: Account) returns string:
+export function account_summary(view account: Account) returns string:
     return "{account.id}:{list.length[int64](account.visits)}"

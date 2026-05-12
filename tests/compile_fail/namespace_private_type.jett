@@ -1,0 +1,10 @@
+namespace api
+
+struct SecretBox:
+    value: int64
+
+namespace app
+
+function main() returns int64:
+    api.SecretBox box = api.SecretBox(value: 1)
+    return box.value

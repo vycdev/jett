@@ -1054,6 +1054,12 @@ impl Resolver {
     }
 
     fn record_resolution(&mut self, name: &str, span: Span, item_index: usize, def_id: DefId) {
+        if let Some((namespace, def_span)) = self.private_namespace_access(def_id) {
+            self.sink
+                .emit(errors::private_definition(name, &namespace, span, def_span));
+            return;
+        }
+
         // Check for forward reference to a top-level item.
         if let Some(&(top_def_id, decl_index)) = self.top_level_order.get(name) {
             if def_id == top_def_id && decl_index > item_index {
@@ -1065,6 +1071,20 @@ impl Resolver {
         }
         self.resolutions.insert(span, def_id);
         self.used_defs.insert(def_id);
+    }
+
+    fn private_namespace_access(&self, def_id: DefId) -> Option<(String, Span)> {
+        let def = self.scope_table.def(def_id);
+        if def.visibility == DefVisibility::Public {
+            return None;
+        }
+
+        let namespace = def.namespace.as_ref()?;
+        if self.current_namespace.as_deref() == Some(namespace.as_str()) {
+            return None;
+        }
+
+        Some((namespace.clone(), def.span))
     }
 
     fn lookup_local_non_root(&self, name: &str) -> Option<DefId> {
@@ -1081,7 +1101,26 @@ impl Resolver {
         None
     }
 
+    fn expand_namespace_alias_path(&self, path: &str) -> Option<String> {
+        let (prefix, suffix) = path.split_once('.')?;
+        let alias_def = self.lookup_local_non_root(prefix)?;
+        let target = self.namespace_aliases.get(&alias_def)?;
+        Some(format!("{target}.{suffix}"))
+    }
+
     fn resolve_namespace_prefix(&mut self, path: &str, span: Span, item_index: usize) -> bool {
+        if let Some(expanded) = self.expand_namespace_alias_path(path) {
+            if let Some(def_id) = self.scope_table.lookup(self.current_scope, &expanded) {
+                self.record_resolution(&expanded, span, item_index, def_id);
+                return true;
+            }
+        }
+
+        if let Some(def_id) = self.scope_table.lookup(self.current_scope, path) {
+            self.record_resolution(path, span, item_index, def_id);
+            return true;
+        }
+
         for (index, _) in path.match_indices('.').rev() {
             let prefix = &path[..index];
             if is_builtin_module(prefix) {
@@ -1092,6 +1131,10 @@ impl Resolver {
                 continue;
             };
             if self.scope_table.def(def_id).kind != DefKind::Namespace {
+                if prefix.contains('.') && self.scope_table.def(def_id).namespace.is_some() {
+                    self.record_resolution(prefix, span, item_index, def_id);
+                    return true;
+                }
                 continue;
             }
 
@@ -1496,6 +1539,165 @@ export function exposed() returns nothing:
         assert_eq!(
             def_by_name(&result, "exposed").visibility,
             crate::scope::DefVisibility::Public
+        );
+    }
+
+    #[test]
+    fn private_namespaced_function_rejects_external_qualified_access() {
+        let module = parse_module(
+            r#"
+namespace api
+
+function helper() returns int64:
+    return 1
+
+namespace app
+
+function main() returns int64:
+    return api.helper()
+"#,
+        );
+
+        let result = resolve(&module);
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == Severity::Error && d.code.code() == 207)
+            .collect();
+        assert_eq!(errors.len(), 1, "expected private access error");
+        assert!(errors[0].message.contains("api.helper"));
+    }
+
+    #[test]
+    fn private_namespaced_function_rejects_external_flat_access() {
+        let module = parse_module(
+            r#"
+namespace api
+
+function helper() returns int64:
+    return 1
+
+namespace app
+
+function main() returns int64:
+    return helper()
+"#,
+        );
+
+        let result = resolve(&module);
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == Severity::Error && d.code.code() == 207)
+            .collect();
+        assert_eq!(errors.len(), 1, "expected private flat access error");
+        assert!(errors[0].message.contains("helper"));
+    }
+
+    #[test]
+    fn private_namespaced_function_allows_same_namespace_access() {
+        let module = parse_module(
+            r#"
+namespace api
+
+function helper() returns int64:
+    return 1
+
+function main() returns int64:
+    return helper()
+"#,
+        );
+
+        let result = resolve(&module);
+        assert!(
+            !result
+                .diagnostics
+                .iter()
+                .any(|d| d.severity == Severity::Error),
+            "expected no errors, got: {:#?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn exported_namespaced_function_allows_external_access() {
+        let module = parse_module(
+            r#"
+namespace api
+
+export function helper() returns int64:
+    return 1
+
+namespace app
+
+function main() returns int64:
+    return api.helper()
+"#,
+        );
+
+        let result = resolve(&module);
+        assert!(
+            !result
+                .diagnostics
+                .iter()
+                .any(|d| d.severity == Severity::Error),
+            "expected no errors, got: {:#?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn private_namespaced_function_rejects_external_alias_access() {
+        let module = parse_module(
+            r#"
+namespace api
+
+function helper() returns int64:
+    return 1
+
+namespace app
+
+function main() returns int64:
+    use api as a
+    return a.helper()
+"#,
+        );
+
+        let result = resolve(&module);
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == Severity::Error && d.code.code() == 207)
+            .collect();
+        assert_eq!(errors.len(), 1, "expected private alias access error");
+        assert!(errors[0].message.contains("api.helper"));
+    }
+
+    #[test]
+    fn exported_namespaced_function_allows_external_alias_access() {
+        let module = parse_module(
+            r#"
+namespace api
+
+export function helper() returns int64:
+    return 1
+
+namespace app
+
+function main() returns int64:
+    use api as a
+    return a.helper()
+"#,
+        );
+
+        let result = resolve(&module);
+        assert!(
+            !result
+                .diagnostics
+                .iter()
+                .any(|d| d.severity == Severity::Error),
+            "expected no errors, got: {:#?}",
+            result.diagnostics
         );
     }
 

@@ -1,37 +1,37 @@
 namespace accounts
 
-struct Record:
+export struct Record:
     id: string
 
-struct Box[T]:
+export struct Box[T]:
     value: T
 
-enum Status:
+export enum Status:
     active
 
-function label(view record: accounts.Record) returns string:
+export function label(view record: accounts.Record) returns string:
     return "account:{record.id}"
 
-function local_summary() returns string:
+export function local_summary() returns string:
     Record record = Record(id: "local")
     Status status = Status.active
     return "{label(view record)}:{status == Status.active}"
 
 namespace audit
 
-struct Record:
+export struct Record:
     attempts: int64
 
-struct Box[T]:
+export struct Box[T]:
     value: T
 
-enum Status:
+export enum Status:
     active
 
-function label(view record: audit.Record) returns string:
+export function label(view record: audit.Record) returns string:
     return "audit:{record.attempts}"
 
-function local_summary() returns string:
+export function local_summary() returns string:
     Record record = Record(attempts: 5)
     Status status = Status.active
     return "{label(view record)}:{status == Status.active}"

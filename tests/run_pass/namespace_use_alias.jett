@@ -1,17 +1,17 @@
 namespace models
 
-enum Color:
+export enum Color:
     active
     inactive
 
-struct User:
+export struct User:
     id: string
     color: Color
 
-function make[T](value: T) returns T:
+export function make[T](value: T) returns T:
     return value
 
-function color_name(color: Color) returns string:
+export function color_name(color: Color) returns string:
     if color == Color.active:
         return "active"
     return "inactive"

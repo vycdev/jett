@@ -1,0 +1,9 @@
+namespace api
+
+function helper() returns int64:
+    return 1
+
+namespace app
+
+function main() returns int64:
+    return api.helper()

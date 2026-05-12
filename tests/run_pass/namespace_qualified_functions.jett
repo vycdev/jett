@@ -1,9 +1,9 @@
 namespace helpers
 
-function double(value: int64) returns int64:
+export function double(value: int64) returns int64:
     return value * 2
 
-function wrap[T](value: T) returns optional[T]:
+export function wrap[T](value: T) returns optional[T]:
     return some(value)
 
 namespace app
