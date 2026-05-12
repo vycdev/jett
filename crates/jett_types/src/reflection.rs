@@ -7,6 +7,7 @@ pub struct ReflectionMetadata {
     type_infos: HashMap<String, ReflectionTypeInfo>,
     type_fields: HashMap<String, Vec<ReflectionFieldInfo>>,
     bitfields: HashMap<String, ReflectionBitfieldInfo>,
+    type_variants: HashMap<String, Vec<ReflectionVariantInfo>>,
 }
 
 impl ReflectionMetadata {
@@ -44,6 +45,18 @@ impl ReflectionMetadata {
 
     pub fn get_bitfield(&self, type_name: &str) -> Option<&ReflectionBitfieldInfo> {
         self.bitfields.get(type_name)
+    }
+
+    pub fn insert_type_variants(
+        &mut self,
+        type_name: impl Into<String>,
+        variants: Vec<ReflectionVariantInfo>,
+    ) {
+        self.type_variants.insert(type_name.into(), variants);
+    }
+
+    pub fn get_type_variants(&self, type_name: &str) -> Option<&[ReflectionVariantInfo]> {
+        self.type_variants.get(type_name).map(Vec::as_slice)
     }
 }
 
@@ -152,6 +165,34 @@ impl ReflectionBitfieldFieldInfo {
             width,
             type_info,
             enum_type,
+        }
+    }
+}
+
+/// Canonical metadata for `TypeVariant`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReflectionVariantInfo {
+    pub index: usize,
+    pub name: String,
+    pub discriminant: i64,
+    pub has_secret: bool,
+    pub fields: Vec<ReflectionFieldInfo>,
+}
+
+impl ReflectionVariantInfo {
+    pub fn new(
+        index: usize,
+        name: impl Into<String>,
+        discriminant: i64,
+        has_secret: bool,
+        fields: Vec<ReflectionFieldInfo>,
+    ) -> Self {
+        Self {
+            index,
+            name: name.into(),
+            discriminant,
+            has_secret,
+            fields,
         }
     }
 }

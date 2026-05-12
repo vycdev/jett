@@ -11,7 +11,7 @@ use jett_parser::ast::{
 };
 use jett_types::{
     ReflectionBitfieldFieldInfo, ReflectionBitfieldInfo, ReflectionFieldInfo, ReflectionMetadata,
-    ReflectionTypeInfo,
+    ReflectionTypeInfo, ReflectionVariantInfo,
 };
 
 use crate::value::Value;
@@ -2482,6 +2482,9 @@ impl Interpreter {
                 if let Some(err) = check_args(name, 0, args) {
                     return Some(err);
                 }
+                if let Some(value) = self.checked_type_variants_value(&ty) {
+                    return Some(Ok(value));
+                }
                 Ok(Value::List(
                     self.type_expr_variants(&ty)
                         .into_iter()
@@ -3624,6 +3627,43 @@ impl Interpreter {
                     Self::reflection_type_info_value(&field.type_info),
                 ),
                 ("enum_type".to_string(), enum_type),
+            ],
+        }
+    }
+
+    fn checked_type_variants(&self, ty: &TypeExpr) -> Option<&[ReflectionVariantInfo]> {
+        let metadata = self.reflection_metadata.as_ref()?;
+        let type_name = type_expr_display(ty);
+        metadata.get_type_variants(&type_name)
+    }
+
+    fn checked_type_variants_value(&self, ty: &TypeExpr) -> Option<Value> {
+        let variants = self.checked_type_variants(ty)?;
+        Some(Value::List(
+            variants
+                .iter()
+                .map(Self::reflection_variant_info_value)
+                .collect(),
+        ))
+    }
+
+    fn reflection_variant_info_value(variant: &ReflectionVariantInfo) -> Value {
+        let fields = variant
+            .fields
+            .iter()
+            .map(Self::reflection_field_info_value)
+            .collect();
+        Value::Struct {
+            type_name: "TypeVariant".to_string(),
+            fields: vec![
+                ("index".to_string(), Value::Int64(variant.index as i64)),
+                ("name".to_string(), Value::String(variant.name.clone())),
+                (
+                    "discriminant".to_string(),
+                    Value::Int64(variant.discriminant),
+                ),
+                ("has_secret".to_string(), Value::Bool(variant.has_secret)),
+                ("fields".to_string(), Value::List(fields)),
             ],
         }
     }
@@ -8523,6 +8563,79 @@ mod tests {
             .find_map(|(name, value)| if name == "width" { Some(value) } else { None })
             .expect("TypeBitfieldField.width should exist");
         assert_eq!(width, &Value::Int64(3));
+    }
+
+    #[test]
+    fn type_variants_uses_checked_reflection_metadata_when_available() {
+        let field_info = ReflectionTypeInfo::new(
+            "secret[string]",
+            "secret",
+            None,
+            true,
+            vec![ReflectionTypeInfo::new(
+                "string",
+                "primitive",
+                Some("string_type".to_string()),
+                false,
+                Vec::new(),
+            )],
+        );
+        let mut metadata = ReflectionMetadata::new();
+        metadata.insert_type_variants(
+            "Choice",
+            vec![ReflectionVariantInfo::new(
+                1,
+                "token",
+                7,
+                true,
+                vec![ReflectionFieldInfo::new(
+                    0,
+                    "value",
+                    "secret[string]",
+                    "secret",
+                    "jsonValue",
+                    true,
+                    field_info,
+                )],
+            )],
+        );
+
+        let mut interp = Interpreter::new();
+        interp.set_reflection_metadata(Arc::new(metadata));
+
+        let value = interp
+            .call_builtin_with_type_args("type.variants", &[type_named("Choice")], &[])
+            .expect("type.variants should be a typed builtin")
+            .expect("type.variants should evaluate");
+
+        let Value::List(variants) = value else {
+            panic!("expected list of TypeVariant values");
+        };
+        let Value::Struct { fields, .. } = &variants[0] else {
+            panic!("expected TypeVariant struct");
+        };
+        let discriminant = fields
+            .iter()
+            .find_map(|(name, value)| {
+                if name == "discriminant" {
+                    Some(value)
+                } else {
+                    None
+                }
+            })
+            .expect("TypeVariant.discriminant should exist");
+        let has_secret = fields
+            .iter()
+            .find_map(|(name, value)| {
+                if name == "has_secret" {
+                    Some(value)
+                } else {
+                    None
+                }
+            })
+            .expect("TypeVariant.has_secret should exist");
+        assert_eq!(discriminant, &Value::Int64(7));
+        assert_eq!(has_secret, &Value::Bool(true));
     }
 
     /// Helper: create a field access expression.

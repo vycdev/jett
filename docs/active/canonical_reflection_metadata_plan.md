@@ -88,11 +88,12 @@ only what reflection needs:
 
 This keeps the interpreter from depending directly on every checker internal.
 
-Status: started for `TypeInfo`, `TypeField`, and bitfield metadata: display
-name, kind, primitive tag, secret-containment, nested type arguments, field
-order, field serialize names, field `TypeInfo` records, bitfield network order,
-bitfield shapes, widths, and enum annotations are captured from the checked
-type state. Variant metadata still uses the AST-shaped interpreter registries.
+Status: started for `TypeInfo`, `TypeField`, bitfield metadata, and enum
+variant metadata: display name, kind, primitive tag, secret-containment, nested
+type arguments, field order, field serialize names, field `TypeInfo` records,
+bitfield network order, bitfield shapes, widths, bitfield enum annotations,
+variant discriminants, and variant payload fields are captured from the checked
+type state.
 
 ### Stage 3: Route Reflection Builtins Through The Snapshot
 
@@ -106,9 +107,10 @@ Move these APIs first:
 - `type.variants`
 
 Status: `type.info[T]()`, `type.arg[T](index)`, `type.fields[T]()`,
-`type.bitfield_layout[T]()`, and `type.bitfield_fields[T]()` now prefer the
-checked snapshot when metadata for the requested type name is present, and fall
-back to the previous AST path during bootstrap and direct interpreter tests.
+`type.bitfield_layout[T]()`, `type.bitfield_fields[T]()` and
+`type.variants[T]()` now prefer the checked snapshot when metadata for the
+requested type name is present, and fall back to the previous AST path during
+bootstrap and direct interpreter tests.
 
 Then move value-sensitive APIs:
 
@@ -151,6 +153,6 @@ Continue the metadata-only migration:
 2. Route `TypeInfo.args` trusted loop binding through checked metadata once
    runtime metadata values and typechecker provenance agree on the same source.
 3. Add checked bitfield layout/field metadata. Done.
-4. Add checked enum variant metadata.
+4. Add checked enum variant metadata. Done.
 5. Only after metadata-only APIs are stable, revisit value-sensitive APIs such
    as `type.field_value` and `type.construct_*`.

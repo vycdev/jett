@@ -14,8 +14,8 @@ use jett_types::{
     BitfieldFieldDef as TypeBitfieldFieldDef, BitfieldFieldKind as TypeBitfieldFieldKind,
     BitfieldId, EnumDef as TypeEnumDef, FunctionSig, InterfaceDef as TypeInterfaceDef,
     ReflectionBitfieldFieldInfo, ReflectionBitfieldInfo, ReflectionFieldInfo, ReflectionMetadata,
-    ReflectionTypeInfo, StructDef as TypeStructDef, StructId, Type, TypeId, TypeInterner,
-    VariantDef,
+    ReflectionTypeInfo, ReflectionVariantInfo, StructDef as TypeStructDef, StructId, Type, TypeId,
+    TypeInterner, VariantDef,
 };
 
 use crate::capability;
@@ -111,6 +111,8 @@ struct TypeChecker<'a> {
     reflection_fields: HashMap<String, Vec<ReflectionFieldInfo>>,
     /// Checked bitfield layout snapshots keyed by the public type spelling.
     reflection_bitfields: HashMap<String, ReflectionBitfieldInfo>,
+    /// Checked enum variant snapshots keyed by the public type spelling.
+    reflection_variants: HashMap<String, Vec<ReflectionVariantInfo>>,
     /// Active type variable substitution during monomorphization (type_param_name → TypeId).
     type_var_subst: HashMap<String, TypeId>,
     /// Trusted field types currently available from direct `type.fields[T]()` loops.
@@ -164,6 +166,7 @@ impl<'a> TypeChecker<'a> {
             monomorphized_structs: HashMap::new(),
             reflection_fields: HashMap::new(),
             reflection_bitfields: HashMap::new(),
+            reflection_variants: HashMap::new(),
             type_var_subst: HashMap::new(),
             reflected_field_type_scopes: Vec::new(),
             reflected_type_info_scopes: Vec::new(),
@@ -843,6 +846,10 @@ impl<'a> TypeChecker<'a> {
             metadata.insert_bitfield(type_name, bitfield);
         }
 
+        for (type_name, variants) in self.reflection_variants.clone() {
+            metadata.insert_type_variants(type_name, variants);
+        }
+
         metadata
     }
 
@@ -1073,6 +1080,45 @@ impl<'a> TypeChecker<'a> {
             })
             .collect();
         ReflectionBitfieldInfo::new(def.network_order, fields)
+    }
+
+    fn reflection_variants_for_enum_def(
+        &mut self,
+        def: &ast::EnumDef,
+        namespace: Option<&str>,
+        resolved_variants: &[VariantDef],
+    ) -> Vec<ReflectionVariantInfo> {
+        def.variants
+            .iter()
+            .zip(resolved_variants.iter())
+            .enumerate()
+            .map(|(variant_index, (variant, resolved_variant))| {
+                let fields = variant
+                    .fields
+                    .iter()
+                    .zip(resolved_variant.fields.iter())
+                    .enumerate()
+                    .map(|(field_index, (field, (_, field_ty)))| {
+                        self.reflection_field_info_for_type_expr(
+                            field_index,
+                            &field.name.name,
+                            field.serialize_name.as_deref().unwrap_or(&field.name.name),
+                            &field.ty,
+                            namespace,
+                            *field_ty,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let has_secret = fields.iter().any(|field| field.has_secret);
+                ReflectionVariantInfo::new(
+                    variant_index,
+                    &variant.name.name,
+                    resolved_variant.discriminant,
+                    has_secret,
+                    fields,
+                )
+            })
+            .collect()
     }
 
     fn reflection_field_info_for_type_expr(
@@ -3328,7 +3374,7 @@ impl<'a> TypeChecker<'a> {
 
         let mut next_discriminant = 0_i64;
         let mut seen_discriminants = HashMap::new();
-        let variants = def
+        let variants: Vec<VariantDef> = def
             .variants
             .iter()
             .map(|variant| {
@@ -3367,6 +3413,17 @@ impl<'a> TypeChecker<'a> {
                 }
             })
             .collect();
+        let reflection_variants =
+            self.reflection_variants_for_enum_def(def, namespace, variants.as_slice());
+        if namespace.is_some() {
+            let leaf_variants =
+                self.reflection_variants_for_enum_def(def, None, variants.as_slice());
+            self.reflection_variants
+                .entry(def.name.name.clone())
+                .or_insert(leaf_variants);
+        }
+        self.reflection_variants
+            .insert(canonical_name.clone(), reflection_variants);
 
         self.interner.update_enum(
             eid,

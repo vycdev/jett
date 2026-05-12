@@ -13,6 +13,6 @@ pub use defs::{
 pub use interner::TypeInterner;
 pub use reflection::{
     ReflectionBitfieldFieldInfo, ReflectionBitfieldInfo, ReflectionFieldInfo, ReflectionMetadata,
-    ReflectionTypeInfo,
+    ReflectionTypeInfo, ReflectionVariantInfo,
 };
 pub use types::{Type, TypeId};
