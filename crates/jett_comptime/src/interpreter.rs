@@ -3813,34 +3813,67 @@ impl Interpreter {
     ) -> Result<Value, String> {
         let (field_index, metadata_name, metadata_type_name) =
             Self::type_field_metadata_for(field_metadata, "type.field_value")?;
-        let owner_fields = self.type_expr_fields(owner_ty);
-        let field = owner_fields.get(field_index).ok_or_else(|| {
-            format!(
-                "type.field_value: type '{}' has no field at index {}",
-                type_expr_display(owner_ty),
-                field_index
-            )
-        })?;
+        let (field_name, actual_type_name) = if let Some(fields) =
+            self.checked_type_fields(owner_ty)
+        {
+            let field = fields.get(field_index).ok_or_else(|| {
+                format!(
+                    "type.field_value: type '{}' has no field at index {}",
+                    type_expr_display(owner_ty),
+                    field_index
+                )
+            })?;
 
-        if field.name != metadata_name {
-            return Err(format!(
-                "type.field_value: field metadata '{}' does not match field '{}' on type '{}'",
-                metadata_name,
-                field.name,
-                type_expr_display(owner_ty)
-            ));
-        }
+            if field.name != metadata_name {
+                return Err(format!(
+                    "type.field_value: field metadata '{}' does not match field '{}' on type '{}'",
+                    metadata_name,
+                    field.name,
+                    type_expr_display(owner_ty)
+                ));
+            }
 
-        let actual_type_name = type_expr_display(&field.ty);
-        if actual_type_name != metadata_type_name {
-            return Err(format!(
-                "type.field_value: field metadata for '{}' has type '{}', but type '{}' reports '{}'",
-                metadata_name,
-                metadata_type_name,
-                type_expr_display(owner_ty),
-                actual_type_name
-            ));
-        }
+            if field.type_name != metadata_type_name {
+                return Err(format!(
+                    "type.field_value: field metadata for '{}' has type '{}', but type '{}' reports '{}'",
+                    metadata_name,
+                    metadata_type_name,
+                    type_expr_display(owner_ty),
+                    field.type_name
+                ));
+            }
+            (field.name.clone(), field.type_name.clone())
+        } else {
+            let owner_fields = self.type_expr_fields(owner_ty);
+            let field = owner_fields.get(field_index).ok_or_else(|| {
+                format!(
+                    "type.field_value: type '{}' has no field at index {}",
+                    type_expr_display(owner_ty),
+                    field_index
+                )
+            })?;
+
+            if field.name != metadata_name {
+                return Err(format!(
+                    "type.field_value: field metadata '{}' does not match field '{}' on type '{}'",
+                    metadata_name,
+                    field.name,
+                    type_expr_display(owner_ty)
+                ));
+            }
+
+            let actual_type_name = type_expr_display(&field.ty);
+            if actual_type_name != metadata_type_name {
+                return Err(format!(
+                    "type.field_value: field metadata for '{}' has type '{}', but type '{}' reports '{}'",
+                    metadata_name,
+                    metadata_type_name,
+                    type_expr_display(owner_ty),
+                    actual_type_name
+                ));
+            }
+            (field.name.clone(), actual_type_name)
+        };
 
         let expected_type_name = type_expr_display(expected_field_ty);
         if actual_type_name != expected_type_name {
@@ -3853,11 +3886,9 @@ impl Interpreter {
         match value {
             Value::Struct { fields, .. } => fields
                 .iter()
-                .find(|(name, _)| name == &field.name)
+                .find(|(name, _)| name == &field_name)
                 .map(|(_, field_value)| field_value.clone())
-                .ok_or_else(|| {
-                    format!("type.field_value: value is missing field '{}'", field.name)
-                }),
+                .ok_or_else(|| format!("type.field_value: value is missing field '{field_name}'")),
             other => Err(format!(
                 "type.field_value: expected struct value for '{}', got {other}",
                 type_expr_display(owner_ty)
@@ -8597,6 +8628,55 @@ mod tests {
             .expect("TypeField.has_secret should exist");
         assert_eq!(serialize_name, &Value::String("jsonValue".to_string()));
         assert_eq!(has_secret, &Value::Bool(true));
+    }
+
+    #[test]
+    fn type_field_value_uses_checked_reflection_metadata_when_available() {
+        let value_info = ReflectionTypeInfo::new(
+            "string",
+            "primitive",
+            Some("string_type".to_string()),
+            false,
+            Vec::new(),
+        );
+        let mut metadata = ReflectionMetadata::new();
+        metadata.insert_type_fields(
+            "Box",
+            vec![ReflectionFieldInfo::new(
+                0,
+                "value",
+                "string",
+                "primitive",
+                "value",
+                false,
+                value_info,
+            )],
+        );
+
+        let mut interp = Interpreter::new();
+        interp.set_reflection_metadata(Arc::new(metadata));
+
+        let field = interp
+            .call_builtin_with_type_args("type.fields", &[type_named("Box")], &[])
+            .expect("type.fields should be a typed builtin")
+            .expect("type.fields should evaluate");
+        let Value::List(fields) = field else {
+            panic!("expected list of TypeField values");
+        };
+        let value = Value::Struct {
+            type_name: "Box".to_string(),
+            fields: vec![("value".to_string(), Value::String("ok".to_string()))],
+        };
+        let reflected = interp
+            .call_builtin_with_type_args(
+                "type.field_value",
+                &[type_named("Box"), type_named("string")],
+                &[value, fields[0].clone()],
+            )
+            .expect("type.field_value should be a typed builtin")
+            .expect("type.field_value should evaluate");
+
+        assert_eq!(reflected, Value::String("ok".to_string()));
     }
 
     #[test]
