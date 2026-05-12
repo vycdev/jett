@@ -2477,8 +2477,7 @@ impl Interpreter {
                     return Some(err);
                 }
                 Ok(Value::Bool(
-                    self.checked_type_info(&ty)
-                        .map(|info| info.has_secret)
+                    self.checked_type_has_secret(&ty)
                         .unwrap_or_else(|| self.type_expr_has_secret(&ty)),
                 ))
             }
@@ -2638,7 +2637,11 @@ impl Interpreter {
                 if let Some(err) = check_args(name, 1, args) {
                     return Some(err);
                 }
-                if name == "json.serialize" && self.type_expr_has_secret(&ty) {
+                if name == "json.serialize"
+                    && self
+                        .checked_type_has_secret(&ty)
+                        .unwrap_or_else(|| self.type_expr_has_secret(&ty))
+                {
                     return Some(Err(format!(
                         "json.serialize cannot serialize secret-containing type '{}'",
                         type_expr_display(&ty)
@@ -3656,6 +3659,10 @@ impl Interpreter {
         let metadata = self.reflection_metadata.as_ref()?;
         let type_name = type_expr_display(ty);
         metadata.get_type_info(&type_name)
+    }
+
+    fn checked_type_has_secret(&self, ty: &TypeExpr) -> Option<bool> {
+        Some(self.checked_type_info(ty)?.has_secret)
     }
 
     fn checked_type_kind(&self, ty: &TypeExpr) -> Option<&str> {
@@ -8997,6 +9004,34 @@ mod tests {
             }))
         );
         assert_eq!(has_secret, Value::Bool(true));
+    }
+
+    #[test]
+    fn json_serialize_secret_gate_uses_checked_reflection_metadata_when_available() {
+        let mut metadata = ReflectionMetadata::new();
+        metadata.insert_type_info(ReflectionTypeInfo::new(
+            "SecretBox",
+            "struct",
+            None,
+            true,
+            Vec::new(),
+        ));
+
+        let mut interp = Interpreter::new();
+        interp.set_reflection_metadata(Arc::new(metadata));
+
+        let value = Value::Struct {
+            type_name: "SecretBox".to_string(),
+            fields: Vec::new(),
+        };
+        let result = interp
+            .call_builtin_with_type_args("json.serialize", &[type_named("SecretBox")], &[value])
+            .expect("json.serialize should be a typed builtin");
+
+        assert_eq!(
+            result,
+            Err("json.serialize cannot serialize secret-containing type 'SecretBox'".to_string())
+        );
     }
 
     #[test]

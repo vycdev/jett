@@ -115,6 +115,9 @@ the previous AST path during bootstrap and direct interpreter tests. Trusted
 `comptime type` bindings over direct `type.arg[T](index)`, `TypeInfo.args`,
 `type.fields[T]()` loops, and `type.variants[T]()` / variant payload loops also
 prefer checked metadata when constructing the compile-time type binding scope.
+The interpreter's public `json.serialize[T]` secret-containing type gate also
+uses the checked secret-containment fact before falling back to the older
+interpreter registry helper.
 
 Then move value-sensitive APIs:
 
