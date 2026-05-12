@@ -5,4 +5,4 @@ pub mod resolver;
 pub mod scope;
 
 pub use resolver::{ResolveResult, resolve};
-pub use scope::{DefId, DefInfo, DefKind, Scope, ScopeId, ScopeTable};
+pub use scope::{DefId, DefInfo, DefKind, DefVisibility, Scope, ScopeId, ScopeTable};

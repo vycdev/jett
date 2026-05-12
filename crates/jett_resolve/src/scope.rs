@@ -46,6 +46,13 @@ pub enum DefKind {
     Namespace,
 }
 
+/// Source-level visibility for a definition's canonical declaration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DefVisibility {
+    Public,
+    Private,
+}
+
 /// Metadata about a single definition.
 #[derive(Debug, Clone)]
 pub struct DefInfo {
@@ -53,6 +60,8 @@ pub struct DefInfo {
     pub name: String,
     pub kind: DefKind,
     pub span: Span,
+    pub namespace: Option<String>,
+    pub visibility: DefVisibility,
 }
 
 /// A single lexical scope containing bindings and an optional parent.
@@ -89,12 +98,26 @@ impl ScopeTable {
 
     /// Register a new definition and return its `DefId`.
     pub fn new_def(&mut self, name: String, kind: DefKind, span: Span) -> DefId {
+        self.new_def_with_visibility(name, kind, span, None, DefVisibility::Private)
+    }
+
+    /// Register a new definition with namespace and visibility metadata.
+    pub fn new_def_with_visibility(
+        &mut self,
+        name: String,
+        kind: DefKind,
+        span: Span,
+        namespace: Option<String>,
+        visibility: DefVisibility,
+    ) -> DefId {
         let id = DefId::new(self.definitions.len() as u32);
         self.definitions.push(DefInfo {
             id,
             name,
             kind,
             span,
+            namespace,
+            visibility,
         });
         id
     }

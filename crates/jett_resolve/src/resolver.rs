@@ -10,7 +10,7 @@ use jett_parser::ast::{
 };
 
 use crate::errors;
-use crate::scope::{DefId, DefKind, ScopeId, ScopeTable};
+use crate::scope::{DefId, DefKind, DefVisibility, ScopeId, ScopeTable};
 
 /// The result of name resolution.
 #[derive(Debug)]
@@ -133,7 +133,13 @@ impl Resolver {
             "println",
         ];
         for name in builtins {
-            let def = scope_table.new_def(name.to_string(), DefKind::Constant, dummy_span);
+            let def = scope_table.new_def_with_visibility(
+                name.to_string(),
+                DefKind::Constant,
+                dummy_span,
+                None,
+                DefVisibility::Public,
+            );
             scope_table.bind(root, name.to_string(), def);
         }
 
@@ -203,6 +209,7 @@ impl Resolver {
                         DefKind::Interface,
                         interface.name.span,
                         index,
+                        interface.exported,
                     );
                 }
                 Item::Struct(s) => {
@@ -211,6 +218,7 @@ impl Resolver {
                         DefKind::Struct,
                         s.name.span,
                         index,
+                        s.exported,
                     );
                 }
                 Item::Bitfield(b) => {
@@ -219,6 +227,7 @@ impl Resolver {
                         DefKind::Bitfield,
                         b.name.span,
                         index,
+                        b.exported,
                     );
                 }
                 Item::Enum(e) => {
@@ -227,6 +236,7 @@ impl Resolver {
                         DefKind::Enum,
                         e.name.span,
                         index,
+                        e.exported,
                     );
                 }
                 Item::VarDecl(v) => {
@@ -235,6 +245,7 @@ impl Resolver {
                         DefKind::Variable,
                         v.name.span,
                         index,
+                        false,
                     );
                     if let Some(id) = def_id {
                         self.var_defs.insert(id);
@@ -246,6 +257,7 @@ impl Resolver {
                         DefKind::Machine,
                         m.name.span,
                         index,
+                        false,
                     );
                 }
                 Item::Actor(a) => {
@@ -254,6 +266,7 @@ impl Resolver {
                         DefKind::Actor,
                         a.name.span,
                         index,
+                        false,
                     );
                 }
                 Item::TypeAlias(ta) => {
@@ -262,6 +275,7 @@ impl Resolver {
                         DefKind::Struct, // treat type aliases like types for now
                         ta.name.span,
                         index,
+                        ta.exported,
                     );
                 }
                 // Verify, property, and implement blocks don't declare new names in the module scope.
@@ -297,6 +311,7 @@ impl Resolver {
             DefKind::Function,
             func.name.span,
             order,
+            func.exported,
         );
     }
 
@@ -309,6 +324,18 @@ impl Resolver {
         span: Span,
         order: usize,
     ) -> Option<DefId> {
+        self.declare_top_level_with_metadata(name, kind, span, order, None, DefVisibility::Public)
+    }
+
+    fn declare_top_level_with_metadata(
+        &mut self,
+        name: &str,
+        kind: DefKind,
+        span: Span,
+        order: usize,
+        namespace: Option<String>,
+        visibility: DefVisibility,
+    ) -> Option<DefId> {
         // Check for duplicate in the current scope.
         if let Some(prev_id) = self.scope_table.lookup_local(self.current_scope, name) {
             let prev_span = self.scope_table.def(prev_id).span;
@@ -316,7 +343,13 @@ impl Resolver {
                 .emit(errors::duplicate_definition(name, span, prev_span));
             return None;
         }
-        let def_id = self.scope_table.new_def(name.to_string(), kind, span);
+        let def_id = self.scope_table.new_def_with_visibility(
+            name.to_string(),
+            kind,
+            span,
+            namespace,
+            visibility,
+        );
         self.scope_table
             .bind(self.current_scope, name.to_string(), def_id);
         self.top_level_order
@@ -375,12 +408,28 @@ impl Resolver {
         kind: DefKind,
         span: Span,
         order: usize,
+        exported: bool,
     ) -> Option<DefId> {
+        let Some(namespace) = self.current_namespace.clone() else {
+            return self.declare_top_level(name, kind, span, order);
+        };
         let Some(qualified) = self.current_qualified_name(name) else {
             return self.declare_top_level(name, kind, span, order);
         };
 
-        let def_id = self.declare_top_level(&qualified, kind, span, order)?;
+        let visibility = if exported {
+            DefVisibility::Public
+        } else {
+            DefVisibility::Private
+        };
+        let def_id = self.declare_top_level_with_metadata(
+            &qualified,
+            kind,
+            span,
+            order,
+            Some(namespace),
+            visibility,
+        )?;
 
         if self
             .scope_table
@@ -1299,6 +1348,155 @@ mod tests {
             stmts: Vec::new(),
             span: sp(start, start + 1),
         }
+    }
+
+    fn parse_module(source: &str) -> Module {
+        let result = jett_parser::parse(source, FileId::new(0));
+        assert!(
+            result.errors.is_empty(),
+            "parse errors: {:?}",
+            result.errors
+        );
+        result.module
+    }
+
+    fn def_by_name<'a>(result: &'a ResolveResult, name: &str) -> &'a crate::scope::DefInfo {
+        result
+            .scope_table
+            .definitions
+            .iter()
+            .find(|def| def.name == name)
+            .unwrap_or_else(|| panic!("expected definition named {name}"))
+    }
+
+    #[test]
+    fn namespaced_export_visibility_metadata_is_recorded() {
+        let module = parse_module(
+            r#"
+namespace api
+
+export function public_fn() returns nothing:
+    return nothing
+
+function private_fn() returns nothing:
+    return nothing
+
+export struct PublicBox:
+    value: int64
+
+struct PrivateBox:
+    value: int64
+
+export enum PublicColor:
+    red
+
+enum PrivateColor:
+    blue
+
+export bitfield PublicFlags:
+    active: 1 bit
+
+bitfield PrivateFlags:
+    active: 1 bit
+
+export type PublicPort = int64
+type PrivatePort = int64
+
+export interface PublicNamed:
+    function name(view self: PublicNamed) returns string
+
+interface PrivateNamed:
+    function name(view self: PrivateNamed) returns string
+"#,
+        );
+
+        let result = resolve(&module);
+        assert!(
+            !result
+                .diagnostics
+                .iter()
+                .any(|d| d.severity == Severity::Error),
+            "expected no errors, got: {:#?}",
+            result.diagnostics
+        );
+
+        for name in [
+            "api.public_fn",
+            "api.PublicBox",
+            "api.PublicColor",
+            "api.PublicFlags",
+            "api.PublicPort",
+            "api.PublicNamed",
+        ] {
+            let def = def_by_name(&result, name);
+            assert_eq!(def.namespace.as_deref(), Some("api"));
+            assert_eq!(def.visibility, crate::scope::DefVisibility::Public);
+        }
+
+        for name in [
+            "api.private_fn",
+            "api.PrivateBox",
+            "api.PrivateColor",
+            "api.PrivateFlags",
+            "api.PrivatePort",
+            "api.PrivateNamed",
+        ] {
+            let def = def_by_name(&result, name);
+            assert_eq!(def.namespace.as_deref(), Some("api"));
+            assert_eq!(def.visibility, crate::scope::DefVisibility::Private);
+        }
+    }
+
+    #[test]
+    fn visibility_metadata_preserves_existing_flat_namespace_binding() {
+        let module = parse_module(
+            r#"
+namespace api
+
+export struct User:
+    id: int64
+"#,
+        );
+
+        let result = resolve(&module);
+        let user = def_by_name(&result, "api.User");
+        let root = ScopeId::new(0);
+
+        assert_eq!(
+            result.scope_table.lookup(root, "api.User"),
+            Some(user.id),
+            "qualified binding should point at canonical definition"
+        );
+        assert_eq!(
+            result.scope_table.lookup(root, "User"),
+            Some(user.id),
+            "temporary flat compatibility binding should remain unchanged"
+        );
+        assert_eq!(user.visibility, crate::scope::DefVisibility::Public);
+        assert_eq!(user.namespace.as_deref(), Some("api"));
+    }
+
+    #[test]
+    fn unnamespaced_declarations_remain_public() {
+        let module = parse_module(
+            r#"
+function helper() returns nothing:
+    return nothing
+
+export function exposed() returns nothing:
+    return nothing
+"#,
+        );
+
+        let result = resolve(&module);
+        assert_eq!(
+            def_by_name(&result, "helper").visibility,
+            crate::scope::DefVisibility::Public
+        );
+        assert_eq!(
+            def_by_name(&result, "exposed").visibility,
+            crate::scope::DefVisibility::Public
+        );
     }
 
     // ---- Test: resolve a simple function call ----
