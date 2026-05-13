@@ -10,7 +10,7 @@ The destination is:
 - `JsonValue` becomes a compatibility spelling for that representation, not a
   separate Rust-backed tree.
 - Typed `json.parse[T]` continues to be compiler-policy-gated but stdlib-bodied.
-- `json.parse_raw` and raw traversal helpers eventually run on `JsonTree`.
+- `json.parse_raw` and raw traversal helpers run on `JsonTree`.
 - The interpreter/compiler should not depend on `serde_json::Value` for normal
   JSON language behavior.
 
@@ -45,8 +45,10 @@ about: two names, two traversal surfaces, one conceptual data model.
   runtime values through trusted stdlib `json_tree_*` hooks.
 - `jett_comptime` no longer has `Value::Json` or a `serde_json` dependency.
 - The type system still reports `JsonValue` as a built-in primitive for
-  reflection compatibility, but it accepts `JsonValue` and `json.JsonTree` as
-  compatible source types for assignments, calls, fields, and container wrappers.
+  reflection compatibility, but it seeds an explicit legacy compatibility alias
+  from `JsonValue` to the bundled `json.JsonTree`. That alias makes the two
+  spellings compatible for assignments, calls, returns, fields, and container
+  wrappers without relying on namespace flattening.
 - `json_decode_reflected[T](raw: JsonValue)` is now only a compatibility wrapper
   around `json_decode_tree_reflected[T](view raw)`.
 
@@ -65,10 +67,10 @@ string text = json.as_string(name) handle error:
     return fail(error)
 ```
 
-The implementation under that spelling can change from Rust-backed
+The implementation under that spelling has changed from Rust-backed
 `serde_json::Value` to native `JsonTree`. The source-level migration can happen
-later, with docs preferring `JsonTree` once visibility/export and aliasing are
-clean enough.
+later, with docs preferring `JsonTree` once the legacy alias/prelude story is
+settled enough for users.
 
 ## Target API Shape
 
@@ -106,12 +108,11 @@ module system is supposed to remove.
 
 The staged direction is:
 
-1. Keep the current narrow compatibility rule while visibility/export work is
-   still open. `JsonValue` remains a compiler-known legacy spelling and only the
-   bundled `json.JsonTree` enum is compatible with it.
-2. Add an explicit compiler-seeded compatibility alias table entry:
-   `JsonValue -> json.JsonTree`. This should model a future prelude/exported
-   alias without depending on namespace leakage.
+1. Keep `JsonValue` as a compiler-known legacy spelling and keep only the
+   bundled `json.JsonTree` enum compatible with it.
+2. Done: the typechecker now seeds an explicit compiler-owned compatibility
+   alias table entry, `JsonValue -> json.JsonTree`. This models a future
+   prelude/exported alias without depending on namespace leakage.
 3. Preserve legacy reflection during the compatibility window:
    `type.info[JsonValue]()` may continue to report
    `TypePrimitive.json_value_type`, while `type.info[json.JsonTree]()` reports
@@ -132,8 +133,7 @@ This keeps canonical identity clear: `json.JsonTree` is the real type;
 Add stdlib helper names that match the current raw API behavior but operate on
 `JsonTree`:
 
-- `json_tree_serialize_raw(view value: JsonTree)` or make
-  `json_tree_serialize` view-friendly.
+- `json_tree_serialize` serializes native tree values.
 - `json_tree_kind`, `json_tree_field`, `json_tree_index`,
   `json_tree_array_length`, `json_tree_object_keys`, and scalar casts already
   exist.
@@ -147,7 +147,9 @@ primitive. Do not paper over that with host magic.
 Status: first parity fixture is in place in
 `tests/run_pass/json_raw_tree_parity.jett`, covering object traversal, array
 lookup, nulls, booleans, strings, numbers, wrong-shape errors, absent lookup,
-and raw serialization against the native tree helpers.
+and raw serialization against the native tree helpers. The focused
+`tests/run_pass/json_value_tree_compatibility.jett` fixture now also pins the
+legacy raw helper surface accepting native `json.JsonTree` values directly.
 
 ### 2. Route Public Raw Functions Through Trusted Stdlib Hooks
 
@@ -188,16 +190,13 @@ Once the runtime representation is native:
 Recommendation: keep `TypePrimitive.json_value_type` for one compatibility
 stage, but document it as legacy once `JsonTree` is the preferred spelling.
 
-Status: implemented as a narrow typechecker compatibility rule rather than a
-source-level alias. Only the stdlib enum `json.JsonTree` is compatible with the
-built-in `JsonValue`; user-defined enums named `JsonTree` remain unrelated.
+Status: implemented through a compiler-owned legacy compatibility alias table
+rather than a source-level alias. Only the stdlib enum `json.JsonTree` is
+compatible with the built-in `JsonValue`; user-defined enums named `JsonTree`
+remain unrelated.
 Reflection metadata is intentionally split for now:
 `type.info[JsonValue]()` reports `TypePrimitive.json_value_type`, while
 `type.info[json.JsonTree]()` reports `TypeKind.enum_type`.
-
-Next status target: replace the ad hoc compatibility rule with a
-compiler-seeded legacy alias record once the typechecker has a small place to
-store compatibility/prelude aliases separately from ordinary source aliases.
 
 ### 5. Move Raw Decoder Code Off `JsonValue`
 
@@ -247,8 +246,9 @@ Add tests before each behavior change:
 ## Risks And Open Questions
 
 - **Alias mechanics:** ordinary source aliases are not enough for the current
-  unqualified compatibility spelling. We likely need a compiler-seeded prelude
-  alias first, then a real exported/prelude stdlib alias later.
+  unqualified compatibility spelling. The compiler-seeded legacy alias exists;
+  the open question is when and how to express it as a real exported/prelude
+  stdlib alias.
 - **Reflection metadata:** if `JsonValue` is an alias, `type.info[JsonValue]`
   must not surprise existing code.
 - **View iteration:** native raw serialization over `view JsonTree` needs a
@@ -264,12 +264,9 @@ Add tests before each behavior change:
 
 Finish the public surface decision:
 
-1. Keep the current compatibility rule until namespace exports exist, but
-   design a small compiler-seeded legacy alias table that can represent
-   `JsonValue -> json.JsonTree` explicitly.
-2. Decide whether raw helper signatures should remain `JsonValue` for source
+1. Decide whether raw helper signatures should remain `JsonValue` for source
    stability or move to `view JsonTree` in a breaking cleanup pass.
-3. Once explicit exports/prelude imports exist, move the compatibility alias
-   out of compiler special cases and into the stdlib/prelude surface.
-4. Later, update reflection metadata so the legacy
+2. Once explicit prelude imports exist, move the compatibility alias out of
+   compiler special cases and into the stdlib/prelude surface.
+3. Later, update reflection metadata so the legacy
    `TypePrimitive.json_value_type` is either formally deprecated or removed.

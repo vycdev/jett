@@ -8,3 +8,12 @@ function bad_user_json_tree_bridge() returns JsonValue:
     JsonTree tree = JsonTree.fake
     JsonValue raw = tree
     return raw
+
+function bad_user_json_tree_builtin() returns string:
+    JsonTree tree = JsonTree.fake
+    return json.kind(tree)
+
+function bad_user_json_tree_container() returns list[JsonValue]:
+    list[JsonTree] trees = list(JsonTree.fake)
+    list[JsonValue] raws = trees
+    return raws

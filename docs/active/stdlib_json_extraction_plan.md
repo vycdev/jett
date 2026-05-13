@@ -5,7 +5,9 @@ reflection JSON prototypes can become a real `stdlib/json.jett` module.
 
 The important conclusion is that JSON itself is no longer the main blocker.
 Reflection can now read fields, construct structs/bitfields/enums, inspect type
-arguments, use structured kind and primitive tags, and walk raw `JsonValue`.
+arguments, use structured kind and primitive tags, and walk native `JsonTree`
+values. `JsonValue` remains only as the legacy compatibility spelling for that
+tree.
 The blocker is the module and namespace path that would let ordinary `.jett`
 stdlib code own the public `json.*` API.
 
@@ -22,9 +24,10 @@ stdlib code own the public `json.*` API.
   blocks, while stripping verify/property blocks from support modules so a
   single-file test report stays focused on the requested file.
 - Namespaces are parsed and resolved as declarations. Top-level functions and
-  named types are now registered under both their historical flat name and a
-  `namespace.name` qualified name for typechecking and interpretation. This is
-  still an alias-based staging model rather than a full namespace registry.
+  named types are checked and interpreted through canonical `namespace.name`
+  names, with scoped lookup preserving same-namespace ergonomics. This is still
+  lighter than a full module registry, but it no longer relies on runtime flat
+  leaf aliases for namespaced declarations.
 - `use` declarations bind aliases or final path segments, but they do not yet
   import a namespace registry.
 - Builtin module prefixes such as `json`, `type`, `list`, `string`, and `bytes`
@@ -52,13 +55,14 @@ The reflected JSON implementation has started moving into stdlib under the
 - `json_decode_reflected[T](raw: JsonValue)`
 - `json_parse_reflected[T](raw: string)`
 
-The module also declares the public wrapper names `parse`, `serialize`, and
-`serialize_public`. Calls such as `json.parse[T](raw)` still pass through the
-compiler-owned policy gate first, then the interpreter delegates to the
+The module also declares exported public wrapper names `parse`, `serialize`,
+and `serialize_public`. Calls such as `json.parse[T](raw)` still pass through
+the compiler-owned policy gate first, then the interpreter delegates to the
 internal reflected stdlib hook when the bundled module is registered as trusted
 compiler-shipped stdlib. The public wrappers remain readable source-level
 declarations, but the bridge target stays on internal hook names until the
-language has an explicit visibility/export model.
+language can carry the compiler-owned JSON policy on ordinary stdlib
+declarations.
 
 The raw-string hook remains directly exercised through its qualified stdlib
 staging name, `json.json_parse_reflected[T](raw)`.
@@ -158,12 +162,13 @@ choice is to keep the checks until namespace and stdlib loading are stable.
 ### 4. Visibility
 
 The serializer and decoder need helper functions such as `quote`,
-`decode_value[T]`, and enum/field helpers. Jett does not yet have explicit
-public/private module visibility.
+`decode_value[T]`, and enum/field helpers. Jett now has explicit `export`
+visibility for namespaced declarations, but it does not yet have a separate
+`private` keyword or a full module registry/import story.
 
-Until visibility exists, extraction should avoid pretending helper names are
-private. A first stdlib experiment can use internal-looking names, but shipping
-the module cleanly probably needs an export rule or another visibility story.
+Until private helper visibility exists, extraction should avoid pretending
+helper names are hidden by naming convention alone. The current stdlib uses
+`export` for the intended public surface and leaves internal hooks unexported.
 
 The first trusted-origin staging piece is in place: interpreter function
 registry entries parsed from the reserved stdlib file-id range are marked
@@ -184,7 +189,7 @@ bridge spoofing, not helper visibility.
    - `json_parse_reflected[T](raw: string)` now routes typed targets through the
      self-hosted `JsonTree` parser/decoder, with a `JsonValue` carve-out for
      the raw compatibility surface.
-3. Continue the public bridge handoff. `json.parse`, `json.serialize`, and
+3. Maintain the public bridge handoff. `json.parse`, `json.serialize`, and
    `json.serialize_public` now use compiler-owned typechecker policy with
    stdlib-owned interpreter bodies. See `/docs/completed/json_public_bridge_handoff.md`.
 4. Keep the real public wrapper names in `namespace json`, while retaining
@@ -199,12 +204,11 @@ bridge spoofing, not helper visibility.
    toward replacing the raw `JsonValue` compatibility surface.
 7. Decide whether `JsonValue` becomes a source-level type alias/replacement or
    remains a compiler-recognized compatibility spelling. The current
-   implementation accepts the built-in `JsonValue` and stdlib `json.JsonTree`
-   as compatible types, while preserving separate reflection metadata for one
-   compatibility stage. See `/docs/active/json_value_transition_plan.md`.
-   The preferred next shape is an explicit compiler-seeded/prelude
-   compatibility alias `JsonValue -> json.JsonTree`, later moved into the
-   exported stdlib/prelude surface once exports exist.
+   implementation seeds a compiler-owned legacy compatibility alias from
+   built-in `JsonValue` to stdlib `json.JsonTree`, while preserving separate
+   reflection metadata for one compatibility stage. See
+   `/docs/active/json_value_transition_plan.md`. The remaining decision is
+   whether and when that alias moves into the exported stdlib/prelude surface.
 
 ## Recommended Shape For `stdlib/json.jett`
 
@@ -230,6 +234,6 @@ functions should probably use `result` while format policy is still evolving.
 - What is the stable external shape for enums, bitfields, bytes, floats, sets,
   and maps?
 - How should stdlib helper visibility work before the language has a general
-  `export` or `private` rule?
+  `private` rule and a full import/prelude model?
 - How much abstraction is allowed around trusted reflection loops before
   `comptime type Field = field.type_info:` loses provenance?

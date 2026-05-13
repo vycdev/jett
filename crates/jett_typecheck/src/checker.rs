@@ -73,6 +73,8 @@ struct TypeChecker<'a> {
     /// User-defined type name → TypeId.
     named_types: HashMap<String, TypeId>,
     type_aliases: HashMap<String, ast::TypeAlias>,
+    /// Compiler-owned source compatibility aliases that do not affect reflection identity.
+    legacy_compat_aliases: Vec<(TypeId, TypeId)>,
     resolving_type_aliases: HashSet<String>,
     /// Expression span → TypeId (the output type map).
     type_map: HashMap<Span, TypeId>,
@@ -149,6 +151,7 @@ impl<'a> TypeChecker<'a> {
             decl_defs,
             named_types: HashMap::new(),
             type_aliases: HashMap::new(),
+            legacy_compat_aliases: Vec::new(),
             resolving_type_aliases: HashSet::new(),
             type_map: HashMap::new(),
             current_return_type: None,
@@ -1518,7 +1521,7 @@ impl<'a> TypeChecker<'a> {
         if expected == got || expected == TypeInterner::ERROR || got == TypeInterner::ERROR {
             return true;
         }
-        if self.json_value_tree_compatible(expected, got) {
+        if self.legacy_compat_alias_compatible(expected, got) {
             return true;
         }
 
@@ -1545,18 +1548,20 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
-    fn json_value_tree_compatible(&self, expected: TypeId, got: TypeId) -> bool {
-        (expected == TypeInterner::JSON_VALUE && self.is_json_tree_type(got))
-            || (got == TypeInterner::JSON_VALUE && self.is_json_tree_type(expected))
+    fn legacy_compat_alias_compatible(&self, expected: TypeId, got: TypeId) -> bool {
+        self.legacy_compat_aliases
+            .iter()
+            .any(|(legacy, canonical)| {
+                (*legacy == expected && *canonical == got)
+                    || (*legacy == got && *canonical == expected)
+            })
     }
 
-    fn is_json_tree_type(&self, id: TypeId) -> bool {
-        match self.interner.resolve(id) {
-            Type::Enum(enum_id) => {
-                let name = &self.interner.resolve_enum(*enum_id).name;
-                name == "json.JsonTree"
-            }
-            _ => false,
+    fn seed_legacy_compat_aliases(&mut self) {
+        self.legacy_compat_aliases.clear();
+        if let Some(&json_tree_ty) = self.named_types.get("json.JsonTree") {
+            self.legacy_compat_aliases
+                .push((TypeInterner::JSON_VALUE, json_tree_ty));
         }
     }
 
@@ -2714,6 +2719,8 @@ impl<'a> TypeChecker<'a> {
                 _ => {}
             }
         }
+
+        self.seed_legacy_compat_aliases();
 
         // Second pass: fill in the struct/enum contents now that all names exist.
         let mut current_file = None;

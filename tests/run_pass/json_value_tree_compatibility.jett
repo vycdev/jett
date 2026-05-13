@@ -1,42 +1,34 @@
 namespace test
-
 struct RawHolder:
     raw: JsonValue
-
 function raw_name(raw: JsonValue) returns string:
     JsonValue name = json.field(raw, "name") handle:
         return "missing name"
     return json.as_string(name) handle error:
         default error
-
 function tree_name(view tree: json.JsonTree) returns string:
     json.JsonTree name = json.json_tree_field(view tree, "name") handle:
         return "missing name"
     return json.json_tree_as_string(view name) handle error:
         default error
-
 function raw_from_tree_assignment() returns string:
     json.JsonTree tree = json.json_tree_parse("{{\"name\":\"Ada\"}}") handle error:
         return error
     JsonValue raw = tree
     return raw_name(raw)
-
 function tree_from_raw_assignment() returns string:
     JsonValue raw = json.parse_raw("{{\"name\":\"Grace\"}}") handle error:
         return error
     json.JsonTree tree = raw
     return tree_name(view tree)
-
 function raw_param_accepts_tree() returns string:
     json.JsonTree tree = json.json_tree_parse("{{\"name\":\"Lin\"}}") handle error:
         return error
     return raw_name(tree)
-
 function tree_param_accepts_raw() returns string:
     JsonValue raw = json.parse_raw("{{\"name\":\"Edsger\"}}") handle error:
         return error
     return tree_name(view raw)
-
 function raw_builtin_accepts_tree() returns string:
     json.JsonTree tree = json.json_tree_parse("{{\"name\":\"Barbara\"}}") handle error:
         return error
@@ -44,12 +36,10 @@ function raw_builtin_accepts_tree() returns string:
         return "missing name"
     return json.as_string(name) handle error:
         default error
-
 function raw_kind_accepts_tree() returns string:
     json.JsonTree tree = json.json_tree_parse("{{\"name\":\"Katherine\"}}") handle error:
         return error
     return json.kind(tree)
-
 function list_tree_to_raw_compatibility() returns string:
     json.JsonTree tree = json.json_tree_parse("\"Margaret\"") handle error:
         return error
@@ -59,7 +49,6 @@ function list_tree_to_raw_compatibility() returns string:
         return "missing"
     return json.as_string(raw) handle error:
         default error
-
 function optional_tree_to_raw_compatibility() returns string:
     json.JsonTree tree = json.json_tree_parse("\"Dorothy\"") handle error:
         return error
@@ -69,7 +58,6 @@ function optional_tree_to_raw_compatibility() returns string:
         return "none"
     return json.as_string(raw) handle error:
         default error
-
 function result_tree_to_raw_compatibility() returns string:
     json.JsonTree tree = json.json_tree_parse("\"Evelyn\"") handle error:
         return error
@@ -79,14 +67,157 @@ function result_tree_to_raw_compatibility() returns string:
         return error
     return json.as_string(raw) handle error:
         default error
-
+function list_raw_to_tree_compatibility() returns string:
+    JsonValue raw = json.parse_raw("\"Frances\"") handle error:
+        return error
+    list[JsonValue] raws = list(raw)
+    list[json.JsonTree] trees = raws
+    json.JsonTree tree = list.get[json.JsonTree](view trees, 0) handle:
+        return "missing"
+    return json.json_tree_as_string(view tree) handle error:
+        default error
+function optional_raw_to_tree_compatibility() returns string:
+    JsonValue raw = json.parse_raw("\"Mary\"") handle error:
+        return error
+    optional[JsonValue] maybe_raw = some(raw)
+    optional[json.JsonTree] maybe_tree = maybe_raw
+    json.JsonTree tree = maybe_tree handle:
+        return "none"
+    return json.json_tree_as_string(view tree) handle error:
+        default error
+function result_raw_to_tree_compatibility() returns string:
+    JsonValue raw = json.parse_raw("\"Rachel\"") handle error:
+        return error
+    result[JsonValue, string] raw_result = ok(raw)
+    result[json.JsonTree, string] tree_result = raw_result
+    json.JsonTree tree = tree_result handle error:
+        return error
+    return json.json_tree_as_string(view tree) handle error:
+        default error
+function map_tree_to_raw_compatibility() returns string:
+    json.JsonTree tree = json.json_tree_parse("\"Annie\"") handle error:
+        return error
+    map[string, json.JsonTree] trees = map("item": tree)
+    map[string, JsonValue] raws = trees
+    JsonValue raw = map.get[string, JsonValue](view raws, "item") handle:
+        return "missing"
+    return json.as_string(raw) handle error:
+        default error
+function set_tree_to_raw_compatibility() returns string:
+    json.JsonTree tree = json.json_tree_parse("\"Karen\"") handle error:
+        return error
+    mutable set[json.JsonTree] trees = set.new[json.JsonTree]()
+    trees = set.add[json.JsonTree](trees, tree)
+    set[JsonValue] raws = trees
+    list[JsonValue] raw_items = set.to_list[JsonValue](raws)
+    JsonValue raw = list.get[JsonValue](view raw_items, 0) handle:
+        return "missing"
+    return json.as_string(raw) handle error:
+        default error
+function secret_tree_to_raw_compatibility() returns string:
+    json.JsonTree tree = json.json_tree_parse("\"Hedy\"") handle error:
+        return error
+    secret[json.JsonTree] tree_secret = tree
+    secret[JsonValue] raw_secret = tree_secret
+    return secret.redact(raw_secret)
+function return_raw_from_tree() returns JsonValue:
+    json.JsonTree tree = json.json_tree_parse("\"Ida\"") handle error:
+        return json.JsonTree.string_value(error)
+    return tree
+function return_tree_from_raw() returns json.JsonTree:
+    JsonValue raw = json.parse_raw("\"Radia\"") handle error:
+        return json.JsonTree.string_value(error)
+    return raw
+function return_raw_from_tree_text() returns string:
+    return json.as_string(return_raw_from_tree()) handle error:
+        default error
+function return_tree_from_raw_text() returns string:
+    return json.json_tree_as_string(view return_tree_from_raw()) handle error:
+        default error
 function struct_field_accepts_tree() returns string:
     json.JsonTree tree = json.json_tree_parse("\"Joan\"") handle error:
         return error
     RawHolder holder = RawHolder(raw: tree)
     return json.as_string(holder.raw) handle error:
         default error
+function sample_object_tree() returns json.JsonTree:
+    json.JsonTree object_tree = json.json_tree_parse("{{\"name\":\"Barbara\",\"scores\":[3,5],\"active\":true,\"ratio\":2.5,\"missing\":null}}") handle error:
+        return json.JsonTree.string_value(error)
+    return object_tree
 
+function raw_index_accepts_tree() returns int64:
+    json.JsonTree object_tree = sample_object_tree()
+    JsonValue scores = json.field(object_tree, "scores") handle:
+        return 0
+    JsonValue second = json.index(scores, 1) handle:
+        return 0
+    return json.as_int64(second) handle error:
+        default 0
+
+function raw_array_length_accepts_tree() returns int64:
+    json.JsonTree object_tree = sample_object_tree()
+    JsonValue scores = json.field(object_tree, "scores") handle:
+        return 0
+    return json.array_length(scores) handle error:
+        default 0
+
+function raw_object_keys_accepts_tree() returns int64:
+    list[string] keys = json.object_keys(sample_object_tree()) handle error:
+        return 0
+    return list.length[string](view keys)
+
+function raw_as_string_accepts_tree() returns string:
+    json.JsonTree tree = json.json_tree_parse("\"Barbara\"") handle error:
+        return error
+    return json.as_string(tree) handle error:
+        default error
+
+function raw_as_bool_accepts_tree() returns bool:
+    json.JsonTree object_tree = sample_object_tree()
+    JsonValue active_raw = json.field(object_tree, "active") handle:
+        return false
+    return json.as_bool(active_raw) handle error:
+        default false
+
+function raw_as_float64_accepts_tree() returns float64:
+    json.JsonTree object_tree = sample_object_tree()
+    JsonValue ratio_raw = json.field(object_tree, "ratio") handle:
+        return 0.0
+    return json.as_float64(ratio_raw) handle error:
+        default 0.0
+
+function raw_is_null_accepts_tree() returns bool:
+    json.JsonTree object_tree = sample_object_tree()
+    JsonValue missing = json.field(object_tree, "missing") handle:
+        return false
+    return json.is_null(missing)
+
+function raw_is_object_accepts_tree() returns bool:
+    return json.is_object(sample_object_tree())
+
+function raw_is_array_accepts_tree() returns bool:
+    json.JsonTree array_tree = json.json_tree_parse("[1]") handle error:
+        return false
+    return json.is_array(array_tree)
+
+function raw_is_number_accepts_tree() returns bool:
+    json.JsonTree number_tree = json.json_tree_parse("5") handle error:
+        return false
+    return json.is_number(number_tree)
+
+function raw_is_bool_accepts_tree() returns bool:
+    json.JsonTree bool_tree = json.json_tree_parse("true") handle error:
+        return false
+    return json.is_bool(bool_tree)
+
+function raw_is_string_accepts_tree() returns bool:
+    json.JsonTree string_tree = json.json_tree_parse("\"Barbara\"") handle error:
+        return false
+    return json.is_string(string_tree)
+
+function raw_serialize_accepts_tree() returns bool:
+    string raw = json.serialize_raw(sample_object_tree())
+    return string.contains(raw, "Barbara")
 verify json_value_tree_compatibility:
     assert raw_from_tree_assignment() == "Ada"
     assert tree_from_raw_assignment() == "Grace"
@@ -97,4 +228,25 @@ verify json_value_tree_compatibility:
     assert list_tree_to_raw_compatibility() == "Margaret"
     assert optional_tree_to_raw_compatibility() == "Dorothy"
     assert result_tree_to_raw_compatibility() == "Evelyn"
+    assert list_raw_to_tree_compatibility() == "Frances"
+    assert optional_raw_to_tree_compatibility() == "Mary"
+    assert result_raw_to_tree_compatibility() == "Rachel"
+    assert map_tree_to_raw_compatibility() == "Annie"
+    assert set_tree_to_raw_compatibility() == "Karen"
+    assert secret_tree_to_raw_compatibility() == "***"
+    assert return_raw_from_tree_text() == "Ida"
+    assert return_tree_from_raw_text() == "Radia"
     assert struct_field_accepts_tree() == "Joan"
+    assert raw_index_accepts_tree() == 5
+    assert raw_array_length_accepts_tree() == 2
+    assert raw_object_keys_accepts_tree() == 5
+    assert raw_as_string_accepts_tree() == "Barbara"
+    assert raw_as_bool_accepts_tree() == true
+    assert raw_as_float64_accepts_tree() == 2.5
+    assert raw_is_null_accepts_tree() == true
+    assert raw_is_object_accepts_tree() == true
+    assert raw_is_array_accepts_tree() == true
+    assert raw_is_number_accepts_tree() == true
+    assert raw_is_bool_accepts_tree() == true
+    assert raw_is_string_accepts_tree() == true
+    assert raw_serialize_accepts_tree() == true

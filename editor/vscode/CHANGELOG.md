@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Document namespace `export` keyword highlighting support.
+
 ## 0.1.2
 
 - Add separate light-theme and dark-theme Jett file icons.

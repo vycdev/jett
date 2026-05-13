@@ -77,7 +77,7 @@ Then restart VS Code or run **Developer: Reload Window**.
 |---|---|---|
 | Comments | `comment.line.number-sign` | `# this is a comment` |
 | Control keywords | `keyword.control` | `function`, `if`, `return`, `for` |
-| Other keywords | `keyword.other` | `struct`, `enum`, `actor`, `verify` |
+| Other keywords | `keyword.other` | `struct`, `enum`, `export`, `verify` |
 | Built-in types | `storage.type` | `int64`, `string`, `list`, `bool` |
 | Capability types | `support.type` | `Stdout`, `Filesystem`, `Network` |
 | Boolean literals | `constant.language` | `true`, `false` |
