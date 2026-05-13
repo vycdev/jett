@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use rand::Rng;
 
-use jett_common::{FileId, is_json_raw_facade};
+use jett_common::{FileId, JsonRawFacadeArgs, is_json_raw_facade, json_raw_facade_spec};
 use jett_parser::ast::{
     ActorDef, BinOp, BitfieldDef, BitfieldFieldKind, Block, CallArg, EnumDef, Expr, FunctionDef,
     Ident, ImplementBlock, InterfaceDecl, Item, MachineDef, Module, Pattern, PipelineStep, Stmt,
@@ -5118,8 +5118,62 @@ impl Interpreter {
     /// Try to call a built-in function.  Returns `None` if the name does not
     /// match any built-in, allowing the caller to fall through to
     /// user-defined function lookup.
+    fn call_json_raw_facade_builtin(
+        &mut self,
+        name: &str,
+        args: &[Value],
+    ) -> Option<Result<Value, String>> {
+        let spec = json_raw_facade_spec(name)?;
+        match spec.args {
+            JsonRawFacadeArgs::RawString => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::String(_) => {
+                        Some(self.call_required_trusted_stdlib_function(name, spec.hook, args))
+                    }
+                    other => Some(Err(format!("{name} expects a string, got {other}"))),
+                }
+            }
+            JsonRawFacadeArgs::Tree => {
+                require_args!(name, 1, args);
+                if is_json_tree_value(&args[0]) {
+                    return Some(self.call_required_trusted_stdlib_function(name, spec.hook, args));
+                }
+                Some(Err(format!("{name} expects JsonValue, got {}", args[0])))
+            }
+            JsonRawFacadeArgs::TreeAndString => {
+                require_args!(name, 2, args);
+                if !is_json_tree_value(&args[0]) {
+                    return Some(Err(format!("{name} expects JsonValue, got {}", args[0])));
+                }
+                match &args[1] {
+                    Value::String(_) => {
+                        Some(self.call_required_trusted_stdlib_function(name, spec.hook, args))
+                    }
+                    other => Some(Err(format!("{name} expects a string key, got {other}"))),
+                }
+            }
+            JsonRawFacadeArgs::TreeAndInt64 => {
+                require_args!(name, 2, args);
+                if !is_json_tree_value(&args[0]) {
+                    return Some(Err(format!("{name} expects JsonValue, got {}", args[0])));
+                }
+                match &args[1] {
+                    Value::Int64(_) => {
+                        Some(self.call_required_trusted_stdlib_function(name, spec.hook, args))
+                    }
+                    other => Some(Err(format!("{name} expects an int64 index, got {other}"))),
+                }
+            }
+        }
+    }
+
     fn call_builtin(&mut self, name: &str, args: &[Value]) -> Option<Result<Value, String>> {
         if let Some(result) = self.call_bitfield_builtin(name, args) {
+            return Some(result);
+        }
+
+        if let Some(result) = self.call_json_raw_facade_builtin(name, args) {
             return Some(result);
         }
 
@@ -5151,202 +5205,6 @@ impl Interpreter {
             "secret.compare" => {
                 require_args!(name, 2, args);
                 Some(Ok(Value::Bool(args[0] == args[1])))
-            }
-
-            // -- JSON operations ---------------------------------------------
-            "json.parse_raw" => {
-                require_args!(name, 1, args);
-                match &args[0] {
-                    Value::String(_) => Some(self.call_required_trusted_stdlib_function(
-                        name,
-                        "json.json_tree_parse",
-                        args,
-                    )),
-                    other => Some(Err(format!("json.parse_raw expects a string, got {other}"))),
-                }
-            }
-
-            "json.serialize_raw" => {
-                require_args!(name, 1, args);
-                if is_json_tree_value(&args[0]) {
-                    return Some(self.call_required_trusted_stdlib_function(
-                        name,
-                        "json.json_tree_serialize",
-                        args,
-                    ));
-                }
-                Some(Err(format!(
-                    "json.serialize_raw expects JsonValue, got {}",
-                    args[0]
-                )))
-            }
-
-            "json.kind" => {
-                require_args!(name, 1, args);
-                if is_json_tree_value(&args[0]) {
-                    return Some(self.call_required_trusted_stdlib_function(
-                        name,
-                        "json.json_tree_kind",
-                        args,
-                    ));
-                }
-                Some(Err(format!("json.kind expects JsonValue, got {}", args[0])))
-            }
-
-            "json.is_null" | "json.is_bool" | "json.is_number" | "json.is_string"
-            | "json.is_array" | "json.is_object" => {
-                require_args!(name, 1, args);
-                if is_json_tree_value(&args[0]) {
-                    let hook = match name {
-                        "json.is_null" => "json.json_tree_is_null",
-                        "json.is_bool" => "json.json_tree_is_bool",
-                        "json.is_number" => "json.json_tree_is_number",
-                        "json.is_string" => "json.json_tree_is_string",
-                        "json.is_array" => "json.json_tree_is_array",
-                        "json.is_object" => "json.json_tree_is_object",
-                        _ => unreachable!(),
-                    };
-                    return Some(self.call_required_trusted_stdlib_function(name, hook, args));
-                }
-                Some(Err(format!("{name} expects JsonValue, got {}", args[0])))
-            }
-
-            "json.field" => {
-                require_args!(name, 2, args);
-                if is_json_tree_value(&args[0]) {
-                    match &args[1] {
-                        Value::String(_) => {
-                            return Some(self.call_required_trusted_stdlib_function(
-                                name,
-                                "json.json_tree_field",
-                                args,
-                            ));
-                        }
-                        other => {
-                            return Some(Err(format!(
-                                "json.field expects a string key, got {other}"
-                            )));
-                        }
-                    }
-                }
-                Some(Err(format!(
-                    "json.field expects JsonValue, got {}",
-                    args[0]
-                )))
-            }
-
-            "json.index" => {
-                require_args!(name, 2, args);
-                if is_json_tree_value(&args[0]) {
-                    match &args[1] {
-                        Value::Int64(_) => {
-                            return Some(self.call_required_trusted_stdlib_function(
-                                name,
-                                "json.json_tree_index",
-                                args,
-                            ));
-                        }
-                        other => {
-                            return Some(Err(format!(
-                                "json.index expects an int64 index, got {other}"
-                            )));
-                        }
-                    }
-                }
-                Some(Err(format!(
-                    "json.index expects JsonValue, got {}",
-                    args[0]
-                )))
-            }
-
-            "json.array_length" => {
-                require_args!(name, 1, args);
-                if is_json_tree_value(&args[0]) {
-                    return Some(self.call_required_trusted_stdlib_function(
-                        name,
-                        "json.json_tree_array_length",
-                        args,
-                    ));
-                }
-                Some(Err(format!(
-                    "json.array_length expects JsonValue, got {}",
-                    args[0]
-                )))
-            }
-
-            "json.object_keys" => {
-                require_args!(name, 1, args);
-                if is_json_tree_value(&args[0]) {
-                    return Some(self.call_required_trusted_stdlib_function(
-                        name,
-                        "json.json_tree_object_keys",
-                        args,
-                    ));
-                }
-                Some(Err(format!(
-                    "json.object_keys expects JsonValue, got {}",
-                    args[0]
-                )))
-            }
-
-            "json.as_string" => {
-                require_args!(name, 1, args);
-                if is_json_tree_value(&args[0]) {
-                    return Some(self.call_required_trusted_stdlib_function(
-                        name,
-                        "json.json_tree_as_string",
-                        args,
-                    ));
-                }
-                Some(Err(format!(
-                    "json.as_string expects JsonValue, got {}",
-                    args[0]
-                )))
-            }
-
-            "json.as_int64" => {
-                require_args!(name, 1, args);
-                if is_json_tree_value(&args[0]) {
-                    return Some(self.call_required_trusted_stdlib_function(
-                        name,
-                        "json.json_tree_as_int64",
-                        args,
-                    ));
-                }
-                Some(Err(format!(
-                    "json.as_int64 expects JsonValue, got {}",
-                    args[0]
-                )))
-            }
-
-            "json.as_float64" => {
-                require_args!(name, 1, args);
-                if is_json_tree_value(&args[0]) {
-                    return Some(self.call_required_trusted_stdlib_function(
-                        name,
-                        "json.json_tree_as_float64",
-                        args,
-                    ));
-                }
-                Some(Err(format!(
-                    "json.as_float64 expects JsonValue, got {}",
-                    args[0]
-                )))
-            }
-
-            "json.as_bool" => {
-                require_args!(name, 1, args);
-                if is_json_tree_value(&args[0]) {
-                    return Some(self.call_required_trusted_stdlib_function(
-                        name,
-                        "json.json_tree_as_bool",
-                        args,
-                    ));
-                }
-                Some(Err(format!(
-                    "json.as_bool expects JsonValue, got {}",
-                    args[0]
-                )))
             }
 
             // -- Random operations (stdlib/random.jett) -----------------------
