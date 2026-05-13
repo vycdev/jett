@@ -156,7 +156,10 @@ scaffold alongside its legacy string maps. The typechecker seeds canonical
 be shared through bound type-name aliases once a checked name is associated with
 that `TypeId`. The comptime interpreter still calls the existing string-shaped
 lookup API, but that API can now resolve through the canonical maps when a
-binding exists.
+binding exists. For field-bearing checked types, the interpreter no longer
+silently reconstructs field, bitfield, or enum variant metadata from AST when a
+checked `TypeInfo` says the owner should have that metadata but the checked
+table is missing.
 
 ### Stage 5: Remove AST Metadata Fallbacks
 
@@ -188,6 +191,6 @@ Concrete follow-up:
 1. Continue replacing display-string-only metadata insertion with canonical
    `TypeId` bindings where the typechecker has an unambiguous checked owner.
 2. Keep no-metadata interpreter mode working for unit tests and bootstrap.
-3. Once generic instantiations have canonical checked records, treat missing
-   checked metadata for reflected owners as an internal metadata error instead
-   of falling back silently.
+3. Extend the same "checked owner metadata must be complete" rule to remaining
+   value-sensitive reflection operations once their canonical owner keys are
+   fully seeded.
