@@ -257,8 +257,10 @@ Add tests before each behavior change:
   stdlib alias.
 - **Reflection metadata:** if `JsonValue` is an alias, `type.info[JsonValue]`
   must not surprise existing code.
-- **View iteration:** native raw serialization over `view JsonTree` needs a
-  principled solution for iterating viewed lists/maps.
+- **View iteration:** native raw serialization over `view JsonTree` now uses
+  viewed list/map iteration; the remaining question is whether the broader
+  language should make view-parameter calls implicitly non-consuming for
+  ordinary source functions, or keep requiring explicit `view` at call sites.
 - **Performance:** the self-hosted parser is correctness-first today. Native
   backends can optimize later, but we should avoid introducing needless
   materialization in the language semantics.
