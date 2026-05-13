@@ -231,6 +231,14 @@ run_pass_fixture!(run_pass_comptime_type_bind, "comptime_type_bind.jett");
 run_pass_fixture!(run_pass_type_reflection, "type_reflection.jett");
 run_pass_fixture!(run_pass_type_info_reflection, "type_info_reflection.jett");
 run_pass_fixture!(
+    run_pass_reflection_type_id_duplicate_generic_owners,
+    "reflection_type_id_duplicate_generic_owners.jett"
+);
+run_pass_fixture!(
+    run_pass_reflection_type_id_duplicate_named_owners,
+    "reflection_type_id_duplicate_named_owners.jett"
+);
+run_pass_fixture!(
     run_pass_type_construction_builder,
     "type_construction_builder.jett"
 );
