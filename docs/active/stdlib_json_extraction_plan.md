@@ -212,8 +212,10 @@ bridge spoofing, not helper visibility.
 6. Continue hardening the self-hosted `JsonTree` parser. Common malformed-input
    diagnostics are pinned for unterminated strings/arrays/objects, trailing
    characters, mismatched delimiters, bad number forms, bad literals, and
-   invalid escapes; the remaining question is how far `JsonTree` should go
-   toward replacing the raw `JsonValue` compatibility surface.
+   invalid escapes. Valid JSON escapes now include quote, backslash, slash,
+   backspace, form feed, newline, carriage return, tab, and unicode escapes.
+   The remaining question is how far `JsonTree` should go toward replacing the
+   raw `JsonValue` compatibility surface.
 7. Decide whether `JsonValue` becomes a source-level type alias/replacement or
    remains a compiler-recognized compatibility spelling. The current
    implementation seeds a compiler-owned legacy compatibility alias from

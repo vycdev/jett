@@ -68,6 +68,12 @@ function json_stdlib_quote(raw: string) returns string:
     string escaped = bytes.to_string(output) handle error:
         default error
     return "\"{escaped}\""
+function json_stdlib_string_from_hex(hex: string) returns result[string, string]:
+    bytes raw = bytes.from_hex(hex) handle error:
+        return fail(error)
+    string decoded = bytes.to_string(raw) handle error:
+        return fail(error)
+    return ok(decoded)
 mutual:
     export function json_tree_parse(raw: string) returns result[JsonTree, string]
     function json_tree_parse_value(raw: string) returns result[JsonTree, string]
@@ -608,6 +614,10 @@ function json_tree_escape_string(byte: int64) returns result[string, string]:
         return ok("\\")
     if byte == 47:
         return ok("/")
+    if byte == 98:
+        return json_stdlib_string_from_hex("08")
+    if byte == 102:
+        return json_stdlib_string_from_hex("0c")
     if byte == 110:
         return ok("\n")
     if byte == 114:
