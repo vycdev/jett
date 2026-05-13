@@ -38,12 +38,14 @@ about: two names, two traversal surfaces, one conceptual data model.
   `JsonTree`.
 - Public typed `json.parse[T]` now routes through `JsonTree`, including the
   legacy-compatible `json.parse[JsonValue]` branch.
-- `json.parse_raw` keeps its public `JsonValue` signature but delegates to the
-  trusted stdlib `json_tree_parse` hook.
+- `json.parse_raw` now prefers a public `JsonTree` signature whenever the
+  bundled stdlib type is loaded; `JsonValue` code still compiles through the
+  legacy compatibility spelling.
 - `json.serialize_raw`, `json.kind`, `json.field`, `json.index`, scalar casts,
-  `json.array_length`, and `json.object_keys` dispatch native `JsonTree`
-  runtime values through exported stdlib facade wrappers backed by
-  `json_tree_*` hooks. The Rust builtin cases remain as bootstrap fallbacks.
+  `json.array_length`, and `json.object_keys` are `JsonTree`-first facade
+  signatures with `JsonValue` compatibility. Runtime values dispatch through
+  exported stdlib facade wrappers backed by `json_tree_*` hooks. The builtin
+  dispatcher remains only as a bootstrap/no-stdlib fallback around those hooks.
 - `jett_comptime` no longer has `Value::Json` or a `serde_json` dependency.
 - The type system still reports `JsonValue` as a built-in primitive for
   reflection compatibility, but it seeds an explicit legacy compatibility alias
@@ -70,9 +72,10 @@ string text = json.as_string(name) handle error:
 ```
 
 The implementation under that spelling has changed from Rust-backed
-`serde_json::Value` to native `JsonTree`. The source-level migration can happen
-later, with docs preferring `JsonTree` once the legacy alias/prelude story is
-settled enough for users.
+`serde_json::Value` to native `JsonTree`. New raw facade signatures should
+prefer `JsonTree`; the remaining source-level migration question is how and
+when the unqualified `JsonValue` compatibility name moves into a real
+exported/prelude alias.
 
 ## Target API Shape
 
@@ -173,14 +176,15 @@ working during the transition.
 Status: implemented. Exported stdlib facade wrappers now exist for
 `parse_raw`, `serialize_raw`, `kind`, `field`, `index`, the shape predicates,
 length/key helpers, and scalar casts. The interpreter prefers those trusted
-stdlib wrappers when they are registered, and keeps the Rust builtin cases only
-as bootstrap fallbacks. The public typed `json.parse[JsonValue]` compatibility
-branch also calls `json_tree_parse` directly instead of bouncing through the raw
-builtin surface. The shared JSON facade name set now lives in `jett_common`, so
-runtime dispatch and ownership's implicit-view rule use one policy list for raw
-facades and view-first `json_tree_*` accessors. The typechecker raw facade
-signatures now prefer `json.JsonTree` when that stdlib type is present, falling
-back to the legacy `JsonValue` primitive only for no-stdlib/bootstrap contexts.
+stdlib wrappers when they are registered, and the remaining builtin path is a
+bootstrap/no-stdlib dispatcher around the same trusted hooks. The public typed
+`json.parse[JsonValue]` compatibility branch also calls `json_tree_parse`
+directly instead of bouncing through the raw builtin surface. The shared JSON
+facade name set now lives in `jett_common`, so runtime dispatch and ownership's
+implicit-view rule use one policy list for raw facades and view-first
+`json_tree_*` accessors. The typechecker raw facade signatures now prefer
+`json.JsonTree` when that stdlib type is present, falling back to the legacy
+`JsonValue` primitive only for no-stdlib/bootstrap contexts.
 
 ### 3. Change Runtime Representation
 
@@ -236,6 +240,8 @@ After parity tests pass with native representation:
 
 - Done: remove `serde_json::Value` from `jett_comptime::value::Value`.
 - Done: remove Rust-backed `json.parse_raw` and raw accessor implementations.
+- Done: keep runtime raw facade fallback as a trusted stdlib hook dispatcher
+  rather than a separate Rust JSON implementation.
 - Keep Rust only for tests/dev tooling if useful, not as language semantics.
 
 ## Required Tests

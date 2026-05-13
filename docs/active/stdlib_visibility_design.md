@@ -5,10 +5,11 @@ This note records the visibility work that blocks a fully ordinary
 
 ## Problem
 
-Jett currently has namespaces, but it does not yet have public/private exports.
-The interpreter now has a narrow trusted-source identity for functions parsed
-from compiler-shipped stdlib files, but that identity is not yet a full module
-visibility system.
+Jett now has namespaces, explicit `export` declarations, and private-by-default
+visibility inside namespaces. The interpreter also has a narrow trusted-source
+identity for functions parsed from compiler-shipped stdlib files. That gives the
+stdlib a workable public/private surface, but it is not yet a full module,
+import, or prelude system.
 
 That matters for JSON because the module needs both:
 
@@ -34,17 +35,17 @@ Two concepts must stay separate:
 Do not make trusted origin a source-level keyword. Trust is a property of how a
 module was loaded by the compiler, not a promise a user file can write.
 
-## Current Namespace Leakage
+## Namespace Leakage Removed
 
 Namespaced declarations are registered under qualified names, for example
-`json.parse`, but they are also staged with a flat alias in several places so
-unqualified calls inside the same namespace keep working.
+`json.parse`. Same-namespace shorthand now resolves through lexical namespace
+context instead of global flat aliases.
 
-That is useful during bootstrap, but it is not the long-term export model:
+The old bootstrap leakage was useful early on, but it is not the export model:
 
-- a helper from `namespace json` can appear as an unqualified global name,
-- helpers are public by convention rather than by declaration,
-- helper visibility is not represented in the language,
+- a helper from `namespace json` should not appear as an unqualified global
+  name outside that namespace,
+- helper visibility is represented by the presence or absence of `export`,
 - trusted origin currently exists only as interpreter staging metadata, not as a
   source-level visibility or export rule.
 
@@ -96,8 +97,7 @@ function json_parse_reflected[T](raw: string) returns result[T, string]:
     ...
 ```
 
-Open syntax decision: whether `export` prefixes declarations, or whether a
-namespace has an explicit export list.
+This syntax is now implemented with `export` prefixing each public declaration.
 
 ### 3. Separate Trusted Stdlib Registry
 
@@ -119,7 +119,9 @@ Use two stages, with source visibility and compiler trust kept orthogonal:
 1. Keep the trusted stdlib identity for compiler-owned bridge hooks. Done for
    the interpreter; future codegen should use the same notion.
 2. Add explicit exports, probably private-by-default within namespaces, before
-   treating `stdlib/json.jett` as a clean public module.
+   treating `stdlib/json.jett` as a clean public module. Done for the current
+   parser/resolver/typechecker/interpreter surface; a full import/prelude model
+   remains separate.
 
 Do not remove compiler-owned JSON policy checks until both stages exist.
 
@@ -151,8 +153,9 @@ For now:
 - helper names remain prefixed to reduce collisions, but that is convention,
   not real privacy.
 
-Before changing the hook names into ordinary public wrappers, implement
-exports/private helpers.
+Before removing compiler-owned JSON policy gates, finish the broader
+module/import/prelude story and decide how trusted private hooks should be
+represented outside the current interpreter registry.
 
 ## Current Implementation Status
 

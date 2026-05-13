@@ -7,8 +7,7 @@ The important conclusion is that JSON itself is no longer the main blocker.
 Reflection can now read fields, construct structs/bitfields/enums, inspect type
 arguments, use structured kind and primitive tags, and walk native `JsonTree`
 values. `JsonValue` remains only as the legacy compatibility spelling for that
-tree.
-The blocker is the module and namespace path that would let ordinary `.jett`
+tree. The blocker is the module and namespace path that would let ordinary `.jett`
 stdlib code own the public `json.*` API.
 
 ## Current Architecture
@@ -95,10 +94,11 @@ delegate to reflected stdlib hook implementations only when the current hook
 registry entries came from compiler-shipped stdlib files. The old typed Rust
 fallback paths for public parse/serialize have been removed; Rust-backed paths
 have also been removed from raw JSON execution in `jett_comptime`. Public
-`json.parse_raw` now delegates to the trusted self-hosted `JsonTree` parser, and
-raw helper calls dispatch native `JsonTree` runtime values through trusted
-stdlib facade wrappers backed by `json_tree_*` hooks. The Rust builtin cases
-remain as bootstrap fallbacks for direct interpreter use without loaded stdlib.
+`json.parse_raw` now delegates to the trusted self-hosted `JsonTree` parser,
+and raw helper calls dispatch native `JsonTree` runtime values through trusted
+stdlib facade wrappers backed by `json_tree_*` hooks. The remaining builtin raw
+facade path is a bootstrap/no-stdlib dispatcher around those hooks, not a
+separate Rust JSON implementation.
 
 ## Blockers
 
@@ -243,11 +243,11 @@ functions should probably use `result` while format policy is still evolving.
 - Should `json.serialize[T]` stay a compiler-checked secret exposure boundary
   even after its implementation body moves to stdlib code?
 - Should unknown object fields be ignored, rejected, or configurable?
-- Should `json.field` and `json.index` keep returning `optional[JsonValue]`, or
+- Should `json.field` and `json.index` keep returning `optional[JsonTree]`, or
   should wrong-shape access be distinguishable from absence?
 - What is the stable external shape for enums, bitfields, bytes, floats, sets,
   and maps?
-- How should stdlib helper visibility work before the language has a general
-  `private` rule and a full import/prelude model?
+- How should stdlib helper visibility evolve beyond namespace-private
+  `export` syntax, especially once a full import/prelude model exists?
 - How much abstraction is allowed around trusted reflection loops before
   `comptime type Field = field.type_info:` loses provenance?

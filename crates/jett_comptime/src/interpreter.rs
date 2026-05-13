@@ -5139,12 +5139,12 @@ impl Interpreter {
                 if is_json_tree_value(&args[0]) {
                     return Some(self.call_required_trusted_stdlib_function(name, spec.hook, args));
                 }
-                Some(Err(format!("{name} expects JsonValue, got {}", args[0])))
+                Some(Err(format!("{name} expects JsonTree, got {}", args[0])))
             }
             JsonRawFacadeArgs::TreeAndString => {
                 require_args!(name, 2, args);
                 if !is_json_tree_value(&args[0]) {
-                    return Some(Err(format!("{name} expects JsonValue, got {}", args[0])));
+                    return Some(Err(format!("{name} expects JsonTree, got {}", args[0])));
                 }
                 match &args[1] {
                     Value::String(_) => {
@@ -5156,7 +5156,7 @@ impl Interpreter {
             JsonRawFacadeArgs::TreeAndInt64 => {
                 require_args!(name, 2, args);
                 if !is_json_tree_value(&args[0]) {
-                    return Some(Err(format!("{name} expects JsonValue, got {}", args[0])));
+                    return Some(Err(format!("{name} expects JsonTree, got {}", args[0])));
                 }
                 match &args[1] {
                     Value::Int64(_) => {
