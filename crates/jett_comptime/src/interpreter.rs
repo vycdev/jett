@@ -8869,6 +8869,14 @@ mod tests {
         }
     }
 
+    fn json_tree_null() -> Value {
+        Value::Enum {
+            type_name: "json.JsonTree".to_string(),
+            variant: "null".to_string(),
+            fields: Vec::new(),
+        }
+    }
+
     #[test]
     fn type_info_uses_checked_reflection_metadata_when_available() {
         let mut metadata = ReflectionMetadata::new();
@@ -10701,6 +10709,57 @@ mod tests {
             .unwrap();
 
         assert_eq!(value, Value::String("trusted tree".to_string()));
+    }
+
+    #[test]
+    fn trusted_public_raw_facade_wrapper_runs_before_builtin_fallback() {
+        let mut interp = Interpreter::new();
+        let mut public_wrapper = func_def(
+            "kind",
+            vec![("value", "JsonTree")],
+            block(vec![return_stmt(string("public wrapper"))]),
+        );
+        public_wrapper.span = stdlib_sp();
+        interp.register_function_in_namespace(Some("json"), &public_wrapper);
+
+        let mut trusted_hook = func_def(
+            "json_tree_kind",
+            vec![("value", "JsonTree")],
+            block(vec![return_stmt(string("hook fallback"))]),
+        );
+        trusted_hook.span = stdlib_sp();
+        interp.register_function_in_namespace(Some("json"), &trusted_hook);
+
+        let value = interp
+            .call_function("json.kind", vec![json_tree_null()])
+            .unwrap();
+
+        assert_eq!(value, Value::String("public wrapper".to_string()));
+    }
+
+    #[test]
+    fn untrusted_raw_facade_wrapper_cannot_spoof_trusted_hook() {
+        let mut interp = Interpreter::new();
+        let mut trusted_hook = func_def(
+            "json_tree_kind",
+            vec![("value", "JsonTree")],
+            block(vec![return_stmt(string("hook fallback"))]),
+        );
+        trusted_hook.span = stdlib_sp();
+        interp.register_function_in_namespace(Some("json"), &trusted_hook);
+
+        let fake_wrapper = func_def(
+            "kind",
+            vec![("value", "JsonTree")],
+            block(vec![return_stmt(string("fake wrapper"))]),
+        );
+        interp.register_function_named("json.kind", &fake_wrapper, false);
+
+        let value = interp
+            .call_function("json.kind", vec![json_tree_null()])
+            .unwrap();
+
+        assert_eq!(value, Value::String("hook fallback".to_string()));
     }
 
     #[test]
