@@ -3,7 +3,9 @@ use std::sync::Arc;
 
 use rand::Rng;
 
-use jett_common::{FileId, JsonRawFacadeArgs, is_json_raw_facade, json_raw_facade_spec};
+use jett_common::{
+    FileId, JsonRawFacadeArgs, is_json_raw_facade, json_public_bridge_spec, json_raw_facade_spec,
+};
 use jett_parser::ast::{
     ActorDef, BinOp, BitfieldDef, BitfieldFieldKind, Block, CallArg, EnumDef, Expr, FunctionDef,
     Ident, ImplementBlock, InterfaceDecl, Item, MachineDef, Module, Pattern, PipelineStep, Stmt,
@@ -2685,22 +2687,25 @@ impl Interpreter {
                 if let Some(err) = check_args(name, 1, args) {
                     return Some(err);
                 }
-                if self.has_trusted_stdlib_function("json.json_parse_reflected") {
+                let hook = json_public_bridge_spec(name)
+                    .expect("json.parse should have a public bridge spec")
+                    .hook;
+                if self.has_trusted_stdlib_function(hook) {
                     return Some(self.call_user_function_with_type_args(
-                        "json.json_parse_reflected",
+                        hook,
                         type_args,
                         args.to_vec(),
                     ));
                 }
-                Err(
-                    "json.parse requires trusted stdlib hook 'json.json_parse_reflected'"
-                        .to_string(),
-                )
+                Err(format!("{name} requires trusted stdlib hook '{hook}'"))
             }
             "json.serialize" | "json.serialize_public" => {
                 if let Some(err) = check_args(name, 1, args) {
                     return Some(err);
                 }
+                let hook = json_public_bridge_spec(name)
+                    .expect("json.serialize bridge should have a public bridge spec")
+                    .hook;
                 if name == "json.serialize"
                     && self
                         .checked_type_has_secret(&ty)
@@ -2711,29 +2716,13 @@ impl Interpreter {
                         type_expr_display(&ty)
                     )));
                 }
-                if name == "json.serialize"
-                    && self.has_trusted_stdlib_function("json.json_serialize_reflected")
-                {
+                if self.has_trusted_stdlib_function(hook) {
                     return Some(self.call_user_function_with_type_args(
-                        "json.json_serialize_reflected",
+                        hook,
                         type_args,
                         args.to_vec(),
                     ));
                 }
-                if name == "json.serialize_public"
-                    && self.has_trusted_stdlib_function("json.json_serialize_public_reflected")
-                {
-                    return Some(self.call_user_function_with_type_args(
-                        "json.json_serialize_public_reflected",
-                        type_args,
-                        args.to_vec(),
-                    ));
-                }
-                let hook = if name == "json.serialize" {
-                    "json.json_serialize_reflected"
-                } else {
-                    "json.json_serialize_public_reflected"
-                };
                 Err(format!("{name} requires trusted stdlib hook '{hook}'"))
             }
             _ => return None,

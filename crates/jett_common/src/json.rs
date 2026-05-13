@@ -14,6 +14,33 @@ pub struct JsonRawFacadeSpec {
     pub args: JsonRawFacadeArgs,
 }
 
+/// Shared policy for public typed JSON bridges with compiler-owned checks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JsonPublicBridgeSpec {
+    pub hook: &'static str,
+}
+
+const JSON_PUBLIC_BRIDGE_SPECS: &[(&str, JsonPublicBridgeSpec)] = &[
+    (
+        "json.parse",
+        JsonPublicBridgeSpec {
+            hook: "json.json_parse_reflected",
+        },
+    ),
+    (
+        "json.serialize",
+        JsonPublicBridgeSpec {
+            hook: "json.json_serialize_reflected",
+        },
+    ),
+    (
+        "json.serialize_public",
+        JsonPublicBridgeSpec {
+            hook: "json.json_serialize_public_reflected",
+        },
+    ),
+];
+
 const JSON_RAW_FACADE_SPECS: &[(&str, JsonRawFacadeSpec)] = &[
     (
         "json.parse_raw",
@@ -136,6 +163,13 @@ const JSON_RAW_FACADE_SPECS: &[(&str, JsonRawFacadeSpec)] = &[
     ),
 ];
 
+/// Returns the trusted stdlib hook for a compiler-policy JSON bridge.
+pub fn json_public_bridge_spec(name: &str) -> Option<JsonPublicBridgeSpec> {
+    JSON_PUBLIC_BRIDGE_SPECS
+        .iter()
+        .find_map(|(facade, spec)| (*facade == name).then_some(*spec))
+}
+
 /// Returns the trusted stdlib hook and argument shape for a raw JSON facade.
 pub fn json_raw_facade_spec(name: &str) -> Option<JsonRawFacadeSpec> {
     JSON_RAW_FACADE_SPECS
@@ -193,6 +227,29 @@ mod tests {
             })
         );
         assert_eq!(json_raw_facade_spec("json.json_tree_parse"), None);
+    }
+
+    #[test]
+    fn public_bridge_specs_pin_trusted_hooks() {
+        assert_eq!(
+            json_public_bridge_spec("json.parse"),
+            Some(JsonPublicBridgeSpec {
+                hook: "json.json_parse_reflected",
+            })
+        );
+        assert_eq!(
+            json_public_bridge_spec("json.serialize"),
+            Some(JsonPublicBridgeSpec {
+                hook: "json.json_serialize_reflected",
+            })
+        );
+        assert_eq!(
+            json_public_bridge_spec("json.serialize_public"),
+            Some(JsonPublicBridgeSpec {
+                hook: "json.json_serialize_public_reflected",
+            })
+        );
+        assert_eq!(json_public_bridge_spec("json.parse_raw"), None);
     }
 
     #[test]
