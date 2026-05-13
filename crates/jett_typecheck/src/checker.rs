@@ -111,10 +111,16 @@ struct TypeChecker<'a> {
     monomorphized_structs: HashMap<(String, Vec<TypeId>), TypeId>,
     /// Checked reflection field snapshots keyed by the public type spelling.
     reflection_fields: HashMap<String, Vec<ReflectionFieldInfo>>,
+    /// Checked reflection field snapshots keyed by the canonical owner TypeId.
+    reflection_fields_by_id: HashMap<TypeId, (String, Vec<ReflectionFieldInfo>)>,
     /// Checked bitfield layout snapshots keyed by the public type spelling.
     reflection_bitfields: HashMap<String, ReflectionBitfieldInfo>,
+    /// Checked bitfield layout snapshots keyed by the canonical owner TypeId.
+    reflection_bitfields_by_id: HashMap<TypeId, (String, ReflectionBitfieldInfo)>,
     /// Checked enum variant snapshots keyed by the public type spelling.
     reflection_variants: HashMap<String, Vec<ReflectionVariantInfo>>,
+    /// Checked enum variant snapshots keyed by the canonical owner TypeId.
+    reflection_variants_by_id: HashMap<TypeId, (String, Vec<ReflectionVariantInfo>)>,
     /// Active type variable substitution during monomorphization (type_param_name → TypeId).
     type_var_subst: HashMap<String, TypeId>,
     /// Trusted field types currently available from direct `type.fields[T]()` loops.
@@ -168,8 +174,11 @@ impl<'a> TypeChecker<'a> {
             generic_struct_templates: HashMap::new(),
             monomorphized_structs: HashMap::new(),
             reflection_fields: HashMap::new(),
+            reflection_fields_by_id: HashMap::new(),
             reflection_bitfields: HashMap::new(),
+            reflection_bitfields_by_id: HashMap::new(),
             reflection_variants: HashMap::new(),
+            reflection_variants_by_id: HashMap::new(),
             type_var_subst: HashMap::new(),
             reflected_field_type_scopes: Vec::new(),
             reflected_type_info_scopes: Vec::new(),
@@ -827,6 +836,18 @@ impl<'a> TypeChecker<'a> {
                     arg_infos,
                 ));
             }
+        }
+
+        for (type_id, (type_name, fields)) in self.reflection_fields_by_id.clone() {
+            metadata.insert_type_fields_for_id(type_id, type_name, fields);
+        }
+
+        for (type_id, (type_name, bitfield)) in self.reflection_bitfields_by_id.clone() {
+            metadata.insert_bitfield_for_id(type_id, type_name, bitfield);
+        }
+
+        for (type_id, (type_name, variants)) in self.reflection_variants_by_id.clone() {
+            metadata.insert_type_variants_for_id(type_id, type_name, variants);
         }
 
         for (type_name, fields) in self.reflection_fields.clone() {
@@ -3160,7 +3181,9 @@ impl<'a> TypeChecker<'a> {
         let reflection_fields =
             self.reflection_fields_for_struct_def(def, namespace, fields.as_slice());
         self.reflection_fields
-            .insert(canonical_name.clone(), reflection_fields);
+            .insert(canonical_name.clone(), reflection_fields.clone());
+        self.reflection_fields_by_id
+            .insert(ty, (canonical_name.clone(), reflection_fields));
         let methods = def
             .methods
             .iter()
@@ -3325,9 +3348,13 @@ impl<'a> TypeChecker<'a> {
         let reflection_bitfield =
             self.reflection_bitfield_info_for_def(def, namespace, fields.as_slice());
         self.reflection_fields
-            .insert(canonical_name.clone(), reflection_fields);
+            .insert(canonical_name.clone(), reflection_fields.clone());
         self.reflection_bitfields
-            .insert(canonical_name.clone(), reflection_bitfield);
+            .insert(canonical_name.clone(), reflection_bitfield.clone());
+        self.reflection_fields_by_id
+            .insert(ty, (canonical_name.clone(), reflection_fields));
+        self.reflection_bitfields_by_id
+            .insert(ty, (canonical_name.clone(), reflection_bitfield));
 
         self.interner.update_bitfield(
             bid,
@@ -3406,7 +3433,9 @@ impl<'a> TypeChecker<'a> {
         let reflection_variants =
             self.reflection_variants_for_enum_def(def, namespace, variants.as_slice());
         self.reflection_variants
-            .insert(canonical_name.clone(), reflection_variants);
+            .insert(canonical_name.clone(), reflection_variants.clone());
+        self.reflection_variants_by_id
+            .insert(ty, (canonical_name.clone(), reflection_variants));
 
         self.interner.update_enum(
             eid,
@@ -6314,7 +6343,10 @@ impl<'a> TypeChecker<'a> {
         });
         let ty = self.interner.intern(Type::Struct(sid));
 
-        self.reflection_fields.insert(mono_name, reflection_fields);
+        self.reflection_fields
+            .insert(mono_name.clone(), reflection_fields.clone());
+        self.reflection_fields_by_id
+            .insert(ty, (mono_name, reflection_fields));
         self.monomorphized_structs.insert(cache_key, ty);
         ty
     }

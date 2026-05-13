@@ -152,14 +152,14 @@ require a stable checked representation of `Box[string]` as more than
 
 Status: started. `ReflectionMetadata` now has a canonical `TypeId` lookup
 scaffold alongside its legacy string maps. The typechecker seeds canonical
-`TypeInfo` entries by checked `TypeId`, and field/bitfield/variant metadata can
-be shared through bound type-name aliases once a checked name is associated with
-that `TypeId`. The comptime interpreter still calls the existing string-shaped
-lookup API, but that API can now resolve through the canonical maps when a
-binding exists. For field-bearing checked types, the interpreter no longer
-silently reconstructs field, bitfield, or enum variant metadata from AST when a
-checked `TypeInfo` says the owner should have that metadata but the checked
-table is missing.
+`TypeInfo` entries by checked `TypeId`, and the checker now stores
+struct/generic-struct fields, bitfield layout metadata, and enum variants by
+the known owner `TypeId` at the construction sites. The string-shaped
+`ReflectionMetadata` API remains as a compatibility facade, but owner metadata
+lookups can resolve through canonical id maps after a name is bound. For
+field-bearing checked types, the interpreter no longer silently reconstructs
+field, bitfield, or enum variant metadata from AST when a checked `TypeInfo`
+says the owner should have that metadata but the checked table is missing.
 
 ### Stage 5: Remove AST Metadata Fallbacks
 
@@ -188,8 +188,9 @@ masking missing owner metadata with AST reconstruction."
 
 Concrete follow-up:
 
-1. Continue replacing display-string-only metadata insertion with canonical
-   `TypeId` bindings where the typechecker has an unambiguous checked owner.
+1. Audit the remaining `ReflectionMetadata` string-only paths. Simple aliases
+   should stay string-only unless they get their own source-level identity;
+   refinements and canonical owners should stay id-bound.
 2. Keep no-metadata interpreter mode working for unit tests and bootstrap.
 3. Extend the same "checked owner metadata must be complete" rule to remaining
    value-sensitive reflection operations once their canonical owner keys are
