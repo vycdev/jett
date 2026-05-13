@@ -176,6 +176,7 @@ mutual:
     function json_decode_tree_enum_payload_reflected[T](view payload: JsonTree, type_name: string, variant_name: string, payload_count: int64) returns result[T, string]
     function json_decode_tree_enum_payload_variant_reflected[T](view payload: JsonTree, type_name: string, variant: TypeVariant, payload_count: int64) returns result[T, string]
     function json_tree_missing_field_reflected(view field: TypeField, owner_name: string) returns result[JsonTree, string]
+    function json_tree_record_field_value(view raw: JsonTree, view field: TypeField, owner_name: string) returns result[JsonTree, string]
     function json_decode_tree_record_reflected[T](view raw: JsonTree, type_name: string) returns result[T, string]
     function json_tree_parse_reflected[T](raw: string) returns result[T, string]
 function json_tree_parse(raw: string) returns result[JsonTree, string]:
@@ -1149,16 +1150,20 @@ function json_tree_missing_field_reflected(view field: TypeField, owner_name: st
     if field.type_info.kind_tag == TypeKind.optional_type:
         return ok(JsonTree.null)
     return fail("missing required field '{field.serialize_name}' for {owner_name}")
+function json_tree_record_field_value(view raw: JsonTree, view field: TypeField, owner_name: string) returns result[JsonTree, string]:
+    JsonTree raw_field = json_tree_field(view raw, field.serialize_name) handle:
+        JsonTree missing = json_tree_missing_field_reflected(view field, owner_name) handle error:
+            return fail(error)
+        default missing
+    return ok(raw_field)
 function json_decode_tree_record_reflected[T](view raw: JsonTree, type_name: string) returns result[T, string]:
     if json_tree_is_object(view raw) == false:
         return fail("expected object, got {json_tree_kind(view raw)}")
     mutable TypeConstruction builder = type.construct_start[T]()
     for field in type.fields[T]():
         comptime type Field = field.type_info:
-            JsonTree raw_field = json_tree_field(view raw, field.serialize_name) handle:
-                JsonTree missing = json_tree_missing_field_reflected(view field, type_name) handle error:
-                    return fail(error)
-                default missing
+            JsonTree raw_field = json_tree_record_field_value(view raw, view field, type_name) handle error:
+                return fail(error)
             Field decoded = json_decode_tree_reflected[Field](view raw_field) handle error:
                 return fail("{field.serialize_name}: {error}")
             builder = type.construct_put[T, Field](builder, view field, decoded) handle error:
