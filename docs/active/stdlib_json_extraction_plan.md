@@ -200,6 +200,9 @@ bridge spoofing, not helper visibility.
      runtime dispatch plus ownership checking, including direct view-first
      `json_tree_*` helpers. The raw facade policy also records the trusted
      stdlib hook and argument shape used by runtime bootstrap dispatch.
+   - The compiler-policy public bridge names (`json.parse`, `json.serialize`,
+     and `json.serialize_public`) also share their trusted stdlib hook mapping
+     through `jett_common`.
 3. Maintain the public bridge handoff. `json.parse`, `json.serialize`, and
    `json.serialize_public` now use compiler-owned typechecker policy with
    stdlib-owned interpreter bodies. See `/docs/completed/json_public_bridge_handoff.md`.

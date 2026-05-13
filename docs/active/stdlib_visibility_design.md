@@ -125,8 +125,8 @@ Use two stages, with source visibility and compiler trust kept orthogonal:
 
 Do not remove compiler-owned JSON policy checks until both stages exist.
 
-The long-term JSON bridge should use a compiler-owned hook table, not public
-function name guessing:
+The JSON bridge uses a compiler-owned hook table, not public function name
+guessing:
 
 ```text
 json.parse            -> json.json_parse_reflected
