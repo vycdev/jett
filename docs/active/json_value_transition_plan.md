@@ -50,8 +50,9 @@ about: two names, two traversal surfaces, one conceptual data model.
   from `JsonValue` to the bundled `json.JsonTree`. That alias makes the two
   spellings compatible for assignments, calls, returns, fields, and container
   wrappers without relying on namespace flattening.
-- `json_decode_reflected[T](raw: JsonValue)` is now only a compatibility wrapper
-  around `json_decode_tree_reflected[T](view raw)`.
+- `json_decode_reflected[T](raw: JsonValue)` has been removed; decoding now
+  enters through `json_decode_tree_reflected[T](view raw)` after parsing to
+  `JsonTree`.
 
 ## Compatibility Principle
 
@@ -213,19 +214,21 @@ Reflection metadata is intentionally split for now:
 
 ### 5. Move Raw Decoder Code Off `JsonValue`
 
-`stdlib/json.jett` still contains the older `json_decode_reflected[T](raw:
+`stdlib/json.jett` used to contain an older `json_decode_reflected[T](raw:
 JsonValue)` path. After raw APIs use `JsonTree`:
 
 - Replace internal uses with `json_decode_tree_reflected[T]`.
-- Keep a thin `json_decode_reflected[T]` compatibility wrapper only if needed.
+- Remove the thin `json_decode_reflected[T]` compatibility wrapper once nothing
+  calls it.
 - Remove duplicate `JsonValue` decoder helpers once no tests or public bridges
   rely on them.
 
 This should substantially reduce `stdlib/json.jett` duplication.
 
 Status: implemented. The old duplicate `JsonValue` decoder helper family was
-removed; the public compatibility entrypoint delegates to the `JsonTree`
-decoder.
+removed, and the unused private `json_decode_reflected[T](raw: JsonValue)`
+wrapper was removed as well. Public typed parse enters through the `JsonTree`
+parser/decoder, with only the `JsonValue` type spelling kept as compatibility.
 
 ### 6. Remove Rust JSON Fallbacks
 

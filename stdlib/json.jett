@@ -147,7 +147,6 @@ mutual:
     function json_serialize_public_optional_reflected[T](view value: T) returns string
     function json_serialize_public_result_reflected[T](view value: T) returns string
     function json_serialize_public_record_reflected[T](view value: T) returns string
-    function json_decode_reflected[T](raw: JsonValue) returns result[T, string]
     function json_decode_tree_reflected[T](view raw: JsonTree) returns result[T, string]
     function json_decode_tree_primitive_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[T, string]
     function json_decode_tree_scalar_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[T, string]
@@ -842,7 +841,7 @@ function json_serialize_public_primitive[T](view value: T, primitive: TypePrimit
         bytes item = value
         return json_stdlib_quote("0x{bytes.to_hex(item)}")
     if primitive == TypePrimitive.json_value_type:
-        JsonValue item = value
+        JsonTree item = value
         return json_tree_serialize(view item)
     return "null"
 function json_serialize_public_enum_reflected[T](view value: T) returns string:
@@ -923,8 +922,6 @@ function json_serialize_public_record_reflected[T](view value: T) returns string
             fields = list.append[string](fields, "{json_stdlib_quote(field.serialize_name)}:{encoded}")
     string body = string.join(fields, ",")
     return "{{{body}}}"
-function json_decode_reflected[T](raw: JsonValue) returns result[T, string]:
-    return json_decode_tree_reflected[T](view raw)
 function json_decode_tree_reflected[T](view raw: JsonTree) returns result[T, string]:
     TypeInfo info = type.info[T]()
     TypeKind kind = info.kind_tag
@@ -1144,7 +1141,7 @@ function json_parse_reflected[T](raw: string) returns result[T, string]:
     TypePrimitive primitive = info.primitive_tag handle:
         default TypePrimitive.unknown_type
     if primitive == TypePrimitive.json_value_type:
-        JsonValue value = json_tree_parse(raw) handle error:
+        JsonTree value = json_tree_parse(raw) handle error:
             return fail(error)
         return ok(value)
     return json_tree_parse_reflected[T](raw)

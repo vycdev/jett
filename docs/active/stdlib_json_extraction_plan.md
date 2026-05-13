@@ -52,7 +52,6 @@ The reflected JSON implementation has started moving into stdlib under the
   keys, and scalar casts
 - `json_serialize_reflected[T](view value)`
 - `json_serialize_public_reflected[T](view value)`
-- `json_decode_reflected[T](raw: JsonValue)`
 - `json_parse_reflected[T](raw: string)`
 
 The module also declares exported public wrapper names `parse`, `serialize`,
@@ -182,11 +181,9 @@ bridge spoofing, not helper visibility.
 2. Continue staging extracted prototype code under flat, non-conflicting names:
    - `json_serialize_reflected[T](view value: T)` exists in stdlib.
    - `json_serialize_public_reflected[T](view value: T)` exists in stdlib.
-   - `json_decode_reflected[T](raw: JsonValue)` exists in stdlib.
    - `json_decode_tree_reflected[T](view raw: JsonTree)` exists in stdlib.
-   - `json_decode_reflected[T](raw: JsonValue)` is now a thin compatibility
-     wrapper over the `JsonTree` decoder; the duplicate raw decoder helper
-     family has been removed.
+   - The old private `json_decode_reflected[T](raw: JsonValue)` wrapper and the
+     duplicate raw decoder helper family have been removed.
    - `json_parse_reflected[T](raw: string)` now routes typed targets through the
      self-hosted `JsonTree` parser/decoder. The `JsonValue` compatibility
      branch also parses through `json_tree_parse` directly.
