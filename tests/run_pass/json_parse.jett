@@ -1,64 +1,54 @@
 namespace test
-
 type NonEmpty = string where string.char_count(value) > 0
 type NonEmptyNames = list[string] where list.length(value) > 0
-
 enum Direction:
     north
     south
-
 enum Shape:
     circle(radius: float64)
     rect(width: float64, height: float64)
-
 enum Protocol:
     tcp = 6
     udp = 17
-
 bitfield Header:
     version: 4 bits
     protocol: 8 bits as Protocol
-
 struct Profile:
     display_name: string serialize "displayName"
     note: string
-
 struct User:
     id: string
     profile: Profile serialize "profileData"
     tags: list[string]
     scores: map[string, int64]
     nickname: optional[string]
-
 struct Box[T]:
     value: T
     label: string
-
 struct RefinedUser:
     name: NonEmpty
-
 struct Credential:
     name: string
     token: secret[string]
-
+struct RawEnvelope:
+    name: string
+    payload: JsonValue
+    tree: json.JsonTree
 function parse_user_id() returns string:
     string raw = "{{\"id\":\"u1\",\"profileData\":{{\"displayName\":\"Alice\",\"note\":\"ok\"}},\"tags\":[\"admin\",\"beta\"],\"scores\":{{\"wins\":3}},\"nickname\":\"ally\"}}"
     User user = json.parse[User](raw) handle error:
         return error
     return user.id
-
 function parse_nested_serialize_name() returns string:
     string raw = "{{\"id\":\"u1\",\"profileData\":{{\"displayName\":\"Alice\",\"note\":\"ok\"}},\"tags\":[\"admin\"],\"scores\":{{\"wins\":3}},\"nickname\":\"ally\"}}"
     User user = json.parse[User](raw) handle error:
         return error
     return user.profile.display_name
-
 function parse_list_field_count() returns int64:
     string raw = "{{\"id\":\"u1\",\"profileData\":{{\"displayName\":\"Alice\",\"note\":\"ok\"}},\"tags\":[\"admin\",\"beta\"],\"scores\":{{\"wins\":3}},\"nickname\":null}}"
     User user = json.parse[User](raw) handle error:
         return -1
     return list.length(user.tags)
-
 function parse_map_field_value() returns int64:
     string raw = "{{\"id\":\"u1\",\"profileData\":{{\"displayName\":\"Alice\",\"note\":\"ok\"}},\"tags\":[\"admin\"],\"scores\":{{\"wins\":3}},\"nickname\":null}}"
     User user = json.parse[User](raw) handle error:
@@ -66,7 +56,6 @@ function parse_map_field_value() returns int64:
     optional[int64] wins = map.get[string, int64](user.scores, "wins")
     return wins handle:
         default -2
-
 function parse_missing_optional() returns string:
     string raw = "{{\"id\":\"u1\",\"profileData\":{{\"displayName\":\"Alice\",\"note\":\"ok\"}},\"tags\":[\"admin\"],\"scores\":{{\"wins\":3}}}}"
     User user = json.parse[User](raw) handle error:
@@ -74,68 +63,57 @@ function parse_missing_optional() returns string:
     string nickname = user.nickname handle:
         default "none"
     return nickname
-
 function parse_result_ok_value() returns int64:
     result[int64, string] parsed = json.parse[result[int64, string]]("{{\"ok\":7}}") handle error:
         return -1
     return parsed handle error:
         default -2
-
 function parse_result_fail_value() returns string:
     result[int64, string] parsed = json.parse[result[int64, string]]("{{\"fail\":\"bad\"}}") handle error:
         return error
     int64 ignored = parsed handle error:
         return error
     return "{ignored}"
-
 function parse_result_multiple_keys_error() returns string:
     result[int64, string] parsed = json.parse[result[int64, string]]("{{\"ok\":7,\"fail\":\"bad\"}}") handle error:
         return error
     int64 ignored = parsed handle error:
         return error
     return "{ignored}"
-
 function parse_result_unknown_key_error() returns string:
     result[int64, string] parsed = json.parse[result[int64, string]]("{{\"value\":7}}") handle error:
         return error
     int64 ignored = parsed handle error:
         return error
     return "{ignored}"
-
 function parse_generic_struct_value() returns string:
     Box[string] box = json.parse[Box[string]]("{{\"value\":\"stored\",\"label\":\"name\"}}") handle error:
         return error
     return box.value
-
 function parse_refinement_ok() returns string:
     RefinedUser user = json.parse[RefinedUser]("{{\"name\":\"alice\"}}") handle error:
         return error
     string name = coarsen user.name
     return name
-
 function parse_refinement_error() returns string:
     RefinedUser user = json.parse[RefinedUser]("{{\"name\":\"\"}}") handle error:
         return error
     string name = coarsen user.name
     return name
-
 function parse_refined_list_count() returns int64:
     NonEmptyNames names = json.parse[NonEmptyNames]("[\"alpha\",\"beta\"]") handle error:
         return -1
     list[string] raw = coarsen names
     return list.length(raw)
-
 function parse_refined_list_error() returns string:
     NonEmptyNames names = json.parse[NonEmptyNames]("[]") handle error:
         return error
     list[string] raw = coarsen names
     return "{list.length(raw)}"
-
 function parse_enum_unit() returns bool:
     Direction direction = json.parse[Direction]("\"north\"") handle error:
         return false
     return direction == Direction.north
-
 function parse_enum_payload_area() returns float64:
     Shape shape = json.parse[Shape]("{{\"rect\":[3.0,4.0]}}") handle error:
         return -1.0
@@ -144,7 +122,6 @@ function parse_enum_payload_area() returns float64:
             return radius
         rect(width, height):
             return width * height
-
 function parse_enum_payload_error() returns string:
     Shape shape = json.parse[Shape]("{{\"rect\":[3.0]}}") handle error:
         return error
@@ -153,60 +130,49 @@ function parse_enum_payload_error() returns string:
             return "{radius}"
         rect(width, height):
             return "{width * height}"
-
 function parse_bitfield_version() returns int64:
     Header header = json.parse[Header]("{{\"version\":4,\"protocol\":\"tcp\"}}") handle error:
         return -1
     return header.version
-
 function parse_bitfield_protocol() returns bool:
     Header header = json.parse[Header]("{{\"version\":4,\"protocol\":\"tcp\"}}") handle error:
         return false
     return header.protocol == Protocol.tcp
-
 function parse_bitfield_width_error() returns string:
     Header header = json.parse[Header]("{{\"version\":16,\"protocol\":\"tcp\"}}") handle error:
         return error
     return "{header.version}"
-
 function parse_missing_required_error() returns string:
     string raw = "{{\"id\":\"u1\",\"tags\":[],\"scores\":{{}}}}"
     User user = json.parse[User](raw) handle error:
         return error
     return user.id
-
 function parse_struct_wrong_shape_error() returns string:
     User user = json.parse[User]("[1,2,3]") handle error:
         return error
     return user.id
-
 function parse_top_level_float() returns float64:
     float64 value = json.parse[float64]("2.5") handle error:
         return -1.0
     return value
-
 function parse_null_as_nothing() returns string:
     nothing value = json.parse[nothing]("null") handle error:
         return error
     return "null"
-
 function parse_invalid_nothing_error() returns string:
     nothing value = json.parse[nothing]("0") handle error:
         return error
     return "unexpected"
-
 function parse_bytes_length() returns int64:
     bytes value = json.parse[bytes]("\"0x4869\"") handle error:
         return -1
     return bytes.length(value)
-
 function parse_bytes_without_prefix_first() returns int64:
     bytes value = json.parse[bytes]("\"4869\"") handle error:
         return -1
     int64 first = bytes.get(value, 0) handle:
         default -1
     return first
-
 function parse_json_value_field() returns string:
     JsonValue root = json.parse[JsonValue]("{{\"name\":\"Ada\",\"score\":5}}") handle error:
         return error
@@ -214,32 +180,44 @@ function parse_json_value_field() returns string:
         return "missing name"
     return json.as_string(name_raw) handle error:
         default error
-
+function parse_json_value_struct_field() returns string:
+    RawEnvelope envelope = json.parse[RawEnvelope]("{{\"name\":\"doc\",\"payload\":{{\"score\":5}},\"tree\":{{\"label\":\"native\"}}}}") handle error:
+        return error
+    JsonValue score_raw = json.field(envelope.payload, "score") handle:
+        return "missing score"
+    int64 score = json.as_int64(score_raw) handle error:
+        return error
+    json.JsonTree label_raw = json.json_tree_field(view envelope.tree, "label") handle:
+        return "missing label"
+    string label = json.json_tree_as_string(view label_raw) handle error:
+        return error
+    return "{envelope.name}:{json.kind(envelope.payload)}:{score}:{label}"
+function parse_json_tree_top_level() returns string:
+    json.JsonTree tree = json.parse[json.JsonTree]("[1,true,null]") handle error:
+        return error
+    int64 length = json.json_tree_array_length(view tree) handle error:
+        return error
+    return "{json.json_tree_kind(view tree)}:{length}"
 function parse_invalid_bytes_error() returns string:
     bytes value = json.parse[bytes]("\"0xzz\"") handle error:
         return error
     return "{bytes.length(value)}"
-
 function parse_top_level_secret_redaction() returns string:
     secret[string] token = json.parse[secret[string]]("\"secret-token\"") handle error:
         return error
     return secret.redact(token)
-
 function parse_secret_field_redaction() returns string:
     Credential credential = json.parse[Credential]("{{\"name\":\"svc\",\"token\":\"secret-token\"}}") handle error:
         return error
     return "{credential.name}:{secret.redact(credential.token)}"
-
 function parse_secret_field_type_error() returns string:
     Credential credential = json.parse[Credential]("{{\"name\":\"svc\",\"token\":7}}") handle error:
         return error
     return credential.name
-
 function parse_missing_secret_field_error() returns string:
     Credential credential = json.parse[Credential]("{{\"name\":\"svc\"}}") handle error:
         return error
     return credential.name
-
 verify json_parse:
     assert parse_user_id() == "u1"
     assert parse_nested_serialize_name() == "Alice"
@@ -269,6 +247,8 @@ verify json_parse:
     assert parse_bytes_length() == 2
     assert parse_bytes_without_prefix_first() == 72
     assert parse_json_value_field() == "Ada"
+    assert parse_json_value_struct_field() == "doc:object:5:native"
+    assert parse_json_tree_top_level() == "array:3"
     assert parse_invalid_bytes_error() == "expected hex bytes string"
     assert parse_top_level_secret_redaction() == "***"
     assert parse_secret_field_redaction() == "svc:***"

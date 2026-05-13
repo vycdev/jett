@@ -37,7 +37,8 @@ about: two names, two traversal surfaces, one conceptual data model.
 - `json_decode_tree_reflected[T](view raw)` decodes typed values from
   `JsonTree`.
 - Public typed `json.parse[T]` now routes through `JsonTree`, including the
-  legacy-compatible `json.parse[JsonValue]` branch.
+  legacy-compatible `json.parse[JsonValue]` branch and the canonical
+  `json.parse[json.JsonTree]` identity path.
 - `json.parse_raw` now prefers a public `JsonTree` signature whenever the
   bundled stdlib type is loaded; `JsonValue` code still compiles through the
   legacy compatibility spelling.
@@ -55,6 +56,10 @@ about: two names, two traversal surfaces, one conceptual data model.
 - `json_decode_reflected[T](raw: JsonValue)` has been removed; decoding now
   enters through `json_decode_tree_reflected[T](view raw)` after parsing to
   `JsonTree`.
+- `json_decode_tree_reflected[T]` now treats both `JsonValue` and
+  `json.JsonTree` as raw-tree identity targets, so raw fields nested inside
+  typed structs/lists/options use the native tree instead of an unsupported
+  primitive path.
 
 ## Compatibility Principle
 
@@ -252,6 +257,7 @@ Add tests before each behavior change:
 - Raw facade signatures accept and return `json.JsonTree` directly while
   preserving `JsonValue` compatibility.
 - `json.parse[JsonValue]` still works during compatibility.
+- `json.parse[json.JsonTree]` returns the native raw tree directly.
 - `JsonValue` and `JsonTree` assignment/alias behavior once enabled.
 - Raw object lookup preserves absence semantics.
 - Wrong-shape lookup returns `none`; wrong-shape shape-requiring access returns
