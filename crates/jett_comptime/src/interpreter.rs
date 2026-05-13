@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use rand::Rng;
 
-use jett_common::FileId;
+use jett_common::{FileId, is_json_raw_facade};
 use jett_parser::ast::{
     ActorDef, BinOp, BitfieldDef, BitfieldFieldKind, Block, CallArg, EnumDef, Expr, FunctionDef,
     Ident, ImplementBlock, InterfaceDecl, Item, MachineDef, Module, Pattern, PipelineStep, Stmt,
@@ -7584,30 +7584,7 @@ impl Interpreter {
 
     fn is_trusted_stdlib_first_function(&self, name: &str) -> bool {
         self.has_trusted_stdlib_function(name)
-            && (name.starts_with("json.json_") || Self::is_json_raw_facade(name))
-    }
-
-    fn is_json_raw_facade(name: &str) -> bool {
-        matches!(
-            name,
-            "json.parse_raw"
-                | "json.serialize_raw"
-                | "json.kind"
-                | "json.is_null"
-                | "json.is_bool"
-                | "json.is_number"
-                | "json.is_string"
-                | "json.is_array"
-                | "json.is_object"
-                | "json.field"
-                | "json.index"
-                | "json.array_length"
-                | "json.object_keys"
-                | "json.as_string"
-                | "json.as_int64"
-                | "json.as_float64"
-                | "json.as_bool"
-        )
+            && (name.starts_with("json.json_") || is_json_raw_facade(name))
     }
 
     fn has_trusted_stdlib_function(&self, name: &str) -> bool {

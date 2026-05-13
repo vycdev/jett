@@ -193,6 +193,8 @@ bridge spoofing, not helper visibility.
    - Public raw facade wrappers now exist in `stdlib/json.jett` for
      `parse_raw`, `serialize_raw`, tree kind/predicates, lookup, length/key
      helpers, and scalar casts.
+   - The raw facade name policy is centralized in `jett_common` and reused by
+     runtime dispatch plus ownership checking.
 3. Maintain the public bridge handoff. `json.parse`, `json.serialize`, and
    `json.serialize_public` now use compiler-owned typechecker policy with
    stdlib-owned interpreter bodies. See `/docs/completed/json_public_bridge_handoff.md`.
