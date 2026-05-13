@@ -13,6 +13,9 @@ struct JsonTreeScan:
 struct JsonTreeObjectField:
     key: string
     value: JsonTree
+struct JsonTreeSegment:
+    start: int64
+    end: int64
 struct JsonTreeStringEscape:
     value: string
     next_index: int64
@@ -105,6 +108,7 @@ mutual:
     function json_tree_insert_object_segment(view input: bytes, fields: map[string, JsonTree], start: int64, end: int64) returns result[map[string, JsonTree], string]
     function json_tree_parse_object_field_span(view input: bytes, start: int64, end: int64) returns result[JsonTreeObjectField, string]
     function json_tree_find_top_level_colon(view input: bytes, start: int64, end: int64) returns result[int64, string]
+    function json_tree_top_level_segments(view input: bytes, start: int64, end: int64) returns result[list[JsonTreeSegment], string]
     function json_tree_parse_string(raw: string) returns result[string, string]
     function json_tree_validate_string_value(view input: bytes, length: int64) returns result[nothing, string]
     function json_tree_invalid_scalar(raw: string) returns result[JsonTree, string]
@@ -381,25 +385,12 @@ function json_tree_parse_array(raw: string) returns result[JsonTree, string]:
     return ok(JsonTree.array_value(items))
 function json_tree_parse_array_body(view input: bytes, start: int64, end: int64) returns result[list[JsonTree], string]:
     mutable list[JsonTree] items = list.new[JsonTree]()
-    if json_tree_span_is_blank(view input, start, end) == true:
-        return ok(items)
-    mutable JsonTreeScan scan = json_tree_scan_start()
-    mutable int64 segment_start = start
-    mutable int64 index = start
-    while index < end:
-        int64 byte = bytes.get(view input, index) handle:
-            default -1
-        if json_tree_scan_is_separator(view scan, byte, 44) == true:
-            items = json_tree_append_array_segment(view input, items, segment_start, index) handle error:
-                return fail(error)
-            segment_start = index + 1
-        else:
-            scan = json_tree_scan_step(view scan, byte) handle error:
-                return fail(error)
-        index = index + 1
-    nothing checked = json_tree_finish_scan(view scan) handle error:
+    list[JsonTreeSegment] segments = json_tree_top_level_segments(view input, start, end) handle error:
         return fail(error)
-    return json_tree_append_array_segment(view input, items, segment_start, end)
+    for segment in segments:
+        items = json_tree_append_array_segment(view input, items, segment.start, segment.end) handle error:
+            return fail(error)
+    return ok(items)
 function json_tree_append_array_segment(view input: bytes, items: list[JsonTree], start: int64, end: int64) returns result[list[JsonTree], string]:
     string raw = json_tree_span_to_trimmed_string(view input, start, end) handle error:
         return fail(error)
@@ -422,8 +413,16 @@ function json_tree_parse_object(raw: string) returns result[JsonTree, string]:
     return ok(JsonTree.object_value(fields))
 function json_tree_parse_object_body(view input: bytes, start: int64, end: int64) returns result[map[string, JsonTree], string]:
     mutable map[string, JsonTree] fields = map.new[string, JsonTree]()
+    list[JsonTreeSegment] segments = json_tree_top_level_segments(view input, start, end) handle error:
+        return fail(error)
+    for segment in segments:
+        fields = json_tree_insert_object_segment(view input, fields, segment.start, segment.end) handle error:
+            return fail(error)
+    return ok(fields)
+function json_tree_top_level_segments(view input: bytes, start: int64, end: int64) returns result[list[JsonTreeSegment], string]:
+    mutable list[JsonTreeSegment] segments = list.new[JsonTreeSegment]()
     if json_tree_span_is_blank(view input, start, end) == true:
-        return ok(fields)
+        return ok(segments)
     mutable JsonTreeScan scan = json_tree_scan_start()
     mutable int64 segment_start = start
     mutable int64 index = start
@@ -431,8 +430,7 @@ function json_tree_parse_object_body(view input: bytes, start: int64, end: int64
         int64 byte = bytes.get(view input, index) handle:
             default -1
         if json_tree_scan_is_separator(view scan, byte, 44) == true:
-            fields = json_tree_insert_object_segment(view input, fields, segment_start, index) handle error:
-                return fail(error)
+            segments = list.append[JsonTreeSegment](segments, JsonTreeSegment(start: segment_start, end: index))
             segment_start = index + 1
         else:
             scan = json_tree_scan_step(view scan, byte) handle error:
@@ -440,7 +438,7 @@ function json_tree_parse_object_body(view input: bytes, start: int64, end: int64
         index = index + 1
     nothing checked = json_tree_finish_scan(view scan) handle error:
         return fail(error)
-    return json_tree_insert_object_segment(view input, fields, segment_start, end)
+    return ok(list.append[JsonTreeSegment](segments, JsonTreeSegment(start: segment_start, end: end)))
 function json_tree_insert_object_segment(view input: bytes, fields: map[string, JsonTree], start: int64, end: int64) returns result[map[string, JsonTree], string]:
     string raw = json_tree_span_to_trimmed_string(view input, start, end) handle error:
         return fail(error)
