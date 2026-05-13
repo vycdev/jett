@@ -167,6 +167,7 @@ mutual:
     function json_decode_tree_enum_string_reflected[T](view raw: JsonTree, type_name: string) returns result[T, string]
     function json_decode_tree_enum_object_reflected[T](view raw: JsonTree, type_name: string) returns result[T, string]
     function json_decode_tree_enum_payload_reflected[T](view payload: JsonTree, type_name: string, variant_name: string, payload_count: int64) returns result[T, string]
+    function json_decode_tree_enum_payload_variant_reflected[T](view payload: JsonTree, type_name: string, variant: TypeVariant, payload_count: int64) returns result[T, string]
     function json_tree_missing_field_reflected(view field: TypeField, owner_name: string) returns result[JsonTree, string]
     function json_decode_tree_record_reflected[T](view raw: JsonTree, type_name: string) returns result[T, string]
     function json_tree_parse_reflected[T](raw: string) returns result[T, string]
@@ -1104,23 +1105,25 @@ function json_decode_tree_enum_payload_reflected[T](view payload: JsonTree, type
     for variant in type.variants[T]():
         if variant.name != variant_name:
             continue
-        int64 expected_count = list.length[TypeField](variant.fields)
-        if payload_count != expected_count:
-            return fail("enum variant '{type_name}.{variant_name}' expects {expected_count} payload field(s), got {payload_count}")
-        mutable TypeConstruction builder = type.construct_variant_start[T](view variant) handle error:
-            return fail(error)
-        mutable int64 index = 0
-        for field in variant.fields:
-            comptime type Field = field.type_info:
-                JsonTree raw_item = json_tree_index(view payload, index) handle:
-                    return fail("missing enum payload item {index}")
-                Field decoded = json_decode_tree_reflected[Field](view raw_item) handle error:
-                    return fail("{variant_name}.{field.name}: {error}")
-                builder = type.construct_put[T, Field](builder, view field, decoded) handle error:
-                    return fail(error)
-            index = index + 1
-        return type.construct_finish[T](builder)
+        return json_decode_tree_enum_payload_variant_reflected[T](view payload, type_name, variant, payload_count)
     return fail("unknown enum variant '{type_name}.{variant_name}'")
+function json_decode_tree_enum_payload_variant_reflected[T](view payload: JsonTree, type_name: string, variant: TypeVariant, payload_count: int64) returns result[T, string]:
+    int64 expected_count = list.length[TypeField](variant.fields)
+    if payload_count != expected_count:
+        return fail("enum variant '{type_name}.{variant.name}' expects {expected_count} payload field(s), got {payload_count}")
+    mutable TypeConstruction builder = type.construct_variant_start[T](view variant) handle error:
+        return fail(error)
+    mutable int64 index = 0
+    for field in variant.fields:
+        comptime type Field = field.type_info:
+            JsonTree raw_item = json_tree_index(view payload, index) handle:
+                return fail("missing enum payload item {index}")
+            Field decoded = json_decode_tree_reflected[Field](view raw_item) handle error:
+                return fail("{variant.name}.{field.name}: {error}")
+            builder = type.construct_put[T, Field](builder, view field, decoded) handle error:
+                return fail(error)
+        index = index + 1
+    return type.construct_finish[T](builder)
 function json_tree_missing_field_reflected(view field: TypeField, owner_name: string) returns result[JsonTree, string]:
     if field.type_info.kind_tag == TypeKind.optional_type:
         return ok(JsonTree.null)
