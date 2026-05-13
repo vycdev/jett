@@ -10950,6 +10950,97 @@ mod tests {
     }
 
     #[test]
+    fn json_serialize_bridge_requires_trusted_stdlib_hook() {
+        let mut interp = Interpreter::new();
+        let fake_hook = generic_json_hook(
+            "json_serialize_reflected",
+            block(vec![return_stmt(string("fake"))]),
+        );
+        interp.register_function_named("json.json_serialize_reflected", &fake_hook, false);
+
+        let err = interp
+            .call_function_with_type_args(
+                "json.serialize",
+                &[type_named("string")],
+                vec![Value::String("value".to_string())],
+            )
+            .unwrap_err();
+
+        assert_eq!(
+            err,
+            "json.serialize requires trusted stdlib hook 'json.json_serialize_reflected'"
+        );
+    }
+
+    #[test]
+    fn json_serialize_bridge_uses_trusted_stdlib_hook() {
+        let mut interp = Interpreter::new();
+        let mut trusted_hook = generic_json_hook(
+            "json_serialize_reflected",
+            block(vec![return_stmt(string("trusted serialized"))]),
+        );
+        trusted_hook.span = stdlib_sp();
+        interp.register_function_in_namespace(Some("json"), &trusted_hook);
+
+        let value = interp
+            .call_function_with_type_args(
+                "json.serialize",
+                &[type_named("string")],
+                vec![Value::String("value".to_string())],
+            )
+            .unwrap();
+
+        assert_eq!(value, Value::String("trusted serialized".to_string()));
+    }
+
+    #[test]
+    fn json_serialize_public_bridge_requires_trusted_stdlib_hook() {
+        let mut interp = Interpreter::new();
+        let fake_hook = generic_json_hook(
+            "json_serialize_public_reflected",
+            block(vec![return_stmt(string("fake"))]),
+        );
+        interp.register_function_named("json.json_serialize_public_reflected", &fake_hook, false);
+
+        let err = interp
+            .call_function_with_type_args(
+                "json.serialize_public",
+                &[type_named("string")],
+                vec![Value::String("value".to_string())],
+            )
+            .unwrap_err();
+
+        assert_eq!(
+            err,
+            "json.serialize_public requires trusted stdlib hook 'json.json_serialize_public_reflected'"
+        );
+    }
+
+    #[test]
+    fn json_serialize_public_bridge_uses_trusted_stdlib_hook() {
+        let mut interp = Interpreter::new();
+        let mut trusted_hook = generic_json_hook(
+            "json_serialize_public_reflected",
+            block(vec![return_stmt(string("trusted public serialized"))]),
+        );
+        trusted_hook.span = stdlib_sp();
+        interp.register_function_in_namespace(Some("json"), &trusted_hook);
+
+        let value = interp
+            .call_function_with_type_args(
+                "json.serialize_public",
+                &[type_named("string")],
+                vec![Value::String("value".to_string())],
+            )
+            .unwrap();
+
+        assert_eq!(
+            value,
+            Value::String("trusted public serialized".to_string())
+        );
+    }
+
+    #[test]
     fn json_parse_raw_requires_trusted_json_tree_parse() {
         let mut interp = Interpreter::new();
 
@@ -11087,6 +11178,66 @@ mod tests {
         assert_eq!(
             err,
             "json.parse requires trusted stdlib hook 'json.json_parse_reflected'"
+        );
+    }
+
+    #[test]
+    fn untrusted_registration_removes_previous_json_serialize_hook_trust() {
+        let mut interp = Interpreter::new();
+        let mut trusted_hook = generic_json_hook(
+            "json_serialize_reflected",
+            block(vec![return_stmt(string("trusted"))]),
+        );
+        trusted_hook.span = stdlib_sp();
+        interp.register_function_in_namespace(Some("json"), &trusted_hook);
+
+        let fake_hook = generic_json_hook(
+            "json_serialize_reflected",
+            block(vec![return_stmt(string("fake"))]),
+        );
+        interp.register_function_named("json.json_serialize_reflected", &fake_hook, false);
+
+        let err = interp
+            .call_function_with_type_args(
+                "json.serialize",
+                &[type_named("string")],
+                vec![Value::String("value".to_string())],
+            )
+            .unwrap_err();
+
+        assert_eq!(
+            err,
+            "json.serialize requires trusted stdlib hook 'json.json_serialize_reflected'"
+        );
+    }
+
+    #[test]
+    fn untrusted_registration_removes_previous_json_serialize_public_hook_trust() {
+        let mut interp = Interpreter::new();
+        let mut trusted_hook = generic_json_hook(
+            "json_serialize_public_reflected",
+            block(vec![return_stmt(string("trusted"))]),
+        );
+        trusted_hook.span = stdlib_sp();
+        interp.register_function_in_namespace(Some("json"), &trusted_hook);
+
+        let fake_hook = generic_json_hook(
+            "json_serialize_public_reflected",
+            block(vec![return_stmt(string("fake"))]),
+        );
+        interp.register_function_named("json.json_serialize_public_reflected", &fake_hook, false);
+
+        let err = interp
+            .call_function_with_type_args(
+                "json.serialize_public",
+                &[type_named("string")],
+                vec![Value::String("value".to_string())],
+            )
+            .unwrap_err();
+
+        assert_eq!(
+            err,
+            "json.serialize_public requires trusted stdlib hook 'json.json_serialize_public_reflected'"
         );
     }
 
