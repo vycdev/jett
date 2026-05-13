@@ -198,9 +198,9 @@ verify json_reflection_nested_decoder:
     assert string.contains(invalid_enum_payload_message(), "shape: enum variant 'test.Shape.point' expects 2 payload field(s), got 1") == true
     assert string.contains(invalid_bitfield_enum_message(), "header: protocol: unknown enum variant 'test.Protocol.bogus'") == true
     assert decoded_top_level_refinement() == "ready"
-    assert string.contains(invalid_top_level_refinement_message(), "refinement type constraint failed for 'NonEmpty'") == true
+    assert string.contains(invalid_top_level_refinement_message(), "refinement type constraint failed for 'test.NonEmpty'") == true
     assert decoded_refined_list_count() == 2
-    assert string.contains(invalid_refined_list_message(), "refinement type constraint failed for 'NonEmptyNumbers'") == true
+    assert string.contains(invalid_refined_list_message(), "refinement type constraint failed for 'test.NonEmptyNumbers'") == true
     assert decoded_top_level_float() == 2.5
     assert decoded_null_as_nothing() == "null"
     assert invalid_nothing_message() == "expected null, got number"

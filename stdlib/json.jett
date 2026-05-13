@@ -943,7 +943,8 @@ function json_decode_tree_reflected[T](view raw: JsonTree) returns result[T, str
         comptime type Base = type.arg[T](0):
             Base item = json_decode_tree_reflected[Base](view raw) handle error:
                 return fail(error)
-            T refined = item
+            T refined = item handle error:
+                return fail(error)
             return ok(refined)
     if kind == TypeKind.secret_type:
         comptime type Inner = type.arg[T](0):

@@ -330,6 +330,13 @@ impl Interpreter {
         self.expand_namespace_alias_name(name)
             .filter(|expanded| registry.contains_key(expanded))
             .or_else(|| {
+                if name.contains('.') {
+                    registry.contains_key(name).then(|| name.to_string())
+                } else {
+                    None
+                }
+            })
+            .or_else(|| {
                 self.current_qualified_name(name)
                     .filter(|qualified| registry.contains_key(qualified))
             })
@@ -358,7 +365,8 @@ impl Interpreter {
     }
 
     fn runtime_name(&self, name: &str) -> String {
-        self.expand_namespace_alias_name(name)
+        self.registry_name(&self.functions, name)
+            .or_else(|| self.expand_namespace_alias_name(name))
             .unwrap_or_else(|| name.to_string())
     }
 
@@ -416,17 +424,16 @@ impl Interpreter {
         }
     }
 
-    /// Register a function under both the historical flat name and the current
-    /// namespace-qualified name.
+    /// Register a function under its canonical runtime name.
     pub fn register_function_in_namespace(&mut self, namespace: Option<&str>, func: &FunctionDef) {
         let trusted_stdlib = func.span.file.is_stdlib();
-        self.register_function_named(&func.name.name, func, trusted_stdlib);
-        if let Some(namespace) = namespace {
-            self.register_function_named(
+        match namespace {
+            Some(namespace) => self.register_function_named(
                 &format!("{namespace}.{}", func.name.name),
                 func,
                 trusted_stdlib,
-            );
+            ),
+            None => self.register_function_named(&func.name.name, func, trusted_stdlib),
         }
     }
 
@@ -515,11 +522,12 @@ impl Interpreter {
     }
 
     pub fn register_struct_in_namespace(&mut self, namespace: Option<&str>, strukt: &StructDef) {
-        self.register_struct(strukt);
         if let Some(namespace) = namespace {
             let mut qualified = strukt.clone();
             qualified.name.name = format!("{namespace}.{}", strukt.name.name);
             self.register_struct(&qualified);
+        } else {
+            self.register_struct(strukt);
         }
     }
 
@@ -530,11 +538,12 @@ impl Interpreter {
     }
 
     pub fn register_actor_in_namespace(&mut self, namespace: Option<&str>, actor: &ActorDef) {
-        self.register_actor(actor);
         if let Some(namespace) = namespace {
             let mut qualified = actor.clone();
             qualified.name.name = format!("{namespace}.{}", actor.name.name);
             self.register_actor(&qualified);
+        } else {
+            self.register_actor(actor);
         }
     }
 
@@ -550,11 +559,12 @@ impl Interpreter {
         namespace: Option<&str>,
         bitfield: &BitfieldDef,
     ) {
-        self.register_bitfield(bitfield);
         if let Some(namespace) = namespace {
             let mut qualified = bitfield.clone();
             qualified.name.name = format!("{namespace}.{}", bitfield.name.name);
             self.register_bitfield(&qualified);
+        } else {
+            self.register_bitfield(bitfield);
         }
     }
 
@@ -565,11 +575,12 @@ impl Interpreter {
     }
 
     pub fn register_enum_in_namespace(&mut self, namespace: Option<&str>, enm: &EnumDef) {
-        self.register_enum(enm);
         if let Some(namespace) = namespace {
             let mut qualified = enm.clone();
             qualified.name.name = format!("{namespace}.{}", enm.name.name);
             self.register_enum(&qualified);
+        } else {
+            self.register_enum(enm);
         }
     }
 
@@ -603,11 +614,12 @@ impl Interpreter {
     }
 
     pub fn register_machine_in_namespace(&mut self, namespace: Option<&str>, machine: &MachineDef) {
-        self.register_machine(machine);
         if let Some(namespace) = namespace {
             let mut qualified = machine.clone();
             qualified.name.name = format!("{namespace}.{}", machine.name.name);
             self.register_machine(&qualified);
+        } else {
+            self.register_machine(machine);
         }
     }
 
@@ -626,23 +638,31 @@ impl Interpreter {
     }
 
     pub fn register_type_alias_in_namespace(&mut self, namespace: Option<&str>, alias: &TypeAlias) {
-        self.register_type_alias(alias);
         if let Some(namespace) = namespace {
             let mut qualified = alias.clone();
             qualified.name.name = format!("{namespace}.{}", alias.name.name);
             self.register_type_alias(&qualified);
+        } else {
+            self.register_type_alias(alias);
         }
     }
 
     /// Check a value against a refinement type's constraint.
     /// Returns `Ok(())` if valid, or `Err(message)` if the constraint fails.
     fn check_refinement(&mut self, type_name: &str, value: &Value) -> Result<(), String> {
-        if let Some(base_ty) = self.type_alias_bases.get(type_name).cloned() {
-            let base_type_name = type_expr_name(&base_ty);
+        let type_name = self
+            .registry_name(&self.type_aliases, type_name)
+            .unwrap_or_else(|| type_name.to_string());
+
+        if let Some(base_ty) = self.type_alias_bases.get(&type_name).cloned() {
+            let namespace =
+                Self::type_name_namespace(&type_name).or(self.current_namespace.as_deref());
+            let base_type_name =
+                type_expr_name(&self.substitute_type_expr_in_namespace(&base_ty, namespace));
             self.check_refinement(&base_type_name, value)?;
         }
 
-        let def = match self.type_aliases.get(type_name) {
+        let def = match self.type_aliases.get(&type_name) {
             Some(Some(def)) => def.clone(),
             Some(None) => return Ok(()), // simple alias, no constraint
             None => return Ok(()),       // not a known type alias
@@ -681,12 +701,18 @@ impl Interpreter {
     }
 
     fn type_name_has_refinement(&self, type_name: &str) -> bool {
-        match self.type_aliases.get(type_name) {
+        let type_name = self
+            .registry_name(&self.type_aliases, type_name)
+            .unwrap_or_else(|| type_name.to_string());
+        match self.type_aliases.get(&type_name) {
             Some(Some(_)) => true,
-            Some(None) => self
-                .type_alias_bases
-                .get(type_name)
-                .is_some_and(|base| self.type_name_has_refinement(&type_expr_name(base))),
+            Some(None) => self.type_alias_bases.get(&type_name).is_some_and(|base| {
+                let namespace =
+                    Self::type_name_namespace(&type_name).or(self.current_namespace.as_deref());
+                let base_name =
+                    type_expr_name(&self.substitute_type_expr_in_namespace(base, namespace));
+                self.type_name_has_refinement(&base_name)
+            }),
             None => false,
         }
     }
@@ -953,13 +979,16 @@ impl Interpreter {
 
             Expr::Spawn(inner, _) => {
                 // `spawn ActorType(cap1: val1, ...)` — create a new actor instance.
-                let (actor_name, args) = match inner.as_ref() {
+                let (source_actor_name, args) = match inner.as_ref() {
                     Expr::Call(callee, args, _) => match callee.as_ref() {
                         Expr::Ident(ident) => (ident.name.clone(), args),
                         _ => return Err("spawn: expected actor type name".to_string()),
                     },
                     _ => return Err("spawn: expected call expression".to_string()),
                 };
+                let actor_name = self
+                    .registry_name(&self.actor_defs, &source_actor_name)
+                    .unwrap_or(source_actor_name);
 
                 let actor_def = self
                     .actor_defs
@@ -1082,19 +1111,30 @@ impl Interpreter {
         // since state-name arguments are bare identifiers (not variables) and
         // would fail evaluation.
         match callee {
-            Expr::Ident(ident) if self.structs.contains_key(&ident.name) => {}
-            Expr::Ident(ident) if self.machines.contains_key(&ident.name) => {
-                return Ok(ExprFlow::Value(self.construct_machine(&ident.name, args)?));
+            Expr::Ident(ident) if self.registry_name(&self.structs, &ident.name).is_some() => {}
+            Expr::Ident(ident) => {
+                if let Some(machine_name) = self.registry_name(&self.machines, &ident.name) {
+                    return Ok(ExprFlow::Value(
+                        self.construct_machine(&machine_name, args)?,
+                    ));
+                }
             }
             Expr::FieldAccess(obj, field, _) => {
                 if let Some(name) = Self::extract_dotted_name(obj, &field.name) {
-                    if self.machines.contains_key(&name) {
-                        return Ok(ExprFlow::Value(self.construct_machine(&name, args)?));
+                    if let Some(machine_name) = self.registry_name(&self.machines, &name) {
+                        return Ok(ExprFlow::Value(
+                            self.construct_machine(&machine_name, args)?,
+                        ));
                     }
                 }
                 if let Some(owner_name) = Self::dotted_expr_name(obj) {
-                    if field.name == "transition" && self.machines.contains_key(&owner_name) {
-                        return Ok(ExprFlow::Value(self.machine_transition(&owner_name, args)?));
+                    if field.name == "transition" {
+                        if let Some(machine_name) = self.registry_name(&self.machines, &owner_name)
+                        {
+                            return Ok(ExprFlow::Value(
+                                self.machine_transition(&machine_name, args)?,
+                            ));
+                        }
                     }
                 }
             }
@@ -1296,7 +1336,7 @@ impl Interpreter {
     fn exec_stmt_inner(&mut self, stmt: &Stmt) -> Result<Option<Signal>, String> {
         match stmt {
             Stmt::VarDecl(decl) => {
-                let type_name = type_expr_name(&decl.ty);
+                let type_name = type_expr_name(&self.substitute_type_expr(&decl.ty));
                 let val = if self.type_aliases.contains_key(&type_name) {
                     match &decl.value {
                         Expr::Handle(target, bind_name, body, _) => {
@@ -7601,45 +7641,37 @@ impl Interpreter {
         let type_scope = self.type_scope_for_function(&func, type_args)?;
         self.type_arg_scopes.push(type_scope);
 
-        // Create a new scope and bind parameters.
-        self.push_scope();
-        let mut bind_error = None;
-        for (param, arg) in func.params.iter().zip(args) {
-            let type_name = type_expr_name(&param.ty);
-            if let Err(message) = self.check_refinement(&type_name, &arg) {
-                bind_error = Some(message);
-                break;
-            }
-            self.set_variable(&param.name.name, arg);
-        }
-        if let Some(message) = bind_error {
-            self.pop_scope();
-            self.type_arg_scopes.pop();
-            return Err(message);
-        }
-
         let saved_namespace = self.current_namespace.clone();
         self.current_namespace = Self::function_namespace(&resolved_name);
-        let result = self.exec_block_inner(&func.body);
+
+        self.push_scope();
+        let call_result = (|| {
+            for (param, arg) in func.params.iter().zip(args) {
+                let type_name = type_expr_name(&self.substitute_type_expr(&param.ty));
+                self.check_refinement(&type_name, &arg)?;
+                self.set_variable(&param.name.name, arg);
+            }
+
+            let result = self.exec_block_inner(&func.body)?;
+            let value = match result {
+                Some(Signal::Return(v)) => v,
+                Some(Signal::Default(_)) => {
+                    return Err("`default` can only be used inside a `handle` block".to_string());
+                }
+                _ => Value::Nothing,
+            };
+
+            if let Some(return_type) = &func.return_type {
+                let type_name = type_expr_name(&self.substitute_type_expr(return_type));
+                self.check_refinement(&type_name, &value)?;
+            }
+
+            Ok(value)
+        })();
         self.pop_scope();
         self.type_arg_scopes.pop();
         self.current_namespace = saved_namespace;
-        let result = result?;
-
-        let value = match result {
-            Some(Signal::Return(v)) => v,
-            Some(Signal::Default(_)) => {
-                return Err("`default` can only be used inside a `handle` block".to_string());
-            }
-            _ => Value::Nothing,
-        };
-
-        if let Some(return_type) = &func.return_type {
-            let type_name = type_expr_name(return_type);
-            self.check_refinement(&type_name, &value)?;
-        }
-
-        Ok(value)
+        call_result
     }
 
     fn type_scope_for_function(

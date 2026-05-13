@@ -175,6 +175,14 @@ Implemented:
 - The typechecker now registers namespaced functions, types, aliases, generic
   struct templates, and reflection metadata under canonical namespace keys
   instead of leaf aliases.
+- The comptime/runtime interpreter now registers namespaced functions,
+  structs, actors, bitfields, enums, machines, and type aliases under canonical
+  namespace keys instead of leaf aliases.
+- Verify/property blocks and runtime `main` execute with their lexical
+  namespace context, so same-namespace private helpers still resolve without
+  flat aliases.
+- Parameter, return, and assignment refinement checks resolve aliases in the
+  active lexical namespace.
 - Same-namespace private helper access remains allowed.
 - Existing user/project namespace fixtures now mark public cross-namespace API
   with `export`.
@@ -183,9 +191,6 @@ Implemented:
 
 Still staged:
 
-- The interpreter still keeps temporary flat compatibility registrations. The
-  resolver and typechecker no longer create flat aliases, but runtime registries
-  still need to stop creating those aliases internally.
 - Public JSON policy remains compiler-owned; source `export` is not trusted
   origin.
 
