@@ -150,20 +150,24 @@ Status: first parity fixture is in place in
 lookup, nulls, booleans, strings, numbers, wrong-shape errors, absent lookup,
 and raw serialization against the native tree helpers. The focused
 `tests/run_pass/json_value_tree_compatibility.jett` fixture now also pins the
-legacy raw helper surface accepting native `json.JsonTree` values directly.
+legacy raw helper surface accepting native `json.JsonTree` values directly, and
+`tests/run_pass/json_raw_facade_tree_surface.jett` pins the public raw facade
+API as a `JsonTree`-first surface.
 
 ### 2. Route Public Raw Functions Through Trusted Stdlib Hooks
 
-Keep compiler/typechecker signatures stable, but make interpreter execution
-delegate to trusted stdlib functions where possible:
+Keep legacy `JsonValue` source compatibility stable, but make normal checked
+and interpreted execution delegate to trusted stdlib functions where possible:
 
 - `json.parse_raw(raw)` delegates to `json.json_tree_parse(raw)`.
 - `json.serialize_raw(value)` delegates to native tree serialization.
 - `json.kind`, `json.field`, `json.index`, scalar casts, length, and keys
   delegate to the corresponding tree helpers.
 
-At this stage the typechecker may still say the parameter/return type is
-`JsonValue`, but the interpreter should hold a native tree value.
+The typechecker should prefer the bundled `json.JsonTree` type for raw facade
+parameters and returns when the stdlib is loaded. The compiler-owned
+`JsonValue -> json.JsonTree` compatibility alias keeps older `JsonValue` code
+working during the transition.
 
 Status: implemented. Exported stdlib facade wrappers now exist for
 `parse_raw`, `serialize_raw`, `kind`, `field`, `index`, the shape predicates,
@@ -173,7 +177,9 @@ as bootstrap fallbacks. The public typed `json.parse[JsonValue]` compatibility
 branch also calls `json_tree_parse` directly instead of bouncing through the raw
 builtin surface. The shared JSON facade name set now lives in `jett_common`, so
 runtime dispatch and ownership's implicit-view rule use one policy list for raw
-facades and view-first `json_tree_*` accessors.
+facades and view-first `json_tree_*` accessors. The typechecker raw facade
+signatures now prefer `json.JsonTree` when that stdlib type is present, falling
+back to the legacy `JsonValue` primitive only for no-stdlib/bootstrap contexts.
 
 ### 3. Change Runtime Representation
 
@@ -234,6 +240,8 @@ After parity tests pass with native representation:
 Add tests before each behavior change:
 
 - `json.parse_raw` returns a value that raw accessors can traverse.
+- Raw facade signatures accept and return `json.JsonTree` directly while
+  preserving `JsonValue` compatibility.
 - `json.parse[JsonValue]` still works during compatibility.
 - `JsonValue` and `JsonTree` assignment/alias behavior once enabled.
 - Raw object lookup preserves absence semantics.
