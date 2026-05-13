@@ -346,6 +346,57 @@ fn register_module_items(
     interp.register_module(module);
 }
 
+fn item_file(item: &Item) -> FileId {
+    match item {
+        Item::Namespace(ns) => ns.span.file,
+        Item::Function(func) => func.span.file,
+        Item::Mutual(block) => block.span.file,
+        Item::Interface(interface) => interface.span.file,
+        Item::Implement(block) => block.span.file,
+        Item::Struct(strukt) => strukt.span.file,
+        Item::Bitfield(bitfield) => bitfield.span.file,
+        Item::Enum(enm) => enm.span.file,
+        Item::Machine(machine) => machine.span.file,
+        Item::Actor(actor) => actor.span.file,
+        Item::VarDecl(decl) => decl.span.file,
+        Item::Verify(verify) => verify.span.file,
+        Item::Property(prop) => prop.span.file,
+        Item::TypeAlias(alias) => alias.span.file,
+    }
+}
+
+fn update_current_namespace(
+    item: &Item,
+    current_file: &mut Option<FileId>,
+    current_namespace: &mut Option<String>,
+) {
+    let file = item_file(item);
+    if current_file.is_some_and(|current| current != file) {
+        *current_namespace = None;
+    }
+    *current_file = Some(file);
+
+    if let Item::Namespace(ns) = item {
+        *current_namespace = Some(ns.name.name.clone());
+    }
+}
+
+fn find_main_function(module: &Module) -> Option<(Option<String>, &FunctionDef)> {
+    let mut current_file = None;
+    let mut current_namespace = None;
+
+    for item in &module.items {
+        update_current_namespace(item, &mut current_file, &mut current_namespace);
+        if let Item::Function(func) = item
+            && func.name.name == "main"
+        {
+            return Some((current_namespace.clone(), func));
+        }
+    }
+
+    None
+}
+
 fn prepend_support_modules(module: &mut Module, support_modules: Vec<Module>) {
     if support_modules.is_empty() {
         return;
@@ -460,13 +511,7 @@ fn run_file_inner(path: &Path) -> Result<(), String> {
     let parse_result = parse(&source, file_id);
     let module = parse_result.module;
 
-    // Find main()
-    let main_func = module.items.iter().find_map(|item| match item {
-        Item::Function(func) if func.name.name == "main" => Some(func),
-        _ => None,
-    });
-
-    let Some(main_func) = main_func else {
+    let Some((main_namespace, main_func)) = find_main_function(&module) else {
         return Err("runtime error: no `main` function found".to_string());
     };
 
@@ -490,7 +535,7 @@ fn run_file_inner(path: &Path) -> Result<(), String> {
     register_module_items(&mut interp, &module);
 
     // Call main()
-    match interp.call_function("main", main_args) {
+    match interp.call_function_in_namespace(main_namespace.as_deref(), "main", main_args) {
         Ok(_) => Ok(()),
         Err(e) => Err(format!("runtime error: {}", e)),
     }

@@ -112,10 +112,10 @@ function tree_reflected_invalid_bitfield_message() returns string:
 
 verify json_tree_reflection_parse_wrapper:
     assert tree_reflected_parse_summary() == "u1:true:Cluj:2:2:ally:none:3:true"
-    assert tree_reflected_missing_error() == "missing required field 'active' for TreeUser"
+    assert tree_reflected_missing_error() == "missing required field 'active' for test.TreeUser"
     assert string.contains(tree_reflected_wrong_item_error(), "tags: 0: expected string") == true
     assert tree_reflected_decode_existing_tree() == "Ada"
     assert tree_reflected_full_summary() == "4:5:true:7:2:true:ready:7:***:2:72"
     assert tree_reflected_result_failure() == "bad"
     assert string.contains(tree_reflected_invalid_refinement_message(), "refinement type constraint failed") == true
-    assert string.contains(tree_reflected_invalid_bitfield_message(), "bitfield 'TreeHeader' field 'version'") == true
+    assert string.contains(tree_reflected_invalid_bitfield_message(), "bitfield 'test.TreeHeader' field 'version'") == true

@@ -1,0 +1,14 @@
+namespace alpha
+
+function helper() returns int64:
+    return 1
+
+function main() returns nothing:
+    if helper() != 1:
+        int64 boom = 1 / 0
+    return nothing
+
+namespace beta
+
+function helper() returns int64:
+    return 2

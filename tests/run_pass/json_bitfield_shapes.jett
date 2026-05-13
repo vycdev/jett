@@ -30,6 +30,6 @@ function bitfield_enum_numeric_shape_error() returns string:
 
 verify json_bitfield_shapes:
     assert bitfield_requires_object_error() == "expected object, got array"
-    assert bitfield_missing_field_error() == "missing required field 'protocol' for Header"
+    assert bitfield_missing_field_error() == "missing required field 'protocol' for test.Header"
     assert bitfield_extra_field_ignored() == true
     assert bitfield_enum_numeric_shape_error() == "protocol: expected enum string or object, got number"

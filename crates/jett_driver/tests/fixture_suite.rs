@@ -213,6 +213,14 @@ run_pass_fixture!(
     "namespace_exports_syntax.jett"
 );
 run_pass_fixture!(
+    run_pass_namespace_runtime_verify_context,
+    "namespace_runtime_verify_context.jett"
+);
+run_pass_fixture!(
+    run_pass_namespace_runtime_main_context,
+    "namespace_runtime_main_context.jett"
+);
+run_pass_fixture!(
     run_pass_handle_result_optional,
     "handle_result_optional.jett"
 );

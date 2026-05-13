@@ -7485,6 +7485,38 @@ impl Interpreter {
         self.call_function_with_type_args(name, &[], args)
     }
 
+    /// Call a function while resolving unqualified names as if execution is
+    /// currently inside `namespace`.
+    pub fn call_function_in_namespace(
+        &mut self,
+        namespace: Option<&str>,
+        name: &str,
+        args: Vec<Value>,
+    ) -> Result<Value, String> {
+        let saved_namespace = self.current_namespace.clone();
+        self.current_namespace = namespace.map(str::to_string);
+        let runtime_name = self
+            .registry_name(&self.functions, name)
+            .unwrap_or_else(|| name.to_string());
+        let result = self.call_function(&runtime_name, args);
+        self.current_namespace = saved_namespace;
+        result
+    }
+
+    /// Execute a block while resolving unqualified names as if execution is
+    /// currently inside `namespace`.
+    pub fn exec_block_in_namespace(
+        &mut self,
+        namespace: Option<&str>,
+        block: &Block,
+    ) -> Result<Option<Value>, String> {
+        let saved_namespace = self.current_namespace.clone();
+        self.current_namespace = namespace.map(str::to_string);
+        let result = self.exec_block(block);
+        self.current_namespace = saved_namespace;
+        result
+    }
+
     fn call_function_with_type_args(
         &mut self,
         name: &str,

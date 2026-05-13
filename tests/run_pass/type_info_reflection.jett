@@ -412,7 +412,7 @@ verify type_info_reflection:
     assert type_info_arg_count[list[optional[User]]]() == 1
     assert type_info_arg_kind[list[optional[User]]](0) == "optional"
     assert type_info_nested_arg_kind[list[optional[User]]](0, 0) == "struct"
-    assert type_info_nested_arg_type_name[list[optional[User]]](0, 0) == "User"
+    assert type_info_nested_arg_type_name[list[optional[User]]](0, 0) == "test.User"
     assert type_info_arg_count[map[string, result[int64, string]]]() == 2
     assert type_info_arg_type_name[map[string, result[int64, string]]](0) == "string"
     assert type_info_arg_kind[map[string, result[int64, string]]](1) == "result"

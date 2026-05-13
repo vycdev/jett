@@ -106,7 +106,7 @@ function reflected_field_count[T]() returns int64:
 verify type_reflection:
     assert type.name[int64]() == "int64"
     assert type.name[list[string]]() == "list[string]"
-    assert reflected_name[Pair[string, int64]]() == "Pair[string, int64]"
+    assert reflected_name[Pair[string, int64]]() == "test.Pair[string, int64]"
     assert type.kind[int64]() == "primitive"
     assert type.kind[list[string]]() == "list"
     assert type.kind[User]() == "struct"

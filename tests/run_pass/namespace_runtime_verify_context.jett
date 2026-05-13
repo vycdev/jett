@@ -1,0 +1,23 @@
+namespace alpha
+
+function helper() returns int64:
+    return 1
+
+verify alpha_verify_context:
+    assert helper() == 1
+
+property alpha_property_context:
+    given n: int64
+    assert helper() == 1
+
+namespace beta
+
+function helper() returns int64:
+    return 2
+
+verify beta_verify_context:
+    assert helper() == 2
+
+property beta_property_context:
+    given n: int64
+    assert helper() == 2

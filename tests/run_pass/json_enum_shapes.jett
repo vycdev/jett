@@ -46,8 +46,8 @@ function enum_unknown_object_error() returns string:
 verify json_enum_shapes:
     assert unit_variant_from_string() == true
     assert unit_variant_from_empty_payload_object() == true
-    assert payload_variant_as_string_error() == "enum variant 'Shape.point' expects 2 payload field(s)"
+    assert payload_variant_as_string_error() == "enum variant 'test.Shape.point' expects 2 payload field(s)"
     assert enum_object_multiple_keys_error() == "expected enum object with exactly one variant key"
-    assert enum_payload_not_array_error() == "expected array payload for enum variant 'Shape.point', got number"
-    assert enum_unknown_string_error() == "unknown enum variant 'Direction.east'"
-    assert enum_unknown_object_error() == "unknown enum variant 'Shape.missing'"
+    assert enum_payload_not_array_error() == "expected array payload for enum variant 'test.Shape.point', got number"
+    assert enum_unknown_string_error() == "unknown enum variant 'test.Direction.east'"
+    assert enum_unknown_object_error() == "unknown enum variant 'test.Shape.missing'"

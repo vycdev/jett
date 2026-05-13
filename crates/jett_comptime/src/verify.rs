@@ -1,4 +1,4 @@
-use jett_common::Span;
+use jett_common::{FileId, Span};
 use jett_diagnostics::Diagnostic;
 use jett_parser::ast::{
     FunctionDef, GivenDecl, Item, Module, PropertyBlock, TypeExpr, VerifyBlock,
@@ -8,6 +8,41 @@ use std::sync::Arc;
 
 use crate::interpreter::Interpreter;
 use crate::value::Value;
+
+fn item_file(item: &Item) -> FileId {
+    match item {
+        Item::Namespace(ns) => ns.span.file,
+        Item::Function(func) => func.span.file,
+        Item::Mutual(block) => block.span.file,
+        Item::Interface(interface) => interface.span.file,
+        Item::Implement(block) => block.span.file,
+        Item::Struct(strukt) => strukt.span.file,
+        Item::Bitfield(bitfield) => bitfield.span.file,
+        Item::Enum(enm) => enm.span.file,
+        Item::Machine(machine) => machine.span.file,
+        Item::Actor(actor) => actor.span.file,
+        Item::VarDecl(decl) => decl.span.file,
+        Item::Verify(verify) => verify.span.file,
+        Item::Property(prop) => prop.span.file,
+        Item::TypeAlias(alias) => alias.span.file,
+    }
+}
+
+fn update_current_namespace(
+    item: &Item,
+    current_file: &mut Option<FileId>,
+    current_namespace: &mut Option<String>,
+) {
+    let item_file = item_file(item);
+    if current_file.is_some_and(|file| file != item_file) {
+        *current_namespace = None;
+    }
+    *current_file = Some(item_file);
+
+    if let Item::Namespace(ns) = item {
+        *current_namespace = Some(ns.name.name.clone());
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Default iteration count for property-based testing
@@ -139,29 +174,32 @@ fn run_verify_blocks_detailed_inner(
     // First pass: register all functions and type aliases so verify blocks
     // can call them and use refinement types.
     interp.register_module(module);
-    let mut legacy_verify_functions: Vec<FunctionDef> = Vec::new();
-    let mut verify_blocks: Vec<VerifyBlock> = Vec::new();
-    let mut property_blocks: Vec<PropertyBlock> = Vec::new();
+    let mut legacy_verify_functions: Vec<(Option<String>, FunctionDef)> = Vec::new();
+    let mut verify_blocks: Vec<(Option<String>, VerifyBlock)> = Vec::new();
+    let mut property_blocks: Vec<(Option<String>, PropertyBlock)> = Vec::new();
+    let mut current_file = None;
+    let mut current_namespace = None;
     for item in &module.items {
+        update_current_namespace(item, &mut current_file, &mut current_namespace);
         match item {
             Item::Function(func) => {
                 if has_assert_stmts(func) && func.params.is_empty() && func.name.name != "main" {
-                    legacy_verify_functions.push(func.clone());
+                    legacy_verify_functions.push((current_namespace.clone(), func.clone()));
                 }
             }
             Item::Verify(vb) => {
-                verify_blocks.push(vb.clone());
+                verify_blocks.push((current_namespace.clone(), vb.clone()));
             }
             Item::Property(pb) => {
-                property_blocks.push(pb.clone());
+                property_blocks.push((current_namespace.clone(), pb.clone()));
             }
             _ => {}
         }
     }
 
     // Execute proper verify blocks.
-    for vb in &verify_blocks {
-        match interp.exec_block(&vb.body) {
+    for (namespace, vb) in &verify_blocks {
+        match interp.exec_block_in_namespace(namespace.as_deref(), &vb.body) {
             Ok(_) => {
                 results.push(VerifyResult {
                     name: vb.name.name.clone(),
@@ -184,8 +222,8 @@ fn run_verify_blocks_detailed_inner(
     }
 
     // Execute legacy verify functions (zero-arg functions with asserts).
-    for func in &legacy_verify_functions {
-        match interp.call_function(&func.name.name, vec![]) {
+    for (namespace, func) in &legacy_verify_functions {
+        match interp.call_function_in_namespace(namespace.as_deref(), &func.name.name, vec![]) {
             Ok(_) => {
                 results.push(VerifyResult {
                     name: func.name.name.clone(),
@@ -208,8 +246,8 @@ fn run_verify_blocks_detailed_inner(
     }
 
     // Execute property blocks.
-    for pb in &property_blocks {
-        let result = run_property_block(&mut interp, pb);
+    for (namespace, pb) in &property_blocks {
+        let result = run_property_block(&mut interp, namespace.as_deref(), pb);
         results.push(result);
     }
 
@@ -329,7 +367,12 @@ fn shrink_value(value: &Value) -> Vec<Value> {
 
 /// Try to find simpler inputs that still cause the property to fail.
 /// Returns the shrunk inputs as a Vec<Value> in the same order as `failing`.
-fn shrink_inputs(interp: &mut Interpreter, pb: &PropertyBlock, failing: Vec<Value>) -> Vec<Value> {
+fn shrink_inputs(
+    interp: &mut Interpreter,
+    namespace: Option<&str>,
+    pb: &PropertyBlock,
+    failing: Vec<Value>,
+) -> Vec<Value> {
     let mut current = failing;
 
     'outer: for _ in 0..SHRINK_MAX_STEPS {
@@ -345,7 +388,7 @@ fn shrink_inputs(interp: &mut Interpreter, pb: &PropertyBlock, failing: Vec<Valu
                 for (given, value) in pb.givens.iter().zip(attempt.iter()) {
                     interp.set_variable_public(&given.name.name, value.clone());
                 }
-                let result = interp.exec_block(&pb.body);
+                let result = interp.exec_block_in_namespace(namespace, &pb.body);
                 interp.pop_scope_public();
 
                 if result.is_err() {
@@ -362,7 +405,11 @@ fn shrink_inputs(interp: &mut Interpreter, pb: &PropertyBlock, failing: Vec<Valu
     current
 }
 
-fn run_property_block(interp: &mut Interpreter, pb: &PropertyBlock) -> VerifyResult {
+fn run_property_block(
+    interp: &mut Interpreter,
+    namespace: Option<&str>,
+    pb: &PropertyBlock,
+) -> VerifyResult {
     let iterations = PROPERTY_DEFAULT_ITERATIONS;
 
     // Pre-compute the value pools for each given declaration.
@@ -406,13 +453,13 @@ fn run_property_block(interp: &mut Interpreter, pb: &PropertyBlock) -> VerifyRes
             interp.set_variable_public(&given.name.name, value.clone());
         }
 
-        let exec_result = interp.exec_block(&pb.body);
+        let exec_result = interp.exec_block_in_namespace(namespace, &pb.body);
         interp.pop_scope_public();
 
         if let Err(msg) = exec_result {
             // Shrink the failing inputs to find a simpler counterexample.
             let failing_values: Vec<Value> = chosen.iter().map(|(_, v)| v.clone()).collect();
-            let shrunk = shrink_inputs(interp, pb, failing_values);
+            let shrunk = shrink_inputs(interp, namespace, pb, failing_values);
 
             let input_desc: Vec<String> = pb
                 .givens

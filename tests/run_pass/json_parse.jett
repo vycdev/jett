@@ -252,16 +252,16 @@ verify json_parse:
     assert parse_result_unknown_key_error() == "expected result object with key 'ok' or 'fail'"
     assert parse_generic_struct_value() == "stored"
     assert parse_refinement_ok() == "alice"
-    assert parse_refinement_error() == "refinement type constraint failed for 'NonEmpty'"
+    assert parse_refinement_error() == "refinement type constraint failed for 'test.NonEmpty'"
     assert parse_refined_list_count() == 2
     assert parse_refined_list_error() == "refinement type constraint failed for 'NonEmptyNames'"
     assert parse_enum_unit() == true
     assert parse_enum_payload_area() == 12.0
-    assert parse_enum_payload_error() == "enum variant 'Shape.rect' expects 2 payload field(s), got 1"
+    assert parse_enum_payload_error() == "enum variant 'test.Shape.rect' expects 2 payload field(s), got 1"
     assert parse_bitfield_version() == 4
     assert parse_bitfield_protocol() == true
-    assert parse_bitfield_width_error() == "bitfield 'Header' field 'version' is 4 bit(s) wide and cannot hold '16'"
-    assert parse_missing_required_error() == "missing required field 'profileData' for User"
+    assert parse_bitfield_width_error() == "bitfield 'test.Header' field 'version' is 4 bit(s) wide and cannot hold '16'"
+    assert parse_missing_required_error() == "missing required field 'profileData' for test.User"
     assert parse_struct_wrong_shape_error() == "expected object, got array"
     assert parse_top_level_float() == 2.5
     assert parse_null_as_nothing() == "null"
@@ -273,4 +273,4 @@ verify json_parse:
     assert parse_top_level_secret_redaction() == "***"
     assert parse_secret_field_redaction() == "svc:***"
     assert parse_secret_field_type_error() == "token: expected string, got number"
-    assert parse_missing_secret_field_error() == "missing required field 'token' for Credential"
+    assert parse_missing_secret_field_error() == "missing required field 'token' for test.Credential"
