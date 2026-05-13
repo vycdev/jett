@@ -150,6 +150,14 @@ That does not require full native codegen monomorphization first, but it does
 require a stable checked representation of `Box[string]` as more than
 `Box[T] + {T = string}` in interpreter-local code.
 
+Status: started. `ReflectionMetadata` now has a canonical `TypeId` lookup
+scaffold alongside its legacy string maps. The typechecker seeds canonical
+`TypeInfo` entries by checked `TypeId`, and field/bitfield/variant metadata can
+be shared through bound type-name aliases once a checked name is associated with
+that `TypeId`. The comptime interpreter still calls the existing string-shaped
+lookup API, but that API can now resolve through the canonical maps when a
+binding exists.
+
 ### Stage 5: Remove AST Metadata Fallbacks
 
 Once fixtures and comptime tests are passing through the checked snapshot, remove
@@ -177,7 +185,8 @@ masking missing owner metadata with AST reconstruction."
 
 Concrete follow-up:
 
-1. Add canonical metadata keys that do not depend on display strings.
+1. Continue replacing display-string-only metadata insertion with canonical
+   `TypeId` bindings where the typechecker has an unambiguous checked owner.
 2. Keep no-metadata interpreter mode working for unit tests and bootstrap.
 3. Once generic instantiations have canonical checked records, treat missing
    checked metadata for reflected owners as an internal metadata error instead

@@ -795,7 +795,7 @@ impl<'a> TypeChecker<'a> {
 
         let type_ids = self.interner.type_ids().collect::<Vec<_>>();
         for type_id in type_ids {
-            metadata.insert_type_info(self.reflection_type_info_for_type(type_id));
+            metadata.insert_type_info_for_id(type_id, self.reflection_type_info_for_type(type_id));
         }
 
         for (name, type_id) in self.named_types.clone() {
@@ -818,7 +818,7 @@ impl<'a> TypeChecker<'a> {
                 display_name.clone(),
                 arg_infos.clone(),
             );
-            metadata.insert_type_info(info);
+            metadata.insert_type_info_for_id(type_id, info);
 
             if let Some((_namespace, leaf_name)) = display_name.split_once('.') {
                 metadata.insert_type_info(self.reflection_type_info_for_type_named_with_args(

@@ -1,9 +1,16 @@
 use std::collections::HashMap;
 
+use crate::TypeId;
+
 /// Immutable reflection metadata produced by type checking and consumed by
 /// comptime reflection builtins.
 #[derive(Debug, Clone, Default)]
 pub struct ReflectionMetadata {
+    type_ids_by_name: HashMap<String, TypeId>,
+    type_infos_by_id: HashMap<TypeId, ReflectionTypeInfo>,
+    type_fields_by_id: HashMap<TypeId, Vec<ReflectionFieldInfo>>,
+    bitfields_by_id: HashMap<TypeId, ReflectionBitfieldInfo>,
+    type_variants_by_id: HashMap<TypeId, Vec<ReflectionVariantInfo>>,
     type_infos: HashMap<String, ReflectionTypeInfo>,
     type_fields: HashMap<String, Vec<ReflectionFieldInfo>>,
     bitfields: HashMap<String, ReflectionBitfieldInfo>,
@@ -15,11 +22,26 @@ impl ReflectionMetadata {
         Self::default()
     }
 
+    pub fn bind_type_name(&mut self, type_name: impl Into<String>, type_id: TypeId) {
+        self.type_ids_by_name.insert(type_name.into(), type_id);
+    }
+
+    pub fn insert_type_info_for_id(&mut self, type_id: TypeId, info: ReflectionTypeInfo) {
+        self.bind_type_name(info.type_name.clone(), type_id);
+        self.type_infos_by_id.insert(type_id, info.clone());
+        self.type_infos.insert(info.type_name.clone(), info);
+    }
+
     pub fn insert_type_info(&mut self, info: ReflectionTypeInfo) {
         self.type_infos.insert(info.type_name.clone(), info);
     }
 
     pub fn get_type_info(&self, type_name: &str) -> Option<&ReflectionTypeInfo> {
+        if let Some(type_id) = self.type_ids_by_name.get(type_name)
+            && let Some(info) = self.type_infos_by_id.get(type_id)
+        {
+            return Some(info);
+        }
         self.type_infos.get(type_name)
     }
 
@@ -28,10 +50,19 @@ impl ReflectionMetadata {
         type_name: impl Into<String>,
         fields: Vec<ReflectionFieldInfo>,
     ) {
-        self.type_fields.insert(type_name.into(), fields);
+        let type_name = type_name.into();
+        if let Some(type_id) = self.type_ids_by_name.get(&type_name) {
+            self.type_fields_by_id.insert(*type_id, fields.clone());
+        }
+        self.type_fields.insert(type_name, fields);
     }
 
     pub fn get_type_fields(&self, type_name: &str) -> Option<&[ReflectionFieldInfo]> {
+        if let Some(type_id) = self.type_ids_by_name.get(type_name)
+            && let Some(fields) = self.type_fields_by_id.get(type_id)
+        {
+            return Some(fields.as_slice());
+        }
         self.type_fields.get(type_name).map(Vec::as_slice)
     }
 
@@ -40,10 +71,19 @@ impl ReflectionMetadata {
         type_name: impl Into<String>,
         bitfield: ReflectionBitfieldInfo,
     ) {
-        self.bitfields.insert(type_name.into(), bitfield);
+        let type_name = type_name.into();
+        if let Some(type_id) = self.type_ids_by_name.get(&type_name) {
+            self.bitfields_by_id.insert(*type_id, bitfield.clone());
+        }
+        self.bitfields.insert(type_name, bitfield);
     }
 
     pub fn get_bitfield(&self, type_name: &str) -> Option<&ReflectionBitfieldInfo> {
+        if let Some(type_id) = self.type_ids_by_name.get(type_name)
+            && let Some(bitfield) = self.bitfields_by_id.get(type_id)
+        {
+            return Some(bitfield);
+        }
         self.bitfields.get(type_name)
     }
 
@@ -52,10 +92,19 @@ impl ReflectionMetadata {
         type_name: impl Into<String>,
         variants: Vec<ReflectionVariantInfo>,
     ) {
-        self.type_variants.insert(type_name.into(), variants);
+        let type_name = type_name.into();
+        if let Some(type_id) = self.type_ids_by_name.get(&type_name) {
+            self.type_variants_by_id.insert(*type_id, variants.clone());
+        }
+        self.type_variants.insert(type_name, variants);
     }
 
     pub fn get_type_variants(&self, type_name: &str) -> Option<&[ReflectionVariantInfo]> {
+        if let Some(type_id) = self.type_ids_by_name.get(type_name)
+            && let Some(variants) = self.type_variants_by_id.get(type_id)
+        {
+            return Some(variants.as_slice());
+        }
         self.type_variants.get(type_name).map(Vec::as_slice)
     }
 }
@@ -194,5 +243,66 @@ impl ReflectionVariantInfo {
             has_secret,
             fields,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn info(type_name: &str, kind: &str) -> ReflectionTypeInfo {
+        ReflectionTypeInfo::new(type_name, kind, None, false, Vec::new())
+    }
+
+    #[test]
+    fn type_id_lookup_preserves_legacy_string_lookup() {
+        let type_id = TypeId(42);
+        let mut metadata = ReflectionMetadata::new();
+
+        metadata.insert_type_info_for_id(type_id, info("models.Box[int64]", "struct"));
+        metadata.insert_type_info(info("Box[int64]", "struct"));
+
+        assert_eq!(
+            metadata
+                .get_type_info("models.Box[int64]")
+                .expect("canonical info should exist")
+                .kind,
+            "struct"
+        );
+        assert_eq!(
+            metadata
+                .get_type_info("Box[int64]")
+                .expect("legacy string info should exist")
+                .kind,
+            "struct"
+        );
+    }
+
+    #[test]
+    fn type_id_lookup_can_share_fields_across_bound_names() {
+        let type_id = TypeId(43);
+        let mut metadata = ReflectionMetadata::new();
+        let value_info = info("string", "primitive");
+        let fields = vec![ReflectionFieldInfo::new(
+            0,
+            "value",
+            "string",
+            "primitive",
+            "value",
+            false,
+            value_info,
+        )];
+
+        metadata.insert_type_info_for_id(type_id, info("models.Box[string]", "struct"));
+        metadata.insert_type_fields("models.Box[string]", fields);
+        metadata.bind_type_name("box_alias", type_id);
+
+        assert_eq!(
+            metadata
+                .get_type_fields("box_alias")
+                .expect("bound alias should see canonical fields")[0]
+                .name,
+            "value"
+        );
     }
 }
