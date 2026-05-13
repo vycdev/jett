@@ -4116,14 +4116,82 @@ One namespace, one file. No ambiguity about which `auth` is being imported.
 
 **Third-party namespace collisions:** If a vendored library declares `namespace auth` and your project also has `namespace auth`, this is a compile error. Since dependencies are vendored source files, you own the copy — rename the namespace in the vendored file (e.g. to `namespace authlib.auth`), then `use authlib.auth as auth` at the call site. Library authors should use prefixed namespaces (e.g. `namespace mylib.auth` instead of just `namespace auth`) to minimize collisions.
 
-**TODO: Namespace visibility / exports.** The implementation now has provisional
-private-by-default namespace items with explicit `export` for public APIs. This
-needs to be written into the canonical design before it is considered settled:
-document same-namespace private access, qualified-only external access,
-`export` on functions/types/interfaces/bitfields/enums/type aliases, `export`
-inside `mutual` blocks, examples for stdlib modules, editor syntax
-highlighting expectations, and update the keyword list. Use
-`docs/active/stdlib_visibility_design.md` as the staging reference.
+#### Namespace Visibility And Exports
+
+Declarations inside a namespace are **private by default**. Code in the same
+namespace can use private helper declarations, but code outside the namespace
+can only name declarations marked with `export`.
+
+This keeps library and standard library internals out of the public API by
+default. Public surface area is local, explicit, and searchable:
+
+```
+namespace json
+
+export function parse[T](raw: string) returns result[T, string]:
+    return json_parse_reflected[T](raw)
+
+function json_parse_reflected[T](raw: string) returns result[T, string]:
+    # private helper, callable inside namespace json only
+    ...
+```
+
+`export` can prefix public top-level API declarations:
+
+```
+export function load(path: string) returns result[Config, string]:
+    ...
+
+export struct Config:
+    host: string
+    port: int64
+
+export enum Mode:
+    development
+    production
+
+export bitfield Flags:
+    enabled: 1 bit
+
+export type Port = int64 where value > 0
+
+export interface Displayable:
+    function display(view value: self) returns string
+```
+
+Inside a `mutual` block, each public function signature is exported
+individually. This allows one recursive group to expose a small public entry
+point while keeping the rest of the cycle private:
+
+```
+namespace parser
+
+mutual:
+    export function parse_document(tokens: list[Token]) returns result[Node, string]
+    function parse_expression(tokens: list[Token]) returns result[Node, string]
+    function parse_term(tokens: list[Token]) returns result[Node, string]
+```
+
+From outside the namespace, exported declarations must still be accessed through
+the namespace path or an explicit namespace alias. `export` makes a declaration
+public; it does not create a global flat name.
+
+```
+namespace app
+
+function main() returns nothing:
+    use json
+    result[User, string] user = json.parse[User](raw)
+```
+
+This means `parse[User](raw)` is still rejected outside `namespace json`, even
+though `json.parse` is exported. That rule preserves Jett's flat, explicit name
+model: public APIs are discoverable as `namespace.name`, and renames remain
+mechanical.
+
+`export` controls ordinary source visibility only. It is not a trust marker.
+Compiler-shipped standard library modules may still need separate trusted-origin
+metadata for policy-bearing hooks such as JSON serialization.
 
 #### Flat File Organization — The LLM Decides
 
@@ -6246,7 +6314,7 @@ All 17 block constructs share the same shape. An LLM only needs to learn one pat
 
 Jett's keyword set uses complete, common English words that each map to a single token. Boolean and comparison operators use universal symbols (`==`, `!=`, `&&`, `||`, `!`, `<`, `>`, `<=`, `>=`):
 
-`mutable`, `function`, `return`, `returns`, `if`, `else`, `for`, `in`, `into`, `while`, `struct`, `enum`, `match`, `use`, `true`, `false`, `none`, `and`, `within`, `self`, `handle`, `error`, `default`, `result`, `ok`, `fail`, `as`, `break`, `continue`, `interface`, `implement`, `assert`, `type`, `where`, `value`, `mutual`, `machine`, `states`, `transitions`, `to`, `at`, `is`, `transition`, `clone`, `actor`, `receive`, `send`, `ask`, `respond`, `spawn`, `run`, `join`, `cancel`, `comptime`, `verify`, `secret`, `declassify`, `coarsen`, `serialize`, `namespace`, `bitfield`, `bit`, `bits`, `network`, `view`, `property`, `given`, `trace`, `breakpoint`, `some`, `optional`, `nothing`, `other`, `not`, `int8`, `int16`, `int32`, `int64`, `uint8`, `uint16`, `uint32`, `uint64`, `float32`, `float64`, `string`, `bool`, `bytes`, `list`, `map`, `set`, `modulo`
+`mutable`, `function`, `return`, `returns`, `if`, `else`, `for`, `in`, `into`, `while`, `struct`, `enum`, `match`, `use`, `true`, `false`, `none`, `and`, `within`, `self`, `handle`, `error`, `default`, `result`, `ok`, `fail`, `as`, `break`, `continue`, `interface`, `implement`, `assert`, `type`, `where`, `value`, `mutual`, `machine`, `states`, `transitions`, `to`, `at`, `is`, `transition`, `clone`, `actor`, `receive`, `send`, `ask`, `respond`, `spawn`, `run`, `join`, `cancel`, `comptime`, `verify`, `secret`, `declassify`, `coarsen`, `serialize`, `namespace`, `export`, `bitfield`, `bit`, `bits`, `network`, `view`, `property`, `given`, `trace`, `breakpoint`, `some`, `optional`, `nothing`, `other`, `not`, `int8`, `int16`, `int32`, `int64`, `uint8`, `uint16`, `uint32`, `uint64`, `float32`, `float64`, `string`, `bool`, `bytes`, `list`, `map`, `set`, `modulo`
 
 ### JSON AST Round-Tripping
 

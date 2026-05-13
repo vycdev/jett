@@ -266,18 +266,19 @@ TopLevelItem    → FunctionDef | StructDef | EnumDef | InterfaceDef |
                   ImplementBlock | MachineDef | ActorDef | TypeAlias |
                   VerifyBlock | PropertyBlock | MutualBlock | BitfieldDef |
                   ConstDecl
-FunctionDef     → 'function' Name GenericParams? '(' ParamList ')' 'returns' Type ':' Block
-StructDef       → 'struct' Name ':' FieldList FunctionDef*    // Fields may have 'serialize "jsonName"' annotation
-EnumDef         → 'enum' Name ':' VariantList      // Variants may have data fields or integer values (e.g., tcp = 6)
+FunctionDef     → ('export')? 'function' Name GenericParams? '(' ParamList ')' 'returns' Type ':' Block
+StructDef       → ('export')? 'struct' Name ':' FieldList FunctionDef*    // Fields may have 'serialize "jsonName"' annotation
+EnumDef         → ('export')? 'enum' Name ':' VariantList      // Variants may have data fields or integer values (e.g., tcp = 6)
 MachineDef      → 'machine' Name ':' StatesBlock TransitionsBlock
 ActorDef        → 'actor' Name '(' ParamList ')' ':' (ReceiveHandler)*
-BitfieldDef     → ('network')? 'bitfield' Name ':' BitfieldList  // Fields: 'name: N bits' or 'name: N bits as EnumType' or 'payload: list[uint8]'
-TypeAlias       → 'type' Name GenericParams? '=' Type ('where' Expr)?
+BitfieldDef     → ('export')? ('network')? 'bitfield' Name ':' BitfieldList  // Fields: 'name: N bits' or 'name: N bits as EnumType' or 'payload: list[uint8]'
+TypeAlias       → ('export')? 'type' Name GenericParams? '=' Type ('where' Expr)?
 VerifyBlock     → 'verify' Name ':' Block
 PropertyBlock   → 'property' Name ':' GivenDecls Block
-InterfaceDef    → 'interface' Name ':' FunctionSignature*
+InterfaceDef    → ('export')? 'interface' Name ':' FunctionSignature*
 ImplementBlock  → 'implement' Name 'for' Name ':' FunctionDef*
-MutualBlock     → 'mutual' ':' ('export')? FunctionSignature*
+MutualBlock     → 'mutual' ':' MutualSignature*
+MutualSignature → ('export')? FunctionSignature
 
 MatchArm        → Pattern ':' Block      // Pattern includes variant destructure or 'other' catch-all
 
@@ -336,10 +337,12 @@ Expression      → Literal | Ident | BinaryExpr | UnaryExpr |
    - Register all top-level declarations (functions, structs, enums, machines, actors, interfaces, type aliases, bitfields) into a per-namespace symbol table.
    - Respect strict top-to-bottom ordering (Rule Set 4): a declaration is only visible to code that follows it.
    - Handle `mutual` blocks: register all signatures in the mutual block before processing their bodies.
+   - Record namespace visibility: declarations in an explicit namespace are private by default unless marked `export`.
 
 2. **Reference pass:**
    - Walk all expressions and resolve identifiers to their declarations.
    - Resolve `use` statements: look up the namespace registry, bind the last segment (or `as` alias) in the function's local scope.
+   - Enforce namespace visibility: code outside a namespace can reference only exported declarations, and must do so through the qualified namespace path or an explicit namespace alias.
    - Enforce: no forward references, no circular imports, no unused imports, no unused variables, no variable shadowing.
 
 ### Key Data Structures
@@ -377,6 +380,7 @@ ResolveResult {
 - **No circular imports** — if namespace A uses namespace B and B uses A, it's a compile error.
 - **Import aliasing** — `use net.http as net_http` binds the alias in local scope. Conflicting last-segment names require `as`.
 - **Parent namespace aggregation** — `use net.http` imports all child namespaces (`net.http.server`, `net.http.client`) when `net.http` itself is not a declared namespace but its children are. Accessing child items uses the last segment: `server.listen(...)`, `client.get(...)`.
+- **Namespace exports** — namespaced declarations are private to their declaring namespace by default. `export` marks public API declarations, but outside code must still use `namespace.name` or a `use ... as ...` alias; exported names are not inserted into the global flat scope.
 
 ---
 
