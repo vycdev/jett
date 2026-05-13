@@ -165,22 +165,20 @@ the AST reconstruction paths that duplicate typechecker behavior.
 
 ## Recommended Next Bite
 
-Continue the metadata-only migration:
+Move metadata identity from display-string keys toward canonical checked type
+records or `TypeId`s, while preserving documented bootstrap/direct-interpreter
+fallback paths.
 
-1. Add checked `TypeField` records to `ReflectionMetadata`, then move
-   `type.fields[T]()` over while preserving trusted loop provenance. Done.
-2. Route `TypeInfo.args` trusted loop binding through checked metadata once
-   runtime metadata values and typechecker provenance agree on the same source.
-   Done.
-3. Add checked bitfield layout/field metadata. Done.
-4. Add checked enum variant metadata. Done.
-5. Move value-sensitive APIs incrementally. `type.field_value`,
-   `type.variant_value`, and `type.variant_field_value` have started;
-   `type.construct_variant_start` and `type.construct_put` now stage checked
-   construction validation. `type.construct_finish` now uses checked metadata
-   for structs, enums, and bitfields.
-6. Route trusted `comptime type` binding derivation through checked metadata for
-   direct `type.arg`, field loops, variant loops, and variant payload loops.
-   Done.
-7. Audit the remaining AST fallback users and decide which ones are true
-   bootstrap compatibility paths versus metadata gaps that should be closed.
+The remaining AST fallback users have been audited. They are intentionally kept
+for direct interpreter tests and bootstrap runs without a checked
+`ReflectionMetadata` snapshot. The tightening target is no longer "remove every
+AST path"; it is "when checked metadata exists for a program, avoid silently
+masking missing owner metadata with AST reconstruction."
+
+Concrete follow-up:
+
+1. Add canonical metadata keys that do not depend on display strings.
+2. Keep no-metadata interpreter mode working for unit tests and bootstrap.
+3. Once generic instantiations have canonical checked records, treat missing
+   checked metadata for reflected owners as an internal metadata error instead
+   of falling back silently.
