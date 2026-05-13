@@ -42,7 +42,8 @@ about: two names, two traversal surfaces, one conceptual data model.
   trusted stdlib `json_tree_parse` hook.
 - `json.serialize_raw`, `json.kind`, `json.field`, `json.index`, scalar casts,
   `json.array_length`, and `json.object_keys` dispatch native `JsonTree`
-  runtime values through trusted stdlib `json_tree_*` hooks.
+  runtime values through exported stdlib facade wrappers backed by
+  `json_tree_*` hooks. The Rust builtin cases remain as bootstrap fallbacks.
 - `jett_comptime` no longer has `Value::Json` or a `serde_json` dependency.
 - The type system still reports `JsonValue` as a built-in primitive for
   reflection compatibility, but it seeds an explicit legacy compatibility alias
@@ -164,11 +165,13 @@ delegate to trusted stdlib functions where possible:
 At this stage the typechecker may still say the parameter/return type is
 `JsonValue`, but the interpreter should hold a native tree value.
 
-Status: implemented. The interpreter delegates `json.parse_raw` to trusted
-`json.json_tree_parse`, and raw helpers dispatch native `JsonTree` values
-through trusted `json.json_tree_*` hooks. The public typed
-`json.parse[JsonValue]` compatibility branch also calls `json_tree_parse`
-directly instead of bouncing through the raw builtin surface.
+Status: implemented. Exported stdlib facade wrappers now exist for
+`parse_raw`, `serialize_raw`, `kind`, `field`, `index`, the shape predicates,
+length/key helpers, and scalar casts. The interpreter prefers those trusted
+stdlib wrappers when they are registered, and keeps the Rust builtin cases only
+as bootstrap fallbacks. The public typed `json.parse[JsonValue]` compatibility
+branch also calls `json_tree_parse` directly instead of bouncing through the raw
+builtin surface.
 
 ### 3. Change Runtime Representation
 

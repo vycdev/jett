@@ -843,7 +843,7 @@ function json_serialize_public_primitive[T](view value: T, primitive: TypePrimit
         return json_stdlib_quote("0x{bytes.to_hex(item)}")
     if primitive == TypePrimitive.json_value_type:
         JsonValue item = value
-        return json.serialize_raw(item)
+        return json_tree_serialize(item)
     return "null"
 function json_serialize_public_enum_reflected[T](view value: T) returns string:
     TypeVariant selected = type.variant_value[T](view value)
@@ -1148,6 +1148,41 @@ function json_parse_reflected[T](raw: string) returns result[T, string]:
             return fail(error)
         return ok(value)
     return json_tree_parse_reflected[T](raw)
+export function parse_raw(raw: string) returns result[JsonTree, string]:
+    return json_tree_parse(raw)
+export function serialize_raw(view value: JsonTree) returns string:
+    JsonTree owned = clone value
+    return json_tree_serialize(owned)
+export function kind(view value: JsonTree) returns string:
+    return json_tree_kind(view value)
+export function is_null(view value: JsonTree) returns bool:
+    return json_tree_is_null(view value)
+export function is_bool(view value: JsonTree) returns bool:
+    return json_tree_is_bool(view value)
+export function is_number(view value: JsonTree) returns bool:
+    return json_tree_is_number(view value)
+export function is_string(view value: JsonTree) returns bool:
+    return json_tree_is_string(view value)
+export function is_array(view value: JsonTree) returns bool:
+    return json_tree_is_array(view value)
+export function is_object(view value: JsonTree) returns bool:
+    return json_tree_is_object(view value)
+export function field(view value: JsonTree, key: string) returns optional[JsonTree]:
+    return json_tree_field(view value, key)
+export function index(view value: JsonTree, index: int64) returns optional[JsonTree]:
+    return json_tree_index(view value, index)
+export function array_length(view value: JsonTree) returns result[int64, string]:
+    return json_tree_array_length(view value)
+export function object_keys(view value: JsonTree) returns result[list[string], string]:
+    return json_tree_object_keys(view value)
+export function as_string(view value: JsonTree) returns result[string, string]:
+    return json_tree_as_string(view value)
+export function as_int64(view value: JsonTree) returns result[int64, string]:
+    return json_tree_as_int64(view value)
+export function as_float64(view value: JsonTree) returns result[float64, string]:
+    return json_tree_as_float64(view value)
+export function as_bool(view value: JsonTree) returns result[bool, string]:
+    return json_tree_as_bool(view value)
 export function parse[T](raw: string) returns result[T, string]:
     return json_parse_reflected[T](raw)
 export function serialize[T](view value: T) returns string:

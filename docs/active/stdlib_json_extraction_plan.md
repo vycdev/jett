@@ -98,7 +98,8 @@ fallback paths for public parse/serialize have been removed; Rust-backed paths
 have also been removed from raw JSON execution in `jett_comptime`. Public
 `json.parse_raw` now delegates to the trusted self-hosted `JsonTree` parser, and
 raw helper calls dispatch native `JsonTree` runtime values through trusted
-`json_tree_*` hooks.
+stdlib facade wrappers backed by `json_tree_*` hooks. The Rust builtin cases
+remain as bootstrap fallbacks for direct interpreter use without loaded stdlib.
 
 ## Blockers
 
@@ -189,6 +190,9 @@ bridge spoofing, not helper visibility.
    - `json_parse_reflected[T](raw: string)` now routes typed targets through the
      self-hosted `JsonTree` parser/decoder. The `JsonValue` compatibility
      branch also parses through `json_tree_parse` directly.
+   - Public raw facade wrappers now exist in `stdlib/json.jett` for
+     `parse_raw`, `serialize_raw`, tree kind/predicates, lookup, length/key
+     helpers, and scalar casts.
 3. Maintain the public bridge handoff. `json.parse`, `json.serialize`, and
    `json.serialize_public` now use compiler-owned typechecker policy with
    stdlib-owned interpreter bodies. See `/docs/completed/json_public_bridge_handoff.md`.

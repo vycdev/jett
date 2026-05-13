@@ -7563,7 +7563,7 @@ impl Interpreter {
         type_args: &[TypeExpr],
         args: Vec<Value>,
     ) -> Result<Value, String> {
-        if self.is_stdlib_internal_function(name) {
+        if self.is_trusted_stdlib_first_function(name) {
             return self.call_user_function_with_type_args(name, type_args, args);
         }
 
@@ -7582,8 +7582,32 @@ impl Interpreter {
         self.call_user_function_with_type_args(name, type_args, args)
     }
 
-    fn is_stdlib_internal_function(&self, name: &str) -> bool {
-        name.starts_with("json.json_") && self.has_trusted_stdlib_function(name)
+    fn is_trusted_stdlib_first_function(&self, name: &str) -> bool {
+        self.has_trusted_stdlib_function(name)
+            && (name.starts_with("json.json_") || Self::is_json_raw_facade(name))
+    }
+
+    fn is_json_raw_facade(name: &str) -> bool {
+        matches!(
+            name,
+            "json.parse_raw"
+                | "json.serialize_raw"
+                | "json.kind"
+                | "json.is_null"
+                | "json.is_bool"
+                | "json.is_number"
+                | "json.is_string"
+                | "json.is_array"
+                | "json.is_object"
+                | "json.field"
+                | "json.index"
+                | "json.array_length"
+                | "json.object_keys"
+                | "json.as_string"
+                | "json.as_int64"
+                | "json.as_float64"
+                | "json.as_bool"
+        )
     }
 
     fn has_trusted_stdlib_function(&self, name: &str) -> bool {
