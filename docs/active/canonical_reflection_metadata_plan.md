@@ -152,9 +152,11 @@ require a stable checked representation of `Box[string]` as more than
 
 Status: started. `ReflectionMetadata` now has a canonical `TypeId` lookup
 scaffold alongside its legacy string maps. The typechecker seeds canonical
-`TypeInfo` entries by checked `TypeId`, and the checker now stores
-struct/generic-struct fields, bitfield layout metadata, and enum variants by
-the known owner `TypeId` at the construction sites. The string-shaped
+`TypeInfo` entries by checked `TypeId`, including real named owners and
+refinements while keeping simple aliases string-only so they do not collapse
+into their base type's reflection identity. The checker now stores
+struct/generic-struct fields, bitfield layout metadata, and enum variants by the
+known owner `TypeId` at the construction sites. The string-shaped
 `ReflectionMetadata` API remains as a compatibility facade, but owner metadata
 lookups can resolve through canonical id maps after a name is bound. For
 field-bearing checked types, the interpreter no longer silently reconstructs
@@ -188,9 +190,9 @@ masking missing owner metadata with AST reconstruction."
 
 Concrete follow-up:
 
-1. Audit the remaining `ReflectionMetadata` string-only paths. Simple aliases
-   should stay string-only unless they get their own source-level identity;
-   refinements and canonical owners should stay id-bound.
+1. Keep auditing future `ReflectionMetadata` insertions: simple aliases should
+   stay string-only unless they get their own source-level identity; refinements
+   and canonical owners should stay id-bound.
 2. Keep no-metadata interpreter mode working for unit tests and bootstrap.
 3. Extend the same "checked owner metadata must be complete" rule to remaining
    value-sensitive reflection operations once their canonical owner keys are

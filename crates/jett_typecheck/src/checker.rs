@@ -808,12 +808,17 @@ impl<'a> TypeChecker<'a> {
         }
 
         for (name, type_id) in self.named_types.clone() {
-            let info = if let Some(alias) = self.type_aliases.get(&name).cloned() {
-                self.reflection_type_info_for_alias(&name, &alias)
+            if let Some(alias) = self.type_aliases.get(&name).cloned() {
+                let info = self.reflection_type_info_for_alias(&name, &alias);
+                if alias.constraint.is_some() {
+                    metadata.insert_type_info_for_id(type_id, info);
+                } else {
+                    metadata.insert_type_info(info);
+                }
             } else {
-                self.reflection_type_info_for_type_named(type_id, name)
-            };
-            metadata.insert_type_info(info);
+                let info = self.reflection_type_info_for_type_named(type_id, name);
+                metadata.insert_type_info_for_id(type_id, info);
+            }
         }
 
         for ((_name, type_args), type_id) in self.monomorphized_structs.clone() {
