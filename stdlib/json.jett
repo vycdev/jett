@@ -154,6 +154,9 @@ mutual:
     function json_serialize_public_result_reflected[T](view value: T) returns string
     function json_serialize_public_record_reflected[T](view value: T) returns string
     function json_decode_tree_reflected[T](view raw: JsonTree) returns result[T, string]
+    function json_decode_tree_alias_reflected[T](view raw: JsonTree) returns result[T, string]
+    function json_decode_tree_refinement_reflected[T](view raw: JsonTree) returns result[T, string]
+    function json_decode_tree_secret_reflected[T](view raw: JsonTree) returns result[T, string]
     function json_decode_tree_primitive_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[T, string]
     function json_decode_tree_scalar_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[T, string]
     function json_decode_tree_other_primitive_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[T, string]
@@ -942,25 +945,31 @@ function json_decode_tree_reflected[T](view raw: JsonTree) returns result[T, str
     if primitive != TypePrimitive.unknown_type:
         return json_decode_tree_primitive_reflected[T](view raw, primitive)
     if kind == TypeKind.alias_type:
-        comptime type Base = type.arg[T](0):
-            Base item = json_decode_tree_reflected[Base](view raw) handle error:
-                return fail(error)
-            T alias_value = item
-            return ok(alias_value)
+        return json_decode_tree_alias_reflected[T](view raw)
     if kind == TypeKind.refinement_type:
-        comptime type Base = type.arg[T](0):
-            Base item = json_decode_tree_reflected[Base](view raw) handle error:
-                return fail(error)
-            T refined = item handle error:
-                return fail(error)
-            return ok(refined)
+        return json_decode_tree_refinement_reflected[T](view raw)
     if kind == TypeKind.secret_type:
-        comptime type Inner = type.arg[T](0):
-            Inner item = json_decode_tree_reflected[Inner](view raw) handle error:
-                return fail(error)
-            T secret_value = item
-            return ok(secret_value)
+        return json_decode_tree_secret_reflected[T](view raw)
     return json_decode_tree_structured_reflected[T](view raw, kind, type_name)
+function json_decode_tree_alias_reflected[T](view raw: JsonTree) returns result[T, string]:
+    comptime type Base = type.arg[T](0):
+        Base item = json_decode_tree_reflected[Base](view raw) handle error:
+            return fail(error)
+        T alias_value = item
+        return ok(alias_value)
+function json_decode_tree_refinement_reflected[T](view raw: JsonTree) returns result[T, string]:
+    comptime type Base = type.arg[T](0):
+        Base item = json_decode_tree_reflected[Base](view raw) handle error:
+            return fail(error)
+        T refined = item handle error:
+            return fail(error)
+        return ok(refined)
+function json_decode_tree_secret_reflected[T](view raw: JsonTree) returns result[T, string]:
+    comptime type Inner = type.arg[T](0):
+        Inner item = json_decode_tree_reflected[Inner](view raw) handle error:
+            return fail(error)
+        T secret_value = item
+        return ok(secret_value)
 function json_decode_tree_primitive_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[T, string]:
     if primitive == TypePrimitive.string_type or primitive == TypePrimitive.int64_type or primitive == TypePrimitive.float64_type or primitive == TypePrimitive.bool_type:
         return json_decode_tree_scalar_reflected[T](view raw, primitive)
