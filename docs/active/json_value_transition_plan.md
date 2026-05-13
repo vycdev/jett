@@ -288,11 +288,12 @@ Add tests before each behavior change:
 
 ## Recommended Next Implementation Bite
 
-Finish the public surface decision:
+Finish the compatibility-name decision:
 
-1. Decide whether raw helper signatures should remain `JsonValue` for source
-   stability or move to `view JsonTree` in a breaking cleanup pass.
-2. Once explicit prelude imports exist, move the compatibility alias out of
-   compiler special cases and into the stdlib/prelude surface.
+1. Keep raw helper signatures `JsonTree`-first; treat `JsonValue` as the
+   temporary source-compatibility spelling.
+2. Once explicit prelude imports or exported root aliases exist, move the
+   compatibility alias out of compiler special cases and into the
+   stdlib/prelude surface.
 3. Later, update reflection metadata so the legacy
    `TypePrimitive.json_value_type` is either formally deprecated or removed.

@@ -1,4 +1,4 @@
-/// Argument shapes for legacy raw JSON facades backed by `JsonTree` hooks.
+/// Argument shapes for public raw JSON facades backed by `JsonTree` hooks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JsonRawFacadeArgs {
     RawString,
@@ -7,7 +7,7 @@ pub enum JsonRawFacadeArgs {
     TreeAndInt64,
 }
 
-/// Shared policy for a legacy raw JSON facade.
+/// Shared policy for a public raw JSON facade.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct JsonRawFacadeSpec {
     pub hook: &'static str,
@@ -90,8 +90,8 @@ pub fn json_raw_facade_spec(name: &str) -> Option<JsonRawFacadeSpec> {
     Some(spec)
 }
 
-/// Returns true for the legacy raw JSON facade functions that are now backed
-/// by `stdlib/json.jett`.
+/// Returns true for the public raw JSON facade functions backed by
+/// `stdlib/json.jett`.
 pub fn is_json_raw_facade(name: &str) -> bool {
     json_raw_facade_spec(name).is_some()
 }
