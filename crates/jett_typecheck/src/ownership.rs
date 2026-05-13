@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use jett_common::{Span, is_json_raw_facade};
+use jett_common::{Span, is_json_implicit_view_facade};
 use jett_diagnostics::Diagnostic;
 use jett_parser::ast::{self, Block, CallArg, Expr, FunctionDef, Item, Module, Stmt, StringPart};
 use jett_types::{Type, TypeId, TypeInterner};
@@ -497,7 +497,7 @@ impl<'a> OwnershipChecker<'a> {
         ];
         let first_arg_is_view = callee_name
             .as_deref()
-            .map(|n| collection_view_builtins.contains(&n) || is_json_raw_facade(n))
+            .map(|n| collection_view_builtins.contains(&n) || is_json_implicit_view_facade(n))
             .unwrap_or(false);
 
         for (i, arg) in args.iter().enumerate() {

@@ -171,8 +171,9 @@ length/key helpers, and scalar casts. The interpreter prefers those trusted
 stdlib wrappers when they are registered, and keeps the Rust builtin cases only
 as bootstrap fallbacks. The public typed `json.parse[JsonValue]` compatibility
 branch also calls `json_tree_parse` directly instead of bouncing through the raw
-builtin surface. The shared raw facade name set now lives in `jett_common`, so
-runtime dispatch and ownership's implicit-view rule use one policy list.
+builtin surface. The shared JSON facade name set now lives in `jett_common`, so
+runtime dispatch and ownership's implicit-view rule use one policy list for raw
+facades and view-first `json_tree_*` accessors.
 
 ### 3. Change Runtime Representation
 

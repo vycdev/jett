@@ -26,6 +26,14 @@ function json_tree_roundtrip_through_raw() returns bool:
         return false
     return decoded == "Ada"
 
+function json_tree_serialize_does_not_consume_tree() returns string:
+    json.JsonTree tree = sample_tree()
+    string raw = json.json_tree_serialize(tree)
+    string kind = json.json_tree_kind(tree)
+    bool has_name = string.contains(raw, "\"Ada\"")
+    return "{kind}:{has_name}"
+
 verify json_tree_value:
     assert json_tree_summary() == "{{\"name\":\"Ada\",\"items\":[3,true,null],\"quote\":\"line\\nnext\"}}"
     assert json_tree_roundtrip_through_raw() == true
+    assert json_tree_serialize_does_not_consume_tree() == "object:true"

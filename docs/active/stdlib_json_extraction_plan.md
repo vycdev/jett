@@ -196,8 +196,9 @@ bridge spoofing, not helper visibility.
    - `json_tree_serialize` is view-native and iterates arrays/objects through
      viewed list/map loops, so `serialize_raw(view value)` no longer clones the
      tree before serializing.
-   - The raw facade name policy is centralized in `jett_common` and reused by
-     runtime dispatch plus ownership checking.
+   - The JSON facade name policy is centralized in `jett_common` and reused by
+     runtime dispatch plus ownership checking, including direct view-first
+     `json_tree_*` helpers.
 3. Maintain the public bridge handoff. `json.parse`, `json.serialize`, and
    `json.serialize_public` now use compiler-owned typechecker policy with
    stdlib-owned interpreter bodies. See `/docs/completed/json_public_bridge_handoff.md`.
