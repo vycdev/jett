@@ -16,6 +16,9 @@ struct JsonTreeObjectField:
 struct JsonTreeStringEscape:
     value: string
     next_index: int64
+struct JsonTreeResultPayload:
+    key: string
+    value: JsonTree
 function json_stdlib_hex_digit(value: int64) returns string:
     if value < 10:
         return "{value}"
@@ -165,6 +168,7 @@ mutual:
     function json_decode_tree_set_reflected[T](view raw: JsonTree) returns result[T, string]
     function json_decode_tree_map_reflected[T](view raw: JsonTree) returns result[T, string]
     function json_decode_tree_optional_reflected[T](view raw: JsonTree) returns result[T, string]
+    function json_tree_result_payload(view raw: JsonTree) returns result[JsonTreeResultPayload, string]
     function json_decode_tree_result_reflected[T](view raw: JsonTree) returns result[T, string]
     function json_decode_tree_enum_reflected[T](view raw: JsonTree, type_name: string) returns result[T, string]
     function json_decode_tree_enum_string_reflected[T](view raw: JsonTree, type_name: string) returns result[T, string]
@@ -1065,22 +1069,30 @@ function json_decode_tree_optional_reflected[T](view raw: JsonTree) returns resu
         Inner item = json_decode_tree_reflected[Inner](view raw) handle error:
             return fail(error)
         return ok(some(item))
-function json_decode_tree_result_reflected[T](view raw: JsonTree) returns result[T, string]:
+function json_tree_result_payload(view raw: JsonTree) returns result[JsonTreeResultPayload, string]:
     list[string] keys = json_tree_object_keys(view raw) handle error:
         return fail(error)
     if list.length[string](keys) != 1:
         return fail("expected result object with exactly one key")
-    comptime type Ok = type.arg[T](0):
-        JsonTree ok_raw = json_tree_field(view raw, "ok") handle:
-            comptime type Err = type.arg[T](1):
-                JsonTree fail_raw = json_tree_field(view raw, "fail") handle:
-                    return fail("expected result object with key 'ok' or 'fail'")
-                Err failure = json_decode_tree_reflected[Err](view fail_raw) handle error:
-                    return fail("fail: {error}")
-                return ok(fail(failure))
-        Ok item = json_decode_tree_reflected[Ok](view ok_raw) handle error:
-            return fail("ok: {error}")
-        return ok(ok(item))
+    string key = list.get[string](keys, 0) handle:
+        return fail("expected result object with exactly one key")
+    if key != "ok" and key != "fail":
+        return fail("expected result object with key 'ok' or 'fail'")
+    JsonTree value = json_tree_field(view raw, key) handle:
+        return fail("expected result object with key 'ok' or 'fail'")
+    return ok(JsonTreeResultPayload(key: key, value: value))
+function json_decode_tree_result_reflected[T](view raw: JsonTree) returns result[T, string]:
+    JsonTreeResultPayload payload = json_tree_result_payload(view raw) handle error:
+        return fail(error)
+    if payload.key == "ok":
+        comptime type Ok = type.arg[T](0):
+            Ok item = json_decode_tree_reflected[Ok](view payload.value) handle error:
+                return fail("ok: {error}")
+            return ok(ok(item))
+    comptime type Err = type.arg[T](1):
+        Err failure = json_decode_tree_reflected[Err](view payload.value) handle error:
+            return fail("fail: {error}")
+        return ok(fail(failure))
 function json_decode_tree_enum_reflected[T](view raw: JsonTree, type_name: string) returns result[T, string]:
     if json_tree_is_string(view raw) == true:
         return json_decode_tree_enum_string_reflected[T](view raw, type_name)
