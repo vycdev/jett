@@ -218,6 +218,20 @@ function raw_is_string_accepts_tree() returns bool:
 function raw_serialize_accepts_tree() returns bool:
     string raw = json.serialize_raw(sample_object_tree())
     return string.contains(raw, "Barbara")
+function raw_helpers_view_tree_without_consuming() returns string:
+    json.JsonTree tree = sample_object_tree()
+    string kind = json.kind(tree)
+    bool is_object = json.is_object(tree)
+    list[string] keys = json.object_keys(tree) handle error:
+        return error
+    JsonValue name_raw = json.field(tree, "name") handle:
+        return "missing name"
+    string raw = json.serialize_raw(tree)
+    string name = json.as_string(name_raw) handle error:
+        return error
+    bool serialized = string.contains(raw, "Barbara")
+    string tree_kind = json.json_tree_kind(view tree)
+    return "{kind}:{is_object}:{list.length[string](view keys)}:{name}:{serialized}:{tree_kind}"
 verify json_value_tree_compatibility:
     assert raw_from_tree_assignment() == "Ada"
     assert tree_from_raw_assignment() == "Grace"
@@ -250,3 +264,4 @@ verify json_value_tree_compatibility:
     assert raw_is_bool_accepts_tree() == true
     assert raw_is_string_accepts_tree() == true
     assert raw_serialize_accepts_tree() == true
+    assert raw_helpers_view_tree_without_consuming() == "object:true:5:Barbara:true:object"

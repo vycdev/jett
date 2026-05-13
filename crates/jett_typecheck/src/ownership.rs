@@ -494,6 +494,22 @@ impl<'a> OwnershipChecker<'a> {
             "map.merge",
             "map.contains_key",
             "map.set",
+            "json.serialize_raw",
+            "json.kind",
+            "json.is_null",
+            "json.is_bool",
+            "json.is_number",
+            "json.is_string",
+            "json.is_array",
+            "json.is_object",
+            "json.field",
+            "json.index",
+            "json.array_length",
+            "json.object_keys",
+            "json.as_string",
+            "json.as_int64",
+            "json.as_float64",
+            "json.as_bool",
         ];
         let first_arg_is_view = callee_name
             .as_deref()
