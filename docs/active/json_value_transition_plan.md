@@ -36,8 +36,8 @@ about: two names, two traversal surfaces, one conceptual data model.
 - `json_tree_*` traversal helpers mirror the raw `JsonValue` helper surface.
 - `json_decode_tree_reflected[T](view raw)` decodes typed values from
   `JsonTree`.
-- Public typed `json.parse[T]` now routes through `JsonTree`, except
-  `json.parse[JsonValue]`.
+- Public typed `json.parse[T]` now routes through `JsonTree`, including the
+  legacy-compatible `json.parse[JsonValue]` branch.
 - `json.parse_raw` keeps its public `JsonValue` signature but delegates to the
   trusted stdlib `json_tree_parse` hook.
 - `json.serialize_raw`, `json.kind`, `json.field`, `json.index`, scalar casts,
@@ -166,7 +166,9 @@ At this stage the typechecker may still say the parameter/return type is
 
 Status: implemented. The interpreter delegates `json.parse_raw` to trusted
 `json.json_tree_parse`, and raw helpers dispatch native `JsonTree` values
-through trusted `json.json_tree_*` hooks.
+through trusted `json.json_tree_*` hooks. The public typed
+`json.parse[JsonValue]` compatibility branch also calls `json_tree_parse`
+directly instead of bouncing through the raw builtin surface.
 
 ### 3. Change Runtime Representation
 

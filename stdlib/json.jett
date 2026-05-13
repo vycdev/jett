@@ -1144,7 +1144,7 @@ function json_parse_reflected[T](raw: string) returns result[T, string]:
     TypePrimitive primitive = info.primitive_tag handle:
         default TypePrimitive.unknown_type
     if primitive == TypePrimitive.json_value_type:
-        JsonValue value = json.parse_raw(raw) handle error:
+        JsonValue value = json_tree_parse(raw) handle error:
             return fail(error)
         return ok(value)
     return json_tree_parse_reflected[T](raw)

@@ -9,8 +9,10 @@ use jett_parser::ast::{FunctionDef, Item, Module, Param, TypeExpr};
 use jett_parser::parse;
 use jett_resolve::resolve;
 use jett_typecheck::check;
+use jett_types::ReflectionMetadata;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::thread;
 
 const RUNTIME_STACK_SIZE: usize = 8 * 1024 * 1024;
@@ -23,6 +25,8 @@ pub struct BuildResult {
     pub source: String,
     /// The file path that was compiled (for diagnostic rendering).
     pub file_path: String,
+    /// Checked reflection metadata for runtime reflection/JSON hooks.
+    pub reflection_metadata: Option<Arc<ReflectionMetadata>>,
 }
 
 /// Run the full compilation pipeline on in-memory source text.
@@ -44,6 +48,7 @@ pub fn build_source(source: &str, file_path: &str) -> BuildResult {
             diagnostics: all_diagnostics,
             source: source.to_string(),
             file_path: file_path.to_string(),
+            reflection_metadata: None,
         };
     }
 
@@ -62,6 +67,7 @@ pub fn build_source(source: &str, file_path: &str) -> BuildResult {
             diagnostics: all_diagnostics,
             source: source.to_string(),
             file_path: file_path.to_string(),
+            reflection_metadata: None,
         };
     }
 
@@ -78,10 +84,12 @@ pub fn build_source(source: &str, file_path: &str) -> BuildResult {
             diagnostics: all_diagnostics,
             source: source.to_string(),
             file_path: file_path.to_string(),
+            reflection_metadata: None,
         };
     }
 
     // Phase 5: Execute verify blocks at compile time
+    let reflection_metadata = check_result.reflection_metadata.clone();
     let verify_diagnostics =
         run_verify_blocks_with_metadata(&parse_result.module, check_result.reflection_metadata);
     all_diagnostics.extend(verify_diagnostics);
@@ -95,6 +103,7 @@ pub fn build_source(source: &str, file_path: &str) -> BuildResult {
         diagnostics: all_diagnostics,
         source: source.to_string(),
         file_path: file_path.to_string(),
+        reflection_metadata: Some(reflection_metadata),
     }
 }
 
@@ -256,6 +265,7 @@ fn build_file_inner(path: &Path, include_project: bool) -> BuildResult {
                 has_errors: true,
                 source: String::new(),
                 file_path: file_path_str,
+                reflection_metadata: None,
             };
         }
     };
@@ -277,6 +287,7 @@ fn build_file_inner(path: &Path, include_project: bool) -> BuildResult {
             diagnostics: all_diagnostics,
             source,
             file_path: file_path_str,
+            reflection_metadata: None,
         };
     }
 
@@ -302,6 +313,7 @@ fn build_file_inner(path: &Path, include_project: bool) -> BuildResult {
             diagnostics: all_diagnostics,
             source,
             file_path: file_path_str,
+            reflection_metadata: None,
         };
     }
 
@@ -318,10 +330,12 @@ fn build_file_inner(path: &Path, include_project: bool) -> BuildResult {
             diagnostics: all_diagnostics,
             source,
             file_path: file_path_str,
+            reflection_metadata: None,
         };
     }
 
     // Phase 5: Execute verify blocks at compile time
+    let reflection_metadata = check_result.reflection_metadata.clone();
     let verify_diagnostics =
         run_verify_blocks_with_metadata(&parse_result.module, check_result.reflection_metadata);
     all_diagnostics.extend(verify_diagnostics);
@@ -335,6 +349,7 @@ fn build_file_inner(path: &Path, include_project: bool) -> BuildResult {
         diagnostics: all_diagnostics,
         source,
         file_path: file_path_str,
+        reflection_metadata: Some(reflection_metadata),
     }
 }
 
@@ -519,6 +534,9 @@ fn run_file_inner(path: &Path) -> Result<(), String> {
 
     use jett_comptime::interpreter::Interpreter;
     let mut interp = Interpreter::new_runtime();
+    if let Some(metadata) = build.reflection_metadata.clone() {
+        interp.set_reflection_metadata(metadata);
+    }
 
     // Register compiler-shipped stdlib modules before project and entry files.
     for module in discover_stdlib_modules() {

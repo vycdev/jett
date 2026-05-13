@@ -187,16 +187,17 @@ bridge spoofing, not helper visibility.
      wrapper over the `JsonTree` decoder; the duplicate raw decoder helper
      family has been removed.
    - `json_parse_reflected[T](raw: string)` now routes typed targets through the
-     self-hosted `JsonTree` parser/decoder, with a `JsonValue` carve-out for
-     the raw compatibility surface.
+     self-hosted `JsonTree` parser/decoder. The `JsonValue` compatibility
+     branch also parses through `json_tree_parse` directly.
 3. Maintain the public bridge handoff. `json.parse`, `json.serialize`, and
    `json.serialize_public` now use compiler-owned typechecker policy with
    stdlib-owned interpreter bodies. See `/docs/completed/json_public_bridge_handoff.md`.
 4. Keep the real public wrapper names in `namespace json`, while retaining
    compiler policy checks for secrets, `view`, map keys, and handled results.
 5. Keep broad bridge/parity tests before removing any Rust-backed fallback
-   implementation paths. Done for typed public parse/serialize and raw
-   `JsonValue` execution in `jett_comptime`.
+   implementation paths. Done for typed public parse/serialize, raw
+   `JsonValue` execution in `jett_comptime`, and runtime `main()` reflection
+   metadata handoff for namespaced generic JSON.
 6. Continue hardening the self-hosted `JsonTree` parser. Common malformed-input
    diagnostics are pinned for unterminated strings/arrays/objects, trailing
    characters, mismatched delimiters, bad number forms, bad literals, and
