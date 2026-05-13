@@ -161,7 +161,10 @@ known owner `TypeId` at the construction sites. The string-shaped
 lookups can resolve through canonical id maps after a name is bound. For
 field-bearing checked types, the interpreter no longer silently reconstructs
 field, bitfield, or enum variant metadata from AST when a checked `TypeInfo`
-says the owner should have that metadata but the checked table is missing.
+says the owner should have that metadata but the checked table is missing. The
+same completeness rule now applies to value-sensitive field/variant access and
+reflected construction paths, so missing checked owner metadata is surfaced
+instead of masked by interpreter-local AST reconstruction.
 
 ### Stage 5: Remove AST Metadata Fallbacks
 
@@ -194,6 +197,5 @@ Concrete follow-up:
    stay string-only unless they get their own source-level identity; refinements
    and canonical owners should stay id-bound.
 2. Keep no-metadata interpreter mode working for unit tests and bootstrap.
-3. Extend the same "checked owner metadata must be complete" rule to remaining
-   value-sensitive reflection operations once their canonical owner keys are
-   fully seeded.
+3. Apply the same "checked owner metadata must be complete" rule to any future
+   value-sensitive reflection operations as they are added.

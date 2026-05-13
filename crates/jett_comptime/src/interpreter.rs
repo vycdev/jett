@@ -3738,6 +3738,13 @@ impl Interpreter {
             .is_some_and(|kind| kinds.contains(&kind))
     }
 
+    fn missing_checked_metadata_error(&self, ty: &TypeExpr, metadata: &str) -> String {
+        format!(
+            "checked reflection metadata for type '{}' is missing {metadata} metadata",
+            type_expr_display(ty)
+        )
+    }
+
     fn checked_construction_kind(&self, ty: &TypeExpr) -> Option<&'static str> {
         if let Some(kind) = self.checked_type_kind(ty) {
             return match kind {
@@ -4115,6 +4122,8 @@ impl Interpreter {
                 ));
             }
             (field.name.clone(), field.type_name.clone())
+        } else if self.checked_metadata_kind_is(owner_ty, &["struct", "bitfield"]) {
+            return Err(self.missing_checked_metadata_error(owner_ty, "field"));
         } else {
             let owner_fields = self.type_expr_fields(owner_ty);
             let field = owner_fields.get(field_index).ok_or_else(|| {
@@ -4198,6 +4207,10 @@ impl Interpreter {
                         expected_type_name, variant
                     )
                 });
+        }
+
+        if self.checked_metadata_kind_is(owner_ty, &["enum"]) {
+            return Err(self.missing_checked_metadata_error(owner_ty, "variant"));
         }
 
         self.type_expr_variants(owner_ty)
@@ -4287,6 +4300,10 @@ impl Interpreter {
                     field.name
                 )
             });
+        }
+
+        if self.checked_metadata_kind_is(owner_ty, &["enum"]) {
+            return Err(self.missing_checked_metadata_error(owner_ty, "variant"));
         }
 
         let variants = self.type_expr_variants(owner_ty);
@@ -4405,6 +4422,11 @@ impl Interpreter {
                 };
                 (field.name.clone(), field.type_name.clone())
             } else {
+                if self.checked_metadata_kind_is(owner_ty, &["enum"]) {
+                    return Ok(result_fail(
+                        self.missing_checked_metadata_error(owner_ty, "variant"),
+                    ));
+                }
                 let Some(variant) = self
                     .type_expr_variants(owner_ty)
                     .into_iter()
@@ -4440,6 +4462,11 @@ impl Interpreter {
                 };
                 (field.name.clone(), field.type_name.clone())
             } else {
+                if self.checked_metadata_kind_is(owner_ty, &["struct", "bitfield"]) {
+                    return Ok(result_fail(
+                        self.missing_checked_metadata_error(owner_ty, "field"),
+                    ));
+                }
                 let fields = self.type_expr_fields(owner_ty);
                 let Some(field) = fields.get(field_index) else {
                     return Ok(result_fail(format!(
@@ -4571,6 +4598,11 @@ impl Interpreter {
             }
             variant.name.clone()
         } else {
+            if self.checked_metadata_kind_is(owner_ty, &["enum"]) {
+                return Ok(result_fail(
+                    self.missing_checked_metadata_error(owner_ty, "variant"),
+                ));
+            }
             let variants = self.type_expr_variants(owner_ty);
             let Some(variant) = variants.get(variant_index) else {
                 return Ok(result_fail(format!(
@@ -4696,6 +4728,12 @@ impl Interpreter {
             );
         }
 
+        if self.checked_metadata_kind_is(owner_ty, &["struct"]) {
+            return Ok(result_fail(
+                self.missing_checked_metadata_error(owner_ty, "field"),
+            ));
+        }
+
         let reflected_fields = self.type_expr_fields(owner_ty);
         let mut struct_fields = Vec::with_capacity(reflected_fields.len());
         for (index, field) in reflected_fields.iter().enumerate() {
@@ -4807,6 +4845,12 @@ impl Interpreter {
             }));
         }
 
+        if self.checked_metadata_kind_is(owner_ty, &["enum"]) {
+            return Ok(result_fail(
+                self.missing_checked_metadata_error(owner_ty, "variant"),
+            ));
+        }
+
         let Some(variant) = self
             .type_expr_variants(owner_ty)
             .into_iter()
@@ -4883,6 +4927,12 @@ impl Interpreter {
                 type_name: bitfield_name,
                 fields: bitfield_fields,
             }));
+        }
+
+        if self.checked_metadata_kind_is(owner_ty, &["bitfield"]) {
+            return Ok(result_fail(
+                self.missing_checked_metadata_error(owner_ty, "bitfield"),
+            ));
         }
 
         let bitfield =
@@ -8877,6 +8927,28 @@ mod tests {
         }
     }
 
+    fn string_type_info() -> ReflectionTypeInfo {
+        ReflectionTypeInfo::new(
+            "string",
+            "primitive",
+            Some("string_type".to_string()),
+            false,
+            Vec::new(),
+        )
+    }
+
+    fn string_field_info(index: usize, name: &str) -> ReflectionFieldInfo {
+        ReflectionFieldInfo::new(
+            index,
+            name,
+            "string",
+            "primitive",
+            name,
+            false,
+            string_type_info(),
+        )
+    }
+
     #[test]
     fn type_info_uses_checked_reflection_metadata_when_available() {
         let mut metadata = ReflectionMetadata::new();
@@ -9225,6 +9297,37 @@ mod tests {
     }
 
     #[test]
+    fn type_field_value_reports_missing_checked_field_metadata() {
+        let mut metadata = ReflectionMetadata::new();
+        metadata.insert_type_info(ReflectionTypeInfo::new(
+            "Box",
+            "struct",
+            None,
+            false,
+            Vec::new(),
+        ));
+
+        let mut interp = Interpreter::new();
+        interp.set_reflection_metadata(Arc::new(metadata));
+
+        let field = Interpreter::reflection_field_info_value(&string_field_info(0, "value"));
+        let value = Value::Struct {
+            type_name: "Box".to_string(),
+            fields: vec![("value".to_string(), Value::String("ok".to_string()))],
+        };
+        let err = interp
+            .call_builtin_with_type_args(
+                "type.field_value",
+                &[type_named("Box"), type_named("string")],
+                &[value, field],
+            )
+            .expect("type.field_value should be a typed builtin")
+            .expect_err("missing checked field metadata should be an error");
+
+        assert!(err.contains("missing field metadata"));
+    }
+
+    #[test]
     fn reflected_field_loop_uses_checked_reflection_metadata_when_available() {
         let value_info = ReflectionTypeInfo::new(
             "string",
@@ -9487,6 +9590,33 @@ mod tests {
             .call_builtin_with_type_args("type.variants", &[type_named("Shape")], &[])
             .expect("type.variants should be a typed builtin")
             .expect_err("missing checked enum variants should be an error");
+
+        assert!(err.contains("missing variant metadata"));
+    }
+
+    #[test]
+    fn type_variant_value_reports_missing_checked_variant_metadata() {
+        let mut metadata = ReflectionMetadata::new();
+        metadata.insert_type_info(ReflectionTypeInfo::new(
+            "Choice",
+            "enum",
+            None,
+            false,
+            Vec::new(),
+        ));
+
+        let mut interp = Interpreter::new();
+        interp.set_reflection_metadata(Arc::new(metadata));
+
+        let value = Value::Enum {
+            type_name: "Choice".to_string(),
+            variant: "token".to_string(),
+            fields: Vec::new(),
+        };
+        let err = interp
+            .call_builtin_with_type_args("type.variant_value", &[type_named("Choice")], &[value])
+            .expect("type.variant_value should be a typed builtin")
+            .expect_err("missing checked variant metadata should be an error");
 
         assert!(err.contains("missing variant metadata"));
     }
@@ -9969,6 +10099,73 @@ mod tests {
     }
 
     #[test]
+    fn type_construct_put_reports_missing_checked_field_metadata() {
+        let mut metadata = ReflectionMetadata::new();
+        metadata.insert_type_info(ReflectionTypeInfo::new(
+            "Box",
+            "struct",
+            None,
+            false,
+            Vec::new(),
+        ));
+
+        let mut interp = Interpreter::new();
+        interp.set_reflection_metadata(Arc::new(metadata));
+
+        let builder = interp
+            .call_builtin_with_type_args("type.construct_start", &[type_named("Box")], &[])
+            .expect("type.construct_start should be a typed builtin")
+            .expect("type.construct_start should evaluate");
+        let field = Interpreter::reflection_field_info_value(&string_field_info(0, "value"));
+        let updated = interp
+            .call_builtin_with_type_args(
+                "type.construct_put",
+                &[type_named("Box"), type_named("string")],
+                &[builder, field, Value::String("ok".to_string())],
+            )
+            .expect("type.construct_put should be a typed builtin")
+            .expect("type.construct_put should evaluate");
+
+        assert_eq!(
+            updated,
+            result_fail(
+                "checked reflection metadata for type 'Box' is missing field metadata".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn type_construct_finish_reports_missing_checked_field_metadata() {
+        let mut metadata = ReflectionMetadata::new();
+        metadata.insert_type_info(ReflectionTypeInfo::new(
+            "Box",
+            "struct",
+            None,
+            false,
+            Vec::new(),
+        ));
+
+        let mut interp = Interpreter::new();
+        interp.set_reflection_metadata(Arc::new(metadata));
+
+        let builder = interp
+            .call_builtin_with_type_args("type.construct_start", &[type_named("Box")], &[])
+            .expect("type.construct_start should be a typed builtin")
+            .expect("type.construct_start should evaluate");
+        let finished = interp
+            .call_builtin_with_type_args("type.construct_finish", &[type_named("Box")], &[builder])
+            .expect("type.construct_finish should be a typed builtin")
+            .expect("type.construct_finish should evaluate");
+
+        assert_eq!(
+            finished,
+            result_fail(
+                "checked reflection metadata for type 'Box' is missing field metadata".to_string()
+            )
+        );
+    }
+
+    #[test]
     fn type_construct_finish_checked_enum_reports_missing_payload_field() {
         let field_type = ReflectionTypeInfo::new(
             "string",
@@ -10038,6 +10235,118 @@ mod tests {
             finished,
             result_fail(
                 "type.construct_finish: variant 'Choice.token' is missing required payload field 'value'"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn type_construct_variant_start_reports_missing_checked_variant_metadata() {
+        let mut metadata = ReflectionMetadata::new();
+        metadata.insert_type_info(ReflectionTypeInfo::new(
+            "Choice",
+            "enum",
+            None,
+            false,
+            Vec::new(),
+        ));
+
+        let mut interp = Interpreter::new();
+        interp.set_reflection_metadata(Arc::new(metadata));
+
+        let variant = Interpreter::reflection_variant_info_value(&ReflectionVariantInfo::new(
+            0,
+            "token",
+            7,
+            false,
+            Vec::new(),
+        ));
+        let builder = interp
+            .call_builtin_with_type_args(
+                "type.construct_variant_start",
+                &[type_named("Choice")],
+                &[variant],
+            )
+            .expect("type.construct_variant_start should be a typed builtin")
+            .expect("type.construct_variant_start should evaluate");
+
+        assert_eq!(
+            builder,
+            result_fail(
+                "checked reflection metadata for type 'Choice' is missing variant metadata"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn type_construct_finish_reports_missing_checked_variant_metadata() {
+        let mut metadata = ReflectionMetadata::new();
+        metadata.insert_type_info(ReflectionTypeInfo::new(
+            "Choice",
+            "enum",
+            None,
+            false,
+            Vec::new(),
+        ));
+
+        let mut interp = Interpreter::new();
+        interp.set_reflection_metadata(Arc::new(metadata));
+
+        let builder = Value::TypeConstruction {
+            type_name: "Choice".to_string(),
+            variant: Some("token".to_string()),
+            fields: Vec::new(),
+        };
+        let finished = interp
+            .call_builtin_with_type_args(
+                "type.construct_finish",
+                &[type_named("Choice")],
+                &[builder],
+            )
+            .expect("type.construct_finish should be a typed builtin")
+            .expect("type.construct_finish should evaluate");
+
+        assert_eq!(
+            finished,
+            result_fail(
+                "checked reflection metadata for type 'Choice' is missing variant metadata"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn type_construct_finish_reports_missing_checked_bitfield_metadata() {
+        let mut metadata = ReflectionMetadata::new();
+        metadata.insert_type_info(ReflectionTypeInfo::new(
+            "Header",
+            "bitfield",
+            None,
+            false,
+            Vec::new(),
+        ));
+
+        let mut interp = Interpreter::new();
+        interp.set_reflection_metadata(Arc::new(metadata));
+
+        let builder = interp
+            .call_builtin_with_type_args("type.construct_start", &[type_named("Header")], &[])
+            .expect("type.construct_start should be a typed builtin")
+            .expect("type.construct_start should evaluate");
+        let finished = interp
+            .call_builtin_with_type_args(
+                "type.construct_finish",
+                &[type_named("Header")],
+                &[builder],
+            )
+            .expect("type.construct_finish should be a typed builtin")
+            .expect("type.construct_finish should evaluate");
+
+        assert_eq!(
+            finished,
+            result_fail(
+                "checked reflection metadata for type 'Header' is missing bitfield metadata"
                     .to_string()
             )
         );
