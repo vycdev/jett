@@ -53,14 +53,14 @@ The reflected JSON implementation has started moving into stdlib under the
 - `json_serialize_public_reflected[T](view value)`
 - `json_parse_reflected[T](raw: string)`
 
-The module also declares exported public wrapper names `parse`, `serialize`,
-and `serialize_public`. Calls such as `json.parse[T](raw)` still pass through
-the compiler-owned policy gate first, then the interpreter delegates to the
-internal reflected stdlib hook when the bundled module is registered as trusted
-compiler-shipped stdlib. The public wrappers remain readable source-level
-declarations, but the bridge target stays on internal hook names until the
-language can carry the compiler-owned JSON policy on ordinary stdlib
-declarations.
+The module also declares exported public wrapper names `parse`, `parse_exact`,
+`serialize`, and `serialize_public`. Calls such as `json.parse[T](raw)` and
+`json.parse_exact[T](raw)` still pass through the compiler-owned policy gate
+first, then the interpreter delegates to the internal reflected stdlib hook when
+the bundled module is registered as trusted compiler-shipped stdlib. The public
+wrappers remain readable source-level declarations, but the bridge target stays
+on internal hook names until the language can carry the compiler-owned JSON
+policy on ordinary stdlib declarations.
 
 The raw-string hook remains directly exercised through its qualified stdlib
 staging name, `json.json_parse_reflected[T](raw)`.
@@ -156,7 +156,8 @@ Some JSON rules are typechecker policy, not only implementation:
 - public serialization rejects top-level secret wrappers and omits
   secret-containing fields.
 - `map[K, V]` JSON encoding is currently restricted to `K == string`.
-- `json.parse[T]` returns `result[T, string]`, so callers must handle errors.
+- `json.parse[T]` and `json.parse_exact[T]` return `result[T, string]`, so
+  callers must handle errors.
 
 Those checks can remain compiler-known while the body moves to `.jett`, or they
 can be redesigned as ordinary typed stdlib constraints later. The safer staging
@@ -207,12 +208,13 @@ bridge spoofing, not helper visibility.
      runtime dispatch plus ownership checking, including direct view-first
      `json_tree_*` helpers. The raw facade policy also records the trusted
      stdlib hook and argument shape used by runtime bootstrap dispatch.
-   - The compiler-policy public bridge names (`json.parse`, `json.serialize`,
-     and `json.serialize_public`) also share their trusted stdlib hook mapping
-     through `jett_common`.
-3. Maintain the public bridge handoff. `json.parse`, `json.serialize`, and
-   `json.serialize_public` now use compiler-owned typechecker policy with
-   stdlib-owned interpreter bodies. See `/docs/completed/json_public_bridge_handoff.md`.
+   - The compiler-policy public bridge names (`json.parse`,
+     `json.parse_exact`, `json.serialize`, and `json.serialize_public`) also
+     share their trusted stdlib hook mapping through `jett_common`.
+3. Maintain the public bridge handoff. `json.parse`, `json.parse_exact`,
+   `json.serialize`, and `json.serialize_public` now use compiler-owned
+   typechecker policy with stdlib-owned interpreter bodies. See
+   `/docs/completed/json_public_bridge_handoff.md`.
 4. Keep the real public wrapper names in `namespace json`, while retaining
    compiler policy checks for secrets, `view`, map keys, and handled results.
 5. Keep broad bridge/parity tests before removing any Rust-backed fallback
@@ -278,6 +280,7 @@ The eventual module should keep these layers distinct:
 - `serialize_public_value[T](view value: T) returns result[string, string]`
 - `decode_value[T](view raw: JsonTree) returns result[T, string]`
 - `parse[T](raw: string) returns result[T, string]`
+- `parse_exact[T](raw: string) returns result[T, string]`
 
 The public API can return plain `string` for serialization only if the compiler
 continues to prove that the chosen policy cannot fail. The internal reflected

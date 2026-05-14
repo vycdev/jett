@@ -131,4 +131,6 @@ Status: implemented. The strict helper surface is pinned in
 `tests/run_pass/json_raw_strict_accessors.jett`. The remaining design question
 is whether the lenient `json.field` / `json.index` names should stay as the
 primary public spelling forever, or whether a later compatibility stage should
-guide users toward the stricter helpers for most production code.
+guide users toward the stricter helpers for most production code. The current
+JSON transition docs explicitly describe `field` / `index` as probing helpers
+and the strict helpers as the production validation surface.

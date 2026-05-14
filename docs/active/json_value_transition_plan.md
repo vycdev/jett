@@ -97,6 +97,10 @@ function serialize_raw(view value: JsonTree) returns string
 function kind(view value: JsonTree) returns string
 function field(view value: JsonTree, key: string) returns optional[JsonTree]
 function index(view value: JsonTree, index: int64) returns optional[JsonTree]
+function object_field(view value: JsonTree, key: string) returns result[optional[JsonTree], string]
+function array_index(view value: JsonTree, index: int64) returns result[optional[JsonTree], string]
+function require_field(view value: JsonTree, key: string) returns result[JsonTree, string]
+function require_index(view value: JsonTree, index: int64) returns result[JsonTree, string]
 function array_length(view value: JsonTree) returns result[int64, string]
 function object_keys(view value: JsonTree) returns result[list[string], string]
 function as_string(view value: JsonTree) returns result[string, string]
@@ -110,6 +114,11 @@ write `type JsonValue = JsonTree` in the right namespace while preserving the
 current unqualified `JsonValue` spelling. Until that exists, `JsonValue` can stay
 compiler-recognized as a compatibility name whose runtime representation is
 `JsonTree`.
+
+`field` and `index` are probing helpers: wrong shape and absence both produce
+`none`. Production validation should use `require_field` / `require_index` when
+presence is mandatory, and `object_field` / `array_index` when absence is allowed
+but the parent shape must be correct.
 
 ## Alias Direction
 

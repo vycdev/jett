@@ -3227,7 +3227,7 @@ struct User:
 # User.from_bytes(raw)      → result[User, string]
 ```
 
-The compiler makes every struct compatible with `json.serialize[Type]()` and `json.parse[Type](raw)` automatically. There are no auto-generated `.to_json()` or `.from_json()` methods on the struct itself — the `json` module functions are the canonical API. `json.serialize` declares a `view` parameter — it reads the value without consuming it. The caller writes `json.serialize[User](view user)` with the `view` keyword explicit at the call site. `json.parse[Type](raw)` is the **only** form — the Type parameter is mandatory, not optional. It parses a JSON string into the specified type and returns `result[Type, string]`. There is no single-argument `json.parse(raw)` that returns an untyped value. For structs with `secret[T]` fields, `json.serialize_public[Type](view value)` omits those fields.
+The compiler makes every struct compatible with `json.serialize[Type]()` and `json.parse[Type](raw)` automatically. There are no auto-generated `.to_json()` or `.from_json()` methods on the struct itself - the `json` module functions are the canonical API. `json.serialize` declares a `view` parameter - it reads the value without consuming it. The caller writes `json.serialize[User](view user)` with the `view` keyword explicit at the call site. `json.parse[Type](raw)` is the typed parse form for compatibility-oriented JSON boundaries: the Type parameter is mandatory, not optional, and unknown object fields are ignored so newer producers can add data safely. `json.parse_exact[Type](raw)` has the same return type but rejects unknown object fields recursively, so it is preferred for config files, protocol messages, tests, and any other closed input contract. Both parse forms return `result[Type, string]`. There is no single-argument `json.parse(raw)` that returns an untyped value. For structs with `secret[T]` fields, `json.serialize_public[Type](view value)` omits those fields.
 
 The LLM does not write parsing functions. The LLM does not import a serialization library. The compiler sees the struct definition and generates everything. For fields that need custom naming (e.g., mapping to camelCase APIs), Jett uses an inline `serialize` keyword on the field itself (see Custom Field Naming below) — not a separate annotation syntax.
 
@@ -3243,7 +3243,7 @@ function save_user(view fs: Filesystem, view user: User) returns result[nothing,
 function load_user(view fs: Filesystem, id: string) returns result[User, string]:
     string raw = Filesystem.read_file(view fs, "users/{id}.json") handle error:
         return fail("user file not found")
-    User user = json.parse[User](raw) handle error:
+    User user = json.parse_exact[User](raw) handle error:
         return fail("invalid user data")
     return ok(user)
 ```
@@ -3369,6 +3369,7 @@ struct ApiResponse:
 
 # json.serialize[ApiResponse](view ...) produces: {"userName":"...","totalCount":42,"isActive":true}
 # json.parse[ApiResponse](...) accepts: {"userName":"...","totalCount":42,"isActive":true}
+# json.parse_exact[ApiResponse](...) accepts the same names and rejects unknown fields
 # The struct code always uses snake_case field names internally.
 ```
 

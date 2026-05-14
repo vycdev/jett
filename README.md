@@ -63,6 +63,7 @@ Jett is experimental, but the compiler front half is substantial.
 - `jett run` executes programs through the tree-walking interpreter.
 - `jett test` runs `verify` and `property` blocks.
 - The standard library is partly Rust-backed and partly written in `.jett`; `stdlib/json.jett` is the active bridge toward reflection-powered stdlib JSON.
+- `json.parse[T]` is the lenient compatibility parser, while `json.parse_exact[T]` rejects unknown object fields for closed contracts such as config files, protocols, and tests.
 
 See [docs/progress.md](docs/progress.md) for the detailed implementation matrix.
 
