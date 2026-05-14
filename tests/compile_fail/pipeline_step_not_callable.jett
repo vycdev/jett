@@ -1,0 +1,6 @@
+# ERROR: E0313
+namespace app
+
+function bad_pipeline_not_callable() returns string:
+    int64 value = 1
+    return "hello" into value

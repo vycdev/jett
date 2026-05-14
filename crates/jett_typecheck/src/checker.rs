@@ -5081,21 +5081,7 @@ impl<'a> TypeChecker<'a> {
                 }
                 self.fully_coarsened_type(inner_ty)
             }
-            Expr::Pipeline(initial, steps, _) => {
-                // Check the initial expression and each step; return the type
-                // of the last step (or the initial expression if there are no steps).
-                let mut current_ty = self.check_expr(initial);
-                for step in steps {
-                    // Check the function and extra args but return Error for now
-                    // since full pipeline type inference is not yet implemented.
-                    self.check_expr(&step.function);
-                    for arg in &step.extra_args {
-                        self.check_expr(&arg.value);
-                    }
-                    current_ty = TypeInterner::ERROR;
-                }
-                current_ty
-            }
+            Expr::Pipeline(initial, steps, _) => self.check_pipeline(initial, steps),
             Expr::At(inner, _state, _) => {
                 // `expr at state` returns a bool.
                 self.check_expr(inner);
@@ -5176,6 +5162,232 @@ impl<'a> TypeChecker<'a> {
         // Record the type for this expression span.
         self.type_map.insert(expr.span(), ty);
         ty
+    }
+
+    fn check_pipeline(&mut self, initial: &Expr, steps: &[ast::PipelineStep]) -> TypeId {
+        let mut current_ty = self.check_expr(initial);
+        for step in steps {
+            current_ty = self.check_pipeline_step(current_ty, step);
+        }
+        current_ty
+    }
+
+    fn check_pipeline_step(&mut self, current_ty: TypeId, step: &ast::PipelineStep) -> TypeId {
+        let callee_name = self.resolved_expr_name(&step.function);
+        let callee_is_pure = callee_name
+            .as_deref()
+            .map(|name| {
+                if Self::is_impure_builtin(name) {
+                    false
+                } else {
+                    self.purity_map.get(name).copied().unwrap_or(true)
+                }
+            })
+            .unwrap_or(false);
+
+        if let Some(callee_name) = callee_name.as_deref()
+            && !callee_is_pure
+        {
+            if self.current_function_pure
+                && let Some(caller_name) = &self.current_function_name
+            {
+                self.sink.emit(errors::pure_calls_impure(
+                    caller_name,
+                    callee_name,
+                    step.span,
+                ));
+            }
+            if self.in_verify_block
+                && let Some(verify_name) = &self.current_verify_name
+            {
+                self.sink.emit(errors::verify_calls_impure(
+                    verify_name,
+                    callee_name,
+                    step.span,
+                ));
+            }
+        }
+
+        let builtin_signature = self.builtin_signature(&step.function, &[], step.span);
+        let user_function_signature = if builtin_signature.is_none() {
+            callee_name
+                .as_deref()
+                .and_then(|name| self.function_signatures.get(name).cloned())
+        } else {
+            None
+        };
+
+        let (param_types, return_type) = if let Some(signature) = builtin_signature {
+            signature
+        } else if let Some(signature) = user_function_signature {
+            signature
+        } else {
+            self.check_expr(&step.function);
+            for arg in &step.extra_args {
+                self.check_expr(&arg.value);
+            }
+            self.sink.emit(errors::not_callable(
+                callee_name.as_deref().unwrap_or("pipeline step"),
+                step.span,
+            ));
+            return TypeInterner::ERROR;
+        };
+
+        let arg_count = step.extra_args.len() + 1;
+        if arg_count != param_types.len() {
+            let func_name = callee_name
+                .clone()
+                .unwrap_or_else(|| "<pipeline step>".to_string());
+            self.sink.emit(errors::argument_count_mismatch(
+                &func_name,
+                param_types.len(),
+                arg_count,
+                step.span,
+            ));
+            for arg in &step.extra_args {
+                self.check_expr(&arg.value);
+            }
+            return return_type;
+        }
+
+        let mut tainted_return = false;
+        let mut checked_arg_types = Vec::with_capacity(arg_count);
+        checked_arg_types.push(current_ty);
+        tainted_return |= self.check_argument_against_param_type(
+            callee_name.as_deref(),
+            callee_is_pure,
+            "#1",
+            param_types[0],
+            current_ty,
+            step.span,
+        );
+
+        for (index, arg) in step.extra_args.iter().enumerate() {
+            let param_ty = param_types[index + 1];
+            let arg_ty = self.check_expr_for_expected(&arg.value, param_ty, false);
+            checked_arg_types.push(arg_ty);
+            tainted_return |= self.check_argument_against_param_type(
+                callee_name.as_deref(),
+                callee_is_pure,
+                &format!("#{}", index + 2),
+                param_ty,
+                arg_ty,
+                arg.value.span(),
+            );
+        }
+
+        if matches!(callee_name.as_deref(), Some("secret.compare")) && checked_arg_types.len() == 2
+        {
+            if let (Some(lhs_inner), Some(rhs_inner)) = (
+                self.secret_inner_type(checked_arg_types[0]),
+                self.secret_inner_type(checked_arg_types[1]),
+            ) {
+                if !self.types_compatible(lhs_inner, rhs_inner)
+                    || !self.types_compatible(rhs_inner, lhs_inner)
+                {
+                    self.sink.emit(errors::argument_type_mismatch(
+                        "#2",
+                        &self.type_name(checked_arg_types[0]),
+                        &self.type_name(checked_arg_types[1]),
+                        step.span,
+                    ));
+                }
+            }
+        }
+
+        if let Some(callee_name) = callee_name.as_deref()
+            && tainted_return
+            && Self::is_secret_liftable_call(callee_name, callee_is_pure)
+        {
+            return self.maybe_wrap_secret(return_type, true);
+        }
+
+        return_type
+    }
+
+    fn check_argument_against_param_type(
+        &mut self,
+        callee_name: Option<&str>,
+        callee_is_pure: bool,
+        param_name: &str,
+        param_ty: TypeId,
+        arg_ty: TypeId,
+        span: Span,
+    ) -> bool {
+        if arg_ty != TypeInterner::ERROR && self.type_requires_handle_error(param_ty, arg_ty) {
+            self.sink.emit(errors::result_requires_handle_error(span));
+            return false;
+        }
+
+        if arg_ty != TypeInterner::ERROR && self.type_requires_bare_handle(param_ty, arg_ty) {
+            self.sink.emit(errors::optional_requires_bare_handle(span));
+            return false;
+        }
+
+        if self.is_refinement_type(param_ty)
+            && arg_ty != TypeInterner::ERROR
+            && self.can_refine_from(arg_ty, param_ty)
+        {
+            self.sink.emit(errors::refinement_requires_handle_error(
+                &self.type_name(param_ty),
+                &self.type_name(arg_ty),
+                span,
+            ));
+            return false;
+        }
+
+        if let Some(callee_name) = callee_name {
+            if Self::is_secret_output_boundary(callee_name) && self.is_secret_type(arg_ty) {
+                self.sink.emit(errors::secret_exposure(
+                    callee_name,
+                    &self.type_name(arg_ty),
+                    span,
+                ));
+                return false;
+            }
+
+            if matches!(callee_name, "secret.redact" | "secret.compare")
+                && !self.is_secret_type(arg_ty)
+            {
+                self.sink.emit(errors::secret_operation_requires_secret(
+                    callee_name,
+                    &self.type_name(arg_ty),
+                    span,
+                ));
+                return false;
+            }
+        }
+
+        let (matches, lifted_secret) = self.secret_argument_matches_param(param_ty, arg_ty);
+        if matches {
+            if lifted_secret {
+                let allows_secret_lifting = callee_name
+                    .map(|name| Self::is_secret_liftable_call(name, callee_is_pure))
+                    .unwrap_or(callee_is_pure);
+
+                if !allows_secret_lifting {
+                    self.sink.emit(errors::secret_exposure(
+                        callee_name.unwrap_or("<call>"),
+                        &self.type_name(arg_ty),
+                        span,
+                    ));
+                    return false;
+                }
+                return true;
+            }
+            return false;
+        }
+
+        if !self.types_compatible(param_ty, arg_ty) {
+            self.sink.emit(errors::argument_type_mismatch(
+                param_name,
+                &self.type_name(param_ty),
+                &self.type_name(arg_ty),
+                span,
+            ));
+        }
+
+        false
     }
 
     fn check_spawn(&mut self, inner: &Expr) -> TypeId {

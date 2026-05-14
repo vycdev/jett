@@ -1,0 +1,5 @@
+# ERROR: E0304
+namespace app
+
+function bad_pipeline_extra_arg() returns string:
+    return "hello" into string.replace("h", 1)

@@ -1,0 +1,5 @@
+# ERROR: E0304
+namespace app
+
+function bad_pipeline_builtin_input() returns string:
+    return 42 into string.trim

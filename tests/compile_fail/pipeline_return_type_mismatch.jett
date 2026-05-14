@@ -1,0 +1,5 @@
+# ERROR: E0305
+namespace app
+
+function bad_pipeline_return_type() returns int64:
+    return "hello" into string.trim

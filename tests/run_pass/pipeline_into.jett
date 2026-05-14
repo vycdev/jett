@@ -1,5 +1,11 @@
 namespace app
 
+function plus_one(value: int64) returns int64:
+    return value + 1
+
+function add(value: int64, amount: int64) returns int64:
+    return value + amount
+
 function pipeline_single_line_test() returns string:
     return "  Hello  " into string.trim into string.lower
 
@@ -29,3 +35,21 @@ function pipeline_multi_step_test() returns string:
 
 verify pipeline_multi_step_test:
     assert pipeline_multi_step_test() == "hello jett"
+
+function pipeline_builtin_result_type_test() returns int64:
+    return "  hello  " into string.trim into string.length
+
+verify pipeline_builtin_result_type_test:
+    assert pipeline_builtin_result_type_test() == 5
+
+function pipeline_user_function_test() returns int64:
+    return 41 into plus_one
+
+verify pipeline_user_function_test:
+    assert pipeline_user_function_test() == 42
+
+function pipeline_user_function_extra_arg_test() returns int64:
+    return 40 into add(2)
+
+verify pipeline_user_function_extra_arg_test:
+    assert pipeline_user_function_extra_arg_test() == 42

@@ -446,6 +446,22 @@ compile_fail_fixture!(compile_fail_unhandled_optional, "unhandled_optional.jett"
 compile_fail_fixture!(compile_fail_trace_unknown, "trace_unknown.jett");
 compile_fail_fixture!(compile_fail_unknown_type, "unknown_type.jett");
 compile_fail_fixture!(
+    compile_fail_pipeline_builtin_input_mismatch,
+    "pipeline_builtin_input_mismatch.jett"
+);
+compile_fail_fixture!(
+    compile_fail_pipeline_extra_arg_mismatch,
+    "pipeline_extra_arg_mismatch.jett"
+);
+compile_fail_fixture!(
+    compile_fail_pipeline_return_type_mismatch,
+    "pipeline_return_type_mismatch.jett"
+);
+compile_fail_fixture!(
+    compile_fail_pipeline_step_not_callable,
+    "pipeline_step_not_callable.jett"
+);
+compile_fail_fixture!(
     compile_fail_function_statement_limit,
     "function_statement_limit.jett"
 );
