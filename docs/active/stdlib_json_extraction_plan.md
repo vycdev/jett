@@ -29,10 +29,14 @@ stdlib code own the public `json.*` API.
   leaf aliases for namespaced declarations.
 - `use` declarations bind aliases or final path segments, but they do not yet
   import a namespace registry.
-- Builtin module prefixes such as `json`, `type`, `list`, `string`, and `bytes`
-  are hardcoded in resolver/typechecker/interpreter paths. The typechecker now
-  gives compiler-owned builtin signatures precedence over ordinary functions,
-  matching the interpreter's builtin-first runtime dispatch.
+- Builtin module prefixes such as `json`, `type`, `list`, `map`, `set`,
+  `string`, and `bytes` are hardcoded in resolver/typechecker/interpreter
+  paths. The typechecker now gives compiler-owned builtin signatures precedence
+  over ordinary functions, matching the interpreter's builtin-first runtime
+  dispatch. Set builtins now have compiler-owned signatures for
+  `new`/`add`/`remove`/`contains`/`length`/`is_empty`/`to_list`/`union`/
+  `intersection`/`difference`, so JSON set parsing fixtures typecheck through
+  normal builtin signatures.
 
 That means a physical `stdlib/json.jett` file is available to single-file
 builds, but ordinary `namespace json` functions still do not automatically own
@@ -96,6 +100,10 @@ Together they cover the shape needed for a future stdlib module:
 - malformed-input parity across `json.json_tree_parse`, `json.parse_raw`,
   `json.parse[JsonValue]`, `json.parse[json.JsonTree]`, and the exact raw-tree
   targets.
+- dedicated shape coverage now lives in `json_shape_matrix`,
+  `json_parse_collection_edges`, `json_parse_exact*`,
+  `json_enum_bitfield_exact_edges`, `json_refinement_exact_serialize_edges`,
+  and parser parity fixtures.
 
 The compiler-known JSON bridge remains the compatibility and policy facade. It
 still owns the public typechecker policy for `json.parse`, `json.parse_exact`,
@@ -111,7 +119,10 @@ facade path is a bootstrap/no-stdlib dispatcher around those hooks, not a
 separate Rust JSON implementation.
 `json.parse_exact[T]` now exists as a second compiler-policy public parse
 bridge backed by trusted stdlib hooks. It rejects unknown object fields
-recursively while preserving the existing lenient `json.parse[T]` behavior.
+recursively for reflected closed-shape targets: structs, bitfields, enum
+payloads, aliases/refinements over those shapes, and containers containing
+them. Raw `JsonTree` / `JsonValue` targets remain arbitrary JSON payloads.
+The existing `json.parse[T]` behavior remains lenient.
 
 ## Blockers
 
@@ -165,7 +176,8 @@ Some JSON rules are typechecker policy, not only implementation:
 - full serialization rejects secret-containing values.
 - public serialization rejects top-level secret wrappers and omits
   secret-containing fields.
-- `map[K, V]` JSON encoding is currently restricted to `K == string`.
+- `map[K, V]` JSON encoding and decoding for `serialize`, `serialize_public`,
+  `parse`, and `parse_exact` is restricted to `K == string`.
 - `json.parse[T]` and `json.parse_exact[T]` return `result[T, string]`, so
   callers must handle errors.
 
@@ -233,11 +245,13 @@ bridge spoofing, not helper visibility.
    metadata handoff for namespaced generic JSON.
 6. Continue hardening the self-hosted `JsonTree` parser. Common malformed-input
    diagnostics are pinned for unterminated strings/arrays/objects, trailing
-   characters, mismatched delimiters, bad number forms, bad literals, root-edge
-   empties, malformed object keys, nested unterminated strings, and invalid
-   escapes. Valid JSON escapes now include quote, backslash, slash, backspace,
-   form feed, newline, carriage return, tab, and unicode escapes. Public
-   entrypoint parity for those parser errors is pinned across
+   characters, mismatched delimiters, bad number forms, bad literals,
+   empty/whitespace-only roots, malformed object keys, duplicate object fields
+   after key unescaping, comma/separator errors, extra closing delimiters,
+   nested unterminated strings, invalid escapes, and unicode surrogate failures.
+   Valid JSON escapes now include quote, backslash, slash, backspace, form feed,
+   newline, carriage return, tab, and unicode escapes. Public entrypoint parity
+   for those parser errors is pinned across
    `json.json_tree_parse`, `json.parse_raw`, `json.parse[JsonValue]`,
    `json.parse[json.JsonTree]`, `json.parse_exact[JsonValue]`, and
    `json.parse_exact[json.JsonTree]`. The remaining question is how far
@@ -314,12 +328,12 @@ functions should probably use `result` while format policy is still evolving.
   `docs/open_design/json_raw_access_semantics.md` for the current options and
   recommendation. Strict additive helpers now exist for shape-sensitive lookup;
   the remaining question is long-term naming/default guidance.
-- The representative external shape for enums, bitfields, bytes, floats, sets,
-  maps, optionals, results, and refinements is now pinned in run-pass fixtures.
-  The remaining shape questions are narrower: whether map/set ordering should
-  ever become a documented contract, whether to add configurable strictness
-  beyond `parse_exact`, and how much diagnostic polish to do for missing-comma
-  malformed JSON before treating those messages as long-term API.
+- Representative shape is pinned for bytes, `float32`/`float64`, sets, maps,
+  optionals/results, unit and payload enums, bitfields, aliases/refinements,
+  serialize names, and nested matrix combinations. The remaining shape
+  questions are narrower: whether map/set ordering should ever become a
+  documented contract, whether to add configurable strictness beyond
+  `parse_exact`, and final wording for comma/separator diagnostics.
 - How should stdlib helper visibility evolve beyond namespace-private
   `export` syntax, especially once a full import/prelude model exists?
 - How much abstraction is allowed around trusted reflection loops before
