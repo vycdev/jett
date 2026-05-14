@@ -166,8 +166,6 @@ mutual:
     function json_serialize_public_reflected[T](view value: T) returns string
     function json_serialize_public_raw_reflected[T](view value: T) returns string
     function json_serialize_public_primitive[T](view value: T, primitive: TypePrimitive) returns string
-    function json_primitive_is_integer(primitive: TypePrimitive) returns bool
-    function json_primitive_is_float(primitive: TypePrimitive) returns bool
     function json_serialize_public_integer_primitive[T](view value: T, primitive: TypePrimitive) returns optional[string]
     function json_serialize_public_float_primitive[T](view value: T, primitive: TypePrimitive) returns optional[string]
     function json_serialize_public_integer_value[T](view value: T) returns string
@@ -965,30 +963,6 @@ function json_serialize_public_non_integer_primitive[T](view value: T, primitive
     if primitive == TypePrimitive.json_value_type:
         return json_serialize_public_raw_reflected[T](view value)
     return "null"
-function json_primitive_is_integer(primitive: TypePrimitive) returns bool:
-    if primitive == TypePrimitive.int8_type:
-        return true
-    if primitive == TypePrimitive.int16_type:
-        return true
-    if primitive == TypePrimitive.int32_type:
-        return true
-    if primitive == TypePrimitive.int64_type:
-        return true
-    if primitive == TypePrimitive.uint8_type:
-        return true
-    if primitive == TypePrimitive.uint16_type:
-        return true
-    if primitive == TypePrimitive.uint32_type:
-        return true
-    if primitive == TypePrimitive.uint64_type:
-        return true
-    return false
-function json_primitive_is_float(primitive: TypePrimitive) returns bool:
-    if primitive == TypePrimitive.float32_type:
-        return true
-    if primitive == TypePrimitive.float64_type:
-        return true
-    return false
 function json_serialize_public_integer_primitive[T](view value: T, primitive: TypePrimitive) returns optional[string]:
     match primitive:
         int8_type:
