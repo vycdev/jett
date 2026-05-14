@@ -1,0 +1,30 @@
+namespace test
+
+function takes_byte(value: uint8) returns uint8:
+    return value
+
+function return_byte_sum() returns uint8:
+    return 1 + 2
+
+actor ByteCounter(seed: uint8):
+    mutable uint8 count = seed + 1
+
+    receive add(delta: uint8):
+        count = count + delta
+
+    receive current responds uint8:
+        respond count + 1
+
+verify numeric_literal_contexts:
+    uint8 local = 1 + 2
+    uint8 called = takes_byte(3 + 4)
+    uint8 returned = return_byte_sum()
+
+    ByteCounter counter = spawn ByteCounter(seed: 4 + 5)
+    send counter.add(10 + 11)
+    uint8 current = ask counter.current
+
+    assert local == 3
+    assert called == 7
+    assert returned == 3
+    assert current == 32

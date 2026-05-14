@@ -1,0 +1,7 @@
+# ERROR: E0304
+actor ByteCounter(seed: uint8):
+    mutable uint8 count = seed
+
+function main() returns nothing:
+    ByteCounter counter = spawn ByteCounter(seed: 300)
+    return nothing

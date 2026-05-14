@@ -3,7 +3,7 @@
 ## Statistics
 
 - **Lines of Rust:** ~33,000
-- **Tests:** 460+ passing
+- **Tests:** 465+ passing
 - **Crates:** 15
 - **VS Code extension:** Yes
 
@@ -28,7 +28,7 @@
 |---|---|---|---|
 | Type interning, struct/enum/interface defs | `jett_types` | 18 | Done |
 | Name resolution, scoping, namespace export visibility | `jett_resolve` | 27 | Done |
-| Type checking (expressions, operators, generics) | `jett_typecheck` | 97 | Done |
+| Type checking (expressions, operators, generics) | `jett_typecheck` | 100 | Done |
 
 ### Phase C: Ownership and Capabilities — COMPLETE
 
@@ -76,7 +76,7 @@
 | Verify blocks (parsing + execution) | Done |
 | Property-based testing (`property` blocks) | Done |
 | Bitfield declarations | Partial (constructors, field access, enum-annotated fields, payload fields, reflection, and interpreter `to_bytes`/`from_bytes` roundtrips are covered; native codegen still pending) |
-| Actor model (`actor`, `spawn`, `send`, `ask`) | Done |
+| Actor model (`actor`, `spawn`, `send`, `ask`) | Done (capability args, message args, state initializers, and `responds` values typecheck against declared types) |
 | Structured concurrency (`run`, `join`, `cancel`) | Done |
 | Interface/implement blocks | Done |
 | `mutual` blocks | Done |

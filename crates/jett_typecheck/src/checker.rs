@@ -617,6 +617,11 @@ impl<'a> TypeChecker<'a> {
         matches!(self.interner.resolve(id), Type::Float32 | Type::Float64)
     }
 
+    fn expected_numeric_type(&self, expected_ty: TypeId) -> Option<TypeId> {
+        let id = self.secret_inner_type(expected_ty).unwrap_or(expected_ty);
+        self.is_numeric(id).then_some(id)
+    }
+
     fn is_numeric_literal(expr: &Expr) -> bool {
         matches!(expr, Expr::IntLiteral(_, _) | Expr::FloatLiteral(_, _))
     }
@@ -3057,10 +3062,20 @@ impl<'a> TypeChecker<'a> {
             local_env.insert(name.clone(), *ty);
         }
 
+        for (param_ast, (_, param_ty)) in def
+            .capability_params
+            .iter()
+            .zip(actor_def.capability_params.iter())
+        {
+            if let Some(def_id) = self.declaration_def_id(param_ast.name.span) {
+                self.type_env.insert(def_id, *param_ty);
+            }
+        }
+
         // Type-check state field initializers.
         for field in &def.state_fields {
-            let init_ty = self.check_expr(&field.value);
             let declared_ty = self.resolve_type_expr(&field.ty);
+            let init_ty = self.check_expr_for_expected(&field.value, declared_ty, true);
             if init_ty != TypeInterner::ERROR
                 && declared_ty != TypeInterner::ERROR
                 && !self.types_compatible(declared_ty, init_ty)
@@ -4500,12 +4515,13 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn check_respond(&mut self, resp: &ast::RespondStmt) {
-        let val_ty = self.check_expr(&resp.value);
         match self.current_respond_type {
             None => {
+                self.check_expr(&resp.value);
                 self.sink.emit(errors::respond_outside_handler(resp.span));
             }
             Some(expected) => {
+                let val_ty = self.check_expr_for_expected(&resp.value, expected, false);
                 if val_ty != TypeInterner::ERROR
                     && expected != TypeInterner::ERROR
                     && !self.types_compatible(expected, val_ty)
@@ -4534,6 +4550,17 @@ impl<'a> TypeChecker<'a> {
             }
             Expr::FloatLiteral(_, _) if self.float_literal_matches_expected_type(expected_ty) => {
                 expected_ty
+            }
+            Expr::Binary(lhs, op, rhs, span)
+                if matches!(
+                    op,
+                    BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Modulo
+                ) && self.expected_numeric_type(expected_ty).is_some() =>
+            {
+                let operand_ty = self
+                    .expected_numeric_type(expected_ty)
+                    .expect("guard checked expected numeric type");
+                self.check_binary_for_expected_numeric(lhs, *op, rhs, *span, operand_ty)
             }
             Expr::ListConstruct(elems, _span) => {
                 let expected_inner = self.secret_inner_type(expected_ty).unwrap_or(expected_ty);
@@ -5436,13 +5463,7 @@ impl<'a> TypeChecker<'a> {
         // `spawn ActorType(args)` — the inner expr should be a call to the actor type name.
         // We check the arguments but return the actor type.
         let callee = match inner {
-            Expr::Call(callee, args, _span) => {
-                // Check argument expressions.
-                for arg in args {
-                    self.check_expr(&arg.value);
-                }
-                callee.as_ref()
-            }
+            Expr::Call(callee, _args, _span) => callee.as_ref(),
             _ => {
                 self.check_expr(inner);
                 return TypeInterner::ERROR;
@@ -5452,13 +5473,32 @@ impl<'a> TypeChecker<'a> {
         match callee {
             Expr::Ident(ident) => {
                 if let Some(&ty) = self.named_types.get(&ident.name) {
-                    if matches!(self.interner.resolve(ty), Type::Actor(_)) {
+                    if let Type::Actor(aid) = *self.interner.resolve(ty) {
+                        let actor_def = self.interner.resolve_actor(aid).clone();
+                        if let Expr::Call(_, args, _) = inner {
+                            self.check_actor_argument_list(
+                                &actor_def.name,
+                                &actor_def.capability_params,
+                                args,
+                                inner.span(),
+                            );
+                        }
                         return ty;
+                    }
+                }
+                if let Expr::Call(_, args, _) = inner {
+                    for arg in args {
+                        self.check_expr(&arg.value);
                     }
                 }
                 self.check_expr(callee)
             }
             _ => {
+                if let Expr::Call(_, args, _) = inner {
+                    for arg in args {
+                        self.check_expr(&arg.value);
+                    }
+                }
                 self.check_expr(callee);
                 TypeInterner::ERROR
             }
@@ -5468,15 +5508,20 @@ impl<'a> TypeChecker<'a> {
     fn check_send_ask_inner(&mut self, inner: &Expr) -> TypeId {
         // inner is `actor_expr.handler_name` or `actor_expr.handler_name(args)`
         // We check the actor expression and any args, and return the responds type.
-        let (actor_expr, message_name, args) = match inner {
+        let (actor_expr, message_name, message_span, args) = match inner {
             Expr::Call(callee, args, _) => match callee.as_ref() {
-                Expr::FieldAccess(base, field, _) => (base.as_ref(), &field.name, Some(args)),
+                Expr::FieldAccess(base, field, _) => (
+                    base.as_ref(),
+                    &field.name,
+                    field.span,
+                    Some(args.as_slice()),
+                ),
                 _ => {
                     self.check_expr(inner);
                     return TypeInterner::ERROR;
                 }
             },
-            Expr::FieldAccess(base, field, _) => (base.as_ref(), &field.name, None),
+            Expr::FieldAccess(base, field, _) => (base.as_ref(), &field.name, field.span, None),
             _ => {
                 self.check_expr(inner);
                 return TypeInterner::ERROR;
@@ -5484,20 +5529,85 @@ impl<'a> TypeChecker<'a> {
         };
 
         let actor_ty = self.check_expr(actor_expr);
-        if let Some(arg_list) = args {
-            for arg in arg_list {
-                self.check_expr(&arg.value);
-            }
-        }
 
         // Look up the handler and return its responds type.
         if let Type::Actor(aid) = *self.interner.resolve(actor_ty) {
             let actor_def = self.interner.resolve_actor(aid).clone();
             if let Some(msg) = actor_def.messages.iter().find(|m| m.name == *message_name) {
+                self.check_actor_message_args(&actor_def.name, msg, args, inner.span());
                 return msg.responds;
+            }
+            self.sink.emit(errors::type_has_no_member(
+                &actor_def.name,
+                message_name,
+                message_span,
+            ));
+        } else {
+            if actor_ty != TypeInterner::ERROR {
+                self.sink.emit(errors::type_has_no_member(
+                    &self.type_name(actor_ty),
+                    message_name,
+                    message_span,
+                ));
+            }
+            if let Some(arg_list) = args {
+                for arg in arg_list {
+                    self.check_expr(&arg.value);
+                }
             }
         }
         TypeInterner::ERROR
+    }
+
+    fn check_actor_message_args(
+        &mut self,
+        actor_name: &str,
+        msg: &ActorMessageDef,
+        args: Option<&[ast::CallArg]>,
+        span: Span,
+    ) {
+        self.check_actor_argument_list(
+            &format!("{actor_name}.{}", msg.name),
+            &msg.params,
+            args.unwrap_or(&[]),
+            span,
+        );
+    }
+
+    fn check_actor_argument_list(
+        &mut self,
+        label: &str,
+        params: &[(String, TypeId)],
+        args: &[ast::CallArg],
+        span: Span,
+    ) {
+        if args.len() != params.len() {
+            self.sink.emit(errors::argument_count_mismatch(
+                label,
+                params.len(),
+                args.len(),
+                span,
+            ));
+            for arg in args {
+                self.check_expr(&arg.value);
+            }
+            return;
+        }
+
+        for (arg, (param_name, param_ty)) in args.iter().zip(params.iter()) {
+            let arg_ty = self.check_expr_for_expected(&arg.value, *param_ty, false);
+            if arg_ty != TypeInterner::ERROR
+                && *param_ty != TypeInterner::ERROR
+                && !self.types_compatible(*param_ty, arg_ty)
+            {
+                self.sink.emit(errors::argument_type_mismatch(
+                    param_name,
+                    &self.type_name(*param_ty),
+                    &self.type_name(arg_ty),
+                    arg.value.span(),
+                ));
+            }
+        }
     }
 
     fn check_ident(&mut self, ident: &ast::Ident) -> TypeId {
@@ -5618,6 +5728,36 @@ impl<'a> TypeChecker<'a> {
                 self.maybe_wrap_secret(TypeInterner::BOOL, tainted)
             }
         }
+    }
+
+    fn check_binary_for_expected_numeric(
+        &mut self,
+        lhs: &Expr,
+        op: BinOp,
+        rhs: &Expr,
+        span: Span,
+        expected_operand_ty: TypeId,
+    ) -> TypeId {
+        let lhs_ty = self.check_expr_for_expected(lhs, expected_operand_ty, false);
+        let rhs_ty = self.check_expr_for_expected(rhs, expected_operand_ty, false);
+
+        if lhs_ty == TypeInterner::ERROR || rhs_ty == TypeInterner::ERROR {
+            return TypeInterner::ERROR;
+        }
+
+        let (lhs_base, lhs_secret) = self.strip_secret_type(lhs_ty);
+        let (rhs_base, rhs_secret) = self.strip_secret_type(rhs_ty);
+        if !self.is_numeric(lhs_base) || !self.is_numeric(rhs_base) || lhs_base != rhs_base {
+            self.sink.emit(errors::binary_op_mismatch(
+                Self::binop_str(op),
+                &self.type_name(lhs_ty),
+                &self.type_name(rhs_ty),
+                span,
+            ));
+            return TypeInterner::ERROR;
+        }
+
+        self.maybe_wrap_secret(lhs_base, lhs_secret || rhs_secret)
     }
 
     fn check_unary(&mut self, op: UnaryOp, operand: &Expr, span: Span) -> TypeId {

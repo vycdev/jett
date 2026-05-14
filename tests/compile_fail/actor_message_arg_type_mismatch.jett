@@ -1,0 +1,11 @@
+# ERROR: E0304
+actor ByteCounter:
+    mutable uint8 count = 0
+
+    receive add(delta: uint8):
+        count = count + delta
+
+function main() returns nothing:
+    ByteCounter counter = spawn ByteCounter()
+    send counter.add(300)
+    return nothing

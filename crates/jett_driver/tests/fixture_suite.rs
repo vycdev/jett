@@ -305,6 +305,10 @@ run_pass_fixture!(
 );
 run_pass_fixture!(run_pass_actor_counter, "actor_counter.jett");
 run_pass_fixture!(
+    run_pass_numeric_literal_contexts,
+    "numeric_literal_contexts.jett"
+);
+run_pass_fixture!(
     run_pass_structured_concurrency,
     "structured_concurrency.jett"
 );
@@ -564,6 +568,22 @@ compile_fail_fixture!(
 compile_fail_fixture!(
     compile_fail_uint8_binary_literal_out_of_range,
     "uint8_binary_literal_out_of_range.jett"
+);
+compile_fail_fixture!(
+    compile_fail_uint8_binary_expression_out_of_range,
+    "uint8_binary_expression_out_of_range.jett"
+);
+compile_fail_fixture!(
+    compile_fail_actor_message_arg_type_mismatch,
+    "actor_message_arg_type_mismatch.jett"
+);
+compile_fail_fixture!(
+    compile_fail_actor_respond_type_mismatch,
+    "actor_respond_type_mismatch.jett"
+);
+compile_fail_fixture!(
+    compile_fail_actor_spawn_arg_type_mismatch,
+    "actor_spawn_arg_type_mismatch.jett"
 );
 compile_fail_fixture!(
     compile_fail_generic_function_secret_argument_mismatch,
