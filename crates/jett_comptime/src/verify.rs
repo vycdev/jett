@@ -524,6 +524,7 @@ fn generate_values_for_type(ty: &TypeExpr) -> Vec<Value> {
         TypeExpr::Generic(ident, args, _) => match ident.name.as_str() {
             "list" if args.len() == 1 => generate_list_values_for_type(&args[0]),
             "set" if args.len() == 1 => generate_set_values_for_type(&args[0]),
+            "map" if args.len() == 2 => generate_map_values_for_type(&args[0], &args[1]),
             _ => vec![], // unsupported generic type
         },
         TypeExpr::View(inner, _) => generate_values_for_type(inner),
@@ -578,6 +579,40 @@ fn generate_set_values_for_type(inner_ty: &TypeExpr) -> Vec<Value> {
     }
 
     values
+}
+
+fn generate_map_values_for_type(key_ty: &TypeExpr, value_ty: &TypeExpr) -> Vec<Value> {
+    let key_values = generate_values_for_type(key_ty);
+    let value_values = generate_values_for_type(value_ty);
+    if key_values.is_empty() || value_values.is_empty() {
+        return Vec::new();
+    }
+
+    let mut unique_keys = Vec::new();
+    for key in key_values {
+        if !unique_keys.contains(&key) {
+            unique_keys.push(key);
+        }
+    }
+
+    let mut maps = vec![Value::Map(vec![])];
+    maps.push(Value::Map(vec![(
+        unique_keys[0].clone(),
+        value_values[0].clone(),
+    )]));
+
+    let mut sample = Vec::new();
+    for (index, key) in unique_keys.iter().take(3).enumerate() {
+        sample.push((
+            key.clone(),
+            value_values[index % value_values.len()].clone(),
+        ));
+    }
+    if sample.len() > 1 {
+        maps.push(Value::Map(sample));
+    }
+
+    maps
 }
 
 // ---------------------------------------------------------------------------
@@ -1611,7 +1646,7 @@ mod tests {
     }
 
     #[test]
-    fn property_generator_supports_lists_of_generated_types() {
+    fn property_generator_supports_generic_collections_of_generated_types() {
         let string_lists =
             generate_values_for_type(&type_generic("list", vec![type_named("string")]));
         assert!(
@@ -1636,6 +1671,19 @@ mod tests {
                 matches!(value, Value::Set(items) if items.iter().any(|item| matches!(item, Value::String(_))))
             }),
             "expected set[string] generation to include string payloads"
+        );
+
+        let string_int_maps = generate_values_for_type(&type_generic(
+            "map",
+            vec![type_named("string"), type_named("int64")],
+        ));
+        assert!(
+            string_int_maps.iter().any(|value| {
+                matches!(value, Value::Map(entries) if entries.iter().any(|(key, value)| {
+                    matches!(key, Value::String(_)) && matches!(value, Value::Int64(_))
+                }))
+            }),
+            "expected map[string, int64] generation to include string/int64 entries"
         );
     }
 

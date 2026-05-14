@@ -14,3 +14,8 @@ property string_sets_have_nonnegative_length:
     given labels: set[string]
     int64 length = set.length[string](labels)
     assert length >= 0
+
+property string_int_maps_have_nonnegative_length:
+    given scores: map[string, int64]
+    int64 length = map.length[string, int64](scores)
+    assert length >= 0
