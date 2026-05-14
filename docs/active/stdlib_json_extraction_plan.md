@@ -255,13 +255,16 @@ bridge spoofing, not helper visibility.
    branches, which pulls record and enum JSON helper bodies further into the
    checked path. Direct top-level value-sensitive reflection statements for
    variant selection and `TypeConstruction` start/finish are checked per
-   concrete instantiation as well. Primitive JSON dispatch now keeps exact
-   `TypePrimitive.*` comparisons visible at each generic helper split point,
-   using small optional-returning helpers rather than opaque predicates, so the
-   checker can prune invalid primitive casts while the function complexity
-   checker still applies to stdlib code. Predicate-derived facts, diagnostic
-   string facts, and other value-sensitive reflection helper shapes remain
-   deferred.
+   concrete instantiation as well. Reflection-specialized `match` statements
+   over known `TypeKind` and `TypePrimitive` values now select only the
+   reachable arm, matching Jett's canonical enum-dispatch form rather than
+   forcing all generic reflection code through `if` ladders. Primitive JSON
+   dispatch still keeps exact `TypePrimitive.*` comparisons visible at each
+   generic helper split point, using small optional-returning helpers rather
+   than opaque predicates, so the checker can prune invalid primitive casts
+   while the function complexity checker still applies to stdlib code.
+   Predicate-derived facts, diagnostic string facts, and other value-sensitive
+   reflection helper shapes remain deferred.
 
 ## Recommended Shape For `stdlib/json.jett`
 

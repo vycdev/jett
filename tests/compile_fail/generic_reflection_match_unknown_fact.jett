@@ -1,0 +1,11 @@
+# ERROR: E0345
+function helper_match_requires_known_kind[T](value: T, kind: TypeKind) returns int64:
+    match kind:
+        list_type:
+            comptime type Elem = type.arg[T](0):
+                list[Elem] items = value
+                return list.length[Elem](view items)
+        other:
+            return 0
+function caller(value: list[int64], kind: TypeKind) returns int64:
+    return helper_match_requires_known_kind[list[int64]](value, kind)

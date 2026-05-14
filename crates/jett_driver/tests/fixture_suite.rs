@@ -325,6 +325,10 @@ run_pass_fixture!(
     "generic_reflection_branch_specialization.jett"
 );
 run_pass_fixture!(
+    run_pass_generic_reflection_match_specialization,
+    "generic_reflection_match_specialization.jett"
+);
+run_pass_fixture!(
     run_pass_structured_concurrency,
     "structured_concurrency.jett"
 );
@@ -649,6 +653,14 @@ compile_fail_fixture!(
 compile_fail_fixture!(
     compile_fail_generic_reflection_top_level_type_arg_error,
     "generic_reflection_top_level_type_arg_error.jett"
+);
+compile_fail_fixture!(
+    compile_fail_generic_reflection_match_reachable_arm_error,
+    "generic_reflection_match_reachable_arm_error.jett"
+);
+compile_fail_fixture!(
+    compile_fail_generic_reflection_match_unknown_fact,
+    "generic_reflection_match_unknown_fact.jett"
 );
 compile_fail_fixture!(
     compile_fail_actor_message_arg_type_mismatch,

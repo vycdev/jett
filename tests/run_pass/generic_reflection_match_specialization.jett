@@ -1,0 +1,63 @@
+namespace test
+type Names = list[string]
+function match_kind_list_length_or_zero[T](value: T) returns int64:
+    TypeInfo info = type.info[T]()
+    TypeKind kind = info.kind_tag
+    match kind:
+        list_type:
+            list[int64] items = value
+            return list.length[int64](view items)
+        other:
+            return 0
+function match_direct_kind_name[T]() returns string:
+    match type.kind_tag[T]():
+        alias_type:
+            return "alias"
+        list_type:
+            return "list"
+        other:
+            return "other"
+function match_primitive_string_or_other[T](value: T) returns string:
+    TypePrimitive primitive = type.primitive_tag[T]() handle:
+        default TypePrimitive.unknown_type
+    match primitive:
+        string_type:
+            string text = value
+            return text
+        other:
+            return "other"
+function helper_match_kind_list_length_or_zero[T](value: T, kind: TypeKind) returns int64:
+    match kind:
+        list_type:
+            list[int64] items = value
+            return list.length[int64](view items)
+        other:
+            return 0
+function local_kind_helper_match_list_length_or_zero[T](value: T) returns int64:
+    TypeInfo info = type.info[T]()
+    TypeKind kind = info.kind_tag
+    return helper_match_kind_list_length_or_zero[T](value, kind)
+function helper_match_primitive_string_or_other[T](value: T, primitive: TypePrimitive) returns string:
+    match primitive:
+        string_type:
+            string text = value
+            return text
+        other:
+            return "other"
+function local_primitive_helper_match_string_or_other[T](value: T) returns string:
+    TypePrimitive primitive = type.primitive_tag[T]() handle:
+        default TypePrimitive.unknown_type
+    return helper_match_primitive_string_or_other[T](value, primitive)
+verify generic_reflection_match_specialization:
+    list[int64] numbers = list(1, 2, 3)
+    assert match_kind_list_length_or_zero[list[int64]](numbers) == 3
+    assert match_kind_list_length_or_zero[string]("Ada") == 0
+    assert match_direct_kind_name[Names]() == "alias"
+    assert match_direct_kind_name[list[string]]() == "list"
+    assert match_direct_kind_name[string]() == "other"
+    assert match_primitive_string_or_other[string]("Ada") == "Ada"
+    assert match_primitive_string_or_other[int64](7) == "other"
+    assert local_kind_helper_match_list_length_or_zero[list[int64]](numbers) == 3
+    assert local_kind_helper_match_list_length_or_zero[string]("Ada") == 0
+    assert local_primitive_helper_match_string_or_other[string]("Ada") == "Ada"
+    assert local_primitive_helper_match_string_or_other[int64](7) == "other"

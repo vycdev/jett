@@ -87,6 +87,14 @@ enum StaticReflectionEnumValue {
     TypePrimitive(String),
 }
 
+impl StaticReflectionEnumValue {
+    fn variant_name(&self) -> &str {
+        match self {
+            Self::TypeKind(name) | Self::TypePrimitive(name) => name,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReflectionBranchContext {
     TopLevel,
@@ -4348,6 +4356,9 @@ impl<'a> TypeChecker<'a> {
             Stmt::For(for_stmt) => {
                 self.for_reflection_is_branch_specializable(for_stmt, type_params, context)
             }
+            Stmt::Match(match_stmt) => {
+                self.match_reflection_is_branch_specializable(match_stmt, type_params, context)
+            }
             _ => !self.stmt_uses_type_param_reflection(stmt, type_params),
         }
     }
@@ -4402,6 +4413,33 @@ impl<'a> TypeChecker<'a> {
                 type_params,
                 context,
             )
+    }
+
+    fn match_reflection_is_branch_specializable(
+        &self,
+        match_stmt: &ast::MatchStmt,
+        type_params: &HashSet<String>,
+        _context: ReflectionBranchContext,
+    ) -> bool {
+        let scrutinee_static = self.expr_is_potential_static_reflection_value(&match_stmt.expr);
+        if self.expr_uses_type_param_reflection(&match_stmt.expr, type_params) && !scrutinee_static
+        {
+            return false;
+        }
+
+        let arm_context = if scrutinee_static {
+            ReflectionBranchContext::StaticReflectionBranch
+        } else {
+            ReflectionBranchContext::RuntimeBranch
+        };
+
+        match_stmt.arms.iter().all(|arm| {
+            self.block_reflection_is_branch_specializable_in_context(
+                &arm.body,
+                type_params,
+                arm_context,
+            )
+        })
     }
 
     fn expr_is_reflection_local_fact_source(
@@ -5976,6 +6014,34 @@ impl<'a> TypeChecker<'a> {
         Some(if_stmt.else_ifs.len() + 1)
     }
 
+    fn static_reflection_match_arm(&mut self, match_stmt: &ast::MatchStmt) -> Option<usize> {
+        let selected_value = self.eval_static_reflection_enum_value(&match_stmt.expr)?;
+
+        for (index, arm) in match_stmt.arms.iter().enumerate() {
+            match &arm.pattern {
+                ast::Pattern::Ident(name) | ast::Pattern::Variant(name, _) => {
+                    if selected_value.variant_name() == name.name {
+                        return Some(index);
+                    }
+                }
+                ast::Pattern::Other(_) => return Some(index),
+            }
+        }
+
+        None
+    }
+
+    fn match_arm_type_param_reflection_span(
+        &self,
+        match_stmt: &ast::MatchStmt,
+        type_params: &HashSet<String>,
+    ) -> Option<Span> {
+        match_stmt
+            .arms
+            .iter()
+            .find_map(|arm| self.block_type_param_reflection_span(&arm.body, type_params))
+    }
+
     fn check_for(&mut self, for_stmt: &ast::ForStmt) {
         let iterable_type = self.check_expr(&for_stmt.iterable);
 
@@ -6130,10 +6196,30 @@ impl<'a> TypeChecker<'a> {
         };
 
         let enum_def = self.interner.resolve_enum(enum_id).clone();
+        let selected_static_arm = if self.specialize_reflection_branches {
+            self.static_reflection_match_arm(match_stmt)
+        } else {
+            None
+        };
+        let unknown_reflection_span = if self.specialize_reflection_branches
+            && selected_static_arm.is_none()
+        {
+            let active_type_params = self.type_var_subst.keys().cloned().collect::<HashSet<_>>();
+            if self.expr_uses_type_param_reflection(&match_stmt.expr, &active_type_params) {
+                Some(match_stmt.expr.span())
+            } else {
+                self.match_arm_type_param_reflection_span(match_stmt, &active_type_params)
+            }
+        } else {
+            None
+        };
         let mut covered = HashSet::new();
         let mut has_other = false;
 
-        for arm in &match_stmt.arms {
+        for (arm_index, arm) in match_stmt.arms.iter().enumerate() {
+            let check_body = unknown_reflection_span.is_none()
+                && selected_static_arm.map_or(true, |selected| selected == arm_index);
+
             match &arm.pattern {
                 ast::Pattern::Ident(name) => {
                     if enum_def
@@ -6166,9 +6252,13 @@ impl<'a> TypeChecker<'a> {
                             ));
                         }
 
-                        for (binding, (_, field_ty)) in bindings.iter().zip(variant.fields.iter()) {
-                            if let Some(def_id) = self.declaration_def_id(binding.span) {
-                                self.type_env.insert(def_id, *field_ty);
+                        if check_body {
+                            for (binding, (_, field_ty)) in
+                                bindings.iter().zip(variant.fields.iter())
+                            {
+                                if let Some(def_id) = self.declaration_def_id(binding.span) {
+                                    self.type_env.insert(def_id, *field_ty);
+                                }
                             }
                         }
                     } else {
@@ -6184,7 +6274,13 @@ impl<'a> TypeChecker<'a> {
                 }
             }
 
-            self.check_block(&arm.body);
+            if check_body {
+                self.check_block(&arm.body);
+            }
+        }
+
+        if let Some(span) = unknown_reflection_span {
+            self.sink.emit(errors::invalid_comptime_type_binding(span));
         }
 
         if !has_other {
