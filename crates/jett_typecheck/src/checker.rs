@@ -91,6 +91,8 @@ struct TypeChecker<'a> {
     /// User-defined function name -> parameter and return types. Entries are
     /// registered under both the historical flat name and `namespace.name`.
     function_signatures: HashMap<String, (Vec<TypeId>, TypeId)>,
+    /// Function signatures originating from compiler-shipped stdlib files.
+    trusted_stdlib_function_signatures: HashMap<String, (Vec<TypeId>, TypeId)>,
     /// Name of the function currently being type-checked (None outside functions).
     current_function_name: Option<String>,
     /// Whether the function currently being type-checked is pure.
@@ -161,6 +163,7 @@ impl<'a> TypeChecker<'a> {
             impl_methods_by_type: HashMap::new(),
             purity_map: HashMap::new(),
             function_signatures: HashMap::new(),
+            trusted_stdlib_function_signatures: HashMap::new(),
             current_function_name: None,
             current_function_pure: false,
             in_verify_block: false,
@@ -1588,6 +1591,11 @@ impl<'a> TypeChecker<'a> {
     ) -> Option<(Vec<TypeId>, TypeId)> {
         let spec = json_raw_facade_spec(name)?;
         let valid_type_args = self.check_builtin_type_arg_count(name, type_args, 0, span);
+        if valid_type_args
+            && let Some(signature) = self.trusted_stdlib_function_signatures.get(name).cloned()
+        {
+            return Some(signature);
+        }
         let json_tree_ty = self.json_tree_type_or_legacy_json_value();
 
         let params = match spec.args {
@@ -2753,6 +2761,10 @@ impl<'a> TypeChecker<'a> {
                                 current_namespace.as_deref(),
                                 &decl.name.name,
                             ) {
+                                if decl.span.file.is_stdlib() {
+                                    self.trusted_stdlib_function_signatures
+                                        .insert(name.clone(), signature.clone());
+                                }
                                 self.function_signatures.insert(name, signature.clone());
                             }
                         }
@@ -2766,6 +2778,10 @@ impl<'a> TypeChecker<'a> {
                             current_namespace.as_deref(),
                             &func.name.name,
                         ) {
+                            if func.span.file.is_stdlib() {
+                                self.trusted_stdlib_function_signatures
+                                    .insert(name.clone(), signature.clone());
+                            }
                             self.function_signatures.insert(name, signature.clone());
                         }
                     } else {
@@ -6984,7 +7000,7 @@ fn is_type_variant_value_callee(callee: &Expr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use jett_common::{FileId, Span};
+    use jett_common::{FileId, STDLIB_FILE_ID_START, Span};
     use jett_parser::{ast::*, parse};
     use jett_resolve::resolver::ResolveResult;
     use jett_resolve::scope::{DefKind, ScopeTable};
@@ -7056,6 +7072,10 @@ mod tests {
 
     fn check_source_result(source: &str) -> CheckResult {
         let file_id = FileId::new(0);
+        check_source_result_with_file_id(source, file_id)
+    }
+
+    fn check_source_result_with_file_id(source: &str, file_id: FileId) -> CheckResult {
         let parse_result = parse(source, file_id);
         assert!(
             parse_result.errors.is_empty(),
@@ -8893,6 +8913,35 @@ export bitfield Header:
                 .discriminant,
             17
         );
+    }
+
+    #[test]
+    fn raw_json_facade_signature_prefers_trusted_stdlib_declaration() {
+        let result = check_source_result_with_file_id(
+            "\
+namespace json
+
+export enum JsonTree:
+    null
+
+export function kind(view value: JsonTree) returns int64:
+    return 1
+
+namespace app
+
+function main() returns int64:
+    json.JsonTree tree = json.JsonTree.null
+    return json.kind(view tree)
+",
+            FileId::new(STDLIB_FILE_ID_START),
+        );
+
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == jett_diagnostics::Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
     }
 
     #[test]
