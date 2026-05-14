@@ -58,5 +58,12 @@ function duplicate_leaf_summary() returns string:
     audit.Header decoded_audit_header = json.parse[audit.Header](audit_header_raw) handle error:
         return error
     return "{accounts.label(view decoded_account)}:{audit.label(view decoded_event)}:{accounts.local_summary()}:{audit.local_summary()}:{account_field.name}:{audit_field.name}:{type.name[accounts.Record]()}:{type.name[audit.Record]()}:{type.name[accounts.Box[accounts.Record]]()}:{type.name[audit.Box[audit.Record]]()}:{account_status == accounts.Status.active}:{audit_status == audit.Status.active}:{decoded_account_header.version}:{decoded_account_header.flag == accounts.Flag.enabled}:{decoded_audit_header.attempts}:{type.name[accounts.Header]()}:{type.name[audit.Header]()}"
+function duplicate_leaf_alias_function_summary() returns string:
+    use accounts as a
+    use audit as b
+    a.Record account = a.Record(id: "alias")
+    b.Record event = b.Record(attempts: 9)
+    return "{a.label(view account)}:{b.label(view event)}:{a.local_summary()}:{b.local_summary()}"
 verify namespace_duplicate_leaf_types:
     assert duplicate_leaf_summary() == "account:a1:audit:3:account:local:true:audit:5:true:id:attempts:accounts.Record:audit.Record:accounts.Box[accounts.Record]:audit.Box[audit.Record]:true:true:4:true:7:accounts.Header:audit.Header"
+    assert duplicate_leaf_alias_function_summary() == "account:alias:audit:9:account:local:true:audit:5:true"

@@ -121,7 +121,9 @@ front-end convenience.
 - Duplicate-leaf bitfields and `use`-alias bitfield references are now covered
   by the namespace run-pass fixtures.
 - Add more duplicate-leaf coverage beyond structs, enums, generic structs,
-  bitfields, and same-leaf functions: actors and interfaces remain.
+  bitfields, and same-leaf functions. Same-leaf functions are now covered both
+  by direct qualified calls and `use`-alias calls, so actors and interfaces
+  remain.
 - `type.name[a.User]()` returns `a.User`.
 - `type.fields[a.User]()` reports field metadata with owner `a.User`.
 - `json.parse[a.User]` and `json.serialize[a.User]` roundtrip only the intended
