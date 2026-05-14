@@ -1198,6 +1198,14 @@ impl Interpreter {
                     if let Some(result) = self.call_higher_order_builtin(name, arg_values.clone()) {
                         return Ok(ExprFlow::Value(result?));
                     }
+                    let runtime_name = self.runtime_name(name);
+                    if self.is_trusted_stdlib_first_function(&runtime_name) {
+                        return Ok(ExprFlow::Value(self.call_user_function_with_type_args(
+                            &runtime_name,
+                            type_args,
+                            arg_values,
+                        )?));
+                    }
                     // Try type-reflection built-ins before ordinary built-ins.
                     if let Some(result) =
                         self.call_builtin_with_type_args(name, type_args, &arg_values)
@@ -1208,7 +1216,6 @@ impl Interpreter {
                         return Ok(ExprFlow::Value(result?));
                     }
                     // Try user-defined dotted functions.
-                    let runtime_name = self.runtime_name(name);
                     if self.functions.contains_key(runtime_name.as_str())
                         || self
                             .resolve_interface_dispatch(&runtime_name, &arg_values)
@@ -1278,10 +1285,17 @@ impl Interpreter {
                     if let Some(result) = self.call_higher_order_builtin(name, arg_values.clone()) {
                         return Ok(ExprFlow::Value(result?));
                     }
+                    let runtime_name = self.runtime_name(name);
+                    if self.is_trusted_stdlib_first_function(&runtime_name) {
+                        return Ok(ExprFlow::Value(self.call_user_function_with_type_args(
+                            &runtime_name,
+                            &[],
+                            arg_values,
+                        )?));
+                    }
                     if let Some(result) = self.call_builtin(name, &arg_values) {
                         return Ok(ExprFlow::Value(result?));
                     }
-                    let runtime_name = self.runtime_name(name);
                     if self.functions.contains_key(runtime_name.as_str()) {
                         return Ok(ExprFlow::Value(
                             self.call_function(&runtime_name, arg_values)?,
@@ -11300,6 +11314,70 @@ mod tests {
 
         let value = interp
             .call_function("json.kind", vec![json_tree_null()])
+            .unwrap();
+
+        assert_eq!(value, Value::String("public wrapper".to_string()));
+    }
+
+    #[test]
+    fn dotted_raw_facade_expr_runs_trusted_wrapper_before_builtin_fallback() {
+        let mut interp = Interpreter::new();
+        interp.set_variable_public("tree", json_tree_null());
+
+        let mut public_wrapper = func_def(
+            "kind",
+            vec![("value", "JsonTree")],
+            block(vec![return_stmt(string("public wrapper"))]),
+        );
+        public_wrapper.span = stdlib_sp();
+        interp.register_function_in_namespace(Some("json"), &public_wrapper);
+
+        let mut trusted_hook = func_def(
+            "json_tree_kind",
+            vec![("value", "JsonTree")],
+            block(vec![return_stmt(string("hook fallback"))]),
+        );
+        trusted_hook.span = stdlib_sp();
+        interp.register_function_in_namespace(Some("json"), &trusted_hook);
+
+        let value = interp
+            .eval_expr(&dotted_call("json", "kind", vec![var("tree")]))
+            .unwrap();
+
+        assert_eq!(value, Value::String("public wrapper".to_string()));
+    }
+
+    #[test]
+    fn pipeline_raw_facade_step_runs_trusted_wrapper_before_builtin_fallback() {
+        let mut interp = Interpreter::new();
+        interp.set_variable_public("tree", json_tree_null());
+
+        let mut public_wrapper = func_def(
+            "kind",
+            vec![("value", "JsonTree")],
+            block(vec![return_stmt(string("public wrapper"))]),
+        );
+        public_wrapper.span = stdlib_sp();
+        interp.register_function_in_namespace(Some("json"), &public_wrapper);
+
+        let mut trusted_hook = func_def(
+            "json_tree_kind",
+            vec![("value", "JsonTree")],
+            block(vec![return_stmt(string("hook fallback"))]),
+        );
+        trusted_hook.span = stdlib_sp();
+        interp.register_function_in_namespace(Some("json"), &trusted_hook);
+
+        let value = interp
+            .eval_expr(&Expr::Pipeline(
+                Box::new(var("tree")),
+                vec![PipelineStep {
+                    function: field_access(var("json"), "kind"),
+                    extra_args: Vec::new(),
+                    span: sp(),
+                }],
+                sp(),
+            ))
             .unwrap();
 
         assert_eq!(value, Value::String("public wrapper".to_string()));
