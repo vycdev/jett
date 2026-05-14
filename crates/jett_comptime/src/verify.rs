@@ -1291,7 +1291,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // state name resolution not yet wired
     fn machine_construct_and_check_state() {
         // machine UserAuth: ...
         // verify machine_test:
