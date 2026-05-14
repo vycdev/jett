@@ -205,6 +205,10 @@ run_pass_fixture!(run_pass_string_interpolation, "string_interpolation.jett");
 run_pass_fixture!(run_pass_stdlib_loading, "stdlib_loading.jett");
 run_pass_fixture!(run_pass_verify_test, "verify_test.jett");
 run_pass_fixture!(run_pass_multi_verify, "multi_verify.jett");
+run_pass_fixture!(
+    run_pass_property_generic_lists,
+    "property_generic_lists.jett"
+);
 
 #[test]
 fn run_file_capture_stdout_captures_capability_writes() {

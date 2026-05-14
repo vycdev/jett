@@ -1,0 +1,11 @@
+namespace app
+
+property string_lists_have_nonnegative_length:
+    given items: list[string]
+    int64 length = list.length[string](items)
+    assert length >= 0
+
+property bool_lists_have_nonnegative_length:
+    given flags: list[bool]
+    int64 length = list.length[bool](flags)
+    assert length >= 0
