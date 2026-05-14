@@ -274,7 +274,7 @@ impl Resolver {
                 Item::TypeAlias(ta) => {
                     self.declare_namespaced_top_level(
                         &ta.name.name,
-                        DefKind::Struct, // treat type aliases like types for now
+                        DefKind::Type,
                         ta.name.span,
                         index,
                         ta.exported,
@@ -1583,6 +1583,8 @@ interface PrivateNamed:
             assert_eq!(def.visibility, crate::scope::DefVisibility::Public);
         }
 
+        assert_eq!(def_by_name(&result, "api.PublicPort").kind, DefKind::Type);
+
         for name in [
             "api.private_fn",
             "api.PrivateBox",
@@ -1595,6 +1597,8 @@ interface PrivateNamed:
             assert_eq!(def.namespace.as_deref(), Some("api"));
             assert_eq!(def.visibility, crate::scope::DefVisibility::Private);
         }
+
+        assert_eq!(def_by_name(&result, "api.PrivatePort").kind, DefKind::Type);
     }
 
     #[test]
