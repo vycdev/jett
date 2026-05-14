@@ -1053,6 +1053,10 @@ function json_decode_tree_scalar_reflected[T](view raw: JsonTree, primitive: Typ
     return fail("unsupported reflected JSON primitive")
 function json_decode_tree_integer_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[T, string]:
     int64 item = json_tree_as_int64(view raw) handle error:
+        if primitive == TypePrimitive.uint64_type:
+            if json_tree_is_number(view raw):
+                return fail("expected uint64 in range 0..9223372036854775807")
+            return fail(json_tree_kind_error(view raw, "uint64"))
         return fail(error)
     string range_error = json_decode_tree_integer_range_error(item, primitive) handle:
         default ""
