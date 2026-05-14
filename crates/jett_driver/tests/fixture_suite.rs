@@ -716,6 +716,10 @@ compile_fail_fixture!(
     "json_private_parse_reflected.jett"
 );
 compile_fail_fixture!(
+    compile_fail_json_private_parse_exact_reflected,
+    "json_private_parse_exact_reflected.jett"
+);
+compile_fail_fixture!(
     compile_fail_json_private_decode_tree_reflected,
     "json_private_decode_tree_reflected.jett"
 );
@@ -1114,6 +1118,7 @@ fn completions_hide_private_stdlib_json_hooks() {
         !candidates
             .iter()
             .any(|(name, _)| name == "json.json_parse_reflected"
+                || name == "json.json_parse_exact_reflected"
                 || name == "json.json_decode_tree_reflected"
                 || name == "json.json_serialize_public_reflected"
                 || name == "json.json_serialize_reflected"),
