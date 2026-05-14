@@ -90,6 +90,12 @@ Together they cover the shape needed for a future stdlib module:
 - bridge checks that keep the reflected prototypes aligned with the public JSON
   facade for representative full serialization, public serialization, and
   typed parse.
+- focused external shape fixtures for bytes, floats, sets, maps, enum payloads,
+  bitfields, optionals, results, refinements, and public secret omission across
+  `serialize`, `serialize_public`, `parse`, and `parse_exact`.
+- malformed-input parity across `json.json_tree_parse`, `json.parse_raw`,
+  `json.parse[JsonValue]`, `json.parse[json.JsonTree]`, and the exact raw-tree
+  targets.
 
 The compiler-known JSON bridge remains the compatibility and policy facade. It
 still owns the public typechecker policy for `json.parse`, `json.parse_exact`,
@@ -227,13 +233,16 @@ bridge spoofing, not helper visibility.
    metadata handoff for namespaced generic JSON.
 6. Continue hardening the self-hosted `JsonTree` parser. Common malformed-input
    diagnostics are pinned for unterminated strings/arrays/objects, trailing
-   characters, mismatched delimiters, bad number forms, bad literals, and
-   invalid escapes. Valid JSON escapes now include quote, backslash, slash,
-   backspace, form feed, newline, carriage return, tab, and unicode escapes.
-   Public entrypoint parity for those parser errors is pinned across
-   `json.json_tree_parse`, `json.parse_raw`, `json.parse[JsonValue]`, and
-   `json.parse[json.JsonTree]`. The remaining question is how far `JsonTree`
-   should go toward replacing the raw `JsonValue` compatibility surface.
+   characters, mismatched delimiters, bad number forms, bad literals, root-edge
+   empties, malformed object keys, nested unterminated strings, and invalid
+   escapes. Valid JSON escapes now include quote, backslash, slash, backspace,
+   form feed, newline, carriage return, tab, and unicode escapes. Public
+   entrypoint parity for those parser errors is pinned across
+   `json.json_tree_parse`, `json.parse_raw`, `json.parse[JsonValue]`,
+   `json.parse[json.JsonTree]`, `json.parse_exact[JsonValue]`, and
+   `json.parse_exact[json.JsonTree]`. The remaining question is how far
+   `JsonTree` should go toward replacing the raw `JsonValue` compatibility
+   surface.
 7. Decide whether `JsonValue` becomes a source-level type alias/replacement or
    remains a compiler-recognized compatibility spelling. The current
    implementation seeds a compiler-owned legacy compatibility alias from
@@ -305,8 +314,12 @@ functions should probably use `result` while format policy is still evolving.
   `docs/open_design/json_raw_access_semantics.md` for the current options and
   recommendation. Strict additive helpers now exist for shape-sensitive lookup;
   the remaining question is long-term naming/default guidance.
-- What is the stable external shape for enums, bitfields, bytes, floats, sets,
-  and maps?
+- The representative external shape for enums, bitfields, bytes, floats, sets,
+  maps, optionals, results, and refinements is now pinned in run-pass fixtures.
+  The remaining shape questions are narrower: whether map/set ordering should
+  ever become a documented contract, whether to add configurable strictness
+  beyond `parse_exact`, and how much diagnostic polish to do for missing-comma
+  malformed JSON before treating those messages as long-term API.
 - How should stdlib helper visibility evolve beyond namespace-private
   `export` syntax, especially once a full import/prelude model exists?
 - How much abstraction is allowed around trusted reflection loops before
