@@ -243,6 +243,9 @@ Still staged:
   aliases from outside their namespace.
 - Public JSON policy remains compiler-owned: `view`, secret, map-key, and
   handled-result rules still fire even if public wrapper declarations exist.
+- Project code cannot reopen compiler-shipped stdlib namespaces such as
+  `json`; the prepended stdlib namespace declaration wins and later project
+  declarations collide instead of replacing trusted symbols.
 - A project-defined `namespace json function json_parse_reflected...` cannot
   satisfy the trusted public JSON bridge, and an untrusted later registration of
   a hook name clears trust. Ordinary source access to the private typed parse

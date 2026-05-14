@@ -479,6 +479,10 @@ compile_fail_fixture!(
     "namespace_private_mutual_flat.jett"
 );
 compile_fail_fixture!(
+    compile_fail_stdlib_namespace_collision,
+    "stdlib_namespace_collision.jett"
+);
+compile_fail_fixture!(
     compile_fail_map_literal_key_type_mismatch,
     "map_literal_key_type_mismatch.jett"
 );
