@@ -361,8 +361,66 @@ fn shrink_value(value: &Value) -> Vec<Value> {
             }
             candidates
         }
+        Value::Set(items) if !items.is_empty() => {
+            let mut candidates = Vec::new();
+            candidates.push(Value::Set(vec![]));
+            if items.len() > 1 {
+                candidates.push(Value::Set(items[..items.len() / 2].to_vec()));
+                candidates.push(Value::Set(items[items.len() / 2..].to_vec()));
+                candidates.push(Value::Set(items[..items.len() - 1].to_vec()));
+            }
+            for (i, item) in items.iter().enumerate() {
+                for shrunk_item in shrink_value(item) {
+                    let mut new_set = items.clone();
+                    new_set[i] = shrunk_item;
+                    candidates.push(Value::Set(unique_values(new_set)));
+                }
+            }
+            candidates
+        }
+        Value::Map(entries) if !entries.is_empty() => {
+            let mut candidates = Vec::new();
+            candidates.push(Value::Map(vec![]));
+            if entries.len() > 1 {
+                candidates.push(Value::Map(entries[..entries.len() / 2].to_vec()));
+                candidates.push(Value::Map(entries[entries.len() / 2..].to_vec()));
+                candidates.push(Value::Map(entries[..entries.len() - 1].to_vec()));
+            }
+            for (i, (key, value)) in entries.iter().enumerate() {
+                for shrunk_key in shrink_value(key) {
+                    if entries
+                        .iter()
+                        .enumerate()
+                        .any(|(other_index, (other_key, _))| {
+                            other_index != i && *other_key == shrunk_key
+                        })
+                    {
+                        continue;
+                    }
+                    let mut new_map = entries.clone();
+                    new_map[i].0 = shrunk_key;
+                    candidates.push(Value::Map(new_map));
+                }
+                for shrunk_value in shrink_value(value) {
+                    let mut new_map = entries.clone();
+                    new_map[i].1 = shrunk_value;
+                    candidates.push(Value::Map(new_map));
+                }
+            }
+            candidates
+        }
         _ => vec![], // Bool, Nothing, etc. cannot be shrunk further
     }
+}
+
+fn unique_values(values: Vec<Value>) -> Vec<Value> {
+    let mut unique = Vec::new();
+    for value in values {
+        if !unique.contains(&value) {
+            unique.push(value);
+        }
+    }
+    unique
 }
 
 /// Try to find simpler inputs that still cause the property to fail.
@@ -563,17 +621,17 @@ fn generate_set_values_for_type(inner_ty: &TypeExpr) -> Vec<Value> {
         return Vec::new();
     }
 
-    let mut unique_values = Vec::new();
+    let mut unique_inner_values = Vec::new();
     for value in inner_values {
-        if !unique_values.contains(&value) {
-            unique_values.push(value);
+        if !unique_inner_values.contains(&value) {
+            unique_inner_values.push(value);
         }
     }
 
     let mut values = vec![Value::Set(vec![])];
-    values.push(Value::Set(vec![unique_values[0].clone()]));
+    values.push(Value::Set(vec![unique_inner_values[0].clone()]));
 
-    let sample: Vec<Value> = unique_values.iter().take(3).cloned().collect();
+    let sample: Vec<Value> = unique_inner_values.iter().take(3).cloned().collect();
     if sample.len() > 1 {
         values.push(Value::Set(sample));
     }
@@ -1685,6 +1743,23 @@ mod tests {
             }),
             "expected map[string, int64] generation to include string/int64 entries"
         );
+    }
+
+    #[test]
+    fn property_shrinker_simplifies_sets_and_maps() {
+        let set_candidates = shrink_value(&Value::Set(vec![Value::Int64(5)]));
+        assert!(set_candidates.contains(&Value::Set(vec![])));
+        assert!(set_candidates.contains(&Value::Set(vec![Value::Int64(0)])));
+
+        let map_candidates = shrink_value(&Value::Map(vec![(
+            Value::String("score".to_string()),
+            Value::Int64(5),
+        )]));
+        assert!(map_candidates.contains(&Value::Map(vec![])));
+        assert!(map_candidates.contains(&Value::Map(vec![(
+            Value::String("score".to_string()),
+            Value::Int64(0),
+        )])));
     }
 
     #[test]

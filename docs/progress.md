@@ -133,7 +133,7 @@
 | Component | Status |
 |---|---|
 | Property-based test runner | Done (basic: 100 generated iterations; primitives plus generic list/set/map pools) |
-| Input shrinking on failure | Done (shrinking for int64, float64, string, list; set/map generation is covered but set/map shrinking is not yet specialized) |
+| Input shrinking on failure | Done (shrinking for int64, float64, string, list, set, map) |
 | CPU profiler (`--profile`) | Not started |
 | Memory profiler (`--profile-memory`) | Not started |
 | `trace` keyword | Partial (parses, typechecks, runtime current-value output in `jett run`) |
