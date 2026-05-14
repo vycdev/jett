@@ -96,7 +96,6 @@ impl Resolver {
             "bool",
             "bytes",
             "nothing",
-            "JsonValue",
             "TypeConstruction",
             // Built-in generic types (used as identifiers in type annotations)
             "list",
@@ -272,13 +271,17 @@ impl Resolver {
                     );
                 }
                 Item::TypeAlias(ta) => {
-                    self.declare_namespaced_top_level(
-                        &ta.name.name,
-                        DefKind::Type,
-                        ta.name.span,
-                        index,
-                        ta.exported,
-                    );
+                    if ta.root_exported {
+                        self.declare_root_type_alias(ta, index);
+                    } else {
+                        self.declare_namespaced_top_level(
+                            &ta.name.name,
+                            DefKind::Type,
+                            ta.name.span,
+                            index,
+                            ta.exported,
+                        );
+                    }
                 }
                 // Verify, property, and implement blocks don't declare new names in the module scope.
                 Item::Verify(_) | Item::Property(_) | Item::Implement(_) => {}
@@ -312,6 +315,42 @@ impl Resolver {
             order,
             func.exported,
         );
+    }
+
+    fn declare_root_type_alias(&mut self, alias: &TypeAlias, order: usize) -> Option<DefId> {
+        if !alias.name.span.file.is_stdlib() {
+            self.sink.emit(errors::invalid_root_export(
+                "`export root type` is only allowed in compiler-shipped stdlib files",
+                alias.name.span,
+            ));
+            return None;
+        }
+        if alias.constraint.is_some() {
+            self.sink.emit(errors::invalid_root_export(
+                "`export root type` does not support refinements in this stage",
+                alias.name.span,
+            ));
+            return None;
+        }
+        if alias.name.name != "JsonValue" {
+            self.sink.emit(errors::invalid_root_export(
+                format!(
+                    "unsupported root export `{}`; only `JsonValue` is allowed in this stage",
+                    alias.name.name
+                ),
+                alias.name.span,
+            ));
+            return None;
+        }
+
+        self.declare_top_level_with_metadata(
+            &alias.name.name,
+            DefKind::Type,
+            alias.name.span,
+            order,
+            None,
+            DefVisibility::Public,
+        )
     }
 
     /// Register a top-level name. Returns `Some(DefId)` on success, `None` if
@@ -2661,6 +2700,7 @@ function main() returns int64:
                     sp(24, 34),
                 )),
                 exported: false,
+                root_exported: false,
                 span: sp(0, 34),
             })],
             span: sp(0, 34),

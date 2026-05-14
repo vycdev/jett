@@ -272,7 +272,8 @@ EnumDef         → ('export')? 'enum' Name ':' VariantList      // Variants may
 MachineDef      → 'machine' Name ':' StatesBlock TransitionsBlock
 ActorDef        → 'actor' Name '(' ParamList ')' ':' (ReceiveHandler)*
 BitfieldDef     → ('export')? ('network')? 'bitfield' Name ':' BitfieldList  // Fields: 'name: N bits' or 'name: N bits as EnumType' or 'payload: list[uint8]'
-TypeAlias       → ('export')? 'type' Name GenericParams? '=' Type ('where' Expr)?
+TypeAlias       → ('export' ('root')?)? 'type' Name GenericParams? '=' Type ('where' Expr)?
+                # 'export root type' is stdlib-only and currently restricted to root compatibility aliases.
 VerifyBlock     → 'verify' Name ':' Block
 PropertyBlock   → 'property' Name ':' GivenDecls Block
 InterfaceDef    → ('export')? 'interface' Name ':' FunctionSignature*

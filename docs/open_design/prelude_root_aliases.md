@@ -123,41 +123,43 @@ compatibility stage.
 
 ## Implementation Staging Notes
 
-The narrow feature is implementable now, but the first slice should not remove
-the compiler-owned `JsonValue` primitive behavior in the same change.
+The first narrow slice is implemented for `JsonValue`. It deliberately does not
+remove the compiler-owned `JsonValue` primitive behavior in the same change.
 
 The important staged invariant is:
 
-- `export root type JsonValue = json.JsonTree` makes the compatibility spelling
-  visible as source-owned stdlib API.
+- Done: `export root type JsonValue = json.JsonTree` makes the compatibility
+  spelling visible as source-owned stdlib API.
 - `JsonValue` may still resolve through the legacy compatibility path for one
   release window so `type.info[JsonValue]()` continues to report
   `TypePrimitive.json_value_type`.
-- `json.JsonValue` remains the ordinary namespaced alias whose reflection is an
-  alias to `json.JsonTree`.
+- Done: `json.JsonValue` remains the ordinary namespaced alias whose reflection
+  is an alias to `json.JsonTree`.
 - The `JsonValue -> json.JsonTree` compatibility relation remains restricted to
   the bundled stdlib `json.JsonTree`, not any user enum named `JsonTree`.
 
 Concretely, a safe implementation should:
 
-1. Add parser support for `export root type`, but reject `export root` on
-   functions, structs, enums, bitfields, actors, interfaces, variables, and
-   project files.
-2. Limit the first stdlib root export to an allowlisted `JsonValue` alias.
-3. Register root exports as root-scope names rather than namespace-private or
-   namespace-public names; otherwise namespace visibility diagnostics will treat
-   `JsonValue` as an external `prelude.JsonValue` access.
+1. Done: parser support for `export root type`, with parser rejection for
+   non-type `export root` items.
+2. Done: resolver support is stdlib-only, type-alias-only, and allowlisted to
+   `JsonValue`; project-file root aliases are rejected.
+3. Done: root exports register as root-scope names rather than
+   namespace-private or namespace-public names; otherwise namespace visibility
+   diagnostics would treat `JsonValue` as an external `prelude.JsonValue`
+   access.
 4. Keep source visibility separate from trusted origin. A root alias should not
    make any function implementation trusted.
-5. Keep the legacy `JsonValue` reflection behavior until a later explicit
+5. Done for the first slice: keep the legacy `JsonValue` reflection behavior
+   until a later explicit
    migration decides whether to deprecate or remove
    `TypePrimitive.json_value_type`.
 
 Required tests for that first slice:
 
 - parser accepts `export root type JsonValue = json.JsonTree`,
-- parser or resolver rejects `export root function`, `export root struct`, and
-  project-file `export root type`,
+- parser or resolver rejects non-type `export root` items and project-file
+  `export root type`,
 - bare `JsonValue` is visible from ordinary source without relying on namespace
   leaf leakage,
 - `prelude.JsonValue` behavior is explicitly decided and pinned,
@@ -168,3 +170,9 @@ Required tests for that first slice:
   distinct behavior,
 - completions include the root `JsonValue` alias while private stdlib JSON hooks
   remain hidden.
+
+Status: parser, resolver, stdlib declaration, completion, compatibility, and
+reflection-staging coverage are in place for `JsonValue`. The remaining design
+work is broader prelude policy: whether more root aliases should ever exist, how
+they are documented in generated API references, and when the legacy
+`TypePrimitive.json_value_type` compatibility tag can be retired.

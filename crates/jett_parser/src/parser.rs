@@ -73,6 +73,15 @@ impl<'src> Parser<'src> {
         }
     }
 
+    fn eat_contextual_ident(&mut self, text: &str) -> Option<Token> {
+        let tok = self.peek_token().clone();
+        if tok.kind == TokenKind::Ident && self.token_text(&tok) == text {
+            Some(self.advance())
+        } else {
+            None
+        }
+    }
+
     fn expect(&mut self, kind: TokenKind) -> Token {
         if self.peek() == kind {
             self.advance()
@@ -176,6 +185,15 @@ impl<'src> Parser<'src> {
         self.skip_newlines();
         let export_span = self.eat(TokenKind::Export).map(|tok| tok.span);
         let exported = export_span.is_some();
+        let root_exported = exported && self.eat_contextual_ident("root").is_some();
+        if root_exported && self.peek() != TokenKind::Type {
+            let tok = self.peek_token().clone();
+            self.error(
+                format!("expected `type` after `export root`, found {:?}", tok.kind),
+                tok.span,
+            );
+            return None;
+        }
         if exported
             && !matches!(
                 self.peek(),
@@ -221,9 +239,11 @@ impl<'src> Parser<'src> {
             TokenKind::Actor => Some(Item::Actor(self.parse_actor(exported, export_span))),
             TokenKind::Verify => Some(Item::Verify(self.parse_verify_block())),
             TokenKind::Property => Some(Item::Property(self.parse_property_block())),
-            TokenKind::Type => Some(Item::TypeAlias(
-                self.parse_type_alias(exported, export_span),
-            )),
+            TokenKind::Type => Some(Item::TypeAlias(self.parse_type_alias(
+                exported,
+                root_exported,
+                export_span,
+            ))),
             TokenKind::Mutable => Some(Item::VarDecl(self.parse_var_decl())),
             // Could be a variable declaration: `Type name = expr`
             _ if !exported && self.looks_like_var_decl() => {
@@ -332,7 +352,12 @@ impl<'src> Parser<'src> {
         }
     }
 
-    fn parse_type_alias(&mut self, exported: bool, export_span: Option<Span>) -> TypeAlias {
+    fn parse_type_alias(
+        &mut self,
+        exported: bool,
+        root_exported: bool,
+        export_span: Option<Span>,
+    ) -> TypeAlias {
         let kw = self.expect(TokenKind::Type);
         let start_span = export_span.unwrap_or(kw.span);
         let name = self.parse_ident();
@@ -353,6 +378,7 @@ impl<'src> Parser<'src> {
             base_type,
             constraint,
             exported,
+            root_exported,
         }
     }
 
@@ -2604,6 +2630,35 @@ export actor Worker:
         assert!(matches!(&result.module.items[5], Item::TypeAlias(t) if t.exported));
         assert!(matches!(&result.module.items[6], Item::Interface(i) if i.exported));
         assert!(matches!(&result.module.items[7], Item::Actor(a) if a.exported));
+    }
+
+    #[test]
+    fn parse_export_root_type_alias() {
+        let src = "\
+export root type JsonValue = json.JsonTree
+";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        assert_eq!(result.module.items.len(), 1);
+        assert!(
+            matches!(&result.module.items[0], Item::TypeAlias(t) if t.exported && t.root_exported && t.name.name == "JsonValue")
+        );
+    }
+
+    #[test]
+    fn parse_export_root_rejects_non_type_item() {
+        let src = "\
+export root function
+";
+        let result = parse_str(src);
+        assert!(!result.errors.is_empty());
+        assert!(
+            result.errors[0]
+                .message
+                .contains("expected `type` after `export root`"),
+            "unexpected errors: {:?}",
+            result.errors
+        );
     }
 
     #[test]

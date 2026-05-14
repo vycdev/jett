@@ -4166,6 +4166,18 @@ export interface Displayable:
     function display(view value: self) returns string
 ```
 
+Compiler-shipped standard library files may use the narrower
+`export root type` form for carefully audited compatibility aliases:
+
+```
+export root type JsonValue = json.JsonTree
+```
+
+This form is stdlib-only and type-alias-only. Project files cannot use it, and
+it does not mark any implementation as trusted. The current `JsonValue` root
+alias is a migration bridge for legacy raw JSON code while reflection still
+reports bare `JsonValue` as `TypePrimitive.json_value_type`.
+
 Inside a `mutual` block, each public function signature is exported
 individually. This allows one recursive group to expose a small public entry
 point while keeping the rest of the cycle private:

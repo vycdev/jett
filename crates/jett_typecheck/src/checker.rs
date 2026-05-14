@@ -3148,8 +3148,16 @@ impl<'a> TypeChecker<'a> {
             let Item::TypeAlias(alias) = item else {
                 continue;
             };
-            let canonical = Self::canonical_name(current_namespace.as_deref(), &alias.name.name);
+            let canonical = Self::type_alias_canonical_name(alias, current_namespace.as_deref());
             self.type_aliases.insert(canonical, alias.clone());
+        }
+    }
+
+    fn type_alias_canonical_name(alias: &ast::TypeAlias, namespace: Option<&str>) -> String {
+        if alias.root_exported {
+            alias.name.name.clone()
+        } else {
+            Self::canonical_name(namespace, &alias.name.name)
         }
     }
 
@@ -3165,7 +3173,11 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn check_type_alias(&mut self, alias: &ast::TypeAlias, namespace: Option<&str>) {
-        let alias_name = Self::canonical_name(namespace, &alias.name.name);
+        let alias_name = Self::type_alias_canonical_name(alias, namespace);
+        if alias.root_exported {
+            let _ = self.resolve_type_expr(&alias.base_type);
+            return;
+        }
         let Some(constraint) = &alias.constraint else {
             let _ = self.resolve_type_alias(&alias_name, alias.name.span);
             return;

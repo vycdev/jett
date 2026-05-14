@@ -613,6 +613,10 @@ compile_fail_fixture!(
     "stdlib_namespace_collision.jett"
 );
 compile_fail_fixture!(
+    compile_fail_export_root_type_project_file,
+    "export_root_type_project_file.jett"
+);
+compile_fail_fixture!(
     compile_fail_map_literal_key_type_mismatch,
     "map_literal_key_type_mismatch.jett"
 );
@@ -1101,6 +1105,12 @@ fn completions_hide_private_stdlib_json_hooks() {
     let source = "namespace app\n\nfunction main() returns nothing:\n    return nothing\n";
     let candidates = completions(source);
 
+    assert!(
+        candidates.iter().any(|(name, kind)| {
+            name == "JsonValue" && *kind == jett_resolve::scope::DefKind::Type
+        }),
+        "expected completions to include root stdlib JsonValue alias"
+    );
     for expected in [
         "json.JsonTree",
         "json.JsonValue",

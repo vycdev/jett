@@ -2514,6 +2514,7 @@ mod tests {
             base_type: type_named(base),
             constraint,
             exported: false,
+            root_exported: false,
             span: sp(),
         }
     }

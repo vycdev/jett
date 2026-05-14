@@ -7,6 +7,7 @@ export enum JsonTree:
     array_value(items: list[JsonTree])
     object_value(fields: map[string, JsonTree])
 export type JsonValue = JsonTree
+export root type JsonValue = json.JsonTree
 struct JsonTreeScan:
     depth: int64
     in_string: bool

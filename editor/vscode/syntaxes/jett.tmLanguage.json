@@ -90,11 +90,12 @@
         "type-alias-definition": {
             "patterns": [
                 {
-                    "match": "\\b(?:(export)\\s+)?(type)\\s+([A-Z][a-zA-Z0-9_]*)",
+                    "match": "\\b(?:(export)\\s+(?:(root)\\s+)?)?(type)\\s+([A-Z][a-zA-Z0-9_]*)",
                     "captures": {
                         "1": { "name": "keyword.other.jett" },
                         "2": { "name": "keyword.other.jett" },
-                        "3": { "name": "entity.name.type.jett" }
+                        "3": { "name": "keyword.other.jett" },
+                        "4": { "name": "entity.name.type.jett" }
                     }
                 }
             ]

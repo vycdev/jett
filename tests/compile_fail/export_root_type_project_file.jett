@@ -1,0 +1,2 @@
+# ERROR: E0209
+export root type ProjectJsonValue = int64

@@ -44,6 +44,9 @@ pub struct TypeAlias {
     /// being constrained.  `None` for simple aliases without a constraint.
     pub constraint: Option<Expr>,
     pub exported: bool,
+    /// A compiler-shipped stdlib alias exported into the root namespace.
+    /// This is intentionally narrower than ordinary namespaced `export`.
+    pub root_exported: bool,
     pub span: Span,
 }
 

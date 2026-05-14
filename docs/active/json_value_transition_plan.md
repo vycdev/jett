@@ -54,9 +54,10 @@ about: two names, two traversal surfaces, one conceptual data model.
   spellings compatible for assignments, calls, returns, fields, and container
   wrappers without relying on namespace flattening.
 - `stdlib/json.jett` now also exports `json.JsonValue` as a source alias to
-  `json.JsonTree`. The unqualified `JsonValue` spelling remains a compiler-owned
-  compatibility name until the language has an explicit prelude/root alias
-  mechanism.
+  `json.JsonTree`, and exports a narrow root alias
+  `JsonValue = json.JsonTree` for source visibility. The unqualified
+  `JsonValue` spelling still keeps its legacy primitive reflection behavior for
+  one compatibility stage.
 - `json_decode_reflected[T](raw: JsonValue)` has been removed; decoding now
   enters through `json_decode_tree_reflected[T](view raw)` after parsing to
   `JsonTree`.
@@ -145,12 +146,12 @@ The staged direction is:
    prelude/exported alias without depending on namespace leakage.
 3. Done: the stdlib also exports `json.JsonValue = JsonTree` as the
    namespaced source-level alias.
-4. Preserve legacy reflection during the compatibility window:
+4. Done: the stdlib exports `export root type JsonValue = json.JsonTree`, while
+   project files are rejected from using `export root`.
+5. Preserve legacy reflection during the compatibility window:
    `type.info[JsonValue]()` may continue to report
    `TypePrimitive.json_value_type`, while `type.info[json.JsonTree]()` reports
    enum metadata.
-5. Once explicit prelude/root aliases exist, move the unqualified
-   compatibility spelling into source as an exported/prelude stdlib symbol.
 6. In a later breaking cleanup, decide whether to deprecate or remove
    `TypePrimitive.json_value_type` and make `JsonValue` fully identical to
    `json.JsonTree` in reflection.
@@ -337,8 +338,7 @@ Finish the prelude/root alias decision:
 1. Keep raw helper signatures `JsonTree`-first; treat bare `JsonValue` as the
    temporary compiler-owned compatibility spelling.
 2. Implement the narrow `export root type` stage described in
-   `docs/open_design/prelude_root_aliases.md`.
-3. Move the unqualified `JsonValue` compatibility alias out of compiler special
-   cases and into the stdlib/prelude surface.
-4. Later, update reflection metadata so the legacy
+   `docs/open_design/prelude_root_aliases.md`. Done for the visible root alias;
+   the legacy reflection primitive is intentionally still staged.
+3. Later, update reflection metadata so the legacy
    `TypePrimitive.json_value_type` is either formally deprecated or removed.

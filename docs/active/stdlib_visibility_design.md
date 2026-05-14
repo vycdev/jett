@@ -194,8 +194,9 @@ Implemented:
 - The public `JsonTree` API in `stdlib/json.jett` is explicitly exported while
   parser, decoder, serializer, and reflected bridge helpers stay private.
 - `stdlib/json.jett` exports `json.JsonValue = JsonTree` as the namespaced
-  source-level alias; the unqualified `JsonValue` compatibility spelling remains
-  compiler-owned until a prelude/root alias mechanism exists.
+  source-level alias and `export root type JsonValue = json.JsonTree` as the
+  narrow root compatibility alias. The unqualified spelling still preserves the
+  legacy `TypePrimitive.json_value_type` reflection tag during the transition.
 - Driver-level `build_source` coverage now verifies that in-memory/LSP-style
   validation sees the exported `json.JsonTree` raw facade surface, not only the
   marker stdlib module.
@@ -274,6 +275,6 @@ Still staged:
 
 - Codegen should eventually get equivalent trusted-origin coverage once JSON
   bridge delegation moves beyond the comptime/runtime interpreter.
-- The future import/prelude design should add integration coverage for whatever
-  root-level compatibility alias replaces the current compiler-owned
-  unqualified `JsonValue` spelling.
+- The future import/prelude design should decide whether additional root aliases
+  are ever allowed and when the legacy `TypePrimitive.json_value_type`
+  compatibility tag can retire.

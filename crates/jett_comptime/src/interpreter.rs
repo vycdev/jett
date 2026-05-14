@@ -483,7 +483,11 @@ impl Interpreter {
                     self.register_function_in_namespace(current_namespace.as_deref(), func)
                 }
                 Item::TypeAlias(alias) => {
-                    self.register_type_alias_in_namespace(current_namespace.as_deref(), alias)
+                    if alias.root_exported {
+                        self.register_type_alias(alias);
+                    } else {
+                        self.register_type_alias_in_namespace(current_namespace.as_deref(), alias);
+                    }
                 }
                 Item::Interface(interface) => self.register_interface(interface),
                 Item::Implement(block) => self.register_implement_block(block),
@@ -8926,6 +8930,7 @@ mod tests {
             base_type: type_named(base),
             constraint,
             exported: false,
+            root_exported: false,
             span: sp(),
         }
     }
