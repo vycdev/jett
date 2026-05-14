@@ -44,6 +44,19 @@ function parse_exact_validates_map_values() returns string:
     map[string, Profile] profiles = json.parse_exact[map[string, Profile]](raw) handle error:
         return error
     return "{map.length[string, Profile](view profiles)}"
+function parse_exact_accepts_set_shape() returns string:
+    set[int64] values_for_length = json.parse_exact[set[int64]]("[1,2,2]") handle error:
+        return error
+    set[int64] values_for_contains = json.parse_exact[set[int64]]("[1,2,2]") handle error:
+        return error
+    int64 length = set.length[int64](values_for_length)
+    bool has_two = set.contains[int64](values_for_contains, 2)
+    return "{length}:{has_two}"
+function parse_exact_rejects_set_non_array() returns string:
+    set[int64] values = json.parse_exact[set[int64]]("{{\"value\":1}}") handle error:
+        return error
+    int64 length = set.length[int64](values)
+    return "{length}"
 function parse_exact_validates_alias_base() returns string:
     string raw = "{{\"displayName\":\"Alice\",\"note\":\"ok\",\"extra\":\"nope\"}}"
     ProfileAlias profile = json.parse_exact[ProfileAlias](raw) handle error:
@@ -115,6 +128,8 @@ verify json_parse_exact:
     assert parse_exact_uses_serialize_name() == "profileData: unknown field 'display_name' for test.Profile"
     assert parse_exact_validates_list_items() == "0: unknown field 'extra' for test.Profile"
     assert parse_exact_validates_map_values() == "primary: unknown field 'extra' for test.Profile"
+    assert parse_exact_accepts_set_shape() == "2:true"
+    assert parse_exact_rejects_set_non_array() == "expected array, got object"
     assert parse_exact_validates_alias_base() == "unknown field 'extra' for test.Profile"
     assert parse_exact_validates_optional_value() == "unknown field 'extra' for test.Profile"
     assert parse_exact_accepts_optional_null() == "none"

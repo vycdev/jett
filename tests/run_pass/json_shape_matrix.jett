@@ -1,0 +1,86 @@
+namespace test
+enum State:
+    idle
+    loading(percent: int64)
+enum Protocol:
+    tcp = 6
+    udp = 17
+bitfield Packet:
+    version: 4 bits
+    protocol: 8 bits as Protocol
+struct Matrix:
+    payload: bytes
+    ratio: float64
+    lucky: set[int64]
+    scores: map[string, int64]
+    state: State
+    packet: Packet
+    maybe: optional[int64]
+    outcome: result[list[int64], string]
+function parse_matrix_summary() returns string:
+    string raw = "{{\"payload\":\"0x4869\",\"ratio\":3.5,\"lucky\":[2,3,2],\"scores\":{{\"wins\":3,\"losses\":1}},\"state\":{{\"loading\":[65]}},\"packet\":{{\"version\":4,\"protocol\":\"tcp\"}},\"maybe\":9,\"outcome\":{{\"ok\":[1,2]}}}}"
+    Matrix matrix = json.parse[Matrix](raw) handle error:
+        return error
+    float64 ratio = matrix.ratio
+    int64 percent = 0
+    match matrix.state:
+        idle:
+            percent = -1
+        loading(value):
+            percent = value
+    bool tcp = matrix.packet.protocol == Protocol.tcp
+    int64 maybe_value = matrix.maybe handle:
+        default -1
+    int64 first_byte = bytes.get(matrix.payload, 0) handle:
+        default -1
+    int64 lucky_count = set.length[int64](matrix.lucky)
+    int64 wins = map.get[string, int64](matrix.scores, "wins") handle:
+        default -1
+    list[int64] outcome = matrix.outcome handle error:
+        return error
+    int64 second = list.get[int64](view outcome, 1) handle:
+        default -1
+    return "{first_byte}:{ratio}:{lucky_count}:{wins}:{percent}:{tcp}:{maybe_value}:{second}"
+function parse_matrix_result_fail() returns string:
+    string raw = "{{\"payload\":\"4869\",\"ratio\":3.5,\"lucky\":[2],\"scores\":{{\"wins\":3}},\"state\":\"idle\",\"packet\":{{\"version\":4,\"protocol\":\"udp\"}},\"maybe\":null,\"outcome\":{{\"fail\":\"bad\"}}}}"
+    Matrix matrix = json.parse[Matrix](raw) handle error:
+        return error
+    list[int64] ignored = matrix.outcome handle error:
+        return error
+    return "{list.length[int64](view ignored)}"
+function serialize_matrix_shape_checks() returns string:
+    bytes payload = bytes.from_string("Hi")
+    mutable set[int64] lucky = set.new[int64]()
+    lucky = set.add[int64](lucky, 2)
+    lucky = set.add[int64](lucky, 3)
+    list[int64] outcome_values = list(1, 2)
+    result[list[int64], string] outcome = ok(outcome_values)
+    Matrix matrix = Matrix(payload: payload, ratio: 3.5, lucky: lucky, scores: map("wins": 3, "losses": 1), state: State.loading(65), packet: Packet(version: 4, protocol: Protocol.tcp), maybe: some(9), outcome: outcome)
+    string raw = json.serialize[Matrix](view matrix)
+    bool has_payload = string.contains(raw, "\"payload\":\"0x4869\"")
+    bool has_ratio = string.contains(raw, "\"ratio\":3.5")
+    bool has_lucky = string.contains(raw, "\"lucky\":[") && string.contains(raw, "2") && string.contains(raw, "3")
+    bool has_scores = string.contains(raw, "\"scores\":") && string.contains(raw, "\"wins\":3") && string.contains(raw, "\"losses\":1")
+    bool has_state = string.contains(raw, "\"state\":") && string.contains(raw, "\"loading\":[65]")
+    bool has_packet = string.contains(raw, "\"packet\":") && string.contains(raw, "\"version\":4") && string.contains(raw, "\"protocol\":\"tcp\"")
+    bool has_maybe = string.contains(raw, "\"maybe\":9")
+    bool has_outcome = string.contains(raw, "\"outcome\":") && string.contains(raw, "\"ok\":[1,2]")
+    return "{has_payload}:{has_ratio}:{has_lucky}:{has_scores}:{has_state}:{has_packet}:{has_maybe}:{has_outcome}"
+function parse_exact_accepts_matrix_shape() returns string:
+    string raw = "{{\"payload\":\"0x4869\",\"ratio\":3.5,\"lucky\":[2,3],\"scores\":{{\"wins\":3}},\"state\":{{\"loading\":[65]}},\"packet\":{{\"version\":4,\"protocol\":\"tcp\"}},\"maybe\":null,\"outcome\":{{\"ok\":[1,2]}}}}"
+    Matrix matrix = json.parse_exact[Matrix](raw) handle error:
+        return error
+    int64 version = matrix.packet.version
+    int64 lucky_count = set.length[int64](matrix.lucky)
+    return "{lucky_count}:{version}"
+function parse_exact_rejects_nested_shape_extra() returns string:
+    string raw = "{{\"payload\":\"0x4869\",\"ratio\":3.5,\"lucky\":[2,3],\"scores\":{{\"wins\":3}},\"state\":{{\"loading\":[65]}},\"packet\":{{\"version\":4,\"protocol\":\"tcp\",\"extra\":1}},\"maybe\":null,\"outcome\":{{\"ok\":[1,2]}}}}"
+    Matrix matrix = json.parse_exact[Matrix](raw) handle error:
+        return error
+    return "{matrix.packet.version}"
+verify json_shape_matrix:
+    assert parse_matrix_summary() == "72:3.5:2:3:65:true:9:2"
+    assert parse_matrix_result_fail() == "bad"
+    assert serialize_matrix_shape_checks() == "true:true:true:true:true:true:true:true"
+    assert parse_exact_accepts_matrix_shape() == "2:4"
+    assert parse_exact_rejects_nested_shape_extra() == "packet: unknown field 'extra' for test.Packet"

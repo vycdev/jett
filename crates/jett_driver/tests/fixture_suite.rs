@@ -348,6 +348,7 @@ run_pass_fixture!(
 );
 run_pass_fixture!(run_pass_json_parse, "json_parse.jett");
 run_pass_fixture!(run_pass_json_parse_exact, "json_parse_exact.jett");
+run_pass_fixture!(run_pass_json_shape_matrix, "json_shape_matrix.jett");
 run_pass_fixture!(
     run_pass_json_parse_error_parity,
     "json_parse_error_parity.jett"
