@@ -1,0 +1,11 @@
+# ERROR: E0311
+function broken_when_not_list[T](value: T) returns int64:
+    if type.info[T]().kind_tag == TypeKind.list_type:
+        return 0
+    else:
+        int64 item = value
+        return item
+
+function main() returns nothing:
+    int64 item = broken_when_not_list[string]("alpha")
+    return nothing

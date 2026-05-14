@@ -121,6 +121,10 @@ struct TypeChecker<'a> {
     reflection_variants_by_id: HashMap<TypeId, (String, Vec<ReflectionVariantInfo>)>,
     /// Active type variable substitution during monomorphization (type_param_name → TypeId).
     type_var_subst: HashMap<String, TypeId>,
+    /// Source-level reflected kind tags for active type variables. This keeps
+    /// simple aliases visible to `type.kind_tag[T]()` while their TypeId may
+    /// resolve to the alias base type.
+    type_var_kind_tags: HashMap<String, String>,
     /// Trusted field types currently available from direct `type.fields[T]()` loops.
     reflected_field_type_scopes: Vec<HashMap<String, Vec<TypeId>>>,
     /// Trusted TypeInfo types currently available from direct reflected `args` loops.
@@ -132,7 +136,10 @@ struct TypeChecker<'a> {
     /// AST templates for user-defined generic functions (have type_params).
     generic_function_templates: HashMap<String, FunctionDef>,
     /// Generic function instantiations whose bodies have already been checked.
-    checked_generic_function_instantiations: HashSet<(String, Vec<TypeId>)>,
+    checked_generic_function_instantiations: HashSet<(String, Vec<TypeId>, Vec<String>)>,
+    /// True while checking a generic instantiation whose type-param reflection
+    /// is limited to directly evaluable branch conditions.
+    specialize_reflection_branches: bool,
 
     // -- Actor support --
     /// The expected `responds T` type for the receive handler being checked.
@@ -179,11 +186,13 @@ impl<'a> TypeChecker<'a> {
             reflection_bitfields_by_id: HashMap::new(),
             reflection_variants_by_id: HashMap::new(),
             type_var_subst: HashMap::new(),
+            type_var_kind_tags: HashMap::new(),
             reflected_field_type_scopes: Vec::new(),
             reflected_type_info_scopes: Vec::new(),
             reflected_variant_type_scopes: Vec::new(),
             generic_function_templates: HashMap::new(),
             checked_generic_function_instantiations: HashSet::new(),
+            specialize_reflection_branches: false,
             current_respond_type: None,
         };
         checker.install_builtin_metadata_types();
@@ -991,6 +1000,85 @@ impl<'a> TypeChecker<'a> {
             Type::Function { .. } => "function",
             Type::Refinement { .. } => "refinement",
             Type::Interface(_) | Type::Actor(_) | Type::Error => "unknown",
+        }
+    }
+
+    fn reflection_kind_tag_for_type(&self, type_id: TypeId) -> &'static str {
+        match self.interner.resolve(type_id) {
+            Type::Int8
+            | Type::Int16
+            | Type::Int32
+            | Type::Int64
+            | Type::Uint8
+            | Type::Uint16
+            | Type::Uint32
+            | Type::Uint64
+            | Type::Float32
+            | Type::Float64
+            | Type::String
+            | Type::Bool
+            | Type::Bytes
+            | Type::Nothing
+            | Type::JsonValue
+            | Type::TypeConstruction => "primitive_type",
+            Type::List(_) => "list_type",
+            Type::Map(_, _) => "map_type",
+            Type::Set(_) => "set_type",
+            Type::Optional(_) => "optional_type",
+            Type::Result(_, _) => "result_type",
+            Type::Secret(_) => "secret_type",
+            Type::Struct(_) => "struct_type",
+            Type::Bitfield(_) => "bitfield_type",
+            Type::Enum(_) => "enum_type",
+            Type::Function { .. } => "function_type",
+            Type::Refinement { .. } => "refinement_type",
+            Type::Interface(_) | Type::Actor(_) | Type::Error => "unknown_type",
+        }
+    }
+
+    fn reflection_kind_tag_for_type_expr(&self, ty: &TypeExpr, resolved_ty: TypeId) -> String {
+        match ty {
+            TypeExpr::View(inner, _) => self.reflection_kind_tag_for_type_expr(inner, resolved_ty),
+            TypeExpr::Named(ident) => {
+                if let Some(kind_tag) = self.type_var_kind_tags.get(&ident.name) {
+                    return kind_tag.clone();
+                }
+
+                let name = self.resolved_or_expanded_name(&ident.name, ident.span);
+                if Self::reflection_primitive_tag_for_name(&name).is_some()
+                    || Self::reflection_primitive_tag_for_name(&ident.name).is_some()
+                {
+                    "primitive_type".to_string()
+                } else if let Some(alias) = self
+                    .type_aliases
+                    .get(&name)
+                    .or_else(|| self.type_aliases.get(&ident.name))
+                {
+                    if alias.constraint.is_some() {
+                        "refinement_type".to_string()
+                    } else {
+                        "alias_type".to_string()
+                    }
+                } else {
+                    self.reflection_kind_tag_for_type(resolved_ty).to_string()
+                }
+            }
+            TypeExpr::Generic(ident, _, _) => {
+                let name = self.resolved_or_expanded_name(&ident.name, ident.span);
+                match name.as_str() {
+                    "list" => "list_type".to_string(),
+                    "map" => "map_type".to_string(),
+                    "set" => "set_type".to_string(),
+                    "optional" => "optional_type".to_string(),
+                    "result" => "result_type".to_string(),
+                    "secret" => "secret_type".to_string(),
+                    _ if self.generic_struct_templates.contains_key(&name) => {
+                        "struct_type".to_string()
+                    }
+                    _ => self.reflection_kind_tag_for_type(resolved_ty).to_string(),
+                }
+            }
+            TypeExpr::Function(_, _, _) => "function_type".to_string(),
         }
     }
 
@@ -3953,12 +4041,26 @@ impl<'a> TypeChecker<'a> {
         func: &FunctionDef,
         concrete_args: &[TypeId],
         subst: HashMap<String, TypeId>,
+        kind_subst: HashMap<String, String>,
     ) {
-        if self.generic_function_uses_type_param_reflection(func) {
+        let uses_type_param_reflection = self.generic_function_uses_type_param_reflection(func);
+        let branch_specializable = uses_type_param_reflection
+            && self.generic_function_reflection_is_branch_specializable(func);
+        if uses_type_param_reflection && !branch_specializable {
             return;
         }
 
-        let cache_key = (function_name.to_string(), concrete_args.to_vec());
+        let kind_key = func
+            .type_params
+            .iter()
+            .map(|param| {
+                kind_subst
+                    .get(&param.name)
+                    .cloned()
+                    .unwrap_or_else(|| "unknown_type".to_string())
+            })
+            .collect::<Vec<_>>();
+        let cache_key = (function_name.to_string(), concrete_args.to_vec(), kind_key);
         if !self
             .checked_generic_function_instantiations
             .insert(cache_key)
@@ -3973,6 +4075,7 @@ impl<'a> TypeChecker<'a> {
         let instantiated_name = format!("{function_name}[{}]", type_arg_names.join(", "));
 
         let old_subst = std::mem::replace(&mut self.type_var_subst, subst);
+        let old_kind_subst = std::mem::replace(&mut self.type_var_kind_tags, kind_subst);
         let old_return_type = self.current_return_type;
         let old_function_name = self.current_function_name.clone();
         let old_function_pure = self.current_function_pure;
@@ -3981,16 +4084,19 @@ impl<'a> TypeChecker<'a> {
         let old_verify_name = self.current_verify_name.clone();
         let old_handle_body_depth = self.handle_body_depth;
         let old_respond_type = self.current_respond_type;
+        let old_specialize_reflection_branches = self.specialize_reflection_branches;
 
         self.in_verify_block = false;
         self.in_property_block = false;
         self.current_verify_name = None;
         self.handle_body_depth = 0;
         self.current_respond_type = None;
+        self.specialize_reflection_branches = branch_specializable;
 
         self.check_function_impl(func, instantiated_name);
 
         self.type_var_subst = old_subst;
+        self.type_var_kind_tags = old_kind_subst;
         self.current_return_type = old_return_type;
         self.current_function_name = old_function_name;
         self.current_function_pure = old_function_pure;
@@ -3999,6 +4105,7 @@ impl<'a> TypeChecker<'a> {
         self.current_verify_name = old_verify_name;
         self.handle_body_depth = old_handle_body_depth;
         self.current_respond_type = old_respond_type;
+        self.specialize_reflection_branches = old_specialize_reflection_branches;
     }
 
     fn generic_function_uses_type_param_reflection(&self, func: &FunctionDef) -> bool {
@@ -4008,6 +4115,216 @@ impl<'a> TypeChecker<'a> {
             .map(|param| param.name.clone())
             .collect::<HashSet<_>>();
         self.block_uses_type_param_reflection(&func.body, &type_params)
+    }
+
+    fn generic_function_reflection_is_branch_specializable(&self, func: &FunctionDef) -> bool {
+        let type_params = func
+            .type_params
+            .iter()
+            .map(|param| param.name.clone())
+            .collect::<HashSet<_>>();
+        self.block_reflection_is_branch_specializable(&func.body, &type_params)
+    }
+
+    fn block_reflection_is_branch_specializable(
+        &self,
+        block: &Block,
+        type_params: &HashSet<String>,
+    ) -> bool {
+        block
+            .stmts
+            .iter()
+            .all(|stmt| self.stmt_reflection_is_branch_specializable(stmt, type_params))
+    }
+
+    fn stmt_reflection_is_branch_specializable(
+        &self,
+        stmt: &Stmt,
+        type_params: &HashSet<String>,
+    ) -> bool {
+        match stmt {
+            Stmt::If(if_stmt) => {
+                self.expr_reflection_is_direct_branch_condition(&if_stmt.condition, type_params)
+                    && self
+                        .block_reflection_is_branch_specializable(&if_stmt.then_block, type_params)
+                    && if_stmt.else_ifs.iter().all(|(condition, block)| {
+                        self.expr_reflection_is_direct_branch_condition(condition, type_params)
+                            && self.block_reflection_is_branch_specializable(block, type_params)
+                    })
+                    && if_stmt.else_block.as_ref().map_or(true, |block| {
+                        self.block_reflection_is_branch_specializable(block, type_params)
+                    })
+            }
+            _ => !self.stmt_uses_type_param_reflection(stmt, type_params),
+        }
+    }
+
+    fn expr_reflection_is_direct_branch_condition(
+        &self,
+        expr: &Expr,
+        type_params: &HashSet<String>,
+    ) -> bool {
+        if !self.expr_uses_type_param_reflection(expr, type_params) {
+            return true;
+        }
+
+        self.expr_is_static_type_condition(expr, type_params)
+    }
+
+    fn expr_is_static_type_condition(&self, expr: &Expr, type_params: &HashSet<String>) -> bool {
+        match expr {
+            Expr::BoolLiteral(_, _) => true,
+            Expr::Paren(inner, _) => self.expr_is_static_type_condition(inner, type_params),
+            Expr::Unary(UnaryOp::Not, inner, _) => {
+                self.expr_is_static_type_condition(inner, type_params)
+            }
+            Expr::Binary(lhs, BinOp::And | BinOp::Or, rhs, _) => {
+                self.expr_is_static_type_condition(lhs, type_params)
+                    && self.expr_is_static_type_condition(rhs, type_params)
+            }
+            Expr::Binary(lhs, BinOp::Eq | BinOp::NotEq, rhs, _) => {
+                (self.expr_is_type_kind_reflection(lhs, type_params)
+                    && self.expr_is_type_kind_literal(rhs))
+                    || (self.expr_is_type_kind_literal(lhs)
+                        && self.expr_is_type_kind_reflection(rhs, type_params))
+            }
+            _ => false,
+        }
+    }
+
+    fn expr_is_type_kind_reflection(&self, expr: &Expr, type_params: &HashSet<String>) -> bool {
+        match expr {
+            Expr::GenericCall(callee, type_args, args, _) => {
+                args.is_empty()
+                    && self
+                        .resolved_expr_name(callee)
+                        .is_some_and(|name| name == "type.kind_tag")
+                    && type_args.len() == 1
+                    && Self::type_expr_mentions_type_param(&type_args[0], type_params)
+            }
+            Expr::FieldAccess(base, field, _) if field.name == "kind_tag" => {
+                self.expr_is_type_info_reflection(base, type_params)
+            }
+            Expr::Paren(inner, _) => self.expr_is_type_kind_reflection(inner, type_params),
+            _ => false,
+        }
+    }
+
+    fn expr_is_type_info_reflection(&self, expr: &Expr, type_params: &HashSet<String>) -> bool {
+        match expr {
+            Expr::GenericCall(callee, type_args, args, _) => {
+                args.is_empty()
+                    && self
+                        .resolved_expr_name(callee)
+                        .is_some_and(|name| name == "type.info")
+                    && type_args.len() == 1
+                    && Self::type_expr_mentions_type_param(&type_args[0], type_params)
+            }
+            Expr::Paren(inner, _) => self.expr_is_type_info_reflection(inner, type_params),
+            _ => false,
+        }
+    }
+
+    fn expr_is_type_kind_literal(&self, expr: &Expr) -> bool {
+        self.type_kind_literal_name(expr).is_some()
+    }
+
+    fn type_kind_literal_name(&self, expr: &Expr) -> Option<String> {
+        match expr {
+            Expr::Paren(inner, _) => self.type_kind_literal_name(inner),
+            Expr::EnumVariant(type_name, variant, _) if type_name.name == "TypeKind" => {
+                Some(variant.name.clone())
+            }
+            Expr::FieldAccess(_, _, _) => {
+                let name = self.expanded_dotted_expr_name(expr)?;
+                let (type_name, variant_name) = name.rsplit_once('.')?;
+                (type_name == "TypeKind").then(|| variant_name.to_string())
+            }
+            _ => None,
+        }
+    }
+
+    fn eval_static_type_condition(&mut self, expr: &Expr) -> Option<bool> {
+        match expr {
+            Expr::BoolLiteral(value, _) => Some(*value),
+            Expr::Paren(inner, _) => self.eval_static_type_condition(inner),
+            Expr::Unary(UnaryOp::Not, inner, _) => {
+                self.eval_static_type_condition(inner).map(|value| !value)
+            }
+            Expr::Binary(lhs, BinOp::And, rhs, _) => match self.eval_static_type_condition(lhs)? {
+                false => Some(false),
+                true => self.eval_static_type_condition(rhs),
+            },
+            Expr::Binary(lhs, BinOp::Or, rhs, _) => match self.eval_static_type_condition(lhs)? {
+                true => Some(true),
+                false => self.eval_static_type_condition(rhs),
+            },
+            Expr::Binary(lhs, BinOp::Eq | BinOp::NotEq, rhs, _) => {
+                let lhs_kind = self.eval_type_kind_value(lhs)?;
+                let rhs_kind = self.eval_type_kind_value(rhs)?;
+                let equal = lhs_kind == rhs_kind;
+                Some(if matches!(expr, Expr::Binary(_, BinOp::Eq, _, _)) {
+                    equal
+                } else {
+                    !equal
+                })
+            }
+            _ => None,
+        }
+    }
+
+    fn eval_type_kind_value(&mut self, expr: &Expr) -> Option<String> {
+        match expr {
+            Expr::Paren(inner, _) => self.eval_type_kind_value(inner),
+            Expr::GenericCall(callee, type_args, args, _)
+                if args.is_empty()
+                    && self
+                        .resolved_expr_name(callee)
+                        .is_some_and(|name| name == "type.kind_tag") =>
+            {
+                self.reflection_type_arg_kind_tag(type_args)
+            }
+            Expr::FieldAccess(base, field, _) if field.name == "kind_tag" => {
+                self.eval_type_info_type_arg_kind_tag(base)
+            }
+            _ => self.type_kind_literal_name(expr),
+        }
+    }
+
+    fn eval_type_info_type_arg_kind_tag(&mut self, expr: &Expr) -> Option<String> {
+        match expr {
+            Expr::Paren(inner, _) => self.eval_type_info_type_arg_kind_tag(inner),
+            Expr::GenericCall(callee, type_args, args, _)
+                if args.is_empty()
+                    && self
+                        .resolved_expr_name(callee)
+                        .is_some_and(|name| name == "type.info") =>
+            {
+                self.reflection_type_arg_kind_tag(type_args)
+            }
+            _ => None,
+        }
+    }
+
+    fn reflection_type_arg_kind_tag(&mut self, type_args: &[TypeExpr]) -> Option<String> {
+        let [type_arg] = type_args else {
+            return None;
+        };
+        let type_id = self.reflection_type_arg_id(type_args)?;
+        Some(self.reflection_kind_tag_for_type_expr(type_arg, type_id))
+    }
+
+    fn reflection_type_arg_id(&mut self, type_args: &[TypeExpr]) -> Option<TypeId> {
+        let [type_arg] = type_args else {
+            return None;
+        };
+        if let TypeExpr::Named(ident) = type_arg {
+            if let Some(&type_id) = self.type_var_subst.get(&ident.name) {
+                return Some(type_id);
+            }
+        }
+        let type_id = self.resolve_type_expr(type_arg);
+        (type_id != TypeInterner::ERROR).then_some(type_id)
     }
 
     fn block_uses_type_param_reflection(
@@ -4818,31 +5135,68 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
-    fn check_if(&mut self, if_stmt: &ast::IfStmt) {
-        let cond_type = self.check_expr(&if_stmt.condition);
+    fn check_condition_expr(&mut self, condition: &Expr) {
+        let cond_type = self.check_expr(condition);
         if cond_type != TypeInterner::ERROR && cond_type != TypeInterner::BOOL {
             self.sink.emit(errors::condition_not_bool(
                 &self.type_name(cond_type),
-                if_stmt.condition.span(),
+                condition.span(),
             ));
         }
+    }
 
+    fn check_if(&mut self, if_stmt: &ast::IfStmt) {
+        if self.specialize_reflection_branches {
+            if let Some(selected_branch) = self.static_reflection_if_branch(if_stmt) {
+                self.check_condition_expr(&if_stmt.condition);
+                for (else_if_cond, _) in &if_stmt.else_ifs {
+                    self.check_condition_expr(else_if_cond);
+                }
+
+                if selected_branch == 0 {
+                    self.check_block(&if_stmt.then_block);
+                    return;
+                }
+
+                for (index, (_, else_if_block)) in if_stmt.else_ifs.iter().enumerate() {
+                    if selected_branch == index + 1 {
+                        self.check_block(else_if_block);
+                        return;
+                    }
+                }
+
+                if let Some(else_block) = &if_stmt.else_block {
+                    self.check_block(else_block);
+                }
+                return;
+            }
+        }
+
+        self.check_condition_expr(&if_stmt.condition);
         self.check_block(&if_stmt.then_block);
 
         for (else_if_cond, else_if_block) in &if_stmt.else_ifs {
-            let ei_type = self.check_expr(else_if_cond);
-            if ei_type != TypeInterner::ERROR && ei_type != TypeInterner::BOOL {
-                self.sink.emit(errors::condition_not_bool(
-                    &self.type_name(ei_type),
-                    else_if_cond.span(),
-                ));
-            }
+            self.check_condition_expr(else_if_cond);
             self.check_block(else_if_block);
         }
 
         if let Some(else_block) = &if_stmt.else_block {
             self.check_block(else_block);
         }
+    }
+
+    fn static_reflection_if_branch(&mut self, if_stmt: &ast::IfStmt) -> Option<usize> {
+        if self.eval_static_type_condition(&if_stmt.condition)? {
+            return Some(0);
+        }
+
+        for (index, (else_if_cond, _)) in if_stmt.else_ifs.iter().enumerate() {
+            if self.eval_static_type_condition(else_if_cond)? {
+                return Some(index + 1);
+            }
+        }
+
+        Some(if_stmt.else_ifs.len() + 1)
     }
 
     fn check_for(&mut self, for_stmt: &ast::ForStmt) {
@@ -5877,6 +6231,17 @@ impl<'a> TypeChecker<'a> {
                         .zip(concrete_args.iter())
                         .map(|(p, &ty)| (p.name.clone(), ty))
                         .collect();
+                    let kind_subst: HashMap<String, String> = template
+                        .type_params
+                        .iter()
+                        .zip(type_args.iter().zip(concrete_args.iter()))
+                        .map(|(param, (type_arg, &resolved_ty))| {
+                            (
+                                param.name.clone(),
+                                self.reflection_kind_tag_for_type_expr(type_arg, resolved_ty),
+                            )
+                        })
+                        .collect();
 
                     let old_subst = std::mem::replace(&mut self.type_var_subst, subst.clone());
 
@@ -5924,6 +6289,7 @@ impl<'a> TypeChecker<'a> {
                             &template,
                             &concrete_args,
                             subst,
+                            kind_subst,
                         );
                     }
                     return return_type;

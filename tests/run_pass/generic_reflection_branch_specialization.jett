@@ -1,0 +1,50 @@
+namespace test
+
+type Names = list[string]
+
+function list_length_or_zero[T](value: T) returns int64:
+    if type.kind_tag[T]() == TypeKind.list_type:
+        list[int64] items = value
+        return list.length[int64](view items)
+    return 0
+
+function type_info_list_length_or_zero[T](value: T) returns int64:
+    if type.info[T]().kind_tag == TypeKind.list_type:
+        list[int64] items = value
+        return list.length[int64](view items)
+    return 0
+
+function not_list_marker[T](value: T) returns string:
+    if type.kind_tag[T]() != TypeKind.list_type:
+        string text = value
+        return text
+    return "list"
+
+function kind_branch[T]() returns string:
+    if type.kind_tag[T]() == TypeKind.alias_type:
+        return "alias"
+    if type.kind_tag[T]() == TypeKind.list_type:
+        return "list"
+    return "other"
+
+function type_info_kind_branch[T]() returns string:
+    if type.info[T]().kind_tag == TypeKind.alias_type:
+        return "alias"
+    if type.info[T]().kind_tag == TypeKind.list_type:
+        return "list"
+    return "other"
+
+verify generic_reflection_branch_specialization:
+    list[int64] numbers = list(1, 2, 3)
+    assert list_length_or_zero[list[int64]](numbers) == 3
+    assert list_length_or_zero[string]("Ada") == 0
+    list[int64] more = list(4, 5)
+    assert type_info_list_length_or_zero[list[int64]](more) == 2
+    assert type_info_list_length_or_zero[string]("Ada") == 0
+    assert not_list_marker[string]("Ada") == "Ada"
+    list[int64] empty = list.new[int64]()
+    assert not_list_marker[list[int64]](empty) == "list"
+    assert kind_branch[Names]() == "alias"
+    assert kind_branch[list[string]]() == "list"
+    assert type_info_kind_branch[Names]() == "alias"
+    assert type_info_kind_branch[string]() == "other"

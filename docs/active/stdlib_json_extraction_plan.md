@@ -233,11 +233,12 @@ bridge spoofing, not helper visibility.
    `/docs/active/json_value_transition_plan.md`. The remaining decision is
    whether and when that alias moves into the exported stdlib/prelude surface.
 8. Keep reflection-specialized generic helpers staged carefully. The typechecker
-   now checks ordinary generic function bodies per concrete instantiation, but
-   deliberately defers body checking for generic helpers that inspect their type
-   parameter through `type.*[T]` reflection. Those helpers need real
-   type-dependent branch specialization before every branch can be checked under
-   one concrete `T` without false positives.
+   now checks ordinary generic function bodies per concrete instantiation, and
+   it can specialize the narrow direct-branch form
+   `type.kind_tag[T]()` / `type.info[T]().kind_tag` compared to `TypeKind.*`
+   inside `if`/`else if` conditions. Indirect reflection through locals or
+   helper parameters remains deliberately deferred, which keeps the current
+   JSON helpers staged until reflection constant propagation exists.
 
 ## Recommended Shape For `stdlib/json.jett`
 
