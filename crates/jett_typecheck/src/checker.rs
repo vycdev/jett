@@ -4275,6 +4275,49 @@ impl<'a> TypeChecker<'a> {
                     _ => self.check_expr(expr),
                 }
             }
+            Expr::Some(inner, _span) => {
+                let expected_inner = self.secret_inner_type(expected_ty).unwrap_or(expected_ty);
+                match self.interner.resolve(expected_inner).clone() {
+                    Type::Optional(expected_payload) => self.check_wrapper_payload_for_expected(
+                        inner,
+                        expected_ty,
+                        expected_payload,
+                        allow_refinement_handle,
+                    ),
+                    _ => self.check_expr(expr),
+                }
+            }
+            Expr::Ok(inner, _span) => {
+                let expected_inner = self.secret_inner_type(expected_ty).unwrap_or(expected_ty);
+                match self.interner.resolve(expected_inner).clone() {
+                    Type::Result(expected_payload, _) => self.check_wrapper_payload_for_expected(
+                        inner,
+                        expected_ty,
+                        expected_payload,
+                        allow_refinement_handle,
+                    ),
+                    _ => self.check_expr(expr),
+                }
+            }
+            Expr::Fail(inner, _span) => {
+                let expected_inner = self.secret_inner_type(expected_ty).unwrap_or(expected_ty);
+                match self.interner.resolve(expected_inner).clone() {
+                    Type::Result(_, expected_payload) => self.check_wrapper_payload_for_expected(
+                        inner,
+                        expected_ty,
+                        expected_payload,
+                        allow_refinement_handle,
+                    ),
+                    _ => self.check_expr(expr),
+                }
+            }
+            Expr::None(_) => {
+                let expected_inner = self.secret_inner_type(expected_ty).unwrap_or(expected_ty);
+                match self.interner.resolve(expected_inner) {
+                    Type::Optional(_) => expected_ty,
+                    _ => self.check_expr(expr),
+                }
+            }
             Expr::Coarsen(inner, span) => {
                 let inner_ty = self.check_expr(inner);
                 if inner_ty == TypeInterner::ERROR {
@@ -6118,6 +6161,29 @@ impl<'a> TypeChecker<'a> {
         } else {
             self.check_expr_for_expected(expr, expected_ty, allow_refinement_handle)
         }
+    }
+
+    fn check_wrapper_payload_for_expected(
+        &mut self,
+        payload: &Expr,
+        expected_wrapper_ty: TypeId,
+        expected_payload_ty: TypeId,
+        allow_refinement_handle: bool,
+    ) -> TypeId {
+        let payload_ty = self.check_expr_with_optional_expected(
+            payload,
+            expected_payload_ty,
+            allow_refinement_handle,
+        );
+        if !self.types_compatible(expected_payload_ty, payload_ty) {
+            self.sink.emit(errors::type_mismatch(
+                &self.type_name(expected_payload_ty),
+                &self.type_name(payload_ty),
+                payload.span(),
+            ));
+        }
+
+        expected_wrapper_ty
     }
 
     fn check_handle(

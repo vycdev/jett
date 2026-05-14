@@ -495,6 +495,14 @@ compile_fail_fixture!(
     "generic_function_secret_argument_mismatch.jett"
 );
 compile_fail_fixture!(
+    compile_fail_result_ok_payload_requires_handle,
+    "result_ok_payload_requires_handle.jett"
+);
+compile_fail_fixture!(
+    compile_fail_some_payload_requires_handle,
+    "some_payload_requires_handle.jett"
+);
+compile_fail_fixture!(
     compile_fail_json_private_tree_parse_scalar,
     "json_private_tree_parse_scalar.jett"
 );

@@ -1,0 +1,5 @@
+# ERROR: E0316
+namespace test
+
+function bad_ok_payload(raw: string) returns result[int64, string]:
+    return ok(int64.from_string(raw))
