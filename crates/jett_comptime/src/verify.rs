@@ -350,6 +350,21 @@ fn shrink_value(value: &Value) -> Vec<Value> {
             }
             candidates
         }
+        Value::OptionalSome(value) => {
+            let mut candidates = vec![Value::OptionalNone];
+            for shrunk_value in shrink_value(value) {
+                candidates.push(Value::OptionalSome(Box::new(shrunk_value)));
+            }
+            candidates
+        }
+        Value::ResultOk(value) => shrink_value(value)
+            .into_iter()
+            .map(|value| Value::ResultOk(Box::new(value)))
+            .collect(),
+        Value::ResultFail(error) => shrink_value(error)
+            .into_iter()
+            .map(|error| Value::ResultFail(Box::new(error)))
+            .collect(),
         Value::List(items) if !items.is_empty() => {
             let mut candidates = Vec::new();
             candidates.push(Value::List(vec![]));
@@ -599,6 +614,8 @@ fn generate_values_for_type(ty: &TypeExpr) -> Vec<Value> {
             "list" if args.len() == 1 => generate_list_values_for_type(&args[0]),
             "set" if args.len() == 1 => generate_set_values_for_type(&args[0]),
             "map" if args.len() == 2 => generate_map_values_for_type(&args[0], &args[1]),
+            "optional" if args.len() == 1 => generate_optional_values_for_type(&args[0]),
+            "result" if args.len() == 2 => generate_result_values_for_type(&args[0], &args[1]),
             _ => vec![], // unsupported generic type
         },
         TypeExpr::View(inner, _) => generate_values_for_type(inner),
@@ -687,6 +704,43 @@ fn generate_map_values_for_type(key_ty: &TypeExpr, value_ty: &TypeExpr) -> Vec<V
     }
 
     maps
+}
+
+fn generate_optional_values_for_type(inner_ty: &TypeExpr) -> Vec<Value> {
+    let inner_values = generate_values_for_type(inner_ty);
+    if inner_values.is_empty() {
+        return Vec::new();
+    }
+
+    let mut values = vec![Value::OptionalNone];
+    values.extend(
+        inner_values
+            .into_iter()
+            .take(3)
+            .map(|value| Value::OptionalSome(Box::new(value))),
+    );
+    values
+}
+
+fn generate_result_values_for_type(ok_ty: &TypeExpr, error_ty: &TypeExpr) -> Vec<Value> {
+    let ok_values = generate_values_for_type(ok_ty);
+    let error_values = generate_values_for_type(error_ty);
+    if ok_values.is_empty() || error_values.is_empty() {
+        return Vec::new();
+    }
+
+    let mut values: Vec<Value> = ok_values
+        .into_iter()
+        .take(3)
+        .map(|value| Value::ResultOk(Box::new(value)))
+        .collect();
+    values.extend(
+        error_values
+            .into_iter()
+            .take(3)
+            .map(|error| Value::ResultFail(Box::new(error))),
+    );
+    values
 }
 
 // ---------------------------------------------------------------------------
@@ -1759,6 +1813,33 @@ mod tests {
             }),
             "expected map[string, int64] generation to include string/int64 entries"
         );
+
+        let optional_strings =
+            generate_values_for_type(&type_generic("optional", vec![type_named("string")]));
+        assert!(optional_strings.contains(&Value::OptionalNone));
+        assert!(
+            optional_strings.iter().any(|value| {
+                matches!(value, Value::OptionalSome(inner) if matches!(inner.as_ref(), Value::String(_)))
+            }),
+            "expected optional[string] generation to include string payloads"
+        );
+
+        let int_string_results = generate_values_for_type(&type_generic(
+            "result",
+            vec![type_named("int64"), type_named("string")],
+        ));
+        assert!(
+            int_string_results
+                .iter()
+                .any(|value| matches!(value, Value::ResultOk(inner) if matches!(inner.as_ref(), Value::Int64(_)))),
+            "expected result[int64, string] generation to include ok payloads"
+        );
+        assert!(
+            int_string_results
+                .iter()
+                .any(|value| matches!(value, Value::ResultFail(inner) if matches!(inner.as_ref(), Value::String(_)))),
+            "expected result[int64, string] generation to include fail payloads"
+        );
     }
 
     #[test]
@@ -1795,6 +1876,23 @@ mod tests {
         let candidates = shrink_value(&Value::Bytes(b"hello".to_vec()));
         assert!(candidates.contains(&Value::Bytes(Vec::new())));
         assert!(candidates.contains(&Value::Bytes(b"he".to_vec())));
+    }
+
+    #[test]
+    fn property_shrinker_simplifies_optional_and_result_values() {
+        let optional_candidates = shrink_value(&Value::OptionalSome(Box::new(Value::Int64(5))));
+        assert!(optional_candidates.contains(&Value::OptionalNone));
+        assert!(optional_candidates.contains(&Value::OptionalSome(Box::new(Value::Int64(0)))));
+
+        let ok_candidates = shrink_value(&Value::ResultOk(Box::new(Value::Int64(5))));
+        assert!(ok_candidates.contains(&Value::ResultOk(Box::new(Value::Int64(0)))));
+
+        let fail_candidates = shrink_value(&Value::ResultFail(Box::new(Value::String(
+            "error".to_string(),
+        ))));
+        assert!(
+            fail_candidates.contains(&Value::ResultFail(Box::new(Value::String(String::new(),))))
+        );
     }
 
     #[test]

@@ -24,3 +24,15 @@ property bytes_have_nonnegative_length:
     given payload: bytes
     int64 length = bytes.length(payload)
     assert length >= 0
+
+property optional_ints_can_be_handled:
+    given maybe: optional[int64]
+    int64 value = maybe handle:
+        default 0
+    assert value == value
+
+property result_ints_can_be_handled:
+    given outcome: result[int64, string]
+    int64 value = outcome handle error:
+        default 0
+    assert value == value
