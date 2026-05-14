@@ -340,6 +340,16 @@ fn shrink_value(value: &Value) -> Vec<Value> {
             }
             candidates
         }
+        Value::Bytes(bytes) if !bytes.is_empty() => {
+            let mut candidates = Vec::new();
+            candidates.push(Value::Bytes(Vec::new()));
+            if bytes.len() > 1 {
+                candidates.push(Value::Bytes(bytes[bytes.len() / 2..].to_vec()));
+                candidates.push(Value::Bytes(bytes[..bytes.len() / 2].to_vec()));
+                candidates.push(Value::Bytes(bytes[..bytes.len() - 1].to_vec()));
+            }
+            candidates
+        }
         Value::List(items) if !items.is_empty() => {
             let mut candidates = Vec::new();
             candidates.push(Value::List(vec![]));
@@ -576,6 +586,12 @@ fn generate_values_for_type(ty: &TypeExpr) -> Vec<Value> {
                 Value::Float64(-1.0),
                 Value::Float64(3.14),
                 Value::Float64(-0.0),
+            ],
+            "bytes" => vec![
+                Value::Bytes(Vec::new()),
+                Value::Bytes(vec![0]),
+                Value::Bytes(b"hello".to_vec()),
+                Value::Bytes(vec![0, 1, 2, 127, 255]),
             ],
             _ => vec![], // unsupported type
         },
@@ -1746,6 +1762,18 @@ mod tests {
     }
 
     #[test]
+    fn property_generator_supports_bytes() {
+        let byte_values = generate_values_for_type(&type_named("bytes"));
+        assert!(byte_values.contains(&Value::Bytes(Vec::new())));
+        assert!(
+            byte_values
+                .iter()
+                .any(|value| matches!(value, Value::Bytes(bytes) if !bytes.is_empty())),
+            "expected bytes generation to include non-empty payloads"
+        );
+    }
+
+    #[test]
     fn property_shrinker_simplifies_sets_and_maps() {
         let set_candidates = shrink_value(&Value::Set(vec![Value::Int64(5)]));
         assert!(set_candidates.contains(&Value::Set(vec![])));
@@ -1760,6 +1788,13 @@ mod tests {
             Value::String("score".to_string()),
             Value::Int64(0),
         )])));
+    }
+
+    #[test]
+    fn property_shrinker_simplifies_bytes() {
+        let candidates = shrink_value(&Value::Bytes(b"hello".to_vec()));
+        assert!(candidates.contains(&Value::Bytes(Vec::new())));
+        assert!(candidates.contains(&Value::Bytes(b"he".to_vec())));
     }
 
     #[test]

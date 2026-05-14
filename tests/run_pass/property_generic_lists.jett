@@ -19,3 +19,8 @@ property string_int_maps_have_nonnegative_length:
     given scores: map[string, int64]
     int64 length = map.length[string, int64](scores)
     assert length >= 0
+
+property bytes_have_nonnegative_length:
+    given payload: bytes
+    int64 length = bytes.length(payload)
+    assert length >= 0
