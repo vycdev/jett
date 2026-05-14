@@ -1,0 +1,42 @@
+namespace test
+enum Direction:
+    north
+    south
+enum Shape:
+    circle(radius: float64)
+    empty
+enum Protocol:
+    tcp = 6
+    udp = 17
+bitfield Header:
+    version: 4 bits
+    protocol: 8 bits as Protocol
+function parse_exact_unit_enum_success() returns bool:
+    Direction direction = json.parse_exact[Direction]("\"north\"") handle error:
+        return false
+    return direction == Direction.north
+function parse_exact_unit_enum_unknown_error() returns string:
+    Direction direction = json.parse_exact[Direction]("\"east\"") handle error:
+        return error
+    return "{direction == Direction.north}"
+function parse_exact_bitfield_success() returns string:
+    Header header = json.parse_exact[Header]("{{\"version\":4,\"protocol\":\"tcp\"}}") handle error:
+        return error
+    bool tcp = header.protocol == Protocol.tcp
+    return "{header.version}:{tcp}"
+function serialize_top_level_unit_enum() returns string:
+    Direction direction = Direction.north
+    return json.serialize[Direction](view direction)
+function serialize_top_level_payload_enum() returns string:
+    Shape shape = Shape.circle(2.5)
+    return json.serialize[Shape](view shape)
+function serialize_top_level_bitfield() returns string:
+    Header header = Header(version: 4, protocol: Protocol.tcp)
+    return json.serialize[Header](view header)
+verify json_enum_bitfield_exact_edges:
+    assert parse_exact_unit_enum_success() == true
+    assert parse_exact_unit_enum_unknown_error() == "unknown enum variant 'test.Direction.east'"
+    assert parse_exact_bitfield_success() == "4:true"
+    assert serialize_top_level_unit_enum() == "\"north\""
+    assert serialize_top_level_payload_enum() == "{{\"circle\":[2.5]}}"
+    assert serialize_top_level_bitfield() == "{{\"version\":4,\"protocol\":\"tcp\"}}"

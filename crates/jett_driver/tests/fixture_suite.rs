@@ -352,6 +352,10 @@ run_pass_fixture!(
     run_pass_json_parse_exact_container_edges,
     "json_parse_exact_container_edges.jett"
 );
+run_pass_fixture!(
+    run_pass_json_parse_exact_primitive_edges,
+    "json_parse_exact_primitive_edges.jett"
+);
 run_pass_fixture!(run_pass_json_shape_matrix, "json_shape_matrix.jett");
 run_pass_fixture!(
     run_pass_json_parse_error_parity,
@@ -377,6 +381,10 @@ run_pass_fixture!(
 );
 run_pass_fixture!(run_pass_json_enum_shapes, "json_enum_shapes.jett");
 run_pass_fixture!(run_pass_json_bitfield_shapes, "json_bitfield_shapes.jett");
+run_pass_fixture!(
+    run_pass_json_enum_bitfield_exact_edges,
+    "json_enum_bitfield_exact_edges.jett"
+);
 run_pass_fixture!(run_pass_json_roundtrip_user, "json_roundtrip_user.jett");
 run_pass_fixture!(
     run_pass_json_parse_refinement_valid,

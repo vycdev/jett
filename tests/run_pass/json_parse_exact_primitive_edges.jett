@@ -1,0 +1,32 @@
+namespace test
+struct PrimitiveBundle:
+    payload: bytes
+    ratio: float64
+function parse_exact_bytes_summary() returns string:
+    bytes length_value = json.parse_exact[bytes]("\"0x4869\"") handle error:
+        return error
+    bytes first_value = json.parse_exact[bytes]("\"0x4869\"") handle error:
+        return error
+    int64 length = bytes.length(length_value)
+    int64 first = bytes.get(first_value, 0) handle:
+        default -1
+    return "{length}:{first}"
+function parse_exact_float32_text() returns string:
+    float32 value = json.parse_exact[float32]("2.5") handle error:
+        return error
+    return "{value}"
+function parse_exact_float64_text() returns string:
+    float64 value = json.parse_exact[float64]("2.5") handle error:
+        return error
+    return "{value}"
+function parse_exact_bundle_summary() returns string:
+    PrimitiveBundle bundle = json.parse_exact[PrimitiveBundle]("{{\"payload\":\"0x4869\",\"ratio\":2.5}}") handle error:
+        return error
+    float64 ratio = bundle.ratio
+    int64 length = bytes.length(bundle.payload)
+    return "{length}:{ratio}"
+verify json_parse_exact_primitive_edges:
+    assert parse_exact_bytes_summary() == "2:72"
+    assert parse_exact_float32_text() == "2.5"
+    assert parse_exact_float64_text() == "2.5"
+    assert parse_exact_bundle_summary() == "2:2.5"
