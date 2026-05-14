@@ -117,7 +117,8 @@ function as_bool(view value: JsonTree) returns result[bool, string]
 syntax detail: Jett does not yet have the exact prelude/root alias mechanics to
 make the unqualified `JsonValue` spelling come from source while preserving
 compatibility. Until that exists, bare `JsonValue` can stay compiler-recognized
-as a compatibility name whose runtime representation is `JsonTree`.
+as a compatibility name whose runtime representation is `JsonTree`. See
+`docs/open_design/prelude_root_aliases.md` for the recommended staged design.
 
 `field` and `index` are probing helpers: wrong shape and absence both produce
 `none`. Production validation should use `require_field` / `require_index` when
@@ -325,12 +326,13 @@ Malformed-input error parity is pinned in
 
 ## Recommended Next Implementation Bite
 
-Finish the compatibility-name decision:
+Finish the prelude/root alias decision:
 
-1. Keep raw helper signatures `JsonTree`-first; treat `JsonValue` as the
-   temporary source-compatibility spelling.
-2. Once explicit prelude imports or exported root aliases exist, move the
-   compatibility alias out of compiler special cases and into the
-   stdlib/prelude surface.
-3. Later, update reflection metadata so the legacy
+1. Keep raw helper signatures `JsonTree`-first; treat bare `JsonValue` as the
+   temporary compiler-owned compatibility spelling.
+2. Implement the narrow `export root type` stage described in
+   `docs/open_design/prelude_root_aliases.md`.
+3. Move the unqualified `JsonValue` compatibility alias out of compiler special
+   cases and into the stdlib/prelude surface.
+4. Later, update reflection metadata so the legacy
    `TypePrimitive.json_value_type` is either formally deprecated or removed.

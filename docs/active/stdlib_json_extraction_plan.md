@@ -236,9 +236,12 @@ bridge spoofing, not helper visibility.
    remains a compiler-recognized compatibility spelling. The current
    implementation seeds a compiler-owned legacy compatibility alias from
    built-in `JsonValue` to stdlib `json.JsonTree`, while preserving separate
-   reflection metadata for one compatibility stage. See
-   `/docs/active/json_value_transition_plan.md`. The remaining decision is
-   whether and when that alias moves into the exported stdlib/prelude surface.
+   reflection metadata for one compatibility stage. `json.JsonValue` now exists
+   as an exported namespaced source alias. See
+   `/docs/active/json_value_transition_plan.md` and
+   `/docs/open_design/prelude_root_aliases.md`. The remaining decision is
+   whether and when the bare `JsonValue` alias moves into the exported
+   stdlib/prelude surface.
 8. Keep reflection-specialized generic helpers staged carefully. The typechecker
    now checks ordinary generic function bodies per concrete instantiation, and
    it can specialize the narrow direct-branch form
