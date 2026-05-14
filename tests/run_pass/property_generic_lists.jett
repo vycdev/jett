@@ -4,6 +4,11 @@ enum PropertyChoice:
     empty
     score(value: int64)
 
+struct PropertyUser:
+    name: string
+    score: int64
+    choice: PropertyChoice
+
 property string_lists_have_nonnegative_length:
     given items: list[string]
     int64 length = list.length[string](items)
@@ -50,3 +55,13 @@ property enum_variants_can_be_matched:
         score(value):
             seen = value == value
     assert seen == true
+
+property structs_have_generated_fields:
+    given user: PropertyUser
+    assert user.name == user.name
+    assert user.score == user.score
+    match user.choice:
+        empty:
+            assert true
+        score(value):
+            assert value == value
