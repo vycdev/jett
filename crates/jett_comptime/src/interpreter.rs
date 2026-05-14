@@ -11189,6 +11189,50 @@ mod tests {
     }
 
     #[test]
+    fn json_parse_exact_bridge_requires_trusted_stdlib_hook() {
+        let mut interp = Interpreter::new();
+        let fake_hook = generic_json_hook(
+            "json_parse_exact_reflected",
+            block(vec![return_stmt(string("fake exact"))]),
+        );
+        interp.register_function_named("json.json_parse_exact_reflected", &fake_hook, false);
+
+        let err = interp
+            .call_function_with_type_args(
+                "json.parse_exact",
+                &[type_named("string")],
+                vec![Value::String("\"value\"".to_string())],
+            )
+            .unwrap_err();
+
+        assert_eq!(
+            err,
+            "json.parse_exact requires trusted stdlib hook 'json.json_parse_exact_reflected'"
+        );
+    }
+
+    #[test]
+    fn json_parse_exact_bridge_uses_trusted_stdlib_hook() {
+        let mut interp = Interpreter::new();
+        let mut trusted_hook = generic_json_hook(
+            "json_parse_exact_reflected",
+            block(vec![return_stmt(string("trusted exact"))]),
+        );
+        trusted_hook.span = stdlib_sp();
+        interp.register_function_in_namespace(Some("json"), &trusted_hook);
+
+        let value = interp
+            .call_function_with_type_args(
+                "json.parse_exact",
+                &[type_named("string")],
+                vec![Value::String("\"value\"".to_string())],
+            )
+            .unwrap();
+
+        assert_eq!(value, Value::String("trusted exact".to_string()));
+    }
+
+    #[test]
     fn json_serialize_bridge_requires_trusted_stdlib_hook() {
         let mut interp = Interpreter::new();
         let fake_hook = generic_json_hook(
@@ -11534,6 +11578,36 @@ mod tests {
         assert_eq!(
             err,
             "json.parse requires trusted stdlib hook 'json.json_parse_reflected'"
+        );
+    }
+
+    #[test]
+    fn untrusted_registration_removes_previous_json_parse_exact_hook_trust() {
+        let mut interp = Interpreter::new();
+        let mut trusted_hook = generic_json_hook(
+            "json_parse_exact_reflected",
+            block(vec![return_stmt(string("trusted exact"))]),
+        );
+        trusted_hook.span = stdlib_sp();
+        interp.register_function_in_namespace(Some("json"), &trusted_hook);
+
+        let fake_hook = generic_json_hook(
+            "json_parse_exact_reflected",
+            block(vec![return_stmt(string("fake exact"))]),
+        );
+        interp.register_function_named("json.json_parse_exact_reflected", &fake_hook, false);
+
+        let err = interp
+            .call_function_with_type_args(
+                "json.parse_exact",
+                &[type_named("string")],
+                vec![Value::String("\"value\"".to_string())],
+            )
+            .unwrap_err();
+
+        assert_eq!(
+            err,
+            "json.parse_exact requires trusted stdlib hook 'json.json_parse_exact_reflected'"
         );
     }
 
