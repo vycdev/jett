@@ -1,0 +1,10 @@
+# ERROR: E0207
+namespace api
+
+interface Named:
+    function name(view self: Named) returns string
+
+namespace app
+
+function bad(view value: api.Named) returns string:
+    return api.Named.name(view value)

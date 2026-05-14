@@ -1,0 +1,10 @@
+# ERROR: E0208
+namespace api
+
+export interface Named:
+    function name(view self: api.Named) returns string
+
+namespace app
+
+function bad(view value: Named) returns string:
+    return Named.name(view value)

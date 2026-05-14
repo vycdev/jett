@@ -490,6 +490,10 @@ compile_fail_fixture!(
     "namespace_private_alias.jett"
 );
 compile_fail_fixture!(
+    compile_fail_namespace_private_interface,
+    "namespace_private_interface.jett"
+);
+compile_fail_fixture!(
     compile_fail_namespace_exported_flat_function,
     "namespace_exported_flat_function.jett"
 );
@@ -508,6 +512,10 @@ compile_fail_fixture!(
 compile_fail_fixture!(
     compile_fail_namespace_exported_flat_bitfield,
     "namespace_exported_flat_bitfield.jett"
+);
+compile_fail_fixture!(
+    compile_fail_namespace_exported_flat_interface,
+    "namespace_exported_flat_interface.jett"
 );
 compile_fail_fixture!(
     compile_fail_namespace_exported_flat_mutual_function,
