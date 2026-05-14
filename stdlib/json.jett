@@ -963,17 +963,19 @@ function json_serialize_public_enum_reflected[T](view value: T) returns string:
         return "{{{json_stdlib_quote(variant.name)}:[{body}]}}"
     return json_stdlib_quote(selected.name)
 function json_serialize_public_non_enum_reflected[T](view value: T, kind: TypeKind) returns string:
-    if kind == TypeKind.list_type:
-        return json_serialize_public_list_reflected[T](view value)
-    if kind == TypeKind.set_type:
-        return json_serialize_public_set_reflected[T](view value)
-    if kind == TypeKind.map_type:
-        return json_serialize_public_map_reflected[T](view value)
-    if kind == TypeKind.optional_type:
-        return json_serialize_public_optional_reflected[T](view value)
-    if kind == TypeKind.result_type:
-        return json_serialize_public_result_reflected[T](view value)
-    return json_serialize_public_record_reflected[T](view value)
+    match kind:
+        list_type:
+            return json_serialize_public_list_reflected[T](view value)
+        set_type:
+            return json_serialize_public_set_reflected[T](view value)
+        map_type:
+            return json_serialize_public_map_reflected[T](view value)
+        optional_type:
+            return json_serialize_public_optional_reflected[T](view value)
+        result_type:
+            return json_serialize_public_result_reflected[T](view value)
+        other:
+            return json_serialize_public_record_reflected[T](view value)
 function json_serialize_public_list_reflected[T](view value: T) returns string:
     comptime type Elem = type.arg[T](0):
         list[Elem] items = value
@@ -1180,21 +1182,25 @@ function json_decode_tree_other_primitive_reflected[T](view raw: JsonTree, primi
         return ok(nothing)
     return fail("unsupported reflected JSON primitive")
 function json_decode_tree_structured_reflected[T](view raw: JsonTree, kind: TypeKind, type_name: string) returns result[T, string]:
-    if kind == TypeKind.list_type:
-        return json_decode_tree_list_reflected[T](view raw)
-    if kind == TypeKind.set_type:
-        return json_decode_tree_set_reflected[T](view raw)
-    if kind == TypeKind.map_type:
-        return json_decode_tree_map_reflected[T](view raw)
-    if kind == TypeKind.optional_type:
-        return json_decode_tree_optional_reflected[T](view raw)
-    if kind == TypeKind.result_type:
-        return json_decode_tree_result_reflected[T](view raw)
-    if kind == TypeKind.enum_type:
-        return json_decode_tree_enum_reflected[T](view raw, type_name)
-    if kind == TypeKind.struct_type or kind == TypeKind.bitfield_type:
-        return json_decode_tree_record_reflected[T](view raw, type_name)
-    return fail("unsupported reflected JSON type: {type_name}")
+    match kind:
+        list_type:
+            return json_decode_tree_list_reflected[T](view raw)
+        set_type:
+            return json_decode_tree_set_reflected[T](view raw)
+        map_type:
+            return json_decode_tree_map_reflected[T](view raw)
+        optional_type:
+            return json_decode_tree_optional_reflected[T](view raw)
+        result_type:
+            return json_decode_tree_result_reflected[T](view raw)
+        enum_type:
+            return json_decode_tree_enum_reflected[T](view raw, type_name)
+        struct_type:
+            return json_decode_tree_record_reflected[T](view raw, type_name)
+        bitfield_type:
+            return json_decode_tree_record_reflected[T](view raw, type_name)
+        other:
+            return fail("unsupported reflected JSON type: {type_name}")
 function json_decode_tree_list_reflected[T](view raw: JsonTree) returns result[T, string]:
     comptime type Elem = type.arg[T](0):
         int64 length = json_tree_array_length(view raw) handle error:
