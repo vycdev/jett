@@ -761,6 +761,14 @@ compile_fail_fixture!(
     "json_parse_exact_map_key_must_be_string.jett"
 );
 compile_fail_fixture!(
+    compile_fail_json_parse_exact_requires_type_arg,
+    "json_parse_exact_requires_type_arg.jett"
+);
+compile_fail_fixture!(
+    compile_fail_json_parse_exact_requires_handle,
+    "json_parse_exact_requires_handle.jett"
+);
+compile_fail_fixture!(
     compile_fail_json_parse_requires_type_arg,
     "json_parse_requires_type_arg.jett"
 );

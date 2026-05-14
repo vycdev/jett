@@ -1,0 +1,8 @@
+# ERROR: E0309
+namespace test
+
+function main() returns nothing:
+    string raw = "{{\"id\":\"123\"}}"
+    string value = json.parse_exact(raw) handle error:
+        return nothing
+    return nothing
