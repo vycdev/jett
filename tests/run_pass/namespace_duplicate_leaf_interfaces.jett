@@ -1,0 +1,35 @@
+namespace readable
+export interface Named:
+    function name(view self: readable.Named) returns string
+namespace display
+export interface Named:
+    function name(view self: display.Named) returns string
+namespace models
+export struct User:
+    name: string
+export struct Device:
+    label: string
+implement readable.Named for models.User:
+    function name(view self: models.User) returns string:
+        return self.name
+implement display.Named for models.Device:
+    function name(view self: models.Device) returns string:
+        return self.label
+namespace app
+function duplicate_leaf_interface_summary() returns string:
+    models.User user = models.User(name: "Ada")
+    models.Device device = models.Device(label: "sensor")
+    return "{readable.Named.name(view user)}:{display.Named.name(view device)}"
+function duplicate_leaf_interface_alias_summary() returns string:
+    use readable as r
+    use display as d
+    use models as m
+    m.User user = m.User(name: "Grace")
+    m.Device device = m.Device(label: "meter")
+    return "{r.Named.name(view user)}:{d.Named.name(view device)}"
+function main() returns nothing:
+    if duplicate_leaf_interface_summary() != "Ada:sensor":
+        int64 fail = 1 / 0
+    if duplicate_leaf_interface_alias_summary() != "Grace:meter":
+        int64 fail = 1 / 0
+    return nothing

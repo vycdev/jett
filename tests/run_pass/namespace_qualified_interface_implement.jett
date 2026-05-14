@@ -11,7 +11,14 @@ namespace app
 function describe_user() returns string:
     models.User user = models.User(name: "Ada")
     return contracts.Named.name(view user)
+function describe_user_with_aliases() returns string:
+    use contracts as c
+    use models as m
+    m.User user = m.User(name: "Grace")
+    return c.Named.name(view user)
 function main() returns nothing:
     if describe_user() != "Ada":
+        int64 fail = 1 / 0
+    if describe_user_with_aliases() != "Grace":
         int64 fail = 1 / 0
     return nothing

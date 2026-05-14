@@ -22,6 +22,8 @@ existing flat declaration model:
 - Qualified interface implementations such as
   `implement contracts.Named for models.User` now parse, typecheck, and run
   through qualified interface method calls like `contracts.Named.name(view user)`.
+- Duplicate-leaf interfaces are covered with both direct qualified calls and
+  function-local namespace aliases.
 
 That was the right first bite because it unblocks stdlib-style reflection and
 JSON code without changing the language's broader namespace semantics.
@@ -34,10 +36,10 @@ JSON code without changing the language's broader namespace semantics.
   as the final namespace model.
 - `use models as m` is a local namespace alias, not a type alias. The registered
   spelling and reflected metadata remain `models.User`.
-- Interfaces, actors, and state machines still have some leaf-name-oriented
-  paths. Qualified struct, enum, bitfield, generic struct, reflection, JSON,
-  and explicitly qualified interface implementation paths are covered first
-  because they are the JSON extraction blocker.
+- Actors and state machines still have some leaf-name-oriented paths.
+  Qualified struct, enum, bitfield, generic struct, reflection, JSON, and
+  interface implementation paths are covered first because they are the JSON
+  extraction blocker.
 - Typechecker canonical names for namespaced user types now use the qualified
   spelling in reflection and `TypeId` display paths covered by the current
   tests.
@@ -119,18 +121,35 @@ The next implementation step should be to keep replacing flat fallback paths
 with canonical qualified symbols, while treating alias expansion as a local
 front-end convenience.
 
+## Deferred Actor And Machine Work
+
+Actors and state machines should stay as an explicit follow-up instead of being
+folded into the interface work. Actor spawn currently expects a bare identifier
+shape in the typechecker and interpreter, while `spawn ns.Actor()` parses as a
+dotted field-access expression. A narrow patch to accept dotted actor names is
+not sufficient by itself: duplicate-leaf actor experiments expose deeper actor
+namespace assumptions around actor body checking, runtime registration, and
+diagnostics. The right fix should introduce one shared "type-name expression"
+resolution path and then thread namespace context through actor checking and
+spawn.
+
+State machines have more runtime namespace support than actor spawn, but their
+type-system story is still thin. Treat namespaced machine tests as design probes
+until the machine type model is made explicit.
+
 ## Suggested Next Tests
 
 - Duplicate-leaf bitfields and `use`-alias bitfield references are now covered
   by the namespace run-pass fixtures.
-- Explicitly qualified interface implementations and qualified interface method
-  calls are now covered by a namespace run-pass fixture.
+- Explicitly qualified interface implementations, qualified interface method
+  calls, and `use`-alias interface method calls are now covered by a namespace
+  run-pass fixture.
 - Add more duplicate-leaf coverage beyond structs, enums, generic structs,
-  bitfields, and same-leaf functions. Same-leaf functions are now covered both
-  by direct qualified calls and `use`-alias calls, so actors and duplicate-leaf
-  interfaces remain.
+  bitfields, same-leaf functions, and interfaces. Same-leaf functions and
+  interfaces are now covered both by direct qualified calls and `use`-alias
+  calls, so actors remain.
 - `type.name[a.User]()` returns `a.User`.
 - `type.fields[a.User]()` reports field metadata with owner `a.User`.
 - `json.parse[a.User]` and `json.serialize[a.User]` roundtrip only the intended
   type.
-- Broader `use a as alias` coverage for interfaces and actors.
+- Broader `use a as alias` coverage for actors.

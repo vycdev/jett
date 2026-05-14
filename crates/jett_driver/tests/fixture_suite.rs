@@ -207,6 +207,10 @@ run_pass_fixture!(
     run_pass_namespace_duplicate_leaf_types,
     "namespace_duplicate_leaf_types.jett"
 );
+run_pass_fixture!(
+    run_pass_namespace_duplicate_leaf_interfaces,
+    "namespace_duplicate_leaf_interfaces.jett"
+);
 run_pass_fixture!(run_pass_namespace_use_alias, "namespace_use_alias.jett");
 run_pass_fixture!(
     run_pass_namespace_exports_syntax,
