@@ -249,10 +249,12 @@ bridge spoofing, not helper visibility.
    bindings, while unknown/runtime guards are rejected instead of falling back
    to checking all branches. Direct top-level `type.arg[T](...)` bindings are
    also checked per concrete generic instantiation, which brings shape-specific
-   helpers such as list/map/optional/result JSON helpers into the typed path
-   when reached with the right concrete `T`. Predicate-derived facts,
-   diagnostic string facts, and direct top-level `type.fields[T]()` /
-   `type.variants[T]()` helper bodies remain deferred.
+   helpers such as list/map/optional/result JSON helpers into the typed path.
+   Direct reflected `type.fields[T]()` and `type.variants[T]()` loops are also
+   checked per concrete owner in top-level helpers or selected reflection
+   branches, which pulls record and enum JSON helper bodies further into the
+   checked path. Predicate-derived facts, diagnostic string facts, and other
+   value-sensitive reflection helper shapes remain deferred.
 
 ## Recommended Shape For `stdlib/json.jett`
 

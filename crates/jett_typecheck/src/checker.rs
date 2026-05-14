@@ -4264,6 +4264,10 @@ impl<'a> TypeChecker<'a> {
         type_params: &HashSet<String>,
         context: ReflectionBranchContext,
     ) -> bool {
+        if context == ReflectionBranchContext::StaticReflectionBranch {
+            return true;
+        }
+
         match stmt {
             Stmt::If(if_stmt) => {
                 let condition_static =
@@ -4330,6 +4334,9 @@ impl<'a> TypeChecker<'a> {
             Stmt::ComptimeTypeBind(bind) => {
                 self.comptime_type_bind_reflection_is_specializable(bind, type_params, context)
             }
+            Stmt::For(for_stmt) => {
+                self.for_reflection_is_branch_specializable(for_stmt, type_params, context)
+            }
             _ => !self.stmt_uses_type_param_reflection(stmt, type_params),
         }
     }
@@ -4356,6 +4363,31 @@ impl<'a> TypeChecker<'a> {
         !self.expr_uses_type_param_reflection(&bind.value, type_params)
             && self.block_reflection_is_branch_specializable_in_context(
                 &bind.body,
+                type_params,
+                context,
+            )
+    }
+
+    fn for_reflection_is_branch_specializable(
+        &self,
+        for_stmt: &ast::ForStmt,
+        type_params: &HashSet<String>,
+        context: ReflectionBranchContext,
+    ) -> bool {
+        if let Some(owner_ty) = direct_reflected_loop_owner_type(&for_stmt.iterable) {
+            if Self::type_expr_mentions_type_param(owner_ty, type_params) {
+                return context.permits_shape_reflection()
+                    && self.block_reflection_is_branch_specializable_in_context(
+                        &for_stmt.body,
+                        type_params,
+                        ReflectionBranchContext::StaticReflectionBranch,
+                    );
+            }
+        }
+
+        !self.expr_uses_type_param_reflection(&for_stmt.iterable, type_params)
+            && self.block_reflection_is_branch_specializable_in_context(
+                &for_stmt.body,
                 type_params,
                 context,
             )
@@ -8450,6 +8482,10 @@ fn comptime_type_variants_binding(expr: &Expr) -> Option<&TypeExpr> {
         return None;
     }
     type_args.first()
+}
+
+fn direct_reflected_loop_owner_type(expr: &Expr) -> Option<&TypeExpr> {
+    comptime_type_fields_binding(expr).or_else(|| comptime_type_variants_binding(expr))
 }
 
 fn comptime_type_variant_value_binding(expr: &Expr) -> Option<&TypeExpr> {

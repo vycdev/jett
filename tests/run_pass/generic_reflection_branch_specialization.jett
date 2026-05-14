@@ -2,6 +2,10 @@ namespace test
 
 type Names = list[string]
 
+struct Person:
+    name: string
+    age: int64
+
 function list_length_or_zero[T](value: T) returns int64:
     if type.kind_tag[T]() == TypeKind.list_type:
         list[int64] items = value
@@ -114,6 +118,12 @@ function top_level_type_arg_length[T](value: T) returns int64:
         list[Elem] items = value
         return list.length[Elem](view items)
 
+function direct_field_count[T]() returns int64:
+    mutable int64 count = 0
+    for field in type.fields[T]():
+        count = count + 1
+    return count
+
 verify generic_reflection_branch_specialization:
     list[int64] numbers = list(1, 2, 3)
     assert list_length_or_zero[list[int64]](numbers) == 3
@@ -145,3 +155,5 @@ verify generic_reflection_branch_specialization:
     assert guarded_type_arg_length_or_zero[list[int64]](numbers) == 3
     assert guarded_type_arg_length_or_zero[string]("Ada") == 0
     assert top_level_type_arg_length[list[int64]](numbers) == 3
+    assert direct_field_count[Person]() == 2
+    assert direct_field_count[string]() == 0
