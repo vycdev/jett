@@ -530,6 +530,10 @@ compile_fail_fixture!(
     compile_fail_json_private_decode_tree_reflected,
     "json_private_decode_tree_reflected.jett"
 );
+compile_fail_fixture!(
+    compile_fail_json_private_serialize_reflected,
+    "json_private_serialize_reflected.jett"
+);
 compile_fail_fixture!(compile_fail_duplicate_field, "duplicate_field.jett");
 compile_fail_fixture!(
     compile_fail_json_serialize_secret_struct_blocked,
@@ -835,17 +839,25 @@ fn completions_hide_private_stdlib_json_hooks() {
     let source = "namespace app\n\nfunction main() returns nothing:\n    return nothing\n";
     let candidates = completions(source);
 
-    assert!(
-        candidates
-            .iter()
-            .any(|(name, _)| name == "json.JsonTree" || name == "json.parse_raw"),
-        "expected completions to include exported stdlib JSON surface"
-    );
+    for expected in [
+        "json.JsonTree",
+        "json.parse_raw",
+        "json.field",
+        "json.index",
+        "json.array_length",
+        "json.as_string",
+    ] {
+        assert!(
+            candidates.iter().any(|(name, _)| name == expected),
+            "expected completions to include {expected}"
+        );
+    }
     assert!(
         !candidates
             .iter()
             .any(|(name, _)| name == "json.json_parse_reflected"
                 || name == "json.json_decode_tree_reflected"
+                || name == "json.json_serialize_public_reflected"
                 || name == "json.json_serialize_reflected"),
         "private stdlib JSON hooks should not leak into completions"
     );
