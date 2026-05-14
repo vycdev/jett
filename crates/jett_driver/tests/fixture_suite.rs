@@ -479,6 +479,14 @@ compile_fail_fixture!(
     "namespace_private_mutual_flat.jett"
 );
 compile_fail_fixture!(
+    compile_fail_map_literal_key_type_mismatch,
+    "map_literal_key_type_mismatch.jett"
+);
+compile_fail_fixture!(
+    compile_fail_map_literal_value_type_mismatch,
+    "map_literal_value_type_mismatch.jett"
+);
+compile_fail_fixture!(
     compile_fail_json_private_tree_parse_scalar,
     "json_private_tree_parse_scalar.jett"
 );

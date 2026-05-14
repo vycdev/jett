@@ -1,0 +1,5 @@
+# ERROR: E0300
+namespace test
+
+function bad_map_key() returns nothing:
+    map[string, int64] scores = map("alice": 10, 2: 20)

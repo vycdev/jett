@@ -4249,6 +4249,19 @@ impl<'a> TypeChecker<'a> {
         allow_refinement_handle: bool,
     ) -> TypeId {
         let ty = match expr {
+            Expr::MapConstruct(entries, _span) => {
+                let expected_inner = self.secret_inner_type(expected_ty).unwrap_or(expected_ty);
+                match self.interner.resolve(expected_inner).clone() {
+                    Type::Map(expected_key, expected_value) => self
+                        .check_map_construct_for_expected(
+                            entries,
+                            expected_ty,
+                            expected_key,
+                            expected_value,
+                        ),
+                    _ => self.check_expr(expr),
+                }
+            }
             Expr::Coarsen(inner, span) => {
                 let inner_ty = self.check_expr(inner);
                 if inner_ty == TypeInterner::ERROR {
@@ -4696,10 +4709,7 @@ impl<'a> TypeChecker<'a> {
             Expr::View(inner, _) => self.check_expr(inner),
 
             Expr::ListConstruct(elems, _span) => self.check_list_construct(elems),
-            Expr::MapConstruct(_entries, _span) => {
-                // Map construction type checking is deferred.
-                TypeInterner::ERROR
-            }
+            Expr::MapConstruct(entries, _span) => self.check_map_construct(entries),
 
             Expr::Handle(target, bind_name, body, span) => {
                 self.check_handle(target, bind_name.as_ref(), body, *span)
@@ -5973,6 +5983,95 @@ impl<'a> TypeChecker<'a> {
 
         let element_ty = self.maybe_wrap_secret(element_ty, tainted);
         self.interner.intern(Type::List(element_ty))
+    }
+
+    fn check_map_construct(&mut self, entries: &[(Expr, Expr)]) -> TypeId {
+        if entries.is_empty() {
+            return self
+                .interner
+                .intern(Type::Map(TypeInterner::ERROR, TypeInterner::ERROR));
+        }
+
+        let first_key_ty = self.check_expr(&entries[0].0);
+        let first_value_ty = self.check_expr(&entries[0].1);
+        let (key_ty, mut key_tainted) = self.strip_secret_type(first_key_ty);
+        let (value_ty, mut value_tainted) = self.strip_secret_type(first_value_ty);
+
+        for (key_expr, value_expr) in &entries[1..] {
+            let entry_key_ty = self.check_expr(key_expr);
+            let (entry_key_base_ty, entry_key_secret) = self.strip_secret_type(entry_key_ty);
+            if !self.types_compatible(key_ty, entry_key_base_ty)
+                && !self.types_compatible(entry_key_base_ty, key_ty)
+            {
+                self.sink.emit(errors::type_mismatch(
+                    &self.type_name(key_ty),
+                    &self.type_name(entry_key_ty),
+                    key_expr.span(),
+                ));
+            }
+            key_tainted |= entry_key_secret;
+
+            let entry_value_ty = self.check_expr(value_expr);
+            let (entry_value_base_ty, entry_value_secret) = self.strip_secret_type(entry_value_ty);
+            if !self.types_compatible(value_ty, entry_value_base_ty)
+                && !self.types_compatible(entry_value_base_ty, value_ty)
+            {
+                self.sink.emit(errors::type_mismatch(
+                    &self.type_name(value_ty),
+                    &self.type_name(entry_value_ty),
+                    value_expr.span(),
+                ));
+            }
+            value_tainted |= entry_value_secret;
+        }
+
+        let key_ty = self.maybe_wrap_secret(key_ty, key_tainted);
+        let value_ty = self.maybe_wrap_secret(value_ty, value_tainted);
+        self.interner.intern(Type::Map(key_ty, value_ty))
+    }
+
+    fn check_map_construct_for_expected(
+        &mut self,
+        entries: &[(Expr, Expr)],
+        expected_map_ty: TypeId,
+        expected_key_ty: TypeId,
+        expected_value_ty: TypeId,
+    ) -> TypeId {
+        for (key_expr, value_expr) in entries {
+            let key_ty = self.check_expr_with_optional_expected(key_expr, expected_key_ty, false);
+            if !self.types_compatible(expected_key_ty, key_ty) {
+                self.sink.emit(errors::type_mismatch(
+                    &self.type_name(expected_key_ty),
+                    &self.type_name(key_ty),
+                    key_expr.span(),
+                ));
+            }
+
+            let value_ty =
+                self.check_expr_with_optional_expected(value_expr, expected_value_ty, false);
+            if !self.types_compatible(expected_value_ty, value_ty) {
+                self.sink.emit(errors::type_mismatch(
+                    &self.type_name(expected_value_ty),
+                    &self.type_name(value_ty),
+                    value_expr.span(),
+                ));
+            }
+        }
+
+        expected_map_ty
+    }
+
+    fn check_expr_with_optional_expected(
+        &mut self,
+        expr: &Expr,
+        expected_ty: TypeId,
+        allow_refinement_handle: bool,
+    ) -> TypeId {
+        if expected_ty == TypeInterner::ERROR {
+            self.check_expr(expr)
+        } else {
+            self.check_expr_for_expected(expr, expected_ty, allow_refinement_handle)
+        }
     }
 
     fn check_handle(

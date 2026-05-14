@@ -71,3 +71,16 @@ function map_keys_length_test() returns int64:
 
 verify map_keys_length_test:
     assert map_keys_length_test() == 3
+
+function map_empty_literal_length_test() returns int64:
+    map[string, int64] scores = map()
+    return map.length(scores)
+
+verify map_empty_literal_length_test:
+    assert map_empty_literal_length_test() == 0
+
+function map_literal_argument_test() returns int64:
+    return map.get_or[string, int64](map("ada": 42), "ada", 0)
+
+verify map_literal_argument_test:
+    assert map_literal_argument_test() == 42
