@@ -4328,9 +4328,20 @@ impl<'a> TypeChecker<'a> {
             }
             Stmt::VarDecl(decl) => {
                 !self.expr_uses_type_param_reflection(&decl.value, type_params)
-                    || (!decl.mutable
-                        && self.expr_is_reflection_local_fact_source(&decl.value, type_params))
+                    || (context.permits_shape_reflection()
+                        && (self
+                            .expr_is_direct_reflection_statement_source(&decl.value, type_params)
+                            || (!decl.mutable
+                                && self.expr_is_reflection_local_fact_source(
+                                    &decl.value,
+                                    type_params,
+                                ))))
             }
+            Stmt::Return(ret) => ret.value.as_ref().map_or(true, |expr| {
+                !self.expr_uses_type_param_reflection(expr, type_params)
+                    || (context.permits_shape_reflection()
+                        && self.expr_is_direct_reflection_statement_source(expr, type_params))
+            }),
             Stmt::ComptimeTypeBind(bind) => {
                 self.comptime_type_bind_reflection_is_specializable(bind, type_params, context)
             }
@@ -4401,6 +4412,35 @@ impl<'a> TypeChecker<'a> {
         self.expr_is_type_info_reflection(expr, type_params)
             || self.expr_is_type_kind_reflection(expr, type_params)
             || self.expr_is_type_primitive_reflection_value(expr, type_params)
+    }
+
+    fn expr_is_direct_reflection_statement_source(
+        &self,
+        expr: &Expr,
+        type_params: &HashSet<String>,
+    ) -> bool {
+        match expr {
+            Expr::Paren(inner, _) => {
+                self.expr_is_direct_reflection_statement_source(inner, type_params)
+            }
+            Expr::Handle(target, _, _, _) => {
+                self.expr_is_direct_reflection_statement_source(target, type_params)
+            }
+            Expr::GenericCall(callee, type_args, _, _) => {
+                self.resolved_expr_name(callee).is_some_and(|name| {
+                    matches!(
+                        name.as_str(),
+                        "type.variant_value"
+                            | "type.construct_start"
+                            | "type.construct_variant_start"
+                            | "type.construct_finish"
+                    )
+                }) && type_args
+                    .iter()
+                    .any(|arg| Self::type_expr_mentions_type_param(arg, type_params))
+            }
+            _ => false,
+        }
     }
 
     fn expr_is_potential_static_reflection_condition(&self, expr: &Expr) -> bool {

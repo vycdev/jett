@@ -6,6 +6,10 @@ struct Person:
     name: string
     age: int64
 
+enum Direction:
+    north
+    south
+
 function list_length_or_zero[T](value: T) returns int64:
     if type.kind_tag[T]() == TypeKind.list_type:
         list[int64] items = value
@@ -124,6 +128,10 @@ function direct_field_count[T]() returns int64:
         count = count + 1
     return count
 
+function selected_variant_name[T](value: T) returns string:
+    TypeVariant selected = type.variant_value[T](view value)
+    return selected.name
+
 verify generic_reflection_branch_specialization:
     list[int64] numbers = list(1, 2, 3)
     assert list_length_or_zero[list[int64]](numbers) == 3
@@ -157,3 +165,4 @@ verify generic_reflection_branch_specialization:
     assert top_level_type_arg_length[list[int64]](numbers) == 3
     assert direct_field_count[Person]() == 2
     assert direct_field_count[string]() == 0
+    assert selected_variant_name[Direction](Direction.north) == "north"

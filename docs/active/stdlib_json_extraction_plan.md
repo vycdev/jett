@@ -253,8 +253,10 @@ bridge spoofing, not helper visibility.
    Direct reflected `type.fields[T]()` and `type.variants[T]()` loops are also
    checked per concrete owner in top-level helpers or selected reflection
    branches, which pulls record and enum JSON helper bodies further into the
-   checked path. Predicate-derived facts, diagnostic string facts, and other
-   value-sensitive reflection helper shapes remain deferred.
+   checked path. Direct top-level value-sensitive reflection statements for
+   variant selection and `TypeConstruction` start/finish are checked per
+   concrete instantiation as well. Predicate-derived facts, diagnostic string
+   facts, and other value-sensitive reflection helper shapes remain deferred.
 
 ## Recommended Shape For `stdlib/json.jett`
 
