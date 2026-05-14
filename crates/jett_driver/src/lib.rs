@@ -553,22 +553,32 @@ fn discover_modules_in_dir(
 /// First validates (lex → parse → resolve → typecheck → verify), then executes main().
 /// If a jett.proj exists, also loads sibling .jett files so cross-file calls work.
 pub fn run_file(path: &Path) -> Result<(), String> {
+    run_file_with_stdout(path, false).map(|_| ())
+}
+
+/// Run a .jett file and capture runtime stdout produced by `Stdout.write`,
+/// `print`, and `println`.
+pub fn run_file_capture_stdout(path: &Path) -> Result<String, String> {
+    run_file_with_stdout(path, true)
+}
+
+fn run_file_with_stdout(path: &Path, capture_stdout: bool) -> Result<String, String> {
     let thread_path = path.to_path_buf();
     let fallback_path = thread_path.clone();
     match thread::Builder::new()
         .name("jett-runtime".to_string())
         .stack_size(RUNTIME_STACK_SIZE)
-        .spawn(move || run_file_inner(&thread_path))
+        .spawn(move || run_file_inner(&thread_path, capture_stdout))
     {
         Ok(handle) => match handle.join() {
             Ok(result) => result,
             Err(payload) => std::panic::resume_unwind(payload),
         },
-        Err(_) => run_file_inner(&fallback_path),
+        Err(_) => run_file_inner(&fallback_path, capture_stdout),
     }
 }
 
-fn run_file_inner(path: &Path) -> Result<(), String> {
+fn run_file_inner(path: &Path, capture_stdout: bool) -> Result<String, String> {
     let build = build_file(path);
 
     if build.has_errors {
@@ -602,6 +612,9 @@ fn run_file_inner(path: &Path) -> Result<(), String> {
     if let Some(metadata) = build.reflection_metadata.clone() {
         interp.set_reflection_metadata(metadata);
     }
+    if capture_stdout {
+        interp.enable_stdout_capture();
+    }
 
     // Register compiler-shipped stdlib modules before project and entry files.
     for module in discover_stdlib_modules() {
@@ -619,7 +632,7 @@ fn run_file_inner(path: &Path) -> Result<(), String> {
 
     // Call main()
     match interp.call_function_in_namespace(main_namespace.as_deref(), "main", main_args) {
-        Ok(_) => Ok(()),
+        Ok(_) => Ok(interp.take_stdout_output()),
         Err(e) => Err(format!("runtime error: {}", e)),
     }
 }

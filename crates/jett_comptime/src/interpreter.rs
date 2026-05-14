@@ -201,6 +201,8 @@ pub struct Interpreter {
     debug_output: Vec<String>,
     /// Whether debug output should print as the program runs.
     emit_runtime_debug: bool,
+    /// Optional captured stdout for driver tests.
+    stdout_capture: Option<String>,
 }
 
 /// Runtime state of a spawned actor instance.
@@ -239,6 +241,7 @@ impl Interpreter {
             next_actor_id: 0,
             debug_output: Vec::new(),
             emit_runtime_debug: false,
+            stdout_capture: None,
         }
     }
 
@@ -257,6 +260,19 @@ impl Interpreter {
     /// Drain any debug lines recorded so far.
     pub fn take_debug_output(&mut self) -> Vec<String> {
         std::mem::take(&mut self.debug_output)
+    }
+
+    /// Capture runtime stdout writes instead of printing them directly.
+    pub fn enable_stdout_capture(&mut self) {
+        self.stdout_capture = Some(String::new());
+    }
+
+    /// Drain captured stdout. Returns an empty string when capture is disabled.
+    pub fn take_stdout_output(&mut self) -> String {
+        self.stdout_capture
+            .as_mut()
+            .map(std::mem::take)
+            .unwrap_or_default()
     }
 
     // -- Scope management ---------------------------------------------------
@@ -302,6 +318,23 @@ impl Interpreter {
         self.debug_output.push(line.clone());
         if self.emit_runtime_debug {
             println!("{line}");
+        }
+    }
+
+    fn write_stdout(&mut self, text: &str) {
+        if let Some(capture) = self.stdout_capture.as_mut() {
+            capture.push_str(text);
+        } else {
+            print!("{text}");
+        }
+    }
+
+    fn write_stdout_line(&mut self, text: &str) {
+        if let Some(capture) = self.stdout_capture.as_mut() {
+            capture.push_str(text);
+            capture.push('\n');
+        } else {
+            println!("{text}");
         }
     }
 
@@ -5304,7 +5337,7 @@ impl Interpreter {
                     )));
                 }
                 // The first arg is the capability (ignored), second is the message.
-                print!("{}", args[1]);
+                self.write_stdout(&format!("{}", args[1]));
                 Some(Ok(Value::Nothing))
             }
 
@@ -5705,12 +5738,12 @@ impl Interpreter {
             // -- print (debugging helper) -------------------------------------
             "print" => {
                 let output: Vec<String> = args.iter().map(|v| format!("{v}")).collect();
-                print!("{}", output.join(" "));
+                self.write_stdout(&output.join(" "));
                 Some(Ok(Value::Nothing))
             }
             "println" => {
                 let output: Vec<String> = args.iter().map(|v| format!("{v}")).collect();
-                println!("{}", output.join(" "));
+                self.write_stdout_line(&output.join(" "));
                 Some(Ok(Value::Nothing))
             }
 
@@ -13128,6 +13161,43 @@ mod builtin_tests {
         let expr = dotted_call("Stdout", "write", vec![string("fake_cap"), string("hello")]);
         let result = interp.eval_expr(&expr).unwrap();
         assert_eq!(result, Value::Nothing);
+    }
+
+    #[test]
+    fn stdout_output_can_be_captured() {
+        let mut interp = Interpreter::new();
+        interp.enable_stdout_capture();
+
+        assert_eq!(
+            interp
+                .call_builtin(
+                    "Stdout.write",
+                    &[Value::Nothing, Value::String("hello ".to_string())],
+                )
+                .expect("Stdout.write should be a builtin")
+                .expect("Stdout.write should succeed"),
+            Value::Nothing
+        );
+        assert_eq!(
+            interp
+                .call_builtin(
+                    "print",
+                    &[Value::String("score".to_string()), Value::Int64(7)],
+                )
+                .expect("print should be a builtin")
+                .expect("print should succeed"),
+            Value::Nothing
+        );
+        assert_eq!(
+            interp
+                .call_builtin("println", &[Value::Bool(true)])
+                .expect("println should be a builtin")
+                .expect("println should succeed"),
+            Value::Nothing
+        );
+
+        assert_eq!(interp.take_stdout_output(), "hello score 7true\n");
+        assert_eq!(interp.take_stdout_output(), "");
     }
 
     #[test]

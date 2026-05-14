@@ -1400,7 +1400,7 @@ Each crate has its own unit tests:
 
 - **`compile_pass/`** — Jett programs that should compile without errors. Tests run `jett build` and assert exit code 0.
 - **`compile_fail/`** — Jett programs with intentional errors. Tests assert specific error codes and messages. Each test file has a comment annotation like `# ERROR: E0601 secret type exposure`.
-- **`run_pass/`** — Jett programs that should compile and produce specific output. Tests run the compiled binary and compare stdout to expected output.
+- **`run_pass/`** — Jett programs that should compile and execute successfully. Verify/property fixtures assert internally, and stdout-producing runtime fixtures can be pinned through the driver's captured-stdout test helper.
 - **`snapshots/`** — Snapshot tests for intermediate representations. Source → AST, source → HIR, source → MIR, source → LLVM IR. Uses `insta` for snapshot management.
 
 ### Property-Based Compiler Tests

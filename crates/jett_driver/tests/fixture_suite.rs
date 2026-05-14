@@ -4,7 +4,8 @@ use std::path::{Path, PathBuf};
 use jett_common::FileId;
 use jett_diagnostics::Severity;
 use jett_driver::{
-    build_file, build_source, completions, completions_at, hover_type, run_file, test_file,
+    build_file, build_source, completions, completions_at, hover_type, run_file,
+    run_file_capture_stdout, test_file,
 };
 use jett_parser::ast::Item;
 use jett_parser::parse;
@@ -131,6 +132,17 @@ fn assert_run_pass(name: &str) {
     }
 }
 
+fn assert_run_stdout(name: &str, expected: &str) {
+    let path = fixture_path("run_pass", name);
+    let output = run_file_capture_stdout(&path).unwrap_or_else(|err| {
+        panic!(
+            "expected {} to run successfully with captured stdout: {err}",
+            path.display()
+        )
+    });
+    assert_eq!(output, expected, "unexpected stdout for {}", path.display());
+}
+
 macro_rules! compile_pass_fixture {
     ($test_name:ident, $file_name:literal) => {
         #[test]
@@ -193,6 +205,21 @@ run_pass_fixture!(run_pass_string_interpolation, "string_interpolation.jett");
 run_pass_fixture!(run_pass_stdlib_loading, "stdlib_loading.jett");
 run_pass_fixture!(run_pass_verify_test, "verify_test.jett");
 run_pass_fixture!(run_pass_multi_verify, "multi_verify.jett");
+
+#[test]
+fn run_file_capture_stdout_captures_capability_writes() {
+    assert_run_stdout("hello_print.jett", "Hello, Jett!42");
+    assert_run_stdout("string_interpolation.jett", "Hello, World!2 + 3 = 5");
+}
+
+#[test]
+fn run_file_capture_stdout_captures_json_runtime_output() {
+    assert_run_stdout(
+        "json_tree_parse_runtime.jett",
+        r#"{"city":"Cluj","scores":[1,true,null]}"#,
+    );
+}
+
 run_pass_fixture!(
     run_pass_namespace_qualified_functions,
     "namespace_qualified_functions.jett"
