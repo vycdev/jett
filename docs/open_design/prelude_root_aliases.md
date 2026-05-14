@@ -162,7 +162,8 @@ Required tests for that first slice:
   `export root type`,
 - bare `JsonValue` is visible from ordinary source without relying on namespace
   leaf leakage,
-- `prelude.JsonValue` behavior is explicitly decided and pinned,
+- `prelude.JsonValue` is explicitly rejected; the compatibility alias is the
+  bare root name `JsonValue`, not a `prelude` namespace member.
 - ordinary namespaced exports still do not leak flat names,
 - `JsonValue` and `json.JsonTree` assignment/container compatibility still
   works,

@@ -1,0 +1,5 @@
+# ERROR: E0200
+function main() returns nothing:
+    prelude.JsonValue raw = json.parse_raw("null") handle error:
+        return nothing
+    return nothing
