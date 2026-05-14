@@ -3,7 +3,9 @@ use std::path::{Path, PathBuf};
 
 use jett_common::FileId;
 use jett_diagnostics::Severity;
-use jett_driver::{build_file, build_source, completions, hover_type, run_file, test_file};
+use jett_driver::{
+    build_file, build_source, completions, completions_at, hover_type, run_file, test_file,
+};
 use jett_parser::ast::Item;
 use jett_parser::parse;
 
@@ -760,6 +762,46 @@ fn completions_hide_private_stdlib_json_hooks() {
                 || name == "json.json_decode_tree_reflected"
                 || name == "json.json_serialize_reflected"),
         "private stdlib JSON hooks should not leak into completions"
+    );
+}
+
+#[test]
+fn completions_at_includes_same_namespace_private_helpers() {
+    let source = r#"
+namespace api
+
+function private_helper() returns int64:
+    return 1
+
+export function public_helper() returns int64:
+    return private_helper()
+
+namespace app
+
+function main() returns nothing:
+    return nothing
+"#;
+
+    let api_candidates = completions_at(source, 8, 12);
+    assert!(
+        api_candidates
+            .iter()
+            .any(|(name, _)| name == "api.private_helper"),
+        "same-namespace completions should include private helpers"
+    );
+
+    let app_candidates = completions_at(source, 13, 12);
+    assert!(
+        !app_candidates
+            .iter()
+            .any(|(name, _)| name == "api.private_helper"),
+        "external completions should hide private namespaced helpers"
+    );
+    assert!(
+        app_candidates
+            .iter()
+            .any(|(name, _)| name == "api.public_helper"),
+        "external completions should include exported namespaced helpers"
     );
 }
 

@@ -199,6 +199,9 @@ Implemented:
 - Driver completion coverage now filters out private namespaced stdlib JSON
   bridge hooks while still exposing the exported `json.JsonTree` raw facade
   surface.
+- LSP completions are now cursor-position aware for namespace visibility:
+  private helpers are offered inside their own namespace but hidden from
+  external namespaces.
 
 Still staged:
 
@@ -247,4 +250,5 @@ Still staged:
   by the run-pass and `test_file` fixtures. Hover/type-query coverage pins the
   JSON raw facade type through the same stdlib-loading path. Completion coverage
   pins exported namespaced declarations without leaking private JSON bridge
-  hooks.
+  hooks, while position-aware completions keep same-namespace private helpers
+  available.

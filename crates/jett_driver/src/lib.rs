@@ -155,6 +155,29 @@ pub fn hover_type(source: &str, line: u32, col: u32) -> Option<String> {
 /// Return a list of (name, kind) completion candidates visible in `source`.
 /// Runs parse + resolve and collects all definitions from the scope table.
 pub fn completions(source: &str) -> Vec<(String, jett_resolve::scope::DefKind)> {
+    completions_for_namespace(source, None)
+}
+
+/// Return completion candidates visible at the given (1-based) line and column.
+pub fn completions_at(
+    source: &str,
+    line: u32,
+    col: u32,
+) -> Vec<(String, jett_resolve::scope::DefKind)> {
+    let file_id = FileId::new(0);
+    let Some(offset) = line_col_to_offset(source, line, col) else {
+        return Vec::new();
+    };
+
+    let parsed = parse(source, file_id);
+    let current_namespace = namespace_at_offset(&parsed.module, file_id, offset);
+    completions_for_namespace(source, current_namespace.as_deref())
+}
+
+fn completions_for_namespace(
+    source: &str,
+    current_namespace: Option<&str>,
+) -> Vec<(String, jett_resolve::scope::DefKind)> {
     use jett_resolve::scope::DefVisibility;
 
     let file_id = FileId::new(0);
@@ -173,9 +196,48 @@ pub fn completions(source: &str) -> Vec<(String, jett_resolve::scope::DefKind)> 
         .scope_table
         .definitions
         .iter()
-        .filter(|def| def.namespace.is_none() || def.visibility == DefVisibility::Public)
+        .filter(|def| {
+            def.namespace.is_none()
+                || def.visibility == DefVisibility::Public
+                || def.namespace.as_deref() == current_namespace
+        })
         .map(|def| (def.name.clone(), def.kind))
         .collect()
+}
+
+fn namespace_at_offset(module: &Module, file_id: FileId, offset: u32) -> Option<String> {
+    let mut current_namespace = None;
+    for item in &module.items {
+        if item_file(item) != file_id {
+            continue;
+        }
+        if item_span(item).start > offset {
+            break;
+        }
+        if let Item::Namespace(ns) = item {
+            current_namespace = Some(ns.name.name.clone());
+        }
+    }
+    current_namespace
+}
+
+fn item_span(item: &Item) -> jett_common::Span {
+    match item {
+        Item::Namespace(ns) => ns.span,
+        Item::Function(func) => func.span,
+        Item::Mutual(block) => block.span,
+        Item::Interface(interface) => interface.span,
+        Item::Implement(block) => block.span,
+        Item::Struct(strukt) => strukt.span,
+        Item::Bitfield(bitfield) => bitfield.span,
+        Item::Enum(enm) => enm.span,
+        Item::Machine(machine) => machine.span,
+        Item::Actor(actor) => actor.span,
+        Item::VarDecl(decl) => decl.span,
+        Item::Verify(verify) => verify.span,
+        Item::Property(prop) => prop.span,
+        Item::TypeAlias(alias) => alias.span,
+    }
 }
 
 /// Return the byte span of the definition of the symbol at the given (1-based)

@@ -192,7 +192,9 @@ impl LanguageServer for JettBackend {
             return Ok(None);
         };
 
-        let candidates = jett_driver::completions(source);
+        let position = params.text_document_position.position;
+        let candidates =
+            jett_driver::completions_at(source, position.line + 1, position.character + 1);
         if candidates.is_empty() {
             return Ok(None);
         }
