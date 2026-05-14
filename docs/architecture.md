@@ -526,7 +526,7 @@ For each `machine` type:
 #### 6h. Complexity Limits Enforcement
 
 At the end of type checking each function:
-- Count statements (excluding `use` declarations) — max 50.
+- Count statements (excluding `use` declarations) — max 100.
 - Compute nesting depth — max 4 levels.
 - Count parameters — max 6.
 - Compute cyclomatic complexity — max 10.

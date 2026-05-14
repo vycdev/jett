@@ -1072,7 +1072,7 @@ Capability bundles are regular structs — they can be constructed, destructured
 
 ```
 error at line 45: function "process_all_orders" exceeds the statement limit
-  current: 67 statements (max: 50)
+  current: 117 statements (max: 100)
   hint: extract related statements into smaller functions
 
 error at line 12: function "validate_input" exceeds the nesting depth limit
@@ -1086,9 +1086,9 @@ This function is too large and the compiler rejects it:
 
 ```
 function process_report(data: list[Record]) returns result[Report, string]:
-    # ... 60+ statements doing validation, transformation,
+    # ... 120+ statements doing validation, transformation,
     # aggregation, formatting, and output ...
-    # COMPILE ERROR: exceeds 50 statement limit
+    # COMPILE ERROR: exceeds 100 statement limit
 ```
 
 The LLM must break it apart:
@@ -1121,7 +1121,7 @@ The result: `process_report` is now 4 lines. Each helper function is small, focu
 
 Linter warnings are suggestions — LLMs (and humans) ignore them. A compile error is absolute. The LLM's code generation loop becomes: write function → compile → if too large, decompose → compile again. This loop naturally produces well-chunked code without any prompting or instructions. The language structure *forces* good architecture.
 
-> **Note:** The limits target logic complexity, not data size. Struct construction is a single expression regardless of field count — a 100-field struct literal is one statement. Struct functions each have their own independent 50-statement limit, so a struct with many functions is not a problem. Heavy math or sequential I/O that appears to need 50+ statements is almost always decomposable into named sub-computations (`calculate_velocity`, `apply_drag`, `resolve_collision`) or grouped operations (`load_configs`, `load_assets`), which produces better code. These limits have no flags or per-function overrides — they are absolute. If the compiler rejects a function, the function is doing too much.
+> **Note:** The limits target logic complexity, not data size. Struct construction is a single expression regardless of field count — a 100-field struct literal is one statement. Struct functions each have their own independent 100-statement limit, so a struct with many functions is not a problem. Heavy math or sequential I/O that appears to need 100+ statements is almost always decomposable into named sub-computations (`calculate_velocity`, `apply_drag`, `resolve_collision`) or grouped operations (`load_configs`, `load_assets`), which produces better code. These limits have no flags or per-function overrides — they are absolute. If the compiler rejects a function, the function is doing too much.
 
 **Nesting depth enforcement — guards over nesting:**
 
@@ -5837,7 +5837,7 @@ function main(stdout: Stdout, fs: Filesystem) returns nothing:
 
 The runtime provides capabilities to `main` based on its parameter list. If `main` does not declare a `Network` parameter, the program physically cannot access the network — the capability is never created. This is where the capability system begins: `main` is the root of the capability tree.
 
-> **Note:** `main` follows the same limits as every other function (50 statements, 4 nesting levels, 6 parameters, 10 cyclomatic complexity). If `main` is hitting those limits, it is doing too much — extract the logic into named functions. A well-structured `main` is a short orchestrator that wires together capabilities and delegates to other functions.
+> **Note:** `main` follows the same limits as every other function (100 statements, 4 nesting levels, 6 parameters, 10 cyclomatic complexity). If `main` is hitting those limits, it is doing too much — extract the logic into named functions. A well-structured `main` is a short orchestrator that wires together capabilities and delegates to other functions.
 
 ### Variables
 
