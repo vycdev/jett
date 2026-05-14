@@ -1,5 +1,9 @@
 namespace app
 
+enum PropertyChoice:
+    empty
+    score(value: int64)
+
 property string_lists_have_nonnegative_length:
     given items: list[string]
     int64 length = list.length[string](items)
@@ -36,3 +40,13 @@ property result_ints_can_be_handled:
     int64 value = outcome handle error:
         default 0
     assert value == value
+
+property enum_variants_can_be_matched:
+    given choice: PropertyChoice
+    mutable bool seen = false
+    match choice:
+        empty:
+            seen = true
+        score(value):
+            seen = value == value
+    assert seen == true

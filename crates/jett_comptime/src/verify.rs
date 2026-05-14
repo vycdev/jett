@@ -1,7 +1,7 @@
 use jett_common::{FileId, Span};
 use jett_diagnostics::Diagnostic;
 use jett_parser::ast::{
-    FunctionDef, GivenDecl, Item, Module, PropertyBlock, TypeExpr, VerifyBlock,
+    EnumDef, FieldDef, FunctionDef, GivenDecl, Item, Module, PropertyBlock, TypeExpr, VerifyBlock,
 };
 use jett_types::ReflectionMetadata;
 use std::sync::Arc;
@@ -51,6 +51,12 @@ fn update_current_namespace(
 const PROPERTY_DEFAULT_ITERATIONS: usize = 100;
 const SHRINK_MAX_STEPS: usize = 50;
 const VERIFY_STACK_SIZE: usize = 8 * 1024 * 1024;
+
+#[derive(Debug, Clone)]
+struct PropertyEnumDef {
+    type_name: String,
+    def: EnumDef,
+}
 
 // ---------------------------------------------------------------------------
 // Error type
@@ -177,11 +183,22 @@ fn run_verify_blocks_detailed_inner(
     let mut legacy_verify_functions: Vec<(Option<String>, FunctionDef)> = Vec::new();
     let mut verify_blocks: Vec<(Option<String>, VerifyBlock)> = Vec::new();
     let mut property_blocks: Vec<(Option<String>, PropertyBlock)> = Vec::new();
+    let mut property_enums: Vec<PropertyEnumDef> = Vec::new();
     let mut current_file = None;
     let mut current_namespace = None;
     for item in &module.items {
         update_current_namespace(item, &mut current_file, &mut current_namespace);
         match item {
+            Item::Enum(enm) => {
+                let type_name = current_namespace
+                    .as_ref()
+                    .map(|namespace| format!("{namespace}.{}", enm.name.name))
+                    .unwrap_or_else(|| enm.name.name.clone());
+                property_enums.push(PropertyEnumDef {
+                    type_name,
+                    def: enm.clone(),
+                });
+            }
             Item::Function(func) => {
                 if has_assert_stmts(func) && func.params.is_empty() && func.name.name != "main" {
                     legacy_verify_functions.push((current_namespace.clone(), func.clone()));
@@ -247,7 +264,7 @@ fn run_verify_blocks_detailed_inner(
 
     // Execute property blocks.
     for (namespace, pb) in &property_blocks {
-        let result = run_property_block(&mut interp, namespace.as_deref(), pb);
+        let result = run_property_block(&mut interp, namespace.as_deref(), pb, &property_enums);
         results.push(result);
     }
 
@@ -434,6 +451,25 @@ fn shrink_value(value: &Value) -> Vec<Value> {
             }
             candidates
         }
+        Value::Enum {
+            type_name,
+            variant,
+            fields,
+        } if !fields.is_empty() => {
+            let mut candidates = Vec::new();
+            for (i, field) in fields.iter().enumerate() {
+                for shrunk_field in shrink_value(field) {
+                    let mut new_fields = fields.clone();
+                    new_fields[i] = shrunk_field;
+                    candidates.push(Value::Enum {
+                        type_name: type_name.clone(),
+                        variant: variant.clone(),
+                        fields: new_fields,
+                    });
+                }
+            }
+            candidates
+        }
         _ => vec![], // Bool, Nothing, etc. cannot be shrunk further
     }
 }
@@ -492,6 +528,7 @@ fn run_property_block(
     interp: &mut Interpreter,
     namespace: Option<&str>,
     pb: &PropertyBlock,
+    enum_defs: &[PropertyEnumDef],
 ) -> VerifyResult {
     let iterations = PROPERTY_DEFAULT_ITERATIONS;
 
@@ -499,7 +536,7 @@ fn run_property_block(
     let pools: Vec<Vec<Value>> = pb
         .givens
         .iter()
-        .map(|g| generate_values_for_type(&g.ty))
+        .map(|g| generate_values_for_type_in_namespace(&g.ty, namespace, enum_defs))
         .collect();
 
     // If any pool is empty, we cannot test.
@@ -574,7 +611,16 @@ fn run_property_block(
 }
 
 /// Generate a pool of test values for a given type expression.
+#[cfg(test)]
 fn generate_values_for_type(ty: &TypeExpr) -> Vec<Value> {
+    generate_values_for_type_in_namespace(ty, None, &[])
+}
+
+fn generate_values_for_type_in_namespace(
+    ty: &TypeExpr,
+    namespace: Option<&str>,
+    enum_defs: &[PropertyEnumDef],
+) -> Vec<Value> {
     match ty {
         TypeExpr::Named(ident) => match ident.name.as_str() {
             "int64" => vec![
@@ -608,23 +654,40 @@ fn generate_values_for_type(ty: &TypeExpr) -> Vec<Value> {
                 Value::Bytes(b"hello".to_vec()),
                 Value::Bytes(vec![0, 1, 2, 127, 255]),
             ],
-            _ => vec![], // unsupported type
+            "nothing" => vec![Value::Nothing],
+            _ => generate_enum_values_for_type_name(&ident.name, namespace, enum_defs),
         },
         TypeExpr::Generic(ident, args, _) => match ident.name.as_str() {
-            "list" if args.len() == 1 => generate_list_values_for_type(&args[0]),
-            "set" if args.len() == 1 => generate_set_values_for_type(&args[0]),
-            "map" if args.len() == 2 => generate_map_values_for_type(&args[0], &args[1]),
-            "optional" if args.len() == 1 => generate_optional_values_for_type(&args[0]),
-            "result" if args.len() == 2 => generate_result_values_for_type(&args[0], &args[1]),
+            "list" if args.len() == 1 => {
+                generate_list_values_for_type(&args[0], namespace, enum_defs)
+            }
+            "set" if args.len() == 1 => {
+                generate_set_values_for_type(&args[0], namespace, enum_defs)
+            }
+            "map" if args.len() == 2 => {
+                generate_map_values_for_type(&args[0], &args[1], namespace, enum_defs)
+            }
+            "optional" if args.len() == 1 => {
+                generate_optional_values_for_type(&args[0], namespace, enum_defs)
+            }
+            "result" if args.len() == 2 => {
+                generate_result_values_for_type(&args[0], &args[1], namespace, enum_defs)
+            }
             _ => vec![], // unsupported generic type
         },
-        TypeExpr::View(inner, _) => generate_values_for_type(inner),
+        TypeExpr::View(inner, _) => {
+            generate_values_for_type_in_namespace(inner, namespace, enum_defs)
+        }
         TypeExpr::Function(_, _, _) => vec![], // cannot generate function values
     }
 }
 
-fn generate_list_values_for_type(inner_ty: &TypeExpr) -> Vec<Value> {
-    let inner_values = generate_values_for_type(inner_ty);
+fn generate_list_values_for_type(
+    inner_ty: &TypeExpr,
+    namespace: Option<&str>,
+    enum_defs: &[PropertyEnumDef],
+) -> Vec<Value> {
+    let inner_values = generate_values_for_type_in_namespace(inner_ty, namespace, enum_defs);
     if inner_values.is_empty() {
         return Vec::new();
     }
@@ -648,8 +711,12 @@ fn generate_list_values_for_type(inner_ty: &TypeExpr) -> Vec<Value> {
     values
 }
 
-fn generate_set_values_for_type(inner_ty: &TypeExpr) -> Vec<Value> {
-    let inner_values = generate_values_for_type(inner_ty);
+fn generate_set_values_for_type(
+    inner_ty: &TypeExpr,
+    namespace: Option<&str>,
+    enum_defs: &[PropertyEnumDef],
+) -> Vec<Value> {
+    let inner_values = generate_values_for_type_in_namespace(inner_ty, namespace, enum_defs);
     if inner_values.is_empty() {
         return Vec::new();
     }
@@ -672,9 +739,14 @@ fn generate_set_values_for_type(inner_ty: &TypeExpr) -> Vec<Value> {
     values
 }
 
-fn generate_map_values_for_type(key_ty: &TypeExpr, value_ty: &TypeExpr) -> Vec<Value> {
-    let key_values = generate_values_for_type(key_ty);
-    let value_values = generate_values_for_type(value_ty);
+fn generate_map_values_for_type(
+    key_ty: &TypeExpr,
+    value_ty: &TypeExpr,
+    namespace: Option<&str>,
+    enum_defs: &[PropertyEnumDef],
+) -> Vec<Value> {
+    let key_values = generate_values_for_type_in_namespace(key_ty, namespace, enum_defs);
+    let value_values = generate_values_for_type_in_namespace(value_ty, namespace, enum_defs);
     if key_values.is_empty() || value_values.is_empty() {
         return Vec::new();
     }
@@ -706,8 +778,12 @@ fn generate_map_values_for_type(key_ty: &TypeExpr, value_ty: &TypeExpr) -> Vec<V
     maps
 }
 
-fn generate_optional_values_for_type(inner_ty: &TypeExpr) -> Vec<Value> {
-    let inner_values = generate_values_for_type(inner_ty);
+fn generate_optional_values_for_type(
+    inner_ty: &TypeExpr,
+    namespace: Option<&str>,
+    enum_defs: &[PropertyEnumDef],
+) -> Vec<Value> {
+    let inner_values = generate_values_for_type_in_namespace(inner_ty, namespace, enum_defs);
     if inner_values.is_empty() {
         return Vec::new();
     }
@@ -722,9 +798,14 @@ fn generate_optional_values_for_type(inner_ty: &TypeExpr) -> Vec<Value> {
     values
 }
 
-fn generate_result_values_for_type(ok_ty: &TypeExpr, error_ty: &TypeExpr) -> Vec<Value> {
-    let ok_values = generate_values_for_type(ok_ty);
-    let error_values = generate_values_for_type(error_ty);
+fn generate_result_values_for_type(
+    ok_ty: &TypeExpr,
+    error_ty: &TypeExpr,
+    namespace: Option<&str>,
+    enum_defs: &[PropertyEnumDef],
+) -> Vec<Value> {
+    let ok_values = generate_values_for_type_in_namespace(ok_ty, namespace, enum_defs);
+    let error_values = generate_values_for_type_in_namespace(error_ty, namespace, enum_defs);
     if ok_values.is_empty() || error_values.is_empty() {
         return Vec::new();
     }
@@ -741,6 +822,93 @@ fn generate_result_values_for_type(ok_ty: &TypeExpr, error_ty: &TypeExpr) -> Vec
             .map(|error| Value::ResultFail(Box::new(error))),
     );
     values
+}
+
+fn generate_enum_values_for_type_name(
+    name: &str,
+    namespace: Option<&str>,
+    enum_defs: &[PropertyEnumDef],
+) -> Vec<Value> {
+    let Some(enum_def) = find_property_enum(name, namespace, enum_defs) else {
+        return Vec::new();
+    };
+
+    generate_enum_values(enum_def, namespace, enum_defs)
+}
+
+fn find_property_enum<'a>(
+    name: &str,
+    namespace: Option<&str>,
+    enum_defs: &'a [PropertyEnumDef],
+) -> Option<&'a PropertyEnumDef> {
+    if name.contains('.') {
+        return enum_defs.iter().find(|enum_def| enum_def.type_name == name);
+    }
+
+    if let Some(namespace) = namespace {
+        let scoped_name = format!("{namespace}.{name}");
+        if let Some(enum_def) = enum_defs
+            .iter()
+            .find(|enum_def| enum_def.type_name == scoped_name)
+        {
+            return Some(enum_def);
+        }
+    }
+
+    enum_defs.iter().find(|enum_def| enum_def.type_name == name)
+}
+
+fn generate_enum_values(
+    enum_def: &PropertyEnumDef,
+    namespace: Option<&str>,
+    enum_defs: &[PropertyEnumDef],
+) -> Vec<Value> {
+    let mut values = Vec::new();
+    for variant in &enum_def.def.variants {
+        if variant.fields.is_empty() {
+            values.push(Value::Enum {
+                type_name: enum_def.type_name.clone(),
+                variant: variant.name.name.clone(),
+                fields: vec![],
+            });
+            continue;
+        }
+
+        let field_pools = generate_enum_field_pools(&variant.fields, namespace, enum_defs);
+        if field_pools.is_empty() {
+            return Vec::new();
+        }
+
+        let sample_count = field_pools.iter().map(Vec::len).max().unwrap_or(0).min(3);
+        for sample_index in 0..sample_count {
+            let fields = field_pools
+                .iter()
+                .map(|pool| pool[sample_index % pool.len()].clone())
+                .collect();
+            values.push(Value::Enum {
+                type_name: enum_def.type_name.clone(),
+                variant: variant.name.name.clone(),
+                fields,
+            });
+        }
+    }
+    values
+}
+
+fn generate_enum_field_pools(
+    fields: &[FieldDef],
+    namespace: Option<&str>,
+    enum_defs: &[PropertyEnumDef],
+) -> Vec<Vec<Value>> {
+    let mut pools = Vec::new();
+    for field in fields {
+        let values = generate_values_for_type_in_namespace(&field.ty, namespace, enum_defs);
+        if values.is_empty() {
+            return Vec::new();
+        }
+        pools.push(values);
+    }
+    pools
 }
 
 // ---------------------------------------------------------------------------
@@ -879,6 +1047,33 @@ mod tests {
                 .collect(),
             methods,
             exported: false,
+            span: sp(),
+        }
+    }
+
+    fn enum_def(name: &str, variants: Vec<Variant>) -> EnumDef {
+        EnumDef {
+            name: ident(name),
+            variants,
+            exported: false,
+            span: sp(),
+        }
+    }
+
+    fn enum_variant(name: &str, fields: Vec<FieldDef>) -> Variant {
+        Variant {
+            name: ident(name),
+            fields,
+            discriminant: None,
+            span: sp(),
+        }
+    }
+
+    fn enum_field(name: &str, ty: TypeExpr) -> FieldDef {
+        FieldDef {
+            name: ident(name),
+            ty,
+            serialize_name: None,
             span: sp(),
         }
     }
@@ -1855,6 +2050,46 @@ mod tests {
     }
 
     #[test]
+    fn property_generator_supports_enums_in_namespace() {
+        let enum_defs = vec![PropertyEnumDef {
+            type_name: "app.PropertyChoice".to_string(),
+            def: enum_def(
+                "PropertyChoice",
+                vec![
+                    enum_variant("empty", vec![]),
+                    enum_variant("score", vec![enum_field("value", type_named("int64"))]),
+                ],
+            ),
+        }];
+
+        let values = generate_values_for_type_in_namespace(
+            &type_named("PropertyChoice"),
+            Some("app"),
+            &enum_defs,
+        );
+        assert!(values.contains(&Value::Enum {
+            type_name: "app.PropertyChoice".to_string(),
+            variant: "empty".to_string(),
+            fields: vec![],
+        }));
+        assert!(
+            values.iter().any(|value| {
+                matches!(
+                    value,
+                    Value::Enum {
+                        type_name,
+                        variant,
+                        fields,
+                    } if type_name == "app.PropertyChoice"
+                        && variant == "score"
+                        && matches!(fields.as_slice(), [Value::Int64(_)])
+                )
+            }),
+            "expected enum generation to include payload variants"
+        );
+    }
+
+    #[test]
     fn property_shrinker_simplifies_sets_and_maps() {
         let set_candidates = shrink_value(&Value::Set(vec![Value::Int64(5)]));
         assert!(set_candidates.contains(&Value::Set(vec![])));
@@ -1893,6 +2128,20 @@ mod tests {
         assert!(
             fail_candidates.contains(&Value::ResultFail(Box::new(Value::String(String::new(),))))
         );
+    }
+
+    #[test]
+    fn property_shrinker_simplifies_enum_payloads() {
+        let candidates = shrink_value(&Value::Enum {
+            type_name: "PropertyChoice".to_string(),
+            variant: "score".to_string(),
+            fields: vec![Value::Int64(5)],
+        });
+        assert!(candidates.contains(&Value::Enum {
+            type_name: "PropertyChoice".to_string(),
+            variant: "score".to_string(),
+            fields: vec![Value::Int64(0)],
+        }));
     }
 
     #[test]
