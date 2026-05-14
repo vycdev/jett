@@ -1,8 +1,8 @@
 use jett_common::{FileId, Span};
 use jett_diagnostics::Diagnostic;
 use jett_parser::ast::{
-    EnumDef, FieldDef, FunctionDef, GivenDecl, Item, Module, PropertyBlock, StructDef, TypeAlias,
-    TypeExpr, VerifyBlock,
+    BitfieldDef, BitfieldFieldKind, EnumDef, FieldDef, FunctionDef, GivenDecl, Item, Module,
+    PropertyBlock, StructDef, TypeAlias, TypeExpr, VerifyBlock,
 };
 use jett_types::ReflectionMetadata;
 use std::collections::HashMap;
@@ -66,6 +66,13 @@ struct PropertyStructDef {
     type_name: String,
     namespace: Option<String>,
     def: StructDef,
+}
+
+#[derive(Debug, Clone)]
+struct PropertyBitfieldDef {
+    type_name: String,
+    namespace: Option<String>,
+    def: BitfieldDef,
 }
 
 #[derive(Debug, Clone)]
@@ -202,6 +209,7 @@ fn run_verify_blocks_detailed_inner(
     let mut property_blocks: Vec<(Option<String>, PropertyBlock)> = Vec::new();
     let mut property_enums: Vec<PropertyEnumDef> = Vec::new();
     let mut property_structs: Vec<PropertyStructDef> = Vec::new();
+    let mut property_bitfields: Vec<PropertyBitfieldDef> = Vec::new();
     let mut property_type_aliases: Vec<PropertyTypeAliasDef> = Vec::new();
     let mut current_file = None;
     let mut current_namespace = None;
@@ -217,6 +225,17 @@ fn run_verify_blocks_detailed_inner(
                     type_name,
                     namespace: current_namespace.clone(),
                     def: strukt.clone(),
+                });
+            }
+            Item::Bitfield(bitfield) => {
+                let type_name = current_namespace
+                    .as_ref()
+                    .map(|namespace| format!("{namespace}.{}", bitfield.name.name))
+                    .unwrap_or_else(|| bitfield.name.name.clone());
+                property_bitfields.push(PropertyBitfieldDef {
+                    type_name,
+                    namespace: current_namespace.clone(),
+                    def: bitfield.clone(),
                 });
             }
             Item::Enum(enm) => {
@@ -312,6 +331,7 @@ fn run_verify_blocks_detailed_inner(
             pb,
             &property_enums,
             &property_structs,
+            &property_bitfields,
             &property_type_aliases,
         );
         results.push(result);
@@ -593,6 +613,7 @@ fn run_property_block(
     pb: &PropertyBlock,
     enum_defs: &[PropertyEnumDef],
     struct_defs: &[PropertyStructDef],
+    bitfield_defs: &[PropertyBitfieldDef],
     type_alias_defs: &[PropertyTypeAliasDef],
 ) -> VerifyResult {
     let iterations = PROPERTY_DEFAULT_ITERATIONS;
@@ -608,6 +629,7 @@ fn run_property_block(
                 namespace,
                 enum_defs,
                 struct_defs,
+                bitfield_defs,
                 type_alias_defs,
             )
         })
@@ -688,7 +710,7 @@ fn run_property_block(
 #[cfg(test)]
 fn generate_values_for_type(ty: &TypeExpr) -> Vec<Value> {
     let mut interp = Interpreter::new();
-    generate_values_for_type_in_namespace(&mut interp, ty, None, &[], &[], &[])
+    generate_values_for_type_in_namespace(&mut interp, ty, None, &[], &[], &[], &[])
 }
 
 fn generate_values_for_type_in_namespace(
@@ -697,6 +719,7 @@ fn generate_values_for_type_in_namespace(
     namespace: Option<&str>,
     enum_defs: &[PropertyEnumDef],
     struct_defs: &[PropertyStructDef],
+    bitfield_defs: &[PropertyBitfieldDef],
     type_alias_defs: &[PropertyTypeAliasDef],
 ) -> Vec<Value> {
     match ty {
@@ -710,6 +733,12 @@ fn generate_values_for_type_in_namespace(
                 Value::Int64(100),
                 Value::Int64(i64::MAX),
                 Value::Int64(i64::MIN),
+            ],
+            "uint8" => vec![
+                Value::Int64(0),
+                Value::Int64(1),
+                Value::Int64(42),
+                Value::Int64(255),
             ],
             "string" => vec![
                 Value::String(String::new()),
@@ -740,6 +769,7 @@ fn generate_values_for_type_in_namespace(
                     namespace,
                     enum_defs,
                     struct_defs,
+                    bitfield_defs,
                     type_alias_defs,
                 ) {
                     return alias_values;
@@ -751,17 +781,32 @@ fn generate_values_for_type_in_namespace(
                     namespace,
                     enum_defs,
                     struct_defs,
+                    bitfield_defs,
                     type_alias_defs,
                 );
                 if enum_values.is_empty() {
-                    generate_struct_values_for_type_name(
+                    let struct_values = generate_struct_values_for_type_name(
                         interp,
                         &ident.name,
                         namespace,
                         enum_defs,
                         struct_defs,
+                        bitfield_defs,
                         type_alias_defs,
-                    )
+                    );
+                    if struct_values.is_empty() {
+                        generate_bitfield_values_for_type_name(
+                            interp,
+                            &ident.name,
+                            namespace,
+                            enum_defs,
+                            struct_defs,
+                            bitfield_defs,
+                            type_alias_defs,
+                        )
+                    } else {
+                        struct_values
+                    }
                 } else {
                     enum_values
                 }
@@ -774,6 +819,7 @@ fn generate_values_for_type_in_namespace(
                 namespace,
                 enum_defs,
                 struct_defs,
+                bitfield_defs,
                 type_alias_defs,
             ),
             "set" if args.len() == 1 => generate_set_values_for_type(
@@ -782,6 +828,7 @@ fn generate_values_for_type_in_namespace(
                 namespace,
                 enum_defs,
                 struct_defs,
+                bitfield_defs,
                 type_alias_defs,
             ),
             "map" if args.len() == 2 => generate_map_values_for_type(
@@ -791,6 +838,7 @@ fn generate_values_for_type_in_namespace(
                 namespace,
                 enum_defs,
                 struct_defs,
+                bitfield_defs,
                 type_alias_defs,
             ),
             "optional" if args.len() == 1 => generate_optional_values_for_type(
@@ -799,6 +847,7 @@ fn generate_values_for_type_in_namespace(
                 namespace,
                 enum_defs,
                 struct_defs,
+                bitfield_defs,
                 type_alias_defs,
             ),
             "result" if args.len() == 2 => generate_result_values_for_type(
@@ -808,6 +857,7 @@ fn generate_values_for_type_in_namespace(
                 namespace,
                 enum_defs,
                 struct_defs,
+                bitfield_defs,
                 type_alias_defs,
             ),
             _ => generate_generic_struct_values_for_type_name(
@@ -817,6 +867,7 @@ fn generate_values_for_type_in_namespace(
                 namespace,
                 enum_defs,
                 struct_defs,
+                bitfield_defs,
                 type_alias_defs,
             ),
         },
@@ -826,6 +877,7 @@ fn generate_values_for_type_in_namespace(
             namespace,
             enum_defs,
             struct_defs,
+            bitfield_defs,
             type_alias_defs,
         ),
         TypeExpr::Function(_, _, _) => vec![], // cannot generate function values
@@ -838,6 +890,7 @@ fn generate_list_values_for_type(
     namespace: Option<&str>,
     enum_defs: &[PropertyEnumDef],
     struct_defs: &[PropertyStructDef],
+    bitfield_defs: &[PropertyBitfieldDef],
     type_alias_defs: &[PropertyTypeAliasDef],
 ) -> Vec<Value> {
     let inner_values = generate_values_for_type_in_namespace(
@@ -846,6 +899,7 @@ fn generate_list_values_for_type(
         namespace,
         enum_defs,
         struct_defs,
+        bitfield_defs,
         type_alias_defs,
     );
     if inner_values.is_empty() {
@@ -877,6 +931,7 @@ fn generate_set_values_for_type(
     namespace: Option<&str>,
     enum_defs: &[PropertyEnumDef],
     struct_defs: &[PropertyStructDef],
+    bitfield_defs: &[PropertyBitfieldDef],
     type_alias_defs: &[PropertyTypeAliasDef],
 ) -> Vec<Value> {
     let inner_values = generate_values_for_type_in_namespace(
@@ -885,6 +940,7 @@ fn generate_set_values_for_type(
         namespace,
         enum_defs,
         struct_defs,
+        bitfield_defs,
         type_alias_defs,
     );
     if inner_values.is_empty() {
@@ -916,6 +972,7 @@ fn generate_map_values_for_type(
     namespace: Option<&str>,
     enum_defs: &[PropertyEnumDef],
     struct_defs: &[PropertyStructDef],
+    bitfield_defs: &[PropertyBitfieldDef],
     type_alias_defs: &[PropertyTypeAliasDef],
 ) -> Vec<Value> {
     let key_values = generate_values_for_type_in_namespace(
@@ -924,6 +981,7 @@ fn generate_map_values_for_type(
         namespace,
         enum_defs,
         struct_defs,
+        bitfield_defs,
         type_alias_defs,
     );
     let value_values = generate_values_for_type_in_namespace(
@@ -932,6 +990,7 @@ fn generate_map_values_for_type(
         namespace,
         enum_defs,
         struct_defs,
+        bitfield_defs,
         type_alias_defs,
     );
     if key_values.is_empty() || value_values.is_empty() {
@@ -971,6 +1030,7 @@ fn generate_optional_values_for_type(
     namespace: Option<&str>,
     enum_defs: &[PropertyEnumDef],
     struct_defs: &[PropertyStructDef],
+    bitfield_defs: &[PropertyBitfieldDef],
     type_alias_defs: &[PropertyTypeAliasDef],
 ) -> Vec<Value> {
     let inner_values = generate_values_for_type_in_namespace(
@@ -979,6 +1039,7 @@ fn generate_optional_values_for_type(
         namespace,
         enum_defs,
         struct_defs,
+        bitfield_defs,
         type_alias_defs,
     );
     if inner_values.is_empty() {
@@ -1002,6 +1063,7 @@ fn generate_result_values_for_type(
     namespace: Option<&str>,
     enum_defs: &[PropertyEnumDef],
     struct_defs: &[PropertyStructDef],
+    bitfield_defs: &[PropertyBitfieldDef],
     type_alias_defs: &[PropertyTypeAliasDef],
 ) -> Vec<Value> {
     let ok_values = generate_values_for_type_in_namespace(
@@ -1010,6 +1072,7 @@ fn generate_result_values_for_type(
         namespace,
         enum_defs,
         struct_defs,
+        bitfield_defs,
         type_alias_defs,
     );
     let error_values = generate_values_for_type_in_namespace(
@@ -1018,6 +1081,7 @@ fn generate_result_values_for_type(
         namespace,
         enum_defs,
         struct_defs,
+        bitfield_defs,
         type_alias_defs,
     );
     if ok_values.is_empty() || error_values.is_empty() {
@@ -1044,6 +1108,7 @@ fn generate_type_alias_values_for_type_name(
     namespace: Option<&str>,
     enum_defs: &[PropertyEnumDef],
     struct_defs: &[PropertyStructDef],
+    bitfield_defs: &[PropertyBitfieldDef],
     type_alias_defs: &[PropertyTypeAliasDef],
 ) -> Option<Vec<Value>> {
     let alias_def = find_property_type_alias(name, namespace, type_alias_defs)?;
@@ -1052,6 +1117,7 @@ fn generate_type_alias_values_for_type_name(
         alias_def,
         enum_defs,
         struct_defs,
+        bitfield_defs,
         type_alias_defs,
     ))
 }
@@ -1087,6 +1153,7 @@ fn generate_type_alias_values(
     alias_def: &PropertyTypeAliasDef,
     enum_defs: &[PropertyEnumDef],
     struct_defs: &[PropertyStructDef],
+    bitfield_defs: &[PropertyBitfieldDef],
     type_alias_defs: &[PropertyTypeAliasDef],
 ) -> Vec<Value> {
     let base_values = generate_values_for_type_in_namespace(
@@ -1095,6 +1162,7 @@ fn generate_type_alias_values(
         alias_def.namespace.as_deref(),
         enum_defs,
         struct_defs,
+        bitfield_defs,
         type_alias_defs,
     );
     if alias_def.def.constraint.is_none() {
@@ -1117,13 +1185,21 @@ fn generate_enum_values_for_type_name(
     namespace: Option<&str>,
     enum_defs: &[PropertyEnumDef],
     struct_defs: &[PropertyStructDef],
+    bitfield_defs: &[PropertyBitfieldDef],
     type_alias_defs: &[PropertyTypeAliasDef],
 ) -> Vec<Value> {
     let Some(enum_def) = find_property_enum(name, namespace, enum_defs) else {
         return Vec::new();
     };
 
-    generate_enum_values(interp, enum_def, enum_defs, struct_defs, type_alias_defs)
+    generate_enum_values(
+        interp,
+        enum_def,
+        enum_defs,
+        struct_defs,
+        bitfield_defs,
+        type_alias_defs,
+    )
 }
 
 fn find_property_enum<'a>(
@@ -1153,6 +1229,7 @@ fn generate_enum_values(
     enum_def: &PropertyEnumDef,
     enum_defs: &[PropertyEnumDef],
     struct_defs: &[PropertyStructDef],
+    bitfield_defs: &[PropertyBitfieldDef],
     type_alias_defs: &[PropertyTypeAliasDef],
 ) -> Vec<Value> {
     let field_namespace = enum_def.namespace.as_deref();
@@ -1173,6 +1250,7 @@ fn generate_enum_values(
             field_namespace,
             enum_defs,
             struct_defs,
+            bitfield_defs,
             type_alias_defs,
         );
         if field_pools.is_empty() {
@@ -1201,6 +1279,7 @@ fn generate_enum_field_pools(
     namespace: Option<&str>,
     enum_defs: &[PropertyEnumDef],
     struct_defs: &[PropertyStructDef],
+    bitfield_defs: &[PropertyBitfieldDef],
     type_alias_defs: &[PropertyTypeAliasDef],
 ) -> Vec<Vec<Value>> {
     let mut pools = Vec::new();
@@ -1211,6 +1290,7 @@ fn generate_enum_field_pools(
             namespace,
             enum_defs,
             struct_defs,
+            bitfield_defs,
             type_alias_defs,
         );
         if values.is_empty() {
@@ -1227,13 +1307,21 @@ fn generate_struct_values_for_type_name(
     namespace: Option<&str>,
     enum_defs: &[PropertyEnumDef],
     struct_defs: &[PropertyStructDef],
+    bitfield_defs: &[PropertyBitfieldDef],
     type_alias_defs: &[PropertyTypeAliasDef],
 ) -> Vec<Value> {
     let Some(struct_def) = find_property_struct(name, namespace, struct_defs) else {
         return Vec::new();
     };
 
-    generate_struct_values(interp, struct_def, enum_defs, struct_defs, type_alias_defs)
+    generate_struct_values(
+        interp,
+        struct_def,
+        enum_defs,
+        struct_defs,
+        bitfield_defs,
+        type_alias_defs,
+    )
 }
 
 fn find_property_struct<'a>(
@@ -1267,6 +1355,7 @@ fn generate_struct_values(
     struct_def: &PropertyStructDef,
     enum_defs: &[PropertyEnumDef],
     struct_defs: &[PropertyStructDef],
+    bitfield_defs: &[PropertyBitfieldDef],
     type_alias_defs: &[PropertyTypeAliasDef],
 ) -> Vec<Value> {
     if !struct_def.def.type_params.is_empty() {
@@ -1286,6 +1375,7 @@ fn generate_struct_values(
         struct_def.namespace.as_deref(),
         enum_defs,
         struct_defs,
+        bitfield_defs,
         type_alias_defs,
     );
     if field_pools.is_empty() {
@@ -1322,6 +1412,7 @@ fn generate_generic_struct_values_for_type_name(
     namespace: Option<&str>,
     enum_defs: &[PropertyEnumDef],
     struct_defs: &[PropertyStructDef],
+    bitfield_defs: &[PropertyBitfieldDef],
     type_alias_defs: &[PropertyTypeAliasDef],
 ) -> Vec<Value> {
     let Some(struct_def) = find_property_struct(name, namespace, struct_defs) else {
@@ -1344,6 +1435,7 @@ fn generate_generic_struct_values_for_type_name(
                     namespace,
                     enum_defs,
                     struct_defs,
+                    bitfield_defs,
                     type_alias_defs,
                 ),
             )
@@ -1356,6 +1448,7 @@ fn generate_generic_struct_values_for_type_name(
         &substitutions,
         enum_defs,
         struct_defs,
+        bitfield_defs,
         type_alias_defs,
     )
 }
@@ -1366,6 +1459,7 @@ fn generate_generic_struct_values(
     substitutions: &HashMap<String, TypeExpr>,
     enum_defs: &[PropertyEnumDef],
     struct_defs: &[PropertyStructDef],
+    bitfield_defs: &[PropertyBitfieldDef],
     type_alias_defs: &[PropertyTypeAliasDef],
 ) -> Vec<Value> {
     let field_namespace = struct_def.namespace.as_deref();
@@ -1394,6 +1488,7 @@ fn generate_generic_struct_values(
         field_namespace,
         enum_defs,
         struct_defs,
+        bitfield_defs,
         type_alias_defs,
     );
     if field_pools.is_empty() {
@@ -1427,6 +1522,7 @@ fn generate_struct_field_pools(
     namespace: Option<&str>,
     enum_defs: &[PropertyEnumDef],
     struct_defs: &[PropertyStructDef],
+    bitfield_defs: &[PropertyBitfieldDef],
     type_alias_defs: &[PropertyTypeAliasDef],
 ) -> Vec<Vec<Value>> {
     let mut pools = Vec::new();
@@ -1437,6 +1533,7 @@ fn generate_struct_field_pools(
             namespace,
             enum_defs,
             struct_defs,
+            bitfield_defs,
             type_alias_defs,
         );
         if values.is_empty() {
@@ -1445,6 +1542,219 @@ fn generate_struct_field_pools(
         pools.push(values);
     }
     pools
+}
+
+fn generate_bitfield_values_for_type_name(
+    interp: &mut Interpreter,
+    name: &str,
+    namespace: Option<&str>,
+    enum_defs: &[PropertyEnumDef],
+    struct_defs: &[PropertyStructDef],
+    bitfield_defs: &[PropertyBitfieldDef],
+    type_alias_defs: &[PropertyTypeAliasDef],
+) -> Vec<Value> {
+    let Some(bitfield_def) = find_property_bitfield(name, namespace, bitfield_defs) else {
+        return Vec::new();
+    };
+
+    generate_bitfield_values(
+        interp,
+        bitfield_def,
+        enum_defs,
+        struct_defs,
+        bitfield_defs,
+        type_alias_defs,
+    )
+}
+
+fn find_property_bitfield<'a>(
+    name: &str,
+    namespace: Option<&str>,
+    bitfield_defs: &'a [PropertyBitfieldDef],
+) -> Option<&'a PropertyBitfieldDef> {
+    if name.contains('.') {
+        return bitfield_defs
+            .iter()
+            .find(|bitfield_def| bitfield_def.type_name == name);
+    }
+
+    if let Some(namespace) = namespace {
+        let scoped_name = format!("{namespace}.{name}");
+        if let Some(bitfield_def) = bitfield_defs
+            .iter()
+            .find(|bitfield_def| bitfield_def.type_name == scoped_name)
+        {
+            return Some(bitfield_def);
+        }
+    }
+
+    bitfield_defs
+        .iter()
+        .find(|bitfield_def| bitfield_def.type_name == name)
+}
+
+fn generate_bitfield_values(
+    interp: &mut Interpreter,
+    bitfield_def: &PropertyBitfieldDef,
+    enum_defs: &[PropertyEnumDef],
+    struct_defs: &[PropertyStructDef],
+    bitfield_defs: &[PropertyBitfieldDef],
+    type_alias_defs: &[PropertyTypeAliasDef],
+) -> Vec<Value> {
+    if bitfield_def.def.fields.is_empty() {
+        return vec![Value::Struct {
+            type_name: bitfield_def.type_name.clone(),
+            fields: vec![],
+        }];
+    }
+
+    let field_pools = generate_bitfield_field_pools(
+        interp,
+        &bitfield_def.def.fields,
+        bitfield_def.namespace.as_deref(),
+        enum_defs,
+        struct_defs,
+        bitfield_defs,
+        type_alias_defs,
+    );
+    if field_pools.is_empty() {
+        return Vec::new();
+    }
+
+    let sample_count = field_pools.iter().map(Vec::len).max().unwrap_or(0).min(3);
+    let mut values = Vec::new();
+    for sample_index in 0..sample_count {
+        let fields = bitfield_def
+            .def
+            .fields
+            .iter()
+            .zip(field_pools.iter())
+            .map(|(field, pool)| {
+                (
+                    field.name.name.clone(),
+                    pool[sample_index % pool.len()].clone(),
+                )
+            })
+            .collect();
+        values.push(Value::Struct {
+            type_name: bitfield_def.type_name.clone(),
+            fields,
+        });
+    }
+    values
+}
+
+fn generate_bitfield_field_pools(
+    interp: &mut Interpreter,
+    fields: &[jett_parser::ast::BitfieldFieldDef],
+    namespace: Option<&str>,
+    enum_defs: &[PropertyEnumDef],
+    struct_defs: &[PropertyStructDef],
+    bitfield_defs: &[PropertyBitfieldDef],
+    type_alias_defs: &[PropertyTypeAliasDef],
+) -> Vec<Vec<Value>> {
+    let mut pools = Vec::new();
+    for field in fields {
+        let values = match &field.kind {
+            BitfieldFieldKind::Bits { width, as_type } => {
+                if let Some(enum_ty) = as_type {
+                    generate_bitfield_enum_values(enum_ty, *width, namespace, enum_defs)
+                } else {
+                    generate_bit_width_values(*width)
+                }
+            }
+            BitfieldFieldKind::Payload(ty) => generate_values_for_type_in_namespace(
+                interp,
+                ty,
+                namespace,
+                enum_defs,
+                struct_defs,
+                bitfield_defs,
+                type_alias_defs,
+            ),
+        };
+        if values.is_empty() {
+            return Vec::new();
+        }
+        pools.push(values);
+    }
+    pools
+}
+
+fn generate_bit_width_values(width: u16) -> Vec<Value> {
+    if width == 0 {
+        return Vec::new();
+    }
+
+    let max_value = if width >= 63 {
+        i64::MAX
+    } else {
+        (1_i64 << width) - 1
+    };
+    let candidates = [0, 1.min(max_value), 42.min(max_value), max_value];
+    unique_values(
+        candidates
+            .into_iter()
+            .map(Value::Int64)
+            .collect::<Vec<Value>>(),
+    )
+}
+
+fn generate_bitfield_enum_values(
+    enum_ty: &TypeExpr,
+    width: u16,
+    namespace: Option<&str>,
+    enum_defs: &[PropertyEnumDef],
+) -> Vec<Value> {
+    let Some(enum_name) = property_type_expr_named_type(enum_ty) else {
+        return Vec::new();
+    };
+    let Some(enum_def) = find_property_enum(&enum_name, namespace, enum_defs) else {
+        return Vec::new();
+    };
+
+    let mut values = Vec::new();
+    for (variant, discriminant) in enum_def
+        .def
+        .variants
+        .iter()
+        .zip(property_enum_discriminants(&enum_def.def))
+    {
+        if variant.fields.is_empty()
+            && discriminant >= 0
+            && property_value_fits_in_bits(discriminant as u64, width)
+        {
+            values.push(Value::Enum {
+                type_name: enum_def.type_name.clone(),
+                variant: variant.name.name.clone(),
+                fields: vec![],
+            });
+        }
+    }
+    values
+}
+
+fn property_type_expr_named_type(ty: &TypeExpr) -> Option<String> {
+    match ty {
+        TypeExpr::Named(ident) => Some(ident.name.clone()),
+        TypeExpr::View(inner, _) => property_type_expr_named_type(inner),
+        TypeExpr::Generic(_, _, _) | TypeExpr::Function(_, _, _) => None,
+    }
+}
+
+fn property_enum_discriminants(enum_def: &EnumDef) -> Vec<i64> {
+    let mut next_discriminant = 0_i64;
+    let mut discriminants = Vec::with_capacity(enum_def.variants.len());
+    for variant in &enum_def.variants {
+        let discriminant = variant.discriminant.unwrap_or(next_discriminant);
+        next_discriminant = discriminant.saturating_add(1);
+        discriminants.push(discriminant);
+    }
+    discriminants
+}
+
+fn property_value_fits_in_bits(value: u64, width: u16) -> bool {
+    width >= 64 || value < (1_u64 << width)
 }
 
 fn substitute_property_type_params(
@@ -1483,6 +1793,7 @@ fn qualify_property_type_expr_in_namespace(
     namespace: Option<&str>,
     enum_defs: &[PropertyEnumDef],
     struct_defs: &[PropertyStructDef],
+    bitfield_defs: &[PropertyBitfieldDef],
     type_alias_defs: &[PropertyTypeAliasDef],
 ) -> TypeExpr {
     match ty {
@@ -1491,6 +1802,7 @@ fn qualify_property_type_expr_in_namespace(
             namespace,
             enum_defs,
             struct_defs,
+            bitfield_defs,
             type_alias_defs,
         )),
         TypeExpr::Generic(ident, args, span) => TypeExpr::Generic(
@@ -1499,6 +1811,7 @@ fn qualify_property_type_expr_in_namespace(
                 namespace,
                 enum_defs,
                 struct_defs,
+                bitfield_defs,
                 type_alias_defs,
             ),
             args.iter()
@@ -1508,6 +1821,7 @@ fn qualify_property_type_expr_in_namespace(
                         namespace,
                         enum_defs,
                         struct_defs,
+                        bitfield_defs,
                         type_alias_defs,
                     )
                 })
@@ -1520,6 +1834,7 @@ fn qualify_property_type_expr_in_namespace(
                 namespace,
                 enum_defs,
                 struct_defs,
+                bitfield_defs,
                 type_alias_defs,
             )),
             *span,
@@ -1533,6 +1848,7 @@ fn qualify_property_type_expr_in_namespace(
                         namespace,
                         enum_defs,
                         struct_defs,
+                        bitfield_defs,
                         type_alias_defs,
                     )
                 })
@@ -1542,6 +1858,7 @@ fn qualify_property_type_expr_in_namespace(
                 namespace,
                 enum_defs,
                 struct_defs,
+                bitfield_defs,
                 type_alias_defs,
             )),
             *span,
@@ -1554,6 +1871,7 @@ fn qualify_property_type_ident_in_namespace(
     namespace: Option<&str>,
     enum_defs: &[PropertyEnumDef],
     struct_defs: &[PropertyStructDef],
+    bitfield_defs: &[PropertyBitfieldDef],
     type_alias_defs: &[PropertyTypeAliasDef],
 ) -> jett_parser::ast::Ident {
     if ident.name.contains('.') {
@@ -1570,6 +1888,9 @@ fn qualify_property_type_ident_in_namespace(
         || struct_defs
             .iter()
             .any(|struct_def| struct_def.type_name == qualified)
+        || bitfield_defs
+            .iter()
+            .any(|bitfield_def| bitfield_def.type_name == qualified)
         || type_alias_defs
             .iter()
             .any(|alias_def| alias_def.type_name == qualified)
@@ -1763,11 +2084,37 @@ mod tests {
         }
     }
 
+    fn enum_variant_with_discriminant(name: &str, discriminant: i64) -> Variant {
+        Variant {
+            name: ident(name),
+            fields: vec![],
+            discriminant: Some(discriminant),
+            span: sp(),
+        }
+    }
+
     fn enum_field(name: &str, ty: TypeExpr) -> FieldDef {
         FieldDef {
             name: ident(name),
             ty,
             serialize_name: None,
+            span: sp(),
+        }
+    }
+
+    fn bitfield_def(name: &str, fields: Vec<(&str, BitfieldFieldKind)>) -> BitfieldDef {
+        BitfieldDef {
+            name: ident(name),
+            network_order: false,
+            fields: fields
+                .into_iter()
+                .map(|(field_name, kind)| BitfieldFieldDef {
+                    name: ident(field_name),
+                    kind,
+                    span: sp(),
+                })
+                .collect(),
+            exported: false,
             span: sp(),
         }
     }
@@ -2765,6 +3112,7 @@ mod tests {
             &enum_defs,
             &[],
             &[],
+            &[],
         );
         assert!(values.contains(&Value::Enum {
             type_name: "app.PropertyChoice".to_string(),
@@ -2807,6 +3155,7 @@ mod tests {
             Some("app"),
             &[],
             &struct_defs,
+            &[],
             &[],
         );
         assert!(
@@ -2854,6 +3203,7 @@ mod tests {
             &enum_defs,
             &struct_defs,
             &[],
+            &[],
         );
         assert!(
             values.iter().any(|value| {
@@ -2867,6 +3217,100 @@ mod tests {
                 )
             }),
             "expected struct field generation to resolve unqualified field types in the owner namespace"
+        );
+    }
+
+    #[test]
+    fn property_generator_supports_bitfields_in_namespace() {
+        let mut interp = Interpreter::new();
+        let enum_defs = vec![PropertyEnumDef {
+            type_name: "app.Protocol".to_string(),
+            namespace: Some("app".to_string()),
+            def: enum_def(
+                "Protocol",
+                vec![
+                    enum_variant_with_discriminant("icmp", 1),
+                    enum_variant_with_discriminant("tcp", 6),
+                    enum_variant_with_discriminant("udp", 17),
+                ],
+            ),
+        }];
+        let bitfield_defs = vec![PropertyBitfieldDef {
+            type_name: "app.Header".to_string(),
+            namespace: Some("app".to_string()),
+            def: bitfield_def(
+                "Header",
+                vec![
+                    (
+                        "version",
+                        BitfieldFieldKind::Bits {
+                            width: 4,
+                            as_type: None,
+                        },
+                    ),
+                    (
+                        "header_length",
+                        BitfieldFieldKind::Bits {
+                            width: 4,
+                            as_type: None,
+                        },
+                    ),
+                    (
+                        "protocol",
+                        BitfieldFieldKind::Bits {
+                            width: 8,
+                            as_type: Some(type_named("Protocol")),
+                        },
+                    ),
+                    (
+                        "payload",
+                        BitfieldFieldKind::Payload(type_generic("list", vec![type_named("uint8")])),
+                    ),
+                ],
+            ),
+        }];
+
+        let values = generate_values_for_type_in_namespace(
+            &mut interp,
+            &type_named("Header"),
+            Some("app"),
+            &enum_defs,
+            &[],
+            &bitfield_defs,
+            &[],
+        );
+        assert!(
+            values.iter().any(|value| {
+                matches!(
+                    value,
+                    Value::Struct { type_name, fields }
+                        if type_name == "app.Header"
+                            && fields.iter().any(|(name, value)| {
+                                name == "version"
+                                    && matches!(value, Value::Int64(n) if (0..=15).contains(n))
+                            })
+                            && fields.iter().any(|(name, value)| {
+                                name == "protocol"
+                                    && matches!(
+                                        value,
+                                        Value::Enum { type_name, fields, .. }
+                                            if type_name == "app.Protocol" && fields.is_empty()
+                                    )
+                            })
+                            && fields.iter().any(|(name, value)| {
+                                name == "payload"
+                                    && matches!(
+                                        value,
+                                        Value::List(items)
+                                            if !items.is_empty()
+                                                && items.iter().all(|item| {
+                                                    matches!(item, Value::Int64(n) if (0..=255).contains(n))
+                                                })
+                                    )
+                            })
+                )
+            }),
+            "expected bitfield generation to include valid bit, enum, and payload fields"
         );
     }
 
@@ -2897,6 +3341,7 @@ mod tests {
             Some("app"),
             &[],
             &[],
+            &[],
             &type_alias_defs,
         );
         assert!(
@@ -2910,6 +3355,7 @@ mod tests {
             &mut interp,
             &type_named("Positive"),
             Some("app"),
+            &[],
             &[],
             &[],
             &type_alias_defs,
@@ -2946,6 +3392,7 @@ mod tests {
             Some("app"),
             &[],
             &struct_defs,
+            &[],
             &type_alias_defs,
         );
         assert!(
@@ -2975,6 +3422,7 @@ mod tests {
             Some("app"),
             &[],
             &struct_defs,
+            &[],
             &[],
         );
         assert!(
@@ -3013,6 +3461,7 @@ mod tests {
             Some("app"),
             &[],
             &struct_defs,
+            &[],
             &type_alias_defs,
         );
         assert!(

@@ -6,6 +6,11 @@ enum PropertyChoice:
     empty
     score(value: int64)
 
+enum PropertyProtocol:
+    icmp = 1
+    tcp = 6
+    udp = 17
+
 struct PropertyUser:
     name: PropertyName
     score: int64
@@ -17,6 +22,15 @@ struct PropertyBox[T]:
 struct PropertyPair[T, U]:
     first: T
     second: U
+
+bitfield network PropertyHeader:
+    version: 4 bits
+    header_length: 4 bits
+    protocol: 8 bits as PropertyProtocol
+
+bitfield PropertyPacket:
+    tag: 8 bits
+    payload: list[uint8]
 
 property string_lists_have_nonnegative_length:
     given items: list[string]
@@ -89,3 +103,26 @@ property generic_pairs_substitute_nested_types:
     int64 second = pair.second handle:
         default 0
     assert second == second
+
+property bitfield_values_have_valid_fields:
+    given header: PropertyHeader
+    assert header.version >= 0
+    assert header.version <= 15
+    assert header.header_length >= 0
+    assert header.header_length <= 15
+    mutable bool known = false
+    match header.protocol:
+        icmp:
+            known = true
+        tcp:
+            known = true
+        udp:
+            known = true
+    assert known == true
+
+property bitfield_payloads_are_byte_lists:
+    given packet: PropertyPacket
+    assert packet.tag >= 0
+    assert packet.tag <= 255
+    int64 length = list.length[uint8](packet.payload)
+    assert length >= 0
