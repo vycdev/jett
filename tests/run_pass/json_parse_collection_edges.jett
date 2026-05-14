@@ -1,0 +1,41 @@
+namespace test
+struct Profile:
+    display_name: string serialize "displayName"
+    note: string
+function parse_top_level_set_dedupes() returns string:
+    set[int64] values = json.parse[set[int64]]("[1,1,2]") handle error:
+        return error
+    int64 length = set.length[int64](values)
+    set[int64] values_for_one = json.parse[set[int64]]("[1,1,2]") handle error:
+        return error
+    bool has_one = set.contains[int64](values_for_one, 1)
+    set[int64] values_for_two = json.parse[set[int64]]("[1,1,2]") handle error:
+        return error
+    bool has_two = set.contains[int64](values_for_two, 2)
+    return "{length}:{has_one}:{has_two}"
+function parse_top_level_map_optional_bytes() returns string:
+    map[string, optional[bytes]] entries = json.parse[map[string, optional[bytes]]]("{{\"blob\":\"0x4869\",\"missing\":null}}") handle error:
+        return error
+    optional[optional[bytes]] maybe_blob_entry = map.get[string, optional[bytes]](entries, "blob")
+    optional[bytes] maybe_blob = maybe_blob_entry handle:
+        return "missing blob"
+    bytes blob = maybe_blob handle:
+        return "none blob"
+    optional[optional[bytes]] maybe_missing_entry = map.get[string, optional[bytes]](entries, "missing")
+    optional[bytes] maybe_missing = maybe_missing_entry handle:
+        return "missing key"
+    bool has_missing = map.has[string, optional[bytes]](entries, "missing")
+    bytes missing_blob = maybe_missing handle:
+        default bytes.new()
+    int64 length = bytes.length(blob)
+    return "{length}:{has_missing}:{bytes.length(missing_blob)}"
+function parse_top_level_result_fail_payload() returns string:
+    result[int64, Profile] parsed = json.parse[result[int64, Profile]]("{{\"fail\":{{\"displayName\":\"Alice\",\"note\":\"bad\"}}}}") handle error:
+        return error
+    int64 ignored = parsed handle error:
+        return "{error.display_name}:{error.note}"
+    return "{ignored}"
+verify json_parse_collection_edges:
+    assert parse_top_level_set_dedupes() == "2:true:true"
+    assert parse_top_level_map_optional_bytes() == "2:true:0"
+    assert parse_top_level_result_fail_payload() == "Alice:bad"

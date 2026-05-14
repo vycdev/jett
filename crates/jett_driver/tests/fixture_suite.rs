@@ -347,6 +347,10 @@ run_pass_fixture!(
     "json_serialize_public_omits_secret_fields.jett"
 );
 run_pass_fixture!(run_pass_json_parse, "json_parse.jett");
+run_pass_fixture!(
+    run_pass_json_parse_collection_edges,
+    "json_parse_collection_edges.jett"
+);
 run_pass_fixture!(run_pass_json_parse_exact, "json_parse_exact.jett");
 run_pass_fixture!(
     run_pass_json_parse_exact_container_edges,
