@@ -1,23 +1,23 @@
 namespace models
-
 export enum Color:
     active
     inactive
-
+export enum HeaderColor:
+    blue = 1
+    red = 2
+export bitfield Header:
+    version: 4 bits
+    color: 8 bits as models.HeaderColor
 export struct User:
     id: string
     color: Color
-
 export function make[T](value: T) returns T:
     return value
-
 export function color_name(color: Color) returns string:
     if color == Color.active:
         return "active"
     return "inactive"
-
 namespace app
-
 function namespace_alias_summary() returns string:
     use models as m
     m.User user = m.User(id: "u1", color: m.Color.active)
@@ -25,7 +25,10 @@ function namespace_alias_summary() returns string:
     string raw = json.serialize[m.User](view user)
     m.User decoded = json.parse[m.User](raw) handle error:
         return error
-    return "{m.color_name(decoded.color)}:{made}:{type.name[m.User]()}:{decoded.id}:{decoded.color == m.Color.active}"
-
+    m.Header header = m.Header(version: 4, color: m.HeaderColor.blue)
+    string header_raw = json.serialize[m.Header](view header)
+    m.Header decoded_header = json.parse[m.Header](header_raw) handle error:
+        return error
+    return "{m.color_name(decoded.color)}:{made}:{type.name[m.User]()}:{decoded.id}:{decoded.color == m.Color.active}:{decoded_header.version}:{decoded_header.color == m.HeaderColor.blue}:{type.name[m.Header]()}"
 verify namespace_use_alias:
-    assert namespace_alias_summary() == "active:ok:models.User:u1:true"
+    assert namespace_alias_summary() == "active:ok:models.User:u1:true:4:true:models.Header"

@@ -1,43 +1,38 @@
 namespace accounts
-
 export struct Record:
     id: string
-
 export struct Box[T]:
     value: T
-
 export enum Status:
     active
-
+export enum Flag:
+    enabled = 1
+    disabled = 2
+export bitfield Header:
+    version: 4 bits
+    flag: 8 bits as accounts.Flag
 export function label(view record: accounts.Record) returns string:
     return "account:{record.id}"
-
 export function local_summary() returns string:
     Record record = Record(id: "local")
     Status status = Status.active
     return "{label(view record)}:{status == Status.active}"
-
 namespace audit
-
 export struct Record:
     attempts: int64
-
 export struct Box[T]:
     value: T
-
 export enum Status:
     active
-
+export bitfield Header:
+    attempts: 8 bits
 export function label(view record: audit.Record) returns string:
     return "audit:{record.attempts}"
-
 export function local_summary() returns string:
     Record record = Record(attempts: 5)
     Status status = Status.active
     return "{label(view record)}:{status == Status.active}"
-
 namespace app
-
 function duplicate_leaf_summary() returns string:
     accounts.Record account = accounts.Record(id: "a1")
     audit.Record event = audit.Record(attempts: 3)
@@ -54,7 +49,14 @@ function duplicate_leaf_summary() returns string:
         return "missing audit field"
     accounts.Status account_status = accounts.Status.active
     audit.Status audit_status = audit.Status.active
-    return "{accounts.label(view decoded_account)}:{audit.label(view decoded_event)}:{accounts.local_summary()}:{audit.local_summary()}:{account_field.name}:{audit_field.name}:{type.name[accounts.Record]()}:{type.name[audit.Record]()}:{type.name[accounts.Box[accounts.Record]]()}:{type.name[audit.Box[audit.Record]]()}:{account_status == accounts.Status.active}:{audit_status == audit.Status.active}"
-
+    accounts.Header account_header = accounts.Header(version: 4, flag: accounts.Flag.enabled)
+    audit.Header audit_header = audit.Header(attempts: 7)
+    string account_header_raw = json.serialize[accounts.Header](view account_header)
+    string audit_header_raw = json.serialize[audit.Header](view audit_header)
+    accounts.Header decoded_account_header = json.parse[accounts.Header](account_header_raw) handle error:
+        return error
+    audit.Header decoded_audit_header = json.parse[audit.Header](audit_header_raw) handle error:
+        return error
+    return "{accounts.label(view decoded_account)}:{audit.label(view decoded_event)}:{accounts.local_summary()}:{audit.local_summary()}:{account_field.name}:{audit_field.name}:{type.name[accounts.Record]()}:{type.name[audit.Record]()}:{type.name[accounts.Box[accounts.Record]]()}:{type.name[audit.Box[audit.Record]]()}:{account_status == accounts.Status.active}:{audit_status == audit.Status.active}:{decoded_account_header.version}:{decoded_account_header.flag == accounts.Flag.enabled}:{decoded_audit_header.attempts}:{type.name[accounts.Header]()}:{type.name[audit.Header]()}"
 verify namespace_duplicate_leaf_types:
-    assert duplicate_leaf_summary() == "account:a1:audit:3:account:local:true:audit:5:true:id:attempts:accounts.Record:audit.Record:accounts.Box[accounts.Record]:audit.Box[audit.Record]:true:true"
+    assert duplicate_leaf_summary() == "account:a1:audit:3:account:local:true:audit:5:true:id:attempts:accounts.Record:audit.Record:accounts.Box[accounts.Record]:audit.Box[audit.Record]:true:true:4:true:7:accounts.Header:audit.Header"
