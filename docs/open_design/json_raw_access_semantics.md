@@ -22,6 +22,9 @@ Shape-requiring helpers are stricter:
 - `json.object_keys(value)` returns `result[list[string], string]`,
 - `json.array_length(value)` returns `result[int64, string]`,
 - scalar casts such as `json.as_int64(value)` return `result[T, string]`.
+- strict raw lookup helpers now exist for production-style validation:
+  `json.object_field`, `json.array_index`, `json.require_field`, and
+  `json.require_index`.
 
 So the current split is:
 
@@ -123,3 +126,9 @@ It fits Jett's "one obvious pattern per intent" principle better than changing
 The next implementation bite should add the strict helpers in
 `stdlib/json.jett`, keep the existing lenient helpers unchanged, and add parity
 tests that pin wrong-shape and missing-key/index diagnostics separately.
+
+Status: implemented. The strict helper surface is pinned in
+`tests/run_pass/json_raw_strict_accessors.jett`. The remaining design question
+is whether the lenient `json.field` / `json.index` names should stay as the
+primary public spelling forever, or whether a later compatibility stage should
+guide users toward the stricter helpers for most production code.

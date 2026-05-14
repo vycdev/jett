@@ -1373,6 +1373,28 @@ export function field(view value: JsonTree, key: string) returns optional[JsonTr
     return json_tree_field(view value, key)
 export function index(view value: JsonTree, index: int64) returns optional[JsonTree]:
     return json_tree_index(view value, index)
+export function object_field(view value: JsonTree, key: string) returns result[optional[JsonTree], string]:
+    if json_tree_is_object(view value) == false:
+        return fail(json_tree_kind_error(view value, "object"))
+    optional[JsonTree] item = json_tree_field(view value, key)
+    return ok(item)
+export function array_index(view value: JsonTree, index: int64) returns result[optional[JsonTree], string]:
+    if json_tree_is_array(view value) == false:
+        return fail(json_tree_kind_error(view value, "array"))
+    optional[JsonTree] item = json_tree_index(view value, index)
+    return ok(item)
+export function require_field(view value: JsonTree, key: string) returns result[JsonTree, string]:
+    optional[JsonTree] maybe_item = object_field(view value, key) handle error:
+        return fail(error)
+    JsonTree item = maybe_item handle:
+        return fail("missing object field '{key}'")
+    return ok(item)
+export function require_index(view value: JsonTree, index: int64) returns result[JsonTree, string]:
+    optional[JsonTree] maybe_item = array_index(view value, index) handle error:
+        return fail(error)
+    JsonTree item = maybe_item handle:
+        return fail("missing array item {index}")
+    return ok(item)
 export function array_length(view value: JsonTree) returns result[int64, string]:
     return json_tree_array_length(view value)
 export function object_keys(view value: JsonTree) returns result[list[string], string]:

@@ -356,6 +356,10 @@ run_pass_fixture!(
     run_pass_json_raw_value_access_edges,
     "json_raw_value_access_edges.jett"
 );
+run_pass_fixture!(
+    run_pass_json_raw_strict_accessors,
+    "json_raw_strict_accessors.jett"
+);
 run_pass_fixture!(run_pass_json_raw_tree_parity, "json_raw_tree_parity.jett");
 run_pass_fixture!(
     run_pass_json_value_tree_compatibility,
