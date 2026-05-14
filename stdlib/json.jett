@@ -206,6 +206,7 @@ mutual:
     function json_validate_exact_refinement_reflected[T](view raw: JsonTree) returns result[nothing, string]
     function json_validate_exact_secret_reflected[T](view raw: JsonTree) returns result[nothing, string]
     function json_validate_exact_structured_reflected[T](view raw: JsonTree, kind: TypeKind, type_name: string) returns result[nothing, string]
+    function json_validate_exact_array_items_reflected[Elem](view raw: JsonTree) returns result[nothing, string]
     function json_validate_exact_list_reflected[T](view raw: JsonTree) returns result[nothing, string]
     function json_validate_exact_set_reflected[T](view raw: JsonTree) returns result[nothing, string]
     function json_validate_exact_map_reflected[T](view raw: JsonTree) returns result[nothing, string]
@@ -1406,26 +1407,21 @@ function json_validate_exact_structured_reflected[T](view raw: JsonTree, kind: T
             return json_validate_exact_record_reflected[T](view raw, type_name)
         other:
             return ok(nothing)
+function json_validate_exact_array_items_reflected[Elem](view raw: JsonTree) returns result[nothing, string]:
+    int64 length = json_tree_array_length(view raw) handle error:
+        return fail(error)
+    for index in range(length):
+        JsonTree raw_item = json_tree_index(view raw, index) handle:
+            return fail("missing array item {index}")
+        nothing checked = json_validate_exact_reflected[Elem](view raw_item) handle error:
+            return fail("{index}: {error}")
+    return ok(nothing)
 function json_validate_exact_list_reflected[T](view raw: JsonTree) returns result[nothing, string]:
     comptime type Elem = type.arg[T](0):
-        int64 length = json_tree_array_length(view raw) handle error:
-            return fail(error)
-        for index in range(length):
-            JsonTree raw_item = json_tree_index(view raw, index) handle:
-                return fail("missing array item {index}")
-            nothing checked = json_validate_exact_reflected[Elem](view raw_item) handle error:
-                return fail("{index}: {error}")
-        return ok(nothing)
+        return json_validate_exact_array_items_reflected[Elem](view raw)
 function json_validate_exact_set_reflected[T](view raw: JsonTree) returns result[nothing, string]:
     comptime type Elem = type.arg[T](0):
-        int64 length = json_tree_array_length(view raw) handle error:
-            return fail(error)
-        for index in range(length):
-            JsonTree raw_item = json_tree_index(view raw, index) handle:
-                return fail("missing array item {index}")
-            nothing checked = json_validate_exact_reflected[Elem](view raw_item) handle error:
-                return fail("{index}: {error}")
-        return ok(nothing)
+        return json_validate_exact_array_items_reflected[Elem](view raw)
 function json_validate_exact_map_reflected[T](view raw: JsonTree) returns result[nothing, string]:
     comptime type Val = type.arg[T](1):
         list[string] keys = json_tree_object_keys(view raw) handle error:
