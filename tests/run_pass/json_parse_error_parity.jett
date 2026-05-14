@@ -42,10 +42,14 @@ function parse_errors_match(raw: string) returns bool:
         return false
     return true
 verify json_parse_error_parity:
+    assert tree_parse_error("") == "expected JSON value"
+    assert tree_parse_error("   ") == "expected JSON value"
     assert tree_parse_error("\"bad") == "unterminated JSON string"
     assert tree_parse_error("[1,]") == "expected JSON value"
     assert tree_parse_error("{{\"name\":1") == "unterminated JSON object"
     assert tree_parse_error("01") == "invalid JSON number"
+    assert parse_errors_match("") == true
+    assert parse_errors_match("   ") == true
     assert parse_errors_match("\"bad") == true
     assert parse_errors_match("\"Ada\" trailing") == true
     assert parse_errors_match("\"\\") == true
@@ -56,12 +60,17 @@ verify json_parse_error_parity:
     assert parse_errors_match("\"\\ud834\"") == true
     assert parse_errors_match("\"\\udd1e\"") == true
     assert parse_errors_match("\"\\ud834\\u0041\"") == true
+    assert parse_errors_match("\"\\ud834abcdef\"") == true
+    assert parse_errors_match("\"\\ud834\\uddxz\"") == true
     assert parse_errors_match("[1,]") == true
     assert parse_errors_match("[,1]") == true
     assert parse_errors_match("[1,,2]") == true
     assert parse_errors_match("[1") == true
+    assert parse_errors_match("[\"bad]") == true
     assert parse_errors_match("[1] trailing") == true
     assert parse_errors_match("[1}}") == true
+    assert parse_errors_match("{{name:1}}") == true
+    assert parse_errors_match("{{:1}}") == true
     assert parse_errors_match("{{\"name\"}}") == true
     assert parse_errors_match("{{\"name\":}}") == true
     assert parse_errors_match("{{\"name\":1,}}") == true
@@ -79,9 +88,16 @@ verify json_parse_error_parity:
     assert parse_errors_match("-01") == true
     assert parse_errors_match("+1") == true
     assert parse_errors_match("-") == true
+    assert parse_errors_match(":") == true
     assert parse_errors_match("1.") == true
+    assert parse_errors_match("1 2") == true
+    assert parse_errors_match("0x1") == true
     assert parse_errors_match("1e") == true
     assert parse_errors_match("1e+") == true
     assert parse_errors_match("1E-") == true
+    assert parse_errors_match("nullx") == true
+    assert parse_errors_match("falsex") == true
     assert parse_errors_match("true false") == true
+    assert parse_errors_match("tru") == true
+    assert parse_errors_match("fal") == true
     assert parse_errors_match("nope") == true
