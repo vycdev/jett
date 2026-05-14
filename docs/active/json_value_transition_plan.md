@@ -276,6 +276,11 @@ Add tests before each behavior change:
 - `type.info[JsonValue]()` and `type.info[json.JsonTree]()` stay pinned during
   the compatibility stage.
 
+Status: the recursive compatibility surface is pinned in
+`tests/run_pass/json_value_tree_compatibility.jett`, including bidirectional
+list, map, set, optional, result, secret, direct assignment, function argument,
+return, and struct-field compatibility between `JsonValue` and `json.JsonTree`.
+
 ## Risks And Open Questions
 
 - **Alias mechanics:** ordinary source aliases are not enough for the current
