@@ -1,0 +1,46 @@
+namespace test
+struct Profile:
+    display_name: string serialize "displayName"
+    note: string
+function parse_exact_set_profile_success() returns string:
+    string raw = "[{{\"displayName\":\"Alice\",\"note\":\"ok\"}}]"
+    set[Profile] profiles = json.parse_exact[set[Profile]](raw) handle error:
+        return error
+    return "{set.length[Profile](profiles)}"
+function parse_exact_set_profile_extra_error() returns string:
+    string raw = "[{{\"displayName\":\"Alice\",\"note\":\"ok\",\"extra\":1}}]"
+    set[Profile] profiles = json.parse_exact[set[Profile]](raw) handle error:
+        return error
+    return "{set.length[Profile](profiles)}"
+function parse_exact_map_set_profile_success() returns string:
+    string raw = "{{\"primary\":[{{\"displayName\":\"Alice\",\"note\":\"ok\"}}]}}"
+    map[string, set[Profile]] groups = json.parse_exact[map[string, set[Profile]]](raw) handle error:
+        return error
+    optional[set[Profile]] maybe_profiles = map.get[string, set[Profile]](groups, "primary")
+    set[Profile] profiles = maybe_profiles handle:
+        return "missing"
+    return "{set.length[Profile](profiles)}"
+function parse_exact_map_set_profile_extra_error() returns string:
+    string raw = "{{\"primary\":[{{\"displayName\":\"Alice\",\"note\":\"ok\",\"extra\":1}}]}}"
+    map[string, set[Profile]] groups = json.parse_exact[map[string, set[Profile]]](raw) handle error:
+        return error
+    return "{map.length[string, set[Profile]](groups)}"
+function parse_exact_result_fail_profile_success() returns string:
+    result[string, Profile] parsed = json.parse_exact[result[string, Profile]]("{{\"fail\":{{\"displayName\":\"Alice\",\"note\":\"bad\"}}}}") handle error:
+        return error
+    string ignored = parsed handle error:
+        return error.display_name
+    return ignored
+function parse_exact_result_fail_profile_extra_error() returns string:
+    result[string, Profile] parsed = json.parse_exact[result[string, Profile]]("{{\"fail\":{{\"displayName\":\"Alice\",\"note\":\"bad\",\"extra\":1}}}}") handle error:
+        return error
+    string ignored = parsed handle error:
+        return error.display_name
+    return ignored
+verify json_parse_exact_container_edges:
+    assert parse_exact_set_profile_success() == "1"
+    assert parse_exact_set_profile_extra_error() == "0: unknown field 'extra' for test.Profile"
+    assert parse_exact_map_set_profile_success() == "1"
+    assert parse_exact_map_set_profile_extra_error() == "primary: 0: unknown field 'extra' for test.Profile"
+    assert parse_exact_result_fail_profile_success() == "Alice"
+    assert parse_exact_result_fail_profile_extra_error() == "fail: unknown field 'extra' for test.Profile"
