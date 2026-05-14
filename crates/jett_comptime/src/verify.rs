@@ -521,26 +521,38 @@ fn generate_values_for_type(ty: &TypeExpr) -> Vec<Value> {
             ],
             _ => vec![], // unsupported type
         },
-        TypeExpr::Generic(ident, args, _) => {
-            match ident.name.as_str() {
-                "list" if args.len() == 1 => {
-                    match &args[0] {
-                        TypeExpr::Named(inner) if inner.name == "int64" => vec![
-                            Value::List(vec![]),
-                            Value::List(vec![Value::Int64(1)]),
-                            Value::List(vec![Value::Int64(3), Value::Int64(1), Value::Int64(2)]),
-                            Value::List(vec![Value::Int64(1), Value::Int64(1), Value::Int64(1)]),
-                            Value::List(vec![Value::Int64(-5), Value::Int64(0), Value::Int64(5)]),
-                        ],
-                        _ => vec![], // unsupported inner type
-                    }
-                }
-                _ => vec![], // unsupported generic type
-            }
-        }
+        TypeExpr::Generic(ident, args, _) => match ident.name.as_str() {
+            "list" if args.len() == 1 => generate_list_values_for_type(&args[0]),
+            _ => vec![], // unsupported generic type
+        },
         TypeExpr::View(inner, _) => generate_values_for_type(inner),
         TypeExpr::Function(_, _, _) => vec![], // cannot generate function values
     }
+}
+
+fn generate_list_values_for_type(inner_ty: &TypeExpr) -> Vec<Value> {
+    let inner_values = generate_values_for_type(inner_ty);
+    if inner_values.is_empty() {
+        return Vec::new();
+    }
+
+    let mut values = vec![Value::List(vec![])];
+    values.push(Value::List(vec![inner_values[0].clone()]));
+
+    let sample: Vec<Value> = inner_values.iter().take(3).cloned().collect();
+    if sample.len() > 1 {
+        values.push(Value::List(sample));
+    }
+
+    if inner_values.len() > 1 {
+        values.push(Value::List(vec![
+            inner_values[1].clone(),
+            inner_values[1].clone(),
+            inner_values[1].clone(),
+        ]));
+    }
+
+    values
 }
 
 // ---------------------------------------------------------------------------
@@ -1531,6 +1543,22 @@ mod tests {
         }
     }
 
+    fn generic_call(module: &str, func_name: &str, args: Vec<TypeExpr>, values: Vec<Expr>) -> Expr {
+        Expr::GenericCall(
+            Box::new(field_access(var(module), func_name)),
+            args,
+            values
+                .into_iter()
+                .map(|value| CallArg {
+                    name: None,
+                    value,
+                    span: sp(),
+                })
+                .collect(),
+            sp(),
+        )
+    }
+
     #[test]
     fn property_block_passing_int64() {
         // property int_identity:
@@ -1540,6 +1568,64 @@ mod tests {
             "int_identity",
             vec![given_decl("x", type_named("int64"))],
             block(vec![assert_stmt_ast(binary(var("x"), BinOp::Eq, var("x")))]),
+        );
+
+        let module = Module {
+            items: vec![Item::Property(pb)],
+            span: sp(),
+        };
+        let results = run_verify_blocks_detailed(&module);
+        assert_eq!(results.len(), 1);
+        assert!(
+            results[0].passed,
+            "expected property to pass: {:?}",
+            results[0].error
+        );
+        assert!(results[0].is_property);
+        assert_eq!(results[0].iterations, Some(100));
+    }
+
+    #[test]
+    fn property_generator_supports_lists_of_generated_types() {
+        let string_lists =
+            generate_values_for_type(&type_generic("list", vec![type_named("string")]));
+        assert!(
+            string_lists.iter().any(|value| {
+                matches!(value, Value::List(items) if items.iter().any(|item| matches!(item, Value::String(_))))
+            }),
+            "expected list[string] generation to include string payloads"
+        );
+
+        let bool_lists = generate_values_for_type(&type_generic("list", vec![type_named("bool")]));
+        assert!(
+            bool_lists.iter().any(|value| {
+                matches!(value, Value::List(items) if items.iter().any(|item| matches!(item, Value::Bool(_))))
+            }),
+            "expected list[bool] generation to include bool payloads"
+        );
+    }
+
+    #[test]
+    fn property_block_string_list_length_non_negative() {
+        let pb = property_block_item(
+            "string_list_length_non_negative",
+            vec![given_decl(
+                "items",
+                type_generic("list", vec![type_named("string")]),
+            )],
+            block(vec![
+                var_decl_stmt(
+                    "int64",
+                    "len",
+                    generic_call(
+                        "list",
+                        "length",
+                        vec![type_named("string")],
+                        vec![var("items")],
+                    ),
+                ),
+                assert_stmt_ast(binary(var("len"), BinOp::GtEq, int(0))),
+            ]),
         );
 
         let module = Module {
