@@ -270,6 +270,10 @@ run_pass_fixture!(
     "handle_result_optional.jett"
 );
 run_pass_fixture!(run_pass_bitfield_roundtrip, "bitfield_roundtrip.jett");
+run_pass_fixture!(
+    run_pass_bitfield_payload_roundtrip,
+    "bitfield_payload_roundtrip.jett"
+);
 run_pass_fixture!(run_pass_generic_struct, "generic_struct.jett");
 run_pass_fixture!(run_pass_generic_function, "generic_function.jett");
 run_pass_fixture!(run_pass_comptime_type_bind, "comptime_type_bind.jett");
@@ -552,6 +556,10 @@ compile_fail_fixture!(
 compile_fail_fixture!(
     compile_fail_list_literal_value_type_mismatch,
     "list_literal_value_type_mismatch.jett"
+);
+compile_fail_fixture!(
+    compile_fail_uint8_literal_out_of_range,
+    "uint8_literal_out_of_range.jett"
 );
 compile_fail_fixture!(
     compile_fail_generic_function_secret_argument_mismatch,

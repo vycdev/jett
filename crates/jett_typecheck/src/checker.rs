@@ -593,6 +593,30 @@ impl<'a> TypeChecker<'a> {
         )
     }
 
+    fn int_literal_fits_type(&self, value: i64, id: TypeId) -> bool {
+        match self.interner.resolve(id) {
+            Type::Int8 => (i8::MIN as i64..=i8::MAX as i64).contains(&value),
+            Type::Int16 => (i16::MIN as i64..=i16::MAX as i64).contains(&value),
+            Type::Int32 => (i32::MIN as i64..=i32::MAX as i64).contains(&value),
+            Type::Int64 => true,
+            Type::Uint8 => (0..=u8::MAX as i64).contains(&value),
+            Type::Uint16 => (0..=u16::MAX as i64).contains(&value),
+            Type::Uint32 => (0..=u32::MAX as i64).contains(&value),
+            Type::Uint64 => value >= 0,
+            _ => false,
+        }
+    }
+
+    fn int_literal_matches_expected_type(&self, value: i64, expected_ty: TypeId) -> bool {
+        let expected_inner = self.secret_inner_type(expected_ty).unwrap_or(expected_ty);
+        self.int_literal_fits_type(value, expected_inner)
+    }
+
+    fn float_literal_matches_expected_type(&self, expected_ty: TypeId) -> bool {
+        let id = self.secret_inner_type(expected_ty).unwrap_or(expected_ty);
+        matches!(self.interner.resolve(id), Type::Float32 | Type::Float64)
+    }
+
     fn json_read_requires_view(&self, id: TypeId) -> bool {
         match self.interner.resolve(id) {
             Type::Int8
@@ -4499,6 +4523,14 @@ impl<'a> TypeChecker<'a> {
         allow_refinement_handle: bool,
     ) -> TypeId {
         let ty = match expr {
+            Expr::IntLiteral(value, _)
+                if self.int_literal_matches_expected_type(*value, expected_ty) =>
+            {
+                expected_ty
+            }
+            Expr::FloatLiteral(_, _) if self.float_literal_matches_expected_type(expected_ty) => {
+                expected_ty
+            }
             Expr::ListConstruct(elems, _span) => {
                 let expected_inner = self.secret_inner_type(expected_ty).unwrap_or(expected_ty);
                 match self.interner.resolve(expected_inner).clone() {

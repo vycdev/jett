@@ -1,0 +1,35 @@
+bitfield Packet:
+    kind: 8 bits
+    payload: list[uint8]
+
+function main() returns nothing:
+    mutable list[uint8] payload = list.new[uint8]()
+    payload = list.append[uint8](payload, 1)
+    payload = list.append[uint8](payload, 127)
+    payload = list.append[uint8](payload, 255)
+
+    Packet packet = Packet(kind: 42, payload: payload)
+    bytes raw = Packet.to_bytes(packet)
+    Packet decoded = Packet.from_bytes(raw) handle error:
+        return nothing
+
+    uint8 first = list.get[uint8](view decoded.payload, 0) handle:
+        return nothing
+    uint8 second = list.get[uint8](view decoded.payload, 1) handle:
+        return nothing
+    uint8 third = list.get[uint8](view decoded.payload, 2) handle:
+        return nothing
+    uint8 one = 1
+    uint8 middle = 127
+    uint8 last = 255
+
+    if decoded.kind != 42:
+        return nothing
+    if first != one:
+        return nothing
+    if second != middle:
+        return nothing
+    if third != last:
+        return nothing
+
+    return nothing
