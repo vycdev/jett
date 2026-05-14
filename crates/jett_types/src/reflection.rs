@@ -23,7 +23,24 @@ impl ReflectionMetadata {
     }
 
     pub fn bind_type_name(&mut self, type_name: impl Into<String>, type_id: TypeId) {
-        self.type_ids_by_name.insert(type_name.into(), type_id);
+        let type_name = type_name.into();
+        self.type_ids_by_name.insert(type_name.clone(), type_id);
+        if let Some(info) = self.type_infos.get(&type_name) {
+            self.type_infos_by_id.insert(type_id, info.clone());
+        }
+        if let Some(fields) = self.type_fields.get(&type_name) {
+            self.type_fields_by_id.insert(type_id, fields.clone());
+        }
+        if let Some(bitfield) = self.bitfields.get(&type_name) {
+            self.bitfields_by_id.insert(type_id, bitfield.clone());
+        }
+        if let Some(variants) = self.type_variants.get(&type_name) {
+            self.type_variants_by_id.insert(type_id, variants.clone());
+        }
+    }
+
+    pub fn type_id_for_name(&self, type_name: &str) -> Option<TypeId> {
+        self.type_ids_by_name.get(type_name).copied()
     }
 
     pub fn insert_type_info_for_id(&mut self, type_id: TypeId, info: ReflectionTypeInfo) {
@@ -39,9 +56,13 @@ impl ReflectionMetadata {
         self.type_infos.insert(info.type_name.clone(), info);
     }
 
+    pub fn get_type_info_for_id(&self, type_id: TypeId) -> Option<&ReflectionTypeInfo> {
+        self.type_infos_by_id.get(&type_id)
+    }
+
     pub fn get_type_info(&self, type_name: &str) -> Option<&ReflectionTypeInfo> {
-        if let Some(type_id) = self.type_ids_by_name.get(type_name)
-            && let Some(info) = self.type_infos_by_id.get(type_id)
+        if let Some(type_id) = self.type_id_for_name(type_name)
+            && let Some(info) = self.get_type_info_for_id(type_id)
         {
             return Some(info);
         }
@@ -72,11 +93,15 @@ impl ReflectionMetadata {
         self.type_fields.insert(type_name, fields);
     }
 
+    pub fn get_type_fields_for_id(&self, type_id: TypeId) -> Option<&[ReflectionFieldInfo]> {
+        self.type_fields_by_id.get(&type_id).map(Vec::as_slice)
+    }
+
     pub fn get_type_fields(&self, type_name: &str) -> Option<&[ReflectionFieldInfo]> {
-        if let Some(type_id) = self.type_ids_by_name.get(type_name)
-            && let Some(fields) = self.type_fields_by_id.get(type_id)
+        if let Some(type_id) = self.type_id_for_name(type_name)
+            && let Some(fields) = self.get_type_fields_for_id(type_id)
         {
-            return Some(fields.as_slice());
+            return Some(fields);
         }
         self.type_fields.get(type_name).map(Vec::as_slice)
     }
@@ -105,9 +130,13 @@ impl ReflectionMetadata {
         self.bitfields.insert(type_name, bitfield);
     }
 
+    pub fn get_bitfield_for_id(&self, type_id: TypeId) -> Option<&ReflectionBitfieldInfo> {
+        self.bitfields_by_id.get(&type_id)
+    }
+
     pub fn get_bitfield(&self, type_name: &str) -> Option<&ReflectionBitfieldInfo> {
-        if let Some(type_id) = self.type_ids_by_name.get(type_name)
-            && let Some(bitfield) = self.bitfields_by_id.get(type_id)
+        if let Some(type_id) = self.type_id_for_name(type_name)
+            && let Some(bitfield) = self.get_bitfield_for_id(type_id)
         {
             return Some(bitfield);
         }
@@ -138,11 +167,15 @@ impl ReflectionMetadata {
         self.type_variants.insert(type_name, variants);
     }
 
+    pub fn get_type_variants_for_id(&self, type_id: TypeId) -> Option<&[ReflectionVariantInfo]> {
+        self.type_variants_by_id.get(&type_id).map(Vec::as_slice)
+    }
+
     pub fn get_type_variants(&self, type_name: &str) -> Option<&[ReflectionVariantInfo]> {
-        if let Some(type_id) = self.type_ids_by_name.get(type_name)
-            && let Some(variants) = self.type_variants_by_id.get(type_id)
+        if let Some(type_id) = self.type_id_for_name(type_name)
+            && let Some(variants) = self.get_type_variants_for_id(type_id)
         {
-            return Some(variants.as_slice());
+            return Some(variants);
         }
         self.type_variants.get(type_name).map(Vec::as_slice)
     }
@@ -430,6 +463,103 @@ mod tests {
             metadata
                 .get_type_variants("PacketAlias")
                 .expect("alias should see id-keyed variants")[0]
+                .fields[0]
+                .name,
+            "payload"
+        );
+    }
+
+    #[test]
+    fn type_name_binding_promotes_existing_string_metadata_to_type_id() {
+        let type_id = TypeId(46);
+        let mut metadata = ReflectionMetadata::new();
+
+        metadata.insert_type_info(info("models.Packet", "struct"));
+        metadata.insert_type_fields("models.Packet", vec![field("version", "int64")]);
+        metadata.insert_bitfield(
+            "models.Packet",
+            ReflectionBitfieldInfo::new(
+                true,
+                vec![ReflectionBitfieldFieldInfo::new(
+                    0,
+                    "version",
+                    "bits",
+                    4,
+                    info("int64", "primitive"),
+                    None,
+                )],
+            ),
+        );
+        metadata.insert_type_variants(
+            "models.Packet",
+            vec![ReflectionVariantInfo::new(
+                0,
+                "data",
+                0,
+                false,
+                vec![field("payload", "bytes")],
+            )],
+        );
+
+        metadata.bind_type_name("models.Packet", type_id);
+        metadata.bind_type_name("PacketAlias", type_id);
+        let alias_type_id = metadata
+            .type_id_for_name("PacketAlias")
+            .expect("alias should be bound to a type id");
+        assert_eq!(alias_type_id, type_id);
+
+        assert_eq!(
+            metadata
+                .get_type_info("PacketAlias")
+                .expect("alias should see promoted type info")
+                .kind,
+            "struct"
+        );
+        assert_eq!(
+            metadata
+                .get_type_info_for_id(alias_type_id)
+                .expect("type id should see promoted type info")
+                .kind,
+            "struct"
+        );
+        assert_eq!(
+            metadata
+                .get_type_fields("PacketAlias")
+                .expect("alias should see promoted fields")[0]
+                .name,
+            "version"
+        );
+        assert_eq!(
+            metadata
+                .get_type_fields_for_id(alias_type_id)
+                .expect("type id should see promoted fields")[0]
+                .name,
+            "version"
+        );
+        assert!(
+            metadata
+                .get_bitfield("PacketAlias")
+                .expect("alias should see promoted bitfield")
+                .network_order
+        );
+        assert!(
+            metadata
+                .get_bitfield_for_id(alias_type_id)
+                .expect("type id should see promoted bitfield")
+                .network_order
+        );
+        assert_eq!(
+            metadata
+                .get_type_variants("PacketAlias")
+                .expect("alias should see promoted variants")[0]
+                .fields[0]
+                .name,
+            "payload"
+        );
+        assert_eq!(
+            metadata
+                .get_type_variants_for_id(alias_type_id)
+                .expect("type id should see promoted variants")[0]
                 .fields[0]
                 .name,
             "payload"

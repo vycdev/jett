@@ -175,6 +175,12 @@ own checked field metadata.
 `ReflectionMetadata::insert_type_info` now also refreshes an existing canonical
 `TypeId` binding when the inserted type name is already bound, matching the
 owner-metadata insertion behavior.
+`ReflectionMetadata::bind_type_name` now promotes any existing string-keyed type
+info, fields, bitfield layout, or variant metadata into the canonical `TypeId`
+tables when the binding is added after the metadata. The metadata API also
+exposes explicit `type_id_for_name` and `get_*_for_id` accessors, and the
+comptime interpreter's checked reflection helpers use those id accessors first
+before preserving the legacy string fallback.
 
 ### Stage 5: Remove AST Metadata Fallbacks
 
