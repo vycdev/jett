@@ -72,6 +72,8 @@ struct TypeChecker<'a> {
     decl_defs: HashMap<Span, DefId>,
     /// User-defined type name → TypeId.
     named_types: HashMap<String, TypeId>,
+    /// Named types originating from compiler-shipped stdlib files.
+    trusted_stdlib_named_types: HashMap<String, TypeId>,
     type_aliases: HashMap<String, ast::TypeAlias>,
     /// Compiler-owned source compatibility aliases that do not affect reflection identity.
     legacy_compat_aliases: Vec<(TypeId, TypeId)>,
@@ -154,6 +156,7 @@ impl<'a> TypeChecker<'a> {
             type_env: HashMap::new(),
             decl_defs,
             named_types: HashMap::new(),
+            trusted_stdlib_named_types: HashMap::new(),
             type_aliases: HashMap::new(),
             legacy_compat_aliases: Vec::new(),
             resolving_type_aliases: HashSet::new(),
@@ -475,6 +478,13 @@ impl<'a> TypeChecker<'a> {
     fn register_named_type(&mut self, namespace: Option<&str>, name: &str, ty: TypeId) {
         let canonical = Self::canonical_name(namespace, name);
         self.named_types.insert(canonical, ty);
+    }
+
+    fn register_trusted_stdlib_named_type(&mut self, canonical_name: &str, ty: TypeId, span: Span) {
+        if span.file.is_stdlib() {
+            self.trusted_stdlib_named_types
+                .insert(canonical_name.to_string(), ty);
+        }
     }
 
     fn register_generic_struct_template(
@@ -1570,14 +1580,14 @@ impl<'a> TypeChecker<'a> {
 
     fn seed_legacy_compat_aliases(&mut self) {
         self.legacy_compat_aliases.clear();
-        if let Some(&json_tree_ty) = self.named_types.get("json.JsonTree") {
+        if let Some(&json_tree_ty) = self.trusted_stdlib_named_types.get("json.JsonTree") {
             self.legacy_compat_aliases
                 .push((TypeInterner::JSON_VALUE, json_tree_ty));
         }
     }
 
     fn json_tree_type_or_legacy_json_value(&self) -> TypeId {
-        self.named_types
+        self.trusted_stdlib_named_types
             .get("json.JsonTree")
             .copied()
             .unwrap_or(TypeInterner::JSON_VALUE)
@@ -2932,6 +2942,7 @@ impl<'a> TypeChecker<'a> {
 
     fn predeclare_actor(&mut self, def: &ast::ActorDef, namespace: Option<&str>) {
         let canonical_name = Self::canonical_name(namespace, &def.name.name);
+        let trusted_name = canonical_name.clone();
         let aid = self.interner.add_actor(TypeActorDef {
             name: canonical_name,
             capability_params: Vec::new(),
@@ -2940,6 +2951,7 @@ impl<'a> TypeChecker<'a> {
         });
         let ty = self.interner.intern(Type::Actor(aid));
         self.register_named_type(namespace, &def.name.name, ty);
+        self.register_trusted_stdlib_named_type(&trusted_name, ty, def.name.span);
         if let Some(def_id) = self.declaration_def_id(def.name.span) {
             self.type_env.insert(def_id, ty);
         }
@@ -3089,6 +3101,7 @@ impl<'a> TypeChecker<'a> {
         }
 
         let canonical_name = Self::canonical_name(namespace, &def.name.name);
+        let trusted_name = canonical_name.clone();
         let sid = self.interner.add_struct(TypeStructDef {
             name: canonical_name,
             fields: Vec::new(),
@@ -3096,6 +3109,7 @@ impl<'a> TypeChecker<'a> {
         });
         let ty = self.interner.intern(Type::Struct(sid));
         self.register_named_type(namespace, &def.name.name, ty);
+        self.register_trusted_stdlib_named_type(&trusted_name, ty, def.name.span);
 
         if let Some(def_id) = self.declaration_def_id(def.name.span) {
             self.type_env.insert(def_id, ty);
@@ -3104,12 +3118,14 @@ impl<'a> TypeChecker<'a> {
 
     fn predeclare_interface(&mut self, def: &ast::InterfaceDecl, namespace: Option<&str>) {
         let canonical_name = Self::canonical_name(namespace, &def.name.name);
+        let trusted_name = canonical_name.clone();
         let iid = self.interner.add_interface(TypeInterfaceDef {
             name: canonical_name,
             methods: Vec::new(),
         });
         let ty = self.interner.intern(Type::Interface(iid));
         self.register_named_type(namespace, &def.name.name, ty);
+        self.register_trusted_stdlib_named_type(&trusted_name, ty, def.name.span);
 
         if let Some(def_id) = self.declaration_def_id(def.name.span) {
             self.type_env.insert(def_id, ty);
@@ -3118,6 +3134,7 @@ impl<'a> TypeChecker<'a> {
 
     fn predeclare_bitfield(&mut self, def: &ast::BitfieldDef, namespace: Option<&str>) {
         let canonical_name = Self::canonical_name(namespace, &def.name.name);
+        let trusted_name = canonical_name.clone();
         let bid = self.interner.add_bitfield(TypeBitfieldDef {
             name: canonical_name,
             network_order: def.network_order,
@@ -3125,6 +3142,7 @@ impl<'a> TypeChecker<'a> {
         });
         let ty = self.interner.intern(Type::Bitfield(bid));
         self.register_named_type(namespace, &def.name.name, ty);
+        self.register_trusted_stdlib_named_type(&trusted_name, ty, def.name.span);
 
         if let Some(def_id) = self.declaration_def_id(def.name.span) {
             self.type_env.insert(def_id, ty);
@@ -3333,12 +3351,14 @@ impl<'a> TypeChecker<'a> {
 
     fn predeclare_enum(&mut self, def: &ast::EnumDef, namespace: Option<&str>) {
         let canonical_name = Self::canonical_name(namespace, &def.name.name);
+        let trusted_name = canonical_name.clone();
         let eid = self.interner.add_enum(TypeEnumDef {
             name: canonical_name,
             variants: Vec::new(),
         });
         let ty = self.interner.intern(Type::Enum(eid));
         self.register_named_type(namespace, &def.name.name, ty);
+        self.register_trusted_stdlib_named_type(&trusted_name, ty, def.name.span);
 
         if let Some(def_id) = self.declaration_def_id(def.name.span) {
             self.type_env.insert(def_id, ty);
@@ -6617,6 +6637,10 @@ impl<'a> TypeChecker<'a> {
         };
 
         self.named_types.insert(name.to_string(), alias_ty);
+        if alias.name.span.file.is_stdlib() {
+            self.trusted_stdlib_named_types
+                .insert(name.to_string(), alias_ty);
+        }
         self.resolving_type_aliases.remove(name);
         alias_ty
     }
@@ -8942,6 +8966,33 @@ function main() returns int64:
             .filter(|d| d.severity == jett_diagnostics::Severity::Error)
             .collect();
         assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+    }
+
+    #[test]
+    fn raw_json_facade_ignores_untrusted_json_tree_type() {
+        let errors = check_source_errors(
+            "\
+namespace json
+
+export enum JsonTree:
+    null
+
+export function kind(view value: JsonTree) returns int64:
+    return 1
+
+namespace app
+
+function main() returns string:
+    json.JsonTree tree = json.JsonTree.null
+    return json.kind(view tree)
+",
+        );
+
+        assert!(
+            errors.iter().any(|d| d.code.code() == 304),
+            "expected E0304, got: {:?}",
+            errors
+        );
     }
 
     #[test]

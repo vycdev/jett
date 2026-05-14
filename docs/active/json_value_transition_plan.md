@@ -177,9 +177,10 @@ and interpreted execution delegate to trusted stdlib functions where possible:
   delegate to the corresponding tree helpers.
 
 The typechecker should prefer the bundled `json.JsonTree` type for raw facade
-parameters and returns when the stdlib is loaded. The compiler-owned
-`JsonValue -> json.JsonTree` compatibility alias keeps older `JsonValue` code
-working during the transition.
+parameters and returns when the stdlib is loaded from compiler-shipped files.
+User/project declarations with the same qualified name must not seed that
+bridge. The compiler-owned `JsonValue -> json.JsonTree` compatibility alias
+keeps older `JsonValue` code working during the transition.
 
 Status: implemented. Exported stdlib facade wrappers now exist for
 `parse_raw`, `serialize_raw`, `kind`, `field`, `index`, the shape predicates,
@@ -191,8 +192,9 @@ directly instead of bouncing through the raw builtin surface. The shared JSON
 facade name set now lives in `jett_common`, so runtime dispatch and ownership's
 implicit-view rule use one policy list for raw facades and view-first
 `json_tree_*` accessors. The typechecker raw facade signatures now prefer
-`json.JsonTree` when that stdlib type is present, falling back to the legacy
-`JsonValue` primitive only for no-stdlib/bootstrap contexts.
+`json.JsonTree` only when that type came from the trusted stdlib file range,
+falling back to the legacy `JsonValue` primitive for no-stdlib/bootstrap
+contexts and for user-defined same-name types.
 
 ### 3. Change Runtime Representation
 
@@ -221,7 +223,8 @@ rather than a source-level alias. Only the stdlib enum `json.JsonTree` is
 compatible with the built-in `JsonValue`; user-defined enums named `JsonTree`
 remain unrelated. The runtime raw facade checks now follow the same rule and
 only accept enum values whose owner is the bundled `json.JsonTree`, not a bare
-or user-defined `JsonTree`.
+or user-defined `JsonTree`. Typechecker raw facade signatures also follow the
+same trusted-origin rule instead of trusting qualified name text alone.
 Reflection metadata is intentionally split for now:
 `type.info[JsonValue]()` reports `TypePrimitive.json_value_type`, while
 `type.info[json.JsonTree]()` reports `TypeKind.enum_type`.

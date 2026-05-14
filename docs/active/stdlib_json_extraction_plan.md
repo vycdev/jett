@@ -191,10 +191,12 @@ bridge spoofing, not helper visibility.
      `parse_raw`, `serialize_raw`, tree kind/predicates, lookup, length/key
      helpers, and scalar casts.
    - The typechecker raw facade signatures now prefer the bundled
-     `json.JsonTree` type while preserving the compiler-owned `JsonValue`
-     compatibility alias. When compiler-shipped stdlib declarations are loaded,
-     those raw facade calls now use the trusted exported stdlib signatures
-     before falling back to the hardcoded bootstrap signature table.
+     `json.JsonTree` type only when it came from compiler-shipped stdlib files,
+     while preserving the compiler-owned `JsonValue` compatibility alias.
+     User/project declarations with the same qualified name do not affect that
+     bridge. When compiler-shipped stdlib declarations are loaded, those raw
+     facade calls now use the trusted exported stdlib signatures before falling
+     back to the hardcoded bootstrap signature table.
    - `json_tree_serialize` is view-native and iterates arrays/objects through
      viewed list/map loops, so `serialize_raw(view value)` no longer clones the
      tree before serializing.
