@@ -7,6 +7,7 @@ Syntax highlighting for the [Jett programming language](https://github.com/vycde
 - Syntax highlighting for Jett keywords, types, operators, strings, numbers, and comments
 - String interpolation support (`"hello {name}"`)
 - Richer scopes for custom types, function calls, generic type arguments, parameters, fields, and enum members
+- Dotted namespace and qualified type highlighting (`namespace outer.models`, `json.JsonTree`)
 - Optional theme-aware Jett file icons for `.jett` files
 - Auto-closing pairs for parentheses, brackets, braces, and quotes
 - Comment toggling with `#`
@@ -86,5 +87,6 @@ Then restart VS Code or run **Developer: Reload Window**.
 | Operators | `keyword.operator` | `==`, `+`, `&&`, `!` |
 | Function names | `entity.name.function` | `function fibonacci(` |
 | Type names | `entity.name.type` | `struct Point:` |
-| Namespace names | `entity.name.namespace` | `namespace app` |
+| Qualified type names | `entity.name.namespace`, `entity.name.type` | `json.JsonTree` |
+| Namespace names | `entity.name.namespace` | `namespace app.models` |
 | Field access | `variable.other.member` | `.field_name` |

@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Document namespace `export` keyword highlighting support.
+- Highlight dotted namespace declarations and qualified type/enum names.
 
 ## 0.1.2
 
