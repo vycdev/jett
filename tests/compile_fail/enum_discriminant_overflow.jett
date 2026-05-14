@@ -1,0 +1,6 @@
+# ERROR: E1000
+enum TooBig:
+    value = 9223372036854775808
+
+function main() returns nothing:
+    return nothing

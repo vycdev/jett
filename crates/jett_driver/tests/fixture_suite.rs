@@ -603,6 +603,14 @@ compile_fail_fixture!(
     "int8_negative_literal_out_of_range.jett"
 );
 compile_fail_fixture!(
+    compile_fail_integer_literal_overflow,
+    "integer_literal_overflow.jett"
+);
+compile_fail_fixture!(
+    compile_fail_enum_discriminant_overflow,
+    "enum_discriminant_overflow.jett"
+);
+compile_fail_fixture!(
     compile_fail_uint8_handle_default_out_of_range,
     "uint8_handle_default_out_of_range.jett"
 );

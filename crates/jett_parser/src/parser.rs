@@ -96,6 +96,17 @@ impl<'src> Parser<'src> {
         }
     }
 
+    fn parse_i64_token(&mut self, token: &Token, context: &str) -> i64 {
+        let text = self.token_text(token).to_string();
+        text.parse::<i64>().unwrap_or_else(|_| {
+            self.error(
+                format!("{context} must fit in the supported signed 64-bit literal range"),
+                token.span,
+            );
+            0
+        })
+    }
+
     fn skip_newlines(&mut self) {
         while self.peek() == TokenKind::Newline {
             self.advance();
@@ -755,13 +766,7 @@ impl<'src> Parser<'src> {
 
         if self.eat(TokenKind::Eq).is_some() {
             let value_tok = self.expect(TokenKind::IntLiteral);
-            discriminant = self.token_text(&value_tok).parse::<i64>().ok();
-            if discriminant.is_none() {
-                self.error(
-                    "enum discriminants must be base-10 integer literals",
-                    value_tok.span,
-                );
-            }
+            discriminant = Some(self.parse_i64_token(&value_tok, "enum discriminant"));
             end_span = value_tok.span;
         }
 
@@ -1913,8 +1918,7 @@ impl<'src> Parser<'src> {
         match tok.kind {
             TokenKind::IntLiteral => {
                 self.advance();
-                let text = self.token_text(&tok);
-                let value = text.parse::<i64>().unwrap_or(0);
+                let value = self.parse_i64_token(&tok, "integer literal");
                 Expr::IntLiteral(value, tok.span)
             }
             TokenKind::FloatLiteral => {
