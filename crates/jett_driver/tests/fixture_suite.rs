@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use jett_common::FileId;
 use jett_diagnostics::Severity;
-use jett_driver::{build_file, build_source, run_file, test_file};
+use jett_driver::{build_file, build_source, hover_type, run_file, test_file};
 use jett_parser::ast::Item;
 use jett_parser::parse;
 
@@ -721,6 +721,24 @@ verify build_source_json:
             .map(|diagnostic| format!("{}: {}", diagnostic.code, diagnostic.message))
             .collect::<Vec<_>>()
             .join("\n")
+    );
+}
+
+#[test]
+fn stdlib_json_exports_loaded_for_hover_type() {
+    let source = r#"
+namespace app
+
+function hover_json() returns json.JsonTree:
+    return json.parse_raw("null") handle error:
+        default json.JsonTree.string_value(error)
+"#;
+
+    let ty = hover_type(source, 5, 12);
+    assert_eq!(
+        ty,
+        Some("result[json.JsonTree, string]".to_string()),
+        "expected hover to see stdlib JsonTree raw facade signature"
     );
 }
 

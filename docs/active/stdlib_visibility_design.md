@@ -194,6 +194,8 @@ Implemented:
 - Driver-level `build_source` coverage now verifies that in-memory/LSP-style
   validation sees the exported `json.JsonTree` raw facade surface, not only the
   marker stdlib module.
+- Driver hover coverage now verifies that editor type queries see the
+  `json.parse_raw` facade as `result[json.JsonTree, string]`.
 
 Still staged:
 
@@ -239,4 +241,5 @@ Still staged:
 - `jett build`, `jett run`, `jett test file`, project tests, and LSP-style
   `build_source` all see the same stdlib exports. The marker stdlib module and
   JSON raw facade are covered for `build_source`; file/project paths are covered
-  by the run-pass and `test_file` fixtures.
+  by the run-pass and `test_file` fixtures. Hover/type-query coverage pins the
+  JSON raw facade type through the same stdlib-loading path.
