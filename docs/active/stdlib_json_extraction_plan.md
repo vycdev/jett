@@ -284,7 +284,9 @@ functions should probably use `result` while format policy is still evolving.
 
 - Should `json.serialize[T]` stay a compiler-checked secret exposure boundary
   even after its implementation body moves to stdlib code?
-- Should unknown object fields be ignored, rejected, or configurable?
+- Should unknown object fields be ignored, rejected, or configurable? See
+  `docs/open_design/json_unknown_field_policy.md` for the staged
+  `parse_exact` recommendation.
 - Should `json.field` and `json.index` keep returning `optional[JsonTree]`, or
   should wrong-shape access be distinguishable from absence? See
   `docs/open_design/json_raw_access_semantics.md` for the current options and
