@@ -286,7 +286,9 @@ functions should probably use `result` while format policy is still evolving.
   even after its implementation body moves to stdlib code?
 - Should unknown object fields be ignored, rejected, or configurable?
 - Should `json.field` and `json.index` keep returning `optional[JsonTree]`, or
-  should wrong-shape access be distinguishable from absence?
+  should wrong-shape access be distinguishable from absence? See
+  `docs/open_design/json_raw_access_semantics.md` for the current options and
+  recommendation.
 - What is the stable external shape for enums, bitfields, bytes, floats, sets,
   and maps?
 - How should stdlib helper visibility evolve beyond namespace-private
