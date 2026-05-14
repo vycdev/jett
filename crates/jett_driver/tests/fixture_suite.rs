@@ -191,8 +191,8 @@ compile_pass_fixture!(
     "json_serialize_public_secret_fields.jett"
 );
 compile_pass_fixture!(
-    compile_pass_generic_reflection_indirect_deferral,
-    "generic_reflection_indirect_deferral.jett"
+    compile_pass_generic_reflection_local_fact_specialization,
+    "generic_reflection_local_fact_specialization.jett"
 );
 
 compile_fail_fixture!(compile_fail_type_mismatch, "type_mismatch.jett");
@@ -621,6 +621,10 @@ compile_fail_fixture!(
 compile_fail_fixture!(
     compile_fail_generic_reflection_branch_reachable_else_error,
     "generic_reflection_branch_reachable_else_error.jett"
+);
+compile_fail_fixture!(
+    compile_fail_generic_reflection_local_fact_reachable_error,
+    "generic_reflection_local_fact_reachable_error.jett"
 );
 compile_fail_fixture!(
     compile_fail_actor_message_arg_type_mismatch,

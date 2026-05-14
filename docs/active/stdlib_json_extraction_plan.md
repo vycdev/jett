@@ -236,9 +236,11 @@ bridge spoofing, not helper visibility.
    now checks ordinary generic function bodies per concrete instantiation, and
    it can specialize the narrow direct-branch form
    `type.kind_tag[T]()` / `type.info[T]().kind_tag` compared to `TypeKind.*`
-   inside `if`/`else if` conditions. Indirect reflection through locals or
-   helper parameters remains deliberately deferred, which keeps the current
-   JSON helpers staged until reflection constant propagation exists.
+   inside `if`/`else if` conditions. It also carries immutable block-local
+   `TypeInfo` / `TypeKind` facts derived from those direct reflection calls,
+   so helpers may name `TypeInfo info = type.info[T]()` and branch on
+   `info.kind_tag` or a local `TypeKind kind`. Passing reflection facts through
+   helper parameters remains deliberately deferred.
 
 ## Recommended Shape For `stdlib/json.jett`
 

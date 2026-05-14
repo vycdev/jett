@@ -125,6 +125,12 @@ struct TypeChecker<'a> {
     /// simple aliases visible to `type.kind_tag[T]()` while their TypeId may
     /// resolve to the alias base type.
     type_var_kind_tags: HashMap<String, String>,
+    /// Lexically scoped immutable `TypeInfo` locals known to come from
+    /// `type.info[T]()` for the current concrete generic instantiation.
+    reflection_type_info_kind_scopes: Vec<HashMap<DefId, String>>,
+    /// Lexically scoped immutable `TypeKind` locals known from direct reflected
+    /// kind facts.
+    reflection_type_kind_value_scopes: Vec<HashMap<DefId, String>>,
     /// Trusted field types currently available from direct `type.fields[T]()` loops.
     reflected_field_type_scopes: Vec<HashMap<String, Vec<TypeId>>>,
     /// Trusted TypeInfo types currently available from direct reflected `args` loops.
@@ -187,6 +193,8 @@ impl<'a> TypeChecker<'a> {
             reflection_variants_by_id: HashMap::new(),
             type_var_subst: HashMap::new(),
             type_var_kind_tags: HashMap::new(),
+            reflection_type_info_kind_scopes: Vec::new(),
+            reflection_type_kind_value_scopes: Vec::new(),
             reflected_field_type_scopes: Vec::new(),
             reflected_type_info_scopes: Vec::new(),
             reflected_variant_type_scopes: Vec::new(),
@@ -514,6 +522,14 @@ impl<'a> TypeChecker<'a> {
             .or_else(|| self.decl_defs.get(&span).copied())
     }
 
+    fn ident_def_id(&self, ident: &ast::Ident) -> Option<DefId> {
+        self.resolve
+            .resolutions
+            .get(&ident.span)
+            .copied()
+            .or_else(|| self.decl_defs.get(&ident.span).copied())
+    }
+
     fn ident_def_kind(&self, ident: &ast::Ident) -> Option<DefKind> {
         let def_id = self
             .resolve
@@ -717,6 +733,12 @@ impl<'a> TypeChecker<'a> {
     fn satisfies_expected_type(&self, expected: TypeId, got: TypeId) -> bool {
         self.types_compatible(expected, got)
             || (self.is_refinement_type(expected) && self.can_refine_from(got, expected))
+    }
+
+    fn type_id_is_named(&self, type_id: TypeId, name: &str) -> bool {
+        self.named_types
+            .get(name)
+            .is_some_and(|named_type_id| *named_type_id == type_id)
     }
 
     fn type_requires_handle_error(&self, expected: TypeId, got: TypeId) -> bool {
@@ -4155,8 +4177,22 @@ impl<'a> TypeChecker<'a> {
                         self.block_reflection_is_branch_specializable(block, type_params)
                     })
             }
+            Stmt::VarDecl(decl) => {
+                !self.expr_uses_type_param_reflection(&decl.value, type_params)
+                    || (!decl.mutable
+                        && self.expr_is_reflection_local_fact_source(&decl.value, type_params))
+            }
             _ => !self.stmt_uses_type_param_reflection(stmt, type_params),
         }
+    }
+
+    fn expr_is_reflection_local_fact_source(
+        &self,
+        expr: &Expr,
+        type_params: &HashSet<String>,
+    ) -> bool {
+        self.expr_is_type_info_reflection(expr, type_params)
+            || self.expr_is_type_kind_reflection(expr, type_params)
     }
 
     fn expr_reflection_is_direct_branch_condition(
@@ -4276,6 +4312,7 @@ impl<'a> TypeChecker<'a> {
     fn eval_type_kind_value(&mut self, expr: &Expr) -> Option<String> {
         match expr {
             Expr::Paren(inner, _) => self.eval_type_kind_value(inner),
+            Expr::Ident(ident) => self.reflection_type_kind_value_for_ident(ident),
             Expr::GenericCall(callee, type_args, args, _)
                 if args.is_empty()
                     && self
@@ -4294,6 +4331,7 @@ impl<'a> TypeChecker<'a> {
     fn eval_type_info_type_arg_kind_tag(&mut self, expr: &Expr) -> Option<String> {
         match expr {
             Expr::Paren(inner, _) => self.eval_type_info_type_arg_kind_tag(inner),
+            Expr::Ident(ident) => self.reflection_type_info_kind_for_ident(ident),
             Expr::GenericCall(callee, type_args, args, _)
                 if args.is_empty()
                     && self
@@ -4560,9 +4598,11 @@ impl<'a> TypeChecker<'a> {
     // ------------------------------------------------------------------
 
     fn check_block(&mut self, block: &Block) {
+        self.push_reflection_local_fact_scope();
         for stmt in &block.stmts {
             self.check_stmt(stmt);
         }
+        self.pop_reflection_local_fact_scope();
     }
 
     // ------------------------------------------------------------------
@@ -4693,6 +4733,55 @@ impl<'a> TypeChecker<'a> {
             .rev()
             .find_map(|scope| scope.get(name))
             .copied()
+    }
+
+    fn reflection_type_info_kind_for_ident(&self, ident: &ast::Ident) -> Option<String> {
+        let def_id = self.ident_def_id(ident)?;
+        self.reflection_type_info_kind_scopes
+            .iter()
+            .rev()
+            .find_map(|scope| scope.get(&def_id))
+            .cloned()
+    }
+
+    fn reflection_type_kind_value_for_ident(&self, ident: &ast::Ident) -> Option<String> {
+        let def_id = self.ident_def_id(ident)?;
+        self.reflection_type_kind_value_scopes
+            .iter()
+            .rev()
+            .find_map(|scope| scope.get(&def_id))
+            .cloned()
+    }
+
+    fn current_reflection_type_info_kind_scope_mut(
+        &mut self,
+    ) -> Option<&mut HashMap<DefId, String>> {
+        self.reflection_type_info_kind_scopes.last_mut()
+    }
+
+    fn current_reflection_type_kind_value_scope_mut(
+        &mut self,
+    ) -> Option<&mut HashMap<DefId, String>> {
+        self.reflection_type_kind_value_scopes.last_mut()
+    }
+
+    fn push_reflection_local_fact_scope(&mut self) {
+        self.reflection_type_info_kind_scopes.push(HashMap::new());
+        self.reflection_type_kind_value_scopes.push(HashMap::new());
+    }
+
+    fn pop_reflection_local_fact_scope(&mut self) {
+        self.reflection_type_kind_value_scopes.pop();
+        self.reflection_type_info_kind_scopes.pop();
+    }
+
+    fn clear_reflection_local_fact(&mut self, def_id: DefId) {
+        for scope in &mut self.reflection_type_info_kind_scopes {
+            scope.remove(&def_id);
+        }
+        for scope in &mut self.reflection_type_kind_value_scopes {
+            scope.remove(&def_id);
+        }
     }
 
     fn reflected_field_types_for_owner(&self, owner_ty: TypeId) -> Vec<TypeId> {
@@ -5079,6 +5168,43 @@ impl<'a> TypeChecker<'a> {
         refinement_ty
     }
 
+    fn record_reflection_local_fact(
+        &mut self,
+        decl: &ast::VarDecl,
+        declared_type: TypeId,
+        init_type: TypeId,
+    ) {
+        if !self.specialize_reflection_branches || decl.mutable {
+            return;
+        }
+
+        let Some(def_id) = self.declaration_def_id(decl.name.span) else {
+            return;
+        };
+
+        if !self.types_compatible(declared_type, init_type) {
+            self.clear_reflection_local_fact(def_id);
+            return;
+        }
+
+        if self.type_id_is_named(declared_type, "TypeInfo") {
+            if let Some(kind_tag) = self.eval_type_info_type_arg_kind_tag(&decl.value) {
+                if let Some(scope) = self.current_reflection_type_info_kind_scope_mut() {
+                    scope.insert(def_id, kind_tag);
+                }
+            }
+            return;
+        }
+
+        if self.type_id_is_named(declared_type, "TypeKind") {
+            if let Some(kind_tag) = self.eval_type_kind_value(&decl.value) {
+                if let Some(scope) = self.current_reflection_type_kind_value_scope_mut() {
+                    scope.insert(def_id, kind_tag);
+                }
+            }
+        }
+    }
+
     fn check_var_decl(&mut self, decl: &ast::VarDecl) {
         let declared_type = self.resolve_type_expr(&decl.ty);
         let init_type = self.check_expr_for_expected(&decl.value, declared_type, true);
@@ -5097,9 +5223,17 @@ impl<'a> TypeChecker<'a> {
                 decl.span,
             ));
         }
+
+        self.record_reflection_local_fact(decl, declared_type, init_type);
     }
 
     fn check_assign(&mut self, assign: &ast::AssignStmt) {
+        if let Expr::Ident(ident) = &assign.target {
+            if let Some(def_id) = self.ident_def_id(ident) {
+                self.clear_reflection_local_fact(def_id);
+            }
+        }
+
         let target_type = self.check_expr(&assign.target);
         let value_type = self.check_expr_for_expected(&assign.value, target_type, false);
 

@@ -1,0 +1,11 @@
+function local_fact_kind_check[T](value: T) returns int64:
+    TypeInfo info = type.info[T]()
+    TypeKind kind = info.kind_tag
+    if kind == TypeKind.list_type:
+        list[int64] items = value
+        return list.length[int64](view items)
+    return 0
+
+function main() returns nothing:
+    int64 value = local_fact_kind_check[string]("Ada")
+    return nothing
