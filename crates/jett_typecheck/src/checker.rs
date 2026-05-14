@@ -1907,6 +1907,15 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    /// Extract T from set builtin type args.
+    /// Uses ERROR as a wildcard when type args are absent.
+    fn set_type_arg(&mut self, type_args: &[TypeExpr]) -> TypeId {
+        match type_args.len() {
+            1 => self.resolve_type_expr(&type_args[0]),
+            _ => TypeInterner::ERROR,
+        }
+    }
+
     fn extract_dotted_name(expr: &Expr) -> Option<String> {
         match expr {
             Expr::Ident(ident) => Some(ident.name.clone()),
@@ -2743,6 +2752,41 @@ impl<'a> TypeChecker<'a> {
                 let map_ty = self.interner.intern(Type::Map(k, v));
                 Some((vec![map_ty], self.interner.intern(Type::List(v))))
             }
+            "set.new" => {
+                let inner = self.set_type_arg(type_args);
+                Some((vec![], self.interner.intern(Type::Set(inner))))
+            }
+            "set.add" | "set.remove" => {
+                let inner = self.set_type_arg(type_args);
+                let set_ty = self.interner.intern(Type::Set(inner));
+                Some((vec![set_ty, inner], set_ty))
+            }
+            "set.contains" => {
+                let inner = self.set_type_arg(type_args);
+                let set_ty = self.interner.intern(Type::Set(inner));
+                Some((vec![set_ty, inner], TypeInterner::BOOL))
+            }
+            "set.length" => {
+                let inner = self.set_type_arg(type_args);
+                let set_ty = self.interner.intern(Type::Set(inner));
+                Some((vec![set_ty], TypeInterner::INT64))
+            }
+            "set.is_empty" => {
+                let inner = self.set_type_arg(type_args);
+                let set_ty = self.interner.intern(Type::Set(inner));
+                Some((vec![set_ty], TypeInterner::BOOL))
+            }
+            "set.to_list" => {
+                let inner = self.set_type_arg(type_args);
+                let set_ty = self.interner.intern(Type::Set(inner));
+                Some((vec![set_ty], self.interner.intern(Type::List(inner))))
+            }
+            "set.union" | "set.intersection" | "set.difference" => {
+                let inner = self.set_type_arg(type_args);
+                let set_ty = self.interner.intern(Type::Set(inner));
+                Some((vec![set_ty, set_ty], set_ty))
+            }
+
             // list.first / list.last — no fn arg
             "list.first" | "list.last" => {
                 let inner = if type_args.len() == 1 {

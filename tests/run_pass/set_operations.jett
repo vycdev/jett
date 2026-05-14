@@ -1,84 +1,66 @@
 namespace app
-
-# --- Basic set operations ---
-
 function make_set_123() returns set[int64]:
     mutable set[int64] s = set.new[int64]()
     s = set.add[int64](s, 1)
     s = set.add[int64](s, 2)
     s = set.add[int64](s, 3)
     return s
-
 function test_set_add() returns int64:
     mutable set[int64] s = set.new[int64]()
     s = set.add[int64](s, 1)
     s = set.add[int64](s, 2)
     s = set.add[int64](s, 2)
     return set.length[int64](s)
-
 verify test_set_add:
     assert test_set_add() == 2
-
 function test_set_contains() returns bool:
     set[int64] s = make_set_123()
     return set.contains[int64](s, 2)
-
 verify test_set_contains:
     assert test_set_contains() == true
-
+function test_set_typed_interpolation() returns string:
+    set[int64] length_set = make_set_123()
+    set[int64] contains_set = make_set_123()
+    return "{set.length[int64](length_set)}:{set.contains[int64](contains_set, 2)}"
+verify test_set_typed_interpolation:
+    assert test_set_typed_interpolation() == "3:true"
 function test_set_remove() returns int64:
     mutable set[int64] s = make_set_123()
     s = set.remove[int64](s, 2)
     return set.length[int64](s)
-
 verify test_set_remove:
     assert test_set_remove() == 2
-
-# --- Set algebra ---
-
 function make_set_ab() returns set[int64]:
     mutable set[int64] s = set.new[int64]()
     s = set.add[int64](s, 1)
     s = set.add[int64](s, 2)
     return s
-
 function make_set_bc() returns set[int64]:
     mutable set[int64] s = set.new[int64]()
     s = set.add[int64](s, 2)
     s = set.add[int64](s, 3)
     return s
-
 function test_union() returns int64:
     set[int64] c = set.union[int64](make_set_ab(), make_set_bc())
     return set.length[int64](c)
-
 verify test_union:
     assert test_union() == 3
-
 function test_intersection() returns int64:
     set[int64] c = set.intersection[int64](make_set_ab(), make_set_bc())
     return set.length[int64](c)
-
 verify test_intersection:
     assert test_intersection() == 1
-
 function test_difference() returns int64:
     set[int64] c = set.difference[int64](make_set_123(), make_set_bc())
     return set.length[int64](c)
-
 verify test_difference:
     assert test_difference() == 1
-
-# --- Set iteration ---
-
 function sum_set(s: set[int64]) returns int64:
     int64 total = 0
     for item in s:
         total = total + item
     return total
-
 function test_sum_set() returns int64:
     return sum_set(make_set_123())
-
 verify test_sum_set:
     assert test_sum_set() == 6
