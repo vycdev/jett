@@ -2522,6 +2522,7 @@ impl Interpreter {
                 | "type.construct_put"
                 | "type.construct_finish"
                 | "json.parse"
+                | "json.parse_exact"
                 | "json.serialize"
                 | "json.serialize_public"
         );
@@ -2752,12 +2753,12 @@ impl Interpreter {
                 let expected_field_ty = self.substitute_type_expr(&type_args[1]);
                 self.reflected_variant_field_value(&args[0], &ty, &args[1], &expected_field_ty)
             }
-            "json.parse" => {
+            "json.parse" | "json.parse_exact" => {
                 if let Some(err) = check_args(name, 1, args) {
                     return Some(err);
                 }
                 let hook = json_public_bridge_spec(name)
-                    .expect("json.parse should have a public bridge spec")
+                    .expect("JSON parse bridge should have a public bridge spec")
                     .hook;
                 if self.has_trusted_stdlib_function(hook) {
                     return Some(self.call_user_function_with_type_args(

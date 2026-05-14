@@ -91,3 +91,9 @@ public `json.parse_exact[T](raw)` wrapper. Keep `json.parse[T]` lenient during
 the compatibility stage and update docs/examples to recommend `parse_exact`
 for config files, protocol messages, and tests where the input contract should
 be closed.
+
+Status: implemented. `json.parse_exact[T](raw)` is a compiler-policy public
+bridge backed by trusted stdlib hooks, and
+`tests/run_pass/json_parse_exact.jett` pins exact top-level, nested, list, and
+map-value validation. The current `json.parse[T]` behavior remains lenient and
+is still pinned by `tests/run_pass/json_unknown_fields.jett`.

@@ -28,6 +28,12 @@ const JSON_PUBLIC_BRIDGE_SPECS: &[(&str, JsonPublicBridgeSpec)] = &[
         },
     ),
     (
+        "json.parse_exact",
+        JsonPublicBridgeSpec {
+            hook: "json.json_parse_exact_reflected",
+        },
+    ),
+    (
         "json.serialize",
         JsonPublicBridgeSpec {
             hook: "json.json_serialize_reflected",
@@ -235,6 +241,12 @@ mod tests {
             json_public_bridge_spec("json.parse"),
             Some(JsonPublicBridgeSpec {
                 hook: "json.json_parse_reflected",
+            })
+        );
+        assert_eq!(
+            json_public_bridge_spec("json.parse_exact"),
+            Some(JsonPublicBridgeSpec {
+                hook: "json.json_parse_exact_reflected",
             })
         );
         assert_eq!(

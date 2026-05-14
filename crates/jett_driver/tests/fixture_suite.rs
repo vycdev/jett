@@ -343,6 +343,7 @@ run_pass_fixture!(
     "json_serialize_public_omits_secret_fields.jett"
 );
 run_pass_fixture!(run_pass_json_parse, "json_parse.jett");
+run_pass_fixture!(run_pass_json_parse_exact, "json_parse_exact.jett");
 run_pass_fixture!(
     run_pass_json_parse_error_parity,
     "json_parse_error_parity.jett"
@@ -750,6 +751,10 @@ compile_fail_fixture!(
 compile_fail_fixture!(
     compile_fail_json_parse_map_key_must_be_string,
     "json_parse_map_key_must_be_string.jett"
+);
+compile_fail_fixture!(
+    compile_fail_json_parse_exact_map_key_must_be_string,
+    "json_parse_exact_map_key_must_be_string.jett"
 );
 compile_fail_fixture!(
     compile_fail_json_parse_requires_type_arg,

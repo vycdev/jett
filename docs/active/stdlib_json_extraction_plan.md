@@ -94,11 +94,14 @@ delegate to reflected stdlib hook implementations only when the current hook
 registry entries came from compiler-shipped stdlib files. The old typed Rust
 fallback paths for public parse/serialize have been removed; Rust-backed paths
 have also been removed from raw JSON execution in `jett_comptime`. Public
-`json.parse_raw` now delegates to the trusted self-hosted `JsonTree` parser,
+  `json.parse_raw` now delegates to the trusted self-hosted `JsonTree` parser,
 and raw helper calls dispatch native `JsonTree` runtime values through trusted
 stdlib facade wrappers backed by `json_tree_*` hooks. The remaining builtin raw
 facade path is a bootstrap/no-stdlib dispatcher around those hooks, not a
 separate Rust JSON implementation.
+`json.parse_exact[T]` now exists as a second compiler-policy public parse
+bridge backed by trusted stdlib hooks. It rejects unknown object fields
+recursively while preserving the existing lenient `json.parse[T]` behavior.
 
 ## Blockers
 
@@ -286,7 +289,7 @@ functions should probably use `result` while format policy is still evolving.
   even after its implementation body moves to stdlib code?
 - Should unknown object fields be ignored, rejected, or configurable? See
   `docs/open_design/json_unknown_field_policy.md` for the staged
-  `parse_exact` recommendation.
+  `parse_exact` path, now implemented while keeping `json.parse[T]` lenient.
 - Should `json.field` and `json.index` keep returning `optional[JsonTree]`, or
   should wrong-shape access be distinguishable from absence? See
   `docs/open_design/json_raw_access_semantics.md` for the current options and

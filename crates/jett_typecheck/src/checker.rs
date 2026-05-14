@@ -1737,7 +1737,7 @@ impl<'a> TypeChecker<'a> {
                 };
                 self.check_json_public_serialize_policy(callee_name, value_ty, arg);
             }
-            "json.parse" => {
+            "json.parse" | "json.parse_exact" => {
                 let Some(arg) = args.first() else {
                     return;
                 };
@@ -2032,7 +2032,7 @@ impl<'a> TypeChecker<'a> {
                 vec![TypeInterner::ERROR, TypeInterner::STRING],
                 TypeInterner::NOTHING,
             )),
-            "json.parse" => {
+            "json.parse" | "json.parse_exact" => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
                         &format!("{name} (expected 1 type argument, got {})", type_args.len()),
