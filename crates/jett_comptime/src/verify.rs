@@ -1331,7 +1331,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn machine_transition_valid() {
         // machine UserAuth: ...
         // verify transition_test:
@@ -1400,7 +1399,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn machine_transition_invalid_rejected() {
         // machine UserAuth: ...
         // verify invalid_transition_test:
@@ -1467,7 +1465,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn machine_at_check_wrong_state() {
         // machine UserAuth: ...
         // verify at_wrong_state:
@@ -1655,7 +1652,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn property_block_with_function_call() {
         // function negate(x: int64) returns int64:
         //     return 0 - x
