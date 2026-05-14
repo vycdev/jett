@@ -1,0 +1,11 @@
+# ERROR: E0311
+function helper_cached_primitive[T](value: T, primitive: TypePrimitive) returns int64:
+    if primitive == TypePrimitive.int64_type:
+        int64 item = value
+        return item
+    return 0
+
+function main() returns nothing:
+    int64 first = helper_cached_primitive[string]("Ada", TypePrimitive.string_type)
+    int64 second = helper_cached_primitive[string]("Ada", TypePrimitive.int64_type)
+    return nothing

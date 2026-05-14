@@ -61,13 +61,30 @@ pub fn check(module: &Module, resolve: &ResolveResult) -> CheckResult {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 struct ReflectionParamFacts {
     type_info_kinds: Vec<(usize, String)>,
+    type_info_primitives: Vec<(usize, Option<String>)>,
     type_kind_values: Vec<(usize, String)>,
+    type_primitive_values: Vec<(usize, String)>,
 }
 
 impl ReflectionParamFacts {
     fn is_empty(&self) -> bool {
-        self.type_info_kinds.is_empty() && self.type_kind_values.is_empty()
+        self.type_info_kinds.is_empty()
+            && self.type_info_primitives.is_empty()
+            && self.type_kind_values.is_empty()
+            && self.type_primitive_values.is_empty()
     }
+}
+
+#[derive(Debug, Clone)]
+struct ReflectionTypeInfoStaticFacts {
+    kind_tag: String,
+    primitive_tag: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum StaticReflectionEnumValue {
+    TypeKind(String),
+    TypePrimitive(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -140,9 +157,15 @@ struct TypeChecker<'a> {
     /// Lexically scoped immutable `TypeInfo` locals known to come from
     /// `type.info[T]()` for the current concrete generic instantiation.
     reflection_type_info_kind_scopes: Vec<HashMap<DefId, String>>,
+    /// Primitive tags for known `TypeInfo` locals. A present `None` means the
+    /// TypeInfo is known, but it has no primitive tag.
+    reflection_type_info_primitive_scopes: Vec<HashMap<DefId, Option<String>>>,
     /// Lexically scoped immutable `TypeKind` locals known from direct reflected
     /// kind facts.
     reflection_type_kind_value_scopes: Vec<HashMap<DefId, String>>,
+    /// Lexically scoped immutable `TypePrimitive` locals known from direct
+    /// reflected primitive facts.
+    reflection_type_primitive_value_scopes: Vec<HashMap<DefId, String>>,
     /// Trusted field types currently available from direct `type.fields[T]()` loops.
     reflected_field_type_scopes: Vec<HashMap<String, Vec<TypeId>>>,
     /// Trusted TypeInfo types currently available from direct reflected `args` loops.
@@ -207,7 +230,9 @@ impl<'a> TypeChecker<'a> {
             type_var_subst: HashMap::new(),
             type_var_kind_tags: HashMap::new(),
             reflection_type_info_kind_scopes: Vec::new(),
+            reflection_type_info_primitive_scopes: Vec::new(),
             reflection_type_kind_value_scopes: Vec::new(),
+            reflection_type_primitive_value_scopes: Vec::new(),
             reflected_field_type_scopes: Vec::new(),
             reflected_type_info_scopes: Vec::new(),
             reflected_variant_type_scopes: Vec::new(),
@@ -1136,6 +1161,32 @@ impl<'a> TypeChecker<'a> {
             Type::JsonValue => Some("json_value_type"),
             Type::TypeConstruction => Some("type_construction_type"),
             _ => None,
+        }
+    }
+
+    fn reflection_primitive_tag_for_type_expr_static(
+        &self,
+        ty: &TypeExpr,
+        resolved_ty: TypeId,
+    ) -> Option<String> {
+        if self.reflection_kind_tag_for_type_expr(ty, resolved_ty) != "primitive_type" {
+            return None;
+        }
+
+        match ty {
+            TypeExpr::Named(ident) => {
+                let name = self.resolved_or_expanded_name(&ident.name, ident.span);
+                Self::reflection_primitive_tag_for_name(&name)
+                    .or_else(|| Self::reflection_primitive_tag_for_name(&ident.name))
+                    .or_else(|| self.reflection_primitive_tag_for_type(resolved_ty))
+                    .map(str::to_string)
+            }
+            TypeExpr::View(inner, _) => {
+                self.reflection_primitive_tag_for_type_expr_static(inner, resolved_ty)
+            }
+            TypeExpr::Generic(_, _, _) | TypeExpr::Function(_, _, _) => self
+                .reflection_primitive_tag_for_type(resolved_ty)
+                .map(str::to_string),
         }
     }
 
@@ -4215,6 +4266,7 @@ impl<'a> TypeChecker<'a> {
     ) -> bool {
         self.expr_is_type_info_reflection(expr, type_params)
             || self.expr_is_type_kind_reflection(expr, type_params)
+            || self.expr_is_type_primitive_reflection_value(expr, type_params)
     }
 
     fn expr_reflection_is_direct_branch_condition(
@@ -4241,13 +4293,22 @@ impl<'a> TypeChecker<'a> {
                     && self.expr_is_static_type_condition(rhs, type_params)
             }
             Expr::Binary(lhs, BinOp::Eq | BinOp::NotEq, rhs, _) => {
-                (self.expr_is_type_kind_reflection(lhs, type_params)
-                    && self.expr_is_type_kind_literal(rhs))
-                    || (self.expr_is_type_kind_literal(lhs)
-                        && self.expr_is_type_kind_reflection(rhs, type_params))
+                (self.expr_is_static_reflection_value(lhs, type_params)
+                    && self.expr_is_static_reflection_literal(rhs))
+                    || (self.expr_is_static_reflection_literal(lhs)
+                        && self.expr_is_static_reflection_value(rhs, type_params))
             }
             _ => false,
         }
+    }
+
+    fn expr_is_static_reflection_value(&self, expr: &Expr, type_params: &HashSet<String>) -> bool {
+        self.expr_is_type_kind_reflection(expr, type_params)
+            || self.expr_is_type_primitive_reflection_value(expr, type_params)
+    }
+
+    fn expr_is_static_reflection_literal(&self, expr: &Expr) -> bool {
+        self.expr_is_type_kind_literal(expr) || self.expr_is_type_primitive_literal(expr)
     }
 
     fn expr_is_type_kind_reflection(&self, expr: &Expr, type_params: &HashSet<String>) -> bool {
@@ -4264,6 +4325,48 @@ impl<'a> TypeChecker<'a> {
                 self.expr_is_type_info_reflection(base, type_params)
             }
             Expr::Paren(inner, _) => self.expr_is_type_kind_reflection(inner, type_params),
+            _ => false,
+        }
+    }
+
+    fn expr_is_type_primitive_reflection_value(
+        &self,
+        expr: &Expr,
+        type_params: &HashSet<String>,
+    ) -> bool {
+        match expr {
+            Expr::Handle(target, _, body, _) => {
+                self.expr_is_optional_type_primitive_reflection(target, type_params)
+                    && Self::handle_default_expr(body)
+                        .is_some_and(|default| self.expr_is_type_primitive_literal(default))
+            }
+            Expr::Paren(inner, _) => {
+                self.expr_is_type_primitive_reflection_value(inner, type_params)
+            }
+            _ => false,
+        }
+    }
+
+    fn expr_is_optional_type_primitive_reflection(
+        &self,
+        expr: &Expr,
+        type_params: &HashSet<String>,
+    ) -> bool {
+        match expr {
+            Expr::GenericCall(callee, type_args, args, _) => {
+                args.is_empty()
+                    && self
+                        .resolved_expr_name(callee)
+                        .is_some_and(|name| name == "type.primitive_tag")
+                    && type_args.len() == 1
+                    && Self::type_expr_mentions_type_param(&type_args[0], type_params)
+            }
+            Expr::FieldAccess(base, field, _) if field.name == "primitive_tag" => {
+                self.expr_is_type_info_reflection(base, type_params)
+            }
+            Expr::Paren(inner, _) => {
+                self.expr_is_optional_type_primitive_reflection(inner, type_params)
+            }
             _ => false,
         }
     }
@@ -4287,6 +4390,10 @@ impl<'a> TypeChecker<'a> {
         self.type_kind_literal_name(expr).is_some()
     }
 
+    fn expr_is_type_primitive_literal(&self, expr: &Expr) -> bool {
+        self.type_primitive_literal_name(expr).is_some()
+    }
+
     fn type_kind_literal_name(&self, expr: &Expr) -> Option<String> {
         match expr {
             Expr::Paren(inner, _) => self.type_kind_literal_name(inner),
@@ -4300,6 +4407,31 @@ impl<'a> TypeChecker<'a> {
             }
             _ => None,
         }
+    }
+
+    fn type_primitive_literal_name(&self, expr: &Expr) -> Option<String> {
+        match expr {
+            Expr::Paren(inner, _) => self.type_primitive_literal_name(inner),
+            Expr::EnumVariant(type_name, variant, _) if type_name.name == "TypePrimitive" => {
+                Some(variant.name.clone())
+            }
+            Expr::FieldAccess(_, _, _) => {
+                let name = self.expanded_dotted_expr_name(expr)?;
+                let (type_name, variant_name) = name.rsplit_once('.')?;
+                (type_name == "TypePrimitive").then(|| variant_name.to_string())
+            }
+            _ => None,
+        }
+    }
+
+    fn handle_default_expr(body: &Block) -> Option<&Expr> {
+        let Stmt::Expr(expr_stmt) = body.stmts.last()? else {
+            return None;
+        };
+        let Expr::Default(default_value, _) = &expr_stmt.expr else {
+            return None;
+        };
+        Some(default_value)
     }
 
     fn eval_static_type_condition(&mut self, expr: &Expr) -> Option<bool> {
@@ -4318,9 +4450,9 @@ impl<'a> TypeChecker<'a> {
                 false => self.eval_static_type_condition(rhs),
             },
             Expr::Binary(lhs, BinOp::Eq | BinOp::NotEq, rhs, _) => {
-                let lhs_kind = self.eval_type_kind_value(lhs)?;
-                let rhs_kind = self.eval_type_kind_value(rhs)?;
-                let equal = lhs_kind == rhs_kind;
+                let lhs_value = self.eval_static_reflection_enum_value(lhs)?;
+                let rhs_value = self.eval_static_reflection_enum_value(rhs)?;
+                let equal = lhs_value == rhs_value;
                 Some(if matches!(expr, Expr::Binary(_, BinOp::Eq, _, _)) {
                     equal
                 } else {
@@ -4329,6 +4461,17 @@ impl<'a> TypeChecker<'a> {
             }
             _ => None,
         }
+    }
+
+    fn eval_static_reflection_enum_value(
+        &mut self,
+        expr: &Expr,
+    ) -> Option<StaticReflectionEnumValue> {
+        if let Some(kind_tag) = self.eval_type_kind_value(expr) {
+            return Some(StaticReflectionEnumValue::TypeKind(kind_tag));
+        }
+        self.eval_type_primitive_value(expr)
+            .map(StaticReflectionEnumValue::TypePrimitive)
     }
 
     fn eval_type_kind_value(&mut self, expr: &Expr) -> Option<String> {
@@ -4350,17 +4493,73 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
-    fn eval_type_info_type_arg_kind_tag(&mut self, expr: &Expr) -> Option<String> {
+    fn eval_type_primitive_value(&mut self, expr: &Expr) -> Option<String> {
         match expr {
-            Expr::Paren(inner, _) => self.eval_type_info_type_arg_kind_tag(inner),
-            Expr::Ident(ident) => self.reflection_type_info_kind_for_ident(ident),
+            Expr::Paren(inner, _) => self.eval_type_primitive_value(inner),
+            Expr::Ident(ident) => self.reflection_type_primitive_value_for_ident(ident),
+            Expr::Handle(target, _, body, _) => {
+                match self.eval_optional_type_primitive_value(target)? {
+                    Some(primitive_tag) => Some(primitive_tag),
+                    None => Self::handle_default_expr(body)
+                        .and_then(|default| self.eval_type_primitive_value(default)),
+                }
+            }
+            _ => self.type_primitive_literal_name(expr),
+        }
+    }
+
+    fn eval_optional_type_primitive_value(&mut self, expr: &Expr) -> Option<Option<String>> {
+        match expr {
+            Expr::Paren(inner, _) => self.eval_optional_type_primitive_value(inner),
+            Expr::GenericCall(callee, type_args, args, _)
+                if args.is_empty()
+                    && self
+                        .resolved_expr_name(callee)
+                        .is_some_and(|name| name == "type.primitive_tag") =>
+            {
+                Some(self.reflection_type_arg_primitive_tag(type_args))
+            }
+            Expr::FieldAccess(base, field, _) if field.name == "primitive_tag" => {
+                self.eval_type_info_primitive_tag(base)
+            }
+            _ => None,
+        }
+    }
+
+    fn eval_type_info_type_arg_kind_tag(&mut self, expr: &Expr) -> Option<String> {
+        self.eval_type_info_facts(expr).map(|facts| facts.kind_tag)
+    }
+
+    fn eval_type_info_primitive_tag(&mut self, expr: &Expr) -> Option<Option<String>> {
+        self.eval_type_info_facts(expr)
+            .map(|facts| facts.primitive_tag)
+    }
+
+    fn eval_type_info_facts(&mut self, expr: &Expr) -> Option<ReflectionTypeInfoStaticFacts> {
+        match expr {
+            Expr::Paren(inner, _) => self.eval_type_info_facts(inner),
+            Expr::Ident(ident) => {
+                let kind_tag = self.reflection_type_info_kind_for_ident(ident)?;
+                let primitive_tag = self
+                    .reflection_type_info_primitive_for_ident(ident)
+                    .unwrap_or(None);
+                Some(ReflectionTypeInfoStaticFacts {
+                    kind_tag,
+                    primitive_tag,
+                })
+            }
             Expr::GenericCall(callee, type_args, args, _)
                 if args.is_empty()
                     && self
                         .resolved_expr_name(callee)
                         .is_some_and(|name| name == "type.info") =>
             {
-                self.reflection_type_arg_kind_tag(type_args)
+                let kind_tag = self.reflection_type_arg_kind_tag(type_args)?;
+                let primitive_tag = self.reflection_type_arg_primitive_tag(type_args);
+                Some(ReflectionTypeInfoStaticFacts {
+                    kind_tag,
+                    primitive_tag,
+                })
             }
             _ => None,
         }
@@ -4372,6 +4571,14 @@ impl<'a> TypeChecker<'a> {
         };
         let type_id = self.reflection_type_arg_id(type_args)?;
         Some(self.reflection_kind_tag_for_type_expr(type_arg, type_id))
+    }
+
+    fn reflection_type_arg_primitive_tag(&mut self, type_args: &[TypeExpr]) -> Option<String> {
+        let [type_arg] = type_args else {
+            return None;
+        };
+        let type_id = self.reflection_type_arg_id(type_args)?;
+        self.reflection_primitive_tag_for_type_expr_static(type_arg, type_id)
     }
 
     fn reflection_type_arg_id(&mut self, type_args: &[TypeExpr]) -> Option<TypeId> {
@@ -4766,9 +4973,30 @@ impl<'a> TypeChecker<'a> {
             .cloned()
     }
 
+    fn reflection_type_info_primitive_for_ident(
+        &self,
+        ident: &ast::Ident,
+    ) -> Option<Option<String>> {
+        let def_id = self.ident_def_id(ident)?;
+        self.reflection_type_info_primitive_scopes
+            .iter()
+            .rev()
+            .find_map(|scope| scope.get(&def_id))
+            .cloned()
+    }
+
     fn reflection_type_kind_value_for_ident(&self, ident: &ast::Ident) -> Option<String> {
         let def_id = self.ident_def_id(ident)?;
         self.reflection_type_kind_value_scopes
+            .iter()
+            .rev()
+            .find_map(|scope| scope.get(&def_id))
+            .cloned()
+    }
+
+    fn reflection_type_primitive_value_for_ident(&self, ident: &ast::Ident) -> Option<String> {
+        let def_id = self.ident_def_id(ident)?;
+        self.reflection_type_primitive_value_scopes
             .iter()
             .rev()
             .find_map(|scope| scope.get(&def_id))
@@ -4781,15 +5009,31 @@ impl<'a> TypeChecker<'a> {
         self.reflection_type_info_kind_scopes.last_mut()
     }
 
+    fn current_reflection_type_info_primitive_scope_mut(
+        &mut self,
+    ) -> Option<&mut HashMap<DefId, Option<String>>> {
+        self.reflection_type_info_primitive_scopes.last_mut()
+    }
+
     fn current_reflection_type_kind_value_scope_mut(
         &mut self,
     ) -> Option<&mut HashMap<DefId, String>> {
         self.reflection_type_kind_value_scopes.last_mut()
     }
 
+    fn current_reflection_type_primitive_value_scope_mut(
+        &mut self,
+    ) -> Option<&mut HashMap<DefId, String>> {
+        self.reflection_type_primitive_value_scopes.last_mut()
+    }
+
     fn push_reflection_local_fact_scope(&mut self) {
         self.reflection_type_info_kind_scopes.push(HashMap::new());
+        self.reflection_type_info_primitive_scopes
+            .push(HashMap::new());
         self.reflection_type_kind_value_scopes.push(HashMap::new());
+        self.reflection_type_primitive_value_scopes
+            .push(HashMap::new());
     }
 
     fn push_reflection_param_fact_scope(
@@ -4806,6 +5050,15 @@ impl<'a> TypeChecker<'a> {
             }
         }
 
+        let mut type_info_primitive_scope = HashMap::new();
+        for (index, primitive_tag) in &facts.type_info_primitives {
+            if let Some(param) = func.params.get(*index) {
+                if let Some(def_id) = self.declaration_def_id(param.name.span) {
+                    type_info_primitive_scope.insert(def_id, primitive_tag.clone());
+                }
+            }
+        }
+
         let mut type_kind_scope = HashMap::new();
         for (index, kind_tag) in &facts.type_kind_values {
             if let Some(param) = func.params.get(*index) {
@@ -4815,12 +5068,27 @@ impl<'a> TypeChecker<'a> {
             }
         }
 
+        let mut type_primitive_scope = HashMap::new();
+        for (index, primitive_tag) in &facts.type_primitive_values {
+            if let Some(param) = func.params.get(*index) {
+                if let Some(def_id) = self.declaration_def_id(param.name.span) {
+                    type_primitive_scope.insert(def_id, primitive_tag.clone());
+                }
+            }
+        }
+
         self.reflection_type_info_kind_scopes.push(type_info_scope);
+        self.reflection_type_info_primitive_scopes
+            .push(type_info_primitive_scope);
         self.reflection_type_kind_value_scopes.push(type_kind_scope);
+        self.reflection_type_primitive_value_scopes
+            .push(type_primitive_scope);
     }
 
     fn pop_reflection_local_fact_scope(&mut self) {
+        self.reflection_type_primitive_value_scopes.pop();
         self.reflection_type_kind_value_scopes.pop();
+        self.reflection_type_info_primitive_scopes.pop();
         self.reflection_type_info_kind_scopes.pop();
     }
 
@@ -4828,7 +5096,13 @@ impl<'a> TypeChecker<'a> {
         for scope in &mut self.reflection_type_info_kind_scopes {
             scope.remove(&def_id);
         }
+        for scope in &mut self.reflection_type_info_primitive_scopes {
+            scope.remove(&def_id);
+        }
         for scope in &mut self.reflection_type_kind_value_scopes {
+            scope.remove(&def_id);
+        }
+        for scope in &mut self.reflection_type_primitive_value_scopes {
             scope.remove(&def_id);
         }
     }
@@ -5237,9 +5511,12 @@ impl<'a> TypeChecker<'a> {
         }
 
         if self.type_id_is_named(declared_type, "TypeInfo") {
-            if let Some(kind_tag) = self.eval_type_info_type_arg_kind_tag(&decl.value) {
+            if let Some(facts) = self.eval_type_info_facts(&decl.value) {
                 if let Some(scope) = self.current_reflection_type_info_kind_scope_mut() {
-                    scope.insert(def_id, kind_tag);
+                    scope.insert(def_id, facts.kind_tag);
+                }
+                if let Some(scope) = self.current_reflection_type_info_primitive_scope_mut() {
+                    scope.insert(def_id, facts.primitive_tag);
                 }
             }
             return;
@@ -5249,6 +5526,14 @@ impl<'a> TypeChecker<'a> {
             if let Some(kind_tag) = self.eval_type_kind_value(&decl.value) {
                 if let Some(scope) = self.current_reflection_type_kind_value_scope_mut() {
                     scope.insert(def_id, kind_tag);
+                }
+            }
+        }
+
+        if self.type_id_is_named(declared_type, "TypePrimitive") {
+            if let Some(primitive_tag) = self.eval_type_primitive_value(&decl.value) {
+                if let Some(scope) = self.current_reflection_type_primitive_value_scope_mut() {
+                    scope.insert(def_id, primitive_tag);
                 }
             }
         }
@@ -6361,8 +6646,11 @@ impl<'a> TypeChecker<'a> {
             }
 
             if self.type_id_is_named(param_ty, "TypeInfo") {
-                if let Some(kind_tag) = self.eval_type_info_type_arg_kind_tag(&arg.value) {
-                    facts.type_info_kinds.push((index, kind_tag));
+                if let Some(info_facts) = self.eval_type_info_facts(&arg.value) {
+                    facts.type_info_kinds.push((index, info_facts.kind_tag));
+                    facts
+                        .type_info_primitives
+                        .push((index, info_facts.primitive_tag));
                 }
                 continue;
             }
@@ -6370,6 +6658,12 @@ impl<'a> TypeChecker<'a> {
             if self.type_id_is_named(param_ty, "TypeKind") {
                 if let Some(kind_tag) = self.eval_type_kind_value(&arg.value) {
                     facts.type_kind_values.push((index, kind_tag));
+                }
+            }
+
+            if self.type_id_is_named(param_ty, "TypePrimitive") {
+                if let Some(primitive_tag) = self.eval_type_primitive_value(&arg.value) {
+                    facts.type_primitive_values.push((index, primitive_tag));
                 }
             }
         }

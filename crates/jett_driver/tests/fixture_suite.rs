@@ -631,6 +631,10 @@ compile_fail_fixture!(
     "generic_reflection_helper_kind_fact_cache.jett"
 );
 compile_fail_fixture!(
+    compile_fail_generic_reflection_helper_primitive_fact_cache,
+    "generic_reflection_helper_primitive_fact_cache.jett"
+);
+compile_fail_fixture!(
     compile_fail_actor_message_arg_type_mismatch,
     "actor_message_arg_type_mismatch.jett"
 );

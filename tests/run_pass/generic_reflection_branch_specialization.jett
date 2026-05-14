@@ -80,6 +80,26 @@ function local_info_helper_list_length_or_zero[T](value: T) returns int64:
     TypeInfo info = type.info[T]()
     return helper_info_list_length_or_zero[T](value, info)
 
+function local_primitive_string_or_other[T](value: T) returns string:
+    TypeInfo info = type.info[T]()
+    TypePrimitive primitive = info.primitive_tag handle:
+        default TypePrimitive.unknown_type
+    if primitive == TypePrimitive.string_type:
+        string text = value
+        return text
+    return "other"
+
+function helper_primitive_string_or_other[T](value: T, primitive: TypePrimitive) returns string:
+    if primitive == TypePrimitive.string_type:
+        string text = value
+        return text
+    return "other"
+
+function local_primitive_helper_string_or_other[T](value: T) returns string:
+    TypePrimitive primitive = type.primitive_tag[T]() handle:
+        default TypePrimitive.unknown_type
+    return helper_primitive_string_or_other[T](value, primitive)
+
 verify generic_reflection_branch_specialization:
     list[int64] numbers = list(1, 2, 3)
     assert list_length_or_zero[list[int64]](numbers) == 3
@@ -104,3 +124,7 @@ verify generic_reflection_branch_specialization:
     assert local_kind_helper_list_length_or_zero[string]("Ada") == 0
     assert local_info_helper_list_length_or_zero[list[int64]](more) == 2
     assert local_info_helper_list_length_or_zero[string]("Ada") == 0
+    assert local_primitive_string_or_other[string]("Ada") == "Ada"
+    assert local_primitive_string_or_other[int64](7) == "other"
+    assert local_primitive_helper_string_or_other[string]("Ada") == "Ada"
+    assert local_primitive_helper_string_or_other[int64](7) == "other"
