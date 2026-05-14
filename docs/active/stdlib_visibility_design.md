@@ -196,6 +196,9 @@ Implemented:
   marker stdlib module.
 - Driver hover coverage now verifies that editor type queries see the
   `json.parse_raw` facade as `result[json.JsonTree, string]`.
+- Driver completion coverage now filters out private namespaced stdlib JSON
+  bridge hooks while still exposing the exported `json.JsonTree` raw facade
+  surface.
 
 Still staged:
 
@@ -242,4 +245,6 @@ Still staged:
   `build_source` all see the same stdlib exports. The marker stdlib module and
   JSON raw facade are covered for `build_source`; file/project paths are covered
   by the run-pass and `test_file` fixtures. Hover/type-query coverage pins the
-  JSON raw facade type through the same stdlib-loading path.
+  JSON raw facade type through the same stdlib-loading path. Completion coverage
+  pins exported namespaced declarations without leaking private JSON bridge
+  hooks.

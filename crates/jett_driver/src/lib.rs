@@ -155,6 +155,8 @@ pub fn hover_type(source: &str, line: u32, col: u32) -> Option<String> {
 /// Return a list of (name, kind) completion candidates visible in `source`.
 /// Runs parse + resolve and collects all definitions from the scope table.
 pub fn completions(source: &str) -> Vec<(String, jett_resolve::scope::DefKind)> {
+    use jett_resolve::scope::DefVisibility;
+
     let file_id = FileId::new(0);
     let mut parse_result = parse(source, file_id);
     if parse_result
@@ -171,6 +173,7 @@ pub fn completions(source: &str) -> Vec<(String, jett_resolve::scope::DefKind)> 
         .scope_table
         .definitions
         .iter()
+        .filter(|def| def.namespace.is_none() || def.visibility == DefVisibility::Public)
         .map(|def| (def.name.clone(), def.kind))
         .collect()
 }

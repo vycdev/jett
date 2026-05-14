@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use jett_common::FileId;
 use jett_diagnostics::Severity;
-use jett_driver::{build_file, build_source, hover_type, run_file, test_file};
+use jett_driver::{build_file, build_source, completions, hover_type, run_file, test_file};
 use jett_parser::ast::Item;
 use jett_parser::parse;
 
@@ -739,6 +739,27 @@ function hover_json() returns json.JsonTree:
         ty,
         Some("result[json.JsonTree, string]".to_string()),
         "expected hover to see stdlib JsonTree raw facade signature"
+    );
+}
+
+#[test]
+fn completions_hide_private_stdlib_json_hooks() {
+    let source = "namespace app\n\nfunction main() returns nothing:\n    return nothing\n";
+    let candidates = completions(source);
+
+    assert!(
+        candidates
+            .iter()
+            .any(|(name, _)| name == "json.JsonTree" || name == "json.parse_raw"),
+        "expected completions to include exported stdlib JSON surface"
+    );
+    assert!(
+        !candidates
+            .iter()
+            .any(|(name, _)| name == "json.json_parse_reflected"
+                || name == "json.json_decode_tree_reflected"
+                || name == "json.json_serialize_reflected"),
+        "private stdlib JSON hooks should not leak into completions"
     );
 }
 
