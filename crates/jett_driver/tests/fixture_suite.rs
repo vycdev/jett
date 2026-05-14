@@ -840,6 +840,18 @@ function hover_raw_facades(view root: json.JsonTree) returns string:
     optional[json.JsonTree] item = json.index(root, 0)
     result[int64, string] length = json.array_length(root)
     result[string, string] text = json.as_string(root)
+    string raw = json.serialize_raw(root)
+    string kind = json.kind(root)
+    bool nullish = json.is_null(root)
+    bool boolean = json.is_bool(root)
+    bool number = json.is_number(root)
+    bool textish = json.is_string(root)
+    bool array = json.is_array(root)
+    bool object = json.is_object(root)
+    result[list[string], string] keys = json.object_keys(root)
+    result[int64, string] integer = json.as_int64(root)
+    result[float64, string] float = json.as_float64(root)
+    result[bool, string] truth = json.as_bool(root)
     return "ok"
 "#;
 
@@ -858,6 +870,30 @@ function hover_raw_facades(view root: json.JsonTree) returns string:
     assert_eq!(
         hover_type(source, 7, 35),
         Some("result[string, string]".to_string())
+    );
+    assert_eq!(hover_type(source, 8, 18), Some("string".to_string()));
+    assert_eq!(hover_type(source, 9, 19), Some("string".to_string()));
+    assert_eq!(hover_type(source, 10, 20), Some("bool".to_string()));
+    assert_eq!(hover_type(source, 11, 20), Some("bool".to_string()));
+    assert_eq!(hover_type(source, 12, 19), Some("bool".to_string()));
+    assert_eq!(hover_type(source, 13, 20), Some("bool".to_string()));
+    assert_eq!(hover_type(source, 14, 18), Some("bool".to_string()));
+    assert_eq!(hover_type(source, 15, 19), Some("bool".to_string()));
+    assert_eq!(
+        hover_type(source, 16, 41),
+        Some("result[list[string], string]".to_string())
+    );
+    assert_eq!(
+        hover_type(source, 17, 37),
+        Some("result[int64, string]".to_string())
+    );
+    assert_eq!(
+        hover_type(source, 18, 38),
+        Some("result[float64, string]".to_string())
+    );
+    assert_eq!(
+        hover_type(source, 19, 35),
+        Some("result[bool, string]".to_string())
     );
 }
 
