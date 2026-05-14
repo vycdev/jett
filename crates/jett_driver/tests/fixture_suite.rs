@@ -562,6 +562,10 @@ compile_fail_fixture!(
     "uint8_literal_out_of_range.jett"
 );
 compile_fail_fixture!(
+    compile_fail_uint8_binary_literal_out_of_range,
+    "uint8_binary_literal_out_of_range.jett"
+);
+compile_fail_fixture!(
     compile_fail_generic_function_secret_argument_mismatch,
     "generic_function_secret_argument_mismatch.jett"
 );

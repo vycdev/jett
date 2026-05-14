@@ -19,17 +19,14 @@ function main() returns nothing:
         return nothing
     uint8 third = list.get[uint8](view decoded.payload, 2) handle:
         return nothing
-    uint8 one = 1
-    uint8 middle = 127
-    uint8 last = 255
 
     if decoded.kind != 42:
         return nothing
-    if first != one:
+    if first != 1:
         return nothing
-    if second != middle:
+    if second != 127:
         return nothing
-    if third != last:
+    if third != 255:
         return nothing
 
     return nothing

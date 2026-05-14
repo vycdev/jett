@@ -617,6 +617,10 @@ impl<'a> TypeChecker<'a> {
         matches!(self.interner.resolve(id), Type::Float32 | Type::Float64)
     }
 
+    fn is_numeric_literal(expr: &Expr) -> bool {
+        matches!(expr, Expr::IntLiteral(_, _) | Expr::FloatLiteral(_, _))
+    }
+
     fn json_read_requires_view(&self, id: TypeId) -> bool {
         match self.interner.resolve(id) {
             Type::Int8
@@ -5539,8 +5543,27 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn check_binary(&mut self, lhs: &Expr, op: BinOp, rhs: &Expr, span: Span) -> TypeId {
-        let lhs_ty = self.check_expr(lhs);
-        let rhs_ty = self.check_expr(rhs);
+        let (lhs_ty, rhs_ty) = if Self::is_numeric_literal(lhs) && !Self::is_numeric_literal(rhs) {
+            let rhs_ty = self.check_expr(rhs);
+            let (rhs_base, _) = self.strip_secret_type(rhs_ty);
+            let lhs_ty = if self.is_numeric(rhs_base) {
+                self.check_expr_for_expected(lhs, rhs_base, false)
+            } else {
+                self.check_expr(lhs)
+            };
+            (lhs_ty, rhs_ty)
+        } else if !Self::is_numeric_literal(lhs) && Self::is_numeric_literal(rhs) {
+            let lhs_ty = self.check_expr(lhs);
+            let (lhs_base, _) = self.strip_secret_type(lhs_ty);
+            let rhs_ty = if self.is_numeric(lhs_base) {
+                self.check_expr_for_expected(rhs, lhs_base, false)
+            } else {
+                self.check_expr(rhs)
+            };
+            (lhs_ty, rhs_ty)
+        } else {
+            (self.check_expr(lhs), self.check_expr(rhs))
+        };
 
         // If either side is an error, propagate.
         if lhs_ty == TypeInterner::ERROR || rhs_ty == TypeInterner::ERROR {

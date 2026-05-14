@@ -1,0 +1,6 @@
+# ERROR: E0301
+function main() returns nothing:
+    uint8 value = 1
+    if value == 256:
+        return nothing
+    return nothing
