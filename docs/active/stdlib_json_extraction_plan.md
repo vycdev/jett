@@ -333,7 +333,8 @@ functions should probably use `result` while format policy is still evolving.
   serialize names, and nested matrix combinations. The remaining shape
   questions are narrower: whether map/set ordering should ever become a
   documented contract, whether to add configurable strictness beyond
-  `parse_exact`, and final wording for comma/separator diagnostics.
+  `parse_exact`, and whether more parser diagnostics deserve similarly specific
+  wording.
 - How should stdlib helper visibility evolve beyond namespace-private
   `export` syntax, especially once a full import/prelude model exists?
 - How much abstraction is allowed around trusted reflection loops before
