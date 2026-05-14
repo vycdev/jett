@@ -219,7 +219,9 @@ stage, but document it as legacy once `JsonTree` is the preferred spelling.
 Status: implemented through a compiler-owned legacy compatibility alias table
 rather than a source-level alias. Only the stdlib enum `json.JsonTree` is
 compatible with the built-in `JsonValue`; user-defined enums named `JsonTree`
-remain unrelated.
+remain unrelated. The runtime raw facade checks now follow the same rule and
+only accept enum values whose owner is the bundled `json.JsonTree`, not a bare
+or user-defined `JsonTree`.
 Reflection metadata is intentionally split for now:
 `type.info[JsonValue]()` reports `TypePrimitive.json_value_type`, while
 `type.info[json.JsonTree]()` reports `TypeKind.enum_type`.

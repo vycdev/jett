@@ -8754,10 +8754,7 @@ fn is_type_variant_value_callee(callee: &Expr) -> bool {
 }
 
 fn is_json_tree_value(value: &Value) -> bool {
-    matches!(
-        value,
-        Value::Enum { type_name, .. } if type_name == "JsonTree" || type_name == "json.JsonTree"
-    )
+    matches!(value, Value::Enum { type_name, .. } if type_name == "json.JsonTree")
 }
 
 fn result_ok(value: Value) -> Value {
@@ -11291,6 +11288,31 @@ mod tests {
             .unwrap();
 
         assert_eq!(value, Value::String("trusted tree".to_string()));
+    }
+
+    #[test]
+    fn bare_json_tree_enum_does_not_satisfy_raw_facade_value() {
+        let mut interp = Interpreter::new();
+        let mut trusted_hook = func_def(
+            "json_tree_kind",
+            vec![("value", "JsonTree")],
+            block(vec![return_stmt(string("hook fallback"))]),
+        );
+        trusted_hook.span = stdlib_sp();
+        interp.register_function_in_namespace(Some("json"), &trusted_hook);
+
+        let err = interp
+            .call_function(
+                "json.kind",
+                vec![Value::Enum {
+                    type_name: "JsonTree".to_string(),
+                    variant: "null".to_string(),
+                    fields: vec![],
+                }],
+            )
+            .unwrap_err();
+
+        assert_eq!(err, "json.kind expects JsonTree, got JsonTree.null");
     }
 
     #[test]
