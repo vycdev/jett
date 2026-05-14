@@ -1,30 +1,38 @@
 # Raw JSON Values
 
-This note records the first raw JSON surface in Jett. It is meant as a bridge
-toward stdlib `json.parse[T]`, not as a replacement for typed parsing.
+This note records the first raw JSON surface in Jett. It began as an opaque
+`JsonValue` bridge toward stdlib `json.parse[T]`; the active implementation now
+executes that surface through the self-hosted `json.JsonTree` representation.
 
-Long term, `JsonValue` should become a compatibility spelling for the native
-`JsonTree` representation rather than a separate Rust-backed tree. See
-`/docs/active/json_value_transition_plan.md`.
+Long term, bare `JsonValue` should become a compatibility spelling for the
+native `JsonTree` representation rather than a compiler-owned legacy spelling.
+See `/docs/active/json_value_transition_plan.md`.
 
-## Current Primitive
+## Current Compatibility Surface
 
-`JsonValue` is an opaque built-in value that stores a parsed JSON tree. It is not
-an `any` type: user code can only inspect it through explicit `json.*` accessors,
-and typed conversion still returns `result[T, string]`.
+`json.JsonTree` is the stdlib-owned raw JSON tree. `json.JsonValue` is an
+exported namespaced alias for that tree, while bare `JsonValue` remains a
+compiler-owned compatibility spelling for one transition stage. It is not an
+`any` type: user code can only inspect raw JSON through explicit `json.*`
+accessors, and typed conversion still returns `result[T, string]`.
 
 Implemented accessors:
 
-- `json.parse_raw(raw: string)` returns `result[JsonValue, string]`.
-- `json.serialize_raw(value: JsonValue)` returns a compact JSON string.
-- `json.kind(value: JsonValue)` returns `null`, `bool`, `number`, `string`,
+- `json.parse_raw(raw: string)` returns `result[json.JsonTree, string]`, with
+  compatibility assignment to bare `JsonValue`.
+- `json.serialize_raw(view value: json.JsonTree)` returns a compact JSON
+  string.
+- `json.kind(view value: json.JsonTree)` returns `null`, `bool`, `number`, `string`,
   `array`, or `object`.
 - `json.is_null`, `json.is_bool`, `json.is_number`, `json.is_string`,
   `json.is_array`, and `json.is_object` return `bool`.
-- `json.field(value: JsonValue, key: string)` returns `optional[JsonValue]`.
-- `json.index(value: JsonValue, index: int64)` returns `optional[JsonValue]`.
-- `json.array_length(value: JsonValue)` returns `result[int64, string]`.
-- `json.object_keys(value: JsonValue)` returns `result[list[string], string]`.
+- `json.field(view value: json.JsonTree, key: string)` returns
+  `optional[json.JsonTree]`.
+- `json.index(view value: json.JsonTree, index: int64)` returns
+  `optional[json.JsonTree]`.
+- `json.array_length(view value: json.JsonTree)` returns `result[int64, string]`.
+- `json.object_keys(view value: json.JsonTree)` returns
+  `result[list[string], string]`.
 - `json.as_string`, `json.as_int64`, `json.as_float64`, and `json.as_bool`
   return typed `result` values.
 
@@ -47,17 +55,16 @@ quoting helper as reflected typed serialization. `json.json_tree_parse(raw)`
 now parses that staged tree shape for nulls, booleans, raw-number tokens,
 strings, arrays, and objects.
 
-The staged tree also has stdlib traversal helpers mirroring the opaque raw API:
+The tree also has stdlib traversal helpers mirroring the raw API:
 `json_tree_kind`, `json_tree_is_*`, `json_tree_field`, `json_tree_index`,
 `json_tree_array_length`, `json_tree_object_keys`, and scalar casts for string,
-int64, float64, and bool. That gives future decoder work a Rust-free tree
-surface to target.
+int64, float64, and bool. That gives the decoder a Rust-free tree surface to
+target.
 
-This is intentionally staged alongside, not instead of, the opaque `JsonValue`
-primitive. `JsonTree` gives the self-hosted parser a stdlib-owned target
-without breaking existing `json.parse_raw` or raw accessors. Typed public
-`json.parse[T]` now walks `JsonTree`; `JsonValue` remains the Rust-backed raw
-compatibility surface. The parser now has pinned diagnostics for common
+This was intentionally staged alongside the opaque `JsonValue` primitive first.
+The current implementation now routes `json.parse_raw`, raw accessors, and
+typed public `json.parse[T]` through `JsonTree`; bare `JsonValue` remains only a
+compatibility spelling. The parser now has pinned diagnostics for common
 malformed inputs such as unterminated strings/arrays/objects, trailing
 characters, mismatched delimiters, bad number forms, bad literals, and invalid
 escapes. Unicode escapes including BMP values such as `\u0041`, `\u00e9`,
@@ -87,13 +94,13 @@ The raw API deliberately keeps these properties:
 
 ## Relationship To Reflected Construction
 
-A future `.jett` decoder can use `JsonValue` to parse and inspect the raw tree,
-then use trusted reflection to decode each field at its concrete type:
+The `.jett` decoder uses `JsonTree` to parse and inspect the raw tree, then uses
+trusted reflection to decode each field at its concrete type:
 
 ```jett
 for field in type.fields[T]():
     comptime type Field = field.type_info:
-        JsonValue raw_field = json.field(raw, field.serialize_name) handle:
+        json.JsonTree raw_field = json.field(view raw, field.serialize_name) handle:
             ...
         Field value = decode_json[Field](view raw_field) handle error:
             ...
@@ -101,14 +108,12 @@ for field in type.fields[T]():
 ```
 
 For structs, bitfields, and enums, construction of the final `T` from typed
-field or payload values is now available through `TypeConstruction`. The nested
-decoder proof uses that path and treats absent optional fields as `none`; the
-remaining work is hardening the prototype into stdlib code. That is tracked in
-`/docs/open_design/type_construction_design.md` and
-`/docs/completed/reflected_construction_staging.md`.
-The first flat and nested struct proofs live in
+field or payload values is available through `TypeConstruction`. The stdlib
+decoder uses that path and treats absent optional fields as `none`. The original
+flat and nested struct proofs live in
 `tests/run_pass/json_reflection_flat_decoder.jett` and
-`tests/run_pass/json_reflection_nested_decoder.jett`.
+`tests/run_pass/json_reflection_nested_decoder.jett`; the active stdlib bridge
+coverage now lives in the JSON run-pass and driver tests.
 
 ## Open Questions
 

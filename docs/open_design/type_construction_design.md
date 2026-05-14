@@ -148,8 +148,9 @@ Verdict: preferred direction, pending syntax.
 4. Done for enums: start from checked `TypeVariant` metadata with
    `type.construct_variant_start[T](variant)`, then reuse `construct_put` and
    `construct_finish` for variant-local payload fields.
-5. Replace pieces of Rust-backed `json.parse[T]` with `.jett` code as each
-   construction case becomes expressible.
+5. Done for JSON: public typed parse now routes through the stdlib `JsonTree`
+   parser/decoder. Remaining construction work is about hardening syntax and
+   reuse for future decoders, not replacing a Rust-backed `json.parse[T]`.
 
 ## Implementation Notes
 

@@ -54,6 +54,7 @@ The reflected JSON implementation has started moving into stdlib under the
 - `json_serialize_reflected[T](view value)`
 - `json_serialize_public_reflected[T](view value)`
 - `json_parse_reflected[T](raw: string)`
+- `json_parse_exact_reflected[T](raw: string)`
 
 The module also declares exported public wrapper names `parse`, `parse_exact`,
 `serialize`, and `serialize_public`. Calls such as `json.parse[T](raw)` and
@@ -64,8 +65,9 @@ wrappers remain readable source-level declarations, but the bridge target stays
 on internal hook names until the language can carry the compiler-owned JSON
 policy on ordinary stdlib declarations.
 
-The raw-string hook remains directly exercised through its qualified stdlib
-staging name, `json.json_parse_reflected[T](raw)`.
+The raw-string hooks remain directly exercised through their qualified stdlib
+staging names, `json.json_parse_reflected[T](raw)` and
+`json.json_parse_exact_reflected[T](raw)`.
 
 The run-pass fixtures still own the test-specific type definitions and the
 flat decoder prototype:
@@ -90,13 +92,13 @@ Together they cover the shape needed for a future stdlib module:
   typed parse.
 
 The compiler-known JSON bridge remains the compatibility and policy facade. It
-still owns the public typechecker policy for `json.parse`, `json.serialize`,
-and `json.serialize_public`. In the interpreter, all three public calls now
+still owns the public typechecker policy for `json.parse`, `json.parse_exact`,
+`json.serialize`, and `json.serialize_public`. In the interpreter, all four public calls now
 delegate to reflected stdlib hook implementations only when the current hook
 registry entries came from compiler-shipped stdlib files. The old typed Rust
 fallback paths for public parse/serialize have been removed; Rust-backed paths
 have also been removed from raw JSON execution in `jett_comptime`. Public
-  `json.parse_raw` now delegates to the trusted self-hosted `JsonTree` parser,
+`json.parse_raw` now delegates to the trusted self-hosted `JsonTree` parser,
 and raw helper calls dispatch native `JsonTree` runtime values through trusted
 stdlib facade wrappers backed by `json_tree_*` hooks. The remaining builtin raw
 facade path is a bootstrap/no-stdlib dispatcher around those hooks, not a
@@ -131,7 +133,7 @@ namespace name such as `helpers.wrap[T](value)` or
 
 Moving JSON into `.jett` still needs the public API handoff:
 
-- the compiler-owned `json.parse`, `json.serialize`, and
+- the compiler-owned `json.parse`, `json.parse_exact`, `json.serialize`, and
   `json.serialize_public` paths still carry compiler-enforced policy checks,
 - `use` still resolves only a namespace-looking binding rather than importing a
   real namespace registry,

@@ -65,18 +65,13 @@ Implemented reflection primitives:
   recursive dispatch for wrappers such as `list[T]` and `optional[T]` without
   trusting user-constructed metadata.
 
-JSON serialization is still Rust-backed, but it now consumes the same field
-metadata exposed to Jett code. The active tests cover nested structs, bitfields,
-lists, sets, maps with string keys, optionals, results, `serialize` names,
-public secret omission, and valid JSON string escaping for control characters.
-
-There are also `.jett` serializer hooks now staged in
-`stdlib/json.jett` as
+JSON serialization has moved behind trusted `.jett` serializer hooks in
+`stdlib/json.jett`:
 `json_serialize_reflected[T](view value)` and
 `json_serialize_public_reflected[T](view value)`. They recursively handle
 primitives, structs, lists, sets, `map[string, V]`, optionals, result ok/fail
 objects, alias/refinement base serialization, bitfields, and enums using the
-same string/object shape as the Rust-backed JSON bridge. It relies on reflection
+public JSON string/object shape. The implementation relies on reflection
 primitives, trusted `comptime type` binding, and `type.arg[T](index)` for wrapper
 element/value types. The prototype also covers basic string escaping for quotes,
 backslashes, common named control characters, and all other ASCII control bytes
@@ -86,44 +81,44 @@ function against nested user-defined types. The public `json.serialize[T]` and
 `json.serialize_public[T]` bridges now delegate to these hooks in the
 interpreter after the typechecker keeps the public policy checks.
 
-There are also `.jett` decoder prototypes:
+There are also `.jett` decoder paths:
 `tests/run_pass/json_reflection_flat_decoder.jett` covers the first
 flat-struct path, and `stdlib/json.jett` now stages the nested
-decoder as `json_decode_reflected[T](raw)`, plus
-`json_parse_reflected[T](raw: string)` as a thin staged wrapper over
-`json.parse_raw` and the reflected decoder. It recursively handles core
+decoder as `json_decode_tree_reflected[T](view raw: JsonTree)`, plus
+`json_parse_reflected[T](raw: string)` and
+`json_parse_exact_reflected[T](raw: string)` as staged wrappers over the
+self-hosted `JsonTree` parser and reflected decoder. It recursively handles core
 primitives (`string`, `int64`, `float64`, `bool`,
 `bytes` as hex strings, and JSON null as `nothing`), nested structs, lists,
 sets, maps with string keys, optionals, results, aliases/refinements, and
-`serialize_name` by walking raw `JsonValue` and finishing structs, bitfields,
+`serialize_name` by walking raw `JsonTree` and finishing structs, bitfields,
 and enums with `TypeConstruction`.
 It treats absent optional fields as `none`, validates top-level refinements
 including refinements over generic shapes, and decodes enum-annotated bitfields
 through the ordinary enum branch plus bitfield finish validation. It also
 decodes `secret[T]` by parsing the inner `T` and assigning the result into the
-secret wrapper, matching the Rust-backed `json.parse[T]` input policy while
+secret wrapper, matching the public `json.parse[T]` input policy while
 keeping output exposure blocked by the ordinary secret type rules.
 `tests/run_pass/json_reflection_nested_decoder.jett` exercises the decoder
 against nested user-defined types, while
 `tests/run_pass/json_reflection_parse_wrapper.jett` checks the raw-string
 wrapper path through the qualified staging name
 `json.json_parse_reflected[T](raw)`. See
-`/docs/completed/json_public_parse_policy.md` for the current
-recommendation: avoid a public parse API for now, and keep public JSON as an
-output projection unless a future audit-oriented API rejects secret-containing
-targets outright.
+`/docs/completed/json_public_parse_policy.md` for the original parse-policy
+handoff. Public typed parse is now implemented, with `json.parse[T]` remaining
+lenient and `json.parse_exact[T]` rejecting unknown object fields recursively.
 
 `tests/run_pass/json_reflection_bridge_parity.jett` now keeps the reflected
 serializer/parser hooks aligned with the public JSON bridge for representative
 full serialization, public serialization, and typed parse calls.
 
-`json.parse[T](raw)` remains a compiler-known public bridge: it requires one
-type argument, accepts a string, returns `result[T, string]`, and the
-typechecker still enforces the public JSON policies. The stdlib module now also
-declares `json.parse[T](raw)` as a wrapper around the reflected hook; in the
-interpreter, the compiler-known bridge delegates through that wrapper when the
-bundled stdlib module is registered, with `json.json_parse_reflected[T](raw)` as
-the bootstrap fallback. The reflected path supports core primitives,
+`json.parse[T](raw)` and `json.parse_exact[T](raw)` remain compiler-known public
+bridges: they require one type argument, accept a string, return
+`result[T, string]`, and the typechecker still enforces the public JSON
+policies. The stdlib module also declares readable exported wrappers, but the
+interpreter delegates compiler-owned public bridges directly to trusted internal
+hooks such as `json.json_parse_reflected[T](raw)` and
+`json.json_parse_exact_reflected[T](raw)`. The reflected path supports core primitives,
 structs with `serialize` names, lists, sets, `map[string, V]`, optionals,
 results, `secret[T]` wrappers, enums using the serializer's string/object
 payload shape, bitfields from JSON objects with width and enum-annotation
@@ -134,22 +129,21 @@ available through `TypeConstruction`, bitfield construction is available through
 the same builder, and enum construction is available through
 `type.construct_variant_start`.
 
-`json.serialize_public[T](view value)` follows the same staged bridge pattern:
+`json.serialize_public[T](view value)` follows the same bridge pattern:
 the typechecker keeps the public policy checks, while the interpreter delegates
-the body through the stdlib `json.serialize_public[T](view value)` wrapper when
-the bundled stdlib function is registered. Full
-`json.serialize[T](view value)` delegates through the stdlib
-`json.serialize[T](view value)` wrapper for non-secret-containing types; the
+the body through trusted internal stdlib hooks. Full
+`json.serialize[T](view value)` delegates for non-secret-containing types; the
 typechecker still owns secret rejection, and the interpreter keeps a defensive
 guard before delegation. See
 `/docs/active/stdlib_json_extraction_plan.md` and
 `/docs/completed/json_public_bridge_handoff.md`.
 
-`json.parse_raw(raw)` now exposes an opaque `JsonValue` tree with explicit
-accessors for kind checks, object fields, array indexes, scalar casts, object
-keys, array length, null checks, and compact raw serialization. This gives a
-future `.jett` decoder a safe raw input representation without adding an
-unchecked `any` lane. See `/docs/completed/json_raw_value_design.md`.
+`json.parse_raw(raw)` now exposes the stdlib `json.JsonTree` representation,
+with compatibility assignment to bare `JsonValue`. Explicit raw accessors cover
+kind checks, object fields, array indexes, scalar casts, object keys, array
+length, null checks, and compact raw serialization. This gives the `.jett`
+decoder a safe raw input representation without adding an unchecked `any` lane.
+See `/docs/completed/json_raw_value_design.md`.
 
 ## Design Pressure
 
@@ -193,12 +187,13 @@ For replacing stringly kind checks with structured tags, see
 
 ### 2. Constructing `T` During `json.parse[T]`
 
-Deserialization now has a stdlib-shaped reflected path over `JsonTree`: given
+Deserialization now has a stdlib reflected path over `JsonTree`: given
 parsed field values, it builds `T` in declaration order while validating missing
 fields, `serialize` names, secret wrappers, optionals, results, refinements, and
 nested structs. The same `TypeConstruction` path builds structs, bitfields, and
 enums with primitive, list/set/map, optional, result, alias, and refinement
-fields. Raw `JsonValue` parsing/access remains Rust-backed for compatibility.
+fields. Raw `JsonValue` parsing/access now executes on native `JsonTree` values
+through trusted stdlib facades.
 
 Refinement fields are validated at `construct_finish`; direct top-level
 refinement targets validate through the decoder's refinement branch.

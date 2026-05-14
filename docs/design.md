@@ -1267,14 +1267,20 @@ use json
 Config config = json.parse[Config](raw_string) handle error:
     return fail("invalid json")                              # string to typed value
 string text = json.serialize[Config](view config)                    # value to string
-string pretty = json.serialize_pretty[Config](view config)           # value to formatted string
+Config strict = json.parse_exact[Config](raw_string) handle error:
+    return fail("unexpected json field")                     # closed-contract parsing
 
 # For dynamic/untyped JSON access (when the schema is unknown):
-JsonValue raw = json.parse_raw(raw_string) handle error:
+json.JsonTree raw = json.parse_raw(raw_string) handle error:
     return fail("invalid json")                              # string to raw json value
-JsonValue field = json.get(raw, "user.address.city") handle:
-    return fail("field not found")                           # nested field access by path
-string safe = json.get_or(raw, "user.nickname", "anon")     # with default
+json.JsonTree user = json.require_field(view raw, "user") handle error:
+    return fail(error)
+json.JsonTree address = json.require_field(view user, "address") handle error:
+    return fail(error)
+json.JsonTree city_raw = json.require_field(view address, "city") handle error:
+    return fail(error)
+string city = json.as_string(view city_raw) handle error:
+    return fail(error)
 ```
 
 **HTTP — high-level client out of the box:**
@@ -3306,11 +3312,11 @@ struct UserRecord:
 # The json module provides two serialization paths:
 # json.serialize_public[UserRecord](view user) → {"id":"123","name":"alice"}
 #   (secret fields are omitted)
-# json.serialize_full[UserRecord](view user, declassify_token) → requires explicit declassification
+# future: json.serialize_full[UserRecord](view user, declassify_token) → requires explicit declassification
 #   (only callable with a declassification token — see Rule Set 15)
 ```
 
-Calling `json.serialize` on a struct with secret fields is a compile error. The LLM cannot accidentally serialize secrets. It must explicitly choose `json.serialize_public` (safe) or `json.serialize_full` with a declassification token (auditable).
+Calling `json.serialize` on a struct with secret fields is a compile error. The LLM cannot accidentally serialize secrets. It must explicitly choose `json.serialize_public` (safe). A future audited full-serialization path can require a declassification token.
 
 #### Serialization with State Machines
 
@@ -6241,7 +6247,7 @@ Primitive types (`int64`, `float64`, `string`, `bool`) implement standard interf
 | `Orderable` | `int64`, `float64`, `string` | `<`, `>`, `<=`, `>=` |
 | `Displayable` | `int64`, `float64`, `string`, `bool` | string representation (used by string interpolation) |
 | `Hashable` | `int64`, `string`, `bool` | can be used as `map` keys and `set` elements |
-| `Serializable` | all structs, all primitives | `json.serialize[T]()`, `json.parse[T]()` |
+| `Serializable` | all structs, all primitives | `json.serialize[T]()`, `json.parse[T]()`, `json.parse_exact[T]()` |
 
 Primitive interface implementations are ordinary `implement` blocks, not compiler magic. `Serializable` is automatically implemented for all structs — since structs are plain data with known fields, the compiler can generate serialization code without any user input.
 
@@ -6260,7 +6266,7 @@ The standard library is intentionally massive and opinionated. The goal is to ma
 - **set** — add, remove, union, intersection, difference, contains
 - **net.http** — HTTP client (get, post, put, delete), response handling, HttpError enum (connection_failed, timeout, status_error)
 - **net.socket** — low-level TCP/UDP networking
-- **json** — parse, parse_raw, serialize, serialize_public, serialize_full, pretty print, nested path access, get, get_or
+- **json** — parse, parse_exact, parse_raw, serialize, serialize_public, raw `JsonTree` field/index access, strict raw accessors, scalar casts
 - **time** — now, format, parse, difference, add/subtract, comparisons, day_of_week, years_between
 - **os** — environment variables, process management, file system, argv
 - **test** — mock infrastructure for property-based testing (`test.mock` for mock filesystems, networks, etc.)

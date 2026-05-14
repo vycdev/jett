@@ -62,8 +62,9 @@ Jett is experimental, but the compiler front half is substantial.
 - `jett build` currently validates and type-checks programs. Native LLVM code generation is planned but not implemented yet.
 - `jett run` executes programs through the tree-walking interpreter.
 - `jett test` runs `verify` and `property` blocks.
-- The standard library is partly Rust-backed and partly written in `.jett`; `stdlib/json.jett` is the active bridge toward reflection-powered stdlib JSON.
+- The standard library is partly Rust-backed and partly written in `.jett`; JSON now uses trusted `.jett` stdlib bodies behind compiler-owned policy gates.
 - `json.parse[T]` is the lenient compatibility parser, while `json.parse_exact[T]` rejects unknown object fields for closed contracts such as config files, protocols, and tests.
+- Raw JSON uses `json.JsonTree`; bare `JsonValue` remains a legacy compatibility spelling during the transition.
 
 See [docs/progress.md](docs/progress.md) for the detailed implementation matrix.
 

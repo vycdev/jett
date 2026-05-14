@@ -13,7 +13,7 @@ import, or prelude system.
 
 That matters for JSON because the module needs both:
 
-- public functions such as `json.parse`, `json.serialize`, and
+- public functions such as `json.parse`, `json.parse_exact`, `json.serialize`, and
   `json.serialize_public`,
 - many helper functions such as `json_decode_record_reflected` and
   `json_stdlib_quote`,
