@@ -258,6 +258,10 @@ run_pass_fixture!(
     "namespace_qualified_interface_implement.jett"
 );
 run_pass_fixture!(
+    run_pass_namespace_qualified_actors,
+    "namespace_qualified_actors.jett"
+);
+run_pass_fixture!(
     run_pass_namespace_runtime_verify_context,
     "namespace_runtime_verify_context.jett"
 );
@@ -544,6 +548,18 @@ compile_fail_fixture!(
 compile_fail_fixture!(
     compile_fail_namespace_private_mutual_flat,
     "namespace_private_mutual_flat.jett"
+);
+compile_fail_fixture!(
+    compile_fail_namespace_actor_body_checked,
+    "namespace_actor_body_checked.jett"
+);
+compile_fail_fixture!(
+    compile_fail_namespace_private_actor,
+    "namespace_private_actor.jett"
+);
+compile_fail_fixture!(
+    compile_fail_namespace_exported_flat_actor,
+    "namespace_exported_flat_actor.jett"
 );
 compile_fail_fixture!(
     compile_fail_stdlib_namespace_collision,

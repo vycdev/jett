@@ -268,7 +268,7 @@ impl Resolver {
                         DefKind::Actor,
                         a.name.span,
                         index,
-                        false,
+                        a.exported,
                     );
                 }
                 Item::TypeAlias(ta) => {

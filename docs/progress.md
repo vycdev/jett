@@ -3,7 +3,7 @@
 ## Statistics
 
 - **Lines of Rust:** ~33,000
-- **Tests:** 465+ passing
+- **Tests:** 470+ passing
 - **Crates:** 15
 - **VS Code extension:** Yes
 
@@ -76,7 +76,7 @@
 | Verify blocks (parsing + execution) | Done |
 | Property-based testing (`property` blocks) | Done |
 | Bitfield declarations | Partial (constructors, field access, enum-annotated fields, payload fields, reflection, and interpreter `to_bytes`/`from_bytes` roundtrips are covered; native codegen still pending) |
-| Actor model (`actor`, `spawn`, `send`, `ask`) | Done (capability args, message args, state initializers, and `responds` values typecheck against declared types) |
+| Actor model (`actor`, `spawn`, `send`, `ask`) | Done (capability args, message args, state initializers, and `responds` values typecheck against declared types; exported namespaced actors support qualified and `use`-alias spawn) |
 | Structured concurrency (`run`, `join`, `cancel`) | Done |
 | Interface/implement blocks | Done |
 | `mutual` blocks | Done |

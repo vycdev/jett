@@ -2901,7 +2901,7 @@ impl<'a> TypeChecker<'a> {
                     }
                 }
                 Item::Bitfield(_) => {}
-                Item::Actor(def) => self.check_actor(def),
+                Item::Actor(def) => self.check_actor(def, current_namespace.as_deref()),
                 Item::VarDecl(decl) => self.check_var_decl(decl),
                 Item::Verify(verify) => self.check_verify_block(verify),
                 Item::Property(prop) => self.check_property_block(prop),
@@ -3044,8 +3044,9 @@ impl<'a> TypeChecker<'a> {
         );
     }
 
-    fn check_actor(&mut self, def: &ast::ActorDef) {
-        let Some(&actor_ty) = self.named_types.get(&def.name.name) else {
+    fn check_actor(&mut self, def: &ast::ActorDef, namespace: Option<&str>) {
+        let canonical_name = Self::canonical_name(namespace, &def.name.name);
+        let Some(&actor_ty) = self.named_types.get(&canonical_name) else {
             return;
         };
         let Type::Actor(aid) = *self.interner.resolve(actor_ty) else {
@@ -3103,7 +3104,7 @@ impl<'a> TypeChecker<'a> {
             self.current_respond_type = responds_ty;
             self.current_return_type = None;
             self.current_function_name =
-                Some(format!("{}.{}", def.name.name, handler_ast.name.name));
+                Some(format!("{}.{}", actor_def.name, handler_ast.name.name));
 
             // Register message params in the type env temporarily.
             for (param_ast, (_, param_ty)) in
@@ -5462,47 +5463,40 @@ impl<'a> TypeChecker<'a> {
     fn check_spawn(&mut self, inner: &Expr) -> TypeId {
         // `spawn ActorType(args)` — the inner expr should be a call to the actor type name.
         // We check the arguments but return the actor type.
-        let callee = match inner {
-            Expr::Call(callee, _args, _span) => callee.as_ref(),
+        let (callee, args) = match inner {
+            Expr::Call(callee, args, _span) => (callee.as_ref(), args.as_slice()),
             _ => {
                 self.check_expr(inner);
                 return TypeInterner::ERROR;
             }
         };
-        // The callee should be an actor type name.
-        match callee {
-            Expr::Ident(ident) => {
-                if let Some(&ty) = self.named_types.get(&ident.name) {
-                    if let Type::Actor(aid) = *self.interner.resolve(ty) {
-                        let actor_def = self.interner.resolve_actor(aid).clone();
-                        if let Expr::Call(_, args, _) = inner {
-                            self.check_actor_argument_list(
-                                &actor_def.name,
-                                &actor_def.capability_params,
-                                args,
-                                inner.span(),
-                            );
-                        }
-                        return ty;
-                    }
-                }
-                if let Expr::Call(_, args, _) = inner {
-                    for arg in args {
-                        self.check_expr(&arg.value);
-                    }
-                }
-                self.check_expr(callee)
+
+        let Some(actor_name) = self.expanded_dotted_expr_name(callee) else {
+            for arg in args {
+                self.check_expr(&arg.value);
             }
-            _ => {
-                if let Expr::Call(_, args, _) = inner {
-                    for arg in args {
-                        self.check_expr(&arg.value);
-                    }
-                }
-                self.check_expr(callee);
-                TypeInterner::ERROR
+            self.check_expr(callee);
+            return TypeInterner::ERROR;
+        };
+
+        if let Some(&ty) = self.named_types.get(&actor_name) {
+            if let Type::Actor(aid) = *self.interner.resolve(ty) {
+                let actor_def = self.interner.resolve_actor(aid).clone();
+                self.check_actor_argument_list(
+                    &actor_def.name,
+                    &actor_def.capability_params,
+                    args,
+                    inner.span(),
+                );
+                return ty;
             }
         }
+
+        for arg in args {
+            self.check_expr(&arg.value);
+        }
+        self.check_expr(callee);
+        TypeInterner::ERROR
     }
 
     fn check_send_ask_inner(&mut self, inner: &Expr) -> TypeId {

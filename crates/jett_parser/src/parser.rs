@@ -173,6 +173,7 @@ impl<'src> Parser<'src> {
                     | TokenKind::Struct
                     | TokenKind::Bitfield
                     | TokenKind::Enum
+                    | TokenKind::Actor
                     | TokenKind::Type
             )
             && !(self.peek() == TokenKind::Network && self.peek_nth(1) == TokenKind::Bitfield)
@@ -180,7 +181,7 @@ impl<'src> Parser<'src> {
             let tok = self.peek_token().clone();
             self.error(
                 format!(
-                    "expected exportable item (function, interface, struct, bitfield, enum, or type), found {:?}",
+                    "expected exportable item (function, interface, struct, bitfield, enum, actor, or type), found {:?}",
                     tok.kind
                 ),
                 tok.span,
@@ -206,7 +207,7 @@ impl<'src> Parser<'src> {
             )),
             TokenKind::Enum => Some(Item::Enum(self.parse_enum(exported, export_span))),
             TokenKind::Machine => Some(Item::Machine(self.parse_machine())),
-            TokenKind::Actor => Some(Item::Actor(self.parse_actor())),
+            TokenKind::Actor => Some(Item::Actor(self.parse_actor(exported, export_span))),
             TokenKind::Verify => Some(Item::Verify(self.parse_verify_block())),
             TokenKind::Property => Some(Item::Property(self.parse_property_block())),
             TokenKind::Type => Some(Item::TypeAlias(
@@ -222,7 +223,7 @@ impl<'src> Parser<'src> {
                 if exported {
                     self.error(
                         format!(
-                            "expected exportable item (function, interface, struct, bitfield, enum, or type), found {:?}",
+                            "expected exportable item (function, interface, struct, bitfield, enum, actor, or type), found {:?}",
                             tok.kind
                         ),
                         tok.span,
@@ -884,8 +885,9 @@ impl<'src> Parser<'src> {
     // Actors
     // =======================================================================
 
-    fn parse_actor(&mut self) -> ActorDef {
+    fn parse_actor(&mut self, exported: bool, export_span: Option<Span>) -> ActorDef {
         let kw = self.expect(TokenKind::Actor);
+        let start_span = export_span.unwrap_or(kw.span);
         let name = self.parse_ident();
 
         // Optional capability parameters: `actor Counter(stdout: Stdout):`
@@ -945,11 +947,12 @@ impl<'src> Parser<'src> {
         }
 
         ActorDef {
-            span: kw.span.merge(last_span),
+            span: start_span.merge(last_span),
             name,
             capability_params,
             state_fields,
             handlers,
+            exported,
         }
     }
 
@@ -2577,10 +2580,14 @@ export type Port = int64
 
 export interface Speaker:
     function speak(view self: Speaker) returns string
+
+export actor Worker:
+    receive ping:
+        return nothing
 ";
         let result = parse_str(src);
         assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
-        assert_eq!(result.module.items.len(), 7);
+        assert_eq!(result.module.items.len(), 8);
         assert!(matches!(&result.module.items[0], Item::Function(f) if f.exported));
         assert!(matches!(&result.module.items[1], Item::Struct(s) if s.exported));
         assert!(matches!(&result.module.items[2], Item::Enum(e) if e.exported));
@@ -2592,6 +2599,7 @@ export interface Speaker:
         );
         assert!(matches!(&result.module.items[5], Item::TypeAlias(t) if t.exported));
         assert!(matches!(&result.module.items[6], Item::Interface(i) if i.exported));
+        assert!(matches!(&result.module.items[7], Item::Actor(a) if a.exported));
     }
 
     #[test]

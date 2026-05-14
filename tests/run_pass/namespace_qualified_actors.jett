@@ -1,0 +1,27 @@
+namespace workers
+
+export actor Counter(seed: uint8):
+    mutable uint8 count = seed
+
+    receive add(delta: uint8):
+        count = count + delta
+
+    receive current responds uint8:
+        respond count
+
+namespace app
+
+function direct_actor() returns uint8:
+    workers.Counter counter = spawn workers.Counter(seed: 5)
+    send counter.add(7)
+    return ask counter.current
+
+function alias_actor() returns uint8:
+    use workers as w
+    w.Counter counter = spawn w.Counter(seed: 10)
+    send counter.add(3)
+    return ask counter.current
+
+verify namespace_qualified_actors:
+    assert direct_actor() == 12
+    assert alias_actor() == 13

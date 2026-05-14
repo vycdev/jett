@@ -1,0 +1,12 @@
+# ERROR: E0208
+namespace workers
+
+export actor Counter:
+    receive ping:
+        return nothing
+
+namespace app
+
+function main() returns nothing:
+    Counter counter = spawn Counter()
+    return nothing

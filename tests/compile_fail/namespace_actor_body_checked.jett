@@ -1,0 +1,6 @@
+# ERROR: E0300
+namespace workers
+
+export actor Counter:
+    receive current responds uint8:
+        respond 300

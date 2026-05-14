@@ -224,6 +224,7 @@ pub struct ActorDef {
     pub state_fields: Vec<VarDecl>,
     /// Message handlers.
     pub handlers: Vec<ReceiveHandler>,
+    pub exported: bool,
     pub span: Span,
 }
 

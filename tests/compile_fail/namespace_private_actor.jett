@@ -1,0 +1,12 @@
+# ERROR: E0207
+namespace workers
+
+actor Counter:
+    receive ping:
+        return nothing
+
+namespace app
+
+function main() returns nothing:
+    workers.Counter counter = spawn workers.Counter()
+    return nothing

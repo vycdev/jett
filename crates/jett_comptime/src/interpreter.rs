@@ -1023,6 +1023,11 @@ impl Interpreter {
                 let (source_actor_name, args) = match inner.as_ref() {
                     Expr::Call(callee, args, _) => match callee.as_ref() {
                         Expr::Ident(ident) => (ident.name.clone(), args),
+                        Expr::FieldAccess(_, _, _) => {
+                            let name = Self::dotted_expr_name(callee)
+                                .ok_or_else(|| "spawn: expected actor type name".to_string())?;
+                            (name, args)
+                        }
                         _ => return Err("spawn: expected actor type name".to_string()),
                     },
                     _ => return Err("spawn: expected call expression".to_string()),

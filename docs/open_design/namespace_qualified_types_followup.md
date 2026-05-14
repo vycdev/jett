@@ -26,6 +26,10 @@ existing flat declaration model:
   through qualified interface method calls like `contracts.Named.name(view user)`.
 - Duplicate-leaf interfaces are covered with both direct qualified calls and
   function-local namespace aliases.
+- Exported actors can be spawned through qualified names such as
+  `spawn workers.Counter(...)` and function-local namespace aliases such as
+  `use workers as w; spawn w.Counter(...)`; namespaced actor bodies are checked
+  against their canonical owner metadata.
 
 That was the right first bite because it unblocks stdlib-style reflection and
 JSON code without changing the language's broader namespace semantics.
@@ -38,10 +42,11 @@ JSON code without changing the language's broader namespace semantics.
   as the final namespace model.
 - `use models as m` is a local namespace alias, not a type alias. The registered
   spelling and reflected metadata remain `models.User`.
-- Actors and state machines still have some leaf-name-oriented paths.
-  Qualified struct, enum, bitfield, generic struct, reflection, JSON, and
-  interface implementation paths are covered first because they are the JSON
-  extraction blocker.
+- Actors and state machines still have some leaf-name-oriented paths. Qualified
+  actor spawn is covered for exported actors, but duplicate-leaf actor owners
+  remain deferred. Qualified struct, enum, bitfield, generic struct, reflection,
+  JSON, and interface implementation paths are covered first because they are
+  the JSON extraction blocker.
 - Typechecker canonical names for namespaced user types now use the qualified
   spelling in reflection and `TypeId` display paths covered by the current
   tests.
@@ -126,14 +131,13 @@ front-end convenience.
 ## Deferred Actor And Machine Work
 
 Actors and state machines should stay as an explicit follow-up instead of being
-folded into the interface work. Actor spawn currently expects a bare identifier
-shape in the typechecker and interpreter, while `spawn ns.Actor()` parses as a
-dotted field-access expression. A narrow patch to accept dotted actor names is
-not sufficient by itself: duplicate-leaf actor experiments expose deeper actor
-namespace assumptions around actor body checking, runtime registration, and
-diagnostics. The right fix should introduce one shared "type-name expression"
-resolution path and then thread namespace context through actor checking and
-spawn.
+folded into the interface work. Actor spawn now accepts qualified and
+`use`-alias names for exported actors, and namespaced actor bodies are checked
+through their canonical `namespace.Actor` metadata. Duplicate-leaf actor
+experiments still expose deeper actor namespace assumptions around runtime
+registration, diagnostics, and same-leaf owner disambiguation. The next actor
+step should keep extracting shared "type-name expression" resolution instead of
+adding one-off lookup branches.
 
 State machines have more runtime namespace support than actor spawn, but their
 type-system story is still thin. Treat namespaced machine tests as design probes
@@ -141,9 +145,9 @@ until the machine type model is made explicit.
 
 ## Suggested Next Tests
 
-- Actors: add a design probe for duplicate-leaf actors only after `spawn` has a
-  shared qualified type-name resolution path and actor body checking receives
-  namespace context.
+- Actors: add a design probe for duplicate-leaf actors after actor runtime
+  registration and diagnostics share the same canonical owner identity as
+  `spawn`.
 - State machines: add a small namespaced machine fixture once the machine type
   model is explicit enough for diagnostics and reflection to agree on canonical
   names.
