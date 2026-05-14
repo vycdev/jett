@@ -6,6 +6,12 @@ function takes_byte(value: uint8) returns uint8:
 function return_byte_sum() returns uint8:
     return 1 + 2
 
+function signed_literal_text() returns string:
+    int8 small = -128
+    int16 wide = -32768
+    float32 ratio = -2.5
+    return "{small}:{wide}:{ratio}"
+
 actor ByteCounter(seed: uint8):
     mutable uint8 count = seed + 1
 
@@ -28,3 +34,4 @@ verify numeric_literal_contexts:
     assert called == 7
     assert returned == 3
     assert current == 32
+    assert signed_literal_text() == "-128:-32768:-2.5"

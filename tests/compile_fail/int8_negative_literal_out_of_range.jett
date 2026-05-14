@@ -1,0 +1,4 @@
+# ERROR: E0311
+function main() returns nothing:
+    int8 value = -129
+    return nothing

@@ -591,6 +591,10 @@ compile_fail_fixture!(
     "uint8_binary_expression_out_of_range.jett"
 );
 compile_fail_fixture!(
+    compile_fail_int8_negative_literal_out_of_range,
+    "int8_negative_literal_out_of_range.jett"
+);
+compile_fail_fixture!(
     compile_fail_actor_message_arg_type_mismatch,
     "actor_message_arg_type_mismatch.jett"
 );

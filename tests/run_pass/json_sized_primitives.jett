@@ -60,8 +60,7 @@ function serialize_uint8_max() returns string:
     return json.serialize[uint8](value)
 
 function serialize_int16_min() returns string:
-    int16 value = json.parse[int16]("-32768") handle error:
-        return error
+    int16 value = -32768
     return json.serialize[int16](value)
 
 function serialize_uint32_max() returns string:

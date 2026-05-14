@@ -617,6 +617,16 @@ impl<'a> TypeChecker<'a> {
         matches!(self.interner.resolve(id), Type::Float32 | Type::Float64)
     }
 
+    fn negated_literal_matches_expected_type(&self, operand: &Expr, expected_ty: TypeId) -> bool {
+        match operand {
+            Expr::IntLiteral(value, _) => value.checked_neg().is_some_and(|negated| {
+                self.int_literal_matches_expected_type(negated, expected_ty)
+            }),
+            Expr::FloatLiteral(_, _) => self.float_literal_matches_expected_type(expected_ty),
+            _ => false,
+        }
+    }
+
     fn expected_numeric_type(&self, expected_ty: TypeId) -> Option<TypeId> {
         let id = self.secret_inner_type(expected_ty).unwrap_or(expected_ty);
         self.is_numeric(id).then_some(id)
@@ -4550,6 +4560,11 @@ impl<'a> TypeChecker<'a> {
                 expected_ty
             }
             Expr::FloatLiteral(_, _) if self.float_literal_matches_expected_type(expected_ty) => {
+                expected_ty
+            }
+            Expr::Unary(UnaryOp::Neg, inner, _)
+                if self.negated_literal_matches_expected_type(inner, expected_ty) =>
+            {
                 expected_ty
             }
             Expr::Binary(lhs, op, rhs, span)
