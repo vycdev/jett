@@ -151,6 +151,7 @@ mutual:
     function json_tree_serialize_array(view items: list[JsonTree]) returns string
     function json_tree_serialize_object(view fields: map[string, JsonTree]) returns string
     function json_serialize_public_reflected[T](view value: T) returns string
+    function json_serialize_public_raw_reflected[T](view value: T) returns string
     function json_serialize_public_primitive[T](view value: T, primitive: TypePrimitive) returns string
     function json_serialize_public_enum_reflected[T](view value: T) returns string
     function json_serialize_public_non_enum_reflected[T](view value: T, kind: TypeKind) returns string
@@ -825,8 +826,11 @@ function json_tree_serialize_object(view fields: map[string, JsonTree]) returns 
 function json_serialize_public_reflected[T](view value: T) returns string:
     TypeInfo info = type.info[T]()
     TypeKind kind = info.kind_tag
+    string type_name = info.type_name
     TypePrimitive primitive = info.primitive_tag handle:
         default TypePrimitive.unknown_type
+    if type_name == "json.JsonTree":
+        return json_serialize_public_raw_reflected[T](view value)
     if primitive != TypePrimitive.unknown_type:
         return json_serialize_public_primitive[T](view value, primitive)
     if kind == TypeKind.alias_type:
@@ -840,6 +844,9 @@ function json_serialize_public_reflected[T](view value: T) returns string:
     if kind == TypeKind.enum_type:
         return json_serialize_public_enum_reflected[T](view value)
     return json_serialize_public_non_enum_reflected[T](view value, kind)
+function json_serialize_public_raw_reflected[T](view value: T) returns string:
+    JsonTree item = value
+    return json_tree_serialize(view item)
 function json_serialize_public_primitive[T](view value: T, primitive: TypePrimitive) returns string:
     if primitive == TypePrimitive.string_type:
         string item = value
@@ -859,8 +866,7 @@ function json_serialize_public_primitive[T](view value: T, primitive: TypePrimit
         bytes item = value
         return json_stdlib_quote("0x{bytes.to_hex(item)}")
     if primitive == TypePrimitive.json_value_type:
-        JsonTree item = value
-        return json_tree_serialize(view item)
+        return json_serialize_public_raw_reflected[T](view value)
     return "null"
 function json_serialize_public_enum_reflected[T](view value: T) returns string:
     TypeVariant selected = type.variant_value[T](view value)

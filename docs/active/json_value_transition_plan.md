@@ -60,6 +60,9 @@ about: two names, two traversal surfaces, one conceptual data model.
   `json.JsonTree` as raw-tree identity targets, so raw fields nested inside
   typed structs/lists/options use the native tree instead of an unsupported
   primitive path.
+- `json.serialize[json.JsonTree]` and
+  `json.serialize_public[json.JsonTree]` serialize the native tree as raw JSON,
+  matching the legacy `JsonValue` behavior rather than exposing enum internals.
 
 ## Compatibility Principle
 
