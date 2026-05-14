@@ -270,6 +270,10 @@ run_pass_fixture!(
     "namespace_qualified_actors.jett"
 );
 run_pass_fixture!(
+    run_pass_namespace_duplicate_leaf_actors,
+    "namespace_duplicate_leaf_actors.jett"
+);
+run_pass_fixture!(
     run_pass_namespace_runtime_verify_context,
     "namespace_runtime_verify_context.jett"
 );

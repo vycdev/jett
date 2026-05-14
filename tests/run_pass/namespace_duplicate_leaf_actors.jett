@@ -1,0 +1,47 @@
+namespace left
+
+export actor Counter(seed: uint8):
+    mutable uint8 count = seed
+
+    receive add(delta: uint8):
+        count = count + delta
+
+    receive current responds uint8:
+        respond count
+
+namespace right
+
+export actor Counter(seed: uint8):
+    mutable uint8 count = seed
+
+    receive multiply(factor: uint8):
+        count = count * factor
+
+    receive current responds uint8:
+        respond count
+
+namespace app
+
+function direct_duplicate_leaf_actors() returns string:
+    left.Counter left_counter = spawn left.Counter(seed: 4)
+    right.Counter right_counter = spawn right.Counter(seed: 5)
+    send left_counter.add(3)
+    send right_counter.multiply(3)
+    uint8 left_value = ask left_counter.current
+    uint8 right_value = ask right_counter.current
+    return "{left_value}:{right_value}"
+
+function alias_duplicate_leaf_actors() returns string:
+    use left as l
+    use right as r
+    l.Counter left_counter = spawn l.Counter(seed: 2)
+    r.Counter right_counter = spawn r.Counter(seed: 6)
+    send left_counter.add(8)
+    send right_counter.multiply(4)
+    uint8 left_value = ask left_counter.current
+    uint8 right_value = ask right_counter.current
+    return "{left_value}:{right_value}"
+
+verify namespace_duplicate_leaf_actors:
+    assert direct_duplicate_leaf_actors() == "7:15"
+    assert alias_duplicate_leaf_actors() == "10:24"

@@ -81,6 +81,15 @@ function parse_exact_validates_bitfield_fields() returns string:
     Header header = json.parse_exact[Header](raw) handle error:
         return error
     return "{header.version}"
+function parse_exact_accepts_json_tree_payload() returns string:
+    string raw = "{{\"answer\":42,\"extra\":{{\"nested\":true}}}}"
+    json.JsonTree tree = json.parse_exact[json.JsonTree](raw) handle error:
+        return error
+    json.JsonTree answer = json.require_field(view tree, "answer") handle error:
+        return error
+    int64 value = json.as_int64(view answer) handle error:
+        return error
+    return "{value}:{json.is_object(view tree)}"
 verify json_parse_exact:
     assert parse_exact_accepts_matching_shape() == "u1:Alice:ok"
     assert parse_exact_rejects_extra_top_level() == "unknown field 'extra' for test.User"
@@ -94,3 +103,4 @@ verify json_parse_exact:
     assert parse_exact_validates_result_ok() == "ok: unknown field 'extra' for test.Profile"
     assert parse_exact_validates_enum_payload() == "profile_item.profile: unknown field 'extra' for test.Profile"
     assert parse_exact_validates_bitfield_fields() == "unknown field 'extra' for test.Header"
+    assert parse_exact_accepts_json_tree_payload() == "42:true"
