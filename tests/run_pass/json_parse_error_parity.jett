@@ -34,6 +34,39 @@ verify json_parse_error_parity:
     assert tree_parse_error("{{\"name\":1") == "unterminated JSON object"
     assert tree_parse_error("01") == "invalid JSON number"
     assert parse_errors_match("\"bad") == true
+    assert parse_errors_match("\"Ada\" trailing") == true
+    assert parse_errors_match("\"\\") == true
+    assert parse_errors_match("\"\\q\"") == true
+    assert parse_errors_match("\"line\nnext\"") == true
+    assert parse_errors_match("\"\\u00xz\"") == true
+    assert parse_errors_match("\"\\u004\"") == true
+    assert parse_errors_match("\"\\ud834\"") == true
+    assert parse_errors_match("\"\\udd1e\"") == true
+    assert parse_errors_match("\"\\ud834\\u0041\"") == true
     assert parse_errors_match("[1,]") == true
+    assert parse_errors_match("[,1]") == true
+    assert parse_errors_match("[1,,2]") == true
+    assert parse_errors_match("[1") == true
+    assert parse_errors_match("[1] trailing") == true
+    assert parse_errors_match("[1}}") == true
+    assert parse_errors_match("{{\"name\"}}") == true
+    assert parse_errors_match("{{\"name\":}}") == true
+    assert parse_errors_match("{{\"name\":1,}}") == true
+    assert parse_errors_match("{{,\"a\":1}}") == true
+    assert parse_errors_match("{{\"a\":1,,\"b\":2}}") == true
     assert parse_errors_match("{{\"name\":1") == true
+    assert parse_errors_match("{{\"name\":1}} trailing") == true
+    assert parse_errors_match("{{\"name\":1]") == true
+    assert parse_errors_match("[1]]") == true
+    assert parse_errors_match("]") == true
     assert parse_errors_match("01") == true
+    assert parse_errors_match("00") == true
+    assert parse_errors_match("-01") == true
+    assert parse_errors_match("+1") == true
+    assert parse_errors_match("-") == true
+    assert parse_errors_match("1.") == true
+    assert parse_errors_match("1e") == true
+    assert parse_errors_match("1e+") == true
+    assert parse_errors_match("1E-") == true
+    assert parse_errors_match("true false") == true
+    assert parse_errors_match("nope") == true
