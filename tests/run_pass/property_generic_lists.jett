@@ -57,6 +57,16 @@ property bytes_have_nonnegative_length:
     int64 length = bytes.length(payload)
     assert length >= 0
 
+property sized_numeric_primitives_have_identity:
+    given tiny: int8
+    given medium: uint16
+    given wide: uint64
+    given decimal: float32
+    assert tiny == tiny
+    assert medium == medium
+    assert wide == wide
+    assert decimal == decimal
+
 property refined_names_are_nonempty:
     given name: PropertyName
     assert string.char_count(coarsen name) > 0

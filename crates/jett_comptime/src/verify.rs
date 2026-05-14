@@ -713,6 +713,36 @@ fn generate_values_for_type(ty: &TypeExpr) -> Vec<Value> {
     generate_values_for_type_in_namespace(&mut interp, ty, None, &[], &[], &[], &[])
 }
 
+fn generate_signed_integer_values(min: i64, max: i64) -> Vec<Value> {
+    unique_values(
+        [0, 1, -1, 42, -42, 100, max, min]
+            .into_iter()
+            .filter(|value| *value >= min && *value <= max)
+            .map(Value::Int64)
+            .collect(),
+    )
+}
+
+fn generate_unsigned_integer_values(max: i64) -> Vec<Value> {
+    unique_values(
+        [0, 1, 42, 100, max]
+            .into_iter()
+            .filter(|value| *value >= 0 && *value <= max)
+            .map(Value::Int64)
+            .collect(),
+    )
+}
+
+fn generate_float_values() -> Vec<Value> {
+    vec![
+        Value::Float64(0.0),
+        Value::Float64(1.0),
+        Value::Float64(-1.0),
+        Value::Float64(3.14),
+        Value::Float64(-0.0),
+    ]
+}
+
 fn generate_values_for_type_in_namespace(
     interp: &mut Interpreter,
     ty: &TypeExpr,
@@ -724,22 +754,14 @@ fn generate_values_for_type_in_namespace(
 ) -> Vec<Value> {
     match ty {
         TypeExpr::Named(ident) => match ident.name.as_str() {
-            "int64" => vec![
-                Value::Int64(0),
-                Value::Int64(1),
-                Value::Int64(-1),
-                Value::Int64(42),
-                Value::Int64(-42),
-                Value::Int64(100),
-                Value::Int64(i64::MAX),
-                Value::Int64(i64::MIN),
-            ],
-            "uint8" => vec![
-                Value::Int64(0),
-                Value::Int64(1),
-                Value::Int64(42),
-                Value::Int64(255),
-            ],
+            "int8" => generate_signed_integer_values(i8::MIN as i64, i8::MAX as i64),
+            "int16" => generate_signed_integer_values(i16::MIN as i64, i16::MAX as i64),
+            "int32" => generate_signed_integer_values(i32::MIN as i64, i32::MAX as i64),
+            "int64" => generate_signed_integer_values(i64::MIN, i64::MAX),
+            "uint8" => generate_unsigned_integer_values(u8::MAX as i64),
+            "uint16" => generate_unsigned_integer_values(u16::MAX as i64),
+            "uint32" => generate_unsigned_integer_values(u32::MAX as i64),
+            "uint64" => generate_unsigned_integer_values(i64::MAX),
             "string" => vec![
                 Value::String(String::new()),
                 Value::String("a".to_string()),
@@ -748,13 +770,7 @@ fn generate_values_for_type_in_namespace(
                 Value::String("123".to_string()),
             ],
             "bool" => vec![Value::Bool(true), Value::Bool(false)],
-            "float64" => vec![
-                Value::Float64(0.0),
-                Value::Float64(1.0),
-                Value::Float64(-1.0),
-                Value::Float64(3.14),
-                Value::Float64(-0.0),
-            ],
+            "float32" | "float64" => generate_float_values(),
             "bytes" => vec![
                 Value::Bytes(Vec::new()),
                 Value::Bytes(vec![0]),
@@ -3087,6 +3103,49 @@ mod tests {
                 .iter()
                 .any(|value| matches!(value, Value::Bytes(bytes) if !bytes.is_empty())),
             "expected bytes generation to include non-empty payloads"
+        );
+    }
+
+    #[test]
+    fn property_generator_supports_sized_numeric_primitives() {
+        let int8_values = generate_values_for_type(&type_named("int8"));
+        assert!(!int8_values.is_empty());
+        assert!(int8_values.iter().all(|value| {
+            matches!(value, Value::Int64(n) if (i8::MIN as i64..=i8::MAX as i64).contains(n))
+        }));
+
+        let int16_values = generate_values_for_type(&type_named("int16"));
+        assert!(!int16_values.is_empty());
+        assert!(int16_values.iter().all(|value| {
+            matches!(value, Value::Int64(n) if (i16::MIN as i64..=i16::MAX as i64).contains(n))
+        }));
+
+        let int32_values = generate_values_for_type(&type_named("int32"));
+        assert!(!int32_values.is_empty());
+        assert!(int32_values.iter().all(|value| {
+            matches!(value, Value::Int64(n) if (i32::MIN as i64..=i32::MAX as i64).contains(n))
+        }));
+
+        let uint32_values = generate_values_for_type(&type_named("uint32"));
+        assert!(!uint32_values.is_empty());
+        assert!(uint32_values.iter().all(|value| {
+            matches!(value, Value::Int64(n) if (0..=u32::MAX as i64).contains(n))
+        }));
+
+        let uint64_values = generate_values_for_type(&type_named("uint64"));
+        assert!(!uint64_values.is_empty());
+        assert!(
+            uint64_values
+                .iter()
+                .all(|value| matches!(value, Value::Int64(n) if *n >= 0))
+        );
+
+        let float32_values = generate_values_for_type(&type_named("float32"));
+        assert!(!float32_values.is_empty());
+        assert!(
+            float32_values
+                .iter()
+                .all(|value| matches!(value, Value::Float64(_)))
         );
     }
 
