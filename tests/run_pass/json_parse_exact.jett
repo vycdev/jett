@@ -5,6 +5,15 @@ struct Profile:
 struct User:
     id: string
     profile: Profile serialize "profileData"
+type ProfileAlias = Profile
+enum Wrapped:
+    profile_item(profile: Profile)
+enum Protocol:
+    tcp = 6
+    udp = 17
+bitfield Header:
+    version: 4 bits
+    protocol: 8 bits as Protocol
 function parse_exact_accepts_matching_shape() returns string:
     string raw = "{{\"id\":\"u1\",\"profileData\":{{\"displayName\":\"Alice\",\"note\":\"ok\"}}}}"
     User user = json.parse_exact[User](raw) handle error:
@@ -35,6 +44,43 @@ function parse_exact_validates_map_values() returns string:
     map[string, Profile] profiles = json.parse_exact[map[string, Profile]](raw) handle error:
         return error
     return "{map.length[string, Profile](view profiles)}"
+function parse_exact_validates_alias_base() returns string:
+    string raw = "{{\"displayName\":\"Alice\",\"note\":\"ok\",\"extra\":\"nope\"}}"
+    ProfileAlias profile = json.parse_exact[ProfileAlias](raw) handle error:
+        return error
+    return profile.display_name
+function parse_exact_validates_optional_value() returns string:
+    string raw = "{{\"displayName\":\"Alice\",\"note\":\"ok\",\"extra\":\"nope\"}}"
+    optional[Profile] profile = json.parse_exact[optional[Profile]](raw) handle error:
+        return error
+    Profile item = profile handle:
+        return "none"
+    return item.display_name
+function parse_exact_accepts_optional_null() returns string:
+    optional[Profile] profile = json.parse_exact[optional[Profile]]("null") handle error:
+        return error
+    Profile item = profile handle:
+        return "none"
+    return item.display_name
+function parse_exact_validates_result_ok() returns string:
+    string raw = "{{\"ok\":{{\"displayName\":\"Alice\",\"note\":\"ok\",\"extra\":\"nope\"}}}}"
+    result[Profile, string] parsed = json.parse_exact[result[Profile, string]](raw) handle error:
+        return error
+    Profile item = parsed handle error:
+        return error
+    return item.display_name
+function parse_exact_validates_enum_payload() returns string:
+    string raw = "{{\"profile_item\":[{{\"displayName\":\"Alice\",\"note\":\"ok\",\"extra\":\"nope\"}}]}}"
+    Wrapped wrapped = json.parse_exact[Wrapped](raw) handle error:
+        return error
+    match wrapped:
+        profile_item(profile):
+            return profile.display_name
+function parse_exact_validates_bitfield_fields() returns string:
+    string raw = "{{\"version\":4,\"protocol\":\"tcp\",\"extra\":1}}"
+    Header header = json.parse_exact[Header](raw) handle error:
+        return error
+    return "{header.version}"
 verify json_parse_exact:
     assert parse_exact_accepts_matching_shape() == "u1:Alice:ok"
     assert parse_exact_rejects_extra_top_level() == "unknown field 'extra' for test.User"
@@ -42,3 +88,9 @@ verify json_parse_exact:
     assert parse_exact_uses_serialize_name() == "profileData: unknown field 'display_name' for test.Profile"
     assert parse_exact_validates_list_items() == "0: unknown field 'extra' for test.Profile"
     assert parse_exact_validates_map_values() == "primary: unknown field 'extra' for test.Profile"
+    assert parse_exact_validates_alias_base() == "unknown field 'extra' for test.Profile"
+    assert parse_exact_validates_optional_value() == "unknown field 'extra' for test.Profile"
+    assert parse_exact_accepts_optional_null() == "none"
+    assert parse_exact_validates_result_ok() == "ok: unknown field 'extra' for test.Profile"
+    assert parse_exact_validates_enum_payload() == "profile_item.profile: unknown field 'extra' for test.Profile"
+    assert parse_exact_validates_bitfield_fields() == "unknown field 'extra' for test.Header"
