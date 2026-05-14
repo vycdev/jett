@@ -12,6 +12,18 @@ function signed_literal_text() returns string:
     float32 ratio = -2.5
     return "{small}:{wide}:{ratio}"
 
+function default_numeric_text() returns string:
+    optional[uint8] missing_byte = none
+    uint8 byte = missing_byte handle:
+        default 255
+    result[uint32, string] failed_count = fail("missing")
+    uint32 count = failed_count handle error:
+        default 4294967295
+    optional[int8] missing_small = none
+    int8 small = missing_small handle:
+        default -128
+    return "{byte}:{count}:{small}"
+
 actor ByteCounter(seed: uint8):
     mutable uint8 count = seed + 1
 
@@ -35,3 +47,4 @@ verify numeric_literal_contexts:
     assert returned == 3
     assert current == 32
     assert signed_literal_text() == "-128:-32768:-2.5"
+    assert default_numeric_text() == "255:4294967295:-128"

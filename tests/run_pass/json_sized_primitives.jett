@@ -75,18 +75,14 @@ function parse_sized_bundle() returns string:
     string raw = "{{\"small\":-5,\"medium\":65535,\"count\":4294967295,\"serial\":9223372036854775807,\"ratio\":2.5,\"values\":[1,255],\"metrics\":{{\"max\":65535}},\"maybe\":-8,\"outcome\":{{\"ok\":9}}}}"
     SizedBundle bundle = json.parse[SizedBundle](raw) handle error:
         return error
-    uint8 missing_byte = 0
     uint8 second = list.get[uint8](view bundle.values, 1) handle:
-        default missing_byte
-    uint16 missing_metric = 0
+        default 0
     uint16 max = map.get[string, uint16](bundle.metrics, "max") handle:
-        default missing_metric
-    int8 missing_maybe = 0
+        default 0
     int8 maybe = bundle.maybe handle:
-        default missing_maybe
-    uint32 missing_outcome = 0
+        default 0
     uint32 outcome = bundle.outcome handle error:
-        default missing_outcome
+        default 0
     return "{bundle.small}:{bundle.medium}:{bundle.count}:{bundle.serial}:{bundle.ratio}:{second}:{max}:{maybe}:{outcome}"
 
 function serialize_uint8_max() returns string:

@@ -6936,13 +6936,18 @@ impl<'a> TypeChecker<'a> {
         match last_stmt {
             Stmt::Return(_) => {}
             Stmt::Expr(expr_stmt) => {
-                if matches!(expr_stmt.expr, Expr::Default(_, _)) {
+                if let Expr::Default(default_value, _) = &expr_stmt.expr {
                     if success_ty != TypeInterner::ERROR {
-                        let default_ty = self
+                        let mut default_ty = self
                             .type_map
                             .get(&expr_stmt.expr.span())
                             .copied()
                             .unwrap_or(TypeInterner::ERROR);
+                        if !self.types_compatible(success_ty, default_ty) {
+                            default_ty =
+                                self.check_expr_for_expected(default_value, success_ty, false);
+                            self.type_map.insert(expr_stmt.expr.span(), default_ty);
+                        }
                         if !self.types_compatible(success_ty, default_ty) {
                             self.sink.emit(errors::type_mismatch(
                                 &self.type_name(success_ty),

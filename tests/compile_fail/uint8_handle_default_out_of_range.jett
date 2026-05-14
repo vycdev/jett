@@ -1,0 +1,6 @@
+# ERROR: E0300
+function main() returns nothing:
+    optional[uint8] missing = none
+    uint8 value = missing handle:
+        default 256
+    return nothing

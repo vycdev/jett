@@ -595,6 +595,10 @@ compile_fail_fixture!(
     "int8_negative_literal_out_of_range.jett"
 );
 compile_fail_fixture!(
+    compile_fail_uint8_handle_default_out_of_range,
+    "uint8_handle_default_out_of_range.jett"
+);
+compile_fail_fixture!(
     compile_fail_actor_message_arg_type_mismatch,
     "actor_message_arg_type_mismatch.jett"
 );
