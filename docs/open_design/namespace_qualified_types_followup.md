@@ -139,17 +139,14 @@ until the machine type model is made explicit.
 
 ## Suggested Next Tests
 
-- Duplicate-leaf bitfields and `use`-alias bitfield references are now covered
-  by the namespace run-pass fixtures.
-- Explicitly qualified interface implementations, qualified interface method
-  calls, and `use`-alias interface method calls are now covered by a namespace
-  run-pass fixture.
-- Add more duplicate-leaf coverage beyond structs, enums, generic structs,
-  bitfields, same-leaf functions, and interfaces. Same-leaf functions and
-  interfaces are now covered both by direct qualified calls and `use`-alias
-  calls, so actors remain.
-- `type.name[a.User]()` returns `a.User`.
-- `type.fields[a.User]()` reports field metadata with owner `a.User`.
-- `json.parse[a.User]` and `json.serialize[a.User]` roundtrip only the intended
-  type.
-- Broader `use a as alias` coverage for actors.
+- Actors: add a design probe for duplicate-leaf actors only after `spawn` has a
+  shared qualified type-name resolution path and actor body checking receives
+  namespace context.
+- State machines: add a small namespaced machine fixture once the machine type
+  model is explicit enough for diagnostics and reflection to agree on canonical
+  names.
+- Interfaces: the direct qualified, `use`-alias, and duplicate-leaf interface
+  paths are now covered by run-pass fixtures.
+- Structs, enums, generic structs, bitfields, same-leaf functions, type names,
+  field metadata, and JSON parse/serialize are now covered by the namespace and
+  reflection run-pass fixtures.
