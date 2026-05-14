@@ -574,6 +574,10 @@ compile_fail_fixture!(
     "some_payload_requires_handle.jett"
 );
 compile_fail_fixture!(
+    compile_fail_property_given_type_binding,
+    "property_given_type_binding.jett"
+);
+compile_fail_fixture!(
     compile_fail_json_private_tree_parse_scalar,
     "json_private_tree_parse_scalar.jett"
 );

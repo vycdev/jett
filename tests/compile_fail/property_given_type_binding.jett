@@ -1,0 +1,5 @@
+# ERROR: E0311
+property given_type_binding:
+    given name: string
+    int64 value = name
+    assert value == value

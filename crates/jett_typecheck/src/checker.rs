@@ -4174,6 +4174,12 @@ impl<'a> TypeChecker<'a> {
 
     fn check_property_block(&mut self, prop: &ast::PropertyBlock) {
         self.in_property_block = true;
+        for given in &prop.givens {
+            let given_type = self.resolve_type_expr(&given.ty);
+            if let Some(def_id) = self.declaration_def_id(given.name.span) {
+                self.type_env.insert(def_id, given_type);
+            }
+        }
         self.check_block(&prop.body);
         self.in_property_block = false;
     }
