@@ -1,0 +1,43 @@
+namespace accounts
+
+export struct Record:
+    id: string
+    score: int64
+
+namespace audit
+
+export struct Record:
+    user: string
+    attempts: int64
+
+namespace app
+
+function account_record_constructed_by_reflection() returns string:
+    use accounts as a
+    a.Record source = a.Record(id: "acct-1", score: 7)
+    mutable TypeConstruction builder = type.construct_start[a.Record]()
+    for field in type.fields[a.Record]():
+        comptime type Field = field.type_info:
+            Field value = type.field_value[a.Record, Field](view source, view field)
+            builder = type.construct_put[a.Record, Field](builder, view field, value) handle error:
+                return error
+    a.Record built = type.construct_finish[a.Record](builder) handle error:
+        return error
+    return "{type.name[a.Record]()}:{built.id}:{built.score}"
+
+function audit_record_constructed_by_reflection() returns string:
+    use audit as a
+    a.Record source = a.Record(user: "svc", attempts: 3)
+    mutable TypeConstruction builder = type.construct_start[a.Record]()
+    for field in type.fields[a.Record]():
+        comptime type Field = field.type_info:
+            Field value = type.field_value[a.Record, Field](view source, view field)
+            builder = type.construct_put[a.Record, Field](builder, view field, value) handle error:
+                return error
+    a.Record built = type.construct_finish[a.Record](builder) handle error:
+        return error
+    return "{type.name[a.Record]()}:{built.user}:{built.attempts}"
+
+verify reflection_type_id_duplicate_construction:
+    assert account_record_constructed_by_reflection() == "accounts.Record:acct-1:7"
+    assert audit_record_constructed_by_reflection() == "audit.Record:svc:3"

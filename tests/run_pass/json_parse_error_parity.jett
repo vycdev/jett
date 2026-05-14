@@ -1,0 +1,39 @@
+namespace test
+
+function tree_parse_error(raw: string) returns string:
+    json.JsonTree tree = json.json_tree_parse(raw) handle error:
+        return error
+    return json.json_tree_serialize(tree)
+function raw_parse_error(raw: string) returns string:
+    json.JsonTree tree = json.parse_raw(raw) handle error:
+        return error
+    return json.serialize_raw(view tree)
+function typed_json_value_error(raw: string) returns string:
+    JsonValue value = json.parse[JsonValue](raw) handle error:
+        return error
+    return json.serialize_raw(view value)
+function typed_json_tree_error(raw: string) returns string:
+    json.JsonTree value = json.parse[json.JsonTree](raw) handle error:
+        return error
+    return json.serialize_raw(view value)
+function parse_errors_match(raw: string) returns bool:
+    string tree_error = tree_parse_error(raw)
+    string raw_error = raw_parse_error(raw)
+    string legacy_typed_error = typed_json_value_error(raw)
+    string tree_typed_error = typed_json_tree_error(raw)
+    if tree_error != raw_error:
+        return false
+    if tree_error != legacy_typed_error:
+        return false
+    if tree_error != tree_typed_error:
+        return false
+    return true
+verify json_parse_error_parity:
+    assert tree_parse_error("\"bad") == "unterminated JSON string"
+    assert tree_parse_error("[1,]") == "expected JSON value"
+    assert tree_parse_error("{{\"name\":1") == "unterminated JSON object"
+    assert tree_parse_error("01") == "invalid JSON number"
+    assert parse_errors_match("\"bad") == true
+    assert parse_errors_match("[1,]") == true
+    assert parse_errors_match("{{\"name\":1") == true
+    assert parse_errors_match("01") == true

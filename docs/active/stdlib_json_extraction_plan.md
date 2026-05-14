@@ -217,8 +217,10 @@ bridge spoofing, not helper visibility.
    characters, mismatched delimiters, bad number forms, bad literals, and
    invalid escapes. Valid JSON escapes now include quote, backslash, slash,
    backspace, form feed, newline, carriage return, tab, and unicode escapes.
-   The remaining question is how far `JsonTree` should go toward replacing the
-   raw `JsonValue` compatibility surface.
+   Public entrypoint parity for those parser errors is pinned across
+   `json.json_tree_parse`, `json.parse_raw`, `json.parse[JsonValue]`, and
+   `json.parse[json.JsonTree]`. The remaining question is how far `JsonTree`
+   should go toward replacing the raw `JsonValue` compatibility surface.
 7. Decide whether `JsonValue` becomes a source-level type alias/replacement or
    remains a compiler-recognized compatibility spelling. The current
    implementation seeds a compiler-owned legacy compatibility alias from

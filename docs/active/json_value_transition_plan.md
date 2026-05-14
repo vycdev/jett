@@ -280,6 +280,9 @@ Status: the recursive compatibility surface is pinned in
 `tests/run_pass/json_value_tree_compatibility.jett`, including bidirectional
 list, map, set, optional, result, secret, direct assignment, function argument,
 return, and struct-field compatibility between `JsonValue` and `json.JsonTree`.
+Malformed-input error parity is pinned in
+`tests/run_pass/json_parse_error_parity.jett` across `json.json_tree_parse`,
+`json.parse_raw`, `json.parse[JsonValue]`, and `json.parse[json.JsonTree]`.
 
 ## Risks And Open Questions
 

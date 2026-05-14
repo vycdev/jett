@@ -245,6 +245,10 @@ run_pass_fixture!(
     "reflection_type_id_duplicate_generic_owners.jett"
 );
 run_pass_fixture!(
+    run_pass_reflection_type_id_duplicate_construction,
+    "reflection_type_id_duplicate_construction.jett"
+);
+run_pass_fixture!(
     run_pass_reflection_type_id_duplicate_named_owners,
     "reflection_type_id_duplicate_named_owners.jett"
 );
@@ -275,6 +279,10 @@ run_pass_fixture!(
     "json_serialize_public_omits_secret_fields.jett"
 );
 run_pass_fixture!(run_pass_json_parse, "json_parse.jett");
+run_pass_fixture!(
+    run_pass_json_parse_error_parity,
+    "json_parse_error_parity.jett"
+);
 run_pass_fixture!(run_pass_json_parse_raw, "json_parse_raw.jett");
 run_pass_fixture!(
     run_pass_json_raw_value_access_edges,
@@ -469,6 +477,10 @@ compile_fail_fixture!(
 compile_fail_fixture!(
     compile_fail_json_private_tree_parse_scalar,
     "json_private_tree_parse_scalar.jett"
+);
+compile_fail_fixture!(
+    compile_fail_json_private_parse_reflected,
+    "json_private_parse_reflected.jett"
 );
 compile_fail_fixture!(
     compile_fail_json_private_decode_tree_reflected,
@@ -741,6 +753,36 @@ function hover_json() returns json.JsonTree:
         ty,
         Some("result[json.JsonTree, string]".to_string()),
         "expected hover to see stdlib JsonTree raw facade signature"
+    );
+}
+
+#[test]
+fn stdlib_json_raw_facade_hover_types_are_json_tree_first() {
+    let source = r#"namespace app
+
+function hover_raw_facades(view root: json.JsonTree) returns string:
+    optional[json.JsonTree] name = json.field(root, "name")
+    optional[json.JsonTree] item = json.index(root, 0)
+    result[int64, string] length = json.array_length(root)
+    result[string, string] text = json.as_string(root)
+    return "ok"
+"#;
+
+    assert_eq!(
+        hover_type(source, 4, 36),
+        Some("optional[json.JsonTree]".to_string())
+    );
+    assert_eq!(
+        hover_type(source, 5, 36),
+        Some("optional[json.JsonTree]".to_string())
+    );
+    assert_eq!(
+        hover_type(source, 6, 36),
+        Some("result[int64, string]".to_string())
+    );
+    assert_eq!(
+        hover_type(source, 7, 35),
+        Some("result[string, string]".to_string())
     );
 }
 

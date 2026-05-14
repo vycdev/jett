@@ -196,6 +196,8 @@ Implemented:
   marker stdlib module.
 - Driver hover coverage now verifies that editor type queries see the
   `json.parse_raw` facade as `result[json.JsonTree, string]`.
+- Driver hover coverage also pins the `JsonTree`-first return types for
+  `json.field`, `json.index`, `json.array_length`, and `json.as_string`.
 - Driver completion coverage now filters out private namespaced stdlib JSON
   bridge hooks while still exposing the exported `json.JsonTree` raw facade
   surface.
@@ -243,7 +245,8 @@ Still staged:
   handled-result rules still fire even if public wrapper declarations exist.
 - A project-defined `namespace json function json_parse_reflected...` cannot
   satisfy the trusted public JSON bridge, and an untrusted later registration of
-  a hook name clears trust.
+  a hook name clears trust. Ordinary source access to the private typed parse
+  bridge is pinned by `tests/compile_fail/json_private_parse_reflected.jett`.
 - `jett build`, `jett run`, `jett test file`, project tests, and LSP-style
   `build_source` all see the same stdlib exports. The marker stdlib module and
   JSON raw facade are covered for `build_source`; file/project paths are covered

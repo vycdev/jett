@@ -1,0 +1,4 @@
+namespace test
+
+function bad() returns result[string, string]:
+    return json.json_parse_reflected[string]("\"Ada\"")

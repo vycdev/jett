@@ -168,6 +168,10 @@ instead of masked by interpreter-local AST reconstruction. Bitfield enum
 annotations now follow the same rule: if checked metadata says the referenced
 enum exists but variant metadata is absent, enum discriminant lookup reports the
 metadata gap instead of falling back to the interpreter enum registry.
+Duplicate-leaf reflected construction is pinned in
+`tests/run_pass/reflection_type_id_duplicate_construction.jett`, which builds
+`accounts.Record` and `audit.Record` through `type.construct_*` using their
+own checked field metadata.
 
 ### Stage 5: Remove AST Metadata Fallbacks
 
