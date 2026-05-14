@@ -1,0 +1,11 @@
+# ERROR: E0311
+function helper_cached_kind[T](value: T, kind: TypeKind) returns int64:
+    if kind == TypeKind.list_type:
+        int64 item = value
+        return item
+    return 0
+
+function main() returns nothing:
+    int64 first = helper_cached_kind[string]("Ada", TypeKind.string_type)
+    int64 second = helper_cached_kind[string]("Ada", TypeKind.list_type)
+    return nothing

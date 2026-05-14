@@ -58,6 +58,18 @@ pub fn check(module: &Module, resolve: &ResolveResult) -> CheckResult {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+struct ReflectionParamFacts {
+    type_info_kinds: Vec<(usize, String)>,
+    type_kind_values: Vec<(usize, String)>,
+}
+
+impl ReflectionParamFacts {
+    fn is_empty(&self) -> bool {
+        self.type_info_kinds.is_empty() && self.type_kind_values.is_empty()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Internal type checker
 // ---------------------------------------------------------------------------
@@ -142,7 +154,8 @@ struct TypeChecker<'a> {
     /// AST templates for user-defined generic functions (have type_params).
     generic_function_templates: HashMap<String, FunctionDef>,
     /// Generic function instantiations whose bodies have already been checked.
-    checked_generic_function_instantiations: HashSet<(String, Vec<TypeId>, Vec<String>)>,
+    checked_generic_function_instantiations:
+        HashSet<(String, Vec<TypeId>, Vec<String>, ReflectionParamFacts)>,
     /// True while checking a generic instantiation whose type-param reflection
     /// is limited to directly evaluable branch conditions.
     specialize_reflection_branches: bool,
@@ -4064,6 +4077,7 @@ impl<'a> TypeChecker<'a> {
         concrete_args: &[TypeId],
         subst: HashMap<String, TypeId>,
         kind_subst: HashMap<String, String>,
+        param_facts: ReflectionParamFacts,
     ) {
         let uses_type_param_reflection = self.generic_function_uses_type_param_reflection(func);
         let branch_specializable = uses_type_param_reflection
@@ -4071,6 +4085,7 @@ impl<'a> TypeChecker<'a> {
         if uses_type_param_reflection && !branch_specializable {
             return;
         }
+        let specialize_reflection_branches = branch_specializable || !param_facts.is_empty();
 
         let kind_key = func
             .type_params
@@ -4082,7 +4097,12 @@ impl<'a> TypeChecker<'a> {
                     .unwrap_or_else(|| "unknown_type".to_string())
             })
             .collect::<Vec<_>>();
-        let cache_key = (function_name.to_string(), concrete_args.to_vec(), kind_key);
+        let cache_key = (
+            function_name.to_string(),
+            concrete_args.to_vec(),
+            kind_key,
+            param_facts.clone(),
+        );
         if !self
             .checked_generic_function_instantiations
             .insert(cache_key)
@@ -4113,9 +4133,11 @@ impl<'a> TypeChecker<'a> {
         self.current_verify_name = None;
         self.handle_body_depth = 0;
         self.current_respond_type = None;
-        self.specialize_reflection_branches = branch_specializable;
+        self.specialize_reflection_branches = specialize_reflection_branches;
 
+        self.push_reflection_param_fact_scope(func, &param_facts);
         self.check_function_impl(func, instantiated_name);
+        self.pop_reflection_local_fact_scope();
 
         self.type_var_subst = old_subst;
         self.type_var_kind_tags = old_kind_subst;
@@ -4768,6 +4790,33 @@ impl<'a> TypeChecker<'a> {
     fn push_reflection_local_fact_scope(&mut self) {
         self.reflection_type_info_kind_scopes.push(HashMap::new());
         self.reflection_type_kind_value_scopes.push(HashMap::new());
+    }
+
+    fn push_reflection_param_fact_scope(
+        &mut self,
+        func: &FunctionDef,
+        facts: &ReflectionParamFacts,
+    ) {
+        let mut type_info_scope = HashMap::new();
+        for (index, kind_tag) in &facts.type_info_kinds {
+            if let Some(param) = func.params.get(*index) {
+                if let Some(def_id) = self.declaration_def_id(param.name.span) {
+                    type_info_scope.insert(def_id, kind_tag.clone());
+                }
+            }
+        }
+
+        let mut type_kind_scope = HashMap::new();
+        for (index, kind_tag) in &facts.type_kind_values {
+            if let Some(param) = func.params.get(*index) {
+                if let Some(def_id) = self.declaration_def_id(param.name.span) {
+                    type_kind_scope.insert(def_id, kind_tag.clone());
+                }
+            }
+        }
+
+        self.reflection_type_info_kind_scopes.push(type_info_scope);
+        self.reflection_type_kind_value_scopes.push(type_kind_scope);
     }
 
     fn pop_reflection_local_fact_scope(&mut self) {
@@ -6292,6 +6341,42 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn reflection_param_facts_for_call(
+        &mut self,
+        template: &FunctionDef,
+        param_types: &[TypeId],
+        args: &[ast::CallArg],
+    ) -> ReflectionParamFacts {
+        let mut facts = ReflectionParamFacts::default();
+
+        for (index, ((param, &param_ty), arg)) in template
+            .params
+            .iter()
+            .zip(param_types.iter())
+            .zip(args.iter())
+            .enumerate()
+        {
+            if param.mutable {
+                continue;
+            }
+
+            if self.type_id_is_named(param_ty, "TypeInfo") {
+                if let Some(kind_tag) = self.eval_type_info_type_arg_kind_tag(&arg.value) {
+                    facts.type_info_kinds.push((index, kind_tag));
+                }
+                continue;
+            }
+
+            if self.type_id_is_named(param_ty, "TypeKind") {
+                if let Some(kind_tag) = self.eval_type_kind_value(&arg.value) {
+                    facts.type_kind_values.push((index, kind_tag));
+                }
+            }
+        }
+
+        facts
+    }
+
     fn check_call(
         &mut self,
         callee: &Expr,
@@ -6418,12 +6503,15 @@ impl<'a> TypeChecker<'a> {
                         }
                     }
                     if arguments_match {
+                        let param_facts =
+                            self.reflection_param_facts_for_call(&template, &param_types, args);
                         self.check_generic_function_instantiation(
                             function_name,
                             &template,
                             &concrete_args,
                             subst,
                             kind_subst,
+                            param_facts,
                         );
                     }
                     return return_type;

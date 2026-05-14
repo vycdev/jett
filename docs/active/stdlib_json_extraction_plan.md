@@ -239,8 +239,13 @@ bridge spoofing, not helper visibility.
    inside `if`/`else if` conditions. It also carries immutable block-local
    `TypeInfo` / `TypeKind` facts derived from those direct reflection calls,
    so helpers may name `TypeInfo info = type.info[T]()` and branch on
-   `info.kind_tag` or a local `TypeKind kind`. Passing reflection facts through
-   helper parameters remains deliberately deferred.
+   `info.kind_tag` or a local `TypeKind kind`. Immutable generic helper
+   parameters of type `TypeInfo` or `TypeKind` also receive those facts from
+   known call arguments, which lets helper split points like
+   `json_decode_tree_structured_reflected[T](..., kind, ...)` specialize on
+   the caller's reflected kind. Predicate-derived facts, `TypePrimitive`
+   helper parameters, diagnostic string facts, and shape implications for
+   non-branch `type.arg[T]()` bodies remain deferred.
 
 ## Recommended Shape For `stdlib/json.jett`
 

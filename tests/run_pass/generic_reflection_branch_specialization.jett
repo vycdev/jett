@@ -59,6 +59,27 @@ function copied_local_info_kind_branch[T]() returns string:
         return "list"
     return "other"
 
+function helper_kind_list_length_or_zero[T](value: T, kind: TypeKind) returns int64:
+    if kind == TypeKind.list_type:
+        list[int64] items = value
+        return list.length[int64](view items)
+    return 0
+
+function local_kind_helper_list_length_or_zero[T](value: T) returns int64:
+    TypeInfo info = type.info[T]()
+    TypeKind kind = info.kind_tag
+    return helper_kind_list_length_or_zero[T](value, kind)
+
+function helper_info_list_length_or_zero[T](value: T, info: TypeInfo) returns int64:
+    if info.kind_tag == TypeKind.list_type:
+        list[int64] items = value
+        return list.length[int64](view items)
+    return 0
+
+function local_info_helper_list_length_or_zero[T](value: T) returns int64:
+    TypeInfo info = type.info[T]()
+    return helper_info_list_length_or_zero[T](value, info)
+
 verify generic_reflection_branch_specialization:
     list[int64] numbers = list(1, 2, 3)
     assert list_length_or_zero[list[int64]](numbers) == 3
@@ -79,3 +100,7 @@ verify generic_reflection_branch_specialization:
     assert local_kind_list_length_or_zero[string]("Ada") == 0
     assert copied_local_info_kind_branch[Names]() == "alias"
     assert copied_local_info_kind_branch[list[int64]]() == "list"
+    assert local_kind_helper_list_length_or_zero[list[int64]](numbers) == 3
+    assert local_kind_helper_list_length_or_zero[string]("Ada") == 0
+    assert local_info_helper_list_length_or_zero[list[int64]](more) == 2
+    assert local_info_helper_list_length_or_zero[string]("Ada") == 0
