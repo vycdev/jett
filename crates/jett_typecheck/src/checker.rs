@@ -109,16 +109,10 @@ struct TypeChecker<'a> {
     generic_struct_templates: HashMap<String, ast::StructDef>,
     /// Cache of monomorphized generic struct instances: (name, concrete type args) → TypeId.
     monomorphized_structs: HashMap<(String, Vec<TypeId>), TypeId>,
-    /// Checked reflection field snapshots keyed by the public type spelling.
-    reflection_fields: HashMap<String, Vec<ReflectionFieldInfo>>,
     /// Checked reflection field snapshots keyed by the canonical owner TypeId.
     reflection_fields_by_id: HashMap<TypeId, (String, Vec<ReflectionFieldInfo>)>,
-    /// Checked bitfield layout snapshots keyed by the public type spelling.
-    reflection_bitfields: HashMap<String, ReflectionBitfieldInfo>,
     /// Checked bitfield layout snapshots keyed by the canonical owner TypeId.
     reflection_bitfields_by_id: HashMap<TypeId, (String, ReflectionBitfieldInfo)>,
-    /// Checked enum variant snapshots keyed by the public type spelling.
-    reflection_variants: HashMap<String, Vec<ReflectionVariantInfo>>,
     /// Checked enum variant snapshots keyed by the canonical owner TypeId.
     reflection_variants_by_id: HashMap<TypeId, (String, Vec<ReflectionVariantInfo>)>,
     /// Active type variable substitution during monomorphization (type_param_name → TypeId).
@@ -175,11 +169,8 @@ impl<'a> TypeChecker<'a> {
             handle_body_depth: 0,
             generic_struct_templates: HashMap::new(),
             monomorphized_structs: HashMap::new(),
-            reflection_fields: HashMap::new(),
             reflection_fields_by_id: HashMap::new(),
-            reflection_bitfields: HashMap::new(),
             reflection_bitfields_by_id: HashMap::new(),
-            reflection_variants: HashMap::new(),
             reflection_variants_by_id: HashMap::new(),
             type_var_subst: HashMap::new(),
             reflected_field_type_scopes: Vec::new(),
@@ -856,18 +847,6 @@ impl<'a> TypeChecker<'a> {
 
         for (type_id, (type_name, variants)) in self.reflection_variants_by_id.clone() {
             metadata.insert_type_variants_for_id(type_id, type_name, variants);
-        }
-
-        for (type_name, fields) in self.reflection_fields.clone() {
-            metadata.insert_type_fields(type_name, fields);
-        }
-
-        for (type_name, bitfield) in self.reflection_bitfields.clone() {
-            metadata.insert_bitfield(type_name, bitfield);
-        }
-
-        for (type_name, variants) in self.reflection_variants.clone() {
-            metadata.insert_type_variants(type_name, variants);
         }
 
         metadata
@@ -3156,8 +3135,6 @@ impl<'a> TypeChecker<'a> {
             .collect();
         let reflection_fields =
             self.reflection_fields_for_struct_def(def, namespace, fields.as_slice());
-        self.reflection_fields
-            .insert(canonical_name.clone(), reflection_fields.clone());
         self.reflection_fields_by_id
             .insert(ty, (canonical_name.clone(), reflection_fields));
         let methods = def
@@ -3323,10 +3300,6 @@ impl<'a> TypeChecker<'a> {
             self.reflection_fields_for_bitfield_def(def, namespace, fields.as_slice());
         let reflection_bitfield =
             self.reflection_bitfield_info_for_def(def, namespace, fields.as_slice());
-        self.reflection_fields
-            .insert(canonical_name.clone(), reflection_fields.clone());
-        self.reflection_bitfields
-            .insert(canonical_name.clone(), reflection_bitfield.clone());
         self.reflection_fields_by_id
             .insert(ty, (canonical_name.clone(), reflection_fields));
         self.reflection_bitfields_by_id
@@ -3408,8 +3381,6 @@ impl<'a> TypeChecker<'a> {
             .collect();
         let reflection_variants =
             self.reflection_variants_for_enum_def(def, namespace, variants.as_slice());
-        self.reflection_variants
-            .insert(canonical_name.clone(), reflection_variants.clone());
         self.reflection_variants_by_id
             .insert(ty, (canonical_name.clone(), reflection_variants));
 
@@ -6799,8 +6770,6 @@ impl<'a> TypeChecker<'a> {
         });
         let ty = self.interner.intern(Type::Struct(sid));
 
-        self.reflection_fields
-            .insert(mono_name.clone(), reflection_fields.clone());
         self.reflection_fields_by_id
             .insert(ty, (mono_name, reflection_fields));
         self.monomorphized_structs.insert(cache_key, ty);
@@ -8853,6 +8822,76 @@ function area(shape: Shape) returns int64:
             errors.iter().any(|d| d.code.code() == 323),
             "expected E0323, got: {:?}",
             errors
+        );
+    }
+
+    #[test]
+    fn reflection_metadata_owner_tables_are_type_id_backed() {
+        let result = check_source_result(
+            "\
+namespace models
+
+export struct User:
+    name: string
+    score: int64
+
+namespace packets
+
+export enum Protocol:
+    tcp = 6
+    udp = 17
+
+export bitfield Header:
+    version: 4 bits
+    protocol: 8 bits as Protocol
+",
+        );
+        let metadata = result.reflection_metadata;
+
+        let user_id = metadata
+            .type_id_for_name("models.User")
+            .expect("models.User should have a canonical TypeId");
+        let user_fields = metadata
+            .get_type_fields_for_id(user_id)
+            .expect("struct fields should be keyed by owner TypeId");
+        assert_eq!(user_fields[0].name, "name");
+        assert_eq!(
+            metadata
+                .get_type_fields("models.User")
+                .expect("legacy field lookup should bridge through TypeId")[1]
+                .name,
+            "score"
+        );
+
+        let header_id = metadata
+            .type_id_for_name("packets.Header")
+            .expect("packets.Header should have a canonical TypeId");
+        let header = metadata
+            .get_bitfield_for_id(header_id)
+            .expect("bitfield metadata should be keyed by owner TypeId");
+        assert_eq!(header.fields[1].name, "protocol");
+        assert_eq!(
+            metadata
+                .get_bitfield("packets.Header")
+                .expect("legacy bitfield lookup should bridge through TypeId")
+                .fields[0]
+                .width,
+            4
+        );
+
+        let protocol_id = metadata
+            .type_id_for_name("packets.Protocol")
+            .expect("packets.Protocol should have a canonical TypeId");
+        let variants = metadata
+            .get_type_variants_for_id(protocol_id)
+            .expect("enum variants should be keyed by owner TypeId");
+        assert_eq!(variants[0].name, "tcp");
+        assert_eq!(
+            metadata
+                .get_type_variants("packets.Protocol")
+                .expect("legacy variant lookup should bridge through TypeId")[1]
+                .discriminant,
+            17
         );
     }
 

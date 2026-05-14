@@ -180,7 +180,11 @@ info, fields, bitfield layout, or variant metadata into the canonical `TypeId`
 tables when the binding is added after the metadata. The metadata API also
 exposes explicit `type_id_for_name` and `get_*_for_id` accessors, and the
 comptime interpreter's checked reflection helpers use those id accessors first
-before preserving the legacy string fallback.
+before preserving the legacy string fallback. The typechecker no longer keeps
+parallel string-only owner metadata maps for checked struct fields, bitfield
+layouts, or enum variants; production owner metadata now flows through the
+`TypeId` keyed path and relies on `ReflectionMetadata` to preserve legacy name
+lookup compatibility.
 
 ### Stage 5: Remove AST Metadata Fallbacks
 
