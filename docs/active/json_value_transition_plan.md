@@ -64,6 +64,9 @@ about: two names, two traversal surfaces, one conceptual data model.
   `json.JsonTree` as raw-tree identity targets, so raw fields nested inside
   typed structs/lists/options use the native tree instead of an unsupported
   primitive path.
+- `json.parse_exact[JsonValue]` and `json.parse_exact[json.JsonValue]` now
+  share the same raw-tree identity behavior as `json.parse_exact[json.JsonTree]`;
+  exact validation does not reject unknown fields inside raw tree targets.
 - `json.serialize[json.JsonTree]` and
   `json.serialize_public[json.JsonTree]` serialize the native tree as raw JSON,
   matching the legacy `JsonValue` behavior rather than exposing enum internals.
@@ -304,6 +307,9 @@ return, and struct-field compatibility between `JsonValue` and `json.JsonTree`.
 Malformed-input error parity is pinned in
 `tests/run_pass/json_parse_error_parity.jett` across `json.json_tree_parse`,
 `json.parse_raw`, `json.parse[JsonValue]`, and `json.parse[json.JsonTree]`.
+Exact-parse raw target compatibility is pinned in
+`tests/run_pass/json_parse_exact.jett` for `json.JsonTree`, bare `JsonValue`,
+and `json.JsonValue`.
 
 ## Risks And Open Questions
 
