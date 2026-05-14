@@ -11,6 +11,13 @@ struct PropertyUser:
     score: int64
     choice: PropertyChoice
 
+struct PropertyBox[T]:
+    value: T
+
+struct PropertyPair[T, U]:
+    first: T
+    second: U
+
 property string_lists_have_nonnegative_length:
     given items: list[string]
     int64 length = list.length[string](items)
@@ -71,3 +78,14 @@ property structs_have_generated_fields:
             assert true
         score(value):
             assert value == value
+
+property generic_boxes_have_generated_fields:
+    given box: PropertyBox[int64]
+    assert box.value == box.value
+
+property generic_pairs_substitute_nested_types:
+    given pair: PropertyPair[PropertyName, optional[int64]]
+    assert string.char_count(coarsen pair.first) > 0
+    int64 second = pair.second handle:
+        default 0
+    assert second == second

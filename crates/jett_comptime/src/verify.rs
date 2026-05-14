@@ -5,6 +5,7 @@ use jett_parser::ast::{
     TypeExpr, VerifyBlock,
 };
 use jett_types::ReflectionMetadata;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::interpreter::Interpreter;
@@ -809,7 +810,15 @@ fn generate_values_for_type_in_namespace(
                 struct_defs,
                 type_alias_defs,
             ),
-            _ => vec![], // unsupported generic type
+            _ => generate_generic_struct_values_for_type_name(
+                interp,
+                &ident.name,
+                args,
+                namespace,
+                enum_defs,
+                struct_defs,
+                type_alias_defs,
+            ),
         },
         TypeExpr::View(inner, _) => generate_values_for_type_in_namespace(
             interp,
@@ -1306,6 +1315,112 @@ fn generate_struct_values(
     values
 }
 
+fn generate_generic_struct_values_for_type_name(
+    interp: &mut Interpreter,
+    name: &str,
+    args: &[TypeExpr],
+    namespace: Option<&str>,
+    enum_defs: &[PropertyEnumDef],
+    struct_defs: &[PropertyStructDef],
+    type_alias_defs: &[PropertyTypeAliasDef],
+) -> Vec<Value> {
+    let Some(struct_def) = find_property_struct(name, namespace, struct_defs) else {
+        return Vec::new();
+    };
+    if struct_def.def.type_params.len() != args.len() {
+        return Vec::new();
+    }
+
+    let substitutions: HashMap<String, TypeExpr> = struct_def
+        .def
+        .type_params
+        .iter()
+        .zip(args.iter())
+        .map(|(param, arg)| {
+            (
+                param.name.clone(),
+                qualify_property_type_expr_in_namespace(
+                    arg,
+                    namespace,
+                    enum_defs,
+                    struct_defs,
+                    type_alias_defs,
+                ),
+            )
+        })
+        .collect();
+
+    generate_generic_struct_values(
+        interp,
+        struct_def,
+        &substitutions,
+        enum_defs,
+        struct_defs,
+        type_alias_defs,
+    )
+}
+
+fn generate_generic_struct_values(
+    interp: &mut Interpreter,
+    struct_def: &PropertyStructDef,
+    substitutions: &HashMap<String, TypeExpr>,
+    enum_defs: &[PropertyEnumDef],
+    struct_defs: &[PropertyStructDef],
+    type_alias_defs: &[PropertyTypeAliasDef],
+) -> Vec<Value> {
+    let field_namespace = struct_def.namespace.as_deref();
+    let substituted_fields: Vec<FieldDef> = struct_def
+        .def
+        .fields
+        .iter()
+        .map(|field| FieldDef {
+            name: field.name.clone(),
+            ty: substitute_property_type_params(&field.ty, substitutions),
+            serialize_name: field.serialize_name.clone(),
+            span: field.span,
+        })
+        .collect();
+
+    if substituted_fields.is_empty() {
+        return vec![Value::Struct {
+            type_name: struct_def.type_name.clone(),
+            fields: vec![],
+        }];
+    }
+
+    let field_pools = generate_struct_field_pools(
+        interp,
+        &substituted_fields,
+        field_namespace,
+        enum_defs,
+        struct_defs,
+        type_alias_defs,
+    );
+    if field_pools.is_empty() {
+        return Vec::new();
+    }
+
+    let sample_count = field_pools.iter().map(Vec::len).max().unwrap_or(0).min(3);
+    let mut values = Vec::new();
+    for sample_index in 0..sample_count {
+        let fields = substituted_fields
+            .iter()
+            .zip(field_pools.iter())
+            .map(|(field, pool)| {
+                (
+                    field.name.name.clone(),
+                    pool[sample_index % pool.len()].clone(),
+                )
+            })
+            .collect();
+        values.push(Value::Struct {
+            type_name: struct_def.type_name.clone(),
+            fields,
+        });
+    }
+    values
+}
+
 fn generate_struct_field_pools(
     interp: &mut Interpreter,
     fields: &[FieldDef],
@@ -1330,6 +1445,141 @@ fn generate_struct_field_pools(
         pools.push(values);
     }
     pools
+}
+
+fn substitute_property_type_params(
+    ty: &TypeExpr,
+    substitutions: &HashMap<String, TypeExpr>,
+) -> TypeExpr {
+    match ty {
+        TypeExpr::Named(ident) => substitutions
+            .get(&ident.name)
+            .cloned()
+            .unwrap_or_else(|| TypeExpr::Named(ident.clone())),
+        TypeExpr::Generic(ident, args, span) => TypeExpr::Generic(
+            ident.clone(),
+            args.iter()
+                .map(|arg| substitute_property_type_params(arg, substitutions))
+                .collect(),
+            *span,
+        ),
+        TypeExpr::View(inner, span) => TypeExpr::View(
+            Box::new(substitute_property_type_params(inner, substitutions)),
+            *span,
+        ),
+        TypeExpr::Function(params, return_ty, span) => TypeExpr::Function(
+            params
+                .iter()
+                .map(|param| substitute_property_type_params(param, substitutions))
+                .collect(),
+            Box::new(substitute_property_type_params(return_ty, substitutions)),
+            *span,
+        ),
+    }
+}
+
+fn qualify_property_type_expr_in_namespace(
+    ty: &TypeExpr,
+    namespace: Option<&str>,
+    enum_defs: &[PropertyEnumDef],
+    struct_defs: &[PropertyStructDef],
+    type_alias_defs: &[PropertyTypeAliasDef],
+) -> TypeExpr {
+    match ty {
+        TypeExpr::Named(ident) => TypeExpr::Named(qualify_property_type_ident_in_namespace(
+            ident,
+            namespace,
+            enum_defs,
+            struct_defs,
+            type_alias_defs,
+        )),
+        TypeExpr::Generic(ident, args, span) => TypeExpr::Generic(
+            qualify_property_type_ident_in_namespace(
+                ident,
+                namespace,
+                enum_defs,
+                struct_defs,
+                type_alias_defs,
+            ),
+            args.iter()
+                .map(|arg| {
+                    qualify_property_type_expr_in_namespace(
+                        arg,
+                        namespace,
+                        enum_defs,
+                        struct_defs,
+                        type_alias_defs,
+                    )
+                })
+                .collect(),
+            *span,
+        ),
+        TypeExpr::View(inner, span) => TypeExpr::View(
+            Box::new(qualify_property_type_expr_in_namespace(
+                inner,
+                namespace,
+                enum_defs,
+                struct_defs,
+                type_alias_defs,
+            )),
+            *span,
+        ),
+        TypeExpr::Function(params, return_ty, span) => TypeExpr::Function(
+            params
+                .iter()
+                .map(|param| {
+                    qualify_property_type_expr_in_namespace(
+                        param,
+                        namespace,
+                        enum_defs,
+                        struct_defs,
+                        type_alias_defs,
+                    )
+                })
+                .collect(),
+            Box::new(qualify_property_type_expr_in_namespace(
+                return_ty,
+                namespace,
+                enum_defs,
+                struct_defs,
+                type_alias_defs,
+            )),
+            *span,
+        ),
+    }
+}
+
+fn qualify_property_type_ident_in_namespace(
+    ident: &jett_parser::ast::Ident,
+    namespace: Option<&str>,
+    enum_defs: &[PropertyEnumDef],
+    struct_defs: &[PropertyStructDef],
+    type_alias_defs: &[PropertyTypeAliasDef],
+) -> jett_parser::ast::Ident {
+    if ident.name.contains('.') {
+        return ident.clone();
+    }
+
+    let Some(namespace) = namespace else {
+        return ident.clone();
+    };
+    let qualified = format!("{namespace}.{}", ident.name);
+    if enum_defs
+        .iter()
+        .any(|enum_def| enum_def.type_name == qualified)
+        || struct_defs
+            .iter()
+            .any(|struct_def| struct_def.type_name == qualified)
+        || type_alias_defs
+            .iter()
+            .any(|alias_def| alias_def.type_name == qualified)
+    {
+        let mut qualified_ident = ident.clone();
+        qualified_ident.name = qualified;
+        qualified_ident
+    } else {
+        ident.clone()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1467,6 +1717,29 @@ mod tests {
                 })
                 .collect(),
             methods,
+            exported: false,
+            span: sp(),
+        }
+    }
+
+    fn generic_struct_def(
+        name: &str,
+        type_params: Vec<&str>,
+        fields: Vec<(&str, TypeExpr)>,
+    ) -> StructDef {
+        StructDef {
+            name: ident(name),
+            type_params: type_params.into_iter().map(ident).collect(),
+            fields: fields
+                .into_iter()
+                .map(|(field_name, ty)| FieldDef {
+                    name: ident(field_name),
+                    ty,
+                    serialize_name: None,
+                    span: sp(),
+                })
+                .collect(),
+            methods: vec![],
             exported: false,
             span: sp(),
         }
@@ -2684,6 +2957,73 @@ mod tests {
                 )
             }),
             "expected refined struct fields to be generated through refinement filtering"
+        );
+    }
+
+    #[test]
+    fn property_generator_supports_generic_structs() {
+        let mut interp = Interpreter::new();
+        let struct_defs = vec![PropertyStructDef {
+            type_name: "app.Box".to_string(),
+            namespace: Some("app".to_string()),
+            def: generic_struct_def("Box", vec!["T"], vec![("value", type_named("T"))]),
+        }];
+
+        let values = generate_values_for_type_in_namespace(
+            &mut interp,
+            &type_generic("Box", vec![type_named("int64")]),
+            Some("app"),
+            &[],
+            &struct_defs,
+            &[],
+        );
+        assert!(
+            values.iter().any(|value| {
+                matches!(
+                    value,
+                    Value::Struct { type_name, fields }
+                        if type_name == "app.Box"
+                            && matches!(fields.as_slice(), [(_, Value::Int64(_))])
+                )
+            }),
+            "expected generic struct generation to substitute field type parameters"
+        );
+    }
+
+    #[test]
+    fn property_generator_supports_generic_structs_with_refined_args() {
+        let mut interp = Interpreter::new();
+        let constraint = binary(var("value"), BinOp::Gt, int(0));
+        let refinement = type_alias("Positive", "int64", Some(constraint));
+        interp.register_type_alias_in_namespace(Some("app"), &refinement);
+        let type_alias_defs = vec![PropertyTypeAliasDef {
+            type_name: "app.Positive".to_string(),
+            namespace: Some("app".to_string()),
+            def: refinement,
+        }];
+        let struct_defs = vec![PropertyStructDef {
+            type_name: "app.Box".to_string(),
+            namespace: Some("app".to_string()),
+            def: generic_struct_def("Box", vec!["T"], vec![("value", type_named("T"))]),
+        }];
+
+        let values = generate_values_for_type_in_namespace(
+            &mut interp,
+            &type_generic("Box", vec![type_named("Positive")]),
+            Some("app"),
+            &[],
+            &struct_defs,
+            &type_alias_defs,
+        );
+        assert!(
+            values.iter().all(|value| {
+                matches!(
+                    value,
+                    Value::Struct { fields, .. }
+                        if matches!(fields.as_slice(), [(_, Value::Int64(n))] if *n > 0)
+                )
+            }),
+            "expected generic struct type arguments to resolve in the use-site namespace"
         );
     }
 
