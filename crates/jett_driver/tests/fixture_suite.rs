@@ -647,6 +647,10 @@ compile_fail_fixture!(
     "generic_reflection_guarded_unknown_fact.jett"
 );
 compile_fail_fixture!(
+    compile_fail_generic_reflection_top_level_type_arg_error,
+    "generic_reflection_top_level_type_arg_error.jett"
+);
+compile_fail_fixture!(
     compile_fail_actor_message_arg_type_mismatch,
     "actor_message_arg_type_mismatch.jett"
 );

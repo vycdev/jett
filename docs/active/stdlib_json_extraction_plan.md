@@ -247,8 +247,12 @@ bridge spoofing, not helper visibility.
    decoder helpers specialize on caller-reflected tags. Branches selected by a
    statically known reflection guard may now contain deeper `type.arg[T](...)`
    bindings, while unknown/runtime guards are rejected instead of falling back
-   to checking all branches. Predicate-derived facts, diagnostic string facts,
-   and shape implications for non-branch `type.arg[T]()` bodies remain deferred.
+   to checking all branches. Direct top-level `type.arg[T](...)` bindings are
+   also checked per concrete generic instantiation, which brings shape-specific
+   helpers such as list/map/optional/result JSON helpers into the typed path
+   when reached with the right concrete `T`. Predicate-derived facts,
+   diagnostic string facts, and direct top-level `type.fields[T]()` /
+   `type.variants[T]()` helper bodies remain deferred.
 
 ## Recommended Shape For `stdlib/json.jett`
 

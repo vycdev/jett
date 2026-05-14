@@ -109,6 +109,11 @@ function guarded_type_arg_length_or_zero[T](value: T) returns int64:
             return list.length[Elem](view items)
     return 0
 
+function top_level_type_arg_length[T](value: T) returns int64:
+    comptime type Elem = type.arg[T](0):
+        list[Elem] items = value
+        return list.length[Elem](view items)
+
 verify generic_reflection_branch_specialization:
     list[int64] numbers = list(1, 2, 3)
     assert list_length_or_zero[list[int64]](numbers) == 3
@@ -139,3 +144,4 @@ verify generic_reflection_branch_specialization:
     assert local_primitive_helper_string_or_other[int64](7) == "other"
     assert guarded_type_arg_length_or_zero[list[int64]](numbers) == 3
     assert guarded_type_arg_length_or_zero[string]("Ada") == 0
+    assert top_level_type_arg_length[list[int64]](numbers) == 3

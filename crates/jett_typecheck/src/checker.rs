@@ -87,6 +87,19 @@ enum StaticReflectionEnumValue {
     TypePrimitive(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReflectionBranchContext {
+    TopLevel,
+    StaticReflectionBranch,
+    RuntimeBranch,
+}
+
+impl ReflectionBranchContext {
+    fn permits_shape_reflection(self) -> bool {
+        matches!(self, Self::TopLevel | Self::StaticReflectionBranch)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Internal type checker
 // ---------------------------------------------------------------------------
@@ -4226,34 +4239,31 @@ impl<'a> TypeChecker<'a> {
         block: &Block,
         type_params: &HashSet<String>,
     ) -> bool {
-        self.block_reflection_is_branch_specializable_with_guard(block, type_params, false)
+        self.block_reflection_is_branch_specializable_in_context(
+            block,
+            type_params,
+            ReflectionBranchContext::TopLevel,
+        )
     }
 
-    fn block_reflection_is_branch_specializable_with_guard(
+    fn block_reflection_is_branch_specializable_in_context(
         &self,
         block: &Block,
         type_params: &HashSet<String>,
-        guarded_by_static_reflection: bool,
+        context: ReflectionBranchContext,
     ) -> bool {
-        block.stmts.iter().all(|stmt| {
-            self.stmt_reflection_is_branch_specializable(
-                stmt,
-                type_params,
-                guarded_by_static_reflection,
-            )
-        })
+        block
+            .stmts
+            .iter()
+            .all(|stmt| self.stmt_reflection_is_branch_specializable(stmt, type_params, context))
     }
 
     fn stmt_reflection_is_branch_specializable(
         &self,
         stmt: &Stmt,
         type_params: &HashSet<String>,
-        guarded_by_static_reflection: bool,
+        context: ReflectionBranchContext,
     ) -> bool {
-        if guarded_by_static_reflection {
-            return true;
-        }
-
         match stmt {
             Stmt::If(if_stmt) => {
                 let condition_static =
@@ -4264,11 +4274,15 @@ impl<'a> TypeChecker<'a> {
                     return false;
                 }
 
-                let then_guarded = condition_static;
-                let then_ok = self.block_reflection_is_branch_specializable_with_guard(
+                let then_context = if condition_static {
+                    ReflectionBranchContext::StaticReflectionBranch
+                } else {
+                    ReflectionBranchContext::RuntimeBranch
+                };
+                let then_ok = self.block_reflection_is_branch_specializable_in_context(
                     &if_stmt.then_block,
                     type_params,
-                    then_guarded,
+                    then_context,
                 );
 
                 let mut all_conditions_static = condition_static;
@@ -4281,20 +4295,30 @@ impl<'a> TypeChecker<'a> {
                     {
                         return false;
                     }
-                    self.block_reflection_is_branch_specializable_with_guard(
+                    let else_if_context = if else_if_static {
+                        ReflectionBranchContext::StaticReflectionBranch
+                    } else {
+                        ReflectionBranchContext::RuntimeBranch
+                    };
+                    self.block_reflection_is_branch_specializable_in_context(
                         block,
                         type_params,
-                        else_if_static,
+                        else_if_context,
                     )
                 });
 
                 then_ok
                     && else_ifs_ok
                     && if_stmt.else_block.as_ref().map_or(true, |block| {
-                        self.block_reflection_is_branch_specializable_with_guard(
+                        let else_context = if all_conditions_static {
+                            ReflectionBranchContext::StaticReflectionBranch
+                        } else {
+                            ReflectionBranchContext::RuntimeBranch
+                        };
+                        self.block_reflection_is_branch_specializable_in_context(
                             block,
                             type_params,
-                            all_conditions_static,
+                            else_context,
                         )
                     })
             }
@@ -4303,8 +4327,38 @@ impl<'a> TypeChecker<'a> {
                     || (!decl.mutable
                         && self.expr_is_reflection_local_fact_source(&decl.value, type_params))
             }
+            Stmt::ComptimeTypeBind(bind) => {
+                self.comptime_type_bind_reflection_is_specializable(bind, type_params, context)
+            }
             _ => !self.stmt_uses_type_param_reflection(stmt, type_params),
         }
+    }
+
+    fn comptime_type_bind_reflection_is_specializable(
+        &self,
+        bind: &ast::ComptimeTypeBindStmt,
+        type_params: &HashSet<String>,
+        context: ReflectionBranchContext,
+    ) -> bool {
+        let source_mentions_type_param = comptime_type_info_binding(&bind.value)
+            .or_else(|| comptime_type_arg_binding(&bind.value).map(|(ty, _)| ty))
+            .is_some_and(|ty| Self::type_expr_mentions_type_param(ty, type_params));
+
+        if source_mentions_type_param {
+            return context.permits_shape_reflection()
+                && self.block_reflection_is_branch_specializable_in_context(
+                    &bind.body,
+                    type_params,
+                    context,
+                );
+        }
+
+        !self.expr_uses_type_param_reflection(&bind.value, type_params)
+            && self.block_reflection_is_branch_specializable_in_context(
+                &bind.body,
+                type_params,
+                context,
+            )
     }
 
     fn expr_is_reflection_local_fact_source(

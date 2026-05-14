@@ -1,0 +1,8 @@
+# ERROR: E0345
+function bad_top_level_type_arg[T](value: T) returns int64:
+    comptime type Elem = type.arg[T](0):
+        return 1
+
+function main() returns nothing:
+    int64 value = bad_top_level_type_arg[string]("Ada")
+    return nothing
