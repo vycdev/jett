@@ -164,7 +164,10 @@ field, bitfield, or enum variant metadata from AST when a checked `TypeInfo`
 says the owner should have that metadata but the checked table is missing. The
 same completeness rule now applies to value-sensitive field/variant access and
 reflected construction paths, so missing checked owner metadata is surfaced
-instead of masked by interpreter-local AST reconstruction.
+instead of masked by interpreter-local AST reconstruction. Bitfield enum
+annotations now follow the same rule: if checked metadata says the referenced
+enum exists but variant metadata is absent, enum discriminant lookup reports the
+metadata gap instead of falling back to the interpreter enum registry.
 
 ### Stage 5: Remove AST Metadata Fallbacks
 

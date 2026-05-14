@@ -2265,6 +2265,17 @@ impl Interpreter {
             ));
         }
 
+        if self
+            .reflection_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get_type_info(enum_name))
+            .is_some_and(|info| info.kind == "enum")
+        {
+            return Err(format!(
+                "checked reflection metadata for type '{enum_name}' is missing variant metadata"
+            ));
+        }
+
         self.enum_numeric_value(enum_name, variant_name)
     }
 
@@ -10505,6 +10516,126 @@ mod tests {
             finished,
             result_fail(
                 "bitfield 'Header' field 'version' is 4 bit(s) wide and cannot hold '16'"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn type_construct_bitfield_finish_requires_checked_enum_variant_metadata() {
+        let int_info = ReflectionTypeInfo::new(
+            "int64",
+            "primitive",
+            Some("int64_type".to_string()),
+            false,
+            Vec::new(),
+        );
+        let protocol_info = ReflectionTypeInfo::new("IpProtocol", "enum", None, false, Vec::new());
+        let mut metadata = ReflectionMetadata::new();
+        metadata.insert_type_info(ReflectionTypeInfo::new(
+            "Header",
+            "bitfield",
+            None,
+            false,
+            Vec::new(),
+        ));
+        metadata.insert_type_info(protocol_info.clone());
+        metadata.insert_type_fields(
+            "Header",
+            vec![
+                ReflectionFieldInfo::new(
+                    0,
+                    "version",
+                    "int64",
+                    "primitive",
+                    "version",
+                    false,
+                    int_info.clone(),
+                ),
+                ReflectionFieldInfo::new(
+                    1,
+                    "protocol",
+                    "IpProtocol",
+                    "enum",
+                    "protocol",
+                    false,
+                    protocol_info.clone(),
+                ),
+            ],
+        );
+        metadata.insert_bitfield(
+            "Header",
+            ReflectionBitfieldInfo::new(
+                true,
+                vec![
+                    ReflectionBitfieldFieldInfo::new(0, "version", "bits", 4, int_info, None),
+                    ReflectionBitfieldFieldInfo::new(
+                        1,
+                        "protocol",
+                        "bits",
+                        8,
+                        protocol_info.clone(),
+                        Some(protocol_info),
+                    ),
+                ],
+            ),
+        );
+
+        let mut interp = Interpreter::new();
+        interp.set_reflection_metadata(Arc::new(metadata));
+
+        let type_fields = interp
+            .call_builtin_with_type_args("type.fields", &[type_named("Header")], &[])
+            .expect("type.fields should be a typed builtin")
+            .expect("type.fields should evaluate");
+        let Value::List(type_fields) = type_fields else {
+            panic!("expected list of TypeField values");
+        };
+        let protocol = Value::Enum {
+            type_name: "IpProtocol".to_string(),
+            variant: "tcp".to_string(),
+            fields: Vec::new(),
+        };
+
+        let builder = interp
+            .call_builtin_with_type_args("type.construct_start", &[type_named("Header")], &[])
+            .expect("type.construct_start should be a typed builtin")
+            .expect("type.construct_start should evaluate");
+        let builder = interp
+            .call_builtin_with_type_args(
+                "type.construct_put",
+                &[type_named("Header"), type_named("int64")],
+                &[builder, type_fields[0].clone(), Value::Int64(4)],
+            )
+            .expect("type.construct_put should be a typed builtin")
+            .expect("type.construct_put should evaluate");
+        let Value::ResultOk(builder) = builder else {
+            panic!("expected successful version field update");
+        };
+        let builder = interp
+            .call_builtin_with_type_args(
+                "type.construct_put",
+                &[type_named("Header"), type_named("IpProtocol")],
+                &[(*builder).clone(), type_fields[1].clone(), protocol],
+            )
+            .expect("type.construct_put should be a typed builtin")
+            .expect("type.construct_put should evaluate");
+        let Value::ResultOk(builder) = builder else {
+            panic!("expected successful protocol field update");
+        };
+        let finished = interp
+            .call_builtin_with_type_args(
+                "type.construct_finish",
+                &[type_named("Header")],
+                &[*builder],
+            )
+            .expect("type.construct_finish should be a typed builtin")
+            .expect("type.construct_finish should evaluate");
+
+        assert_eq!(
+            finished,
+            result_fail(
+                "checked reflection metadata for type 'IpProtocol' is missing variant metadata"
                     .to_string()
             )
         );
