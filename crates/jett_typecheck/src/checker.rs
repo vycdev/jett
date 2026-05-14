@@ -5408,27 +5408,8 @@ impl<'a> TypeChecker<'a> {
             }
             if self.ident_def_kind(base_ident) == Some(DefKind::Interface) {
                 let base_ty = self.check_ident(base_ident);
-                if let Type::Interface(iid) = *self.interner.resolve(base_ty) {
-                    let interface_def = self.interner.resolve_interface(iid);
-                    if let Some(method) = interface_def
-                        .methods
-                        .iter()
-                        .find(|m| m.name == field.name)
-                        .cloned()
-                    {
-                        let params = method.params.iter().map(|(_, ty, _)| *ty).collect();
-                        return self.interner.intern(Type::Function {
-                            params,
-                            return_type: method.return_type,
-                        });
-                    }
-
-                    self.sink.emit(errors::interface_has_no_member(
-                        &interface_def.name,
-                        &field.name,
-                        span,
-                    ));
-                    return TypeInterner::ERROR;
+                if let Some(method_ty) = self.check_interface_method(base_ty, field, span) {
+                    return method_ty;
                 }
             }
             if self.ident_def_kind(base_ident) == Some(DefKind::Struct) {
@@ -5447,6 +5428,9 @@ impl<'a> TypeChecker<'a> {
                 if matches!(self.interner.resolve(type_id), Type::Enum(_)) {
                     return self.check_enum_variant(base_ident, field, &[], span);
                 }
+                if let Some(method_ty) = self.check_interface_method(type_id, field, span) {
+                    return method_ty;
+                }
                 if let Some(method_ty) = self.check_type_module_method(type_id, field, span) {
                     return method_ty;
                 }
@@ -5459,6 +5443,9 @@ impl<'a> TypeChecker<'a> {
                 if let Some(type_id) = self.named_types.get(&type_name).copied() {
                     if matches!(self.interner.resolve(type_id), Type::Enum(_)) {
                         return self.check_enum_variant_by_type(type_id, field, &[], span);
+                    }
+                    if let Some(method_ty) = self.check_interface_method(type_id, field, span) {
+                        return method_ty;
                     }
                     if let Some(method_ty) = self.check_type_module_method(type_id, field, span) {
                         return method_ty;
@@ -5585,6 +5572,44 @@ impl<'a> TypeChecker<'a> {
                 span,
             ));
         }
+    }
+
+    fn check_interface_method(
+        &mut self,
+        type_id: TypeId,
+        field: &ast::Ident,
+        span: Span,
+    ) -> Option<TypeId> {
+        let Type::Interface(iid) = *self.interner.resolve(type_id) else {
+            return None;
+        };
+
+        let (interface_name, method) = {
+            let interface_def = self.interner.resolve_interface(iid);
+            (
+                interface_def.name.clone(),
+                interface_def
+                    .methods
+                    .iter()
+                    .find(|m| m.name == field.name)
+                    .cloned(),
+            )
+        };
+
+        if let Some(method) = method {
+            let params = method.params.iter().map(|(_, ty, _)| *ty).collect();
+            return Some(self.interner.intern(Type::Function {
+                params,
+                return_type: method.return_type,
+            }));
+        }
+
+        self.sink.emit(errors::interface_has_no_member(
+            &interface_name,
+            &field.name,
+            span,
+        ));
+        Some(TypeInterner::ERROR)
     }
 
     fn check_type_module_method(

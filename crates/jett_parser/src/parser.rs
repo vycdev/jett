@@ -467,7 +467,7 @@ impl<'src> Parser<'src> {
 
     fn parse_implement(&mut self) -> ImplementBlock {
         let kw = self.expect(TokenKind::Implement);
-        let interface_name = self.parse_ident();
+        let interface_name = self.parse_qualified_ident();
         self.expect(TokenKind::For);
         let for_type = self.parse_type();
         self.expect(TokenKind::Colon);

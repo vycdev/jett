@@ -1,0 +1,17 @@
+namespace contracts
+export interface Named:
+    function name(view self: contracts.Named) returns string
+namespace models
+export struct User:
+    name: string
+implement contracts.Named for models.User:
+    function name(view self: models.User) returns string:
+        return self.name
+namespace app
+function describe_user() returns string:
+    models.User user = models.User(name: "Ada")
+    return contracts.Named.name(view user)
+function main() returns nothing:
+    if describe_user() != "Ada":
+        int64 fail = 1 / 0
+    return nothing

@@ -213,6 +213,10 @@ run_pass_fixture!(
     "namespace_exports_syntax.jett"
 );
 run_pass_fixture!(
+    run_pass_namespace_qualified_interface_implement,
+    "namespace_qualified_interface_implement.jett"
+);
+run_pass_fixture!(
     run_pass_namespace_runtime_verify_context,
     "namespace_runtime_verify_context.jett"
 );

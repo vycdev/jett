@@ -19,6 +19,9 @@ existing flat declaration model:
 - Function-local namespace aliases from `use models as m` now expand qualified
   references such as `m.User`, `m.make[T](...)`, and `m.Color.active` back to
   the canonical `models.*` symbols. Reflection still reports canonical names.
+- Qualified interface implementations such as
+  `implement contracts.Named for models.User` now parse, typecheck, and run
+  through qualified interface method calls like `contracts.Named.name(view user)`.
 
 That was the right first bite because it unblocks stdlib-style reflection and
 JSON code without changing the language's broader namespace semantics.
@@ -31,10 +34,10 @@ JSON code without changing the language's broader namespace semantics.
   as the final namespace model.
 - `use models as m` is a local namespace alias, not a type alias. The registered
   spelling and reflected metadata remain `models.User`.
-- Interfaces, implementations, actors, and state machines still have some
-  leaf-name-oriented paths. Qualified struct, enum, bitfield, generic struct,
-  reflection, and JSON paths are covered first because they are the JSON
-  extraction blocker.
+- Interfaces, actors, and state machines still have some leaf-name-oriented
+  paths. Qualified struct, enum, bitfield, generic struct, reflection, JSON,
+  and explicitly qualified interface implementation paths are covered first
+  because they are the JSON extraction blocker.
 - Typechecker canonical names for namespaced user types now use the qualified
   spelling in reflection and `TypeId` display paths covered by the current
   tests.
@@ -120,13 +123,14 @@ front-end convenience.
 
 - Duplicate-leaf bitfields and `use`-alias bitfield references are now covered
   by the namespace run-pass fixtures.
+- Explicitly qualified interface implementations and qualified interface method
+  calls are now covered by a namespace run-pass fixture.
 - Add more duplicate-leaf coverage beyond structs, enums, generic structs,
   bitfields, and same-leaf functions. Same-leaf functions are now covered both
-  by direct qualified calls and `use`-alias calls, so actors and interfaces
-  remain.
+  by direct qualified calls and `use`-alias calls, so actors and duplicate-leaf
+  interfaces remain.
 - `type.name[a.User]()` returns `a.User`.
 - `type.fields[a.User]()` reports field metadata with owner `a.User`.
 - `json.parse[a.User]` and `json.serialize[a.User]` roundtrip only the intended
   type.
-- Broader `use a as alias` coverage for bitfields, interfaces, actors, and
-  same-leaf functions.
+- Broader `use a as alias` coverage for interfaces and actors.
