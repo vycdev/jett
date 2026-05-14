@@ -1066,8 +1066,13 @@ fn completions_hide_private_stdlib_json_hooks() {
 
     for expected in [
         "json.JsonTree",
+        "json.JsonValue",
+        "json.parse",
+        "json.parse_exact",
         "json.parse_raw",
         "json.serialize_raw",
+        "json.serialize",
+        "json.serialize_public",
         "json.kind",
         "json.is_null",
         "json.is_bool",
@@ -1083,6 +1088,10 @@ fn completions_hide_private_stdlib_json_hooks() {
         "json.as_int64",
         "json.as_float64",
         "json.as_bool",
+        "json.object_field",
+        "json.array_index",
+        "json.require_field",
+        "json.require_index",
     ] {
         assert!(
             candidates.iter().any(|(name, _)| name == expected),

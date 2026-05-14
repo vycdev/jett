@@ -203,8 +203,8 @@ Implemented:
 - Driver hover coverage also pins the `JsonTree`-first return types for
   `json.field`, `json.index`, `json.array_length`, and `json.as_string`.
 - Driver completion coverage now filters out private namespaced stdlib JSON
-  bridge hooks while still exposing the exported `json.JsonTree` raw facade
-  surface.
+  bridge hooks while still exposing the exported `json.JsonTree`,
+  `json.JsonValue`, parse/serialize wrappers, and raw facade surface.
 - LSP completions are now cursor-position aware for namespace visibility:
   private helpers are offered inside their own namespace but hidden from
   external namespaces.
