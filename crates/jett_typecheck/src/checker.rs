@@ -133,6 +133,8 @@ struct TypeChecker<'a> {
     // -- Generic function support --
     /// AST templates for user-defined generic functions (have type_params).
     generic_function_templates: HashMap<String, FunctionDef>,
+    /// Generic function instantiations whose bodies have already been checked.
+    checked_generic_function_instantiations: HashSet<(String, Vec<TypeId>)>,
 
     // -- Actor support --
     /// The expected `responds T` type for the receive handler being checked.
@@ -184,6 +186,7 @@ impl<'a> TypeChecker<'a> {
             reflected_type_info_scopes: Vec::new(),
             reflected_variant_type_scopes: Vec::new(),
             generic_function_templates: HashMap::new(),
+            checked_generic_function_instantiations: HashSet::new(),
             current_respond_type: None,
         };
         checker.install_builtin_metadata_types();
@@ -3883,6 +3886,240 @@ impl<'a> TypeChecker<'a> {
         self.check_function_impl(func, format!("{owner}.{}", func.name.name));
     }
 
+    fn check_generic_function_instantiation(
+        &mut self,
+        function_name: &str,
+        func: &FunctionDef,
+        concrete_args: &[TypeId],
+        subst: HashMap<String, TypeId>,
+    ) {
+        if self.generic_function_uses_type_param_reflection(func) {
+            return;
+        }
+
+        let cache_key = (function_name.to_string(), concrete_args.to_vec());
+        if !self
+            .checked_generic_function_instantiations
+            .insert(cache_key)
+        {
+            return;
+        }
+
+        let type_arg_names = concrete_args
+            .iter()
+            .map(|&ty| self.type_name(ty))
+            .collect::<Vec<_>>();
+        let instantiated_name = format!("{function_name}[{}]", type_arg_names.join(", "));
+
+        let old_subst = std::mem::replace(&mut self.type_var_subst, subst);
+        let old_return_type = self.current_return_type;
+        let old_function_name = self.current_function_name.clone();
+        let old_function_pure = self.current_function_pure;
+        let old_in_verify_block = self.in_verify_block;
+        let old_in_property_block = self.in_property_block;
+        let old_verify_name = self.current_verify_name.clone();
+        let old_handle_body_depth = self.handle_body_depth;
+        let old_respond_type = self.current_respond_type;
+
+        self.in_verify_block = false;
+        self.in_property_block = false;
+        self.current_verify_name = None;
+        self.handle_body_depth = 0;
+        self.current_respond_type = None;
+
+        self.check_function_impl(func, instantiated_name);
+
+        self.type_var_subst = old_subst;
+        self.current_return_type = old_return_type;
+        self.current_function_name = old_function_name;
+        self.current_function_pure = old_function_pure;
+        self.in_verify_block = old_in_verify_block;
+        self.in_property_block = old_in_property_block;
+        self.current_verify_name = old_verify_name;
+        self.handle_body_depth = old_handle_body_depth;
+        self.current_respond_type = old_respond_type;
+    }
+
+    fn generic_function_uses_type_param_reflection(&self, func: &FunctionDef) -> bool {
+        let type_params = func
+            .type_params
+            .iter()
+            .map(|param| param.name.clone())
+            .collect::<HashSet<_>>();
+        self.block_uses_type_param_reflection(&func.body, &type_params)
+    }
+
+    fn block_uses_type_param_reflection(
+        &self,
+        block: &Block,
+        type_params: &HashSet<String>,
+    ) -> bool {
+        block
+            .stmts
+            .iter()
+            .any(|stmt| self.stmt_uses_type_param_reflection(stmt, type_params))
+    }
+
+    fn stmt_uses_type_param_reflection(&self, stmt: &Stmt, type_params: &HashSet<String>) -> bool {
+        match stmt {
+            Stmt::VarDecl(decl) => self.expr_uses_type_param_reflection(&decl.value, type_params),
+            Stmt::Assign(assign) => {
+                self.expr_uses_type_param_reflection(&assign.target, type_params)
+                    || self.expr_uses_type_param_reflection(&assign.value, type_params)
+            }
+            Stmt::Return(ret) => ret
+                .value
+                .as_ref()
+                .is_some_and(|expr| self.expr_uses_type_param_reflection(expr, type_params)),
+            Stmt::Respond(resp) => self.expr_uses_type_param_reflection(&resp.value, type_params),
+            Stmt::ComptimeTypeBind(bind) => {
+                self.expr_uses_type_param_reflection(&bind.value, type_params)
+                    || self.block_uses_type_param_reflection(&bind.body, type_params)
+            }
+            Stmt::If(if_stmt) => {
+                self.expr_uses_type_param_reflection(&if_stmt.condition, type_params)
+                    || self.block_uses_type_param_reflection(&if_stmt.then_block, type_params)
+                    || if_stmt.else_ifs.iter().any(|(condition, block)| {
+                        self.expr_uses_type_param_reflection(condition, type_params)
+                            || self.block_uses_type_param_reflection(block, type_params)
+                    })
+                    || if_stmt.else_block.as_ref().is_some_and(|block| {
+                        self.block_uses_type_param_reflection(block, type_params)
+                    })
+            }
+            Stmt::For(for_stmt) => {
+                self.expr_uses_type_param_reflection(&for_stmt.iterable, type_params)
+                    || self.block_uses_type_param_reflection(&for_stmt.body, type_params)
+            }
+            Stmt::While(while_stmt) => {
+                self.expr_uses_type_param_reflection(&while_stmt.condition, type_params)
+                    || self.block_uses_type_param_reflection(&while_stmt.body, type_params)
+            }
+            Stmt::Match(match_stmt) => {
+                self.expr_uses_type_param_reflection(&match_stmt.expr, type_params)
+                    || match_stmt
+                        .arms
+                        .iter()
+                        .any(|arm| self.block_uses_type_param_reflection(&arm.body, type_params))
+            }
+            Stmt::Expr(expr_stmt) => {
+                self.expr_uses_type_param_reflection(&expr_stmt.expr, type_params)
+            }
+            Stmt::Assert(assert_stmt) => {
+                self.expr_uses_type_param_reflection(&assert_stmt.condition, type_params)
+                    || assert_stmt.message.as_ref().is_some_and(|message| {
+                        self.expr_uses_type_param_reflection(message, type_params)
+                    })
+            }
+            Stmt::Breakpoint(breakpoint_stmt) => breakpoint_stmt
+                .condition
+                .as_ref()
+                .is_some_and(|expr| self.expr_uses_type_param_reflection(expr, type_params)),
+            Stmt::Trace(_) | Stmt::Use(_) | Stmt::Break(_) | Stmt::Continue(_) => false,
+        }
+    }
+
+    fn expr_uses_type_param_reflection(&self, expr: &Expr, type_params: &HashSet<String>) -> bool {
+        match expr {
+            Expr::GenericCall(callee, type_args, args, _) => {
+                let is_type_reflection = self
+                    .resolved_expr_name(callee)
+                    .is_some_and(|name| name.starts_with("type."));
+                (is_type_reflection
+                    && type_args
+                        .iter()
+                        .any(|arg| Self::type_expr_mentions_type_param(arg, type_params)))
+                    || self.expr_uses_type_param_reflection(callee, type_params)
+                    || args
+                        .iter()
+                        .any(|arg| self.expr_uses_type_param_reflection(&arg.value, type_params))
+            }
+            Expr::Call(callee, args, _) => {
+                self.expr_uses_type_param_reflection(callee, type_params)
+                    || args
+                        .iter()
+                        .any(|arg| self.expr_uses_type_param_reflection(&arg.value, type_params))
+            }
+            Expr::Binary(lhs, _, rhs, _) => {
+                self.expr_uses_type_param_reflection(lhs, type_params)
+                    || self.expr_uses_type_param_reflection(rhs, type_params)
+            }
+            Expr::Unary(_, inner, _)
+            | Expr::FieldAccess(inner, _, _)
+            | Expr::Paren(inner, _)
+            | Expr::View(inner, _)
+            | Expr::Ok(inner, _)
+            | Expr::Fail(inner, _)
+            | Expr::Some(inner, _)
+            | Expr::Default(inner, _)
+            | Expr::Declassify(inner, _)
+            | Expr::Coarsen(inner, _)
+            | Expr::At(inner, _, _)
+            | Expr::Spawn(inner, _)
+            | Expr::Send(inner, _)
+            | Expr::Ask(inner, _)
+            | Expr::Clone(inner, _)
+            | Expr::Run(inner, _)
+            | Expr::Join(inner, _)
+            | Expr::Cancel(inner, _) => self.expr_uses_type_param_reflection(inner, type_params),
+            Expr::ListConstruct(items, _) => items
+                .iter()
+                .any(|item| self.expr_uses_type_param_reflection(item, type_params)),
+            Expr::MapConstruct(entries, _) => entries.iter().any(|(key, value)| {
+                self.expr_uses_type_param_reflection(key, type_params)
+                    || self.expr_uses_type_param_reflection(value, type_params)
+            }),
+            Expr::Handle(target, _, body, _) => {
+                self.expr_uses_type_param_reflection(target, type_params)
+                    || self.block_uses_type_param_reflection(body, type_params)
+            }
+            Expr::StringInterpolation(parts, _) => parts.iter().any(|part| match part {
+                StringPart::Literal(_) => false,
+                StringPart::Expr(expr) => self.expr_uses_type_param_reflection(expr, type_params),
+            }),
+            Expr::Pipeline(base, steps, _) => {
+                self.expr_uses_type_param_reflection(base, type_params)
+                    || steps.iter().any(|step| {
+                        self.expr_uses_type_param_reflection(&step.function, type_params)
+                            || step.extra_args.iter().any(|arg| {
+                                self.expr_uses_type_param_reflection(&arg.value, type_params)
+                            })
+                    })
+            }
+            Expr::InlineFn(_, return_ty, body, _) => {
+                return_ty
+                    .as_ref()
+                    .is_some_and(|ty| Self::type_expr_mentions_type_param(ty, type_params))
+                    || self.block_uses_type_param_reflection(body, type_params)
+            }
+            Expr::IntLiteral(_, _)
+            | Expr::FloatLiteral(_, _)
+            | Expr::StringLiteral(_, _)
+            | Expr::BoolLiteral(_, _)
+            | Expr::Nothing(_)
+            | Expr::Ident(_)
+            | Expr::None(_)
+            | Expr::EnumVariant(_, _, _)
+            | Expr::Error(_) => false,
+        }
+    }
+
+    fn type_expr_mentions_type_param(ty: &TypeExpr, type_params: &HashSet<String>) -> bool {
+        match ty {
+            TypeExpr::Named(ident) => type_params.contains(&ident.name),
+            TypeExpr::Generic(_, args, _) => args
+                .iter()
+                .any(|arg| Self::type_expr_mentions_type_param(arg, type_params)),
+            TypeExpr::View(inner, _) => Self::type_expr_mentions_type_param(inner, type_params),
+            TypeExpr::Function(params, return_ty, _) => {
+                params
+                    .iter()
+                    .any(|param| Self::type_expr_mentions_type_param(param, type_params))
+                    || Self::type_expr_mentions_type_param(return_ty, type_params)
+            }
+        }
+    }
+
     fn check_implement_block(&mut self, block: &ast::ImplementBlock) {
         let owner_ty = self.resolve_type_expr(&block.for_type);
         let owner_name = self.type_name(owner_ty);
@@ -5212,7 +5449,7 @@ impl<'a> TypeChecker<'a> {
                         .map(|(p, &ty)| (p.name.clone(), ty))
                         .collect();
 
-                    let old_subst = std::mem::replace(&mut self.type_var_subst, subst);
+                    let old_subst = std::mem::replace(&mut self.type_var_subst, subst.clone());
 
                     let param_types: Vec<TypeId> = template
                         .params
@@ -5240,15 +5477,25 @@ impl<'a> TypeChecker<'a> {
                         }
                         return TypeInterner::ERROR;
                     }
+                    let mut arguments_match = true;
                     for (arg, &expected) in args.iter().zip(param_types.iter()) {
                         let got = self.check_expr_for_expected(&arg.value, expected, false);
                         if !self.types_compatible(expected, got) {
+                            arguments_match = false;
                             self.sink.emit(errors::type_mismatch(
                                 &self.type_name(expected),
                                 &self.type_name(got),
                                 arg.value.span(),
                             ));
                         }
+                    }
+                    if arguments_match {
+                        self.check_generic_function_instantiation(
+                            function_name,
+                            &template,
+                            &concrete_args,
+                            subst,
+                        );
                     }
                     return return_type;
                 }

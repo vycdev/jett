@@ -1,0 +1,8 @@
+# ERROR: E0301
+namespace test
+
+function add_one[T](value: T) returns T:
+    return value + 1
+
+function bad_instantiation() returns string:
+    return add_one[string]("item")

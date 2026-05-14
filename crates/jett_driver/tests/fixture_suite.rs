@@ -495,6 +495,10 @@ compile_fail_fixture!(
     "generic_function_secret_argument_mismatch.jett"
 );
 compile_fail_fixture!(
+    compile_fail_generic_function_body_type_error,
+    "generic_function_body_type_error.jett"
+);
+compile_fail_fixture!(
     compile_fail_result_ok_payload_requires_handle,
     "result_ok_payload_requires_handle.jett"
 );
