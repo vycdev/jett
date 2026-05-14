@@ -152,11 +152,15 @@ impl<'src> Parser<'src> {
         let mut items = Vec::new();
 
         while self.peek() != TokenKind::Eof {
+            let before = self.pos;
             match self.parse_item() {
                 Some(item) => items.push(item),
                 None => {
                     // Error recovery: skip to next line
                     self.synchronize();
+                    if self.pos == before && self.peek() != TokenKind::Eof {
+                        self.advance();
+                    }
                 }
             }
             self.skip_newlines();
@@ -2648,7 +2652,8 @@ export root type JsonValue = json.JsonTree
     #[test]
     fn parse_export_root_rejects_non_type_item() {
         let src = "\
-export root function
+export root function parse() returns nothing:
+    return nothing
 ";
         let result = parse_str(src);
         assert!(!result.errors.is_empty());
