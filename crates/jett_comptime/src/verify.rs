@@ -523,6 +523,7 @@ fn generate_values_for_type(ty: &TypeExpr) -> Vec<Value> {
         },
         TypeExpr::Generic(ident, args, _) => match ident.name.as_str() {
             "list" if args.len() == 1 => generate_list_values_for_type(&args[0]),
+            "set" if args.len() == 1 => generate_set_values_for_type(&args[0]),
             _ => vec![], // unsupported generic type
         },
         TypeExpr::View(inner, _) => generate_values_for_type(inner),
@@ -550,6 +551,30 @@ fn generate_list_values_for_type(inner_ty: &TypeExpr) -> Vec<Value> {
             inner_values[1].clone(),
             inner_values[1].clone(),
         ]));
+    }
+
+    values
+}
+
+fn generate_set_values_for_type(inner_ty: &TypeExpr) -> Vec<Value> {
+    let inner_values = generate_values_for_type(inner_ty);
+    if inner_values.is_empty() {
+        return Vec::new();
+    }
+
+    let mut unique_values = Vec::new();
+    for value in inner_values {
+        if !unique_values.contains(&value) {
+            unique_values.push(value);
+        }
+    }
+
+    let mut values = vec![Value::Set(vec![])];
+    values.push(Value::Set(vec![unique_values[0].clone()]));
+
+    let sample: Vec<Value> = unique_values.iter().take(3).cloned().collect();
+    if sample.len() > 1 {
+        values.push(Value::Set(sample));
     }
 
     values
@@ -1602,6 +1627,15 @@ mod tests {
                 matches!(value, Value::List(items) if items.iter().any(|item| matches!(item, Value::Bool(_))))
             }),
             "expected list[bool] generation to include bool payloads"
+        );
+
+        let string_sets =
+            generate_values_for_type(&type_generic("set", vec![type_named("string")]));
+        assert!(
+            string_sets.iter().any(|value| {
+                matches!(value, Value::Set(items) if items.iter().any(|item| matches!(item, Value::String(_))))
+            }),
+            "expected set[string] generation to include string payloads"
         );
     }
 

@@ -9,3 +9,8 @@ property bool_lists_have_nonnegative_length:
     given flags: list[bool]
     int64 length = list.length[bool](flags)
     assert length >= 0
+
+property string_sets_have_nonnegative_length:
+    given labels: set[string]
+    int64 length = set.length[string](labels)
+    assert length >= 0
