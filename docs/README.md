@@ -30,6 +30,7 @@ enough pressure from real code:
 - [Type construction design](open_design/type_construction_design.md)
 - [Type construction block syntax](open_design/type_construction_block_syntax.md)
 - [Namespace-qualified type follow-up](open_design/namespace_qualified_types_followup.md)
+- [State machine type model](open_design/state_machine_type_model.md)
 
 ## Completed Records
 

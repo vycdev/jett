@@ -140,7 +140,8 @@ metadata, and duplicate-leaf actor owners are covered by
 
 State machines have more runtime namespace support than actor spawn, but their
 type-system story is still thin. Treat namespaced machine tests as design probes
-until the machine type model is made explicit.
+until the machine type model is made explicit. See
+`docs/open_design/state_machine_type_model.md`.
 
 ## Suggested Next Tests
 
