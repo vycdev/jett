@@ -1188,6 +1188,32 @@ function main() returns nothing:
 }
 
 #[test]
+fn completions_at_hides_private_stdlib_hooks_in_project_json_namespace() {
+    let source = r#"
+namespace json
+
+function main() returns nothing:
+    return nothing
+"#;
+
+    let candidates = completions_at(source, 5, 12);
+    assert!(
+        candidates.iter().any(|(name, _)| name == "json.parse"),
+        "public JSON exports should remain visible"
+    );
+    assert!(
+        !candidates
+            .iter()
+            .any(|(name, _)| name == "json.json_parse_reflected"
+                || name == "json.json_parse_exact_reflected"
+                || name == "json.json_decode_tree_reflected"
+                || name == "json.json_serialize_public_reflected"
+                || name == "json.json_serialize_reflected"),
+        "project attempts to reopen stdlib json must not expose private hooks"
+    );
+}
+
+#[test]
 fn stdlib_loaded_for_test_file() {
     let path = workspace_root()
         .join("tests")

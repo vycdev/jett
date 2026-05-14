@@ -151,8 +151,9 @@ For now:
   from compiler-shipped stdlib files,
 - public wrappers in `stdlib/json.jett` stay as readable declarations and a
   preview of the eventual API,
-- helper names remain prefixed to reduce collisions, but that is convention,
-  not real privacy.
+- parser walkers, reflected decoders, quoting helpers, and bridge hooks are now
+  namespace-private source declarations. Their `json_` prefixes remain useful
+  for readability, but privacy no longer depends on naming convention.
 
 Before removing compiler-owned JSON policy gates, finish the broader
 module/import/prelude story and decide how trusted private hooks should be
@@ -236,7 +237,7 @@ Still staged:
    reflected decoders, quoting helpers, and bridge hooks private unless there is
    a user-facing reason to expose them. Done for the current `JsonTree` surface.
 
-## Required Tests
+## Covered Tests
 
 - Outside a namespace, code can call exported qualified declarations and cannot
   call private qualified helpers.
@@ -249,11 +250,17 @@ Still staged:
   handled-result rules still fire even if public wrapper declarations exist.
 - Project code cannot reopen compiler-shipped stdlib namespaces such as
   `json`; the prepended stdlib namespace declaration wins and later project
-  declarations collide instead of replacing trusted symbols.
+  declarations collide instead of replacing trusted symbols. Pinned by
+  `tests/compile_fail/stdlib_namespace_collision.jett`, with driver completion
+  coverage ensuring invalid in-memory `namespace json` files do not receive
+  same-namespace access to private stdlib hooks.
 - A project-defined `namespace json function json_parse_reflected...` cannot
-  satisfy the trusted public JSON bridge, and an untrusted later registration of
-  a hook name clears trust. Ordinary source access to the private typed parse
-  bridge is pinned by `tests/compile_fail/json_private_parse_reflected.jett`.
+  satisfy the trusted public JSON bridge, and untrusted later registration of
+  JSON hook names clears trust. Interpreter unit coverage pins parse,
+  parse_exact, serialize, serialize_public, and raw `JsonTree` hooks.
+- Ordinary source access to private JSON hooks is rejected for tree parsing,
+  reflected parsing, exact reflected parsing, reflected decoding, and reflected
+  serialization fixtures under `tests/compile_fail/json_private_*.jett`.
 - `jett build`, `jett run`, `jett test file`, project tests, and LSP-style
   `build_source` all see the same stdlib exports. The marker stdlib module and
   JSON raw facade are covered for `build_source`; file/project paths are covered
@@ -262,3 +269,11 @@ Still staged:
   pins exported namespaced declarations without leaking private JSON bridge
   hooks, while position-aware completions keep same-namespace private helpers
   available.
+
+## Remaining Test Gaps
+
+- Codegen should eventually get equivalent trusted-origin coverage once JSON
+  bridge delegation moves beyond the comptime/runtime interpreter.
+- The future import/prelude design should add integration coverage for whatever
+  root-level compatibility alias replaces the current compiler-owned
+  unqualified `JsonValue` spelling.

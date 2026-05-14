@@ -171,12 +171,23 @@ pub fn completions_at(
 
     let parsed = parse(source, file_id);
     let current_namespace = namespace_at_offset(&parsed.module, file_id, offset);
-    completions_for_namespace(source, current_namespace.as_deref())
+    let support_modules = discover_stdlib_modules();
+    let current_namespace = current_namespace
+        .filter(|namespace| !support_modules_declare_namespace(&support_modules, namespace));
+    completions_for_namespace_with_support(source, current_namespace.as_deref(), support_modules)
 }
 
 fn completions_for_namespace(
     source: &str,
     current_namespace: Option<&str>,
+) -> Vec<(String, jett_resolve::scope::DefKind)> {
+    completions_for_namespace_with_support(source, current_namespace, discover_stdlib_modules())
+}
+
+fn completions_for_namespace_with_support(
+    source: &str,
+    current_namespace: Option<&str>,
+    support_modules: Vec<Module>,
 ) -> Vec<(String, jett_resolve::scope::DefKind)> {
     use jett_resolve::scope::DefVisibility;
 
@@ -189,7 +200,7 @@ fn completions_for_namespace(
     {
         return Vec::new();
     }
-    prepend_support_modules(&mut parse_result.module, discover_stdlib_modules());
+    prepend_support_modules(&mut parse_result.module, support_modules);
 
     let resolve_result = resolve(&parse_result.module);
     resolve_result
@@ -203,6 +214,15 @@ fn completions_for_namespace(
         })
         .map(|def| (def.name.clone(), def.kind))
         .collect()
+}
+
+fn support_modules_declare_namespace(modules: &[Module], namespace: &str) -> bool {
+    modules.iter().any(|module| {
+        module.items.iter().any(|item| match item {
+            Item::Namespace(ns) => ns.span.file.is_stdlib() && ns.name.name == namespace,
+            _ => false,
+        })
+    })
 }
 
 fn namespace_at_offset(module: &Module, file_id: FileId, offset: u32) -> Option<String> {
