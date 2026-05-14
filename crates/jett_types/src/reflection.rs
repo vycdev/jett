@@ -33,6 +33,9 @@ impl ReflectionMetadata {
     }
 
     pub fn insert_type_info(&mut self, info: ReflectionTypeInfo) {
+        if let Some(type_id) = self.type_ids_by_name.get(&info.type_name) {
+            self.type_infos_by_id.insert(*type_id, info.clone());
+        }
         self.type_infos.insert(info.type_name.clone(), info);
     }
 
@@ -323,6 +326,23 @@ mod tests {
                 .expect("legacy string info should exist")
                 .kind,
             "struct"
+        );
+    }
+
+    #[test]
+    fn string_type_info_insertion_updates_existing_type_id_binding() {
+        let type_id = TypeId(45);
+        let mut metadata = ReflectionMetadata::new();
+
+        metadata.insert_type_info_for_id(type_id, info("models.Box", "struct"));
+        metadata.insert_type_info(info("models.Box", "checked_struct"));
+
+        assert_eq!(
+            metadata
+                .get_type_info("models.Box")
+                .expect("bound name should still resolve")
+                .kind,
+            "checked_struct"
         );
     }
 

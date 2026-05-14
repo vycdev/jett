@@ -172,6 +172,9 @@ Duplicate-leaf reflected construction is pinned in
 `tests/run_pass/reflection_type_id_duplicate_construction.jett`, which builds
 `accounts.Record` and `audit.Record` through `type.construct_*` using their
 own checked field metadata.
+`ReflectionMetadata::insert_type_info` now also refreshes an existing canonical
+`TypeId` binding when the inserted type name is already bound, matching the
+owner-metadata insertion behavior.
 
 ### Stage 5: Remove AST Metadata Fallbacks
 
