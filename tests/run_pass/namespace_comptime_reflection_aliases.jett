@@ -1,0 +1,39 @@
+namespace data
+
+export type NameList = list[string]
+
+export type NonEmpty = string where string.char_count(value) > 0
+
+export struct Box[T]:
+    value: T
+
+namespace app
+
+function bound_namespaced_alias_base() returns string:
+    use data as d
+    string found = "missing"
+    comptime type Base = type.arg[d.NameList](0):
+        found = type.name[Base]()
+    return found
+
+function bound_namespaced_refinement_base() returns string:
+    use data as d
+    string found = "missing"
+    comptime type Base = type.arg[d.NonEmpty](0):
+        found = type.name[Base]()
+    return found
+
+function bound_namespaced_generic_field() returns string:
+    use data as d
+    d.Box[list[int64]] box = d.Box[list[int64]](value: list(1, 2, 3))
+    string found = "missing"
+    for field in type.fields[d.Box[list[int64]]]():
+        comptime type Field = field.type_info:
+            Field value = type.field_value[d.Box[list[int64]], Field](view box, view field)
+            found = "{field.type_info.type_name}:{type.name[Field]()}:{list.length(value)}"
+    return found
+
+verify namespace_comptime_reflection_aliases:
+    assert bound_namespaced_alias_base() == "list[string]"
+    assert bound_namespaced_refinement_base() == "string"
+    assert bound_namespaced_generic_field() == "list[int64]:list[int64]:3"

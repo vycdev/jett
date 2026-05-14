@@ -19,6 +19,8 @@ existing flat declaration model:
 - Function-local namespace aliases from `use models as m` now expand qualified
   references such as `m.User`, `m.make[T](...)`, and `m.Color.active` back to
   the canonical `models.*` symbols. Reflection still reports canonical names.
+- `comptime type` binding through namespace aliases is covered for exported
+  aliases, refinements, and generic field metadata.
 - Qualified interface implementations such as
   `implement contracts.Named for models.User` now parse, typecheck, and run
   through qualified interface method calls like `contracts.Named.name(view user)`.
@@ -148,5 +150,5 @@ until the machine type model is made explicit.
 - Interfaces: the direct qualified, `use`-alias, and duplicate-leaf interface
   paths are now covered by run-pass fixtures.
 - Structs, enums, generic structs, bitfields, same-leaf functions, type names,
-  field metadata, and JSON parse/serialize are now covered by the namespace and
-  reflection run-pass fixtures.
+  field metadata, `comptime type` bindings, and JSON parse/serialize are now
+  covered by the namespace and reflection run-pass fixtures.
