@@ -289,6 +289,10 @@ run_pass_fixture!(
 );
 run_pass_fixture!(run_pass_json_parse_raw, "json_parse_raw.jett");
 run_pass_fixture!(
+    run_pass_json_raw_facade_tree_surface,
+    "json_raw_facade_tree_surface.jett"
+);
+run_pass_fixture!(
     run_pass_json_raw_value_access_edges,
     "json_raw_value_access_edges.jett"
 );
