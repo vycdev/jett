@@ -1,0 +1,9 @@
+# ERROR: E0345
+function helper_requires_known_kind[T](value: T, kind: TypeKind) returns int64:
+    if kind == TypeKind.list_type:
+        comptime type Elem = type.arg[T](0):
+            return 1
+    return 0
+
+function caller(value: list[int64], kind: TypeKind) returns int64:
+    return helper_requires_known_kind[list[int64]](value, kind)

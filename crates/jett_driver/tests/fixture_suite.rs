@@ -194,6 +194,10 @@ compile_pass_fixture!(
     compile_pass_generic_reflection_local_fact_specialization,
     "generic_reflection_local_fact_specialization.jett"
 );
+compile_pass_fixture!(
+    compile_pass_generic_reflection_runtime_guard_deferral,
+    "generic_reflection_runtime_guard_deferral.jett"
+);
 
 compile_fail_fixture!(compile_fail_type_mismatch, "type_mismatch.jett");
 compile_fail_fixture!(compile_fail_secret_stdout, "secret_stdout.jett");
@@ -633,6 +637,14 @@ compile_fail_fixture!(
 compile_fail_fixture!(
     compile_fail_generic_reflection_helper_primitive_fact_cache,
     "generic_reflection_helper_primitive_fact_cache.jett"
+);
+compile_fail_fixture!(
+    compile_fail_generic_reflection_guarded_type_arg_error,
+    "generic_reflection_guarded_type_arg_error.jett"
+);
+compile_fail_fixture!(
+    compile_fail_generic_reflection_guarded_unknown_fact,
+    "generic_reflection_guarded_unknown_fact.jett"
 );
 compile_fail_fixture!(
     compile_fail_actor_message_arg_type_mismatch,

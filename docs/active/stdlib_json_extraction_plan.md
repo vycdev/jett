@@ -244,9 +244,11 @@ bridge spoofing, not helper visibility.
    `TypeKind`, or `TypePrimitive` also receive those facts from known call
    arguments, which lets helper split points like
    `json_decode_tree_structured_reflected[T](..., kind, ...)` and primitive
-   decoder helpers specialize on caller-reflected tags. Predicate-derived
-   facts, diagnostic string facts, and shape implications for non-branch
-   `type.arg[T]()` bodies remain deferred.
+   decoder helpers specialize on caller-reflected tags. Branches selected by a
+   statically known reflection guard may now contain deeper `type.arg[T](...)`
+   bindings, while unknown/runtime guards are rejected instead of falling back
+   to checking all branches. Predicate-derived facts, diagnostic string facts,
+   and shape implications for non-branch `type.arg[T]()` bodies remain deferred.
 
 ## Recommended Shape For `stdlib/json.jett`
 

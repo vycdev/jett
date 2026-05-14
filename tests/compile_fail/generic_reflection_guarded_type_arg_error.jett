@@ -1,0 +1,14 @@
+# ERROR: E0345
+struct User:
+    name: string
+
+function bad_guarded_type_arg[T](value: T) returns int64:
+    if type.kind_tag[T]() == TypeKind.struct_type:
+        comptime type Elem = type.arg[T](0):
+            return 1
+    return 0
+
+function main() returns nothing:
+    User user = User(name: "Ada")
+    int64 value = bad_guarded_type_arg[User](user)
+    return nothing

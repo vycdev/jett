@@ -1,0 +1,9 @@
+function runtime_guarded_type_arg[T](value: T, flag: bool) returns int64:
+    if flag:
+        comptime type Elem = type.arg[T](0):
+            return 1
+    return 0
+
+function main() returns nothing:
+    int64 value = runtime_guarded_type_arg[string]("Ada", false)
+    return nothing
