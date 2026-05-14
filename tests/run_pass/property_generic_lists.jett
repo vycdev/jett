@@ -1,11 +1,13 @@
 namespace app
 
+type PropertyName = string where string.char_count(value) > 0
+
 enum PropertyChoice:
     empty
     score(value: int64)
 
 struct PropertyUser:
-    name: string
+    name: PropertyName
     score: int64
     choice: PropertyChoice
 
@@ -34,6 +36,10 @@ property bytes_have_nonnegative_length:
     int64 length = bytes.length(payload)
     assert length >= 0
 
+property refined_names_are_nonempty:
+    given name: PropertyName
+    assert string.char_count(coarsen name) > 0
+
 property optional_ints_can_be_handled:
     given maybe: optional[int64]
     int64 value = maybe handle:
@@ -58,7 +64,7 @@ property enum_variants_can_be_matched:
 
 property structs_have_generated_fields:
     given user: PropertyUser
-    assert user.name == user.name
+    assert string.char_count(coarsen user.name) > 0
     assert user.score == user.score
     match user.choice:
         empty:

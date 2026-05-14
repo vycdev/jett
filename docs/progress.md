@@ -132,7 +132,7 @@
 
 | Component | Status |
 |---|---|
-| Property-based test runner | Done (basic: 100 generated iterations; primitives/bytes, non-generic structs, enums, plus generic list/set/map/optional/result pools) |
+| Property-based test runner | Done (basic: 100 generated iterations; primitives/bytes, aliases/refinements, non-generic structs, enums, plus generic list/set/map/optional/result pools) |
 | Input shrinking on failure | Done (shrinking for int64, float64, string, bytes, list, set, map, optional, result, struct fields, enum payloads) |
 | CPU profiler (`--profile`) | Not started |
 | Memory profiler (`--profile-memory`) | Not started |

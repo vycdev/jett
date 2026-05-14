@@ -722,6 +722,12 @@ impl Interpreter {
         }
     }
 
+    /// Public wrapper for subsystems such as property generation that need to
+    /// reuse the interpreter's registered refinement constraints.
+    pub fn check_refinement_type(&mut self, type_name: &str, value: &Value) -> Result<(), String> {
+        self.check_refinement(type_name, value)
+    }
+
     fn finish_refinement_boundary(
         &mut self,
         type_name: &str,

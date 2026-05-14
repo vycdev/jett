@@ -1,8 +1,8 @@
 use jett_common::{FileId, Span};
 use jett_diagnostics::Diagnostic;
 use jett_parser::ast::{
-    EnumDef, FieldDef, FunctionDef, GivenDecl, Item, Module, PropertyBlock, StructDef, TypeExpr,
-    VerifyBlock,
+    EnumDef, FieldDef, FunctionDef, GivenDecl, Item, Module, PropertyBlock, StructDef, TypeAlias,
+    TypeExpr, VerifyBlock,
 };
 use jett_types::ReflectionMetadata;
 use std::sync::Arc;
@@ -65,6 +65,13 @@ struct PropertyStructDef {
     type_name: String,
     namespace: Option<String>,
     def: StructDef,
+}
+
+#[derive(Debug, Clone)]
+struct PropertyTypeAliasDef {
+    type_name: String,
+    namespace: Option<String>,
+    def: TypeAlias,
 }
 
 // ---------------------------------------------------------------------------
@@ -194,6 +201,7 @@ fn run_verify_blocks_detailed_inner(
     let mut property_blocks: Vec<(Option<String>, PropertyBlock)> = Vec::new();
     let mut property_enums: Vec<PropertyEnumDef> = Vec::new();
     let mut property_structs: Vec<PropertyStructDef> = Vec::new();
+    let mut property_type_aliases: Vec<PropertyTypeAliasDef> = Vec::new();
     let mut current_file = None;
     let mut current_namespace = None;
     for item in &module.items {
@@ -219,6 +227,17 @@ fn run_verify_blocks_detailed_inner(
                     type_name,
                     namespace: current_namespace.clone(),
                     def: enm.clone(),
+                });
+            }
+            Item::TypeAlias(alias) => {
+                let type_name = current_namespace
+                    .as_ref()
+                    .map(|namespace| format!("{namespace}.{}", alias.name.name))
+                    .unwrap_or_else(|| alias.name.name.clone());
+                property_type_aliases.push(PropertyTypeAliasDef {
+                    type_name,
+                    namespace: current_namespace.clone(),
+                    def: alias.clone(),
                 });
             }
             Item::Function(func) => {
@@ -292,6 +311,7 @@ fn run_verify_blocks_detailed_inner(
             pb,
             &property_enums,
             &property_structs,
+            &property_type_aliases,
         );
         results.push(result);
     }
@@ -572,6 +592,7 @@ fn run_property_block(
     pb: &PropertyBlock,
     enum_defs: &[PropertyEnumDef],
     struct_defs: &[PropertyStructDef],
+    type_alias_defs: &[PropertyTypeAliasDef],
 ) -> VerifyResult {
     let iterations = PROPERTY_DEFAULT_ITERATIONS;
 
@@ -579,7 +600,16 @@ fn run_property_block(
     let pools: Vec<Vec<Value>> = pb
         .givens
         .iter()
-        .map(|g| generate_values_for_type_in_namespace(&g.ty, namespace, enum_defs, struct_defs))
+        .map(|g| {
+            generate_values_for_type_in_namespace(
+                interp,
+                &g.ty,
+                namespace,
+                enum_defs,
+                struct_defs,
+                type_alias_defs,
+            )
+        })
         .collect();
 
     // If any pool is empty, we cannot test.
@@ -656,14 +686,17 @@ fn run_property_block(
 /// Generate a pool of test values for a given type expression.
 #[cfg(test)]
 fn generate_values_for_type(ty: &TypeExpr) -> Vec<Value> {
-    generate_values_for_type_in_namespace(ty, None, &[], &[])
+    let mut interp = Interpreter::new();
+    generate_values_for_type_in_namespace(&mut interp, ty, None, &[], &[], &[])
 }
 
 fn generate_values_for_type_in_namespace(
+    interp: &mut Interpreter,
     ty: &TypeExpr,
     namespace: Option<&str>,
     enum_defs: &[PropertyEnumDef],
     struct_defs: &[PropertyStructDef],
+    type_alias_defs: &[PropertyTypeAliasDef],
 ) -> Vec<Value> {
     match ty {
         TypeExpr::Named(ident) => match ident.name.as_str() {
@@ -700,18 +733,33 @@ fn generate_values_for_type_in_namespace(
             ],
             "nothing" => vec![Value::Nothing],
             _ => {
-                let enum_values = generate_enum_values_for_type_name(
+                if let Some(alias_values) = generate_type_alias_values_for_type_name(
+                    interp,
                     &ident.name,
                     namespace,
                     enum_defs,
                     struct_defs,
+                    type_alias_defs,
+                ) {
+                    return alias_values;
+                }
+
+                let enum_values = generate_enum_values_for_type_name(
+                    interp,
+                    &ident.name,
+                    namespace,
+                    enum_defs,
+                    struct_defs,
+                    type_alias_defs,
                 );
                 if enum_values.is_empty() {
                     generate_struct_values_for_type_name(
+                        interp,
                         &ident.name,
                         namespace,
                         enum_defs,
                         struct_defs,
+                        type_alias_defs,
                     )
                 } else {
                     enum_values
@@ -719,42 +767,78 @@ fn generate_values_for_type_in_namespace(
             }
         },
         TypeExpr::Generic(ident, args, _) => match ident.name.as_str() {
-            "list" if args.len() == 1 => {
-                generate_list_values_for_type(&args[0], namespace, enum_defs, struct_defs)
-            }
-            "set" if args.len() == 1 => {
-                generate_set_values_for_type(&args[0], namespace, enum_defs, struct_defs)
-            }
-            "map" if args.len() == 2 => {
-                generate_map_values_for_type(&args[0], &args[1], namespace, enum_defs, struct_defs)
-            }
-            "optional" if args.len() == 1 => {
-                generate_optional_values_for_type(&args[0], namespace, enum_defs, struct_defs)
-            }
-            "result" if args.len() == 2 => generate_result_values_for_type(
+            "list" if args.len() == 1 => generate_list_values_for_type(
+                interp,
+                &args[0],
+                namespace,
+                enum_defs,
+                struct_defs,
+                type_alias_defs,
+            ),
+            "set" if args.len() == 1 => generate_set_values_for_type(
+                interp,
+                &args[0],
+                namespace,
+                enum_defs,
+                struct_defs,
+                type_alias_defs,
+            ),
+            "map" if args.len() == 2 => generate_map_values_for_type(
+                interp,
                 &args[0],
                 &args[1],
                 namespace,
                 enum_defs,
                 struct_defs,
+                type_alias_defs,
+            ),
+            "optional" if args.len() == 1 => generate_optional_values_for_type(
+                interp,
+                &args[0],
+                namespace,
+                enum_defs,
+                struct_defs,
+                type_alias_defs,
+            ),
+            "result" if args.len() == 2 => generate_result_values_for_type(
+                interp,
+                &args[0],
+                &args[1],
+                namespace,
+                enum_defs,
+                struct_defs,
+                type_alias_defs,
             ),
             _ => vec![], // unsupported generic type
         },
-        TypeExpr::View(inner, _) => {
-            generate_values_for_type_in_namespace(inner, namespace, enum_defs, struct_defs)
-        }
+        TypeExpr::View(inner, _) => generate_values_for_type_in_namespace(
+            interp,
+            inner,
+            namespace,
+            enum_defs,
+            struct_defs,
+            type_alias_defs,
+        ),
         TypeExpr::Function(_, _, _) => vec![], // cannot generate function values
     }
 }
 
 fn generate_list_values_for_type(
+    interp: &mut Interpreter,
     inner_ty: &TypeExpr,
     namespace: Option<&str>,
     enum_defs: &[PropertyEnumDef],
     struct_defs: &[PropertyStructDef],
+    type_alias_defs: &[PropertyTypeAliasDef],
 ) -> Vec<Value> {
-    let inner_values =
-        generate_values_for_type_in_namespace(inner_ty, namespace, enum_defs, struct_defs);
+    let inner_values = generate_values_for_type_in_namespace(
+        interp,
+        inner_ty,
+        namespace,
+        enum_defs,
+        struct_defs,
+        type_alias_defs,
+    );
     if inner_values.is_empty() {
         return Vec::new();
     }
@@ -779,13 +863,21 @@ fn generate_list_values_for_type(
 }
 
 fn generate_set_values_for_type(
+    interp: &mut Interpreter,
     inner_ty: &TypeExpr,
     namespace: Option<&str>,
     enum_defs: &[PropertyEnumDef],
     struct_defs: &[PropertyStructDef],
+    type_alias_defs: &[PropertyTypeAliasDef],
 ) -> Vec<Value> {
-    let inner_values =
-        generate_values_for_type_in_namespace(inner_ty, namespace, enum_defs, struct_defs);
+    let inner_values = generate_values_for_type_in_namespace(
+        interp,
+        inner_ty,
+        namespace,
+        enum_defs,
+        struct_defs,
+        type_alias_defs,
+    );
     if inner_values.is_empty() {
         return Vec::new();
     }
@@ -809,16 +901,30 @@ fn generate_set_values_for_type(
 }
 
 fn generate_map_values_for_type(
+    interp: &mut Interpreter,
     key_ty: &TypeExpr,
     value_ty: &TypeExpr,
     namespace: Option<&str>,
     enum_defs: &[PropertyEnumDef],
     struct_defs: &[PropertyStructDef],
+    type_alias_defs: &[PropertyTypeAliasDef],
 ) -> Vec<Value> {
-    let key_values =
-        generate_values_for_type_in_namespace(key_ty, namespace, enum_defs, struct_defs);
-    let value_values =
-        generate_values_for_type_in_namespace(value_ty, namespace, enum_defs, struct_defs);
+    let key_values = generate_values_for_type_in_namespace(
+        interp,
+        key_ty,
+        namespace,
+        enum_defs,
+        struct_defs,
+        type_alias_defs,
+    );
+    let value_values = generate_values_for_type_in_namespace(
+        interp,
+        value_ty,
+        namespace,
+        enum_defs,
+        struct_defs,
+        type_alias_defs,
+    );
     if key_values.is_empty() || value_values.is_empty() {
         return Vec::new();
     }
@@ -851,13 +957,21 @@ fn generate_map_values_for_type(
 }
 
 fn generate_optional_values_for_type(
+    interp: &mut Interpreter,
     inner_ty: &TypeExpr,
     namespace: Option<&str>,
     enum_defs: &[PropertyEnumDef],
     struct_defs: &[PropertyStructDef],
+    type_alias_defs: &[PropertyTypeAliasDef],
 ) -> Vec<Value> {
-    let inner_values =
-        generate_values_for_type_in_namespace(inner_ty, namespace, enum_defs, struct_defs);
+    let inner_values = generate_values_for_type_in_namespace(
+        interp,
+        inner_ty,
+        namespace,
+        enum_defs,
+        struct_defs,
+        type_alias_defs,
+    );
     if inner_values.is_empty() {
         return Vec::new();
     }
@@ -873,15 +987,30 @@ fn generate_optional_values_for_type(
 }
 
 fn generate_result_values_for_type(
+    interp: &mut Interpreter,
     ok_ty: &TypeExpr,
     error_ty: &TypeExpr,
     namespace: Option<&str>,
     enum_defs: &[PropertyEnumDef],
     struct_defs: &[PropertyStructDef],
+    type_alias_defs: &[PropertyTypeAliasDef],
 ) -> Vec<Value> {
-    let ok_values = generate_values_for_type_in_namespace(ok_ty, namespace, enum_defs, struct_defs);
-    let error_values =
-        generate_values_for_type_in_namespace(error_ty, namespace, enum_defs, struct_defs);
+    let ok_values = generate_values_for_type_in_namespace(
+        interp,
+        ok_ty,
+        namespace,
+        enum_defs,
+        struct_defs,
+        type_alias_defs,
+    );
+    let error_values = generate_values_for_type_in_namespace(
+        interp,
+        error_ty,
+        namespace,
+        enum_defs,
+        struct_defs,
+        type_alias_defs,
+    );
     if ok_values.is_empty() || error_values.is_empty() {
         return Vec::new();
     }
@@ -900,17 +1029,92 @@ fn generate_result_values_for_type(
     values
 }
 
-fn generate_enum_values_for_type_name(
+fn generate_type_alias_values_for_type_name(
+    interp: &mut Interpreter,
     name: &str,
     namespace: Option<&str>,
     enum_defs: &[PropertyEnumDef],
     struct_defs: &[PropertyStructDef],
+    type_alias_defs: &[PropertyTypeAliasDef],
+) -> Option<Vec<Value>> {
+    let alias_def = find_property_type_alias(name, namespace, type_alias_defs)?;
+    Some(generate_type_alias_values(
+        interp,
+        alias_def,
+        enum_defs,
+        struct_defs,
+        type_alias_defs,
+    ))
+}
+
+fn find_property_type_alias<'a>(
+    name: &str,
+    namespace: Option<&str>,
+    type_alias_defs: &'a [PropertyTypeAliasDef],
+) -> Option<&'a PropertyTypeAliasDef> {
+    if name.contains('.') {
+        return type_alias_defs
+            .iter()
+            .find(|alias_def| alias_def.type_name == name);
+    }
+
+    if let Some(namespace) = namespace {
+        let scoped_name = format!("{namespace}.{name}");
+        if let Some(alias_def) = type_alias_defs
+            .iter()
+            .find(|alias_def| alias_def.type_name == scoped_name)
+        {
+            return Some(alias_def);
+        }
+    }
+
+    type_alias_defs
+        .iter()
+        .find(|alias_def| alias_def.type_name == name)
+}
+
+fn generate_type_alias_values(
+    interp: &mut Interpreter,
+    alias_def: &PropertyTypeAliasDef,
+    enum_defs: &[PropertyEnumDef],
+    struct_defs: &[PropertyStructDef],
+    type_alias_defs: &[PropertyTypeAliasDef],
+) -> Vec<Value> {
+    let base_values = generate_values_for_type_in_namespace(
+        interp,
+        &alias_def.def.base_type,
+        alias_def.namespace.as_deref(),
+        enum_defs,
+        struct_defs,
+        type_alias_defs,
+    );
+    if alias_def.def.constraint.is_none() {
+        return base_values;
+    }
+
+    base_values
+        .into_iter()
+        .filter(|value| {
+            interp
+                .check_refinement_type(&alias_def.type_name, value)
+                .is_ok()
+        })
+        .collect()
+}
+
+fn generate_enum_values_for_type_name(
+    interp: &mut Interpreter,
+    name: &str,
+    namespace: Option<&str>,
+    enum_defs: &[PropertyEnumDef],
+    struct_defs: &[PropertyStructDef],
+    type_alias_defs: &[PropertyTypeAliasDef],
 ) -> Vec<Value> {
     let Some(enum_def) = find_property_enum(name, namespace, enum_defs) else {
         return Vec::new();
     };
 
-    generate_enum_values(enum_def, enum_defs, struct_defs)
+    generate_enum_values(interp, enum_def, enum_defs, struct_defs, type_alias_defs)
 }
 
 fn find_property_enum<'a>(
@@ -936,9 +1140,11 @@ fn find_property_enum<'a>(
 }
 
 fn generate_enum_values(
+    interp: &mut Interpreter,
     enum_def: &PropertyEnumDef,
     enum_defs: &[PropertyEnumDef],
     struct_defs: &[PropertyStructDef],
+    type_alias_defs: &[PropertyTypeAliasDef],
 ) -> Vec<Value> {
     let field_namespace = enum_def.namespace.as_deref();
     let mut values = Vec::new();
@@ -952,8 +1158,14 @@ fn generate_enum_values(
             continue;
         }
 
-        let field_pools =
-            generate_enum_field_pools(&variant.fields, field_namespace, enum_defs, struct_defs);
+        let field_pools = generate_enum_field_pools(
+            interp,
+            &variant.fields,
+            field_namespace,
+            enum_defs,
+            struct_defs,
+            type_alias_defs,
+        );
         if field_pools.is_empty() {
             return Vec::new();
         }
@@ -975,15 +1187,23 @@ fn generate_enum_values(
 }
 
 fn generate_enum_field_pools(
+    interp: &mut Interpreter,
     fields: &[FieldDef],
     namespace: Option<&str>,
     enum_defs: &[PropertyEnumDef],
     struct_defs: &[PropertyStructDef],
+    type_alias_defs: &[PropertyTypeAliasDef],
 ) -> Vec<Vec<Value>> {
     let mut pools = Vec::new();
     for field in fields {
-        let values =
-            generate_values_for_type_in_namespace(&field.ty, namespace, enum_defs, struct_defs);
+        let values = generate_values_for_type_in_namespace(
+            interp,
+            &field.ty,
+            namespace,
+            enum_defs,
+            struct_defs,
+            type_alias_defs,
+        );
         if values.is_empty() {
             return Vec::new();
         }
@@ -993,16 +1213,18 @@ fn generate_enum_field_pools(
 }
 
 fn generate_struct_values_for_type_name(
+    interp: &mut Interpreter,
     name: &str,
     namespace: Option<&str>,
     enum_defs: &[PropertyEnumDef],
     struct_defs: &[PropertyStructDef],
+    type_alias_defs: &[PropertyTypeAliasDef],
 ) -> Vec<Value> {
     let Some(struct_def) = find_property_struct(name, namespace, struct_defs) else {
         return Vec::new();
     };
 
-    generate_struct_values(struct_def, enum_defs, struct_defs)
+    generate_struct_values(interp, struct_def, enum_defs, struct_defs, type_alias_defs)
 }
 
 fn find_property_struct<'a>(
@@ -1032,9 +1254,11 @@ fn find_property_struct<'a>(
 }
 
 fn generate_struct_values(
+    interp: &mut Interpreter,
     struct_def: &PropertyStructDef,
     enum_defs: &[PropertyEnumDef],
     struct_defs: &[PropertyStructDef],
+    type_alias_defs: &[PropertyTypeAliasDef],
 ) -> Vec<Value> {
     if !struct_def.def.type_params.is_empty() {
         return Vec::new();
@@ -1048,10 +1272,12 @@ fn generate_struct_values(
     }
 
     let field_pools = generate_struct_field_pools(
+        interp,
         &struct_def.def.fields,
         struct_def.namespace.as_deref(),
         enum_defs,
         struct_defs,
+        type_alias_defs,
     );
     if field_pools.is_empty() {
         return Vec::new();
@@ -1081,15 +1307,23 @@ fn generate_struct_values(
 }
 
 fn generate_struct_field_pools(
+    interp: &mut Interpreter,
     fields: &[FieldDef],
     namespace: Option<&str>,
     enum_defs: &[PropertyEnumDef],
     struct_defs: &[PropertyStructDef],
+    type_alias_defs: &[PropertyTypeAliasDef],
 ) -> Vec<Vec<Value>> {
     let mut pools = Vec::new();
     for field in fields {
-        let values =
-            generate_values_for_type_in_namespace(&field.ty, namespace, enum_defs, struct_defs);
+        let values = generate_values_for_type_in_namespace(
+            interp,
+            &field.ty,
+            namespace,
+            enum_defs,
+            struct_defs,
+            type_alias_defs,
+        );
         if values.is_empty() {
             return Vec::new();
         }
@@ -2238,6 +2472,7 @@ mod tests {
 
     #[test]
     fn property_generator_supports_enums_in_namespace() {
+        let mut interp = Interpreter::new();
         let enum_defs = vec![PropertyEnumDef {
             type_name: "app.PropertyChoice".to_string(),
             namespace: Some("app".to_string()),
@@ -2251,9 +2486,11 @@ mod tests {
         }];
 
         let values = generate_values_for_type_in_namespace(
+            &mut interp,
             &type_named("PropertyChoice"),
             Some("app"),
             &enum_defs,
+            &[],
             &[],
         );
         assert!(values.contains(&Value::Enum {
@@ -2280,6 +2517,7 @@ mod tests {
 
     #[test]
     fn property_generator_supports_structs_in_namespace() {
+        let mut interp = Interpreter::new();
         let struct_defs = vec![PropertyStructDef {
             type_name: "app.PropertyUser".to_string(),
             namespace: Some("app".to_string()),
@@ -2291,10 +2529,12 @@ mod tests {
         }];
 
         let values = generate_values_for_type_in_namespace(
+            &mut interp,
             &type_named("PropertyUser"),
             Some("app"),
             &[],
             &struct_defs,
+            &[],
         );
         assert!(
             values.iter().any(|value| {
@@ -2316,6 +2556,7 @@ mod tests {
 
     #[test]
     fn property_generator_resolves_struct_fields_in_owner_namespace() {
+        let mut interp = Interpreter::new();
         let enum_defs = vec![PropertyEnumDef {
             type_name: "models.Status".to_string(),
             namespace: Some("models".to_string()),
@@ -2334,10 +2575,12 @@ mod tests {
         }];
 
         let values = generate_values_for_type_in_namespace(
+            &mut interp,
             &type_named("models.User"),
             Some("tests"),
             &enum_defs,
             &struct_defs,
+            &[],
         );
         assert!(
             values.iter().any(|value| {
@@ -2351,6 +2594,96 @@ mod tests {
                 )
             }),
             "expected struct field generation to resolve unqualified field types in the owner namespace"
+        );
+    }
+
+    #[test]
+    fn property_generator_supports_type_aliases_and_refinements() {
+        let mut interp = Interpreter::new();
+        let alias = type_alias("NameAlias", "string", None);
+        let constraint = binary(var("value"), BinOp::Gt, int(0));
+        let refinement = type_alias("Positive", "int64", Some(constraint));
+        interp.register_type_alias_in_namespace(Some("app"), &alias);
+        interp.register_type_alias_in_namespace(Some("app"), &refinement);
+        let type_alias_defs = vec![
+            PropertyTypeAliasDef {
+                type_name: "app.NameAlias".to_string(),
+                namespace: Some("app".to_string()),
+                def: alias,
+            },
+            PropertyTypeAliasDef {
+                type_name: "app.Positive".to_string(),
+                namespace: Some("app".to_string()),
+                def: refinement,
+            },
+        ];
+
+        let alias_values = generate_values_for_type_in_namespace(
+            &mut interp,
+            &type_named("NameAlias"),
+            Some("app"),
+            &[],
+            &[],
+            &type_alias_defs,
+        );
+        assert!(
+            alias_values
+                .iter()
+                .any(|value| matches!(value, Value::String(_))),
+            "expected simple alias generation to use base values"
+        );
+
+        let refined_values = generate_values_for_type_in_namespace(
+            &mut interp,
+            &type_named("Positive"),
+            Some("app"),
+            &[],
+            &[],
+            &type_alias_defs,
+        );
+        assert!(!refined_values.is_empty());
+        assert!(
+            refined_values
+                .iter()
+                .all(|value| matches!(value, Value::Int64(n) if *n > 0)),
+            "expected refinement generation to keep only values accepted by the constraint"
+        );
+    }
+
+    #[test]
+    fn property_generator_filters_refined_struct_fields() {
+        let mut interp = Interpreter::new();
+        let constraint = binary(var("value"), BinOp::Gt, int(0));
+        let refinement = type_alias("Positive", "int64", Some(constraint));
+        interp.register_type_alias_in_namespace(Some("app"), &refinement);
+        let type_alias_defs = vec![PropertyTypeAliasDef {
+            type_name: "app.Positive".to_string(),
+            namespace: Some("app".to_string()),
+            def: refinement,
+        }];
+        let struct_defs = vec![PropertyStructDef {
+            type_name: "app.Score".to_string(),
+            namespace: Some("app".to_string()),
+            def: struct_def("Score", vec![("value", "Positive")], vec![]),
+        }];
+
+        let values = generate_values_for_type_in_namespace(
+            &mut interp,
+            &type_named("Score"),
+            Some("app"),
+            &[],
+            &struct_defs,
+            &type_alias_defs,
+        );
+        assert!(
+            values.iter().all(|value| {
+                matches!(
+                    value,
+                    Value::Struct { fields, .. }
+                        if matches!(fields.as_slice(), [(_, Value::Int64(n))] if *n > 0)
+                )
+            }),
+            "expected refined struct fields to be generated through refinement filtering"
         );
     }
 
