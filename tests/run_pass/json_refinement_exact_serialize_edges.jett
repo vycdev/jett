@@ -1,0 +1,40 @@
+namespace test
+type NonEmpty = string where string.char_count(value) > 0
+struct Profile:
+    display_name: string serialize "displayName"
+    note: string
+type NonEmptyProfile = Profile where string.char_count(value.display_name) > 0
+function serialize_non_empty_refinement() returns string:
+    NonEmpty value = "ready" handle error:
+        return error
+    return json.serialize[NonEmpty](view value)
+function parse_exact_non_empty_success() returns string:
+    NonEmpty value = json.parse_exact[NonEmpty]("\"ready\"") handle error:
+        return error
+    return coarsen value
+function parse_exact_non_empty_error() returns string:
+    NonEmpty value = json.parse_exact[NonEmpty]("\"\"") handle error:
+        return error
+    return coarsen value
+function parse_exact_refined_profile_success() returns string:
+    NonEmptyProfile profile = json.parse_exact[NonEmptyProfile]("{{\"displayName\":\"Alice\",\"note\":\"ok\"}}") handle error:
+        return error
+    Profile raw = coarsen profile
+    return "{raw.display_name}:{raw.note}"
+function parse_exact_refined_profile_extra_error() returns string:
+    NonEmptyProfile profile = json.parse_exact[NonEmptyProfile]("{{\"displayName\":\"Alice\",\"note\":\"ok\",\"extra\":1}}") handle error:
+        return error
+    Profile raw = coarsen profile
+    return raw.display_name
+function parse_exact_refined_profile_predicate_error() returns string:
+    NonEmptyProfile profile = json.parse_exact[NonEmptyProfile]("{{\"displayName\":\"\",\"note\":\"ok\"}}") handle error:
+        return error
+    Profile raw = coarsen profile
+    return raw.note
+verify json_refinement_exact_serialize_edges:
+    assert serialize_non_empty_refinement() == "\"ready\""
+    assert parse_exact_non_empty_success() == "ready"
+    assert parse_exact_non_empty_error() == "refinement type constraint failed for 'test.NonEmpty'"
+    assert parse_exact_refined_profile_success() == "Alice:ok"
+    assert parse_exact_refined_profile_extra_error() == "unknown field 'extra' for test.Profile"
+    assert parse_exact_refined_profile_predicate_error() == "refinement type constraint failed for 'test.NonEmptyProfile'"

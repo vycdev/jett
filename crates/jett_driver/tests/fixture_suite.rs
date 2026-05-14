@@ -391,6 +391,10 @@ run_pass_fixture!(
     "json_parse_refinement_valid.jett"
 );
 run_pass_fixture!(
+    run_pass_json_refinement_exact_serialize_edges,
+    "json_refinement_exact_serialize_edges.jett"
+);
+run_pass_fixture!(
     run_pass_json_reflection_flat_serializer,
     "json_reflection_flat_serializer.jett"
 );
