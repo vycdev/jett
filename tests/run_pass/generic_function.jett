@@ -19,3 +19,9 @@ function identity[T](value: T) returns T:
 verify identity:
     assert identity[int64](42) == 42
     assert identity[string]("world") == "world"
+
+function list_length[T](items: list[T]) returns int64:
+    return list.length[T](items)
+
+verify expected_collection_literal_argument:
+    assert list_length[int64](list()) == 0

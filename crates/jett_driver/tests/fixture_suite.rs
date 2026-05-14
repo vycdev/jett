@@ -491,6 +491,10 @@ compile_fail_fixture!(
     "list_literal_value_type_mismatch.jett"
 );
 compile_fail_fixture!(
+    compile_fail_generic_function_secret_argument_mismatch,
+    "generic_function_secret_argument_mismatch.jett"
+);
+compile_fail_fixture!(
     compile_fail_json_private_tree_parse_scalar,
     "json_private_tree_parse_scalar.jett"
 );

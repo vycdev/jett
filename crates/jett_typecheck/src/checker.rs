@@ -5198,8 +5198,8 @@ impl<'a> TypeChecker<'a> {
                         return TypeInterner::ERROR;
                     }
                     for (arg, &expected) in args.iter().zip(param_types.iter()) {
-                        let got = self.check_expr(&arg.value);
-                        if !self.types_compatible(got, expected) {
+                        let got = self.check_expr_for_expected(&arg.value, expected, false);
+                        if !self.types_compatible(expected, got) {
                             self.sink.emit(errors::type_mismatch(
                                 &self.type_name(expected),
                                 &self.type_name(got),
