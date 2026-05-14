@@ -448,6 +448,8 @@ function json_tree_insert_object_segment(view input: bytes, fields: map[string, 
         return fail("expected object field")
     JsonTreeObjectField field = json_tree_parse_object_field_span(view input, start, end) handle error:
         return fail(error)
+    if map.has[string, JsonTree](view fields, field.key) == true:
+        return fail("duplicate object field '{field.key}'")
     return ok(map.insert[string, JsonTree](fields, field.key, field.value))
 function json_tree_parse_object_field_span(view input: bytes, start: int64, end: int64) returns result[JsonTreeObjectField, string]:
     int64 colon = json_tree_find_top_level_colon(view input, start, end) handle error:
