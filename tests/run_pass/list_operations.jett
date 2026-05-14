@@ -89,3 +89,17 @@ function is_empty_false_test() returns bool:
 
 verify is_empty_false_test:
     assert is_empty_false_test() == false
+
+function empty_literal_assignment_test() returns int64:
+    list[int64] nums = list()
+    return list.length(nums)
+
+verify empty_literal_assignment_test:
+    assert empty_literal_assignment_test() == 0
+
+function empty_literal_argument_test() returns int64:
+    return list.get[int64](list(), 0) handle:
+        default 7
+
+verify empty_literal_argument_test:
+    assert empty_literal_argument_test() == 7

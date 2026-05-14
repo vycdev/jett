@@ -4249,6 +4249,18 @@ impl<'a> TypeChecker<'a> {
         allow_refinement_handle: bool,
     ) -> TypeId {
         let ty = match expr {
+            Expr::ListConstruct(elems, _span) => {
+                let expected_inner = self.secret_inner_type(expected_ty).unwrap_or(expected_ty);
+                match self.interner.resolve(expected_inner).clone() {
+                    Type::List(expected_element) => self.check_list_construct_for_expected(
+                        elems,
+                        expected_ty,
+                        expected_element,
+                        allow_refinement_handle,
+                    ),
+                    _ => self.check_expr(expr),
+                }
+            }
             Expr::MapConstruct(entries, _span) => {
                 let expected_inner = self.secret_inner_type(expected_ty).unwrap_or(expected_ty);
                 match self.interner.resolve(expected_inner).clone() {
@@ -4258,6 +4270,7 @@ impl<'a> TypeChecker<'a> {
                             expected_ty,
                             expected_key,
                             expected_value,
+                            allow_refinement_handle,
                         ),
                     _ => self.check_expr(expr),
                 }
@@ -5985,6 +5998,31 @@ impl<'a> TypeChecker<'a> {
         self.interner.intern(Type::List(element_ty))
     }
 
+    fn check_list_construct_for_expected(
+        &mut self,
+        elems: &[Expr],
+        expected_list_ty: TypeId,
+        expected_element_ty: TypeId,
+        allow_refinement_handle: bool,
+    ) -> TypeId {
+        for elem in elems {
+            let elem_ty = self.check_expr_with_optional_expected(
+                elem,
+                expected_element_ty,
+                allow_refinement_handle,
+            );
+            if !self.types_compatible(expected_element_ty, elem_ty) {
+                self.sink.emit(errors::type_mismatch(
+                    &self.type_name(expected_element_ty),
+                    &self.type_name(elem_ty),
+                    elem.span(),
+                ));
+            }
+        }
+
+        expected_list_ty
+    }
+
     fn check_map_construct(&mut self, entries: &[(Expr, Expr)]) -> TypeId {
         if entries.is_empty() {
             return self
@@ -6036,9 +6074,14 @@ impl<'a> TypeChecker<'a> {
         expected_map_ty: TypeId,
         expected_key_ty: TypeId,
         expected_value_ty: TypeId,
+        allow_refinement_handle: bool,
     ) -> TypeId {
         for (key_expr, value_expr) in entries {
-            let key_ty = self.check_expr_with_optional_expected(key_expr, expected_key_ty, false);
+            let key_ty = self.check_expr_with_optional_expected(
+                key_expr,
+                expected_key_ty,
+                allow_refinement_handle,
+            );
             if !self.types_compatible(expected_key_ty, key_ty) {
                 self.sink.emit(errors::type_mismatch(
                     &self.type_name(expected_key_ty),
@@ -6047,8 +6090,11 @@ impl<'a> TypeChecker<'a> {
                 ));
             }
 
-            let value_ty =
-                self.check_expr_with_optional_expected(value_expr, expected_value_ty, false);
+            let value_ty = self.check_expr_with_optional_expected(
+                value_expr,
+                expected_value_ty,
+                allow_refinement_handle,
+            );
             if !self.types_compatible(expected_value_ty, value_ty) {
                 self.sink.emit(errors::type_mismatch(
                     &self.type_name(expected_value_ty),

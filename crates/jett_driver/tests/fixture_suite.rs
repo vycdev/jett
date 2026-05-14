@@ -487,6 +487,10 @@ compile_fail_fixture!(
     "map_literal_value_type_mismatch.jett"
 );
 compile_fail_fixture!(
+    compile_fail_list_literal_value_type_mismatch,
+    "list_literal_value_type_mismatch.jett"
+);
+compile_fail_fixture!(
     compile_fail_json_private_tree_parse_scalar,
     "json_private_tree_parse_scalar.jett"
 );
