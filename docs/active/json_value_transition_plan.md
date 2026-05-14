@@ -117,12 +117,11 @@ function as_float64(view value: JsonTree) returns result[float64, string]
 function as_bool(view value: JsonTree) returns result[bool, string]
 ```
 
-`json.JsonValue` is now expressible as a normal exported stdlib alias. Open
-syntax detail: Jett does not yet have the exact prelude/root alias mechanics to
-make the unqualified `JsonValue` spelling come from source while preserving
-compatibility. Until that exists, bare `JsonValue` can stay compiler-recognized
-as a compatibility name whose runtime representation is `JsonTree`. See
-`docs/open_design/prelude_root_aliases.md` for the recommended staged design.
+`json.JsonValue` is now expressible as a normal exported stdlib alias, and bare
+`JsonValue` is now expressible as a narrow stdlib root alias. The compiler still
+preserves the legacy compatibility relation and primitive reflection tag during
+this migration stage. See `docs/open_design/prelude_root_aliases.md` for the
+recommended staged design.
 
 `field` and `index` are probing helpers: wrong shape and absence both produce
 `none`. Production validation should use `require_field` / `require_index` when
@@ -238,13 +237,13 @@ Once the runtime representation is native:
 Recommendation: keep `TypePrimitive.json_value_type` for one compatibility
 stage, but document it as legacy once `JsonTree` is the preferred spelling.
 
-Status: implemented through a compiler-owned legacy compatibility alias table
-rather than a source-level alias. Only the stdlib enum `json.JsonTree` is
-compatible with the built-in `JsonValue`; user-defined enums named `JsonTree`
-remain unrelated. The runtime raw facade checks now follow the same rule and
-only accept enum values whose owner is the bundled `json.JsonTree`, not a bare
-or user-defined `JsonTree`. Typechecker raw facade signatures also follow the
-same trusted-origin rule instead of trusting qualified name text alone.
+Status: implemented through both a narrow source-level root alias and a
+compiler-owned legacy compatibility relation. Only the stdlib enum
+`json.JsonTree` is compatible with `JsonValue`; user-defined enums named
+`JsonTree` remain unrelated. The runtime raw facade checks now follow the same
+rule and only accept enum values whose owner is the bundled `json.JsonTree`, not
+a bare or user-defined `JsonTree`. Typechecker raw facade signatures also follow
+the same trusted-origin rule instead of trusting qualified name text alone.
 Reflection metadata is intentionally split for now:
 `type.info[JsonValue]()` reports `TypePrimitive.json_value_type`, while
 `type.info[json.JsonTree]()` reports `TypeKind.enum_type`.
@@ -314,10 +313,9 @@ and `json.JsonValue`.
 
 ## Risks And Open Questions
 
-- **Alias mechanics:** ordinary source aliases are not enough for the current
-  unqualified compatibility spelling. The compiler-seeded legacy alias exists;
-  the open question is when and how to express it as a real exported/prelude
-  stdlib alias.
+- **Alias mechanics:** the first stdlib root alias exists for `JsonValue`. The
+  open question is whether this stays an allowlisted compatibility-only feature
+  or grows into a broader prelude policy.
 - **Reflection metadata:** if `JsonValue` is an alias, `type.info[JsonValue]`
   must not surprise existing code.
 - **View iteration:** native raw serialization over `view JsonTree` now uses
@@ -333,12 +331,12 @@ and `json.JsonValue`.
 
 ## Recommended Next Implementation Bite
 
-Finish the prelude/root alias decision:
+Finish the legacy reflection decision:
 
 1. Keep raw helper signatures `JsonTree`-first; treat bare `JsonValue` as the
-   temporary compiler-owned compatibility spelling.
-2. Implement the narrow `export root type` stage described in
-   `docs/open_design/prelude_root_aliases.md`. Done for the visible root alias;
+   compatibility spelling for `json.JsonTree`.
+2. The narrow `export root type` stage described in
+   `docs/open_design/prelude_root_aliases.md` is done for the visible root alias;
    the legacy reflection primitive is intentionally still staged.
 3. Later, update reflection metadata so the legacy
    `TypePrimitive.json_value_type` is either formally deprecated or removed.

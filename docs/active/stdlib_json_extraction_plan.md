@@ -6,9 +6,10 @@ reflection JSON prototypes can become a real `stdlib/json.jett` module.
 The important conclusion is that JSON itself is no longer the main blocker.
 Reflection can now read fields, construct structs/bitfields/enums, inspect type
 arguments, use structured kind and primitive tags, and walk native `JsonTree`
-values. `JsonValue` remains only as the legacy compatibility spelling for that
-tree. The blocker is the module and namespace path that would let ordinary `.jett`
-stdlib code own the public `json.*` API.
+values. `JsonValue` is now visible through a narrow stdlib root alias while
+keeping its legacy primitive reflection tag for one compatibility stage. The
+blocker is the module and namespace path that would let ordinary `.jett` stdlib
+code own the public `json.*` API.
 
 ## Current Architecture
 
@@ -49,8 +50,9 @@ The reflected JSON implementation has started moving into stdlib under the
 
 - `stdlib/json.jett`
 - `JsonTree` as a first self-hosted raw JSON tree representation
-- `json.JsonValue` as an exported namespaced alias for `JsonTree`, while bare
-  `JsonValue` remains the legacy compiler-owned compatibility spelling
+- `json.JsonValue` as an exported namespaced alias for `JsonTree`
+- bare `JsonValue` as a stdlib root alias for `json.JsonTree`, while the
+  legacy `TypePrimitive.json_value_type` reflection tag is preserved
 - `json_tree_serialize(value: JsonTree)`
 - `json_tree_parse(raw: string)` for staged scalar, array, and object parsing
 - `json_tree_*` traversal helpers for kind checks, field/index lookup, lengths,
@@ -257,16 +259,14 @@ bridge spoofing, not helper visibility.
    `json.parse_exact[json.JsonTree]`. The remaining question is how far
    `JsonTree` should go toward replacing the raw `JsonValue` compatibility
    surface.
-7. Decide whether `JsonValue` becomes a source-level type alias/replacement or
-   remains a compiler-recognized compatibility spelling. The current
-   implementation seeds a compiler-owned legacy compatibility alias from
-   built-in `JsonValue` to stdlib `json.JsonTree`, while preserving separate
-   reflection metadata for one compatibility stage. `json.JsonValue` now exists
-   as an exported namespaced source alias. See
-   `/docs/active/json_value_transition_plan.md` and
-   `/docs/open_design/prelude_root_aliases.md`. The remaining decision is
-   whether and when the bare `JsonValue` alias moves into the exported
-   stdlib/prelude surface.
+7. Keep the staged `JsonValue` migration narrow. The current implementation
+   exposes `json.JsonValue` as an exported namespaced source alias and bare
+   `JsonValue` as an allowlisted stdlib root alias for `json.JsonTree`. It also
+   preserves the compiler-owned legacy compatibility relation and separate
+   `TypePrimitive.json_value_type` reflection metadata for one compatibility
+   stage. See `/docs/active/json_value_transition_plan.md` and
+   `/docs/open_design/prelude_root_aliases.md`. The remaining decision is when
+   to deprecate or remove the legacy primitive reflection tag.
 8. Keep reflection-specialized generic helpers staged carefully. The typechecker
    now checks ordinary generic function bodies per concrete instantiation, and
    it can specialize the narrow direct-branch form
