@@ -11299,6 +11299,34 @@ mod tests {
     }
 
     #[test]
+    fn untrusted_registration_removes_previous_json_tree_parse_trust() {
+        let mut interp = Interpreter::new();
+        let mut trusted_hook = func_def(
+            "json_tree_parse",
+            vec![("raw", "string")],
+            block(vec![return_stmt(string("trusted raw"))]),
+        );
+        trusted_hook.span = stdlib_sp();
+        interp.register_function_in_namespace(Some("json"), &trusted_hook);
+
+        let fake_hook = func_def(
+            "json_tree_parse",
+            vec![("raw", "string")],
+            block(vec![return_stmt(string("fake raw"))]),
+        );
+        interp.register_function_named("json.json_tree_parse", &fake_hook, false);
+
+        let err = interp
+            .call_function("json.parse_raw", vec![Value::String("null".to_string())])
+            .unwrap_err();
+
+        assert_eq!(
+            err,
+            "json.parse_raw requires trusted stdlib hook 'json.json_tree_parse'"
+        );
+    }
+
+    #[test]
     fn json_raw_helpers_delegate_native_json_tree_values() {
         let mut interp = Interpreter::new();
         let mut trusted_hook = func_def(
