@@ -53,6 +53,10 @@ about: two names, two traversal surfaces, one conceptual data model.
   from `JsonValue` to the bundled `json.JsonTree`. That alias makes the two
   spellings compatible for assignments, calls, returns, fields, and container
   wrappers without relying on namespace flattening.
+- `stdlib/json.jett` now also exports `json.JsonValue` as a source alias to
+  `json.JsonTree`. The unqualified `JsonValue` spelling remains a compiler-owned
+  compatibility name until the language has an explicit prelude/root alias
+  mechanism.
 - `json_decode_reflected[T](raw: JsonValue)` has been removed; decoding now
   enters through `json_decode_tree_reflected[T](view raw)` after parsing to
   `JsonTree`.
@@ -90,7 +94,7 @@ exported/prelude alias.
 Preferred final shape:
 
 ```jett
-type JsonValue = JsonTree
+export type JsonValue = JsonTree
 
 function parse_raw(raw: string) returns result[JsonTree, string]
 function serialize_raw(view value: JsonTree) returns string
@@ -109,11 +113,11 @@ function as_float64(view value: JsonTree) returns result[float64, string]
 function as_bool(view value: JsonTree) returns result[bool, string]
 ```
 
-Open syntax detail: Jett may not yet have the exact alias/export mechanics to
-write `type JsonValue = JsonTree` in the right namespace while preserving the
-current unqualified `JsonValue` spelling. Until that exists, `JsonValue` can stay
-compiler-recognized as a compatibility name whose runtime representation is
-`JsonTree`.
+`json.JsonValue` is now expressible as a normal exported stdlib alias. Open
+syntax detail: Jett does not yet have the exact prelude/root alias mechanics to
+make the unqualified `JsonValue` spelling come from source while preserving
+compatibility. Until that exists, bare `JsonValue` can stay compiler-recognized
+as a compatibility name whose runtime representation is `JsonTree`.
 
 `field` and `index` are probing helpers: wrong shape and absence both produce
 `none`. Production validation should use `require_field` / `require_index` when
@@ -135,13 +139,15 @@ The staged direction is:
 2. Done: the typechecker now seeds an explicit compiler-owned compatibility
    alias table entry, `JsonValue -> json.JsonTree`. This models a future
    prelude/exported alias without depending on namespace leakage.
-3. Preserve legacy reflection during the compatibility window:
+3. Done: the stdlib also exports `json.JsonValue = JsonTree` as the
+   namespaced source-level alias.
+4. Preserve legacy reflection during the compatibility window:
    `type.info[JsonValue]()` may continue to report
    `TypePrimitive.json_value_type`, while `type.info[json.JsonTree]()` reports
    enum metadata.
-4. Once explicit stdlib exports or prelude imports exist, express the
-   compatibility alias as an exported/prelude stdlib symbol.
-5. In a later breaking cleanup, decide whether to deprecate or remove
+5. Once explicit prelude/root aliases exist, move the unqualified
+   compatibility spelling into source as an exported/prelude stdlib symbol.
+6. In a later breaking cleanup, decide whether to deprecate or remove
    `TypePrimitive.json_value_type` and make `JsonValue` fully identical to
    `json.JsonTree` in reflection.
 

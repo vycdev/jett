@@ -130,6 +130,7 @@ guessing:
 
 ```text
 json.parse            -> json.json_parse_reflected
+json.parse_exact      -> json.json_parse_exact_reflected
 json.serialize        -> json.json_serialize_reflected
 json.serialize_public -> json.json_serialize_public_reflected
 ```
@@ -142,10 +143,10 @@ satisfy that table merely by declaring the same qualified name.
 
 For now:
 
-- public `json.parse`, `json.serialize`, and `json.serialize_public` remain
-  compiler-owned policy gates,
+- public `json.parse`, `json.parse_exact`, `json.serialize`, and
+  `json.serialize_public` remain compiler-owned policy gates,
 - the interpreter delegates to `json.json_parse_reflected`,
-  `json.json_serialize_reflected`, and
+  `json.json_parse_exact_reflected`, `json.json_serialize_reflected`, and
   `json.json_serialize_public_reflected` only when those registry entries came
   from compiler-shipped stdlib files,
 - public wrappers in `stdlib/json.jett` stay as readable declarations and a
@@ -191,6 +192,9 @@ Implemented:
   with `export`.
 - The public `JsonTree` API in `stdlib/json.jett` is explicitly exported while
   parser, decoder, serializer, and reflected bridge helpers stay private.
+- `stdlib/json.jett` exports `json.JsonValue = JsonTree` as the namespaced
+  source-level alias; the unqualified `JsonValue` compatibility spelling remains
+  compiler-owned until a prelude/root alias mechanism exists.
 - Driver-level `build_source` coverage now verifies that in-memory/LSP-style
   validation sees the exported `json.JsonTree` raw facade surface, not only the
   marker stdlib module.

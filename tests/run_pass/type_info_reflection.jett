@@ -1,76 +1,59 @@
 namespace test
-
 type NonEmpty = string where string.char_count(value) > 0
 type NameList = list[string]
 type SecretText = secret[string]
-
 enum Direction:
     north
     south
-
 enum Protocol:
     icmp = 1
     tcp = 6
     udp = 17
-
 enum SecretChoice:
     token(value: secret[string])
     empty
-
 bitfield Header:
     version: 4 bits
-
 bitfield Packet:
     version: 4 bits
     header_length: 4 bits
     protocol: 8 bits as Protocol
     payload: list[uint8]
-
 bitfield network NetworkPacket:
     version: 4 bits
     header_length: 4 bits
-
 struct User:
     id: string
-
 struct Complex:
     names: list[string]
     lookup: map[string, result[int64, string]]
     maybe_user: optional[User]
     secret_items: list[secret[string]]
-
 struct Pair[T, U]:
     first: T
     second: U
-
 function type_info_kind[T]() returns string:
     TypeInfo info = type.info[T]()
     return info.kind
-
 function type_info_kind_tag_is[T](expected: TypeKind) returns bool:
     TypeInfo info = type.info[T]()
     return info.kind_tag == expected
-
 function direct_type_kind_tag_is[T](expected: TypeKind) returns bool:
     return type.kind_tag[T]() == expected
-
 function type_info_primitive_tag_is[T](expected: TypePrimitive) returns bool:
     TypeInfo info = type.info[T]()
     TypePrimitive primitive = info.primitive_tag handle:
         return false
     return primitive == expected
-
 function direct_type_primitive_tag_is[T](expected: TypePrimitive) returns bool:
     TypePrimitive primitive = type.primitive_tag[T]() handle:
         return false
     return primitive == expected
-
 function type_info_has_no_primitive_tag[T]() returns bool:
     TypeInfo info = type.info[T]()
     TypePrimitive primitive = info.primitive_tag handle:
         return true
     return primitive == TypePrimitive.unknown_type
-
 function type_info_arg_primitive_tag_is[T](target: int64, expected: TypePrimitive) returns bool:
     TypeInfo info = type.info[T]()
     bool found = false
@@ -82,11 +65,9 @@ function type_info_arg_primitive_tag_is[T](target: int64, expected: TypePrimitiv
             found = primitive == expected
         index = index + 1
     return found
-
 function type_info_arg_count[T]() returns int64:
     TypeInfo info = type.info[T]()
     return list.length(info.args)
-
 function type_info_arg_kind[T](target: int64) returns string:
     TypeInfo info = type.info[T]()
     string found = "missing"
@@ -96,7 +77,6 @@ function type_info_arg_kind[T](target: int64) returns string:
             found = arg.kind
         index = index + 1
     return found
-
 function type_info_arg_type_name[T](target: int64) returns string:
     TypeInfo info = type.info[T]()
     string found = "missing"
@@ -106,7 +86,6 @@ function type_info_arg_type_name[T](target: int64) returns string:
             found = arg.type_name
         index = index + 1
     return found
-
 function type_info_nested_arg_kind[T](outer_target: int64, inner_target: int64) returns string:
     TypeInfo info = type.info[T]()
     string found = "missing"
@@ -120,7 +99,6 @@ function type_info_nested_arg_kind[T](outer_target: int64, inner_target: int64) 
                 inner_index = inner_index + 1
         outer_index = outer_index + 1
     return found
-
 function type_info_nested_arg_type_name[T](outer_target: int64, inner_target: int64) returns string:
     TypeInfo info = type.info[T]()
     string found = "missing"
@@ -134,7 +112,6 @@ function type_info_nested_arg_type_name[T](outer_target: int64, inner_target: in
                 inner_index = inner_index + 1
         outer_index = outer_index + 1
     return found
-
 function complex_field_arg_count(field_name: string) returns int64:
     list[TypeField] fields = type.fields[Complex]()
     int64 found = -1
@@ -142,11 +119,9 @@ function complex_field_arg_count(field_name: string) returns int64:
         if field.name == field_name:
             found = list.length(field.type_info.args)
     return found
-
 function field_count[T]() returns int64:
     list[TypeField] fields = type.fields[T]()
     return list.length(fields)
-
 function field_kind[T](field_name: string) returns string:
     list[TypeField] fields = type.fields[T]()
     string found = "missing"
@@ -154,7 +129,6 @@ function field_kind[T](field_name: string) returns string:
         if field.name == field_name:
             found = field.kind
     return found
-
 function field_kind_tag_is[T](field_name: string, expected: TypeKind) returns bool:
     list[TypeField] fields = type.fields[T]()
     bool found = false
@@ -162,7 +136,6 @@ function field_kind_tag_is[T](field_name: string, expected: TypeKind) returns bo
         if field.name == field_name:
             found = field.kind_tag == expected
     return found
-
 function complex_field_arg_kind(field_name: string, target: int64) returns string:
     list[TypeField] fields = type.fields[Complex]()
     string found = "missing"
@@ -174,7 +147,6 @@ function complex_field_arg_kind(field_name: string, target: int64) returns strin
                     found = arg.kind
                 index = index + 1
     return found
-
 function nested_arg_kind_from_info(info: TypeInfo, outer_target: int64, inner_target: int64) returns string:
     string found = "missing"
     int64 outer_index = 0
@@ -187,7 +159,6 @@ function nested_arg_kind_from_info(info: TypeInfo, outer_target: int64, inner_ta
                 inner_index = inner_index + 1
         outer_index = outer_index + 1
     return found
-
 function complex_field_nested_arg_kind(field_name: string, outer_target: int64, inner_target: int64) returns string:
     list[TypeField] fields = type.fields[Complex]()
     string found = "missing"
@@ -195,7 +166,6 @@ function complex_field_nested_arg_kind(field_name: string, outer_target: int64, 
         if field.name == field_name:
             found = nested_arg_kind_from_info(field.type_info, outer_target, inner_target)
     return found
-
 function complex_field_type_info_secret(field_name: string) returns bool:
     list[TypeField] fields = type.fields[Complex]()
     bool found = false
@@ -203,7 +173,6 @@ function complex_field_type_info_secret(field_name: string) returns bool:
         if field.name == field_name:
             found = field.type_info.has_secret
     return found
-
 function complex_field_type_info_matches_legacy(field_name: string) returns bool:
     list[TypeField] fields = type.fields[Complex]()
     bool found = false
@@ -211,7 +180,6 @@ function complex_field_type_info_matches_legacy(field_name: string) returns bool
         if field.name == field_name:
             found = field.type_info.type_name == field.type_name and field.type_info.kind == field.kind and field.type_info.has_secret == field.has_secret
     return found
-
 function pair_field_arg_type_name(field_name: string, target: int64) returns string:
     list[TypeField] fields = type.fields[Pair[list[int64], optional[string]]]()
     string found = "missing"
@@ -223,7 +191,6 @@ function pair_field_arg_type_name(field_name: string, target: int64) returns str
                     found = arg.type_name
                 index = index + 1
     return found
-
 function header_version_by_reflection() returns int64:
     Header header = Header(version: 4)
     list[TypeField] fields = type.fields[Header]()
@@ -232,19 +199,15 @@ function header_version_by_reflection() returns int64:
         if field.name == "version":
             found = type.field_value[Header, int64](view header, view field)
     return found
-
 function bitfield_field_count[T]() returns int64:
     list[TypeBitfieldField] fields = type.bitfield_fields[T]()
     return list.length(fields)
-
 function bitfield_metadata_field_count[T]() returns int64:
     TypeBitfield info = type.bitfield_layout[T]()
     return list.length(info.fields)
-
 function bitfield_metadata_network_order[T]() returns bool:
     TypeBitfield info = type.bitfield_layout[T]()
     return info.network_order
-
 function bitfield_field_shape[T](field_name: string) returns string:
     list[TypeBitfieldField] fields = type.bitfield_fields[T]()
     string found = "missing"
@@ -252,7 +215,6 @@ function bitfield_field_shape[T](field_name: string) returns string:
         if field.name == field_name:
             found = field.shape
     return found
-
 function bitfield_field_shape_tag_is[T](field_name: string, expected: TypeBitfieldFieldShape) returns bool:
     list[TypeBitfieldField] fields = type.bitfield_fields[T]()
     bool found = false
@@ -260,7 +222,6 @@ function bitfield_field_shape_tag_is[T](field_name: string, expected: TypeBitfie
         if field.name == field_name:
             found = field.shape_tag == expected
     return found
-
 function bitfield_field_width[T](field_name: string) returns int64:
     list[TypeBitfieldField] fields = type.bitfield_fields[T]()
     int64 found = -1
@@ -268,7 +229,6 @@ function bitfield_field_width[T](field_name: string) returns int64:
         if field.name == field_name:
             found = field.width
     return found
-
 function bitfield_field_type_name[T](field_name: string) returns string:
     list[TypeBitfieldField] fields = type.bitfield_fields[T]()
     string found = "missing"
@@ -276,7 +236,6 @@ function bitfield_field_type_name[T](field_name: string) returns string:
         if field.name == field_name:
             found = field.type_info.type_name
     return found
-
 function bitfield_field_type_kind[T](field_name: string) returns string:
     list[TypeBitfieldField] fields = type.bitfield_fields[T]()
     string found = "missing"
@@ -284,7 +243,6 @@ function bitfield_field_type_kind[T](field_name: string) returns string:
         if field.name == field_name:
             found = field.type_info.kind
     return found
-
 function bitfield_field_enum_kind[T](field_name: string) returns string:
     list[TypeBitfieldField] fields = type.bitfield_fields[T]()
     string found = "missing"
@@ -294,11 +252,9 @@ function bitfield_field_enum_kind[T](field_name: string) returns string:
                 default field.type_info
             found = info.kind
     return found
-
 function variant_count[T]() returns int64:
     list[TypeVariant] variants = type.variants[T]()
     return list.length(variants)
-
 function variant_field_count[T](variant_name: string) returns int64:
     list[TypeVariant] variants = type.variants[T]()
     int64 found = -1
@@ -306,7 +262,6 @@ function variant_field_count[T](variant_name: string) returns int64:
         if variant.name == variant_name:
             found = list.length(variant.fields)
     return found
-
 function variant_discriminant[T](variant_name: string) returns int64:
     list[TypeVariant] variants = type.variants[T]()
     int64 found = -1
@@ -314,7 +269,6 @@ function variant_discriminant[T](variant_name: string) returns int64:
         if variant.name == variant_name:
             found = variant.discriminant
     return found
-
 function variant_has_secret[T](variant_name: string) returns bool:
     list[TypeVariant] variants = type.variants[T]()
     bool found = false
@@ -322,7 +276,6 @@ function variant_has_secret[T](variant_name: string) returns bool:
         if variant.name == variant_name:
             found = variant.has_secret
     return found
-
 function variant_field_kind[T](variant_name: string, target: int64) returns string:
     list[TypeVariant] variants = type.variants[T]()
     string found = "missing"
@@ -334,7 +287,6 @@ function variant_field_kind[T](variant_name: string, target: int64) returns stri
                     found = field.kind
                 index = index + 1
     return found
-
 function variant_field_type_name[T](variant_name: string, target: int64) returns string:
     list[TypeVariant] variants = type.variants[T]()
     string found = "missing"
@@ -346,7 +298,6 @@ function variant_field_type_name[T](variant_name: string, target: int64) returns
                     found = field.type_name
                 index = index + 1
     return found
-
 verify type_info_reflection:
     assert type_info_kind[int64]() == "primitive"
     assert direct_type_kind_tag_is[int64](TypeKind.primitive_type) == true
@@ -357,6 +308,11 @@ verify type_info_reflection:
     assert type_info_kind[json.JsonTree]() == "enum"
     assert type_info_kind_tag_is[json.JsonTree](TypeKind.enum_type) == true
     assert type_info_has_no_primitive_tag[json.JsonTree]() == true
+    assert type_info_kind[json.JsonValue]() == "alias"
+    assert type_info_kind_tag_is[json.JsonValue](TypeKind.alias_type) == true
+    assert type_info_has_no_primitive_tag[json.JsonValue]() == true
+    assert type_info_arg_kind[json.JsonValue](0) == "enum"
+    assert type_info_arg_type_name[json.JsonValue](0) == "json.JsonTree"
     assert type_info_kind[NonEmpty]() == "refinement"
     assert type_info_kind_tag_is[NonEmpty](TypeKind.refinement_type) == true
     assert type_info_has_no_primitive_tag[NonEmpty]() == true

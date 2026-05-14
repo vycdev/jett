@@ -1608,6 +1608,9 @@ impl<'a> TypeChecker<'a> {
         if ident.name.contains('.') {
             return ident.name.clone();
         }
+        if Self::reflection_primitive_tag_for_name(&ident.name).is_some() {
+            return ident.name.clone();
+        }
         if let Some(namespace) = namespace {
             let qualified = format!("{namespace}.{}", ident.name);
             if self.reflection_type_name_is_registered(&qualified) {

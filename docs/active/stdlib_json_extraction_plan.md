@@ -45,6 +45,8 @@ The reflected JSON implementation has started moving into stdlib under the
 
 - `stdlib/json.jett`
 - `JsonTree` as a first self-hosted raw JSON tree representation
+- `json.JsonValue` as an exported namespaced alias for `JsonTree`, while bare
+  `JsonValue` remains the legacy compiler-owned compatibility spelling
 - `json_tree_serialize(value: JsonTree)`
 - `json_tree_parse(raw: string)` for staged scalar, array, and object parsing
 - `json_tree_*` traversal helpers for kind checks, field/index lookup, lengths,

@@ -245,6 +245,20 @@ function raw_helpers_view_tree_without_consuming() returns string:
     bool serialized = string.contains(raw, "Barbara")
     string tree_kind = json.json_tree_kind(view tree)
     return "{kind}:{is_object}:{list.length[string](view keys)}:{name}:{serialized}:{tree_kind}"
+function namespaced_json_value_alias_roundtrip() returns string:
+    json.JsonValue raw = json.parse_raw("{{\"name\":\"Alice\"}}") handle error:
+        return error
+    json.JsonValue name = json.require_field(view raw, "name") handle error:
+        return error
+    json.JsonTree tree = name
+    return json.json_tree_as_string(view tree) handle error:
+        default error
+function namespaced_json_value_alias_to_legacy() returns string:
+    json.JsonValue raw = json.json_tree_parse("\"Carol\"") handle error:
+        return error
+    JsonValue legacy = raw
+    return json.as_string(legacy) handle error:
+        default error
 verify json_value_tree_compatibility:
     assert raw_from_tree_assignment() == "Ada"
     assert tree_from_raw_assignment() == "Grace"
@@ -281,3 +295,5 @@ verify json_value_tree_compatibility:
     assert raw_is_string_accepts_tree() == true
     assert raw_serialize_accepts_tree() == true
     assert raw_helpers_view_tree_without_consuming() == "object:true:5:Barbara:true:object"
+    assert namespaced_json_value_alias_roundtrip() == "Alice"
+    assert namespaced_json_value_alias_to_legacy() == "Carol"

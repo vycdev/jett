@@ -2849,7 +2849,7 @@ impl Interpreter {
         let mut expanded = ident.clone();
         if let Some(name) = self.expand_namespace_alias_name(&ident.name) {
             expanded.name = name;
-        } else if !ident.name.contains('.') {
+        } else if !ident.name.contains('.') && !Self::is_builtin_type_name(&ident.name) {
             if let Some(namespace) = namespace {
                 let qualified = format!("{namespace}.{}", ident.name);
                 if self.type_name_is_registered(&qualified) {
@@ -2858,6 +2858,28 @@ impl Interpreter {
             }
         }
         expanded
+    }
+
+    fn is_builtin_type_name(name: &str) -> bool {
+        matches!(
+            name,
+            "int8"
+                | "int16"
+                | "int32"
+                | "int64"
+                | "uint8"
+                | "uint16"
+                | "uint32"
+                | "uint64"
+                | "float32"
+                | "float64"
+                | "string"
+                | "bool"
+                | "bytes"
+                | "nothing"
+                | "JsonValue"
+                | "TypeConstruction"
+        )
     }
 
     fn type_name_is_registered(&self, name: &str) -> bool {
@@ -2951,25 +2973,7 @@ impl Interpreter {
                 if let Some(bound) = self.current_type_binding(&ident.name) {
                     return self.type_expr_kind(&bound);
                 }
-                if matches!(
-                    ident.name.as_str(),
-                    "int8"
-                        | "int16"
-                        | "int32"
-                        | "int64"
-                        | "uint8"
-                        | "uint16"
-                        | "uint32"
-                        | "uint64"
-                        | "float32"
-                        | "float64"
-                        | "string"
-                        | "bool"
-                        | "bytes"
-                        | "nothing"
-                        | "JsonValue"
-                        | "TypeConstruction"
-                ) {
+                if Self::is_builtin_type_name(&ident.name) {
                     "primitive"
                 } else if self.type_aliases.contains_key(&ident.name) {
                     if self
