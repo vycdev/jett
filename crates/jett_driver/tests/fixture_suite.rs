@@ -696,6 +696,35 @@ verify stdlib_source:
 }
 
 #[test]
+fn stdlib_json_exports_loaded_for_build_source() {
+    let source = r#"
+namespace app
+
+function build_source_json_summary() returns string:
+    json.JsonTree raw = json.parse_raw("{{\"name\":\"Ada\"}}") handle error:
+        return error
+    json.JsonTree name = json.field(raw, "name") handle:
+        return "missing"
+    return json.as_string(name) handle error:
+        default error
+
+verify build_source_json:
+    assert build_source_json_summary() == "Ada"
+"#;
+    let result = build_source(source, "memory.jett");
+    assert!(
+        !result.has_errors,
+        "expected in-memory source to see stdlib JSON exports:\n{}",
+        result
+            .diagnostics
+            .iter()
+            .map(|diagnostic| format!("{}: {}", diagnostic.code, diagnostic.message))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+}
+
+#[test]
 fn stdlib_loaded_for_test_file() {
     let path = workspace_root()
         .join("tests")

@@ -191,6 +191,9 @@ Implemented:
   with `export`.
 - The public `JsonTree` API in `stdlib/json.jett` is explicitly exported while
   parser, decoder, serializer, and reflected bridge helpers stay private.
+- Driver-level `build_source` coverage now verifies that in-memory/LSP-style
+  validation sees the exported `json.JsonTree` raw facade surface, not only the
+  marker stdlib module.
 
 Still staged:
 
@@ -234,4 +237,6 @@ Still staged:
   satisfy the trusted public JSON bridge, and an untrusted later registration of
   a hook name clears trust.
 - `jett build`, `jett run`, `jett test file`, project tests, and LSP-style
-  `build_source` all see the same stdlib exports.
+  `build_source` all see the same stdlib exports. The marker stdlib module and
+  JSON raw facade are covered for `build_source`; file/project paths are covered
+  by the run-pass and `test_file` fixtures.
