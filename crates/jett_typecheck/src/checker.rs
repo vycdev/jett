@@ -961,28 +961,6 @@ impl<'a> TypeChecker<'a> {
             }
         }
 
-        for ((_name, type_args), type_id) in self.monomorphized_structs.clone() {
-            let display_name = self.type_name(type_id);
-            let arg_infos: Vec<ReflectionTypeInfo> = type_args
-                .into_iter()
-                .map(|arg| self.reflection_type_info_for_type(arg))
-                .collect();
-            let info = self.reflection_type_info_for_type_named_with_args(
-                type_id,
-                display_name.clone(),
-                arg_infos.clone(),
-            );
-            metadata.insert_type_info_for_id(type_id, info);
-
-            if let Some((_namespace, leaf_name)) = display_name.split_once('.') {
-                metadata.insert_type_info(self.reflection_type_info_for_type_named_with_args(
-                    type_id,
-                    leaf_name.to_string(),
-                    arg_infos,
-                ));
-            }
-        }
-
         for (type_id, (type_name, fields)) in self.reflection_fields_by_id.clone() {
             metadata.insert_type_fields_for_id(type_id, type_name, fields);
         }
@@ -5546,6 +5524,12 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn type_info_arg_types_for_type(&self, ty: TypeId) -> Vec<TypeId> {
+        for ((_name, type_args), type_id) in &self.monomorphized_structs {
+            if *type_id == ty {
+                return type_args.clone();
+            }
+        }
+
         match self.interner.resolve(ty) {
             Type::List(inner) | Type::Set(inner) | Type::Optional(inner) | Type::Secret(inner) => {
                 vec![*inner]
@@ -10701,6 +10685,50 @@ export bitfield Header:
                 .expect("legacy variant lookup should bridge through TypeId")[1]
                 .discriminant,
             17
+        );
+    }
+
+    #[test]
+    fn reflection_metadata_generic_type_info_args_are_type_id_backed() {
+        let result = check_source_result(
+            "\
+namespace accounts
+
+export struct Box[T]:
+    value: T
+
+namespace audit
+
+export struct Box[T]:
+    value: T
+
+namespace app
+
+function use_boxes() returns string:
+    use accounts as a
+    use audit as au
+    a.Box[int64] account = a.Box[int64](value: 1)
+    au.Box[int64] audit_box = au.Box[int64](value: 2)
+    TypeInfo account_info = type.info[a.Box[int64]]()
+    TypeInfo audit_info = type.info[au.Box[int64]]()
+    return \"{account_info.type_name}:{audit_info.type_name}:{account.value}:{audit_box.value}\"
+",
+        );
+        let metadata = result.reflection_metadata;
+
+        let account_info = metadata
+            .get_type_info("accounts.Box[int64]")
+            .expect("accounts.Box[int64] should have canonical type info");
+        assert_eq!(account_info.args[0].type_name, "int64");
+
+        let audit_info = metadata
+            .get_type_info("audit.Box[int64]")
+            .expect("audit.Box[int64] should have canonical type info");
+        assert_eq!(audit_info.args[0].type_name, "int64");
+
+        assert!(
+            metadata.get_type_info("Box[int64]").is_none(),
+            "ambiguous generic leaf metadata should not be published"
         );
     }
 

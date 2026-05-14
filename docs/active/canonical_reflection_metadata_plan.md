@@ -185,6 +185,12 @@ parallel string-only owner metadata maps for checked struct fields, bitfield
 layouts, or enum variants; production owner metadata now flows through the
 `TypeId` keyed path and relies on `ReflectionMetadata` to preserve legacy name
 lookup compatibility.
+Monomorphized generic struct `TypeInfo` now also gets concrete type arguments
+from the checker-owned `(generic owner, TypeId args) -> concrete TypeId` cache
+during canonical TypeId metadata construction. The old ambiguous string-only
+leaf insertion for names such as `Box[int64]` has been removed from checked
+metadata; namespaced generic owners keep their qualified identities such as
+`accounts.Box[int64]` and `audit.Box[int64]`.
 
 ### Stage 5: Remove AST Metadata Fallbacks
 
