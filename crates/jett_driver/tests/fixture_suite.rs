@@ -503,6 +503,10 @@ compile_fail_fixture!(
     "result_ok_payload_requires_handle.jett"
 );
 compile_fail_fixture!(
+    compile_fail_result_fail_payload_requires_handle,
+    "result_fail_payload_requires_handle.jett"
+);
+compile_fail_fixture!(
     compile_fail_some_payload_requires_handle,
     "some_payload_requires_handle.jett"
 );
