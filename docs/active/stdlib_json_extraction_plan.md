@@ -251,6 +251,10 @@ bridge spoofing, not helper visibility.
    empty/whitespace-only roots, malformed object keys, duplicate object fields
    after key unescaping, comma/separator errors, extra closing delimiters,
    nested unterminated strings, invalid escapes, and unicode surrogate failures.
+   Root and nested value trimming now follows JSON's byte-level whitespace set
+   only: space, tab, line feed, and carriage return. Non-JSON whitespace such as
+   form feed stays part of the token and is rejected through the same parser
+   error path as other malformed input.
    Valid JSON escapes now include quote, backslash, slash, backspace, form feed,
    newline, carriage return, tab, and unicode escapes. Public entrypoint parity
    for those parser errors is pinned across
