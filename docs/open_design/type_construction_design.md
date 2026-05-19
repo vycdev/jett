@@ -163,7 +163,7 @@ The current code already has most of the semantic checks in one place:
 - runtime/interpreter enum construction: `Value::Enum` construction and
   `reflected_construct_finish`,
 - JSON behavior oracle after replacing the typed Rust bridge:
-  `stdlib/json.jett` plus the JSON run-pass/parity fixtures.
+  `stdlib/json/` plus the JSON run-pass/parity fixtures.
 
 A reflected construction implementation should route through these same paths
 or share their core helpers. Duplicating the checks risks subtle drift, especially

@@ -1,0 +1,99 @@
+namespace json
+function json_tree_parse(raw: string) returns result[JsonTree, string]:
+    string trimmed = string.trim(raw)
+    if trimmed == "":
+        return fail("expected JSON value")
+    JsonTree value = json_tree_parse_value(trimmed) handle error:
+        return fail(error)
+    return ok(value)
+function json_tree_parse_value(raw: string) returns result[JsonTree, string]:
+    if string.starts_with(raw, "[") == true:
+        return json_tree_parse_array(raw)
+    if string.starts_with(raw, "{{") == true:
+        return json_tree_parse_object(raw)
+    if string.starts_with(raw, "]") == true:
+        return fail("unexpected closing delimiter in JSON value")
+    if string.starts_with(raw, "}}") == true:
+        return fail("unexpected closing delimiter in JSON value")
+    return json_tree_parse_scalar(raw)
+function json_tree_kind(view value: JsonTree) returns string:
+    match value:
+        null:
+            return "null"
+        bool_value(item):
+            return "bool"
+        number_value(raw):
+            return "number"
+        string_value(item):
+            return "string"
+        array_value(items):
+            return "array"
+        object_value(fields):
+            return "object"
+function json_tree_kind_error(view value: JsonTree, expected: string) returns string:
+    string actual = json_tree_kind(view value)
+    return "expected {expected}, got {actual}"
+function json_tree_is_null(view value: JsonTree) returns bool:
+    return json_tree_kind(view value) == "null"
+function json_tree_is_bool(view value: JsonTree) returns bool:
+    return json_tree_kind(view value) == "bool"
+function json_tree_is_number(view value: JsonTree) returns bool:
+    return json_tree_kind(view value) == "number"
+function json_tree_is_string(view value: JsonTree) returns bool:
+    return json_tree_kind(view value) == "string"
+function json_tree_is_array(view value: JsonTree) returns bool:
+    return json_tree_kind(view value) == "array"
+function json_tree_is_object(view value: JsonTree) returns bool:
+    return json_tree_kind(view value) == "object"
+function json_tree_field(view value: JsonTree, key: string) returns optional[JsonTree]:
+    match value:
+        object_value(fields):
+            return map.get[string, JsonTree](view fields, key)
+        other:
+            return none
+function json_tree_index(view value: JsonTree, index: int64) returns optional[JsonTree]:
+    match value:
+        array_value(items):
+            return list.get[JsonTree](view items, index)
+        other:
+            return none
+function json_tree_array_length(view value: JsonTree) returns result[int64, string]:
+    match value:
+        array_value(items):
+            return ok(list.length[JsonTree](view items))
+        other:
+            return fail(json_tree_kind_error(view value, "array"))
+function json_tree_object_keys(view value: JsonTree) returns result[list[string], string]:
+    match value:
+        object_value(fields):
+            return ok(map.keys[string, JsonTree](view fields))
+        other:
+            return fail(json_tree_kind_error(view value, "object"))
+function json_tree_as_string(view value: JsonTree) returns result[string, string]:
+    match value:
+        string_value(item):
+            return ok(item)
+        other:
+            return fail(json_tree_kind_error(view value, "string"))
+function json_tree_as_int64(view value: JsonTree) returns result[int64, string]:
+    match value:
+        number_value(raw):
+            int64 item = int64.from_string(raw) handle error:
+                return fail("expected int64, got number")
+            return ok(item)
+        other:
+            return fail(json_tree_kind_error(view value, "int64"))
+function json_tree_as_float64(view value: JsonTree) returns result[float64, string]:
+    match value:
+        number_value(raw):
+            float64 item = float64.from_string(raw) handle error:
+                return fail("expected float64, got number")
+            return ok(item)
+        other:
+            return fail(json_tree_kind_error(view value, "float64"))
+function json_tree_as_bool(view value: JsonTree) returns result[bool, string]:
+    match value:
+        bool_value(item):
+            return ok(item)
+        other:
+            return fail(json_tree_kind_error(view value, "bool"))

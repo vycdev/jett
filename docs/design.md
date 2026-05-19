@@ -4121,6 +4121,13 @@ namespace auth
 
 One namespace, one file. No ambiguity about which `auth` is being imported.
 
+Compiler-shipped stdlib files have one narrow implementation exception: the
+compiler may split one stdlib namespace across several stdlib fragment files.
+Those fragments are merged into one namespace before user code is checked, and
+duplicate declarations inside the merged namespace are still compile errors.
+This exception is not available to project files or vendored dependencies, and
+project code still cannot reopen a stdlib namespace such as `json`.
+
 **Third-party namespace collisions:** If a vendored library declares `namespace auth` and your project also has `namespace auth`, this is a compile error. Since dependencies are vendored source files, you own the copy — rename the namespace in the vendored file (e.g. to `namespace authlib.auth`), then `use authlib.auth as auth` at the call site. Library authors should use prefixed namespaces (e.g. `namespace mylib.auth` instead of just `namespace auth`) to minimize collisions.
 
 #### Namespace Visibility And Exports

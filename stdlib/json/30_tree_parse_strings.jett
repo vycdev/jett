@@ -1,0 +1,184 @@
+namespace json
+function json_tree_parse_string(raw: string) returns result[string, string]:
+    bytes input = bytes.from_string(raw)
+    int64 length = bytes.length(view input)
+    nothing checked = json_tree_validate_string_value(view input, length) handle error:
+        return fail(error)
+    return json_tree_parse_string_body(view input, length - 1)
+function json_tree_validate_string_value(view input: bytes, length: int64) returns result[nothing, string]:
+    if length == 0:
+        return fail("expected JSON string")
+    int64 first = bytes.get(view input, 0) handle:
+        default -1
+    if first != 34:
+        return fail("expected JSON string")
+    mutable JsonTreeScan scan = JsonTreeScan(depth: 0, in_string: true, escaped: false)
+    mutable int64 index = 1
+    while index < length:
+        int64 byte = bytes.get(view input, index) handle:
+            default -1
+        scan = json_tree_scan_step_string(view scan, byte)
+        if scan.in_string == false:
+            if index != length - 1:
+                return fail("unexpected trailing characters after JSON value")
+            return ok(nothing)
+        index = index + 1
+    if scan.escaped == true:
+        return fail("unterminated escape in JSON string")
+    return fail("unterminated JSON string")
+function json_tree_parse_string_body(view input: bytes, end: int64) returns result[string, string]:
+    mutable bytes output = bytes.new()
+    mutable int64 index = 1
+    while index < end:
+        int64 byte = bytes.get(view input, index) handle:
+            default -1
+        if byte == 34:
+            return fail("unexpected quote in JSON string")
+        if byte < 32:
+            return fail("unescaped control character in JSON string")
+        if byte == 92:
+            index = index + 1
+            JsonTreeStringEscape decoded = json_tree_parse_string_escape_at(view input, index, end) handle error:
+                return fail(error)
+            output = bytes.concat(output, bytes.from_string(decoded.value))
+            index = decoded.next_index
+        else:
+            output = bytes.concat(output, bytes.slice(view input, index, index + 1))
+        index = index + 1
+    string value = bytes.to_string(output) handle error:
+        return fail(error)
+    return ok(value)
+function json_tree_parse_string_escape_at(view input: bytes, index: int64, end: int64) returns result[JsonTreeStringEscape, string]:
+    if index >= end:
+        return fail("unterminated escape in JSON string")
+    int64 escape = bytes.get(view input, index) handle:
+        default -1
+    if escape == 117:
+        return json_tree_parse_unicode_escape_at(view input, index, end)
+    string decoded = json_tree_escape_string(escape) handle error:
+        return fail(error)
+    return ok(JsonTreeStringEscape(value: decoded, next_index: index))
+function json_tree_parse_unicode_escape_at(view input: bytes, index: int64, end: int64) returns result[JsonTreeStringEscape, string]:
+    if index + 4 >= end:
+        return fail("unterminated unicode escape in JSON string")
+    int64 code = json_tree_unicode_codepoint(view input, index + 1) handle error:
+        return fail(error)
+    if json_tree_is_high_surrogate_codepoint(code) == true:
+        return json_tree_parse_unicode_surrogate_pair_at(view input, index, end, code)
+    if json_tree_is_low_surrogate_codepoint(code) == true:
+        return fail("unexpected low surrogate unicode escape")
+    string decoded = json_tree_unicode_codepoint_value(code) handle error:
+        return fail(error)
+    return ok(JsonTreeStringEscape(value: decoded, next_index: index + 4))
+function json_tree_parse_unicode_surrogate_pair_at(view input: bytes, index: int64, end: int64, high_code: int64) returns result[JsonTreeStringEscape, string]:
+    if index + 10 >= end:
+        return fail("unterminated surrogate pair in JSON string")
+    if json_tree_byte_at(view input, index + 5) != 92:
+        return fail("expected low surrogate unicode escape")
+    if json_tree_byte_at(view input, index + 6) != 117:
+        return fail("expected low surrogate unicode escape")
+    int64 low_code = json_tree_unicode_codepoint(view input, index + 7) handle error:
+        return fail(error)
+    if json_tree_is_low_surrogate_codepoint(low_code) == false:
+        return fail("expected low surrogate unicode escape")
+    int64 code = 65536 +(high_code - 55296) * 1024 +(low_code - 56320)
+    string decoded = json_tree_unicode_codepoint_value(code) handle error:
+        return fail(error)
+    return ok(JsonTreeStringEscape(value: decoded, next_index: index + 10))
+function json_tree_unicode_codepoint_value(code: int64) returns result[string, string]:
+    string hex = json_tree_codepoint_to_utf8_hex(code) handle error:
+        return fail(error)
+    bytes raw = bytes.from_hex(hex) handle error:
+        return fail(error)
+    string decoded = bytes.to_string(raw) handle error:
+        return fail(error)
+    return ok(decoded)
+function json_tree_unicode_codepoint(view input: bytes, digit_start: int64) returns result[int64, string]:
+    int64 first = json_tree_hex_digit_value(json_tree_byte_at(view input, digit_start))
+    int64 second = json_tree_hex_digit_value(json_tree_byte_at(view input, digit_start + 1))
+    int64 high = json_tree_hex_digit_value(json_tree_byte_at(view input, digit_start + 2))
+    int64 low = json_tree_hex_digit_value(json_tree_byte_at(view input, digit_start + 3))
+    if first < 0 or second < 0 or high < 0 or low < 0:
+        return fail("invalid unicode escape in JSON string")
+    return ok(first * 4096 + second * 256 + high * 16 + low)
+function json_tree_codepoint_to_utf8_hex(code: int64) returns result[string, string]:
+    if json_tree_is_surrogate_codepoint(code) == true:
+        return fail("surrogate unicode escapes are not supported yet")
+    if code <= 127:
+        return ok(json_tree_byte_hex(code))
+    if code <= 2047:
+        int64 first = 192 + code / 64
+        int64 second = 128 +(code modulo 64)
+        return ok("{json_tree_byte_hex(first)}{json_tree_byte_hex(second)}")
+    int64 first = 224 + code / 4096
+    int64 second = 128 +((code / 64) modulo 64)
+    int64 third = 128 +(code modulo 64)
+    if code <= 65535:
+        return ok("{json_tree_byte_hex(first)}{json_tree_byte_hex(second)}{json_tree_byte_hex(third)}")
+    if code <= 1114111:
+        int64 fourth_first = 240 + code / 262144
+        int64 fourth_second = 128 +((code / 4096) modulo 64)
+        int64 fourth_third = 128 +((code / 64) modulo 64)
+        int64 fourth = 128 +(code modulo 64)
+        return ok("{json_tree_byte_hex(fourth_first)}{json_tree_byte_hex(fourth_second)}{json_tree_byte_hex(fourth_third)}{json_tree_byte_hex(fourth)}")
+    return fail("unicode escape codepoint out of range")
+function json_tree_byte_hex(byte: int64) returns string:
+    string high = json_stdlib_hex_digit(byte / 16)
+    string low = json_stdlib_hex_digit(byte modulo 16)
+    return "{high}{low}"
+function json_tree_is_surrogate_codepoint(code: int64) returns bool:
+    return code >= 55296 and code <= 57343
+function json_tree_is_high_surrogate_codepoint(code: int64) returns bool:
+    return code >= 55296 and code <= 56319
+function json_tree_is_low_surrogate_codepoint(code: int64) returns bool:
+    return code >= 56320 and code <= 57343
+function json_tree_hex_digit_value(byte: int64) returns int64:
+    if byte >= 48 and byte <= 57:
+        return byte - 48
+    if byte >= 65 and byte <= 70:
+        return byte - 55
+    if byte >= 97 and byte <= 102:
+        return byte - 87
+    return -1
+function json_tree_escape_string(byte: int64) returns result[string, string]:
+    if byte == 34:
+        return ok("\"")
+    if byte == 92:
+        return ok("\\")
+    if byte == 47:
+        return ok("/")
+    if byte == 98:
+        return json_stdlib_string_from_hex("08")
+    if byte == 102:
+        return json_stdlib_string_from_hex("0c")
+    if byte == 110:
+        return ok("\n")
+    if byte == 114:
+        return ok("\r")
+    if byte == 116:
+        return ok("\t")
+    return fail("unsupported JSON string escape")
+function json_tree_span_to_trimmed_string(view input: bytes, start: int64, end: int64) returns result[string, string]:
+    bytes raw = bytes.slice(view input, start, end)
+    string text = bytes.to_string(raw) handle error:
+        return fail(error)
+    return ok(string.trim(text))
+function json_tree_span_is_blank(view input: bytes, start: int64, end: int64) returns bool:
+    mutable int64 index = start
+    while index < end:
+        int64 byte = bytes.get(view input, index) handle:
+            default -1
+        if json_tree_is_whitespace_byte(byte) == false:
+            return false
+        index = index + 1
+    return true
+function json_tree_is_whitespace_byte(byte: int64) returns bool:
+    if byte == 32:
+        return true
+    if byte == 10:
+        return true
+    if byte == 13:
+        return true
+    if byte == 9:
+        return true
+    return false

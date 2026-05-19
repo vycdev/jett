@@ -91,10 +91,9 @@ secret-containing targets outright. Avoid option 3 unless the language first
 gains an explicit public projection type, because partial construction of `T`
 would make required secret fields look initialized when they are not.
 
-## Implications For `stdlib/json.jett`
+## Implications For Stdlib JSON
 
 The current reflected decoder prototype should keep mirroring `json.parse[T]`:
 decode secret fields as required fields and assign inner values into the secret
 wrapper. The reflected serializer prototype should remain public-only unless a
 separate audited declassification story is designed.
-

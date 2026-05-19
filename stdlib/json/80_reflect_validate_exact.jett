@@ -1,0 +1,159 @@
+namespace json
+mutual:
+    function json_validate_exact_reflected[T](view raw: JsonTree) returns result[nothing, string]
+    function json_validate_exact_alias_reflected[T](view raw: JsonTree) returns result[nothing, string]
+    function json_validate_exact_refinement_reflected[T](view raw: JsonTree) returns result[nothing, string]
+    function json_validate_exact_secret_reflected[T](view raw: JsonTree) returns result[nothing, string]
+    function json_validate_exact_structured_reflected[T](view raw: JsonTree, kind: TypeKind, type_name: string) returns result[nothing, string]
+    function json_validate_exact_array_items_reflected[Elem](view raw: JsonTree) returns result[nothing, string]
+    function json_validate_exact_list_reflected[T](view raw: JsonTree) returns result[nothing, string]
+    function json_validate_exact_set_reflected[T](view raw: JsonTree) returns result[nothing, string]
+    function json_validate_exact_map_reflected[T](view raw: JsonTree) returns result[nothing, string]
+    function json_validate_exact_optional_reflected[T](view raw: JsonTree) returns result[nothing, string]
+    function json_validate_exact_result_reflected[T](view raw: JsonTree) returns result[nothing, string]
+    function json_validate_exact_enum_reflected[T](view raw: JsonTree, type_name: string) returns result[nothing, string]
+    function json_validate_exact_enum_payload_variant_reflected[T](view payload: JsonTree, type_name: string, variant: TypeVariant, payload_count: int64) returns result[nothing, string]
+    function json_validate_exact_record_reflected[T](view raw: JsonTree, type_name: string) returns result[nothing, string]
+    function json_validate_exact_record_field_reflected[T](view raw: JsonTree, view field: TypeField) returns result[nothing, string]
+    function json_validate_exact_record_field_name_reflected[T](key: string) returns bool
+function json_validate_exact_reflected[T](view raw: JsonTree) returns result[nothing, string]:
+    TypeInfo info = type.info[T]()
+    TypeKind kind = info.kind_tag
+    string type_name = info.type_name
+    TypePrimitive primitive = info.primitive_tag handle:
+        default TypePrimitive.unknown_type
+    if type_name == "json.JsonTree":
+        return ok(nothing)
+    if primitive != TypePrimitive.unknown_type:
+        return ok(nothing)
+    if kind == TypeKind.alias_type:
+        return json_validate_exact_alias_reflected[T](view raw)
+    if kind == TypeKind.refinement_type:
+        return json_validate_exact_refinement_reflected[T](view raw)
+    if kind == TypeKind.secret_type:
+        return json_validate_exact_secret_reflected[T](view raw)
+    return json_validate_exact_structured_reflected[T](view raw, kind, type_name)
+function json_validate_exact_alias_reflected[T](view raw: JsonTree) returns result[nothing, string]:
+    comptime type Base = type.arg[T](0):
+        return json_validate_exact_reflected[Base](view raw)
+function json_validate_exact_refinement_reflected[T](view raw: JsonTree) returns result[nothing, string]:
+    comptime type Base = type.arg[T](0):
+        return json_validate_exact_reflected[Base](view raw)
+function json_validate_exact_secret_reflected[T](view raw: JsonTree) returns result[nothing, string]:
+    comptime type Inner = type.arg[T](0):
+        return json_validate_exact_reflected[Inner](view raw)
+function json_validate_exact_structured_reflected[T](view raw: JsonTree, kind: TypeKind, type_name: string) returns result[nothing, string]:
+    match kind:
+        list_type:
+            return json_validate_exact_list_reflected[T](view raw)
+        set_type:
+            return json_validate_exact_set_reflected[T](view raw)
+        map_type:
+            return json_validate_exact_map_reflected[T](view raw)
+        optional_type:
+            return json_validate_exact_optional_reflected[T](view raw)
+        result_type:
+            return json_validate_exact_result_reflected[T](view raw)
+        enum_type:
+            return json_validate_exact_enum_reflected[T](view raw, type_name)
+        struct_type:
+            return json_validate_exact_record_reflected[T](view raw, type_name)
+        bitfield_type:
+            return json_validate_exact_record_reflected[T](view raw, type_name)
+        other:
+            return ok(nothing)
+function json_validate_exact_array_items_reflected[Elem](view raw: JsonTree) returns result[nothing, string]:
+    int64 length = json_tree_array_length(view raw) handle error:
+        return fail(error)
+    for index in range(length):
+        JsonTree raw_item = json_tree_index(view raw, index) handle:
+            return fail("missing array item {index}")
+        nothing checked = json_validate_exact_reflected[Elem](view raw_item) handle error:
+            return fail("{index}: {error}")
+    return ok(nothing)
+function json_validate_exact_list_reflected[T](view raw: JsonTree) returns result[nothing, string]:
+    comptime type Elem = type.arg[T](0):
+        return json_validate_exact_array_items_reflected[Elem](view raw)
+function json_validate_exact_set_reflected[T](view raw: JsonTree) returns result[nothing, string]:
+    comptime type Elem = type.arg[T](0):
+        return json_validate_exact_array_items_reflected[Elem](view raw)
+function json_validate_exact_map_reflected[T](view raw: JsonTree) returns result[nothing, string]:
+    comptime type Val = type.arg[T](1):
+        list[string] keys = json_tree_object_keys(view raw) handle error:
+            return fail(error)
+        for key in keys:
+            JsonTree raw_item = json_tree_field(view raw, key) handle:
+                return fail("missing object field '{key}'")
+            nothing checked = json_validate_exact_reflected[Val](view raw_item) handle error:
+                return fail("{key}: {error}")
+        return ok(nothing)
+function json_validate_exact_optional_reflected[T](view raw: JsonTree) returns result[nothing, string]:
+    if json_tree_is_null(view raw) == true:
+        return ok(nothing)
+    comptime type Inner = type.arg[T](0):
+        return json_validate_exact_reflected[Inner](view raw)
+function json_validate_exact_result_reflected[T](view raw: JsonTree) returns result[nothing, string]:
+    JsonTreeResultPayload payload = json_tree_result_payload(view raw) handle error:
+        return fail(error)
+    if payload.key == "ok":
+        comptime type Ok = type.arg[T](0):
+            nothing checked = json_validate_exact_reflected[Ok](view payload.value) handle error:
+                return fail("ok: {error}")
+            return ok(nothing)
+    comptime type Err = type.arg[T](1):
+        nothing checked = json_validate_exact_reflected[Err](view payload.value) handle error:
+            return fail("fail: {error}")
+        return ok(nothing)
+function json_validate_exact_enum_reflected[T](view raw: JsonTree, type_name: string) returns result[nothing, string]:
+    if json_tree_is_string(view raw) == true:
+        return ok(nothing)
+    list[string] keys = json_tree_object_keys(view raw) handle error:
+        return fail(error)
+    if list.length[string](keys) != 1:
+        return fail("expected enum object with exactly one key")
+    string variant_name = list.get[string](keys, 0) handle:
+        return fail("expected enum object with exactly one key")
+    JsonTree payload = json_tree_field(view raw, variant_name) handle:
+        return fail("expected enum object with exactly one key")
+    int64 payload_count = json_tree_array_length(view payload) handle error:
+        return fail(error)
+    for variant in type.variants[T]():
+        if variant.name != variant_name:
+            continue
+        return json_validate_exact_enum_payload_variant_reflected[T](view payload, type_name, variant, payload_count)
+    return fail("unknown enum variant '{type_name}.{variant_name}'")
+function json_validate_exact_enum_payload_variant_reflected[T](view payload: JsonTree, type_name: string, variant: TypeVariant, payload_count: int64) returns result[nothing, string]:
+    int64 expected_count = list.length[TypeField](variant.fields)
+    if payload_count != expected_count:
+        return fail("enum variant '{type_name}.{variant.name}' expects {expected_count} payload field(s), got {payload_count}")
+    mutable int64 index = 0
+    for field in variant.fields:
+        comptime type Field = field.type_info:
+            JsonTree raw_item = json_tree_index(view payload, index) handle:
+                return fail("missing enum payload item {index}")
+            nothing checked = json_validate_exact_reflected[Field](view raw_item) handle error:
+                return fail("{variant.name}.{field.name}: {error}")
+        index = index + 1
+    return ok(nothing)
+function json_validate_exact_record_reflected[T](view raw: JsonTree, type_name: string) returns result[nothing, string]:
+    if json_tree_is_object(view raw) == false:
+        return fail("expected object, got {json_tree_kind(view raw)}")
+    list[string] keys = json_tree_object_keys(view raw) handle error:
+        return fail(error)
+    for key in keys:
+        if json_validate_exact_record_field_name_reflected[T](key) == false:
+            return fail("unknown field '{key}' for {type_name}")
+    for field in type.fields[T]():
+        nothing checked = json_validate_exact_record_field_reflected[T](view raw, view field) handle error:
+            return fail("{field.serialize_name}: {error}")
+    return ok(nothing)
+function json_validate_exact_record_field_reflected[T](view raw: JsonTree, view field: TypeField) returns result[nothing, string]:
+    JsonTree raw_field = json_tree_field(view raw, field.serialize_name) handle:
+        return ok(nothing)
+    comptime type Field = field.type_info:
+        return json_validate_exact_reflected[Field](view raw_field)
+function json_validate_exact_record_field_name_reflected[T](key: string) returns bool:
+    for field in type.fields[T]():
+        if field.serialize_name == key:
+            return true
+    return false

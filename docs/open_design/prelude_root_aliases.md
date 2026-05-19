@@ -3,7 +3,7 @@
 Jett now has namespaced exports, but it does not yet have a source-level way for
 stdlib code to introduce an unqualified root name such as `JsonValue`.
 
-This matters because `stdlib/json.jett` can now express:
+This matters because `stdlib/json/` can now express:
 
 ```jett
 namespace json

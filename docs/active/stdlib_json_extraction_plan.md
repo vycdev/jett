@@ -1,7 +1,7 @@
 # JSON Stdlib Extraction Plan
 
 This note records the remaining compiler/tooling work needed before the
-reflection JSON prototypes can become a real `stdlib/json.jett` module.
+reflection JSON prototypes can become a real stdlib `json` module.
 
 The important conclusion is that JSON itself is no longer the main blocker.
 Reflection can now read fields, construct structs/bitfields/enums, inspect type
@@ -39,16 +39,16 @@ code own the public `json.*` API.
   `intersection`/`difference`, so JSON set parsing fixtures typecheck through
   normal builtin signatures.
 
-That means a physical `stdlib/json.jett` file is available to single-file
-builds, but ordinary `namespace json` functions still do not automatically own
-policy-bearing public calls such as `json.parse[T](...)`.
+That means physical stdlib JSON fragments under `stdlib/json/` are available
+to single-file builds, but ordinary `namespace json` functions still do not
+automatically own policy-bearing public calls such as `json.parse[T](...)`.
 
 ## JSON-Specific State
 
 The reflected JSON implementation has started moving into stdlib under the
 `json` namespace. Prefixed hook names hold the implementation bodies:
 
-- `stdlib/json.jett`
+- `stdlib/json/` fragments
 - `JsonTree` as a first self-hosted raw JSON tree representation
 - `json.JsonValue` as an exported namespaced alias for `JsonTree`
 - bare `JsonValue` as a stdlib root alias for `json.JsonTree`, while the
@@ -215,7 +215,7 @@ bridge spoofing, not helper visibility.
    - `json_parse_reflected[T](raw: string)` now routes typed targets through the
      self-hosted `JsonTree` parser/decoder. The `JsonValue` compatibility
      branch also parses through `json_tree_parse` directly.
-   - Public raw facade wrappers now exist in `stdlib/json.jett` for
+   - Public raw facade wrappers now exist in `stdlib/json/` for
      `parse_raw`, `serialize_raw`, tree kind/predicates, lookup, length/key
      helpers, and scalar casts.
    - The typechecker raw facade signatures now prefer the bundled
@@ -301,7 +301,7 @@ bridge spoofing, not helper visibility.
    Predicate-derived facts, diagnostic string facts, and other value-sensitive
    reflection helper shapes remain deferred.
 
-## Recommended Shape For `stdlib/json.jett`
+## Recommended Shape For The Stdlib JSON Module
 
 The eventual module should keep these layers distinct:
 

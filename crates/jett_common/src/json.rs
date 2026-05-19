@@ -183,8 +183,8 @@ pub fn json_raw_facade_spec(name: &str) -> Option<JsonRawFacadeSpec> {
         .find_map(|(facade, spec)| (*facade == name).then_some(*spec))
 }
 
-/// Returns true for the public raw JSON facade functions backed by
-/// `stdlib/json.jett`.
+/// Returns true for the public raw JSON facade functions backed by the stdlib
+/// JSON module.
 pub fn is_json_raw_facade(name: &str) -> bool {
     json_raw_facade_spec(name).is_some()
 }

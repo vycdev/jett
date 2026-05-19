@@ -376,7 +376,7 @@ ResolveResult {
 - **No unused imports** — every `use` must be referenced.
 - **No unused variables** — every variable declaration must be referenced.
 - **Inline-only imports** — `use` statements are only allowed inside functions/blocks, never at file level. Within a function, `use` must appear before any other code.
-- **Duplicate namespace detection** — two files declaring the same namespace is an error. One namespace, one declaration.
+- **Duplicate namespace detection** — two project/dependency files declaring the same namespace is an error. Compiler-shipped stdlib files have a narrow fragment exception so one stdlib namespace can be split across several implementation files; duplicate declarations inside that namespace still fail normally.
 - **Global constants** — registered as top-level declarations (global mutable variables are forbidden).
 - **No circular imports** — if namespace A uses namespace B and B uses A, it's a compile error.
 - **Import aliasing** — `use net.http as net_http` binds the alias in local scope. Conflicting last-segment names require `as`.
@@ -1130,7 +1130,7 @@ Functions like `Filesystem.read_file`, `Network.listen`, `Stdout.write`, `Clock.
 
 ### How the Compiler Locates the Stdlib
 
-The stdlib is a set of `.jett` files bundled with the compiler installation. At build time, the compiler adds the stdlib directory to the set of source files before discovery. Stdlib namespaces (e.g., `namespace string`, `namespace math`) are resolved exactly like user namespaces — the namespace system makes no distinction between stdlib and user code.
+The stdlib is a set of `.jett` files bundled with the compiler installation. At build time, the compiler adds the stdlib directory to the set of source files before discovery. Stdlib namespaces (e.g., `namespace string`, `namespace math`) mostly resolve like user namespaces, but compiler-shipped stdlib files may use namespace fragments so a large module such as `json` can live in several implementation files while exposing one namespace. Project files and vendored dependencies cannot use this exception or reopen stdlib namespaces.
 
 ---
 

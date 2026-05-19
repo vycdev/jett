@@ -6,7 +6,7 @@ functions own the runtime implementation body.
 
 ## Current State
 
-- `stdlib/json.jett` declares `namespace json`.
+- `stdlib/json/` fragments declare `namespace json`.
 - Public source-level wrappers are exported for:
   - `json.parse[T](raw)`
   - `json.parse_exact[T](raw)`
@@ -60,7 +60,7 @@ remain compiler-owned while the implementation body is readable `.jett` code.
 3. Routed lenient `json.parse[T]` through `json.json_parse_reflected[T]`.
 4. Routed full `json.serialize[T]` through `json.json_serialize_reflected[T]`
    while retaining the secret exposure policy gate.
-5. Added exported wrapper declarations in `stdlib/json.jett`, while keeping
+5. Added exported wrapper declarations in `stdlib/json/`, while keeping
    builtin precedence in the typechecker and interpreter.
 6. Removed the old typed Rust parse/serialize fallback from public JSON calls.
 7. Replaced the raw `JsonValue` runtime path with the self-hosted `JsonTree`

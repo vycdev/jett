@@ -1,7 +1,7 @@
 # Stdlib Visibility and Trusted Origins
 
-This note records the visibility work that blocks a fully ordinary
-`stdlib/json.jett` public API.
+This note records the visibility work that blocks a fully ordinary stdlib
+`json` public API.
 
 ## Problem
 
@@ -119,7 +119,7 @@ Use two stages, with source visibility and compiler trust kept orthogonal:
 1. Keep the trusted stdlib identity for compiler-owned bridge hooks. Done for
    the interpreter; future codegen should use the same notion.
 2. Add explicit exports, probably private-by-default within namespaces, before
-   treating `stdlib/json.jett` as a clean public module. Done for the current
+   treating the stdlib `json` module as a clean public module. Done for the current
    parser/resolver/typechecker/interpreter surface; a full import/prelude model
    remains separate.
 
@@ -149,7 +149,7 @@ For now:
   `json.json_parse_exact_reflected`, `json.json_serialize_reflected`, and
   `json.json_serialize_public_reflected` only when those registry entries came
   from compiler-shipped stdlib files,
-- public wrappers in `stdlib/json.jett` stay as readable declarations and a
+- public wrappers in `stdlib/json/` fragments stay as readable declarations and a
   preview of the eventual API,
 - parser walkers, reflected decoders, quoting helpers, and bridge hooks are now
   namespace-private source declarations. Their `json_` prefixes remain useful
@@ -191,9 +191,9 @@ Implemented:
 - Same-namespace private helper access remains allowed.
 - Existing user/project namespace fixtures now mark public cross-namespace API
   with `export`.
-- The public `JsonTree` API in `stdlib/json.jett` is explicitly exported while
+- The public `JsonTree` API in `stdlib/json/` fragments is explicitly exported while
   parser, decoder, serializer, and reflected bridge helpers stay private.
-- `stdlib/json.jett` exports `json.JsonValue = JsonTree` as the namespaced
+- The stdlib JSON module exports `json.JsonValue = JsonTree` as the namespaced
   source-level alias and `export root type JsonValue = json.JsonTree` as the
   narrow root compatibility alias. The unqualified spelling still preserves the
   legacy `TypePrimitive.json_value_type` reflection tag during the transition.

@@ -4,9 +4,9 @@ use jett_common::{FileId, Span};
 use jett_diagnostics::{Diagnostic, DiagnosticSink};
 use jett_parser::ast::{
     ActorDef, AssertStmt, AssignStmt, Block, BreakpointStmt, CallArg, ComptimeTypeBindStmt, Expr,
-    ExprStmt, ForStmt, FunctionDecl, FunctionDef, IfStmt, Item, MatchStmt, Module, Pattern,
-    RespondStmt, ReturnStmt, Stmt, StringPart, TraceStmt, TypeAlias, TypeExpr, UseDecl, VarDecl,
-    WhileStmt,
+    ExprStmt, ForStmt, FunctionDecl, FunctionDef, IfStmt, Item, MatchStmt, Module, NamespaceDecl,
+    Pattern, RespondStmt, ReturnStmt, Stmt, StringPart, TraceStmt, TypeAlias, TypeExpr, UseDecl,
+    VarDecl, WhileStmt,
 };
 
 use crate::errors;
@@ -183,7 +183,7 @@ impl Resolver {
             self.update_current_namespace(item);
             match item {
                 Item::Namespace(ns) => {
-                    self.declare_top_level(&ns.name.name, DefKind::Namespace, ns.span, index);
+                    self.declare_namespace_top_level(ns, index);
                 }
                 Item::Function(func) => {
                     self.declare_function_top_level(func, index);
@@ -363,6 +363,30 @@ impl Resolver {
         order: usize,
     ) -> Option<DefId> {
         self.declare_top_level_with_metadata(name, kind, span, order, None, DefVisibility::Public)
+    }
+
+    fn declare_namespace_top_level(&mut self, ns: &NamespaceDecl, order: usize) -> Option<DefId> {
+        if let Some(prev_id) = self
+            .scope_table
+            .lookup_local(self.current_scope, &ns.name.name)
+        {
+            let prev = self.scope_table.def(prev_id);
+            if prev.kind == DefKind::Namespace
+                && prev.span.file.is_stdlib()
+                && ns.span.file.is_stdlib()
+            {
+                return Some(prev_id);
+            }
+
+            self.sink.emit(errors::duplicate_definition(
+                &ns.name.name,
+                ns.span,
+                prev.span,
+            ));
+            return None;
+        }
+
+        self.declare_top_level(&ns.name.name, DefKind::Namespace, ns.span, order)
     }
 
     fn declare_top_level_with_metadata(
@@ -1504,7 +1528,7 @@ fn stmt_span(stmt: &Stmt) -> Span {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use jett_common::{FileId, Span};
+    use jett_common::{FileId, STDLIB_FILE_ID_START, Span};
     use jett_diagnostics::Severity;
     use jett_parser::ast::*;
 
@@ -1549,6 +1573,28 @@ mod tests {
         result.module
     }
 
+    fn parse_module_with_file(source: &str, file_id: FileId) -> Module {
+        let result = jett_parser::parse(source, file_id);
+        assert!(
+            result.errors.is_empty(),
+            "parse errors: {:?}",
+            result.errors
+        );
+        result.module
+    }
+
+    fn merge_modules(modules: Vec<Module>) -> Module {
+        let mut items = Vec::new();
+        let mut span = sp(0, 0);
+        for module in modules {
+            if items.is_empty() {
+                span = module.span;
+            }
+            items.extend(module.items);
+        }
+        Module { items, span }
+    }
+
     fn def_by_name<'a>(result: &'a ResolveResult, name: &str) -> &'a crate::scope::DefInfo {
         result
             .scope_table
@@ -1556,6 +1602,91 @@ mod tests {
             .iter()
             .find(|def| def.name == name)
             .unwrap_or_else(|| panic!("expected definition named {name}"))
+    }
+
+    #[test]
+    fn stdlib_namespace_fragments_share_one_namespace() {
+        let left = parse_module_with_file(
+            r#"
+namespace json
+
+function left_helper() returns nothing:
+    return nothing
+"#,
+            FileId::new(STDLIB_FILE_ID_START),
+        );
+        let right = parse_module_with_file(
+            r#"
+namespace json
+
+function right_helper() returns nothing:
+    return nothing
+"#,
+            FileId::new(STDLIB_FILE_ID_START + 1),
+        );
+        let module = merge_modules(vec![left, right]);
+
+        let result = resolve(&module);
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == Severity::Error)
+            .collect();
+
+        assert!(errors.is_empty(), "expected no errors, got: {errors:#?}");
+        assert_eq!(
+            def_by_name(&result, "json.left_helper")
+                .namespace
+                .as_deref(),
+            Some("json")
+        );
+        assert_eq!(
+            def_by_name(&result, "json.right_helper")
+                .namespace
+                .as_deref(),
+            Some("json")
+        );
+    }
+
+    #[test]
+    fn stdlib_namespace_fragments_still_reject_duplicate_items() {
+        let left = parse_module_with_file(
+            r#"
+namespace json
+
+function same_helper() returns nothing:
+    return nothing
+"#,
+            FileId::new(STDLIB_FILE_ID_START),
+        );
+        let right = parse_module_with_file(
+            r#"
+namespace json
+
+function same_helper() returns nothing:
+    return nothing
+"#,
+            FileId::new(STDLIB_FILE_ID_START + 1),
+        );
+        let module = merge_modules(vec![left, right]);
+
+        let result = resolve(&module);
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == Severity::Error && d.code.code() == 204)
+            .collect();
+
+        assert_eq!(
+            errors.len(),
+            1,
+            "expected duplicate item error, got: {errors:#?}"
+        );
+        assert!(
+            errors[0].message.contains("json.same_helper"),
+            "expected duplicate error to mention qualified helper name, got: {}",
+            errors[0].message
+        );
     }
 
     #[test]

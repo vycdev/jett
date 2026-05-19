@@ -66,7 +66,7 @@ Implemented reflection primitives:
   trusting user-constructed metadata.
 
 JSON serialization has moved behind trusted `.jett` serializer hooks in
-`stdlib/json.jett`:
+`stdlib/json/`:
 `json_serialize_reflected[T](view value)` and
 `json_serialize_public_reflected[T](view value)`. They recursively handle
 primitives, structs, lists, sets, `map[string, V]`, optionals, result ok/fail
@@ -83,7 +83,7 @@ interpreter after the typechecker keeps the public policy checks.
 
 There are also `.jett` decoder paths:
 `tests/run_pass/json_reflection_flat_decoder.jett` covers the first
-flat-struct path, and `stdlib/json.jett` now stages the nested
+flat-struct path, and `stdlib/json/` now stages the nested
 decoder as `json_decode_tree_reflected[T](view raw: JsonTree)`, plus
 `json_parse_reflected[T](raw: string)` and
 `json_parse_exact_reflected[T](raw: string)` as staged wrappers over the
@@ -147,7 +147,7 @@ See `/docs/completed/json_raw_value_design.md`.
 
 ## Design Pressure
 
-A real `stdlib/json.jett` implementation needs more than shape metadata. It
+A real stdlib JSON implementation needs more than shape metadata. It
 needs ways to turn reflected type metadata into typed recursive work and then
 construct final values from decoded fields.
 

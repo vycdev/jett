@@ -124,7 +124,7 @@ It fits Jett's "one obvious pattern per intent" principle better than changing
   absence is meaningful.
 
 The next implementation bite should add the strict helpers in
-`stdlib/json.jett`, keep the existing lenient helpers unchanged, and add parity
+`stdlib/json/`, keep the existing lenient helpers unchanged, and add parity
 tests that pin wrong-shape and missing-key/index diagnostics separately.
 
 Status: implemented. The strict helper surface is pinned in

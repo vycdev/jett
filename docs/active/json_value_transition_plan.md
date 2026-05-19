@@ -2,7 +2,8 @@
 
 `JsonValue` should not remain a Rust-owned language feature. It was useful as a
 bridge while reflection and construction were missing, but the long-term shape
-should make raw JSON a native Jett value implemented in `stdlib/json.jett`.
+should make raw JSON a native Jett value implemented in the stdlib `json`
+module.
 
 The destination is:
 
@@ -30,7 +31,7 @@ about: two names, two traversal surfaces, one conceptual data model.
 
 ## Current State
 
-- `JsonTree` is defined in `stdlib/json.jett`.
+- `JsonTree` is defined in the stdlib `json` module.
 - `json_tree_parse(raw)` parses nulls, booleans, numbers, strings, arrays, and
   objects.
 - `json_tree_*` traversal helpers mirror the raw `JsonValue` helper surface.
@@ -53,7 +54,7 @@ about: two names, two traversal surfaces, one conceptual data model.
   from `JsonValue` to the bundled `json.JsonTree`. That alias makes the two
   spellings compatible for assignments, calls, returns, fields, and container
   wrappers without relying on namespace flattening.
-- `stdlib/json.jett` now also exports `json.JsonValue` as a source alias to
+- The stdlib JSON module now also exports `json.JsonValue` as a source alias to
   `json.JsonTree`, and exports a narrow root alias
   `JsonValue = json.JsonTree` for source visibility. The unqualified
   `JsonValue` spelling still keeps its legacy primitive reflection behavior for
@@ -250,7 +251,7 @@ Reflection metadata is intentionally split for now:
 
 ### 5. Move Raw Decoder Code Off `JsonValue`
 
-`stdlib/json.jett` used to contain an older `json_decode_reflected[T](raw:
+The stdlib JSON module used to contain an older `json_decode_reflected[T](raw:
 JsonValue)` path. After raw APIs use `JsonTree`:
 
 - Replace internal uses with `json_decode_tree_reflected[T]`.
@@ -259,7 +260,7 @@ JsonValue)` path. After raw APIs use `JsonTree`:
 - Remove duplicate `JsonValue` decoder helpers once no tests or public bridges
   rely on them.
 
-This should substantially reduce `stdlib/json.jett` duplication.
+This should substantially reduce stdlib JSON duplication.
 
 Status: implemented. The old duplicate `JsonValue` decoder helper family was
 removed, and the unused private `json_decode_reflected[T](raw: JsonValue)`

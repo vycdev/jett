@@ -38,7 +38,7 @@ Implemented accessors:
 
 ## Stdlib Tree Staging
 
-`stdlib/json.jett` also defines a first self-hosted raw tree shape:
+`stdlib/json/` also defines a first self-hosted raw tree shape:
 
 ```jett
 enum JsonTree:
@@ -73,7 +73,7 @@ escapes. Unicode escapes including BMP values such as `\u0041`, `\u00e9`,
 ## Design Intent
 
 Raw JSON values are format data, not reflected Jett values. They should help a
-future `stdlib/json.jett` implementation decode input by walking an object tree,
+future stdlib JSON implementation decode input by walking an object tree,
 checking field presence, applying `serialize_name`, and producing clear errors.
 
 The raw API deliberately keeps these properties:
