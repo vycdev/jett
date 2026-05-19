@@ -289,6 +289,9 @@ Add tests before each behavior change:
 - Raw facade signatures accept and return `json.JsonTree` directly while
   preserving `JsonValue` compatibility.
 - `json.parse[JsonValue]` still works during compatibility.
+- `json.parse[json.JsonValue]`, `json.serialize[json.JsonValue]`, and
+  `json.serialize_public[json.JsonValue]` treat the namespaced alias as raw
+  `JsonTree`, not as enum internals.
 - `json.parse[json.JsonTree]` returns the native raw tree directly.
 - `JsonValue` and `JsonTree` assignment/alias behavior once enabled.
 - Raw object lookup preserves absence semantics.
@@ -314,7 +317,10 @@ Malformed-input error parity is pinned in
 `json.parse_raw`, `json.parse[JsonValue]`, and `json.parse[json.JsonTree]`.
 Exact-parse raw target compatibility is pinned in
 `tests/run_pass/json_parse_exact.jett` for `json.JsonTree`, bare `JsonValue`,
-and `json.JsonValue`.
+and `json.JsonValue`. Public bridge compatibility for the namespaced alias is
+pinned in `tests/run_pass/json_parse.jett`,
+`tests/run_pass/json_serialize.jett`, and
+`tests/run_pass/json_serialize_public.jett`.
 
 ## Risks And Open Questions
 
