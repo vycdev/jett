@@ -1,87 +1,77 @@
 namespace test
-
-function raw_user_name(root: JsonValue) returns string:
-    JsonValue user = json.field(root, "user") handle:
+function raw_user_name(view root: json.JsonTree) returns string:
+    json.JsonTree user = json.field(view root, "user") handle:
         return "missing user"
-    JsonValue name_raw = json.field(user, "name") handle:
+    json.JsonTree name_raw = json.field(view user, "name") handle:
         return "missing name"
-    return json.as_string(name_raw) handle error:
+    return json.as_string(view name_raw) handle error:
         default error
-
-function raw_user_score_summary(root: JsonValue) returns string:
-    JsonValue user = json.field(root, "user") handle:
+function raw_user_score_summary(view root: json.JsonTree) returns string:
+    json.JsonTree user = json.field(view root, "user") handle:
         return "missing user"
-    JsonValue scores = json.field(user, "scores") handle:
+    json.JsonTree scores = json.field(view user, "scores") handle:
         return "missing scores"
-    int64 score_count = json.array_length(scores) handle error:
+    int64 score_count = json.array_length(view scores) handle error:
         return error
-    JsonValue second_score = json.index(scores, 1) handle:
+    json.JsonTree second_score = json.index(view scores, 1) handle:
         return "missing score"
-    int64 score = json.as_int64(second_score) handle error:
+    int64 score = json.as_int64(view second_score) handle error:
         return error
     return "{score_count}:{score}"
-
-function raw_user_active(root: JsonValue) returns bool:
-    JsonValue user = json.field(root, "user") handle:
+function raw_user_active(view root: json.JsonTree) returns bool:
+    json.JsonTree user = json.field(view root, "user") handle:
         return false
-    JsonValue active_raw = json.field(user, "active") handle:
+    json.JsonTree active_raw = json.field(view user, "active") handle:
         return false
-    return json.as_bool(active_raw) handle error:
+    return json.as_bool(view active_raw) handle error:
         default false
-
-function raw_user_missing_is_null(root: JsonValue) returns bool:
-    JsonValue user = json.field(root, "user") handle:
+function raw_user_missing_is_null(view root: json.JsonTree) returns bool:
+    json.JsonTree user = json.field(view root, "user") handle:
         return false
-    JsonValue missing_raw = json.field(user, "missing") handle:
+    json.JsonTree missing_raw = json.field(view user, "missing") handle:
         return false
-    return json.is_null(missing_raw)
-
+    return json.is_null(view missing_raw)
 function raw_summary() returns string:
-    JsonValue root = json.parse_raw("{{\"user\":{{\"name\":\"Ada\",\"scores\":[3,5],\"active\":true,\"missing\":null}},\"version\":1}}") handle error:
+    json.JsonTree root = json.parse_raw("{{\"user\":{{\"name\":\"Ada\",\"scores\":[3,5],\"active\":true,\"missing\":null}},\"version\":1}}") handle error:
         return error
-    string name = raw_user_name(root)
-    string score = raw_user_score_summary(root)
-    bool active = raw_user_active(root)
-    if raw_user_missing_is_null(root) == false:
+    string name = raw_user_name(view root)
+    string score = raw_user_score_summary(view root)
+    bool active = raw_user_active(view root)
+    if raw_user_missing_is_null(view root) == false:
         return "not null"
     return "{name}:{score}:{active}"
-
 function raw_object_keys() returns int64:
-    JsonValue root = json.parse_raw("{{\"user\":{{\"name\":\"Ada\"}},\"version\":1}}") handle error:
+    json.JsonTree root = json.parse_raw("{{\"user\":{{\"name\":\"Ada\"}},\"version\":1}}") handle error:
         return 0
-    list[string] keys = json.object_keys(root) handle error:
+    list[string] keys = json.object_keys(view root) handle error:
         return 0
-    return list.length[string](keys)
-
+    return list.length[string](view keys)
 function raw_kind_predicates() returns string:
-    JsonValue root = json.parse_raw("{{\"name\":\"Ada\",\"score\":5,\"ratio\":2.5,\"active\":true,\"items\":[1],\"missing\":null}}") handle error:
+    json.JsonTree root = json.parse_raw("{{\"name\":\"Ada\",\"score\":5,\"ratio\":2.5,\"active\":true,\"items\":[1],\"missing\":null}}") handle error:
         return error
-    JsonValue name = json.field(root, "name") handle:
+    json.JsonTree name = json.field(view root, "name") handle:
         return "missing name"
-    JsonValue score = json.field(root, "score") handle:
+    json.JsonTree score = json.field(view root, "score") handle:
         return "missing score"
-    JsonValue ratio = json.field(root, "ratio") handle:
+    json.JsonTree ratio = json.field(view root, "ratio") handle:
         return "missing ratio"
-    JsonValue active = json.field(root, "active") handle:
+    json.JsonTree active = json.field(view root, "active") handle:
         return "missing active"
-    JsonValue items = json.field(root, "items") handle:
+    json.JsonTree items = json.field(view root, "items") handle:
         return "missing items"
-    JsonValue missing = json.field(root, "missing") handle:
+    json.JsonTree missing = json.field(view root, "missing") handle:
         return "missing null"
-    return "{json.is_object(root)}:{json.is_string(name)}:{json.is_number(score)}:{json.is_number(ratio)}:{json.is_bool(active)}:{json.is_array(items)}:{json.is_null(missing)}"
-
+    return "{json.is_object(view root)}:{json.is_string(view name)}:{json.is_number(view score)}:{json.is_number(view ratio)}:{json.is_bool(view active)}:{json.is_array(view items)}:{json.is_null(view missing)}"
 function raw_invalid_message() returns string:
-    JsonValue root = json.parse_raw("{{\"name\":\"Ada\"}}") handle error:
+    json.JsonTree root = json.parse_raw("{{\"name\":\"Ada\"}}") handle error:
         return error
-    int64 length = json.array_length(root) handle error:
+    int64 length = json.array_length(view root) handle error:
         return error
     return "{length}"
-
 function raw_roundtrip() returns string:
-    JsonValue root = json.parse_raw("{{\"name\":\"Ada\",\"score\":5}}") handle error:
+    json.JsonTree root = json.parse_raw("{{\"name\":\"Ada\",\"score\":5}}") handle error:
         return error
-    return json.serialize_raw(root)
-
+    return json.serialize_raw(view root)
 verify json_parse_raw:
     assert raw_summary() == "Ada:2:5:true"
     assert raw_object_keys() == 2
