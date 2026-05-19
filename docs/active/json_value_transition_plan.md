@@ -266,6 +266,10 @@ Status: implemented. The old duplicate `JsonValue` decoder helper family was
 removed, and the unused private `json_decode_reflected[T](raw: JsonValue)`
 wrapper was removed as well. Public typed parse enters through the `JsonTree`
 parser/decoder, with only the `JsonValue` type spelling kept as compatibility.
+The flat reflected decoder proof fixture now follows the same shape with
+`view json.JsonTree` inputs and strict `json.require_field` lookup;
+`JsonValue` remains covered by explicit compatibility tests rather than new
+decoder examples.
 
 ### 6. Remove Rust JSON Fallbacks
 

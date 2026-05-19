@@ -1,64 +1,53 @@
 namespace test
-
 struct FlatUser:
     id: string serialize "userId"
     age: int64
     active: bool
-
-function decode_flat_value[T](raw: JsonValue) returns result[T, string]:
+function decode_flat_value[T](view raw: json.JsonTree) returns result[T, string]:
     string type_name = type.name[T]()
-
     if type_name == "string":
-        string item = json.as_string(raw) handle error:
+        string item = json.as_string(view raw) handle error:
             return fail(error)
         return ok(item)
-
     if type_name == "int64":
-        int64 item = json.as_int64(raw) handle error:
+        int64 item = json.as_int64(view raw) handle error:
             return fail(error)
         return ok(item)
-
     if type_name == "bool":
-        bool item = json.as_bool(raw) handle error:
+        bool item = json.as_bool(view raw) handle error:
             return fail(error)
         return ok(item)
-
     return fail("unsupported reflected JSON type: {type_name}")
-
-function decode_flat_struct[T](raw: JsonValue) returns result[T, string]:
+function decode_flat_struct[T](view raw: json.JsonTree) returns result[T, string]:
     mutable TypeConstruction builder = type.construct_start[T]()
     for field in type.fields[T]():
         comptime type Field = field.type_info:
-            JsonValue raw_field = json.field(raw, field.serialize_name) handle:
-                return fail("missing field '{field.serialize_name}'")
-            Field decoded = decode_flat_value[Field](raw_field) handle error:
+            json.JsonTree raw_field = json.require_field(view raw, field.serialize_name) handle error:
+                return fail(error)
+            Field decoded = decode_flat_value[Field](view raw_field) handle error:
                 return fail("{field.serialize_name}: {error}")
             builder = type.construct_put[T, Field](builder, view field, decoded) handle error:
                 return fail(error)
     return type.construct_finish[T](builder)
-
 function decoded_user_matches() returns bool:
-    JsonValue root = json.parse_raw("{{\"userId\":\"u1\",\"age\":42,\"active\":true}}") handle error:
+    json.JsonTree root = json.parse_raw("{{\"userId\":\"u1\",\"age\":42,\"active\":true}}") handle error:
         return false
-    FlatUser user = decode_flat_struct[FlatUser](root) handle error:
+    FlatUser user = decode_flat_struct[FlatUser](view root) handle error:
         return false
     return user.id == "u1" and user.age == 42 and user.active == true
-
 function missing_field_message() returns string:
-    JsonValue root = json.parse_raw("{{\"userId\":\"u1\",\"active\":true}}") handle error:
+    json.JsonTree root = json.parse_raw("{{\"userId\":\"u1\",\"active\":true}}") handle error:
         return error
-    FlatUser user = decode_flat_struct[FlatUser](root) handle error:
+    FlatUser user = decode_flat_struct[FlatUser](view root) handle error:
         return error
     return user.id
-
 function wrong_type_message() returns string:
-    JsonValue root = json.parse_raw("{{\"userId\":\"u1\",\"age\":\"old\",\"active\":true}}") handle error:
+    json.JsonTree root = json.parse_raw("{{\"userId\":\"u1\",\"age\":\"old\",\"active\":true}}") handle error:
         return error
-    FlatUser user = decode_flat_struct[FlatUser](root) handle error:
+    FlatUser user = decode_flat_struct[FlatUser](view root) handle error:
         return error
     return user.id
-
 verify json_reflection_flat_decoder:
     assert decoded_user_matches() == true
-    assert missing_field_message() == "missing field 'age'"
+    assert missing_field_message() == "missing object field 'age'"
     assert string.contains(wrong_type_message(), "age: expected int64") == true
