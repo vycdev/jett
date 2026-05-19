@@ -33,6 +33,7 @@ struct Credential:
 struct RawEnvelope:
     name: string
     payload: JsonValue
+    alias_payload: json.JsonValue
     tree: json.JsonTree
 function parse_user_id() returns string:
     string raw = "{{\"id\":\"u1\",\"profileData\":{{\"displayName\":\"Alice\",\"note\":\"ok\"}},\"tags\":[\"admin\",\"beta\"],\"scores\":{{\"wins\":3}},\"nickname\":\"ally\"}}"
@@ -180,18 +181,29 @@ function parse_json_value_field() returns string:
         return "missing name"
     return json.as_string(name_raw) handle error:
         default error
+function parse_json_value_alias_field() returns string:
+    json.JsonValue root = json.parse[json.JsonValue]("{{\"name\":\"Grace\",\"score\":7}}") handle error:
+        return error
+    json.JsonValue name_raw = json.field(view root, "name") handle:
+        return "missing name"
+    return json.as_string(view name_raw) handle error:
+        default error
 function parse_json_value_struct_field() returns string:
-    RawEnvelope envelope = json.parse[RawEnvelope]("{{\"name\":\"doc\",\"payload\":{{\"score\":5}},\"tree\":{{\"label\":\"native\"}}}}") handle error:
+    RawEnvelope envelope = json.parse[RawEnvelope]("{{\"name\":\"doc\",\"payload\":{{\"score\":5}},\"alias_payload\":{{\"score\":8}},\"tree\":{{\"label\":\"native\"}}}}") handle error:
         return error
     JsonValue score_raw = json.field(envelope.payload, "score") handle:
         return "missing score"
     int64 score = json.as_int64(score_raw) handle error:
         return error
+    json.JsonValue alias_score_raw = json.field(view envelope.alias_payload, "score") handle:
+        return "missing alias score"
+    int64 alias_score = json.as_int64(view alias_score_raw) handle error:
+        return error
     json.JsonTree label_raw = json.json_tree_field(view envelope.tree, "label") handle:
         return "missing label"
     string label = json.json_tree_as_string(view label_raw) handle error:
         return error
-    return "{envelope.name}:{json.kind(envelope.payload)}:{score}:{label}"
+    return "{envelope.name}:{json.kind(envelope.payload)}:{score}:{alias_score}:{label}"
 function parse_json_tree_top_level() returns string:
     json.JsonTree tree = json.parse[json.JsonTree]("[1,true,null]") handle error:
         return error
@@ -247,7 +259,8 @@ verify json_parse:
     assert parse_bytes_length() == 2
     assert parse_bytes_without_prefix_first() == 72
     assert parse_json_value_field() == "Ada"
-    assert parse_json_value_struct_field() == "doc:object:5:native"
+    assert parse_json_value_alias_field() == "Grace"
+    assert parse_json_value_struct_field() == "doc:object:5:8:native"
     assert parse_json_tree_top_level() == "array:3"
     assert parse_invalid_bytes_error() == "expected hex bytes string"
     assert parse_top_level_secret_redaction() == "***"

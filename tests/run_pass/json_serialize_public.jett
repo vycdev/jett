@@ -18,6 +18,10 @@ function public_tree_json() returns string:
     json.JsonTree tree = json.json_tree_parse("[1,true,null]") handle error:
         return error
     return json.serialize_public[json.JsonTree](view tree)
+function public_json_value_alias_json() returns string:
+    json.JsonValue raw = json.parse[json.JsonValue]("{{\"visible\":true,\"score\":7}}") handle error:
+        return error
+    return json.serialize_public[json.JsonValue](view raw)
 verify serialize_public_omits_secret_fields:
     string raw = public_session_json()
     assert string.contains(raw, "id") == true
@@ -35,3 +39,7 @@ verify serialize_public_allows_copy_primitives:
     assert public_primitive_json() == "42"
 verify serialize_public_treats_json_tree_as_raw:
     assert public_tree_json() == "[1,true,null]"
+verify serialize_public_treats_json_value_alias_as_raw:
+    string raw = public_json_value_alias_json()
+    assert string.contains(raw, "\"visible\":true") == true
+    assert string.contains(raw, "\"score\":7") == true

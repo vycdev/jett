@@ -13,6 +13,7 @@ struct User:
     failed: result[int64, string]
 struct RawPayload:
     tree: json.JsonTree
+    alias: json.JsonValue
 enum Protocol:
     tcp = 6
     udp = 17
@@ -59,13 +60,23 @@ function json_tree_test() returns string:
     return json.serialize[json.JsonTree](view tree)
 verify json_tree_test:
     assert json_tree_test() == "[1,true,null]"
+function json_value_alias_test() returns string:
+    json.JsonValue raw = json.parse[json.JsonValue]("{{\"name\":\"Grace\",\"score\":7}}") handle error:
+        return error
+    return json.serialize[json.JsonValue](view raw)
+verify json_value_alias_test:
+    string raw = json_value_alias_test()
+    assert string.contains(raw, "\"name\":\"Grace\"") == true
+    assert string.contains(raw, "\"score\":7") == true
 function json_tree_field_test() returns string:
     json.JsonTree tree = json.json_tree_parse("[1,true]") handle error:
         return error
-    RawPayload payload = RawPayload(tree: tree)
+    json.JsonValue alias = json.parse[json.JsonValue]("{{\"ok\":true}}") handle error:
+        return error
+    RawPayload payload = RawPayload(tree: tree, alias: alias)
     return json.serialize[RawPayload](view payload)
 verify json_tree_field_test:
-    assert json_tree_field_test() == "{{\"tree\":[1,true]}}"
+    assert json_tree_field_test() == "{{\"tree\":[1,true],\"alias\":{{\"ok\":true}}}}"
 function json_string_escape_test() returns string:
     return json.serialize[string]("quote \" backslash \\ newline \n tab \t nul \0")
 verify json_string_escape_test:
