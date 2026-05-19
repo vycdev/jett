@@ -22,9 +22,17 @@ function parse_string_value(raw: string) returns string:
 function parse_string_hex(raw: string) returns string:
     string value = parse_string_value(raw)
     return bytes.to_hex(bytes.from_string(value))
+function raw_from_hex(hex: string) returns string:
+    bytes raw = bytes.from_hex(hex) handle error:
+        return error
+    return bytes.to_string(raw) handle error:
+        default error
 verify json_tree_parse_scalar:
     assert parse_tree_summary("") == "expected JSON value"
     assert parse_tree_summary("   ") == "expected JSON value"
+    assert parse_tree_summary(raw_from_hex("09200a0d310d0a2009")) == "1"
+    assert parse_tree_summary(raw_from_hex("0c31")) == "expected JSON scalar"
+    assert parse_tree_summary(raw_from_hex("310c")) == "invalid JSON number"
     assert parse_tree_summary(" null ") == "null"
     assert parse_tree_summary("true") == "true"
     assert parse_tree_summary("false") == "false"

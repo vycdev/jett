@@ -159,10 +159,26 @@ function json_tree_escape_string(byte: int64) returns result[string, string]:
         return ok("\t")
     return fail("unsupported JSON string escape")
 function json_tree_span_to_trimmed_string(view input: bytes, start: int64, end: int64) returns result[string, string]:
-    bytes raw = bytes.slice(view input, start, end)
+    int64 trimmed_start = json_tree_trim_start(view input, start, end)
+    int64 trimmed_end = json_tree_trim_end(view input, trimmed_start, end)
+    bytes raw = bytes.slice(view input, trimmed_start, trimmed_end)
     string text = bytes.to_string(raw) handle error:
         return fail(error)
-    return ok(string.trim(text))
+    return ok(text)
+function json_tree_trim_start(view input: bytes, start: int64, end: int64) returns int64:
+    mutable int64 current = start
+    while current < end:
+        if json_tree_is_whitespace_byte(json_tree_byte_at(view input, current)) == false:
+            return current
+        current = current + 1
+    return current
+function json_tree_trim_end(view input: bytes, start: int64, end: int64) returns int64:
+    mutable int64 current = end
+    while current > start:
+        if json_tree_is_whitespace_byte(json_tree_byte_at(view input, current - 1)) == false:
+            return current
+        current = current - 1
+    return current
 function json_tree_span_is_blank(view input: bytes, start: int64, end: int64) returns bool:
     mutable int64 index = start
     while index < end:

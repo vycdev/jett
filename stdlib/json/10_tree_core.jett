@@ -1,6 +1,8 @@
 namespace json
 function json_tree_parse(raw: string) returns result[JsonTree, string]:
-    string trimmed = string.trim(raw)
+    bytes input = bytes.from_string(raw)
+    string trimmed = json_tree_span_to_trimmed_string(view input, 0, bytes.length(view input)) handle error:
+        return fail(error)
     if trimmed == "":
         return fail("expected JSON value")
     JsonTree value = json_tree_parse_value(trimmed) handle error:
