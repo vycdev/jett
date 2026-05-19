@@ -1,8 +1,7 @@
 # ERROR: E0316
 namespace test
-
 function bad_raw_cast() returns string:
-    JsonValue raw = json.parse_raw("\"Ada\"") handle error:
+    json.JsonTree raw = json.parse_raw("\"Ada\"") handle error:
         return error
-    string name = json.as_string(raw)
+    string name = json.as_string(view raw)
     return name

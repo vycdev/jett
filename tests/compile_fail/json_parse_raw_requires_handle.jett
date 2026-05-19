@@ -1,6 +1,5 @@
 # ERROR: E0316
 namespace test
-
 function main() returns nothing:
-    JsonValue raw = json.parse_raw("{{\"name\":\"Ada\"}}")
+    json.JsonTree raw = json.parse_raw("{{\"name\":\"Ada\"}}")
     return nothing

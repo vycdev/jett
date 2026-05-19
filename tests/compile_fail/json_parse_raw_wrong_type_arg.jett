@@ -1,7 +1,6 @@
 # ERROR: E0309
 namespace test
-
 function bad_parse_raw_type_arg() returns string:
-    JsonValue raw = json.parse_raw[int64]("null") handle error:
+    json.JsonTree raw = json.parse_raw[int64]("null") handle error:
         return error
-    return json.kind(raw)
+    return json.kind(view raw)
