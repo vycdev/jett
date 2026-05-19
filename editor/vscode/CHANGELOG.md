@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Treat doubled braces in strings as literal brace escapes before interpolation highlighting.
 - Document namespace `export` keyword highlighting support.
 - Highlight `export root type` aliases.
 - Highlight dotted namespace declarations and qualified type/enum names.

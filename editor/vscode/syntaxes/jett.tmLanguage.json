@@ -57,6 +57,10 @@
                             "match": "\\\\(?:[\"\\\\nrtbf0{}]|u[0-9a-fA-F]{4})"
                         },
                         {
+                            "name": "constant.character.escape.brace.jett",
+                            "match": "\\{\\{|\\}\\}"
+                        },
+                        {
                             "name": "meta.interpolation.jett",
                             "begin": "\\{",
                             "end": "\\}",
