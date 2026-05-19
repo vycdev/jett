@@ -3,6 +3,11 @@ function parse_tree_summary(raw: string) returns string:
     json.JsonTree tree = json.json_tree_parse(raw) handle error:
         return error
     return json.json_tree_serialize(tree)
+function raw_from_hex(hex: string) returns string:
+    bytes raw = bytes.from_hex(hex) handle error:
+        return error
+    return bytes.to_string(raw) handle error:
+        default error
 verify json_tree_parse_compound:
     assert parse_tree_summary("[]") == "[]"
     assert parse_tree_summary("[1, true, null, \"Ada\"]") == "[1,true,null,\"Ada\"]"
@@ -20,12 +25,14 @@ verify json_tree_parse_compound:
     assert parse_tree_summary("[1 2]") == "expected ',' between JSON values"
     assert parse_tree_summary("[true false]") == "expected ',' between JSON values"
     assert parse_tree_summary("[[1] [2]]") == "expected ',' between JSON values"
+    assert parse_tree_summary(raw_from_hex("5b310c5d")) == "invalid JSON number"
     assert parse_tree_summary("[1] trailing") == "unexpected trailing characters after JSON value"
     assert parse_tree_summary("[1}}") == "mismatched closing delimiter in JSON array"
     assert parse_tree_summary("{{name:1}}") == "expected JSON string"
     assert parse_tree_summary("{{:1}}") == "expected JSON string"
     assert parse_tree_summary("{{\"name\"}}") == "expected object field separator"
     assert parse_tree_summary("{{\"name\":}}") == "expected JSON value"
+    assert parse_tree_summary(raw_from_hex("7b2261223a0c317d")) == "expected JSON scalar"
     assert parse_tree_summary("{{\"a\":1 \"b\":2}}") == "expected ',' between object fields"
     assert parse_tree_summary("{{\"a\":[1] \"b\":2}}") == "expected ',' between object fields"
     assert parse_tree_summary("{{\"name\":1,}}") == "expected object field"
