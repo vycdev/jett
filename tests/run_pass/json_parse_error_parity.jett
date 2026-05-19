@@ -41,15 +41,23 @@ function parse_errors_match(raw: string) returns bool:
     if tree_error != tree_exact_error:
         return false
     return true
+function raw_from_hex(hex: string) returns string:
+    bytes raw = bytes.from_hex(hex) handle error:
+        return error
+    return bytes.to_string(raw) handle error:
+        default error
 verify json_parse_error_parity:
     assert tree_parse_error("") == "expected JSON value"
     assert tree_parse_error("   ") == "expected JSON value"
+    assert tree_parse_error(raw_from_hex("0c31")) == "expected JSON scalar"
     assert tree_parse_error("\"bad") == "unterminated JSON string"
     assert tree_parse_error("[1,]") == "expected JSON value"
     assert tree_parse_error("{{\"name\":1") == "unterminated JSON object"
     assert tree_parse_error("01") == "invalid JSON number"
     assert parse_errors_match("") == true
     assert parse_errors_match("   ") == true
+    assert parse_errors_match(raw_from_hex("0c31")) == true
+    assert parse_errors_match(raw_from_hex("310c")) == true
     assert parse_errors_match("\"bad") == true
     assert parse_errors_match("\"Ada\" trailing") == true
     assert parse_errors_match("\"\\") == true
