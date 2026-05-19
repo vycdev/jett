@@ -106,6 +106,7 @@ mutual:
     export function json_tree_as_int64(view value: JsonTree) returns result[int64, string]
     export function json_tree_as_float64(view value: JsonTree) returns result[float64, string]
     export function json_tree_as_bool(view value: JsonTree) returns result[bool, string]
+mutual:
     function json_tree_parse_scalar(raw: string) returns result[JsonTree, string]
     function json_tree_parse_array(raw: string) returns result[JsonTree, string]
     function json_tree_parse_array_body(view input: bytes, start: int64, end: int64) returns result[list[JsonTree], string]
@@ -122,6 +123,7 @@ mutual:
     function json_tree_segment_value_scan_start_value(view scan: JsonTreeSegmentValueScan, byte: int64) returns result[JsonTreeSegmentValueScan, string]
     function json_tree_segment_value_scan_continue(view scan: JsonTreeSegmentValueScan, byte: int64) returns result[JsonTreeSegmentValueScan, string]
     function json_tree_segment_value_finished(scalar: bool, view before: JsonTreeScan, view after: JsonTreeScan) returns bool
+mutual:
     function json_tree_parse_string(raw: string) returns result[string, string]
     function json_tree_validate_string_value(view input: bytes, length: int64) returns result[nothing, string]
     function json_tree_invalid_scalar(raw: string) returns result[JsonTree, string]
@@ -141,6 +143,7 @@ mutual:
     function json_tree_span_to_trimmed_string(view input: bytes, start: int64, end: int64) returns result[string, string]
     function json_tree_span_is_blank(view input: bytes, start: int64, end: int64) returns bool
     function json_tree_is_whitespace_byte(byte: int64) returns bool
+mutual:
     function json_tree_scan_start() returns JsonTreeScan
     function json_tree_scan_is_separator(view scan: JsonTreeScan, byte: int64, separator: int64) returns bool
     function json_tree_scan_step(view scan: JsonTreeScan, byte: int64) returns result[JsonTreeScan, string]
@@ -160,75 +163,6 @@ mutual:
     function json_tree_is_digit_byte(byte: int64) returns bool
     function json_tree_is_exponent_byte(byte: int64) returns bool
     function json_tree_is_sign_byte(byte: int64) returns bool
-    export function json_tree_serialize(view value: JsonTree) returns string
-    function json_tree_serialize_array(view items: list[JsonTree]) returns string
-    function json_tree_serialize_object(view fields: map[string, JsonTree]) returns string
-    function json_serialize_public_reflected[T](view value: T) returns string
-    function json_serialize_public_raw_reflected[T](view value: T) returns string
-    function json_serialize_public_primitive[T](view value: T, primitive: TypePrimitive) returns string
-    function json_serialize_public_integer_primitive[T](view value: T, primitive: TypePrimitive) returns optional[string]
-    function json_serialize_public_float_primitive[T](view value: T, primitive: TypePrimitive) returns optional[string]
-    function json_serialize_public_integer_value[T](view value: T) returns string
-    function json_serialize_public_float_value[T](view value: T) returns string
-    function json_serialize_public_non_integer_primitive[T](view value: T, primitive: TypePrimitive) returns string
-    function json_serialize_public_enum_reflected[T](view value: T) returns string
-    function json_serialize_public_non_enum_reflected[T](view value: T, kind: TypeKind) returns string
-    function json_serialize_public_list_reflected[T](view value: T) returns string
-    function json_serialize_public_set_reflected[T](view value: T) returns string
-    function json_serialize_public_map_reflected[T](view value: T) returns string
-    function json_serialize_public_optional_reflected[T](view value: T) returns string
-    function json_serialize_public_result_reflected[T](view value: T) returns string
-    function json_serialize_public_record_reflected[T](view value: T) returns string
-    function json_decode_tree_reflected[T](view raw: JsonTree) returns result[T, string]
-    function json_decode_tree_raw_reflected[T](view raw: JsonTree) returns result[T, string]
-    function json_decode_tree_alias_reflected[T](view raw: JsonTree) returns result[T, string]
-    function json_decode_tree_refinement_reflected[T](view raw: JsonTree) returns result[T, string]
-    function json_decode_tree_secret_reflected[T](view raw: JsonTree) returns result[T, string]
-    function json_decode_tree_primitive_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[T, string]
-    function json_decode_tree_integer_primitive_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[optional[T], string]
-    function json_decode_tree_integer_some_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[optional[T], string]
-    function json_decode_tree_float_or_other_primitive_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[T, string]
-    function json_decode_tree_float_primitive_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[optional[T], string]
-    function json_decode_tree_float_some_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[optional[T], string]
-    function json_decode_tree_scalar_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[T, string]
-    function json_decode_tree_integer_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[T, string]
-    function json_decode_tree_float_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[T, string]
-    function json_decode_tree_integer_range_error(value: int64, primitive: TypePrimitive) returns optional[string]
-    function json_decode_tree_range_error(value: int64, minimum: int64, maximum: int64, name: string) returns optional[string]
-    function json_decode_tree_other_primitive_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[T, string]
-    function json_decode_tree_structured_reflected[T](view raw: JsonTree, kind: TypeKind, type_name: string) returns result[T, string]
-    function json_decode_tree_list_reflected[T](view raw: JsonTree) returns result[T, string]
-    function json_decode_tree_set_reflected[T](view raw: JsonTree) returns result[T, string]
-    function json_decode_tree_map_reflected[T](view raw: JsonTree) returns result[T, string]
-    function json_decode_tree_optional_reflected[T](view raw: JsonTree) returns result[T, string]
-    function json_tree_result_payload(view raw: JsonTree) returns result[JsonTreeResultPayload, string]
-    function json_decode_tree_result_reflected[T](view raw: JsonTree) returns result[T, string]
-    function json_decode_tree_enum_reflected[T](view raw: JsonTree, type_name: string) returns result[T, string]
-    function json_decode_tree_enum_string_reflected[T](view raw: JsonTree, type_name: string) returns result[T, string]
-    function json_decode_tree_enum_object_reflected[T](view raw: JsonTree, type_name: string) returns result[T, string]
-    function json_decode_tree_enum_payload_reflected[T](view payload: JsonTree, type_name: string, variant_name: string, payload_count: int64) returns result[T, string]
-    function json_decode_tree_enum_payload_variant_reflected[T](view payload: JsonTree, type_name: string, variant: TypeVariant, payload_count: int64) returns result[T, string]
-    function json_tree_missing_field_reflected(view field: TypeField, owner_name: string) returns result[JsonTree, string]
-    function json_tree_record_field_value(view raw: JsonTree, view field: TypeField, owner_name: string) returns result[JsonTree, string]
-    function json_decode_tree_record_reflected[T](view raw: JsonTree, type_name: string) returns result[T, string]
-    function json_validate_exact_reflected[T](view raw: JsonTree) returns result[nothing, string]
-    function json_validate_exact_alias_reflected[T](view raw: JsonTree) returns result[nothing, string]
-    function json_validate_exact_refinement_reflected[T](view raw: JsonTree) returns result[nothing, string]
-    function json_validate_exact_secret_reflected[T](view raw: JsonTree) returns result[nothing, string]
-    function json_validate_exact_structured_reflected[T](view raw: JsonTree, kind: TypeKind, type_name: string) returns result[nothing, string]
-    function json_validate_exact_array_items_reflected[Elem](view raw: JsonTree) returns result[nothing, string]
-    function json_validate_exact_list_reflected[T](view raw: JsonTree) returns result[nothing, string]
-    function json_validate_exact_set_reflected[T](view raw: JsonTree) returns result[nothing, string]
-    function json_validate_exact_map_reflected[T](view raw: JsonTree) returns result[nothing, string]
-    function json_validate_exact_optional_reflected[T](view raw: JsonTree) returns result[nothing, string]
-    function json_validate_exact_result_reflected[T](view raw: JsonTree) returns result[nothing, string]
-    function json_validate_exact_enum_reflected[T](view raw: JsonTree, type_name: string) returns result[nothing, string]
-    function json_validate_exact_enum_payload_variant_reflected[T](view payload: JsonTree, type_name: string, variant: TypeVariant, payload_count: int64) returns result[nothing, string]
-    function json_validate_exact_record_reflected[T](view raw: JsonTree, type_name: string) returns result[nothing, string]
-    function json_validate_exact_record_field_reflected[T](view raw: JsonTree, view field: TypeField) returns result[nothing, string]
-    function json_validate_exact_record_field_name_reflected[T](key: string) returns bool
-    function json_tree_parse_reflected[T](raw: string) returns result[T, string]
-    function json_tree_parse_exact_reflected[T](raw: string) returns result[T, string]
 function json_tree_parse(raw: string) returns result[JsonTree, string]:
     string trimmed = string.trim(raw)
     if trimmed == "":
@@ -279,71 +213,31 @@ function json_tree_field(view value: JsonTree, key: string) returns optional[Jso
     match value:
         object_value(fields):
             return map.get[string, JsonTree](view fields, key)
-        null:
-            return none
-        bool_value(item):
-            return none
-        number_value(raw):
-            return none
-        string_value(item):
-            return none
-        array_value(items):
+        other:
             return none
 function json_tree_index(view value: JsonTree, index: int64) returns optional[JsonTree]:
     match value:
         array_value(items):
             return list.get[JsonTree](view items, index)
-        null:
-            return none
-        bool_value(item):
-            return none
-        number_value(raw):
-            return none
-        string_value(item):
-            return none
-        object_value(fields):
+        other:
             return none
 function json_tree_array_length(view value: JsonTree) returns result[int64, string]:
     match value:
         array_value(items):
             return ok(list.length[JsonTree](view items))
-        null:
-            return fail(json_tree_kind_error(view value, "array"))
-        bool_value(item):
-            return fail(json_tree_kind_error(view value, "array"))
-        number_value(raw):
-            return fail(json_tree_kind_error(view value, "array"))
-        string_value(item):
-            return fail(json_tree_kind_error(view value, "array"))
-        object_value(fields):
+        other:
             return fail(json_tree_kind_error(view value, "array"))
 function json_tree_object_keys(view value: JsonTree) returns result[list[string], string]:
     match value:
         object_value(fields):
             return ok(map.keys[string, JsonTree](view fields))
-        null:
-            return fail(json_tree_kind_error(view value, "object"))
-        bool_value(item):
-            return fail(json_tree_kind_error(view value, "object"))
-        number_value(raw):
-            return fail(json_tree_kind_error(view value, "object"))
-        string_value(item):
-            return fail(json_tree_kind_error(view value, "object"))
-        array_value(items):
+        other:
             return fail(json_tree_kind_error(view value, "object"))
 function json_tree_as_string(view value: JsonTree) returns result[string, string]:
     match value:
         string_value(item):
             return ok(item)
-        null:
-            return fail(json_tree_kind_error(view value, "string"))
-        bool_value(item):
-            return fail(json_tree_kind_error(view value, "string"))
-        number_value(raw):
-            return fail(json_tree_kind_error(view value, "string"))
-        array_value(items):
-            return fail(json_tree_kind_error(view value, "string"))
-        object_value(fields):
+        other:
             return fail(json_tree_kind_error(view value, "string"))
 function json_tree_as_int64(view value: JsonTree) returns result[int64, string]:
     match value:
@@ -351,15 +245,7 @@ function json_tree_as_int64(view value: JsonTree) returns result[int64, string]:
             int64 item = int64.from_string(raw) handle error:
                 return fail("expected int64, got number")
             return ok(item)
-        null:
-            return fail(json_tree_kind_error(view value, "int64"))
-        bool_value(item):
-            return fail(json_tree_kind_error(view value, "int64"))
-        string_value(item):
-            return fail(json_tree_kind_error(view value, "int64"))
-        array_value(items):
-            return fail(json_tree_kind_error(view value, "int64"))
-        object_value(fields):
+        other:
             return fail(json_tree_kind_error(view value, "int64"))
 function json_tree_as_float64(view value: JsonTree) returns result[float64, string]:
     match value:
@@ -367,29 +253,13 @@ function json_tree_as_float64(view value: JsonTree) returns result[float64, stri
             float64 item = float64.from_string(raw) handle error:
                 return fail("expected float64, got number")
             return ok(item)
-        null:
-            return fail(json_tree_kind_error(view value, "float64"))
-        bool_value(item):
-            return fail(json_tree_kind_error(view value, "float64"))
-        string_value(item):
-            return fail(json_tree_kind_error(view value, "float64"))
-        array_value(items):
-            return fail(json_tree_kind_error(view value, "float64"))
-        object_value(fields):
+        other:
             return fail(json_tree_kind_error(view value, "float64"))
 function json_tree_as_bool(view value: JsonTree) returns result[bool, string]:
     match value:
         bool_value(item):
             return ok(item)
-        null:
-            return fail(json_tree_kind_error(view value, "bool"))
-        number_value(raw):
-            return fail(json_tree_kind_error(view value, "bool"))
-        string_value(item):
-            return fail(json_tree_kind_error(view value, "bool"))
-        array_value(items):
-            return fail(json_tree_kind_error(view value, "bool"))
-        object_value(fields):
+        other:
             return fail(json_tree_kind_error(view value, "bool"))
 function json_tree_parse_scalar(raw: string) returns result[JsonTree, string]:
     if raw == "null":
@@ -889,6 +759,10 @@ function json_tree_is_sign_byte(byte: int64) returns bool:
     if byte == 43:
         return true
     return byte == 45
+mutual:
+    export function json_tree_serialize(view value: JsonTree) returns string
+    function json_tree_serialize_array(view items: list[JsonTree]) returns string
+    function json_tree_serialize_object(view fields: map[string, JsonTree]) returns string
 function json_tree_serialize(view value: JsonTree) returns string:
     match value:
         null:
@@ -916,6 +790,23 @@ function json_tree_serialize_object(view fields: map[string, JsonTree]) returns 
         parts = list.append[string](parts, "{json_stdlib_quote(key)}:{encoded}")
     string body = string.join(parts, ",")
     return "{{{body}}}"
+mutual:
+    function json_serialize_public_reflected[T](view value: T) returns string
+    function json_serialize_public_raw_reflected[T](view value: T) returns string
+    function json_serialize_public_primitive[T](view value: T, primitive: TypePrimitive) returns string
+    function json_serialize_public_integer_primitive[T](view value: T, primitive: TypePrimitive) returns optional[string]
+    function json_serialize_public_float_primitive[T](view value: T, primitive: TypePrimitive) returns optional[string]
+    function json_serialize_public_integer_value[T](view value: T) returns string
+    function json_serialize_public_float_value[T](view value: T) returns string
+    function json_serialize_public_non_integer_primitive[T](view value: T, primitive: TypePrimitive) returns string
+    function json_serialize_public_enum_reflected[T](view value: T) returns string
+    function json_serialize_public_non_enum_reflected[T](view value: T, kind: TypeKind) returns string
+    function json_serialize_public_list_reflected[T](view value: T) returns string
+    function json_serialize_public_set_reflected[T](view value: T) returns string
+    function json_serialize_public_map_reflected[T](view value: T) returns string
+    function json_serialize_public_optional_reflected[T](view value: T) returns string
+    function json_serialize_public_result_reflected[T](view value: T) returns string
+    function json_serialize_public_record_reflected[T](view value: T) returns string
 function json_serialize_public_reflected[T](view value: T) returns string:
     TypeInfo info = type.info[T]()
     TypeKind kind = info.kind_tag
@@ -1077,6 +968,39 @@ function json_serialize_public_record_reflected[T](view value: T) returns string
             fields = list.append[string](fields, "{json_stdlib_quote(field.serialize_name)}:{encoded}")
     string body = string.join(fields, ",")
     return "{{{body}}}"
+mutual:
+    function json_decode_tree_reflected[T](view raw: JsonTree) returns result[T, string]
+    function json_decode_tree_raw_reflected[T](view raw: JsonTree) returns result[T, string]
+    function json_decode_tree_alias_reflected[T](view raw: JsonTree) returns result[T, string]
+    function json_decode_tree_refinement_reflected[T](view raw: JsonTree) returns result[T, string]
+    function json_decode_tree_secret_reflected[T](view raw: JsonTree) returns result[T, string]
+    function json_decode_tree_primitive_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[T, string]
+    function json_decode_tree_integer_primitive_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[optional[T], string]
+    function json_decode_tree_integer_some_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[optional[T], string]
+    function json_decode_tree_float_or_other_primitive_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[T, string]
+    function json_decode_tree_float_primitive_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[optional[T], string]
+    function json_decode_tree_float_some_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[optional[T], string]
+    function json_decode_tree_scalar_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[T, string]
+    function json_decode_tree_integer_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[T, string]
+    function json_decode_tree_float_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[T, string]
+    function json_decode_tree_integer_range_error(value: int64, primitive: TypePrimitive) returns optional[string]
+    function json_decode_tree_range_error(value: int64, minimum: int64, maximum: int64, name: string) returns optional[string]
+    function json_decode_tree_other_primitive_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[T, string]
+    function json_decode_tree_structured_reflected[T](view raw: JsonTree, kind: TypeKind, type_name: string) returns result[T, string]
+    function json_decode_tree_list_reflected[T](view raw: JsonTree) returns result[T, string]
+    function json_decode_tree_set_reflected[T](view raw: JsonTree) returns result[T, string]
+    function json_decode_tree_map_reflected[T](view raw: JsonTree) returns result[T, string]
+    function json_decode_tree_optional_reflected[T](view raw: JsonTree) returns result[T, string]
+    function json_tree_result_payload(view raw: JsonTree) returns result[JsonTreeResultPayload, string]
+    function json_decode_tree_result_reflected[T](view raw: JsonTree) returns result[T, string]
+    function json_decode_tree_enum_reflected[T](view raw: JsonTree, type_name: string) returns result[T, string]
+    function json_decode_tree_enum_string_reflected[T](view raw: JsonTree, type_name: string) returns result[T, string]
+    function json_decode_tree_enum_object_reflected[T](view raw: JsonTree, type_name: string) returns result[T, string]
+    function json_decode_tree_enum_payload_reflected[T](view payload: JsonTree, type_name: string, variant_name: string, payload_count: int64) returns result[T, string]
+    function json_decode_tree_enum_payload_variant_reflected[T](view payload: JsonTree, type_name: string, variant: TypeVariant, payload_count: int64) returns result[T, string]
+    function json_tree_missing_field_reflected(view field: TypeField, owner_name: string) returns result[JsonTree, string]
+    function json_tree_record_field_value(view raw: JsonTree, view field: TypeField, owner_name: string) returns result[JsonTree, string]
+    function json_decode_tree_record_reflected[T](view raw: JsonTree, type_name: string) returns result[T, string]
 function json_decode_tree_reflected[T](view raw: JsonTree) returns result[T, string]:
     TypeInfo info = type.info[T]()
     TypeKind kind = info.kind_tag
@@ -1394,6 +1318,23 @@ function json_decode_tree_record_reflected[T](view raw: JsonTree, type_name: str
             builder = type.construct_put[T, Field](builder, view field, decoded) handle error:
                 return fail(error)
     return type.construct_finish[T](builder)
+mutual:
+    function json_validate_exact_reflected[T](view raw: JsonTree) returns result[nothing, string]
+    function json_validate_exact_alias_reflected[T](view raw: JsonTree) returns result[nothing, string]
+    function json_validate_exact_refinement_reflected[T](view raw: JsonTree) returns result[nothing, string]
+    function json_validate_exact_secret_reflected[T](view raw: JsonTree) returns result[nothing, string]
+    function json_validate_exact_structured_reflected[T](view raw: JsonTree, kind: TypeKind, type_name: string) returns result[nothing, string]
+    function json_validate_exact_array_items_reflected[Elem](view raw: JsonTree) returns result[nothing, string]
+    function json_validate_exact_list_reflected[T](view raw: JsonTree) returns result[nothing, string]
+    function json_validate_exact_set_reflected[T](view raw: JsonTree) returns result[nothing, string]
+    function json_validate_exact_map_reflected[T](view raw: JsonTree) returns result[nothing, string]
+    function json_validate_exact_optional_reflected[T](view raw: JsonTree) returns result[nothing, string]
+    function json_validate_exact_result_reflected[T](view raw: JsonTree) returns result[nothing, string]
+    function json_validate_exact_enum_reflected[T](view raw: JsonTree, type_name: string) returns result[nothing, string]
+    function json_validate_exact_enum_payload_variant_reflected[T](view payload: JsonTree, type_name: string, variant: TypeVariant, payload_count: int64) returns result[nothing, string]
+    function json_validate_exact_record_reflected[T](view raw: JsonTree, type_name: string) returns result[nothing, string]
+    function json_validate_exact_record_field_reflected[T](view raw: JsonTree, view field: TypeField) returns result[nothing, string]
+    function json_validate_exact_record_field_name_reflected[T](key: string) returns bool
 function json_validate_exact_reflected[T](view raw: JsonTree) returns result[nothing, string]:
     TypeInfo info = type.info[T]()
     TypeKind kind = info.kind_tag
