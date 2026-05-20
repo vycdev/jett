@@ -22,7 +22,7 @@ function json_validate_exact_reflected[T](view raw: JsonTree) returns result[not
     string type_name = info.type_name
     TypePrimitive primitive = info.primitive_tag handle:
         default TypePrimitive.unknown_type
-    if type_name == "json.JsonTree":
+    if json_reflected_raw_type(view info):
         return ok(nothing)
     if primitive != TypePrimitive.unknown_type:
         return ok(nothing)
