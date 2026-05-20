@@ -1,15 +1,18 @@
 # JSON Stdlib Extraction Plan
 
-This note records the remaining compiler/tooling work needed before the
-reflection JSON prototypes can become a real stdlib `json` module.
+This note records the remaining compiler/tooling boundaries around the
+reflected JSON stdlib. The reflected prototypes now live in `stdlib/json/`;
+what remains is deciding which compiler-owned policy gates and compatibility
+bridges should eventually become ordinary language/library mechanisms.
 
 The important conclusion is that JSON itself is no longer the main blocker.
 Reflection can now read fields, construct structs/bitfields/enums, inspect type
 arguments, use structured kind and primitive tags, and walk native `JsonTree`
 values. `JsonValue` is now visible through a narrow stdlib root alias while
 keeping its legacy primitive reflection tag for one compatibility stage. The
-blocker is the module and namespace path that would let ordinary `.jett` stdlib
-code own the public `json.*` API.
+remaining boundary is the module and namespace path that would let ordinary
+`.jett` stdlib code carry the compiler-owned policy behind the public
+`json.*` API.
 
 ## Current Architecture
 
@@ -126,12 +129,11 @@ payloads, aliases/refinements over those shapes, and containers containing
 them. Raw `JsonTree` / `JsonValue` targets remain arbitrary JSON payloads.
 The existing `json.parse[T]` behavior remains lenient.
 
-## Blockers
+## Remaining Boundaries
 
 ### 1. Stdlib Loading
 
-The driver has a first bootstrap path for loading stdlib `.jett` files before
-user modules for:
+The driver loads stdlib `.jett` files before user modules for:
 
 - `jett build`,
 - `jett run`,
@@ -144,13 +146,18 @@ This is still intentionally simple: files are collected from repo-local
 `stdlib/` and prepended before project modules. Dependency ordering is lexical
 for now.
 
+Status: implemented for the current single-file, project, test, and LSP-style
+entrypoints. The remaining language work is a real module/import registry and a
+less lexical dependency model, not JSON-specific stdlib loading.
+
 ### 2. Public `json.*` Handoff
 
 Generic and non-generic user functions can now be called through a qualified
 namespace name such as `helpers.wrap[T](value)` or
 `json.json_parse_reflected[T](raw)`.
 
-Moving JSON into `.jett` still needs the public API handoff:
+Moving JSON fully into ordinary `.jett` declarations still needs a policy-aware
+public API handoff:
 
 - the compiler-owned `json.parse`, `json.parse_exact`, `json.serialize`, and
   `json.serialize_public` paths still carry compiler-enforced policy checks,
@@ -185,25 +192,32 @@ Some JSON rules are typechecker policy, not only implementation:
 
 Those checks can remain compiler-known while the body moves to `.jett`, or they
 can be redesigned as ordinary typed stdlib constraints later. The safer staging
-choice is to keep the checks until namespace and stdlib loading are stable.
+choice is to keep the checks until the module/import story can carry those
+constraints deliberately.
+
+Status: implemented for the interpreter/runtime path through trusted bundled
+hooks. The remaining work is whether the public policy gates can be represented
+as ordinary stdlib constraints once imports, prelude/root aliases, and future
+backends can carry trusted origin safely.
 
 ### 4. Visibility
 
 The serializer and decoder need helper functions such as `quote`,
 `decode_value[T]`, and enum/field helpers. Jett now has explicit `export`
-visibility for namespaced declarations, but it does not yet have a separate
-`private` keyword or a full module registry/import story.
+visibility for namespaced declarations. Unexported namespace declarations are
+hidden from ordinary source and tooling completions, while compiler-owned JSON
+policy may still delegate to trusted private hooks.
 
-Until private helper visibility exists, extraction should avoid pretending
-helper names are hidden by naming convention alone. The current stdlib uses
-`export` for the intended public surface and leaves internal hooks unexported.
+The current stdlib uses `export` for the intended public surface and leaves
+internal hooks unexported. This is enough for the current JSON module, but it is
+not a full module/import privacy story.
 
-The first trusted-origin staging piece is in place: interpreter function
-registry entries parsed from the reserved stdlib file-id range are marked
-trusted, and public JSON bridges require trusted hook entries. This solves
-bridge spoofing, not helper visibility.
+Trusted origin remains separate from visibility: interpreter function registry
+entries parsed from the reserved stdlib file-id range are marked trusted, and
+public JSON bridges require trusted hook entries. This solves bridge spoofing
+for current JSON hooks; future backends need the same identity boundary.
 
-## Minimal Staging Plan
+## Current Staging Record
 
 1. Keep the compiler-known public JSON bridge for policy checks.
 2. Continue staging extracted prototype code under flat, non-conflicting names:
