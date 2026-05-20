@@ -1,4 +1,5 @@
 namespace test
 
 function bad() returns result[json.JsonTree, string]:
-    return json.json_tree_parse_scalar("true")
+    bytes input = bytes.from_string("true")
+    return json.json_tree_parse_span(view input, 0, 4)

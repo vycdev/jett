@@ -35,8 +35,6 @@ function json_tree_finish_scan(view scan: JsonTreeScan) returns result[nothing, 
     if scan.depth != 0:
         return fail("unterminated nested JSON value")
     return ok(nothing)
-function json_tree_validate_delimited_value(view input: bytes, length: int64, close_byte: int64, value_name: string) returns result[nothing, string]:
-    return json_tree_validate_delimited_span(view input, 0, length, close_byte, value_name)
 function json_tree_validate_delimited_span(view input: bytes, start: int64, end: int64, close_byte: int64, value_name: string) returns result[nothing, string]:
     mutable JsonTreeScan scan = json_tree_scan_start()
     mutable int64 index = start
@@ -55,9 +53,6 @@ function json_tree_validate_delimited_span(view input: bytes, start: int64, end:
     if scan.in_string == true:
         return fail("unterminated string in JSON value")
     return fail("unterminated JSON {value_name}")
-function json_tree_is_literal_start(raw: string) returns bool:
-    bytes input = bytes.from_string(raw)
-    return json_tree_is_literal_start_span(view input, 0, bytes.length(view input))
 function json_tree_is_literal_start_span(view input: bytes, start: int64, end: int64) returns bool:
     if start >= end:
         return false
@@ -67,9 +62,6 @@ function json_tree_is_literal_start_span(view input: bytes, start: int64, end: i
     if first == 116:
         return true
     return first == 102
-function json_tree_looks_like_number(raw: string) returns bool:
-    bytes input = bytes.from_string(raw)
-    return json_tree_looks_like_number_span(view input, 0, bytes.length(view input))
 function json_tree_looks_like_number_span(view input: bytes, start: int64, end: int64) returns bool:
     if start >= end:
         return false
@@ -79,9 +71,6 @@ function json_tree_looks_like_number_span(view input: bytes, start: int64, end: 
     if first == 43:
         return true
     return json_tree_is_digit_byte(first)
-function json_tree_is_number_candidate(raw: string) returns bool:
-    bytes input = bytes.from_string(raw)
-    return json_tree_is_number_candidate_span(view input, 0, bytes.length(view input))
 function json_tree_is_number_candidate_span(view input: bytes, start: int64, end: int64) returns bool:
     if start >= end:
         return false

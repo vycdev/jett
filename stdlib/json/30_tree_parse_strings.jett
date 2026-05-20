@@ -1,13 +1,8 @@
 namespace json
-function json_tree_parse_string(raw: string) returns result[string, string]:
-    bytes input = bytes.from_string(raw)
-    return json_tree_parse_string_span(view input, 0, bytes.length(view input))
 function json_tree_parse_string_span(view input: bytes, start: int64, end: int64) returns result[string, string]:
     nothing checked = json_tree_validate_string_span(view input, start, end) handle error:
         return fail(error)
     return json_tree_parse_string_body_span(view input, start + 1, end - 1)
-function json_tree_validate_string_value(view input: bytes, length: int64) returns result[nothing, string]:
-    return json_tree_validate_string_span(view input, 0, length)
 function json_tree_validate_string_span(view input: bytes, start: int64, end: int64) returns result[nothing, string]:
     if start >= end:
         return fail("expected JSON string")
@@ -29,8 +24,6 @@ function json_tree_validate_string_span(view input: bytes, start: int64, end: in
     if scan.escaped == true:
         return fail("unterminated escape in JSON string")
     return fail("unterminated JSON string")
-function json_tree_parse_string_body(view input: bytes, end: int64) returns result[string, string]:
-    return json_tree_parse_string_body_span(view input, 1, end)
 function json_tree_parse_string_body_span(view input: bytes, start: int64, end: int64) returns result[string, string]:
     mutable bytes output = bytes.new()
     mutable int64 index = start

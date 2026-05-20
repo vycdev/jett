@@ -1,7 +1,4 @@
 namespace json
-function json_tree_parse_scalar(raw: string) returns result[JsonTree, string]:
-    bytes input = bytes.from_string(raw)
-    return json_tree_parse_scalar_span(view input, 0, bytes.length(view input))
 function json_tree_parse_scalar_span(view input: bytes, start: int64, end: int64) returns result[JsonTree, string]:
     if json_tree_span_is_null_literal(view input, start, end) == true:
         return ok(JsonTree.null)
@@ -18,9 +15,6 @@ function json_tree_parse_scalar_span(view input: bytes, start: int64, end: int64
             return fail(error)
         return ok(JsonTree.number_value(raw))
     return json_tree_invalid_scalar_span(view input, start, end)
-function json_tree_invalid_scalar(raw: string) returns result[JsonTree, string]:
-    bytes input = bytes.from_string(raw)
-    return json_tree_invalid_scalar_span(view input, 0, bytes.length(view input))
 function json_tree_invalid_scalar_span(view input: bytes, start: int64, end: int64) returns result[JsonTree, string]:
     if json_tree_looks_like_number_span(view input, start, end) == true:
         return fail("invalid JSON number")
@@ -33,9 +27,6 @@ function json_tree_invalid_scalar_span(view input: bytes, start: int64, end: int
     if json_tree_is_literal_start_span(view input, start, end) == true:
         return fail("invalid JSON literal")
     return fail("expected JSON scalar")
-function json_tree_parse_array(raw: string) returns result[JsonTree, string]:
-    bytes input = bytes.from_string(raw)
-    return json_tree_parse_array_span(view input, 0, bytes.length(view input))
 function json_tree_parse_array_span(view input: bytes, start: int64, end: int64) returns result[JsonTree, string]:
     if start >= end:
         return fail("expected JSON array")
@@ -62,9 +53,6 @@ function json_tree_append_array_segment(view input: bytes, items: list[JsonTree]
     JsonTree item = json_tree_parse_span(view input, start, end) handle error:
         return fail(error)
     return ok(list.append[JsonTree](items, item))
-function json_tree_parse_object(raw: string) returns result[JsonTree, string]:
-    bytes input = bytes.from_string(raw)
-    return json_tree_parse_object_span(view input, 0, bytes.length(view input))
 function json_tree_parse_object_span(view input: bytes, start: int64, end: int64) returns result[JsonTree, string]:
     if start >= end:
         return fail("expected JSON object")
