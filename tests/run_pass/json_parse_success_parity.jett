@@ -33,6 +33,8 @@ function exact_json_tree_json(raw: string) returns string:
     return json.serialize_raw(view value)
 function parse_success_matches(raw: string) returns bool:
     string tree_json = tree_parse_json(raw)
+    if string.starts_with(tree_json, "error:"):
+        return false
     if tree_json != raw_parse_json(raw):
         return false
     if tree_json != typed_json_value_json(raw):
@@ -65,3 +67,4 @@ verify json_parse_success_parity:
     assert parse_success_matches("{{\"a\":1,\"b\":[\"x\",false]}}") == true
     assert parse_success_matches("{{\"\\u0061\\n\":\"line\\rnext\"}}") == true
     assert parse_success_matches(" [ 1 , {{\"a\" : \"b\"}} ] ") == true
+    assert parse_success_matches("[1,]") == false
