@@ -380,6 +380,87 @@ mod tests {
     }
 
     #[test]
+    fn string_owner_metadata_insertions_update_existing_type_id_bindings() {
+        let type_id = TypeId(47);
+        let mut metadata = ReflectionMetadata::new();
+
+        metadata.bind_type_name("models.Packet", type_id);
+        metadata.insert_type_fields("models.Packet", vec![field("old", "int64")]);
+        metadata.insert_bitfield(
+            "models.Packet",
+            ReflectionBitfieldInfo::new(
+                false,
+                vec![ReflectionBitfieldFieldInfo::new(
+                    0,
+                    "old",
+                    "bits",
+                    1,
+                    info("int64", "primitive"),
+                    None,
+                )],
+            ),
+        );
+        metadata.insert_type_variants(
+            "models.Packet",
+            vec![ReflectionVariantInfo::new(
+                0,
+                "old",
+                0,
+                false,
+                vec![field("old_payload", "int64")],
+            )],
+        );
+
+        metadata.insert_type_fields("models.Packet", vec![field("version", "int64")]);
+        metadata.insert_bitfield(
+            "models.Packet",
+            ReflectionBitfieldInfo::new(
+                true,
+                vec![ReflectionBitfieldFieldInfo::new(
+                    0,
+                    "version",
+                    "bits",
+                    4,
+                    info("int64", "primitive"),
+                    None,
+                )],
+            ),
+        );
+        metadata.insert_type_variants(
+            "models.Packet",
+            vec![ReflectionVariantInfo::new(
+                0,
+                "data",
+                0,
+                false,
+                vec![field("payload", "bytes")],
+            )],
+        );
+
+        assert_eq!(
+            metadata
+                .get_type_fields_for_id(type_id)
+                .expect("type id should see refreshed fields")[0]
+                .name,
+            "version"
+        );
+        assert!(
+            metadata
+                .get_bitfield_for_id(type_id)
+                .expect("type id should see refreshed bitfield")
+                .network_order
+        );
+        assert_eq!(
+            metadata
+                .get_type_variants_for_id(type_id)
+                .expect("type id should see refreshed variants")[0]
+                .fields[0]
+                .name,
+            "payload"
+        );
+    }
+
+    #[test]
     fn type_id_lookup_can_share_fields_across_bound_names() {
         let type_id = TypeId(43);
         let mut metadata = ReflectionMetadata::new();
