@@ -274,6 +274,30 @@ function namespaced_json_value_alias_container_bridge() returns string:
     string legacy_text = json.as_string(legacy) handle error:
         return error
     return "{tree_text}:{legacy_text}"
+function namespaced_json_value_alias_recursive_bridge() returns string:
+    json.JsonValue raw = json.parse_raw("\"Dina\"") handle error:
+        return error
+    optional[json.JsonValue] maybe_alias = some(raw)
+    optional[json.JsonTree] maybe_tree = maybe_alias
+    json.JsonTree tree = maybe_tree handle:
+        return "none"
+    result[json.JsonValue, string] alias_result = ok(raw)
+    result[JsonValue, string] legacy_result = alias_result
+    JsonValue legacy = legacy_result handle error:
+        return error
+    map[string, json.JsonValue] alias_map = map("item": raw)
+    map[string, json.JsonTree] tree_map = alias_map
+    json.JsonTree mapped = map.get[string, json.JsonTree](view tree_map, "item") handle:
+        return "missing"
+    secret[json.JsonValue] alias_secret = raw
+    secret[json.JsonTree] tree_secret = alias_secret
+    string tree_text = json.json_tree_as_string(view tree) handle error:
+        return error
+    string legacy_text = json.as_string(legacy) handle error:
+        return error
+    string mapped_text = json.json_tree_as_string(view mapped) handle error:
+        return error
+    return "{tree_text}:{legacy_text}:{mapped_text}:{secret.redact(tree_secret)}"
 verify json_value_tree_compatibility:
     assert raw_from_tree_assignment() == "Ada"
     assert tree_from_raw_assignment() == "Grace"
@@ -313,3 +337,4 @@ verify json_value_tree_compatibility:
     assert namespaced_json_value_alias_roundtrip() == "Alice"
     assert namespaced_json_value_alias_to_legacy() == "Carol"
     assert namespaced_json_value_alias_container_bridge() == "Alice:Alice"
+    assert namespaced_json_value_alias_recursive_bridge() == "Dina:Dina:Dina:***"
