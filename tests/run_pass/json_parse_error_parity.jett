@@ -109,6 +109,8 @@ verify json_parse_error_parity:
     assert parse_errors_match("{{\"name\":1") == true
     assert parse_errors_match("{{\"name\":1}} trailing") == true
     assert parse_errors_match("{{\"name\":1]") == true
+    assert parse_errors_match("[{{\"a\":1]]") == true
+    assert parse_errors_match("[{{\"a\":1]}}") == true
     assert parse_errors_match("[1]]") == true
     assert parse_errors_match("]") == true
     assert parse_errors_match("}}") == true
