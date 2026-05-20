@@ -2977,9 +2977,7 @@ impl Interpreter {
                 if let Some(bound) = self.current_type_binding(&ident.name) {
                     return self.type_expr_kind(&bound);
                 }
-                if Self::is_builtin_type_name(&ident.name) {
-                    "primitive"
-                } else if self.type_aliases.contains_key(&ident.name) {
+                if self.type_aliases.contains_key(&ident.name) {
                     if self
                         .type_aliases
                         .get(&ident.name)
@@ -2989,6 +2987,8 @@ impl Interpreter {
                     } else {
                         "alias"
                     }
+                } else if Self::is_builtin_type_name(&ident.name) {
+                    "primitive"
                 } else if self.structs.contains_key(&ident.name) {
                     "struct"
                 } else if self.enums.contains_key(&ident.name) {
@@ -3052,6 +3052,7 @@ impl Interpreter {
 
         let variant = match &ty {
             TypeExpr::Named(ident) => match ident.name.as_str() {
+                _ if self.type_aliases.contains_key(&ident.name) => None,
                 "int8" => Some("int8_type"),
                 "int16" => Some("int16_type"),
                 "int32" => Some("int32_type"),
@@ -9152,6 +9153,76 @@ mod tests {
             }))
         );
         assert_eq!(has_secret, Value::Bool(true));
+    }
+
+    #[test]
+    fn direct_json_value_reflection_prefers_registered_alias_fallback() {
+        let mut interp = Interpreter::new();
+        interp.register_enum(&enum_def_with_values("json.JsonTree", vec![("null", 0)]));
+        interp.register_type_alias(&type_alias("JsonValue", "json.JsonTree", None));
+
+        let ty = type_named("JsonValue");
+        let kind = interp
+            .call_builtin_with_type_args("type.kind", std::slice::from_ref(&ty), &[])
+            .expect("type.kind should be a typed builtin")
+            .expect("type.kind should evaluate");
+        let kind_tag = interp
+            .call_builtin_with_type_args("type.kind_tag", std::slice::from_ref(&ty), &[])
+            .expect("type.kind_tag should be a typed builtin")
+            .expect("type.kind_tag should evaluate");
+        let primitive_tag = interp
+            .call_builtin_with_type_args("type.primitive_tag", std::slice::from_ref(&ty), &[])
+            .expect("type.primitive_tag should be a typed builtin")
+            .expect("type.primitive_tag should evaluate");
+        let info = interp
+            .call_builtin_with_type_args("type.info", &[ty], &[])
+            .expect("type.info should be a typed builtin")
+            .expect("type.info should evaluate");
+
+        assert_eq!(kind, Value::String("alias".to_string()));
+        assert_eq!(
+            kind_tag,
+            Value::Enum {
+                type_name: "TypeKind".to_string(),
+                variant: "alias_type".to_string(),
+                fields: Vec::new(),
+            }
+        );
+        assert_eq!(primitive_tag, Value::OptionalNone);
+
+        let Value::Struct { fields, .. } = info else {
+            panic!("expected TypeInfo struct");
+        };
+        let field = |field_name: &str| {
+            fields
+                .iter()
+                .find_map(|(name, value)| (name == field_name).then_some(value))
+                .expect("TypeInfo field should exist")
+        };
+        assert_eq!(field("kind"), &Value::String("alias".to_string()));
+        assert_eq!(field("primitive_tag"), &Value::OptionalNone);
+
+        let Value::List(args) = field("args") else {
+            panic!("expected TypeInfo.args list");
+        };
+        assert_eq!(args.len(), 1);
+        let Value::Struct {
+            fields: arg_fields, ..
+        } = &args[0]
+        else {
+            panic!("expected nested TypeInfo");
+        };
+        let arg_field = |field_name: &str| {
+            arg_fields
+                .iter()
+                .find_map(|(name, value)| (name == field_name).then_some(value))
+                .expect("nested TypeInfo field should exist")
+        };
+        assert_eq!(
+            arg_field("type_name"),
+            &Value::String("json.JsonTree".to_string())
+        );
+        assert_eq!(arg_field("kind"), &Value::String("enum".to_string()));
     }
 
     #[test]

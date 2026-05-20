@@ -20,13 +20,6 @@ function holder_field_type_name_at(field_index: int64) returns string:
     TypeField field = list.get[TypeField](fields, field_index) handle:
         return "missing field"
     return field.type_info.type_name
-function holder_field_primitive_is_at(field_index: int64, expected: TypePrimitive) returns bool:
-    list[TypeField] fields = type.fields[RawReflectionHolder]()
-    TypeField field = list.get[TypeField](fields, field_index) handle:
-        return false
-    TypePrimitive primitive = field.type_info.primitive_tag handle:
-        return false
-    return primitive == expected
 function holder_field_arg_count_at(field_index: int64) returns int64:
     list[TypeField] fields = type.fields[RawReflectionHolder]()
     TypeField field = list.get[TypeField](fields, field_index) handle:
@@ -46,15 +39,6 @@ function holder_field_arg_type_name_at(field_index: int64, target: int64) return
     TypeInfo arg = list.get[TypeInfo](field.type_info.args, target) handle:
         return "missing arg"
     return arg.type_name
-function holder_field_arg_primitive_is_at(field_index: int64, target: int64, expected: TypePrimitive) returns bool:
-    list[TypeField] fields = type.fields[RawReflectionHolder]()
-    TypeField field = list.get[TypeField](fields, field_index) handle:
-        return false
-    TypeInfo arg = list.get[TypeInfo](field.type_info.args, target) handle:
-        return false
-    TypePrimitive primitive = arg.primitive_tag handle:
-        return false
-    return primitive == expected
 function holder_field_nested_arg_kind_at(field_index: int64, outer_target: int64, inner_target: int64) returns string:
     list[TypeField] fields = type.fields[RawReflectionHolder]()
     TypeField field = list.get[TypeField](fields, field_index) handle:
@@ -75,9 +59,11 @@ function holder_field_nested_arg_type_name_at(field_index: int64, outer_target: 
     return inner.type_name
 verify json_value_reflection_container_metadata:
     assert holder_field_name_at(0) == "bare"
-    assert holder_field_kind_at(0) == "primitive"
+    assert holder_field_kind_at(0) == "alias"
     assert holder_field_type_name_at(0) == "JsonValue"
-    assert holder_field_primitive_is_at(0, TypePrimitive.json_value_type) == true
+    assert holder_field_arg_count_at(0) == 1
+    assert holder_field_arg_kind_at(0, 0) == "enum"
+    assert holder_field_arg_type_name_at(0, 0) == "json.JsonTree"
     assert holder_field_name_at(1) == "alias"
     assert holder_field_kind_at(1) == "alias"
     assert holder_field_type_name_at(1) == "json.JsonValue"
@@ -90,9 +76,10 @@ verify json_value_reflection_container_metadata:
     assert holder_field_name_at(3) == "bare_list"
     assert holder_field_kind_at(3) == "list"
     assert holder_field_arg_count_at(3) == 1
-    assert holder_field_arg_kind_at(3, 0) == "primitive"
+    assert holder_field_arg_kind_at(3, 0) == "alias"
     assert holder_field_arg_type_name_at(3, 0) == "JsonValue"
-    assert holder_field_arg_primitive_is_at(3, 0, TypePrimitive.json_value_type) == true
+    assert holder_field_nested_arg_kind_at(3, 0, 0) == "enum"
+    assert holder_field_nested_arg_type_name_at(3, 0, 0) == "json.JsonTree"
     assert holder_field_name_at(4) == "alias_list"
     assert holder_field_kind_at(4) == "list"
     assert holder_field_arg_count_at(4) == 1

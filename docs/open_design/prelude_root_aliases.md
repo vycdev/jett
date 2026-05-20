@@ -118,21 +118,20 @@ Staging rules:
 - does not change compiler-owned trust for JSON bridge hooks.
 
 `JsonValue` can then move from a compiler-seeded compatibility alias toward a
-source-owned prelude alias, while keeping `TypePrimitive.json_value_type` for one
-compatibility stage.
+source-owned prelude alias, while keeping `TypePrimitive.json_value_type` only
+as a bootstrap/no-stdlib fallback during the transition.
 
 ## Implementation Staging Notes
 
 The first narrow slice is implemented for `JsonValue`. It deliberately does not
-remove the compiler-owned `JsonValue` primitive behavior in the same change.
+remove the compiler-owned `JsonValue` primitive fallback in the same change.
 
 The important staged invariant is:
 
 - Done: `export root type JsonValue = json.JsonTree` makes the compatibility
   spelling visible as source-owned stdlib API.
-- `JsonValue` may still resolve through the legacy compatibility path for one
-  release window so `type.info[JsonValue]()` continues to report
-  `TypePrimitive.json_value_type`.
+- Done: in stdlib-loaded code, `JsonValue` resolves and reflects through the
+  root alias rather than through the legacy primitive.
 - Done: `json.JsonValue` remains the ordinary namespaced alias whose reflection
   is an alias to `json.JsonTree`.
 - The `JsonValue -> json.JsonTree` compatibility relation remains restricted to
@@ -150,10 +149,8 @@ Concretely, a safe implementation should:
    access.
 4. Keep source visibility separate from trusted origin. A root alias should not
    make any function implementation trusted.
-5. Done for the first slice: keep the legacy `JsonValue` reflection behavior
-   until a later explicit
-   migration decides whether to deprecate or remove
-   `TypePrimitive.json_value_type`.
+5. Done: switch stdlib-loaded `JsonValue` reflection to alias metadata while
+   keeping the legacy primitive fallback for bootstrap/no-stdlib contexts.
 
 Required tests for that first slice:
 
@@ -167,8 +164,8 @@ Required tests for that first slice:
 - ordinary namespaced exports still do not leak flat names,
 - `JsonValue` and `json.JsonTree` assignment/container compatibility still
   works,
-- `type.info[JsonValue]()` and `type.info[json.JsonValue]()` keep their staged
-  distinct behavior,
+- `type.info[JsonValue]()` and `type.info[json.JsonValue]()` both report alias
+  metadata for `json.JsonTree`,
 - completions include the root `JsonValue` alias while private stdlib JSON hooks
   remain hidden.
 

@@ -195,8 +195,10 @@ Implemented:
   parser, decoder, serializer, and reflected bridge helpers stay private.
 - The stdlib JSON module exports `json.JsonValue = JsonTree` as the namespaced
   source-level alias and `export root type JsonValue = json.JsonTree` as the
-  narrow root compatibility alias. The unqualified spelling still preserves the
-  legacy `TypePrimitive.json_value_type` reflection tag during the transition.
+  narrow root compatibility alias. In stdlib-loaded code the unqualified
+  spelling now reflects as an alias to `json.JsonTree`; the legacy
+  `TypePrimitive.json_value_type` tag remains only for bootstrap/no-stdlib
+  fallback paths.
 - Driver-level `build_source` coverage now verifies that in-memory/LSP-style
   validation sees the exported `json.JsonTree` raw facade surface, not only the
   marker stdlib module.

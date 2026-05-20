@@ -4,10 +4,9 @@ Status: open design.
 
 `json.JsonTree` is now the canonical raw JSON representation. The stdlib also
 exports `json.JsonValue = JsonTree` and the narrow root alias
-`JsonValue = json.JsonTree`, but the compiler still keeps a legacy built-in
-`JsonValue` primitive for one compatibility stage. That means
-`type.info[JsonValue]()` currently reports `TypePrimitive.json_value_type`,
-while `type.info[json.JsonValue]()` reports an alias to `json.JsonTree`.
+`JsonValue = json.JsonTree`. In stdlib-loaded code both aliases reflect as
+aliases to `json.JsonTree`, while the compiler still keeps a legacy built-in
+`JsonValue` primitive for bootstrap/no-stdlib fallback paths.
 
 This note records what must be true before removing or deprecating that legacy
 primitive tag.
@@ -15,15 +14,16 @@ primitive tag.
 ## Current Dependency Map
 
 - `jett_types` still has `Type::JsonValue` and `TypeInterner::JSON_VALUE`.
-- The typechecker maps the bare name `JsonValue` to that built-in type while
-  also seeding a compatibility relation between `JsonValue` and the trusted
-  stdlib `json.JsonTree`.
+- The typechecker lets the stdlib root alias win for the bare name `JsonValue`
+  when the bundled stdlib is loaded, and still seeds a compatibility relation
+  between legacy `JsonValue` and trusted `json.JsonTree`.
 - Raw JSON facade signatures prefer trusted `json.JsonTree` when stdlib is
   loaded and fall back to the legacy built-in during bootstrap/no-stdlib paths.
-- The interpreter reports the `json_value_type` primitive tag for bare
-  `JsonValue` reflection.
-- The stdlib JSON serializer and decoder still use
-  `TypePrimitive.json_value_type` to route bare `JsonValue` targets as raw JSON.
+- The interpreter's direct/no-metadata fallback still reports the
+  `json_value_type` primitive tag for bare `JsonValue` reflection.
+- The stdlib JSON serializer and decoder route bare `JsonValue` targets by
+  reflected type name first, leaving `TypePrimitive.json_value_type` as a
+  centralized legacy fallback.
 - Tests intentionally pin both sides of the staged split:
   `JsonValue` remains a compatibility spelling, while `json.JsonValue` is an
   alias to `json.JsonTree`.
@@ -99,15 +99,14 @@ Do not do this as the next step.
    targets through `json_reflected_raw_type(...)`, leaving the legacy primitive
    tag as one centralized compatibility signal rather than separate leaf
    branches.
-3. Keep the current reflection tests while adding a second fixture that
-   describes the future alias behavior behind an explicit staged expectation.
-   Status: pinned by `tests/run_pass/json_value_reflection_staging.jett`, which
-   keeps the current bare `JsonValue` primitive reflection split visible while
-   also checking raw parse/parse_exact/serialize/serialize_public behavior for
-   both `JsonValue` and `json.JsonValue`.
-4. Change `type.info[JsonValue]()` only after parse, parse_exact, serialize,
-   serialize_public, raw accessors, and container assignment compatibility all
-   pass through the alias path.
+3. Change stdlib-loaded reflection for bare `JsonValue` to alias metadata only
+   after parse, parse_exact, serialize, serialize_public, raw accessors, and
+   container assignment compatibility all pass through the alias path.
+   Status: done. `tests/run_pass/json_value_reflection_staging.jett` and
+   `tests/run_pass/json_value_reflection_container_metadata.jett` now pin alias
+   metadata for bare `JsonValue` while preserving raw behavior.
+4. Keep the legacy primitive fallback isolated to bootstrap/no-stdlib paths
+   until a later cleanup removes or deprecates `TypePrimitive.json_value_type`.
 5. Retire `Type::JsonValue` / `TypeInterner::JSON_VALUE` only after bootstrap
    stdlib loading and root aliases no longer need the fallback built-in.
 

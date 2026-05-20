@@ -1104,11 +1104,7 @@ impl<'a> TypeChecker<'a> {
                 }
 
                 let name = self.resolved_or_expanded_name(&ident.name, ident.span);
-                if Self::reflection_primitive_tag_for_name(&name).is_some()
-                    || Self::reflection_primitive_tag_for_name(&ident.name).is_some()
-                {
-                    "primitive_type".to_string()
-                } else if let Some(alias) = self
+                if let Some(alias) = self
                     .type_aliases
                     .get(&name)
                     .or_else(|| self.type_aliases.get(&ident.name))
@@ -1118,6 +1114,10 @@ impl<'a> TypeChecker<'a> {
                     } else {
                         "alias_type".to_string()
                     }
+                } else if Self::reflection_primitive_tag_for_name(&name).is_some()
+                    || Self::reflection_primitive_tag_for_name(&ident.name).is_some()
+                {
+                    "primitive_type".to_string()
                 } else {
                     self.reflection_kind_tag_for_type(resolved_ty).to_string()
                 }
@@ -1476,14 +1476,14 @@ impl<'a> TypeChecker<'a> {
             }
             TypeExpr::Named(ident) => {
                 let name = self.reflection_type_name_in_namespace(ident, namespace);
-                if Self::reflection_primitive_tag_for_name(&name).is_some() {
-                    "primitive"
-                } else if let Some(alias) = self.type_aliases.get(&name) {
+                if let Some(alias) = self.type_aliases.get(&name) {
                     if alias.constraint.is_some() {
                         "refinement"
                     } else {
                         "alias"
                     }
+                } else if Self::reflection_primitive_tag_for_name(&name).is_some() {
+                    "primitive"
                 } else {
                     self.reflection_kind_for_type(resolved_ty)
                 }
@@ -1513,6 +1513,9 @@ impl<'a> TypeChecker<'a> {
         match ty {
             TypeExpr::Named(ident) => {
                 let name = self.reflection_type_name_in_namespace(ident, namespace);
+                if self.type_aliases.contains_key(&name) {
+                    return None;
+                }
                 Self::reflection_primitive_tag_for_name(&name)
             }
             TypeExpr::View(inner, _) => {
@@ -3175,7 +3178,7 @@ impl<'a> TypeChecker<'a> {
     fn check_type_alias(&mut self, alias: &ast::TypeAlias, namespace: Option<&str>) {
         let alias_name = Self::type_alias_canonical_name(alias, namespace);
         if alias.root_exported {
-            let _ = self.resolve_type_expr(&alias.base_type);
+            let _ = self.resolve_type_alias(&alias_name, alias.name.span);
             return;
         }
         let Some(constraint) = &alias.constraint else {
@@ -8335,6 +8338,14 @@ impl<'a> TypeChecker<'a> {
             return ty;
         }
         let lookup_name = self.resolved_or_expanded_name(name, span);
+        if name == "JsonValue" {
+            if self.type_aliases.contains_key(&lookup_name) {
+                return self.resolve_type_alias(&lookup_name, span);
+            }
+            if self.type_aliases.contains_key(name) {
+                return self.resolve_type_alias(name, span);
+            }
+        }
         match name {
             "int8" => TypeInterner::INT8,
             "int16" => TypeInterner::INT16,

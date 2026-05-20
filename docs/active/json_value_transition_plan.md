@@ -49,16 +49,13 @@ about: two names, two traversal surfaces, one conceptual data model.
   exported stdlib facade wrappers backed by `json_tree_*` hooks. The builtin
   dispatcher remains only as a bootstrap/no-stdlib fallback around those hooks.
 - `jett_comptime` no longer has `Value::Json` or a `serde_json` dependency.
-- The type system still reports `JsonValue` as a built-in primitive for
-  reflection compatibility, but it seeds an explicit legacy compatibility alias
-  from `JsonValue` to the bundled `json.JsonTree`. That alias makes the two
-  spellings compatible for assignments, calls, returns, fields, and container
-  wrappers without relying on namespace flattening.
-- The stdlib JSON module now also exports `json.JsonValue` as a source alias to
+- In stdlib-loaded code, the root `JsonValue` spelling now resolves and
+  reflects through the stdlib alias to `json.JsonTree`. The compiler still keeps
+  a legacy `Type::JsonValue` fallback and compatibility relation for
+  bootstrap/no-stdlib paths.
+- The stdlib JSON module exports `json.JsonValue` as a source alias to
   `json.JsonTree`, and exports a narrow root alias
-  `JsonValue = json.JsonTree` for source visibility. The unqualified
-  `JsonValue` spelling still keeps its legacy primitive reflection behavior for
-  one compatibility stage.
+  `JsonValue = json.JsonTree` for source visibility.
 - `json_decode_reflected[T](raw: JsonValue)` has been removed; decoding now
   enters through `json_decode_tree_reflected[T](view raw)` after parsing to
   `JsonTree`.
@@ -130,10 +127,10 @@ function as_bool(view value: JsonTree) returns result[bool, string]
 ```
 
 `json.JsonValue` is now expressible as a normal exported stdlib alias, and bare
-`JsonValue` is now expressible as a narrow stdlib root alias. The compiler still
-preserves the legacy compatibility relation and primitive reflection tag during
-this migration stage. See `docs/open_design/prelude_root_aliases.md` for the
-recommended staged design.
+`JsonValue` is now expressible as a narrow stdlib root alias. In normal
+stdlib-loaded builds it reflects as an alias to `json.JsonTree`; the legacy
+primitive tag remains only as a bootstrap/no-stdlib fallback. See
+`docs/open_design/prelude_root_aliases.md` for the recommended staged design.
 
 `field` and `index` are probing helpers: wrong shape and absence both produce
 `none`. Production validation should use `require_field` / `require_index` when
@@ -159,13 +156,12 @@ The staged direction is:
    namespaced source-level alias.
 4. Done: the stdlib exports `export root type JsonValue = json.JsonTree`, while
    project files are rejected from using `export root`.
-5. Preserve legacy reflection during the compatibility window:
-   `type.info[JsonValue]()` may continue to report
-   `TypePrimitive.json_value_type`, while `type.info[json.JsonTree]()` reports
-   enum metadata.
-6. In a later breaking cleanup, decide whether to deprecate or remove
+5. Done: stdlib-loaded reflection now reports `type.info[JsonValue]()` as an
+   alias to `json.JsonTree`, matching `json.JsonValue` and leaving
+   `TypePrimitive.json_value_type` to the no-stdlib fallback path.
+6. In a later cleanup, decide whether to deprecate or remove
    `TypePrimitive.json_value_type` and make `JsonValue` fully identical to
-   `json.JsonTree` in reflection.
+   `json.JsonTree` even in bootstrap reflection.
 
 This keeps canonical identity clear: `json.JsonTree` is the real type;
 `JsonValue` is a source-compatibility spelling.
@@ -242,12 +238,14 @@ Once the runtime representation is native:
 
 - Treat `JsonValue` and `json.JsonTree` as the same type for assignment and
   calls, or make `JsonValue` an alias to `JsonTree`.
-- Preserve `type.info[JsonValue]()` enough for existing reflection tests.
+- Update `type.info[JsonValue]()` to follow the stdlib root alias when the
+  bundled stdlib is loaded.
 - Decide whether `TypePrimitive.json_value_type` should remain for
   compatibility or become an alias/wrapper tag around `TypeKind.enum_type`.
 
-Recommendation: keep `TypePrimitive.json_value_type` for one compatibility
-stage, but document it as legacy once `JsonTree` is the preferred spelling.
+Recommendation: keep `TypePrimitive.json_value_type` as a bootstrap/no-stdlib
+fallback, but document it as legacy now that `JsonTree` is the preferred
+spelling.
 
 Status: implemented through both a narrow source-level root alias and a
 compiler-owned legacy compatibility relation. Only the stdlib enum
@@ -256,9 +254,11 @@ compiler-owned legacy compatibility relation. Only the stdlib enum
 rule and only accept enum values whose owner is the bundled `json.JsonTree`, not
 a bare or user-defined `JsonTree`. Typechecker raw facade signatures also follow
 the same trusted-origin rule instead of trusting qualified name text alone.
-Reflection metadata is intentionally split for now:
-`type.info[JsonValue]()` reports `TypePrimitive.json_value_type`, while
-`type.info[json.JsonTree]()` reports `TypeKind.enum_type`.
+Reflection metadata now follows source aliases in stdlib-loaded code:
+`type.info[JsonValue]()` and `type.info[json.JsonValue]()` report aliases to
+`json.JsonTree`, while `type.info[json.JsonTree]()` reports enum metadata. The
+legacy primitive remains available only through bootstrap/no-stdlib fallback
+reflection.
 
 ### 5. Move Raw Decoder Code Off `JsonValue`
 
@@ -316,8 +316,8 @@ Add tests before each behavior change:
 - A compiler-seeded `JsonValue` compatibility alias works recursively in
   `list`, `map`, `set`, `optional`, `result`, `secret`, struct fields, and
   function arguments.
-- `type.info[JsonValue]()` and `type.info[json.JsonTree]()` stay pinned during
-  the compatibility stage.
+- `type.info[JsonValue]()`, `type.info[json.JsonValue]()` and
+  `type.info[json.JsonTree]()` stay pinned during the compatibility stage.
 
 Status: the recursive compatibility surface is pinned in
 `tests/run_pass/json_value_tree_compatibility.jett`, including bidirectional
@@ -359,11 +359,11 @@ fixtures.
 
 ## Recommended Next Implementation Bite
 
-Plan the legacy primitive-tag retirement:
+Continue the legacy primitive-tag retirement:
 
 1. Keep bare `JsonValue` in compatibility fixtures and design notes that explain
    the transition.
-2. Decide whether `type.info[JsonValue]()` should report a deprecated primitive
-   tag for one release window or become an alias to `json.JsonTree`.
-3. If the alias path wins, first update the stdlib JSON serializer/decoder so
-   their raw-target handling no longer depends on `TypePrimitive.json_value_type`.
+2. Done: stdlib-loaded `type.info[JsonValue]()` now reports alias metadata for
+   `json.JsonTree`.
+3. Next: decide when direct bootstrap reflection and `TypePrimitive` itself can
+   stop exposing `json_value_type`.

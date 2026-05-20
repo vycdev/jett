@@ -1,13 +1,16 @@
 namespace test
 function bare_json_value_reflection_summary() returns string:
     TypeInfo info = type.info[JsonValue]()
-    TypePrimitive info_primitive = info.primitive_tag handle:
-        return "missing info primitive"
-    TypePrimitive direct_primitive = type.primitive_tag[JsonValue]() handle:
-        return "missing direct primitive"
-    bool info_is_json_value = info_primitive == TypePrimitive.json_value_type
-    bool direct_is_json_value = direct_primitive == TypePrimitive.json_value_type
-    return "{info.kind}:{info.type_name}:{info_is_json_value}:{direct_is_json_value}"
+    TypePrimitive primitive = info.primitive_tag handle:
+        int64 arg_count = list.length[TypeInfo](info.args)
+        TypeInfo base = list.get[TypeInfo](info.args, 0) handle:
+            return "missing base"
+        bool alias_kind = info.kind_tag == TypeKind.alias_type
+        TypePrimitive direct_primitive = type.primitive_tag[JsonValue]() handle:
+            default TypePrimitive.unknown_type
+        bool direct_is_unknown = direct_primitive == TypePrimitive.unknown_type
+        return "{info.kind}:{info.type_name}:{alias_kind}:{base.kind}:{base.type_name}:{arg_count}:{direct_is_unknown}"
+    return "unexpected primitive"
 function alias_json_value_reflection_summary() returns string:
     TypeInfo info = type.info[json.JsonValue]()
     TypePrimitive primitive = info.primitive_tag handle:
@@ -38,7 +41,7 @@ function alias_json_value_raw_behavior() returns string:
     bool public_score = string.contains(public, "\"score\":13")
     return "{json.kind(view parsed)}:{serialized_name}:{public_score}"
 verify json_value_reflection_staging:
-    assert bare_json_value_reflection_summary() == "primitive:JsonValue:true:true"
+    assert bare_json_value_reflection_summary() == "alias:JsonValue:true:enum:json.JsonTree:1:true"
     assert alias_json_value_reflection_summary() == "alias:json.JsonValue:true:enum:json.JsonTree:1"
     assert bare_json_value_raw_behavior() == "object:true:true"
     assert alias_json_value_raw_behavior() == "object:true:true"

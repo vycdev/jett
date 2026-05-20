@@ -8,8 +8,9 @@ bridges should eventually become ordinary language/library mechanisms.
 The important conclusion is that JSON itself is no longer the main blocker.
 Reflection can now read fields, construct structs/bitfields/enums, inspect type
 arguments, use structured kind and primitive tags, and walk native `JsonTree`
-values. `JsonValue` is now visible through a narrow stdlib root alias while
-keeping its legacy primitive reflection tag for one compatibility stage. The
+values. `JsonValue` is now visible through a narrow stdlib root alias and
+reflects as an alias to `json.JsonTree` in stdlib-loaded code. The legacy
+primitive reflection tag remains only as a bootstrap/no-stdlib fallback. The
 remaining boundary is the module and namespace path that would let ordinary
 `.jett` stdlib code carry the compiler-owned policy behind the public
 `json.*` API.
@@ -54,8 +55,9 @@ The reflected JSON implementation has started moving into stdlib under the
 - `stdlib/json/` fragments
 - `JsonTree` as a first self-hosted raw JSON tree representation
 - `json.JsonValue` as an exported namespaced alias for `JsonTree`
-- bare `JsonValue` as a stdlib root alias for `json.JsonTree`, while the
-  legacy `TypePrimitive.json_value_type` reflection tag is preserved
+- bare `JsonValue` as a stdlib root alias for `json.JsonTree`, with
+  stdlib-loaded reflection reporting alias metadata rather than the legacy
+  primitive tag
 - `json_tree_serialize(value: JsonTree)`
 - `json_tree_parse(raw: string)` for staged scalar, array, and object parsing
 - `json_tree_*` traversal helpers for kind checks, field/index lookup, lengths,
@@ -280,11 +282,12 @@ for current JSON hooks; future backends need the same identity boundary.
 7. Keep the staged `JsonValue` migration narrow. The current implementation
    exposes `json.JsonValue` as an exported namespaced source alias and bare
    `JsonValue` as an allowlisted stdlib root alias for `json.JsonTree`. It also
-   preserves the compiler-owned legacy compatibility relation and separate
-   `TypePrimitive.json_value_type` reflection metadata for one compatibility
-   stage. See `/docs/active/json_value_transition_plan.md` and
+   preserves the compiler-owned legacy compatibility relation and now reflects
+   through the alias in stdlib-loaded code. See
+   `/docs/active/json_value_transition_plan.md` and
    `/docs/open_design/prelude_root_aliases.md`. The remaining decision is when
-   to deprecate or remove the legacy primitive reflection tag.
+   bootstrap/no-stdlib reflection and `TypePrimitive` can deprecate or remove
+   the legacy primitive tag.
 8. Keep reflection-specialized generic helpers staged carefully. The typechecker
    now checks ordinary generic function bodies per concrete instantiation, and
    it can specialize the narrow direct-branch form
