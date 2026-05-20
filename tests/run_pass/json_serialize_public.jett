@@ -22,6 +22,10 @@ function public_json_value_alias_json() returns string:
     json.JsonValue raw = json.parse[json.JsonValue]("{{\"visible\":true,\"score\":7}}") handle error:
         return error
     return json.serialize_public[json.JsonValue](view raw)
+function public_bare_json_value_json() returns string:
+    JsonValue raw = json.parse[JsonValue]("{{\"visible\":true,\"score\":8}}") handle error:
+        return error
+    return json.serialize_public[JsonValue](view raw)
 verify serialize_public_omits_secret_fields:
     string raw = public_session_json()
     assert string.contains(raw, "id") == true
@@ -43,3 +47,7 @@ verify serialize_public_treats_json_value_alias_as_raw:
     string raw = public_json_value_alias_json()
     assert string.contains(raw, "\"visible\":true") == true
     assert string.contains(raw, "\"score\":7") == true
+verify serialize_public_treats_bare_json_value_as_raw:
+    string raw = public_bare_json_value_json()
+    assert string.contains(raw, "\"visible\":true") == true
+    assert string.contains(raw, "\"score\":8") == true
