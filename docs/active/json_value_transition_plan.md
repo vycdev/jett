@@ -77,6 +77,17 @@ about: two names, two traversal surfaces, one conceptual data model.
 
 Do not break user code merely to rename a type.
 
+New code should prefer the stdlib-owned raw tree spelling:
+
+```jett
+json.JsonTree raw = json.parse_raw(body) handle error:
+    return fail(error)
+json.JsonTree name = json.field(view raw, "name") handle:
+    return fail("missing name")
+string text = json.as_string(view name) handle error:
+    return fail(error)
+```
+
 Existing code like this should keep compiling during the transition:
 
 ```jett
