@@ -19,7 +19,6 @@ mutual:
 function json_serialize_public_reflected[T](view value: T) returns string:
     TypeInfo info = type.info[T]()
     TypeKind kind = info.kind_tag
-    string type_name = info.type_name
     TypePrimitive primitive = info.primitive_tag handle:
         default TypePrimitive.unknown_type
     if json_reflected_raw_type(view info):
