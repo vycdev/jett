@@ -17,8 +17,9 @@ primitive tag.
 - The typechecker lets the stdlib root alias win for the bare name `JsonValue`
   when the bundled stdlib is loaded, and still seeds a compatibility relation
   between legacy `JsonValue` and trusted `json.JsonTree`.
-- Raw JSON facade signatures prefer trusted `json.JsonTree` when stdlib is
-  loaded and fall back to the legacy built-in during bootstrap/no-stdlib paths.
+- Raw JSON facade signatures come from exported stdlib wrappers in normal
+  stdlib-loaded code. In no-stdlib direct-interpreter contexts the raw public
+  names are undefined rather than backed by hidden Rust semantics.
 - The interpreter's direct/no-metadata fallback still reports the
   `json_value_type` primitive tag for bare `JsonValue` reflection.
 - The stdlib JSON serializer and decoder route raw targets by reflected type

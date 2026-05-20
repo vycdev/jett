@@ -28,6 +28,7 @@ must receive enough metadata to distinguish:
 - public source calls such as `json.parse[T](raw)`,
 - compiler-owned policy gates for parse/serialize operations,
 - trusted private stdlib hook implementations,
+- trusted exported public stdlib wrappers that form the body boundary,
 - ordinary user functions that merely have matching names.
 
 The backend should not inspect source spelling alone. A project-defined
@@ -38,9 +39,10 @@ JSON hook dispatch.
 
 Carry trusted-origin identity on lowered function symbols or module records.
 The compiler-owned hook table in `jett_common::json` should remain the single
-mapping from public facade names to private hook names. Backends can lower public
-JSON calls through that table only when the selected target symbol has trusted
-stdlib origin.
+mapping from public facade names to private hook names. Backends can lower
+public JSON calls through that table only when both the selected private hook
+and the exported public wrapper have trusted stdlib origin; the wrapper remains
+the body boundary after compiler policy checks pass.
 
 This keeps the rule aligned across:
 

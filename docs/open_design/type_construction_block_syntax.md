@@ -58,12 +58,12 @@ the old typed Rust `json.parse[T]` fallback has been removed from public JSON
 dispatch. That gives the builder enough production pressure to keep hardening
 it, but it does not yet justify adding new parser syntax.
 
-Keep `TypeConstruction` as the implementation surface until two adjacent pieces
-settle:
+Keep `TypeConstruction` as the implementation surface until block-expression
+syntax and lowering are mature enough to justify a new construction block:
 
 - block expressions, so `type.construct[T]:` has a natural AST home,
-- namespace visibility/export rules, so stdlib helpers can stop relying on
-  naming convention for privacy.
+- tooling and diagnostics for a new `provide` statement can explain reflected
+  field provenance clearly.
 
 Candidate A remains the preferred final surface once those pieces exist.
 

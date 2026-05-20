@@ -123,7 +123,10 @@ Use two stages, with source visibility and compiler trust kept orthogonal:
    parser/resolver/typechecker/interpreter surface; a full import/prelude model
    remains separate.
 
-Do not remove compiler-owned JSON policy checks until both stages exist.
+Both stages now exist for the current JSON interpreter path, but they do not
+make public JSON policy ordinary library behavior yet. Keep compiler-owned JSON
+policy checks until the broader import/prelude story and future backends can
+carry the same trusted-origin guarantees.
 
 The JSON bridge uses a compiler-owned hook table, not public function name
 guessing:
@@ -228,9 +231,9 @@ Still staged:
    locally.
 4. Stop registering every namespaced declaration as a global flat alias. Keep
    namespace-local lookup instead.
-5. Keep compiler-owned JSON facades builtin-first in the typechecker and
-   interpreter. Export controls whether users can name a declaration; it does
-   not decide whether compiler policy routes through it.
+5. Keep compiler-owned JSON facades policy-first in the typechecker and
+   wrapper-bodied in the interpreter. Export controls whether users can name a
+   declaration; it does not decide whether compiler policy routes through it.
 6. Add the compiler-owned trusted hook table for public JSON facades. The table
    maps public facade names to private trusted stdlib implementations and is not
    expressible from source.

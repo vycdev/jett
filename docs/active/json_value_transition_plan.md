@@ -98,9 +98,10 @@ string text = json.as_string(name) handle error:
 
 The implementation under that spelling has changed from Rust-backed
 `serde_json::Value` to native `JsonTree`. New raw facade signatures should
-prefer `JsonTree`; the remaining source-level migration question is how and
-when the unqualified `JsonValue` compatibility name moves into a real
-exported/prelude alias.
+prefer `JsonTree`; the narrow stdlib root alias now handles the unqualified
+`JsonValue` compatibility spelling. The remaining migration questions are
+when to retire the legacy primitive tag and whether root aliases should
+generalize beyond this compatibility bridge.
 
 ## Target API Shape
 
@@ -180,9 +181,9 @@ Add stdlib helper names that match the current raw API behavior but operate on
 - Add focused parity fixtures comparing current `JsonValue` helpers to
   `JsonTree` helpers for the same inputs.
 
-Important implementation note: view-friendly serialization currently needs
-either iteration over viewed lists/maps or a deliberate materialization/cloning
-primitive. Do not paper over that with host magic.
+Implementation note: view-friendly serialization now uses viewed list/map
+iteration rather than materializing or cloning raw trees. Keep that path native
+to `.jett` stdlib code rather than reintroducing host magic.
 
 Status: first parity fixture is in place in
 `tests/run_pass/json_raw_tree_parity.jett`, covering object traversal, array

@@ -5,17 +5,18 @@
 Jett now accepts namespace-qualified type spellings such as `models.User`,
 `models.Box[int64]`, `models.Color.blue`, and `models.Header(...)`.
 
-This is intentionally implemented as a small compatibility layer over the
-existing flat declaration model:
+The implementation has moved from the early flat-alias compatibility layer
+toward canonical qualified declarations:
 
-- The resolver now declares namespaced top-level values and types by their
-  qualified `namespace.Name` symbol, while preserving a first unambiguous flat
-  alias for legacy single-namespace fixtures.
+- The resolver declares namespaced top-level values and types by their
+  qualified `namespace.Name` symbol. External unqualified flat access is
+  rejected; same-namespace lookup remains ergonomic inside the namespace.
 - The typechecker uses the qualified symbol as the canonical interner metadata
   name for namespaced structs, enums, bitfields, generic structs, aliases,
   interfaces, and actors.
-- The comptime interpreter registers both leaf and qualified runtime
-  definitions, so reflection and JSON can use qualified type arguments.
+- The comptime interpreter registers namespaced runtime definitions under their
+  qualified symbols and resolves local unqualified names through the current
+  namespace when executing a namespaced body.
 - Function-local namespace aliases from `use models as m` now expand qualified
   references such as `m.User`, `m.make[T](...)`, and `m.Color.active` back to
   the canonical `models.*` symbols. Reflection still reports canonical names.
@@ -41,8 +42,9 @@ JSON code without changing the language's broader namespace semantics.
 
 - Two namespaces can now define the same leaf type name when callers use fully
   qualified names such as `a.User` and `b.User`.
-- Unqualified flat aliases remain a compatibility path and should not be treated
-  as the final namespace model.
+- Some internal typechecker/interpreter registries still have legacy
+  leaf-oriented fallback paths. Treat those as cleanup targets rather than a
+  public namespace model.
 - `use models as m` is a local namespace alias, not a type alias. The registered
   spelling and reflected metadata remain `models.User`.
 - State machines still have some leaf-name-oriented paths. Qualified actor

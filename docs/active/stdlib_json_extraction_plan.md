@@ -35,10 +35,12 @@ remaining boundary is the module and namespace path that would let ordinary
 - `use` declarations bind aliases or final path segments, but they do not yet
   import a namespace registry.
 - Builtin module prefixes such as `json`, `type`, `list`, `map`, `set`,
-  `string`, and `bytes` are hardcoded in resolver/typechecker/interpreter
-  paths. The typechecker now gives compiler-owned builtin signatures precedence
-  over ordinary functions, matching the interpreter's builtin-first runtime
-  dispatch. Set builtins now have compiler-owned signatures for
+  `string`, and `bytes` still have compiler-aware resolver/typechecker/
+  interpreter paths. For JSON, the compiler-owned policy surface is now narrow:
+  `json.parse`, `json.parse_exact`, `json.serialize`, and
+  `json.serialize_public` keep policy-first typechecking, while raw facade
+  signatures come from exported stdlib wrappers. Set builtins still have
+  compiler-owned signatures for
   `new`/`add`/`remove`/`contains`/`length`/`is_empty`/`to_list`/`union`/
   `intersection`/`difference`, so JSON set parsing fixtures typecheck through
   normal builtin signatures.
@@ -76,9 +78,9 @@ body boundary. The private hook names remain the trusted implementation targets
 inside the wrapper body until the language can carry the compiler-owned JSON
 policy on ordinary stdlib declarations.
 
-The raw-string hooks remain directly exercised through their qualified stdlib
-staging names, `json.json_parse_reflected[T](raw)` and
-`json.json_parse_exact_reflected[T](raw)`.
+The raw-string hooks are exercised indirectly through trusted exported public
+wrappers. Ordinary source cannot name the private hook entrypoints directly;
+compile-fail fixtures pin that visibility boundary.
 
 The run-pass fixtures still own the test-specific type definitions and the
 flat decoder prototype:
@@ -224,7 +226,8 @@ for current JSON hooks; future backends need the same identity boundary.
 ## Current Staging Record
 
 1. Keep the compiler-known public JSON bridge for policy checks.
-2. Continue staging extracted prototype code under flat, non-conflicting names:
+2. Continue staging extracted prototype code under namespace-private, prefixed
+   implementation names:
    - `json_serialize_reflected[T](view value: T)` exists in stdlib.
    - `json_serialize_public_reflected[T](view value: T)` exists in stdlib.
    - `json_decode_tree_reflected[T](view raw: JsonTree)` exists in stdlib.
