@@ -16,6 +16,10 @@ function json_tree_parse_span(view input: bytes, start: int64, end: int64) retur
         return fail("unexpected closing delimiter in JSON value")
     if first == 125:
         return fail("unexpected closing delimiter in JSON value")
+    if first == 34:
+        string value = json_tree_parse_string_span(view input, trimmed_start, trimmed_end) handle error:
+            return fail(error)
+        return ok(JsonTree.string_value(value))
     string trimmed = json_tree_span_to_trimmed_string(view input, trimmed_start, trimmed_end) handle error:
         return fail(error)
     return json_tree_parse_scalar(trimmed)

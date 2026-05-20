@@ -136,9 +136,12 @@ mutual:
     function json_tree_segment_value_finished(scalar: bool, view before: JsonTreeScan, view after: JsonTreeScan) returns bool
 mutual:
     function json_tree_parse_string(raw: string) returns result[string, string]
+    function json_tree_parse_string_span(view input: bytes, start: int64, end: int64) returns result[string, string]
     function json_tree_validate_string_value(view input: bytes, length: int64) returns result[nothing, string]
+    function json_tree_validate_string_span(view input: bytes, start: int64, end: int64) returns result[nothing, string]
     function json_tree_invalid_scalar(raw: string) returns result[JsonTree, string]
     function json_tree_parse_string_body(view input: bytes, end: int64) returns result[string, string]
+    function json_tree_parse_string_body_span(view input: bytes, start: int64, end: int64) returns result[string, string]
     function json_tree_parse_string_escape_at(view input: bytes, index: int64, end: int64) returns result[JsonTreeStringEscape, string]
     function json_tree_parse_unicode_escape_at(view input: bytes, index: int64, end: int64) returns result[JsonTreeStringEscape, string]
     function json_tree_parse_unicode_surrogate_pair_at(view input: bytes, index: int64, end: int64, high_code: int64) returns result[JsonTreeStringEscape, string]

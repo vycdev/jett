@@ -106,9 +106,7 @@ function json_tree_insert_object_segment(view input: bytes, fields: map[string, 
 function json_tree_parse_object_field_span(view input: bytes, start: int64, end: int64) returns result[JsonTreeObjectField, string]:
     int64 colon = json_tree_find_top_level_colon(view input, start, end) handle error:
         return fail(error)
-    string raw_key = json_tree_span_to_trimmed_string(view input, start, colon) handle error:
-        return fail(error)
-    string key = json_tree_parse_string(raw_key) handle error:
+    string key = json_tree_parse_string_span(view input, start, colon) handle error:
         return fail(error)
     if json_tree_span_is_blank(view input, colon + 1, end) == true:
         return fail("expected JSON value")
