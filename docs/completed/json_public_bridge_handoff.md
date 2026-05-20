@@ -14,12 +14,12 @@ functions own the runtime implementation body.
   - `json.serialize_public[T](view value)`
 - Those public names remain compiler-known policy gates for typechecking and
   runtime dispatch.
-- The interpreter delegates public JSON calls only to trusted compiler-shipped
-  stdlib hooks:
-  - `json.parse` -> `json.json_parse_reflected`
-  - `json.parse_exact` -> `json.json_parse_exact_reflected`
-  - `json.serialize` -> `json.json_serialize_reflected`
-  - `json.serialize_public` -> `json.json_serialize_public_reflected`
+- The interpreter requires trusted compiler-shipped stdlib hooks behind each
+  public bridge, then executes the trusted exported public wrapper:
+  - `json.parse` requires `json.json_parse_reflected`
+  - `json.parse_exact` requires `json.json_parse_exact_reflected`
+  - `json.serialize` requires `json.json_serialize_reflected`
+  - `json.serialize_public` requires `json.json_serialize_public_reflected`
 - Raw JSON access also routes through trusted stdlib `JsonTree` hooks such as
   `json.json_tree_parse`, `json.json_tree_serialize`, `json.json_tree_field`,
   `json.json_tree_index`, and scalar-cast helpers by way of exported public raw
@@ -72,7 +72,9 @@ remain compiler-owned while the implementation body is readable `.jett` code.
 9. Centralized the public typed JSON bridge hook mapping in `jett_common`.
    Later raw facade hook dispatch was removed, leaving only the raw public-name
    set needed for wrapper precedence and ownership.
-10. Added run-pass and driver coverage for typed parse, exact parse, full
+10. Switched interpreter bridge execution to trusted exported public wrappers
+    while still requiring the trusted private hook table.
+11. Added run-pass and driver coverage for typed parse, exact parse, full
     serialization, public serialization, raw facade delegation, `JsonValue`
     compatibility, `json.JsonValue`, completions, hover, and trusted-hook
     spoofing protections.

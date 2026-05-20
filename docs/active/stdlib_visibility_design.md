@@ -21,9 +21,9 @@ That matters for JSON because the module needs both:
 - a way for the interpreter to know that a helper came from bundled stdlib code,
   not from a project file with the same qualified name.
 
-The current staging model keeps public JSON names compiler-owned and routes
-runtime bodies through internal reflected hook names. That is intentionally
-conservative.
+The current staging model keeps public JSON names compiler-owned, requires
+trusted internal reflected hooks, and executes trusted exported wrappers as the
+runtime body boundary. That is intentionally conservative.
 
 Two concepts must stay separate:
 
@@ -129,15 +129,17 @@ The JSON bridge uses a compiler-owned hook table, not public function name
 guessing:
 
 ```text
-json.parse            -> json.json_parse_reflected
-json.parse_exact      -> json.json_parse_exact_reflected
-json.serialize        -> json.json_serialize_reflected
-json.serialize_public -> json.json_serialize_public_reflected
+json.parse            requires json.json_parse_reflected
+json.parse_exact      requires json.json_parse_exact_reflected
+json.serialize        requires json.json_serialize_reflected
+json.serialize_public requires json.json_serialize_public_reflected
 ```
 
 The right-hand side may be private source code as long as it came from a
 trusted compiler-shipped stdlib module. Ordinary user/project code cannot
-satisfy that table merely by declaring the same qualified name.
+satisfy that table merely by declaring the same qualified name. At runtime the
+interpreter also requires the exported public wrapper itself to be trusted, then
+executes that wrapper as the body boundary.
 
 ## JSON-Specific Staging
 
@@ -145,12 +147,8 @@ For now:
 
 - public `json.parse`, `json.parse_exact`, `json.serialize`, and
   `json.serialize_public` remain compiler-owned policy gates,
-- the interpreter delegates to `json.json_parse_reflected`,
-  `json.json_parse_exact_reflected`, `json.json_serialize_reflected`, and
-  `json.json_serialize_public_reflected` only when those registry entries came
-  from compiler-shipped stdlib files,
-- public wrappers in `stdlib/json/` fragments stay as readable declarations and a
-  preview of the eventual API,
+- the interpreter verifies both the trusted private hook and the trusted
+  exported public wrapper, then executes the public wrapper from `stdlib/json/`,
 - parser walkers, reflected decoders, quoting helpers, and bridge hooks are now
   namespace-private source declarations. Their `json_` prefixes remain useful
   for readability, but privacy no longer depends on naming convention.
@@ -259,8 +257,8 @@ Still staged:
   same-namespace access to private stdlib hooks.
 - A project-defined `namespace json function json_parse_reflected...` cannot
   satisfy the trusted public JSON bridge, and untrusted later registration of
-  JSON hook names clears trust. Interpreter unit coverage pins parse,
-  parse_exact, serialize, serialize_public, and raw `JsonTree` hooks.
+  JSON hook or public wrapper names clears trust. Interpreter unit coverage pins
+  parse, parse_exact, serialize, serialize_public, and raw `JsonTree` hooks.
 - Ordinary source access to private JSON hooks is rejected for tree parsing,
   reflected parsing, exact reflected parsing, reflected decoding, and reflected
   serialization fixtures under `tests/compile_fail/json_private_*.jett`.

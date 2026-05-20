@@ -70,10 +70,10 @@ The reflected JSON implementation has started moving into stdlib under the
 The module also declares exported public wrapper names `parse`, `parse_exact`,
 `serialize`, and `serialize_public`. Calls such as `json.parse[T](raw)` and
 `json.parse_exact[T](raw)` still pass through the compiler-owned policy gate
-first, then the interpreter delegates to the internal reflected stdlib hook when
-the bundled module is registered as trusted compiler-shipped stdlib. The public
-wrappers remain readable source-level declarations, but the bridge target stays
-on internal hook names until the language can carry the compiler-owned JSON
+first. The interpreter requires both the trusted internal reflected hook and the
+trusted exported public wrapper, then executes the public wrapper as the runtime
+body boundary. The private hook names remain the trusted implementation targets
+inside the wrapper body until the language can carry the compiler-owned JSON
 policy on ordinary stdlib declarations.
 
 The raw-string hooks remain directly exercised through their qualified stdlib
@@ -114,10 +114,11 @@ Together they cover the shape needed for a future stdlib module:
 
 The compiler-known JSON bridge remains the compatibility and policy facade. It
 still owns the public typechecker policy for `json.parse`, `json.parse_exact`,
-`json.serialize`, and `json.serialize_public`. In the interpreter, all four public calls now
-delegate to reflected stdlib hook implementations only when the current hook
-registry entries came from compiler-shipped stdlib files. The old typed Rust
-fallback paths for public parse/serialize have been removed; Rust-backed paths
+`json.serialize`, and `json.serialize_public`. In the interpreter, all four
+public calls now require trusted private hook entries and trusted exported
+public wrappers from compiler-shipped stdlib files, then execute the public
+wrapper bodies. The old typed Rust fallback paths for public parse/serialize
+have been removed; Rust-backed paths
 have also been removed from raw JSON execution in `jett_comptime`. Public
 `json.parse_raw` now runs through the exported stdlib wrapper around the
 self-hosted `JsonTree` parser, and raw helper calls dispatch native `JsonTree`
@@ -248,7 +249,8 @@ for current JSON hooks; future backends need the same identity boundary.
      set rather than a trusted hook/argument-shape dispatch table.
    - The compiler-policy public bridge names (`json.parse`,
      `json.parse_exact`, `json.serialize`, and `json.serialize_public`) also
-     share their trusted stdlib hook mapping through `jett_common`.
+     share their trusted private hook mapping through `jett_common`, while
+     runtime execution goes through the corresponding trusted exported wrapper.
 3. Maintain the public bridge handoff. `json.parse`, `json.parse_exact`,
    `json.serialize`, and `json.serialize_public` now use compiler-owned
    typechecker policy with stdlib-owned interpreter bodies. See

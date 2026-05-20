@@ -2759,25 +2759,12 @@ impl Interpreter {
                 if let Some(err) = check_args(name, 1, args) {
                     return Some(err);
                 }
-                let hook = json_public_bridge_spec(name)
-                    .expect("JSON parse bridge should have a public bridge spec")
-                    .hook;
-                if self.has_trusted_stdlib_function(hook) {
-                    return Some(self.call_user_function_with_type_args(
-                        hook,
-                        type_args,
-                        args.to_vec(),
-                    ));
-                }
-                Err(format!("{name} requires trusted stdlib hook '{hook}'"))
+                self.call_trusted_json_public_bridge(name, type_args, args)
             }
             "json.serialize" | "json.serialize_public" => {
                 if let Some(err) = check_args(name, 1, args) {
                     return Some(err);
                 }
-                let hook = json_public_bridge_spec(name)
-                    .expect("json.serialize bridge should have a public bridge spec")
-                    .hook;
                 if name == "json.serialize"
                     && self
                         .checked_type_has_secret(&ty)
@@ -2788,17 +2775,32 @@ impl Interpreter {
                         type_expr_display(&ty)
                     )));
                 }
-                if self.has_trusted_stdlib_function(hook) {
-                    return Some(self.call_user_function_with_type_args(
-                        hook,
-                        type_args,
-                        args.to_vec(),
-                    ));
-                }
-                Err(format!("{name} requires trusted stdlib hook '{hook}'"))
+                self.call_trusted_json_public_bridge(name, type_args, args)
             }
             _ => return None,
         })
+    }
+
+    fn call_trusted_json_public_bridge(
+        &mut self,
+        public_name: &str,
+        type_args: &[TypeExpr],
+        args: &[Value],
+    ) -> Result<Value, String> {
+        let hook = json_public_bridge_spec(public_name)
+            .expect("JSON public bridge should have a public bridge spec")
+            .hook;
+        if !self.has_trusted_stdlib_function(hook) {
+            return Err(format!(
+                "{public_name} requires trusted stdlib hook '{hook}'"
+            ));
+        }
+        if !self.has_trusted_stdlib_function(public_name) {
+            return Err(format!(
+                "{public_name} requires trusted stdlib wrapper '{public_name}'"
+            ));
+        }
+        self.call_user_function_with_type_args(public_name, type_args, args.to_vec())
     }
 
     fn current_type_binding(&self, name: &str) -> Option<TypeExpr> {
@@ -11191,14 +11193,42 @@ mod tests {
     }
 
     #[test]
-    fn json_parse_bridge_uses_trusted_stdlib_hook() {
+    fn json_parse_bridge_requires_trusted_public_wrapper() {
         let mut interp = Interpreter::new();
         let mut trusted_hook = generic_json_hook(
             "json_parse_reflected",
-            block(vec![return_stmt(string("trusted"))]),
+            block(vec![return_stmt(string("private hook"))]),
         );
         trusted_hook.span = stdlib_sp();
         interp.register_function_in_namespace(Some("json"), &trusted_hook);
+
+        let err = interp
+            .call_function_with_type_args(
+                "json.parse",
+                &[type_named("string")],
+                vec![Value::String("\"value\"".to_string())],
+            )
+            .unwrap_err();
+
+        assert_eq!(
+            err,
+            "json.parse requires trusted stdlib wrapper 'json.parse'"
+        );
+    }
+
+    #[test]
+    fn json_parse_bridge_uses_trusted_public_wrapper() {
+        let mut interp = Interpreter::new();
+        let mut trusted_hook = generic_json_hook(
+            "json_parse_reflected",
+            block(vec![return_stmt(string("private hook"))]),
+        );
+        trusted_hook.span = stdlib_sp();
+        interp.register_function_in_namespace(Some("json"), &trusted_hook);
+        let mut public_wrapper =
+            generic_json_hook("parse", block(vec![return_stmt(string("public wrapper"))]));
+        public_wrapper.span = stdlib_sp();
+        interp.register_function_in_namespace(Some("json"), &public_wrapper);
 
         let value = interp
             .call_function_with_type_args(
@@ -11208,7 +11238,61 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(value, Value::String("trusted".to_string()));
+        assert_eq!(value, Value::String("public wrapper".to_string()));
+    }
+
+    #[test]
+    fn untrusted_json_public_wrapper_cannot_satisfy_bridge() {
+        let mut interp = Interpreter::new();
+        let mut trusted_hook = generic_json_hook(
+            "json_parse_reflected",
+            block(vec![return_stmt(string("private hook"))]),
+        );
+        trusted_hook.span = stdlib_sp();
+        interp.register_function_in_namespace(Some("json"), &trusted_hook);
+
+        let fake_wrapper = generic_json_hook("parse", block(vec![return_stmt(string("fake"))]));
+        interp.register_function_named("json.parse", &fake_wrapper, false);
+
+        let err = interp
+            .call_function_with_type_args(
+                "json.parse",
+                &[type_named("string")],
+                vec![Value::String("\"value\"".to_string())],
+            )
+            .unwrap_err();
+
+        assert_eq!(
+            err,
+            "json.parse requires trusted stdlib wrapper 'json.parse'"
+        );
+    }
+
+    #[test]
+    fn trusted_json_public_wrapper_still_requires_trusted_private_hook() {
+        let mut interp = Interpreter::new();
+        let fake_hook = generic_json_hook(
+            "json_parse_reflected",
+            block(vec![return_stmt(string("fake"))]),
+        );
+        interp.register_function_named("json.json_parse_reflected", &fake_hook, false);
+        let mut public_wrapper =
+            generic_json_hook("parse", block(vec![return_stmt(string("public wrapper"))]));
+        public_wrapper.span = stdlib_sp();
+        interp.register_function_in_namespace(Some("json"), &public_wrapper);
+
+        let err = interp
+            .call_function_with_type_args(
+                "json.parse",
+                &[type_named("string")],
+                vec![Value::String("\"value\"".to_string())],
+            )
+            .unwrap_err();
+
+        assert_eq!(
+            err,
+            "json.parse requires trusted stdlib hook 'json.json_parse_reflected'"
+        );
     }
 
     #[test]
@@ -11235,14 +11319,20 @@ mod tests {
     }
 
     #[test]
-    fn json_parse_exact_bridge_uses_trusted_stdlib_hook() {
+    fn json_parse_exact_bridge_uses_trusted_public_wrapper() {
         let mut interp = Interpreter::new();
         let mut trusted_hook = generic_json_hook(
             "json_parse_exact_reflected",
-            block(vec![return_stmt(string("trusted exact"))]),
+            block(vec![return_stmt(string("private exact"))]),
         );
         trusted_hook.span = stdlib_sp();
         interp.register_function_in_namespace(Some("json"), &trusted_hook);
+        let mut public_wrapper = generic_json_hook(
+            "parse_exact",
+            block(vec![return_stmt(string("public exact"))]),
+        );
+        public_wrapper.span = stdlib_sp();
+        interp.register_function_in_namespace(Some("json"), &public_wrapper);
 
         let value = interp
             .call_function_with_type_args(
@@ -11252,7 +11342,7 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(value, Value::String("trusted exact".to_string()));
+        assert_eq!(value, Value::String("public exact".to_string()));
     }
 
     #[test]
@@ -11279,14 +11369,20 @@ mod tests {
     }
 
     #[test]
-    fn json_serialize_bridge_uses_trusted_stdlib_hook() {
+    fn json_serialize_bridge_uses_trusted_public_wrapper() {
         let mut interp = Interpreter::new();
         let mut trusted_hook = generic_json_hook(
             "json_serialize_reflected",
-            block(vec![return_stmt(string("trusted serialized"))]),
+            block(vec![return_stmt(string("private serialized"))]),
         );
         trusted_hook.span = stdlib_sp();
         interp.register_function_in_namespace(Some("json"), &trusted_hook);
+        let mut public_wrapper = generic_json_hook(
+            "serialize",
+            block(vec![return_stmt(string("public serialized"))]),
+        );
+        public_wrapper.span = stdlib_sp();
+        interp.register_function_in_namespace(Some("json"), &public_wrapper);
 
         let value = interp
             .call_function_with_type_args(
@@ -11296,7 +11392,7 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(value, Value::String("trusted serialized".to_string()));
+        assert_eq!(value, Value::String("public serialized".to_string()));
     }
 
     #[test]
@@ -11323,14 +11419,20 @@ mod tests {
     }
 
     #[test]
-    fn json_serialize_public_bridge_uses_trusted_stdlib_hook() {
+    fn json_serialize_public_bridge_uses_trusted_public_wrapper() {
         let mut interp = Interpreter::new();
         let mut trusted_hook = generic_json_hook(
             "json_serialize_public_reflected",
-            block(vec![return_stmt(string("trusted public serialized"))]),
+            block(vec![return_stmt(string("private public serialized"))]),
         );
         trusted_hook.span = stdlib_sp();
         interp.register_function_in_namespace(Some("json"), &trusted_hook);
+        let mut public_wrapper = generic_json_hook(
+            "serialize_public",
+            block(vec![return_stmt(string("public serialized"))]),
+        );
+        public_wrapper.span = stdlib_sp();
+        interp.register_function_in_namespace(Some("json"), &public_wrapper);
 
         let value = interp
             .call_function_with_type_args(
@@ -11340,10 +11442,7 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(
-            value,
-            Value::String("trusted public serialized".to_string())
-        );
+        assert_eq!(value, Value::String("public serialized".to_string()));
     }
 
     #[test]
