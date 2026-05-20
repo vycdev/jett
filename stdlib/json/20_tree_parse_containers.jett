@@ -81,12 +81,13 @@ function json_tree_top_level_segments(view input: bytes, start: int64, end: int6
     while index < end:
         int64 byte = bytes.get(view input, index) handle:
             default -1
-        if json_tree_scan_is_separator(view scan, byte, 44) == true:
+        JsonTreeTopLevelSeparatorStep step = json_tree_top_level_separator_step(view scan, byte, 44) handle error:
+            return fail(error)
+        if step.separated == true:
             segments = list.append[JsonTreeSegment](segments, JsonTreeSegment(start: segment_start, end: index))
             segment_start = index + 1
         else:
-            scan = json_tree_scan_step(view scan, byte) handle error:
-                return fail(error)
+            scan = step.scan
         index = index + 1
     nothing checked = json_tree_finish_scan(view scan) handle error:
         return fail(error)
@@ -119,12 +120,20 @@ function json_tree_find_top_level_colon(view input: bytes, start: int64, end: in
     while index < end:
         int64 byte = bytes.get(view input, index) handle:
             default -1
-        if json_tree_scan_is_separator(view scan, byte, 58) == true:
-            return ok(index)
-        scan = json_tree_scan_step(view scan, byte) handle error:
+        JsonTreeTopLevelSeparatorStep step = json_tree_top_level_separator_step(view scan, byte, 58) handle error:
             return fail(error)
+        if step.separated == true:
+            return ok(index)
+        scan = step.scan
         index = index + 1
     return fail("expected object field separator")
+function json_tree_top_level_separator_step(view scan: JsonTreeScan, byte: int64, separator: int64) returns result[JsonTreeTopLevelSeparatorStep, string]:
+    if json_tree_scan_is_separator(view scan, byte, separator) == true:
+        JsonTreeScan unchanged = JsonTreeScan(depth: scan.depth, in_string: scan.in_string, escaped: scan.escaped)
+        return ok(JsonTreeTopLevelSeparatorStep(scan: unchanged, separated: true))
+    JsonTreeScan next = json_tree_scan_step(view scan, byte) handle error:
+        return fail(error)
+    return ok(JsonTreeTopLevelSeparatorStep(scan: next, separated: false))
 function json_tree_validate_single_segment_value(view input: bytes, start: int64, end: int64, message: string) returns result[nothing, string]:
     mutable JsonTreeSegmentValueScan scan = json_tree_segment_value_scan_start()
     mutable int64 index = start

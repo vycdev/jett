@@ -12,6 +12,9 @@ struct JsonTreeScan:
     depth: int64
     in_string: bool
     escaped: bool
+struct JsonTreeTopLevelSeparatorStep:
+    scan: JsonTreeScan
+    separated: bool
 struct JsonTreeSegmentValueScan:
     tree_scan: JsonTreeScan
     started: bool
@@ -126,6 +129,7 @@ mutual:
     function json_tree_insert_object_segment(view input: bytes, fields: map[string, JsonTree], start: int64, end: int64) returns result[map[string, JsonTree], string]
     function json_tree_parse_object_field_span(view input: bytes, start: int64, end: int64) returns result[JsonTreeObjectField, string]
     function json_tree_find_top_level_colon(view input: bytes, start: int64, end: int64) returns result[int64, string]
+    function json_tree_top_level_separator_step(view scan: JsonTreeScan, byte: int64, separator: int64) returns result[JsonTreeTopLevelSeparatorStep, string]
     function json_tree_top_level_segments(view input: bytes, start: int64, end: int64) returns result[list[JsonTreeSegment], string]
     function json_tree_validate_single_segment_value(view input: bytes, start: int64, end: int64, message: string) returns result[nothing, string]
     function json_tree_segment_value_scan_start() returns JsonTreeSegmentValueScan

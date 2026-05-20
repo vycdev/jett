@@ -240,9 +240,9 @@ for current JSON hooks; future backends need the same identity boundary.
      `parse_raw`, `serialize_raw`, tree kind/predicates, lookup, length/key
      helpers, and scalar casts.
    - The typechecker raw facade signatures now come from those exported stdlib
-     wrapper declarations. The hardcoded raw facade signature fallback has been
-     removed; `JsonValue` compatibility is preserved by the stdlib root alias
-     rather than a compiler-owned compatibility table.
+     wrapper declarations. The hardcoded raw facade signature fallback and the
+     old typechecker-only compatibility table have been removed; `JsonValue`
+     compatibility is preserved by the stdlib root alias.
    - `json_tree_serialize` is view-native and iterates arrays/objects through
      viewed list/map loops, so `serialize_raw(view value)` no longer clones the
      tree before serializing.
