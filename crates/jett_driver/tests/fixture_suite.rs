@@ -822,6 +822,10 @@ compile_fail_fixture!(
     "json_raw_facade_argument_shapes.jett"
 );
 compile_fail_fixture!(
+    compile_fail_json_raw_strict_accessor_argument_shapes,
+    "json_raw_strict_accessor_argument_shapes.jett"
+);
+compile_fail_fixture!(
     compile_fail_json_raw_cast_requires_handle,
     "json_raw_cast_requires_handle.jett"
 );

@@ -1,0 +1,50 @@
+# ERROR: E0304
+namespace test
+
+function bad_object_field_value() returns string:
+    optional[json.JsonTree] maybe = json.object_field("not raw", "name") handle error:
+        return error
+    json.JsonTree item = maybe handle:
+        default json.JsonTree.string_value("missing")
+    return json.kind(view item)
+
+function bad_object_field_key(root: json.JsonTree) returns string:
+    optional[json.JsonTree] maybe = json.object_field(view root, 0) handle error:
+        return error
+    json.JsonTree item = maybe handle:
+        default json.JsonTree.string_value("missing")
+    return json.kind(view item)
+
+function bad_array_index_value() returns string:
+    optional[json.JsonTree] maybe = json.array_index("not raw", 0) handle error:
+        return error
+    json.JsonTree item = maybe handle:
+        default json.JsonTree.string_value("missing")
+    return json.kind(view item)
+
+function bad_array_index_index(root: json.JsonTree) returns string:
+    optional[json.JsonTree] maybe = json.array_index(view root, "0") handle error:
+        return error
+    json.JsonTree item = maybe handle:
+        default json.JsonTree.string_value("missing")
+    return json.kind(view item)
+
+function bad_require_field_value() returns string:
+    json.JsonTree item = json.require_field("not raw", "name") handle error:
+        return error
+    return json.kind(view item)
+
+function bad_require_field_key(root: json.JsonTree) returns string:
+    json.JsonTree item = json.require_field(view root, 0) handle error:
+        return error
+    return json.kind(view item)
+
+function bad_require_index_value() returns string:
+    json.JsonTree item = json.require_index("not raw", 0) handle error:
+        return error
+    return json.kind(view item)
+
+function bad_require_index_index(root: json.JsonTree) returns string:
+    json.JsonTree item = json.require_index(view root, "0") handle error:
+        return error
+    return json.kind(view item)

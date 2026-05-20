@@ -320,7 +320,10 @@ Exact-parse raw target compatibility is pinned in
 and `json.JsonValue`. Public bridge compatibility for the namespaced alias is
 pinned in `tests/run_pass/json_parse.jett`,
 `tests/run_pass/json_serialize.jett`, and
-`tests/run_pass/json_serialize_public.jett`.
+`tests/run_pass/json_serialize_public.jett`. Strict raw accessors are pinned in
+`tests/run_pass/json_raw_strict_accessors.jett` for `json.JsonTree`, bare
+`JsonValue`, and `json.JsonValue`; strict accessor argument-shape diagnostics
+are pinned in `tests/compile_fail/json_raw_strict_accessor_argument_shapes.jett`.
 
 ## Risks And Open Questions
 
@@ -342,12 +345,11 @@ pinned in `tests/run_pass/json_parse.jett`,
 
 ## Recommended Next Implementation Bite
 
-Finish the legacy reflection decision:
+Prefer `JsonTree` in public-facing examples:
 
-1. Keep raw helper signatures `JsonTree`-first; treat bare `JsonValue` as the
-   compatibility spelling for `json.JsonTree`.
-2. The narrow `export root type` stage described in
-   `docs/open_design/prelude_root_aliases.md` is done for the visible root alias;
-   the legacy reflection primitive is intentionally still staged.
+1. Keep bare `JsonValue` in compatibility fixtures and design notes that explain
+   the transition.
+2. Prefer `json.JsonTree` or `json.JsonValue` in examples and public-facing docs
+   so new code does not learn the legacy root spelling first.
 3. Later, update reflection metadata so the legacy
    `TypePrimitive.json_value_type` is either formally deprecated or removed.
