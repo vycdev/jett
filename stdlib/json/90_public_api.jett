@@ -1,20 +1,16 @@
 namespace json
 function json_serialize_reflected[T](view value: T) returns string:
     return json_serialize_public_reflected[T](view value)
-function json_tree_parse_reflected[T](raw: string) returns result[T, string]:
+function json_parse_reflected[T](raw: string) returns result[T, string]:
     JsonTree value = json_tree_parse(raw) handle error:
         return fail(error)
     return json_decode_tree_reflected[T](view value)
-function json_tree_parse_exact_reflected[T](raw: string) returns result[T, string]:
+function json_parse_exact_reflected[T](raw: string) returns result[T, string]:
     JsonTree value = json_tree_parse(raw) handle error:
         return fail(error)
     nothing checked = json_validate_exact_reflected[T](view value) handle error:
         return fail(error)
     return json_decode_tree_reflected[T](view value)
-function json_parse_reflected[T](raw: string) returns result[T, string]:
-    return json_tree_parse_reflected[T](raw)
-function json_parse_exact_reflected[T](raw: string) returns result[T, string]:
-    return json_tree_parse_exact_reflected[T](raw)
 export function parse_raw(raw: string) returns result[JsonTree, string]:
     return json_tree_parse(raw)
 export function serialize_raw(view value: JsonTree) returns string:
