@@ -22,7 +22,8 @@ functions own the runtime implementation body.
   - `json.serialize_public` -> `json.json_serialize_public_reflected`
 - Raw JSON access also routes through trusted stdlib `JsonTree` hooks such as
   `json.json_tree_parse`, `json.json_tree_serialize`, `json.json_tree_field`,
-  `json.json_tree_index`, and scalar-cast helpers.
+  `json.json_tree_index`, and scalar-cast helpers by way of exported public raw
+  facade wrappers.
 - `json.JsonTree` is the self-hosted raw JSON representation. `json.JsonValue`
   is an exported namespaced alias for `JsonTree`; bare `JsonValue` is a narrow
   stdlib root alias in stdlib-loaded code, with a legacy compiler-owned
@@ -68,8 +69,9 @@ remain compiler-owned while the implementation body is readable `.jett` code.
    parser, serializer, traversal helpers, and scalar casts.
 8. Added `json.parse_exact[T]` as a second public parse bridge backed by
    `json.json_parse_exact_reflected[T]`.
-9. Centralized the public JSON bridge and raw facade hook mapping in
-   `jett_common`.
+9. Centralized the public typed JSON bridge hook mapping in `jett_common`.
+   Later raw facade hook dispatch was removed, leaving only the raw public-name
+   set needed for wrapper precedence and ownership.
 10. Added run-pass and driver coverage for typed parse, exact parse, full
     serialization, public serialization, raw facade delegation, `JsonValue`
     compatibility, `json.JsonValue`, completions, hover, and trusted-hook

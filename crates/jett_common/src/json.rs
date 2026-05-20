@@ -1,19 +1,3 @@
-/// Argument shapes for public raw JSON facades backed by `JsonTree` hooks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum JsonRawFacadeArgs {
-    RawString,
-    Tree,
-    TreeAndString,
-    TreeAndInt64,
-}
-
-/// Shared policy for a public raw JSON facade.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct JsonRawFacadeSpec {
-    pub hook: &'static str,
-    pub args: JsonRawFacadeArgs,
-}
-
 /// Shared policy for public typed JSON bridges with compiler-owned checks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct JsonPublicBridgeSpec {
@@ -47,126 +31,47 @@ const JSON_PUBLIC_BRIDGE_SPECS: &[(&str, JsonPublicBridgeSpec)] = &[
     ),
 ];
 
-const JSON_RAW_FACADE_SPECS: &[(&str, JsonRawFacadeSpec)] = &[
-    (
-        "json.parse_raw",
-        JsonRawFacadeSpec {
-            hook: "json.json_tree_parse",
-            args: JsonRawFacadeArgs::RawString,
-        },
-    ),
-    (
-        "json.serialize_raw",
-        JsonRawFacadeSpec {
-            hook: "json.json_tree_serialize",
-            args: JsonRawFacadeArgs::Tree,
-        },
-    ),
-    (
-        "json.kind",
-        JsonRawFacadeSpec {
-            hook: "json.json_tree_kind",
-            args: JsonRawFacadeArgs::Tree,
-        },
-    ),
-    (
-        "json.is_null",
-        JsonRawFacadeSpec {
-            hook: "json.json_tree_is_null",
-            args: JsonRawFacadeArgs::Tree,
-        },
-    ),
-    (
-        "json.is_bool",
-        JsonRawFacadeSpec {
-            hook: "json.json_tree_is_bool",
-            args: JsonRawFacadeArgs::Tree,
-        },
-    ),
-    (
-        "json.is_number",
-        JsonRawFacadeSpec {
-            hook: "json.json_tree_is_number",
-            args: JsonRawFacadeArgs::Tree,
-        },
-    ),
-    (
-        "json.is_string",
-        JsonRawFacadeSpec {
-            hook: "json.json_tree_is_string",
-            args: JsonRawFacadeArgs::Tree,
-        },
-    ),
-    (
-        "json.is_array",
-        JsonRawFacadeSpec {
-            hook: "json.json_tree_is_array",
-            args: JsonRawFacadeArgs::Tree,
-        },
-    ),
-    (
-        "json.is_object",
-        JsonRawFacadeSpec {
-            hook: "json.json_tree_is_object",
-            args: JsonRawFacadeArgs::Tree,
-        },
-    ),
-    (
-        "json.field",
-        JsonRawFacadeSpec {
-            hook: "json.json_tree_field",
-            args: JsonRawFacadeArgs::TreeAndString,
-        },
-    ),
-    (
-        "json.index",
-        JsonRawFacadeSpec {
-            hook: "json.json_tree_index",
-            args: JsonRawFacadeArgs::TreeAndInt64,
-        },
-    ),
-    (
-        "json.array_length",
-        JsonRawFacadeSpec {
-            hook: "json.json_tree_array_length",
-            args: JsonRawFacadeArgs::Tree,
-        },
-    ),
-    (
-        "json.object_keys",
-        JsonRawFacadeSpec {
-            hook: "json.json_tree_object_keys",
-            args: JsonRawFacadeArgs::Tree,
-        },
-    ),
-    (
-        "json.as_string",
-        JsonRawFacadeSpec {
-            hook: "json.json_tree_as_string",
-            args: JsonRawFacadeArgs::Tree,
-        },
-    ),
-    (
-        "json.as_int64",
-        JsonRawFacadeSpec {
-            hook: "json.json_tree_as_int64",
-            args: JsonRawFacadeArgs::Tree,
-        },
-    ),
-    (
-        "json.as_float64",
-        JsonRawFacadeSpec {
-            hook: "json.json_tree_as_float64",
-            args: JsonRawFacadeArgs::Tree,
-        },
-    ),
-    (
-        "json.as_bool",
-        JsonRawFacadeSpec {
-            hook: "json.json_tree_as_bool",
-            args: JsonRawFacadeArgs::Tree,
-        },
-    ),
+const JSON_RAW_FACADE_NAMES: &[&str] = &[
+    "json.parse_raw",
+    "json.serialize_raw",
+    "json.kind",
+    "json.is_null",
+    "json.is_bool",
+    "json.is_number",
+    "json.is_string",
+    "json.is_array",
+    "json.is_object",
+    "json.field",
+    "json.index",
+    "json.array_length",
+    "json.object_keys",
+    "json.as_string",
+    "json.as_int64",
+    "json.as_float64",
+    "json.as_bool",
+    "json.object_field",
+    "json.array_index",
+    "json.require_field",
+    "json.require_index",
+];
+
+const JSON_VIEW_TREE_HELPER_NAMES: &[&str] = &[
+    "json.json_tree_serialize",
+    "json.json_tree_kind",
+    "json.json_tree_is_null",
+    "json.json_tree_is_bool",
+    "json.json_tree_is_number",
+    "json.json_tree_is_string",
+    "json.json_tree_is_array",
+    "json.json_tree_is_object",
+    "json.json_tree_field",
+    "json.json_tree_index",
+    "json.json_tree_array_length",
+    "json.json_tree_object_keys",
+    "json.json_tree_as_string",
+    "json.json_tree_as_int64",
+    "json.json_tree_as_float64",
+    "json.json_tree_as_bool",
 ];
 
 /// Returns the trusted stdlib hook for a compiler-policy JSON bridge.
@@ -176,26 +81,16 @@ pub fn json_public_bridge_spec(name: &str) -> Option<JsonPublicBridgeSpec> {
         .find_map(|(facade, spec)| (*facade == name).then_some(*spec))
 }
 
-/// Returns the trusted stdlib hook and argument shape for a raw JSON facade.
-pub fn json_raw_facade_spec(name: &str) -> Option<JsonRawFacadeSpec> {
-    JSON_RAW_FACADE_SPECS
-        .iter()
-        .find_map(|(facade, spec)| (*facade == name).then_some(*spec))
-}
-
 /// Returns true for the public raw JSON facade functions backed by the stdlib
 /// JSON module.
 pub fn is_json_raw_facade(name: &str) -> bool {
-    json_raw_facade_spec(name).is_some()
+    JSON_RAW_FACADE_NAMES.contains(&name)
 }
 
 /// Returns true for JSON facade functions whose first argument should be
 /// treated as an implicit view by ownership analysis.
 pub fn is_json_implicit_view_facade(name: &str) -> bool {
-    is_json_raw_facade(name)
-        || JSON_RAW_FACADE_SPECS.iter().any(|(_, spec)| {
-            spec.hook == name && !matches!(spec.args, JsonRawFacadeArgs::RawString)
-        })
+    is_json_raw_facade(name) || JSON_VIEW_TREE_HELPER_NAMES.contains(&name)
 }
 
 #[cfg(test)]
@@ -203,36 +98,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn raw_facade_specs_pin_trusted_hooks_and_argument_shapes() {
-        assert_eq!(
-            json_raw_facade_spec("json.parse_raw"),
-            Some(JsonRawFacadeSpec {
-                hook: "json.json_tree_parse",
-                args: JsonRawFacadeArgs::RawString,
-            })
-        );
-        assert_eq!(
-            json_raw_facade_spec("json.field"),
-            Some(JsonRawFacadeSpec {
-                hook: "json.json_tree_field",
-                args: JsonRawFacadeArgs::TreeAndString,
-            })
-        );
-        assert_eq!(
-            json_raw_facade_spec("json.index"),
-            Some(JsonRawFacadeSpec {
-                hook: "json.json_tree_index",
-                args: JsonRawFacadeArgs::TreeAndInt64,
-            })
-        );
-        assert_eq!(
-            json_raw_facade_spec("json.as_bool"),
-            Some(JsonRawFacadeSpec {
-                hook: "json.json_tree_as_bool",
-                args: JsonRawFacadeArgs::Tree,
-            })
-        );
-        assert_eq!(json_raw_facade_spec("json.json_tree_parse"), None);
+    fn raw_facade_names_pin_public_stdlib_surface() {
+        assert!(is_json_raw_facade("json.parse_raw"));
+        assert!(is_json_raw_facade("json.field"));
+        assert!(is_json_raw_facade("json.index"));
+        assert!(is_json_raw_facade("json.as_bool"));
+        assert!(is_json_raw_facade("json.require_field"));
+        assert!(!is_json_raw_facade("json.json_tree_parse"));
     }
 
     #[test]

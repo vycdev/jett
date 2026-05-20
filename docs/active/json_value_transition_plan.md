@@ -46,8 +46,8 @@ about: two names, two traversal surfaces, one conceptual data model.
 - `json.serialize_raw`, `json.kind`, `json.field`, `json.index`, scalar casts,
   `json.array_length`, and `json.object_keys` are `JsonTree`-first facade
   signatures with `JsonValue` compatibility. Runtime values dispatch through
-  exported stdlib facade wrappers backed by `json_tree_*` hooks. The builtin
-  dispatcher remains only as a bootstrap/no-stdlib fallback around those hooks.
+  exported stdlib facade wrappers that call `json_tree_*` helpers. The old
+  compiler-owned raw facade fallback dispatcher has been removed.
 - `jett_comptime` no longer has `Value::Json` or a `serde_json` dependency.
 - In stdlib-loaded code, the root `JsonValue` spelling now resolves and
   reflects through the stdlib alias to `json.JsonTree`. The compiler still keeps
@@ -212,16 +212,15 @@ keeps older `JsonValue` code working during the transition.
 Status: implemented. Exported stdlib facade wrappers now exist for
 `parse_raw`, `serialize_raw`, `kind`, `field`, `index`, the shape predicates,
 length/key helpers, and scalar casts. The interpreter prefers those trusted
-stdlib wrappers when they are registered, and the remaining builtin path is a
-bootstrap/no-stdlib dispatcher around the same trusted hooks. The public typed
-`json.parse[JsonValue]` compatibility branch also calls `json_tree_parse`
-directly instead of bouncing through the raw builtin surface. The shared JSON
-facade name set now lives in `jett_common`, so runtime dispatch and ownership's
-implicit-view rule use one policy list for raw facades and view-first
-`json_tree_*` accessors. The typechecker raw facade signatures now prefer
-`json.JsonTree` only when that type came from the trusted stdlib file range,
-falling back to the legacy `JsonValue` primitive for no-stdlib/bootstrap
-contexts and for user-defined same-name types.
+stdlib wrappers when they are registered, and the old raw builtin path has
+been removed. The public typed `json.parse[JsonValue]` compatibility branch
+also calls `json_tree_parse` directly instead of bouncing through the raw
+builtin surface. The shared JSON facade name set now lives in `jett_common` for
+runtime wrapper precedence and ownership's implicit-view rule across raw
+facades and view-first `json_tree_*` accessors. The typechecker now gets raw
+facade signatures from the exported stdlib wrapper declarations rather than a
+hardcoded signature table; no-stdlib/bootstrap contexts no longer have a
+separate compiler-owned raw facade signature fallback.
 
 ### 3. Change Runtime Representation
 
@@ -290,8 +289,8 @@ After parity tests pass with native representation:
 
 - Done: remove `serde_json::Value` from `jett_comptime::value::Value`.
 - Done: remove Rust-backed `json.parse_raw` and raw accessor implementations.
-- Done: keep runtime raw facade fallback as a trusted stdlib hook dispatcher
-  rather than a separate Rust JSON implementation.
+- Done: remove the runtime raw facade fallback dispatcher. Public raw calls now
+  use exported stdlib wrappers in normal stdlib-loaded execution.
 - Keep Rust only for tests/dev tooling if useful, not as language semantics.
 
 ## Required Tests

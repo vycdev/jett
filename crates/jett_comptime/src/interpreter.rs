@@ -3,9 +3,7 @@ use std::sync::Arc;
 
 use rand::Rng;
 
-use jett_common::{
-    FileId, JsonRawFacadeArgs, is_json_raw_facade, json_public_bridge_spec, json_raw_facade_spec,
-};
+use jett_common::{FileId, is_json_raw_facade, json_public_bridge_spec};
 use jett_parser::ast::{
     ActorDef, BinOp, BitfieldDef, BitfieldFieldKind, Block, CallArg, EnumDef, Expr, FunctionDef,
     Ident, ImplementBlock, InterfaceDecl, Item, MachineDef, Module, Pattern, PipelineStep, Stmt,
@@ -5281,65 +5279,8 @@ impl Interpreter {
     //   exists these should migrate to actual Jett source files.
     // =========================================================================
 
-    /// Try to call a built-in function.  Returns `None` if the name does not
-    /// match any built-in, allowing the caller to fall through to
-    /// user-defined function lookup.
-    fn call_json_raw_facade_builtin(
-        &mut self,
-        name: &str,
-        args: &[Value],
-    ) -> Option<Result<Value, String>> {
-        let spec = json_raw_facade_spec(name)?;
-        match spec.args {
-            JsonRawFacadeArgs::RawString => {
-                require_args!(name, 1, args);
-                match &args[0] {
-                    Value::String(_) => {
-                        Some(self.call_required_trusted_stdlib_function(name, spec.hook, args))
-                    }
-                    other => Some(Err(format!("{name} expects a string, got {other}"))),
-                }
-            }
-            JsonRawFacadeArgs::Tree => {
-                require_args!(name, 1, args);
-                if is_json_tree_value(&args[0]) {
-                    return Some(self.call_required_trusted_stdlib_function(name, spec.hook, args));
-                }
-                Some(Err(format!("{name} expects JsonTree, got {}", args[0])))
-            }
-            JsonRawFacadeArgs::TreeAndString => {
-                require_args!(name, 2, args);
-                if !is_json_tree_value(&args[0]) {
-                    return Some(Err(format!("{name} expects JsonTree, got {}", args[0])));
-                }
-                match &args[1] {
-                    Value::String(_) => {
-                        Some(self.call_required_trusted_stdlib_function(name, spec.hook, args))
-                    }
-                    other => Some(Err(format!("{name} expects a string key, got {other}"))),
-                }
-            }
-            JsonRawFacadeArgs::TreeAndInt64 => {
-                require_args!(name, 2, args);
-                if !is_json_tree_value(&args[0]) {
-                    return Some(Err(format!("{name} expects JsonTree, got {}", args[0])));
-                }
-                match &args[1] {
-                    Value::Int64(_) => {
-                        Some(self.call_required_trusted_stdlib_function(name, spec.hook, args))
-                    }
-                    other => Some(Err(format!("{name} expects an int64 index, got {other}"))),
-                }
-            }
-        }
-    }
-
     fn call_builtin(&mut self, name: &str, args: &[Value]) -> Option<Result<Value, String>> {
         if let Some(result) = self.call_bitfield_builtin(name, args) {
-            return Some(result);
-        }
-
-        if let Some(result) = self.call_json_raw_facade_builtin(name, args) {
             return Some(result);
         }
 
@@ -7644,21 +7585,6 @@ impl Interpreter {
         self.trusted_stdlib_functions.contains(name) && self.functions.contains_key(name)
     }
 
-    fn call_required_trusted_stdlib_function(
-        &mut self,
-        public_name: &str,
-        name: &str,
-        args: &[Value],
-    ) -> Result<Value, String> {
-        if self.has_trusted_stdlib_function(name) {
-            self.call_user_function_with_type_args(name, &[], args.to_vec())
-        } else {
-            Err(format!(
-                "{public_name} requires trusted stdlib hook '{name}'"
-            ))
-        }
-    }
-
     fn call_user_function_with_type_args(
         &mut self,
         name: &str,
@@ -8805,10 +8731,6 @@ fn is_type_variant_value_callee(callee: &Expr) -> bool {
     };
     field.name == "variant_value"
         && matches!(base.as_ref(), Expr::Ident(ident) if ident.name == "type")
-}
-
-fn is_json_tree_value(value: &Value) -> bool {
-    matches!(value, Value::Enum { type_name, .. } if type_name == "json.JsonTree")
 }
 
 fn result_ok(value: Value) -> Value {
@@ -11425,29 +11347,26 @@ mod tests {
     }
 
     #[test]
-    fn json_parse_raw_requires_trusted_json_tree_parse() {
+    fn json_parse_raw_without_stdlib_wrapper_is_undefined() {
         let mut interp = Interpreter::new();
 
         let err = interp
             .call_function("json.parse_raw", vec![Value::String("null".to_string())])
             .unwrap_err();
 
-        assert_eq!(
-            err,
-            "json.parse_raw requires trusted stdlib hook 'json.json_tree_parse'"
-        );
+        assert_eq!(err, "undefined function 'json.parse_raw'");
     }
 
     #[test]
-    fn json_parse_raw_delegates_to_trusted_json_tree_parse() {
+    fn json_parse_raw_uses_public_stdlib_wrapper() {
         let mut interp = Interpreter::new();
-        let mut trusted_hook = func_def(
-            "json_tree_parse",
+        let mut wrapper = func_def(
+            "parse_raw",
             vec![("raw", "string")],
-            block(vec![return_stmt(string("trusted raw"))]),
+            block(vec![return_stmt(string("public raw"))]),
         );
-        trusted_hook.span = stdlib_sp();
-        interp.register_function_in_namespace(Some("json"), &trusted_hook);
+        wrapper.span = stdlib_sp();
+        interp.register_function_in_namespace(Some("json"), &wrapper);
 
         let value = interp
             .call_function(
@@ -11456,47 +11375,19 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(value, Value::String("trusted raw".to_string()));
+        assert_eq!(value, Value::String("public raw".to_string()));
     }
 
     #[test]
-    fn untrusted_registration_removes_previous_json_tree_parse_trust() {
+    fn json_raw_helpers_use_public_stdlib_wrappers() {
         let mut interp = Interpreter::new();
-        let mut trusted_hook = func_def(
-            "json_tree_parse",
-            vec![("raw", "string")],
-            block(vec![return_stmt(string("trusted raw"))]),
-        );
-        trusted_hook.span = stdlib_sp();
-        interp.register_function_in_namespace(Some("json"), &trusted_hook);
-
-        let fake_hook = func_def(
-            "json_tree_parse",
-            vec![("raw", "string")],
-            block(vec![return_stmt(string("fake raw"))]),
-        );
-        interp.register_function_named("json.json_tree_parse", &fake_hook, false);
-
-        let err = interp
-            .call_function("json.parse_raw", vec![Value::String("null".to_string())])
-            .unwrap_err();
-
-        assert_eq!(
-            err,
-            "json.parse_raw requires trusted stdlib hook 'json.json_tree_parse'"
-        );
-    }
-
-    #[test]
-    fn json_raw_helpers_delegate_native_json_tree_values() {
-        let mut interp = Interpreter::new();
-        let mut trusted_hook = func_def(
-            "json_tree_serialize",
+        let mut wrapper = func_def(
+            "serialize_raw",
             vec![("value", "JsonTree")],
-            block(vec![return_stmt(string("trusted tree"))]),
+            block(vec![return_stmt(string("public tree"))]),
         );
-        trusted_hook.span = stdlib_sp();
-        interp.register_function_in_namespace(Some("json"), &trusted_hook);
+        wrapper.span = stdlib_sp();
+        interp.register_function_in_namespace(Some("json"), &wrapper);
 
         let value = interp
             .call_function(
@@ -11509,36 +11400,11 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(value, Value::String("trusted tree".to_string()));
+        assert_eq!(value, Value::String("public tree".to_string()));
     }
 
     #[test]
-    fn bare_json_tree_enum_does_not_satisfy_raw_facade_value() {
-        let mut interp = Interpreter::new();
-        let mut trusted_hook = func_def(
-            "json_tree_kind",
-            vec![("value", "JsonTree")],
-            block(vec![return_stmt(string("hook fallback"))]),
-        );
-        trusted_hook.span = stdlib_sp();
-        interp.register_function_in_namespace(Some("json"), &trusted_hook);
-
-        let err = interp
-            .call_function(
-                "json.kind",
-                vec![Value::Enum {
-                    type_name: "JsonTree".to_string(),
-                    variant: "null".to_string(),
-                    fields: vec![],
-                }],
-            )
-            .unwrap_err();
-
-        assert_eq!(err, "json.kind expects JsonTree, got JsonTree.null");
-    }
-
-    #[test]
-    fn trusted_public_raw_facade_wrapper_runs_before_builtin_fallback() {
+    fn public_raw_facade_wrapper_runs_before_private_helper() {
         let mut interp = Interpreter::new();
         let mut public_wrapper = func_def(
             "kind",
@@ -11564,7 +11430,7 @@ mod tests {
     }
 
     #[test]
-    fn dotted_raw_facade_expr_runs_trusted_wrapper_before_builtin_fallback() {
+    fn dotted_raw_facade_expr_runs_public_wrapper() {
         let mut interp = Interpreter::new();
         interp.set_variable_public("tree", json_tree_null());
 
@@ -11575,14 +11441,6 @@ mod tests {
         );
         public_wrapper.span = stdlib_sp();
         interp.register_function_in_namespace(Some("json"), &public_wrapper);
-
-        let mut trusted_hook = func_def(
-            "json_tree_kind",
-            vec![("value", "JsonTree")],
-            block(vec![return_stmt(string("hook fallback"))]),
-        );
-        trusted_hook.span = stdlib_sp();
-        interp.register_function_in_namespace(Some("json"), &trusted_hook);
 
         let value = interp
             .eval_expr(&dotted_call("json", "kind", vec![var("tree")]))
@@ -11592,7 +11450,7 @@ mod tests {
     }
 
     #[test]
-    fn pipeline_raw_facade_step_runs_trusted_wrapper_before_builtin_fallback() {
+    fn pipeline_raw_facade_step_runs_public_wrapper() {
         let mut interp = Interpreter::new();
         interp.set_variable_public("tree", json_tree_null());
 
@@ -11603,14 +11461,6 @@ mod tests {
         );
         public_wrapper.span = stdlib_sp();
         interp.register_function_in_namespace(Some("json"), &public_wrapper);
-
-        let mut trusted_hook = func_def(
-            "json_tree_kind",
-            vec![("value", "JsonTree")],
-            block(vec![return_stmt(string("hook fallback"))]),
-        );
-        trusted_hook.span = stdlib_sp();
-        interp.register_function_in_namespace(Some("json"), &trusted_hook);
 
         let value = interp
             .eval_expr(&Expr::Pipeline(
@@ -11628,28 +11478,20 @@ mod tests {
     }
 
     #[test]
-    fn untrusted_raw_facade_wrapper_cannot_spoof_trusted_hook() {
+    fn raw_facade_wrapper_is_ordinary_function_without_builtin_fallback() {
         let mut interp = Interpreter::new();
-        let mut trusted_hook = func_def(
-            "json_tree_kind",
-            vec![("value", "JsonTree")],
-            block(vec![return_stmt(string("hook fallback"))]),
-        );
-        trusted_hook.span = stdlib_sp();
-        interp.register_function_in_namespace(Some("json"), &trusted_hook);
-
-        let fake_wrapper = func_def(
+        let wrapper = func_def(
             "kind",
             vec![("value", "JsonTree")],
-            block(vec![return_stmt(string("fake wrapper"))]),
+            block(vec![return_stmt(string("ordinary wrapper"))]),
         );
-        interp.register_function_named("json.kind", &fake_wrapper, false);
+        interp.register_function_named("json.kind", &wrapper, false);
 
         let value = interp
             .call_function("json.kind", vec![json_tree_null()])
             .unwrap();
 
-        assert_eq!(value, Value::String("hook fallback".to_string()));
+        assert_eq!(value, Value::String("ordinary wrapper".to_string()));
     }
 
     #[test]

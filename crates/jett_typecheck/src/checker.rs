@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use jett_common::{FileId, JsonRawFacadeArgs, Span, json_raw_facade_spec};
+use jett_common::{FileId, Span};
 use jett_diagnostics::{Diagnostic, DiagnosticSink};
 use jett_parser::ast::{
     self, BinOp, Block, Expr, FunctionDef, Item, Module, Stmt, StringPart, TypeExpr, UnaryOp,
@@ -477,27 +477,6 @@ impl<'a> TypeChecker<'a> {
             Type::Refinement { name, .. } => name.clone(),
             Type::Error => "<error>".to_string(),
         }
-    }
-
-    fn check_builtin_type_arg_count(
-        &mut self,
-        name: &str,
-        type_args: &[TypeExpr],
-        expected: usize,
-        span: Span,
-    ) -> bool {
-        if type_args.len() == expected {
-            return true;
-        }
-
-        self.sink.emit(errors::unknown_type(
-            &format!(
-                "{name} (expected {expected} type argument(s), got {})",
-                type_args.len()
-            ),
-            span,
-        ));
-        false
     }
 
     fn item_file(item: &Item) -> FileId {
@@ -1808,74 +1787,6 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
-    fn json_tree_type_or_legacy_json_value(&self) -> TypeId {
-        self.trusted_stdlib_named_types
-            .get("json.JsonTree")
-            .copied()
-            .unwrap_or(TypeInterner::JSON_VALUE)
-    }
-
-    fn json_raw_facade_builtin_signature(
-        &mut self,
-        name: &str,
-        type_args: &[TypeExpr],
-        span: Span,
-    ) -> Option<(Vec<TypeId>, TypeId)> {
-        let spec = json_raw_facade_spec(name)?;
-        let valid_type_args = self.check_builtin_type_arg_count(name, type_args, 0, span);
-        if valid_type_args
-            && let Some(signature) = self.trusted_stdlib_function_signatures.get(name).cloned()
-        {
-            return Some(signature);
-        }
-        let json_tree_ty = self.json_tree_type_or_legacy_json_value();
-
-        let params = match spec.args {
-            JsonRawFacadeArgs::RawString => vec![TypeInterner::STRING],
-            JsonRawFacadeArgs::Tree => vec![json_tree_ty],
-            JsonRawFacadeArgs::TreeAndString => vec![json_tree_ty, TypeInterner::STRING],
-            JsonRawFacadeArgs::TreeAndInt64 => vec![json_tree_ty, TypeInterner::INT64],
-        };
-
-        let return_ty = match name {
-            "json.parse_raw" => {
-                if valid_type_args {
-                    self.interner
-                        .intern(Type::Result(json_tree_ty, TypeInterner::STRING))
-                } else {
-                    TypeInterner::ERROR
-                }
-            }
-            "json.serialize_raw" | "json.kind" => TypeInterner::STRING,
-            "json.is_null" | "json.is_bool" | "json.is_number" | "json.is_string"
-            | "json.is_array" | "json.is_object" => TypeInterner::BOOL,
-            "json.field" | "json.index" => self.interner.intern(Type::Optional(json_tree_ty)),
-            "json.array_length" => self
-                .interner
-                .intern(Type::Result(TypeInterner::INT64, TypeInterner::STRING)),
-            "json.object_keys" => {
-                let list_string = self.interner.intern(Type::List(TypeInterner::STRING));
-                self.interner
-                    .intern(Type::Result(list_string, TypeInterner::STRING))
-            }
-            "json.as_string" => self
-                .interner
-                .intern(Type::Result(TypeInterner::STRING, TypeInterner::STRING)),
-            "json.as_int64" => self
-                .interner
-                .intern(Type::Result(TypeInterner::INT64, TypeInterner::STRING)),
-            "json.as_float64" => self
-                .interner
-                .intern(Type::Result(TypeInterner::FLOAT64, TypeInterner::STRING)),
-            "json.as_bool" => self
-                .interner
-                .intern(Type::Result(TypeInterner::BOOL, TypeInterner::STRING)),
-            _ => return None,
-        };
-
-        Some((params, return_ty))
-    }
-
     /// Extract (key_type, value_type) from map builtin type args.
     /// Uses ERROR as a wildcard when type args are absent (matches any map).
     fn map_type_args(&mut self, type_args: &[TypeExpr]) -> (TypeId, TypeId) {
@@ -1959,10 +1870,6 @@ impl<'a> TypeChecker<'a> {
                     }
                 }
             }
-        }
-
-        if let Some(signature) = self.json_raw_facade_builtin_signature(&name, type_args, span) {
-            return Some(signature);
         }
 
         match name.as_str() {
@@ -7261,6 +7168,20 @@ impl<'a> TypeChecker<'a> {
                     }
                     return return_type;
                 }
+
+                if self.function_signatures.contains_key(function_name) {
+                    self.sink.emit(errors::unknown_type(
+                        &format!(
+                            "{function_name} (expected 0 type argument(s), got {})",
+                            type_args.len()
+                        ),
+                        span,
+                    ));
+                    for arg in args {
+                        self.check_expr(&arg.value);
+                    }
+                    return TypeInterner::ERROR;
+                }
             }
         }
 
@@ -10785,7 +10706,7 @@ function main() returns int64:
     }
 
     #[test]
-    fn raw_json_facade_ignores_untrusted_json_tree_type() {
+    fn raw_json_facade_uses_ordinary_source_signature_without_trusted_stdlib() {
         let errors = check_source_errors(
             "\
 namespace json
@@ -10805,8 +10726,8 @@ function main() returns string:
         );
 
         assert!(
-            errors.iter().any(|d| d.code.code() == 304),
-            "expected E0304, got: {:?}",
+            errors.iter().any(|d| d.code.code() == 305),
+            "expected E0305, got: {:?}",
             errors
         );
     }

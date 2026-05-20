@@ -119,11 +119,12 @@ delegate to reflected stdlib hook implementations only when the current hook
 registry entries came from compiler-shipped stdlib files. The old typed Rust
 fallback paths for public parse/serialize have been removed; Rust-backed paths
 have also been removed from raw JSON execution in `jett_comptime`. Public
-`json.parse_raw` now delegates to the trusted self-hosted `JsonTree` parser,
-and raw helper calls dispatch native `JsonTree` runtime values through trusted
-stdlib facade wrappers backed by `json_tree_*` hooks. The remaining builtin raw
-facade path is a bootstrap/no-stdlib dispatcher around those hooks, not a
-separate Rust JSON implementation.
+`json.parse_raw` now runs through the exported stdlib wrapper around the
+self-hosted `JsonTree` parser, and raw helper calls dispatch native `JsonTree`
+runtime values through exported stdlib facade wrappers that call `json_tree_*`
+helpers. The old compiler-owned raw facade fallback dispatcher has been
+removed; in no-stdlib direct-interpreter contexts the raw public names are
+ordinary undefined functions instead of hidden Rust-backed JSON semantics.
 `json.parse_exact[T]` now exists as a second compiler-policy public parse
 bridge backed by trusted stdlib hooks. It rejects unknown object fields
 recursively for reflected closed-shape targets: structs, bitfields, enum
@@ -234,20 +235,17 @@ for current JSON hooks; future backends need the same identity boundary.
    - Public raw facade wrappers now exist in `stdlib/json/` for
      `parse_raw`, `serialize_raw`, tree kind/predicates, lookup, length/key
      helpers, and scalar casts.
-   - The typechecker raw facade signatures now prefer the bundled
-     `json.JsonTree` type only when it came from compiler-shipped stdlib files,
-     while preserving the compiler-owned `JsonValue` compatibility alias.
-     User/project declarations with the same qualified name do not affect that
-     bridge. When compiler-shipped stdlib declarations are loaded, those raw
-     facade calls now use the trusted exported stdlib signatures before falling
-     back to the hardcoded bootstrap signature table.
+   - The typechecker raw facade signatures now come from those exported stdlib
+     wrapper declarations. The hardcoded raw facade signature fallback has been
+     removed; `JsonValue` compatibility is preserved by the stdlib root alias
+     and the checked compatibility relation with trusted `json.JsonTree`.
    - `json_tree_serialize` is view-native and iterates arrays/objects through
      viewed list/map loops, so `serialize_raw(view value)` no longer clones the
      tree before serializing.
    - The JSON facade name policy is centralized in `jett_common` and reused by
-     runtime dispatch plus ownership checking, including direct view-first
-     `json_tree_*` helpers. The raw facade policy also records the trusted
-     stdlib hook and argument shape used by runtime bootstrap dispatch.
+     runtime wrapper precedence plus ownership checking, including direct
+     view-first `json_tree_*` helpers. Raw facade entries are now a public name
+     set rather than a trusted hook/argument-shape dispatch table.
    - The compiler-policy public bridge names (`json.parse`,
      `json.parse_exact`, `json.serialize`, and `json.serialize_public`) also
      share their trusted stdlib hook mapping through `jett_common`.
@@ -258,8 +256,9 @@ for current JSON hooks; future backends need the same identity boundary.
 4. Keep the real public wrapper names in `namespace json`, while retaining
    compiler policy checks for secrets, `view`, map keys, and handled results.
 5. Keep broad bridge/parity tests around the removed Rust-backed fallback
-   implementation paths and the remaining bootstrap/no-stdlib dispatchers.
-   Done for typed public parse/serialize, raw `JsonTree` / compatibility
+   implementation paths and the remaining typed bridge bootstrap/no-stdlib
+   dispatchers. Done for typed public parse/serialize, raw `JsonTree` /
+   compatibility
    `JsonValue` execution in `jett_comptime`, and runtime `main()` reflection
    metadata handoff for namespaced generic JSON.
 6. Continue hardening the self-hosted `JsonTree` parser. Common malformed-input
