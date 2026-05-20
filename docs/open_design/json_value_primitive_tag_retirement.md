@@ -101,6 +101,10 @@ Do not do this as the next step.
    branches.
 3. Keep the current reflection tests while adding a second fixture that
    describes the future alias behavior behind an explicit staged expectation.
+   Status: pinned by `tests/run_pass/json_value_reflection_staging.jett`, which
+   keeps the current bare `JsonValue` primitive reflection split visible while
+   also checking raw parse/parse_exact/serialize/serialize_public behavior for
+   both `JsonValue` and `json.JsonValue`.
 4. Change `type.info[JsonValue]()` only after parse, parse_exact, serialize,
    serialize_public, raw accessors, and container assignment compatibility all
    pass through the alias path.

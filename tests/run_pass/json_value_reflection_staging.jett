@@ -1,0 +1,44 @@
+namespace test
+function bare_json_value_reflection_summary() returns string:
+    TypeInfo info = type.info[JsonValue]()
+    TypePrimitive info_primitive = info.primitive_tag handle:
+        return "missing info primitive"
+    TypePrimitive direct_primitive = type.primitive_tag[JsonValue]() handle:
+        return "missing direct primitive"
+    bool info_is_json_value = info_primitive == TypePrimitive.json_value_type
+    bool direct_is_json_value = direct_primitive == TypePrimitive.json_value_type
+    return "{info.kind}:{info.type_name}:{info_is_json_value}:{direct_is_json_value}"
+function alias_json_value_reflection_summary() returns string:
+    TypeInfo info = type.info[json.JsonValue]()
+    TypePrimitive primitive = info.primitive_tag handle:
+        int64 arg_count = list.length[TypeInfo](info.args)
+        TypeInfo base = list.get[TypeInfo](info.args, 0) handle:
+            return "missing base"
+        bool alias_kind = info.kind_tag == TypeKind.alias_type
+        return "{info.kind}:{info.type_name}:{alias_kind}:{base.kind}:{base.type_name}:{arg_count}"
+    return "unexpected primitive"
+function bare_json_value_raw_behavior() returns string:
+    JsonValue parsed = json.parse[JsonValue]("{{\"name\":\"Ada\",\"score\":5}}") handle error:
+        return error
+    JsonValue exact = json.parse_exact[JsonValue]("{{\"name\":\"Grace\",\"score\":7}}") handle error:
+        return error
+    string serialized = json.serialize[JsonValue](view parsed)
+    string public = json.serialize_public[JsonValue](view exact)
+    bool serialized_name = string.contains(serialized, "\"name\":\"Ada\"")
+    bool public_score = string.contains(public, "\"score\":7")
+    return "{json.kind(parsed)}:{serialized_name}:{public_score}"
+function alias_json_value_raw_behavior() returns string:
+    json.JsonValue parsed = json.parse[json.JsonValue]("{{\"name\":\"Lin\",\"score\":11}}") handle error:
+        return error
+    json.JsonValue exact = json.parse_exact[json.JsonValue]("{{\"name\":\"Edsger\",\"score\":13}}") handle error:
+        return error
+    string serialized = json.serialize[json.JsonValue](view parsed)
+    string public = json.serialize_public[json.JsonValue](view exact)
+    bool serialized_name = string.contains(serialized, "\"name\":\"Lin\"")
+    bool public_score = string.contains(public, "\"score\":13")
+    return "{json.kind(view parsed)}:{serialized_name}:{public_score}"
+verify json_value_reflection_staging:
+    assert bare_json_value_reflection_summary() == "primitive:JsonValue:true:true"
+    assert alias_json_value_reflection_summary() == "alias:json.JsonValue:true:enum:json.JsonTree:1"
+    assert bare_json_value_raw_behavior() == "object:true:true"
+    assert alias_json_value_raw_behavior() == "object:true:true"
