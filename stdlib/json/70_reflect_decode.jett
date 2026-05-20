@@ -10,10 +10,10 @@ mutual:
     function json_decode_tree_integer_some_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[optional[T], string]
     function json_decode_tree_float_or_other_primitive_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[T, string]
     function json_decode_tree_float_primitive_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[optional[T], string]
-    function json_decode_tree_float_some_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[optional[T], string]
+    function json_decode_tree_float_some_reflected[T](view raw: JsonTree) returns result[optional[T], string]
     function json_decode_tree_scalar_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[T, string]
     function json_decode_tree_integer_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[T, string]
-    function json_decode_tree_float_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[T, string]
+    function json_decode_tree_float_reflected[T](view raw: JsonTree) returns result[T, string]
     function json_decode_tree_integer_range_error(value: int64, primitive: TypePrimitive) returns optional[string]
     function json_decode_tree_range_error(value: int64, minimum: int64, maximum: int64, name: string) returns optional[string]
     function json_decode_tree_other_primitive_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[T, string]
@@ -114,13 +114,13 @@ function json_decode_tree_float_or_other_primitive_reflected[T](view raw: JsonTr
 function json_decode_tree_float_primitive_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[optional[T], string]:
     match primitive:
         float32_type:
-            return json_decode_tree_float_some_reflected[T](view raw, primitive)
+            return json_decode_tree_float_some_reflected[T](view raw)
         float64_type:
-            return json_decode_tree_float_some_reflected[T](view raw, primitive)
+            return json_decode_tree_float_some_reflected[T](view raw)
         other:
             return ok(none)
-function json_decode_tree_float_some_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[optional[T], string]:
-    T item = json_decode_tree_float_reflected[T](view raw, primitive) handle error:
+function json_decode_tree_float_some_reflected[T](view raw: JsonTree) returns result[optional[T], string]:
+    T item = json_decode_tree_float_reflected[T](view raw) handle error:
         return fail(error)
     return ok(some(item))
 function json_decode_tree_scalar_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[T, string]:
@@ -146,7 +146,7 @@ function json_decode_tree_integer_reflected[T](view raw: JsonTree, primitive: Ty
         return fail(range_error)
     T typed = item
     return ok(typed)
-function json_decode_tree_float_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[T, string]:
+function json_decode_tree_float_reflected[T](view raw: JsonTree) returns result[T, string]:
     float64 item = json_tree_as_float64(view raw) handle error:
         return fail(error)
     T typed = item
