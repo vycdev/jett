@@ -1,32 +1,24 @@
 namespace test
-
 type Labels = list[string]
 type NonEmpty = string where string.char_count(value) > 0
-
 enum Direction:
     north
     south
-
 enum Shape:
     circle(radius: float64)
     rect(width: float64, height: float64)
-
 bitfield Packet:
     version: 4 bits
     direction: 8 bits as Direction
-
 struct Profile:
     city: string
     visits: list[int64]
-
 struct AliasRefined:
     labels: Labels
     display: NonEmpty
-
 struct EnumPayload:
     direction: Direction
     shape: Shape
-
 struct User:
     id: string serialize "userId"
     active: bool
@@ -42,7 +34,6 @@ struct User:
     failed: result[int64, string]
     token: secret[string]
     audit_tokens: list[secret[string]]
-
 function reflected_user_json() returns string:
     Profile profile = Profile(city: "Cluj", visits: list(3, 5))
     bytes payload = bytes.from_string("Hi")
@@ -53,7 +44,6 @@ function reflected_user_json() returns string:
     secret[string] audit_b = "audit-b"
     User user = User(id: "u1", active: true, note: "quote \" slash \\ newline \n carriage \r tab \t nul \0", payload: payload, profile: profile, tags: list("admin", "beta"), lucky: lucky, scores: map("wins": 3, "losses": 1), nickname: some("ally"), missing: none, outcome: ok(7), failed: fail("bad"), token: "secret-token", audit_tokens: list(audit_a, audit_b))
     return json.serialize_public[User](view user)
-
 function reflected_alias_refinement_json() returns string:
     Labels labels = list("core", "edge")
     NonEmpty display = "ready" handle error:
@@ -61,29 +51,24 @@ function reflected_alias_refinement_json() returns string:
     AliasRefined payload = AliasRefined(labels: labels, display: display) handle error:
         return "invalid"
     return json.serialize_public[AliasRefined](view payload)
-
 function reflected_enum_json() returns string:
     EnumPayload payload = EnumPayload(direction: Direction.north, shape: Shape.circle(2.5))
     return json.serialize_public[EnumPayload](view payload)
-
 function reflected_bitfield_json() returns string:
     Packet packet = Packet(version: 4, direction: Direction.south)
     return json.serialize_public[Packet](view packet)
-
 function reflected_control_string_json() returns string:
     bytes raw = bytes.from_hex("610162080b0c1f") handle error:
         return error
     string text = bytes.to_string(raw) handle error:
         return error
     return json.serialize_public[string](view text)
-
 function reflected_all_control_string_json() returns string:
     bytes raw = bytes.from_hex("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f") handle error:
         return error
     string text = bytes.to_string(raw) handle error:
         return error
     return json.serialize_public[string](view text)
-
 function reflected_unicode_roundtrip_hex() returns string:
     string source_hex = "c3a9e4bda0e5a5bd"
     bytes raw = bytes.from_hex(source_hex) handle error:
@@ -91,12 +76,11 @@ function reflected_unicode_roundtrip_hex() returns string:
     string text = bytes.to_string(raw) handle error:
         return error
     string quoted = json.serialize_public[string](view text)
-    JsonValue parsed = json.parse_raw(quoted) handle error:
+    json.JsonTree parsed = json.parse_raw(quoted) handle error:
         return error
-    string decoded = json.as_string(parsed) handle error:
+    string decoded = json.as_string(view parsed) handle error:
         return error
     return bytes.to_hex(bytes.from_string(decoded))
-
 verify json_reflection_nested_serializer:
     string raw = reflected_user_json()
     assert string.contains(raw, "userId") == true
@@ -129,26 +113,22 @@ verify json_reflection_nested_serializer:
     assert string.contains(raw, "secret-token") == false
     assert string.contains(raw, "audit_tokens") == false
     assert string.contains(raw, "audit-a") == false
-
     string alias_raw = reflected_alias_refinement_json()
     assert string.contains(alias_raw, "labels") == true
     assert string.contains(alias_raw, "[\"core\",\"edge\"]") == true
     assert string.contains(alias_raw, "display") == true
     assert string.contains(alias_raw, "\"ready\"") == true
-
     string enum_raw = reflected_enum_json()
     assert string.contains(enum_raw, "direction") == true
     assert string.contains(enum_raw, "\"north\"") == true
     assert string.contains(enum_raw, "shape") == true
     assert string.contains(enum_raw, "circle") == true
     assert string.contains(enum_raw, "[2.5]") == true
-
     string bitfield_raw = reflected_bitfield_json()
     assert string.contains(bitfield_raw, "version") == true
     assert string.contains(bitfield_raw, "4") == true
     assert string.contains(bitfield_raw, "direction") == true
     assert string.contains(bitfield_raw, "\"south\"") == true
-
     string control_raw = reflected_control_string_json()
     assert control_raw == "\"a\\u0001b\\b\\u000b\\f\\u001f\""
     assert reflected_all_control_string_json() == "\"\\u0000\\u0001\\u0002\\u0003\\u0004\\u0005\\u0006\\u0007\\b\\t\\n\\u000b\\f\\r\\u000e\\u000f\\u0010\\u0011\\u0012\\u0013\\u0014\\u0015\\u0016\\u0017\\u0018\\u0019\\u001a\\u001b\\u001c\\u001d\\u001e\\u001f\""

@@ -32,7 +32,7 @@ struct Credential:
     token: secret[string]
 struct RawEnvelope:
     name: string
-    payload: JsonValue
+    payload: json.JsonTree
     alias_payload: json.JsonValue
     tree: json.JsonTree
 function parse_user_id() returns string:
@@ -174,12 +174,12 @@ function parse_bytes_without_prefix_first() returns int64:
     int64 first = bytes.get(value, 0) handle:
         default -1
     return first
-function parse_json_value_field() returns string:
-    JsonValue root = json.parse[JsonValue]("{{\"name\":\"Ada\",\"score\":5}}") handle error:
+function parse_json_tree_field() returns string:
+    json.JsonTree root = json.parse[json.JsonTree]("{{\"name\":\"Ada\",\"score\":5}}") handle error:
         return error
-    JsonValue name_raw = json.field(root, "name") handle:
+    json.JsonTree name_raw = json.field(view root, "name") handle:
         return "missing name"
-    return json.as_string(name_raw) handle error:
+    return json.as_string(view name_raw) handle error:
         default error
 function parse_json_value_alias_field() returns string:
     json.JsonValue root = json.parse[json.JsonValue]("{{\"name\":\"Grace\",\"score\":7}}") handle error:
@@ -191,9 +191,9 @@ function parse_json_value_alias_field() returns string:
 function parse_json_value_struct_field() returns string:
     RawEnvelope envelope = json.parse[RawEnvelope]("{{\"name\":\"doc\",\"payload\":{{\"score\":5}},\"alias_payload\":{{\"score\":8}},\"tree\":{{\"label\":\"native\"}}}}") handle error:
         return error
-    JsonValue score_raw = json.field(envelope.payload, "score") handle:
+    json.JsonTree score_raw = json.field(view envelope.payload, "score") handle:
         return "missing score"
-    int64 score = json.as_int64(score_raw) handle error:
+    int64 score = json.as_int64(view score_raw) handle error:
         return error
     json.JsonValue alias_score_raw = json.field(view envelope.alias_payload, "score") handle:
         return "missing alias score"
@@ -203,7 +203,7 @@ function parse_json_value_struct_field() returns string:
         return "missing label"
     string label = json.json_tree_as_string(view label_raw) handle error:
         return error
-    return "{envelope.name}:{json.kind(envelope.payload)}:{score}:{alias_score}:{label}"
+    return "{envelope.name}:{json.kind(view envelope.payload)}:{score}:{alias_score}:{label}"
 function parse_json_tree_top_level() returns string:
     json.JsonTree tree = json.parse[json.JsonTree]("[1,true,null]") handle error:
         return error
@@ -258,7 +258,7 @@ verify json_parse:
     assert parse_invalid_nothing_error() == "expected null, got number"
     assert parse_bytes_length() == 2
     assert parse_bytes_without_prefix_first() == 72
-    assert parse_json_value_field() == "Ada"
+    assert parse_json_tree_field() == "Ada"
     assert parse_json_value_alias_field() == "Grace"
     assert parse_json_value_struct_field() == "doc:object:5:8:native"
     assert parse_json_tree_top_level() == "array:3"

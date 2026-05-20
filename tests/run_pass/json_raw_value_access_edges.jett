@@ -1,49 +1,42 @@
 namespace test
-
 function missing_key_and_present_null() returns string:
-    JsonValue root = json.parse_raw("{{\"present\":null}}") handle error:
+    json.JsonTree root = json.parse_raw("{{\"present\":null}}") handle error:
         return error
-    JsonValue missing = json.field(root, "missing") handle:
-        JsonValue present = json.field(root, "present") handle:
+    json.JsonTree missing = json.field(view root, "missing") handle:
+        json.JsonTree present = json.field(view root, "present") handle:
             return "present missing"
-        return "missing absent:present null {json.is_null(present)}"
-    return "missing present:{json.kind(missing)}"
-
+        return "missing absent:present null {json.is_null(view present)}"
+    return "missing present:{json.kind(view missing)}"
 function index_out_of_bounds_is_absent() returns string:
-    JsonValue values = json.parse_raw("[1,2]") handle error:
+    json.JsonTree values = json.parse_raw("[1,2]") handle error:
         return error
-    JsonValue item = json.index(values, 9) handle:
+    json.JsonTree item = json.index(view values, 9) handle:
         return "absent"
-    return "present:{json.kind(item)}"
-
+    return "present:{json.kind(view item)}"
 function field_on_non_object_is_absent() returns string:
-    JsonValue text = json.parse_raw("\"Ada\"") handle error:
+    json.JsonTree text = json.parse_raw("\"Ada\"") handle error:
         return error
-    JsonValue field = json.field(text, "name") handle:
+    json.JsonTree field = json.field(view text, "name") handle:
         return "absent"
-    return "present:{json.kind(field)}"
-
+    return "present:{json.kind(view field)}"
 function index_on_non_array_is_absent() returns string:
-    JsonValue text = json.parse_raw("\"Ada\"") handle error:
+    json.JsonTree text = json.parse_raw("\"Ada\"") handle error:
         return error
-    JsonValue item = json.index(text, 0) handle:
+    json.JsonTree item = json.index(view text, 0) handle:
         return "absent"
-    return "present:{json.kind(item)}"
-
+    return "present:{json.kind(view item)}"
 function object_keys_wrong_shape_error() returns string:
-    JsonValue text = json.parse_raw("\"Ada\"") handle error:
+    json.JsonTree text = json.parse_raw("\"Ada\"") handle error:
         return error
-    list[string] keys = json.object_keys(text) handle error:
+    list[string] keys = json.object_keys(view text) handle error:
         return error
     return "{list.length(keys)}"
-
 function scalar_cast_wrong_shape_error() returns string:
-    JsonValue text = json.parse_raw("\"Ada\"") handle error:
+    json.JsonTree text = json.parse_raw("\"Ada\"") handle error:
         return error
-    int64 value = json.as_int64(text) handle error:
+    int64 value = json.as_int64(view text) handle error:
         return error
     return "{value}"
-
 verify json_raw_value_access_edges:
     assert missing_key_and_present_null() == "missing absent:present null true"
     assert index_out_of_bounds_is_absent() == "absent"

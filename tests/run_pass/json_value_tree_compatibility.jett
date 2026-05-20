@@ -245,6 +245,17 @@ function raw_helpers_view_tree_without_consuming() returns string:
     bool serialized = string.contains(raw, "Barbara")
     string tree_kind = json.json_tree_kind(view tree)
     return "{kind}:{is_object}:{list.length[string](view keys)}:{name}:{serialized}:{tree_kind}"
+function legacy_json_value_public_parse_bridge() returns string:
+    JsonValue raw = json.parse[JsonValue]("{{\"name\":\"Ada\",\"score\":5}}") handle error:
+        return error
+    JsonValue name = json.field(raw, "name") handle:
+        return "missing"
+    return json.as_string(name) handle error:
+        default error
+function legacy_json_value_public_serialize_bridge() returns string:
+    JsonValue raw = json.parse_raw("{{\"name\":\"Ada\",\"score\":5}}") handle error:
+        return error
+    return json.serialize[JsonValue](view raw)
 function namespaced_json_value_alias_roundtrip() returns string:
     json.JsonValue raw = json.parse_raw("{{\"name\":\"Alice\"}}") handle error:
         return error
@@ -334,6 +345,10 @@ verify json_value_tree_compatibility:
     assert raw_is_string_accepts_tree() == true
     assert raw_serialize_accepts_tree() == true
     assert raw_helpers_view_tree_without_consuming() == "object:true:5:Barbara:true:object"
+    assert legacy_json_value_public_parse_bridge() == "Ada"
+    string legacy_serialized = legacy_json_value_public_serialize_bridge()
+    assert string.contains(legacy_serialized, "\"name\":\"Ada\"") == true
+    assert string.contains(legacy_serialized, "\"score\":5") == true
     assert namespaced_json_value_alias_roundtrip() == "Alice"
     assert namespaced_json_value_alias_to_legacy() == "Carol"
     assert namespaced_json_value_alias_container_bridge() == "Alice:Alice"
