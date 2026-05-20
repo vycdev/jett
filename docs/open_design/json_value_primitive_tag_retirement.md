@@ -21,9 +21,9 @@ primitive tag.
   loaded and fall back to the legacy built-in during bootstrap/no-stdlib paths.
 - The interpreter's direct/no-metadata fallback still reports the
   `json_value_type` primitive tag for bare `JsonValue` reflection.
-- The stdlib JSON serializer and decoder route bare `JsonValue` targets by
-  reflected type name first, leaving `TypePrimitive.json_value_type` as a
-  centralized legacy fallback.
+- The stdlib JSON serializer and decoder route raw targets by reflected type
+  name: `json.JsonTree`, `json.JsonValue`, and bare `JsonValue`. They no
+  longer depend on `TypePrimitive.json_value_type`.
 - Tests intentionally pin both sides of the staged split:
   `JsonValue` remains a compatibility spelling, while `json.JsonValue` is an
   alias to `json.JsonTree`.
@@ -96,17 +96,18 @@ Do not do this as the next step.
    `json.JsonValue`, and bare `JsonValue` as raw JSON without depending only on
    `TypePrimitive.json_value_type`.
    Status: done. `stdlib/json/` now routes reflected serialize/decode raw
-   targets through `json_reflected_raw_type(...)`, leaving the legacy primitive
-   tag as one centralized compatibility signal rather than separate leaf
-   branches.
+   targets through `json_reflected_raw_type(...)`, and that helper recognizes
+   only the source-level raw tree spellings. The legacy primitive tag is no
+   longer part of normal stdlib JSON dispatch.
 3. Change stdlib-loaded reflection for bare `JsonValue` to alias metadata only
    after parse, parse_exact, serialize, serialize_public, raw accessors, and
    container assignment compatibility all pass through the alias path.
    Status: done. `tests/run_pass/json_value_reflection_staging.jett` and
    `tests/run_pass/json_value_reflection_container_metadata.jett` now pin alias
    metadata for bare `JsonValue` while preserving raw behavior.
-4. Keep the legacy primitive fallback isolated to bootstrap/no-stdlib paths
-   until a later cleanup removes or deprecates `TypePrimitive.json_value_type`.
+4. Keep the legacy primitive fallback isolated to bootstrap/no-stdlib
+   reflection paths until a later cleanup removes or deprecates
+   `TypePrimitive.json_value_type`.
 5. Retire `Type::JsonValue` / `TypeInterner::JSON_VALUE` only after bootstrap
    stdlib loading and root aliases no longer need the fallback built-in.
 

@@ -87,14 +87,14 @@ function json_stdlib_string_from_hex(hex: string) returns result[string, string]
     string decoded = bytes.to_string(raw) handle error:
         return fail(error)
     return ok(decoded)
-function json_reflected_raw_type(view info: TypeInfo, primitive: TypePrimitive) returns bool:
+function json_reflected_raw_type(view info: TypeInfo) returns bool:
     if info.type_name == "json.JsonTree":
         return true
     if info.type_name == "json.JsonValue":
         return true
     if info.type_name == "JsonValue":
         return true
-    return primitive == TypePrimitive.json_value_type
+    return false
 mutual:
     export function json_tree_parse(raw: string) returns result[JsonTree, string]
     function json_tree_parse_value(raw: string) returns result[JsonTree, string]

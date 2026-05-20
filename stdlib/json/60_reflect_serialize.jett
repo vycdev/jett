@@ -22,7 +22,7 @@ function json_serialize_public_reflected[T](view value: T) returns string:
     string type_name = info.type_name
     TypePrimitive primitive = info.primitive_tag handle:
         default TypePrimitive.unknown_type
-    if json_reflected_raw_type(view info, primitive):
+    if json_reflected_raw_type(view info):
         return json_serialize_public_raw_reflected[T](view value)
     if primitive != TypePrimitive.unknown_type:
         return json_serialize_public_primitive[T](view value, primitive)
