@@ -335,6 +335,9 @@ pinned in `tests/run_pass/json_parse.jett`,
 `tests/run_pass/json_raw_strict_accessors.jett` for `json.JsonTree`, bare
 `JsonValue`, and `json.JsonValue`; strict accessor argument-shape diagnostics
 are pinned in `tests/compile_fail/json_raw_strict_accessor_argument_shapes.jett`.
+General JSON examples now prefer `json.JsonTree` / `json.JsonValue`; bare
+`JsonValue` remains concentrated in compatibility, parity, and transition
+fixtures.
 
 ## Risks And Open Questions
 
@@ -356,11 +359,11 @@ are pinned in `tests/compile_fail/json_raw_strict_accessor_argument_shapes.jett`
 
 ## Recommended Next Implementation Bite
 
-Prefer `JsonTree` in public-facing examples:
+Plan the legacy primitive-tag retirement:
 
 1. Keep bare `JsonValue` in compatibility fixtures and design notes that explain
    the transition.
-2. Prefer `json.JsonTree` or `json.JsonValue` in examples and public-facing docs
-   so new code does not learn the legacy root spelling first.
-3. Later, update reflection metadata so the legacy
-   `TypePrimitive.json_value_type` is either formally deprecated or removed.
+2. Decide whether `type.info[JsonValue]()` should report a deprecated primitive
+   tag for one release window or become an alias to `json.JsonTree`.
+3. If the alias path wins, first update the stdlib JSON serializer/decoder so
+   their raw-target handling no longer depends on `TypePrimitive.json_value_type`.
