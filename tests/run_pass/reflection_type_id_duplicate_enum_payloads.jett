@@ -1,0 +1,43 @@
+namespace accounts
+export struct User:
+    id: string
+export enum Event:
+    created(user: User)
+namespace audit
+export struct User:
+    service: string
+    attempts: int64
+export enum Event:
+    created(user: User)
+namespace app
+function created_payload_type_name[T]() returns string:
+    for variant in type.variants[T]():
+        if variant.name != "created":
+            continue
+        for field in variant.fields:
+            if field.name == "user":
+                return field.type_name
+    return "missing"
+function accounts_event_json_summary() returns string:
+    use accounts as a
+    a.Event event = a.Event.created(a.User(id: "acct-1"))
+    string raw = json.serialize[a.Event](view event)
+    a.Event decoded = json.parse[a.Event](raw) handle error:
+        return error
+    match decoded:
+        created(user):
+            bool raw_has_id = string.contains(raw, "\"id\":\"acct-1\"")
+            return "{created_payload_type_name[a.Event]()}:{user.id}:{raw_has_id}"
+function audit_event_json_summary() returns string:
+    use audit as a
+    a.Event event = a.Event.created(a.User(service: "svc", attempts: 3))
+    string raw = json.serialize[a.Event](view event)
+    a.Event decoded = json.parse[a.Event](raw) handle error:
+        return error
+    match decoded:
+        created(user):
+            bool raw_has_attempts = string.contains(raw, "\"attempts\":3")
+            return "{created_payload_type_name[a.Event]()}:{user.service}:{user.attempts}:{raw_has_attempts}"
+verify reflection_type_id_duplicate_enum_payloads:
+    assert accounts_event_json_summary() == "accounts.User:acct-1:true"
+    assert audit_event_json_summary() == "audit.User:svc:3:true"

@@ -304,6 +304,10 @@ run_pass_fixture!(
     "reflection_type_id_duplicate_construction.jett"
 );
 run_pass_fixture!(
+    run_pass_reflection_type_id_duplicate_enum_payloads,
+    "reflection_type_id_duplicate_enum_payloads.jett"
+);
+run_pass_fixture!(
     run_pass_reflection_type_id_duplicate_named_owners,
     "reflection_type_id_duplicate_named_owners.jett"
 );
