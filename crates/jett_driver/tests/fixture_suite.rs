@@ -369,6 +369,10 @@ run_pass_fixture!(
     run_pass_json_parse_error_parity,
     "json_parse_error_parity.jett"
 );
+run_pass_fixture!(
+    run_pass_json_parse_success_parity,
+    "json_parse_success_parity.jett"
+);
 run_pass_fixture!(run_pass_json_parse_raw, "json_parse_raw.jett");
 run_pass_fixture!(
     run_pass_json_raw_facade_tree_surface,

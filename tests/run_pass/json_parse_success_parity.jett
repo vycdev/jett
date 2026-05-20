@@ -1,0 +1,64 @@
+namespace test
+function tree_parse_json(raw: string) returns string:
+    json.JsonTree tree = json.json_tree_parse(raw) handle error:
+        return "error:{error}"
+    return json.json_tree_serialize(tree)
+function raw_parse_json(raw: string) returns string:
+    json.JsonTree tree = json.parse_raw(raw) handle error:
+        return "error:{error}"
+    return json.serialize_raw(view tree)
+function typed_json_value_json(raw: string) returns string:
+    JsonValue value = json.parse[JsonValue](raw) handle error:
+        return "error:{error}"
+    return json.serialize_raw(view value)
+function typed_json_value_alias_json(raw: string) returns string:
+    json.JsonValue value = json.parse[json.JsonValue](raw) handle error:
+        return "error:{error}"
+    return json.serialize_raw(view value)
+function typed_json_tree_json(raw: string) returns string:
+    json.JsonTree value = json.parse[json.JsonTree](raw) handle error:
+        return "error:{error}"
+    return json.serialize_raw(view value)
+function exact_json_value_json(raw: string) returns string:
+    JsonValue value = json.parse_exact[JsonValue](raw) handle error:
+        return "error:{error}"
+    return json.serialize_raw(view value)
+function exact_json_value_alias_json(raw: string) returns string:
+    json.JsonValue value = json.parse_exact[json.JsonValue](raw) handle error:
+        return "error:{error}"
+    return json.serialize_raw(view value)
+function exact_json_tree_json(raw: string) returns string:
+    json.JsonTree value = json.parse_exact[json.JsonTree](raw) handle error:
+        return "error:{error}"
+    return json.serialize_raw(view value)
+function parse_success_matches(raw: string) returns bool:
+    string tree_json = tree_parse_json(raw)
+    if tree_json != raw_parse_json(raw):
+        return false
+    if tree_json != typed_json_value_json(raw):
+        return false
+    if tree_json != typed_json_value_alias_json(raw):
+        return false
+    if tree_json != typed_json_tree_json(raw):
+        return false
+    if tree_json != exact_json_value_json(raw):
+        return false
+    if tree_json != exact_json_value_alias_json(raw):
+        return false
+    if tree_json != exact_json_tree_json(raw):
+        return false
+    return true
+verify json_parse_success_parity:
+    assert parse_success_matches("null") == true
+    assert parse_success_matches("true") == true
+    assert parse_success_matches("-0.5e+2") == true
+    assert parse_success_matches("\"Ada\"") == true
+    assert parse_success_matches("\"slash\\/path\"") == true
+    assert parse_success_matches("\"quote \\\" and \\\\\"") == true
+    assert parse_success_matches("\"line\\nnext\"") == true
+    assert parse_success_matches("\"\\b\\f\\n\\r\\t\"") == true
+    assert parse_success_matches("\"\\u00e9\"") == true
+    assert parse_success_matches("\"\\ud834\\udd1e\"") == true
+    assert parse_success_matches("[1,true,null]") == true
+    assert parse_success_matches("{{\"a\":1,\"b\":[\"x\",false]}}") == true
+    assert parse_success_matches(" [ 1 , {{\"a\" : \"b\"}} ] ") == true
