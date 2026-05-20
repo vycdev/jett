@@ -35,7 +35,28 @@ function parse_top_level_result_fail_payload() returns string:
     int64 ignored = parsed handle error:
         return "{error.display_name}:{error.note}"
     return "{ignored}"
+function parse_result_optional_json_value_object() returns string:
+    result[optional[json.JsonValue], string] parsed = json.parse[result[optional[json.JsonValue], string]]("{{\"ok\":{{\"name\":\"Ada\"}}}}") handle error:
+        return error
+    optional[json.JsonValue] maybe_value = parsed handle error:
+        return error
+    json.JsonValue value = maybe_value handle:
+        return "none"
+    json.JsonValue name = json.field(view value, "name") handle:
+        return "missing name"
+    return json.as_string(view name) handle error:
+        default error
+function parse_result_optional_json_value_null() returns string:
+    result[optional[json.JsonValue], string] parsed = json.parse[result[optional[json.JsonValue], string]]("{{\"ok\":null}}") handle error:
+        return error
+    optional[json.JsonValue] maybe_value = parsed handle error:
+        return error
+    json.JsonValue value = maybe_value handle:
+        return "none"
+    return json.kind(view value)
 verify json_parse_collection_edges:
     assert parse_top_level_set_dedupes() == "2:true:true"
     assert parse_top_level_map_optional_bytes() == "2:true:0"
     assert parse_top_level_result_fail_payload() == "Alice:bad"
+    assert parse_result_optional_json_value_object() == "Ada"
+    assert parse_result_optional_json_value_null() == "none"
