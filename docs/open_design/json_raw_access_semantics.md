@@ -8,7 +8,7 @@ This note records the open policy question around `json.field` and
 Raw JSON lookup is intentionally lenient today:
 
 ```jett
-JsonValue field = json.field(root, "name") handle:
+json.JsonTree field = json.field(view root, "name") handle:
     return "absent"
 ```
 
@@ -50,8 +50,8 @@ failure as though a key were merely optional.
 Keep:
 
 ```jett
-function field(view value: JsonTree, key: string) returns optional[JsonTree]
-function index(view value: JsonTree, index: int64) returns optional[JsonTree]
+function field(view value: json.JsonTree, key: string) returns optional[json.JsonTree]
+function index(view value: json.JsonTree, index: int64) returns optional[json.JsonTree]
 ```
 
 Pros:
@@ -70,8 +70,8 @@ Cons:
 Change to:
 
 ```jett
-function field(view value: JsonTree, key: string) returns result[optional[JsonTree], string]
-function index(view value: JsonTree, index: int64) returns result[optional[JsonTree], string]
+function field(view value: json.JsonTree, key: string) returns result[optional[json.JsonTree], string]
+function index(view value: json.JsonTree, index: int64) returns result[optional[json.JsonTree], string]
 ```
 
 Pros:
@@ -90,10 +90,10 @@ Cons:
 Keep `field` / `index` as probing helpers and add strict helpers:
 
 ```jett
-function require_field(view value: JsonTree, key: string) returns result[JsonTree, string]
-function require_index(view value: JsonTree, index: int64) returns result[JsonTree, string]
-function object_field(view value: JsonTree, key: string) returns result[optional[JsonTree], string]
-function array_index(view value: JsonTree, index: int64) returns result[optional[JsonTree], string]
+function require_field(view value: json.JsonTree, key: string) returns result[json.JsonTree, string]
+function require_index(view value: json.JsonTree, index: int64) returns result[json.JsonTree, string]
+function object_field(view value: json.JsonTree, key: string) returns result[optional[json.JsonTree], string]
+function array_index(view value: json.JsonTree, index: int64) returns result[optional[json.JsonTree], string]
 ```
 
 `require_*` would fail on both wrong shape and absence. `object_field` /
@@ -123,14 +123,16 @@ It fits Jett's "one obvious pattern per intent" principle better than changing
 - use `json.object_field` / `json.array_index` when shape must be correct but
   absence is meaningful.
 
-The next implementation bite should add the strict helpers in
-`stdlib/json/`, keep the existing lenient helpers unchanged, and add parity
-tests that pin wrong-shape and missing-key/index diagnostics separately.
+The implemented path keeps the existing lenient helpers unchanged and adds the
+strict helpers for code that needs shape validation.
 
 Status: implemented. The strict helper surface is pinned in
-`tests/run_pass/json_raw_strict_accessors.jett`. The remaining design question
-is whether the lenient `json.field` / `json.index` names should stay as the
-primary public spelling forever, or whether a later compatibility stage should
-guide users toward the stricter helpers for most production code. The current
-JSON transition docs explicitly describe `field` / `index` as probing helpers
-and the strict helpers as the production validation surface.
+`tests/run_pass/json_raw_strict_accessors.jett`, and argument-shape diagnostics
+are pinned in
+`tests/compile_fail/json_raw_strict_accessor_argument_shapes.jett`. The
+remaining design question is whether the lenient `json.field` / `json.index`
+names should stay as the primary public spelling forever, or whether a later
+compatibility stage should guide users toward the stricter helpers for most
+production code. The current JSON transition docs explicitly describe `field` /
+`index` as probing helpers and the strict helpers as the production validation
+surface.
