@@ -1,0 +1,12 @@
+# ERROR: E0400
+namespace test
+
+function consume_raw(raw: JsonValue) returns string:
+    return json.serialize_raw(raw)
+
+function json_value_is_not_copyable() returns string:
+    JsonValue raw = json.parse_raw("\"Ada\"") handle error:
+        return error
+    string first = consume_raw(raw)
+    string second = consume_raw(raw)
+    return "{first}:{second}"

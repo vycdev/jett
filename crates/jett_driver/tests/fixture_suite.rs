@@ -850,6 +850,10 @@ compile_fail_fixture!(
     "json_value_user_json_tree_incompatible.jett"
 );
 compile_fail_fixture!(
+    compile_fail_json_value_not_copyable,
+    "json_value_not_copyable.jett"
+);
+compile_fail_fixture!(
     compile_fail_serialize_annotation_requires_string,
     "serialize_annotation_requires_string.jett"
 );

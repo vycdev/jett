@@ -258,7 +258,9 @@ Reflection metadata now follows source aliases in stdlib-loaded code:
 `type.info[JsonValue]()` and `type.info[json.JsonValue]()` report aliases to
 `json.JsonTree`, while `type.info[json.JsonTree]()` reports enum metadata. The
 legacy primitive remains available only through bootstrap/no-stdlib fallback
-reflection.
+reflection. Ownership follows the same source model: `JsonValue` is no longer
+treated as an implicitly copyable primitive, and raw read facades keep their
+ergonomics by borrowing the raw tree argument implicitly.
 
 ### 5. Move Raw Decoder Code Off `JsonValue`
 

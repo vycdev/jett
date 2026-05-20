@@ -121,8 +121,9 @@ coverage now lives in the JSON run-pass and driver tests.
   `json.object_keys` plus `json.field` enough?
 - Should `json.field` and `json.index` return `result[optional[JsonValue],
   string]` to distinguish wrong-shape access from ordinary absence?
-- During the transition, should `JsonValue` stay copyable for ergonomics, or
-  become a non-copy compatibility spelling whose raw accessors read by `view`?
+- Resolved during the `JsonTree` transition: `JsonValue` is a non-copy
+  compatibility spelling, while raw accessors keep ergonomics by reading their
+  first argument as an implicit `view`.
 - Should `JsonTree.number_value` keep raw number text for round-tripping, or
   split into integer/float variants once numeric parsing is self-hosted?
 - Should unicode escape handling live in the parser itself or in a shared
