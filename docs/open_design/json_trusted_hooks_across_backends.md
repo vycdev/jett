@@ -76,7 +76,8 @@ Future backend work should mirror the existing interpreter/typechecker boundary:
 - How will the future import/prelude system represent bundled stdlib identity?
 - Should native codegen call reflected hooks directly, lower through a runtime
   ABI, or specialize common JSON shapes after typechecking?
-- When can bare `JsonValue` stop reporting the legacy
-  `TypePrimitive.json_value_type` tag?
+- Done for stdlib-loaded code: bare `JsonValue` now reflects through the root
+  alias to `json.JsonTree`. The legacy `TypePrimitive.json_value_type` tag is
+  only a bootstrap/no-stdlib fallback.
 - Should the hook table remain JSON-specific, or become a general compiler
   policy-hook registry once other stdlib features need the same treatment?
