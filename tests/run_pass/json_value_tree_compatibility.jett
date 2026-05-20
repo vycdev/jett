@@ -259,6 +259,21 @@ function namespaced_json_value_alias_to_legacy() returns string:
     JsonValue legacy = raw
     return json.as_string(legacy) handle error:
         default error
+function namespaced_json_value_alias_container_bridge() returns string:
+    json.JsonValue raw = json.parse_raw("\"Alice\"") handle error:
+        return error
+    list[json.JsonValue] aliases = list(raw)
+    list[json.JsonTree] trees = aliases
+    json.JsonTree tree = list.get[json.JsonTree](view trees, 0) handle:
+        return "missing"
+    list[JsonValue] legacies = aliases
+    JsonValue legacy = list.get[JsonValue](view legacies, 0) handle:
+        return "missing"
+    string tree_text = json.json_tree_as_string(view tree) handle error:
+        return error
+    string legacy_text = json.as_string(legacy) handle error:
+        return error
+    return "{tree_text}:{legacy_text}"
 verify json_value_tree_compatibility:
     assert raw_from_tree_assignment() == "Ada"
     assert tree_from_raw_assignment() == "Grace"
@@ -297,3 +312,4 @@ verify json_value_tree_compatibility:
     assert raw_helpers_view_tree_without_consuming() == "object:true:5:Barbara:true:object"
     assert namespaced_json_value_alias_roundtrip() == "Alice"
     assert namespaced_json_value_alias_to_legacy() == "Carol"
+    assert namespaced_json_value_alias_container_bridge() == "Alice:Alice"
