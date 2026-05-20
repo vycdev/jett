@@ -95,6 +95,10 @@ Do not do this as the next step.
 2. Add a stdlib JSON raw-target helper that treats `json.JsonTree`,
    `json.JsonValue`, and bare `JsonValue` as raw JSON without depending only on
    `TypePrimitive.json_value_type`.
+   Status: done. `stdlib/json/` now routes reflected serialize/decode raw
+   targets through `json_reflected_raw_type(...)`, leaving the legacy primitive
+   tag as one centralized compatibility signal rather than separate leaf
+   branches.
 3. Keep the current reflection tests while adding a second fixture that
    describes the future alias behavior behind an explicit staged expectation.
 4. Change `type.info[JsonValue]()` only after parse, parse_exact, serialize,
