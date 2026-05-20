@@ -71,7 +71,7 @@ Future backend work should mirror the existing interpreter/typechecker boundary:
 - public `json.parse`, `json.parse_exact`, `json.serialize`, and
   `json.serialize_public` still enforce compiler-owned policy gates,
 - `json.JsonTree`, `json.JsonValue`, and bare `JsonValue` keep the staged
-  compatibility relation without trusting user-defined lookalike types.
+  alias compatibility without trusting user-defined lookalike types.
 
 ## Open Questions
 

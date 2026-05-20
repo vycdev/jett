@@ -242,7 +242,7 @@ for current JSON hooks; future backends need the same identity boundary.
    - The typechecker raw facade signatures now come from those exported stdlib
      wrapper declarations. The hardcoded raw facade signature fallback has been
      removed; `JsonValue` compatibility is preserved by the stdlib root alias
-     and the checked compatibility relation with trusted `json.JsonTree`.
+     rather than a compiler-owned compatibility table.
    - `json_tree_serialize` is view-native and iterates arrays/objects through
      viewed list/map loops, so `serialize_raw(view value)` no longer clones the
      tree before serializing.
@@ -291,9 +291,10 @@ for current JSON hooks; future backends need the same identity boundary.
    surface.
 7. Keep the staged `JsonValue` migration narrow. The current implementation
    exposes `json.JsonValue` as an exported namespaced source alias and bare
-   `JsonValue` as an allowlisted stdlib root alias for `json.JsonTree`. It also
-   preserves the compiler-owned legacy compatibility relation and now reflects
-   through the alias in stdlib-loaded code. See
+   `JsonValue` as an allowlisted stdlib root alias for `json.JsonTree`.
+   Stdlib-loaded code now resolves and reflects through that alias; the
+   compiler-owned `JsonValue` primitive remains only as a bootstrap/no-stdlib
+   fallback. See
    `/docs/active/json_value_transition_plan.md` and
    `/docs/open_design/prelude_root_aliases.md`. The remaining decision is when
    bootstrap/no-stdlib reflection and `TypePrimitive` can deprecate or remove

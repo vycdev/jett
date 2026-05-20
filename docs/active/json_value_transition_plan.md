@@ -51,8 +51,7 @@ about: two names, two traversal surfaces, one conceptual data model.
 - `jett_comptime` no longer has `Value::Json` or a `serde_json` dependency.
 - In stdlib-loaded code, the root `JsonValue` spelling now resolves and
   reflects through the stdlib alias to `json.JsonTree`. The compiler still keeps
-  a legacy `Type::JsonValue` fallback and compatibility relation for
-  bootstrap/no-stdlib paths.
+  a legacy `Type::JsonValue` fallback for bootstrap/no-stdlib paths.
 - The stdlib JSON module exports `json.JsonValue` as a source alias to
   `json.JsonTree`, and exports a narrow root alias
   `JsonValue = json.JsonTree` for source visibility.
@@ -148,11 +147,11 @@ module system is supposed to remove.
 
 The staged direction is:
 
-1. Keep `JsonValue` as a compiler-known legacy spelling and keep only the
-   bundled `json.JsonTree` enum compatible with it.
-2. Done: the typechecker now seeds an explicit compiler-owned compatibility
-   alias table entry, `JsonValue -> json.JsonTree`. This models a future
-   prelude/exported alias without depending on namespace leakage.
+1. Keep the legacy `JsonValue` primitive fallback only for bootstrap/no-stdlib
+   reflection paths.
+2. Done: normal stdlib-loaded source now uses the root alias
+   `JsonValue = json.JsonTree`, without a separate compiler-owned compatibility
+   table.
 3. Done: the stdlib also exports `json.JsonValue = JsonTree` as the
    namespaced source-level alias.
 4. Done: the stdlib exports `export root type JsonValue = json.JsonTree`, while
@@ -207,8 +206,8 @@ and interpreted execution delegate to trusted stdlib functions where possible:
 The typechecker should prefer the bundled `json.JsonTree` type for raw facade
 parameters and returns when the stdlib is loaded from compiler-shipped files.
 User/project declarations with the same qualified name must not seed that
-bridge. The compiler-owned `JsonValue -> json.JsonTree` compatibility alias
-keeps older `JsonValue` code working during the transition.
+bridge. The stdlib root alias keeps older `JsonValue` code working during the
+transition.
 
 Status: implemented. Exported stdlib facade wrappers now exist for
 `parse_raw`, `serialize_raw`, `kind`, `field`, `index`, the shape predicates,
@@ -247,13 +246,13 @@ Recommendation: keep `TypePrimitive.json_value_type` as a bootstrap/no-stdlib
 fallback, but document it as legacy now that `JsonTree` is the preferred
 spelling.
 
-Status: implemented through both a narrow source-level root alias and a
-compiler-owned legacy compatibility relation. Only the stdlib enum
-`json.JsonTree` is compatible with `JsonValue`; user-defined enums named
-`JsonTree` remain unrelated. The runtime raw facade checks now follow the same
-rule and only accept enum values whose owner is the bundled `json.JsonTree`, not
-a bare or user-defined `JsonTree`. Typechecker raw facade signatures also follow
-the same trusted-origin rule instead of trusting qualified name text alone.
+Status: implemented through a narrow source-level root alias. Normal
+stdlib-loaded code resolves `JsonValue` through that alias, so it shares the
+same checked type as the bundled `json.JsonTree`; user-defined enums named
+`JsonTree` remain unrelated. The runtime raw facade checks only accept enum
+values whose owner is the bundled `json.JsonTree`, not a bare or user-defined
+`JsonTree`. Typechecker raw facade signatures also follow the same
+trusted-origin rule instead of trusting qualified name text alone.
 Reflection metadata now follows source aliases in stdlib-loaded code:
 `type.info[JsonValue]()` and `type.info[json.JsonValue]()` report aliases to
 `json.JsonTree`, while `type.info[json.JsonTree]()` reports enum metadata. The
@@ -315,7 +314,7 @@ Add tests before each behavior change:
 - Reflection metadata remains intentional for `JsonValue` and `JsonTree`.
 - A user-defined top-level `enum JsonTree` remains incompatible with
   `JsonValue`.
-- A compiler-seeded `JsonValue` compatibility alias works recursively in
+- The stdlib root `JsonValue` compatibility alias works recursively in
   `list`, `map`, `set`, `optional`, `result`, `secret`, struct fields, and
   function arguments.
 - `type.info[JsonValue]()`, `type.info[json.JsonValue]()` and

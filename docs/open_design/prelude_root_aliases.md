@@ -125,9 +125,9 @@ Staging rules:
 - reflected as an alias when named through the source alias,
 - does not change compiler-owned trust for JSON bridge hooks.
 
-`JsonValue` can then move from a compiler-seeded compatibility alias toward a
-source-owned prelude alias, while keeping `TypePrimitive.json_value_type` only
-as a bootstrap/no-stdlib fallback during the transition.
+`JsonValue` has moved to a source-owned stdlib root alias in normal
+stdlib-loaded code, while `TypePrimitive.json_value_type` remains only as a
+bootstrap/no-stdlib fallback during the transition.
 
 ## Implementation Staging Notes
 
@@ -142,8 +142,9 @@ The important staged invariant is:
   root alias rather than through the legacy primitive.
 - Done: `json.JsonValue` remains the ordinary namespaced alias whose reflection
   is an alias to `json.JsonTree`.
-- The `JsonValue -> json.JsonTree` compatibility relation remains restricted to
-  the bundled stdlib `json.JsonTree`, not any user enum named `JsonTree`.
+- Done: the extra compiler-owned `JsonValue -> json.JsonTree` compatibility
+  table was removed; normal compatibility now comes from the stdlib root alias.
+  User enums named `JsonTree` remain unrelated.
 
 Concretely, a safe implementation should:
 

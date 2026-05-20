@@ -15,8 +15,9 @@ primitive tag.
 
 - `jett_types` still has `Type::JsonValue` and `TypeInterner::JSON_VALUE`.
 - The typechecker lets the stdlib root alias win for the bare name `JsonValue`
-  when the bundled stdlib is loaded, and still seeds a compatibility relation
-  between legacy `JsonValue` and trusted `json.JsonTree`.
+  when the bundled stdlib is loaded. The extra compiler-owned compatibility
+  table between legacy `JsonValue` and trusted `json.JsonTree` has been
+  removed.
 - Raw JSON facade signatures come from exported stdlib wrappers in normal
   stdlib-loaded code. In no-stdlib direct-interpreter contexts the raw public
   names are undefined rather than backed by hidden Rust semantics.
