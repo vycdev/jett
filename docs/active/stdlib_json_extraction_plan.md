@@ -78,9 +78,10 @@ body boundary. The private hook names remain the trusted implementation targets
 inside the wrapper body until the language can carry the compiler-owned JSON
 policy on ordinary stdlib declarations.
 
-The raw-string hooks are exercised indirectly through trusted exported public
-wrappers. Ordinary source cannot name the private hook entrypoints directly;
-compile-fail fixtures pin that visibility boundary.
+The typed parse and serialize bridge hooks are exercised indirectly through
+trusted exported public wrappers. Ordinary source can name the exported
+`json.json_tree_parse` raw parser, but cannot name the private reflected hook
+entrypoints directly; compile-fail fixtures pin that visibility boundary.
 
 The run-pass fixtures still own the test-specific type definitions and the
 flat decoder prototype:
@@ -169,8 +170,8 @@ public API handoff:
   `json.serialize_public` paths still carry compiler-enforced policy checks,
 - `use` still resolves only a namespace-looking binding rather than importing a
   real namespace registry,
-- qualified names are still an alias-based staging model rather than a full
-  namespace/export registry.
+- canonical qualified declarations and export visibility now exist, but the
+  language still lacks a real module/import registry and dependency model.
 
 This is larger than JSON and should be staged carefully.
 See `/docs/active/stdlib_visibility_design.md` for the current visibility and
@@ -260,12 +261,11 @@ for current JSON hooks; future backends need the same identity boundary.
    `/docs/completed/json_public_bridge_handoff.md`.
 4. Keep the real public wrapper names in `namespace json`, while retaining
    compiler policy checks for secrets, `view`, map keys, and handled results.
-5. Keep broad bridge/parity tests around the removed Rust-backed fallback
-   implementation paths and the remaining typed bridge bootstrap/no-stdlib
-   dispatchers. Done for typed public parse/serialize, raw `JsonTree` /
-   compatibility
-   `JsonValue` execution in `jett_comptime`, and runtime `main()` reflection
-   metadata handoff for namespaced generic JSON.
+5. Keep broad bridge/parity tests around removed Rust-backed fallback paths and
+   the current trusted-wrapper/error paths. Done for typed public
+   parse/serialize, raw `JsonTree` / compatibility `JsonValue` execution in
+   `jett_comptime`, and runtime `main()` reflection metadata handoff for
+   namespaced generic JSON.
 6. Continue hardening the self-hosted `JsonTree` parser. Common malformed-input
    diagnostics are pinned for unterminated strings/arrays/objects, trailing
    characters, mismatched delimiters, bad number forms, bad literals,

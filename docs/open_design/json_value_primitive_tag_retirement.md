@@ -46,7 +46,7 @@ Keep `TypePrimitive.json_value_type` and document it as a legacy primitive.
 Pros:
 
 - zero migration risk,
-- current stdlib JSON raw routing stays simple,
+- bootstrap/no-stdlib reflection stays simple,
 - existing reflection tests remain stable.
 
 Cons:
@@ -56,11 +56,11 @@ Cons:
   representation,
 - future backends must keep honoring a special primitive.
 
-### Option B: Deprecate The Primitive Tag, Keep The Bare Name
+### Option B: Finish Deprecating The Primitive Tag, Keep The Bare Name
 
-Make bare `JsonValue` resolve as a root alias to trusted `json.JsonTree`, and
-change `type.info[JsonValue]()` to report alias/enum metadata rather than
-`json_value_type`.
+Keep bare `JsonValue` resolving as a root alias to trusted `json.JsonTree` in
+stdlib-loaded code, then remove the remaining bootstrap/no-stdlib primitive
+reflection behavior once that fallback has a replacement story.
 
 Pros:
 
@@ -112,6 +112,27 @@ Do not do this as the next step.
    `TypePrimitive.json_value_type`.
 5. Retire `Type::JsonValue` / `TypeInterner::JSON_VALUE` only after bootstrap
    stdlib loading and root aliases no longer need the fallback built-in.
+
+## Retirement Checklist
+
+The alias-table removal is done. The remaining primitive behavior is the
+bootstrap/no-stdlib fallback pinned by the direct interpreter reflection tests.
+
+Before removing `TypePrimitive.json_value_type`:
+
+1. Decide what direct/no-stdlib reflection should report for bare `JsonValue`
+   when no bundled stdlib alias has been registered.
+2. Update the typechecker fallback in unresolved-name type lookup so it no
+   longer maps bare `JsonValue` to `TypeInterner::JSON_VALUE`, or keep that path
+   as an explicit deprecated compatibility mode.
+3. Update comptime direct reflection so `type.kind[JsonValue]()` and
+   `type.primitive_tag[JsonValue]()` no longer synthesize the legacy primitive
+   when the alias is absent.
+4. Remove the `TypePrimitive.json_value_type` variant only after all stdlib
+   JSON routing, public raw facade signatures, and compatibility tests are
+   source-alias based.
+5. Remove `Type::JsonValue` / `TypeInterner::JSON_VALUE` last, after bootstrap
+   stdlib loading no longer needs an internal placeholder for the old spelling.
 
 ## Tests That Must Stay Green
 

@@ -58,10 +58,10 @@ about: two names, two traversal surfaces, one conceptual data model.
 - `json_decode_reflected[T](raw: JsonValue)` has been removed; decoding now
   enters through `json_decode_tree_reflected[T](view raw)` after parsing to
   `JsonTree`.
-- `json_decode_tree_reflected[T]` now treats both `JsonValue` and
-  `json.JsonTree` as raw-tree identity targets, so raw fields nested inside
-  typed structs/lists/options use the native tree instead of an unsupported
-  primitive path.
+- `json_decode_tree_reflected[T]` now treats bare `JsonValue`,
+  `json.JsonValue`, and `json.JsonTree` as raw-tree identity targets, so raw
+  fields nested inside typed structs/lists/options use the native tree instead
+  of an unsupported primitive path.
 - `json.parse_exact[JsonValue]` and `json.parse_exact[json.JsonValue]` now
   share the same raw-tree identity behavior as `json.parse_exact[json.JsonTree]`;
   exact validation does not reject unknown fields inside raw tree targets.
@@ -107,23 +107,28 @@ generalize beyond this compatibility bridge.
 Preferred final shape:
 
 ```jett
-export type JsonValue = JsonTree
+namespace json
 
-function parse_raw(raw: string) returns result[JsonTree, string]
-function serialize_raw(view value: JsonTree) returns string
-function kind(view value: JsonTree) returns string
-function field(view value: JsonTree, key: string) returns optional[JsonTree]
-function index(view value: JsonTree, index: int64) returns optional[JsonTree]
-function object_field(view value: JsonTree, key: string) returns result[optional[JsonTree], string]
-function array_index(view value: JsonTree, index: int64) returns result[optional[JsonTree], string]
-function require_field(view value: JsonTree, key: string) returns result[JsonTree, string]
-function require_index(view value: JsonTree, index: int64) returns result[JsonTree, string]
-function array_length(view value: JsonTree) returns result[int64, string]
-function object_keys(view value: JsonTree) returns result[list[string], string]
-function as_string(view value: JsonTree) returns result[string, string]
-function as_int64(view value: JsonTree) returns result[int64, string]
-function as_float64(view value: JsonTree) returns result[float64, string]
-function as_bool(view value: JsonTree) returns result[bool, string]
+export enum JsonTree:
+    ...
+export type JsonValue = JsonTree
+export root type JsonValue = json.JsonTree
+
+export function parse_raw(raw: string) returns result[JsonTree, string]
+export function serialize_raw(view value: JsonTree) returns string
+export function kind(view value: JsonTree) returns string
+export function field(view value: JsonTree, key: string) returns optional[JsonTree]
+export function index(view value: JsonTree, index: int64) returns optional[JsonTree]
+export function object_field(view value: JsonTree, key: string) returns result[optional[JsonTree], string]
+export function array_index(view value: JsonTree, index: int64) returns result[optional[JsonTree], string]
+export function require_field(view value: JsonTree, key: string) returns result[JsonTree, string]
+export function require_index(view value: JsonTree, index: int64) returns result[JsonTree, string]
+export function array_length(view value: JsonTree) returns result[int64, string]
+export function object_keys(view value: JsonTree) returns result[list[string], string]
+export function as_string(view value: JsonTree) returns result[string, string]
+export function as_int64(view value: JsonTree) returns result[int64, string]
+export function as_float64(view value: JsonTree) returns result[float64, string]
+export function as_bool(view value: JsonTree) returns result[bool, string]
 ```
 
 `json.JsonValue` is now expressible as a normal exported stdlib alias, and bare
@@ -142,7 +147,7 @@ but the parent shape must be correct.
 Do not implement `JsonValue` by relying on accidental namespace flattening.
 Writing `type JsonValue = JsonTree` inside `namespace json` would naturally
 create `json.JsonValue`, not the existing unqualified compatibility spelling.
-Using the current flat alias leakage would tie a core migration to behavior the
+Using the old flat alias leakage would have tied a core migration to behavior the
 module system is supposed to remove.
 
 The staged direction is:
@@ -305,7 +310,8 @@ Add tests before each behavior change:
   `json.serialize_public[json.JsonValue]` treat the namespaced alias as raw
   `JsonTree`, not as enum internals.
 - `json.parse[json.JsonTree]` returns the native raw tree directly.
-- `JsonValue` and `JsonTree` assignment/alias behavior once enabled.
+- `JsonValue` and `json.JsonTree` assignment/container alias behavior stays
+  pinned.
 - Raw object lookup preserves absence semantics.
 - Wrong-shape lookup returns `none`; wrong-shape shape-requiring access returns
   `result` errors.
@@ -345,8 +351,9 @@ fixtures.
 - **Alias mechanics:** the first stdlib root alias exists for `JsonValue`. The
   open question is whether this stays an allowlisted compatibility-only feature
   or grows into a broader prelude policy.
-- **Reflection metadata:** if `JsonValue` is an alias, `type.info[JsonValue]`
-  must not surprise existing code.
+- **Reflection metadata:** because `JsonValue` is now a stdlib root alias in
+  stdlib-loaded code, `type.info[JsonValue]()` alias metadata must stay pinned
+  while the no-stdlib primitive fallback remains documented separately.
 - **View iteration:** native raw serialization over `view JsonTree` now uses
   viewed list/map iteration; the remaining question is whether the broader
   language should make view-parameter calls implicitly non-consuming for

@@ -68,6 +68,12 @@ Only compiler-shipped stdlib files may use `export root`. Project files cannot.
 The driver loads these root exports after stdlib declarations and before user
 files.
 
+The current narrow implementation does not require a separate
+`stdlib/prelude.jett` file yet: the compiler allowlists
+`export root type JsonValue = json.JsonTree` inside the compiler-shipped
+`stdlib/json/` fragments. A future prelude file remains the broader
+organization question if more root aliases are ever allowed.
+
 Pros:
 
 - moves compatibility spellings into source,
@@ -119,8 +125,9 @@ Staging rules:
 
 - valid only in compiler-shipped stdlib files,
 - valid only for `type` aliases in the first pass,
-- inserted into root type lookup after built-in primitives and before user
-  declarations,
+- takes precedence over the legacy built-in `JsonValue` primitive when the
+  bundled stdlib alias is present; the primitive remains a fallback only when
+  the alias is absent,
 - visible to completion/hover as a prelude alias,
 - reflected as an alias when named through the source alias,
 - does not change compiler-owned trust for JSON bridge hooks.

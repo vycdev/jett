@@ -192,8 +192,9 @@ Implemented:
 - Same-namespace private helper access remains allowed.
 - Existing user/project namespace fixtures now mark public cross-namespace API
   with `export`.
-- The public `JsonTree` API in `stdlib/json/` fragments is explicitly exported while
-  parser, decoder, serializer, and reflected bridge helpers stay private.
+- The public raw/tree helper surface in `stdlib/json/` fragments is explicitly
+  exported while parser span scanners, reflected decoders, serializers, and
+  bridge hooks stay private.
 - The stdlib JSON module exports `json.JsonValue = JsonTree` as the namespaced
   source-level alias and `export root type JsonValue = json.JsonTree` as the
   narrow root compatibility alias. In stdlib-loaded code the unqualified
@@ -261,7 +262,8 @@ Still staged:
 - A project-defined `namespace json function json_parse_reflected...` cannot
   satisfy the trusted public JSON bridge, and untrusted later registration of
   JSON hook or public wrapper names clears trust. Interpreter unit coverage pins
-  parse, parse_exact, serialize, serialize_public, and raw `JsonTree` hooks.
+  parse, parse_exact, serialize, serialize_public, and public raw facade wrapper
+  dispatch.
 - Ordinary source access to private JSON hooks is rejected for tree parsing,
   reflected parsing, exact reflected parsing, reflected decoding, and reflected
   serialization fixtures under `tests/compile_fail/json_private_*.jett`.
