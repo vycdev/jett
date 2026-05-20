@@ -794,6 +794,10 @@ compile_fail_fixture!(
     "json_serialize_public_requires_view.jett"
 );
 compile_fail_fixture!(
+    compile_fail_json_serialize_json_value_requires_view,
+    "json_serialize_json_value_requires_view.jett"
+);
+compile_fail_fixture!(
     compile_fail_json_serialize_public_top_level_secret_blocked,
     "json_serialize_public_top_level_secret_blocked.jett"
 );

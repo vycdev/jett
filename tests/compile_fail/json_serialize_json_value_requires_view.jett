@@ -1,0 +1,7 @@
+# ERROR: E0344
+namespace test
+
+function bad_json_value_serialize_view() returns string:
+    JsonValue raw = json.parse_raw("{{\"name\":\"Ada\"}}") handle error:
+        return error
+    return json.serialize[JsonValue](raw)
