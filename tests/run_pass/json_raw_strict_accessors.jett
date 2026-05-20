@@ -74,6 +74,38 @@ function strict_accessors_accept_legacy_value() returns string:
         return error
     return json.as_string(name) handle error:
         default error
+function strict_accessors_accept_namespaced_value() returns string:
+    json.JsonValue root = json.parse_raw("{{\"name\":\"Lin\",\"scores\":[3,5]}}") handle error:
+        return error
+    json.JsonValue name = json.require_field(view root, "name") handle error:
+        return error
+    json.JsonValue scores = json.require_field(view root, "scores") handle error:
+        return error
+    json.JsonValue second = json.require_index(view scores, 1) handle error:
+        return error
+    string name_text = json.as_string(view name) handle error:
+        return error
+    int64 score = json.as_int64(view second) handle error:
+        default -1
+    return "{name_text}:{score}"
+function strict_optional_accessors_accept_namespaced_value() returns string:
+    json.JsonValue root = json.parse_raw("{{\"scores\":[3,5]}}") handle error:
+        return error
+    optional[json.JsonValue] missing_field = json.object_field(view root, "absent") handle error:
+        return error
+    json.JsonValue field = missing_field handle:
+        default json.JsonTree.string_value("field absent")
+    json.JsonValue scores = json.require_field(view root, "scores") handle error:
+        return error
+    optional[json.JsonValue] missing_index = json.array_index(view scores, 9) handle error:
+        return error
+    json.JsonValue item = missing_index handle:
+        default json.JsonTree.string_value("index absent")
+    string field_text = json.as_string(view field) handle error:
+        return error
+    string item_text = json.as_string(view item) handle error:
+        return error
+    return "{field_text}:{item_text}"
 verify json_raw_strict_accessors:
     assert strict_required_field_value() == "Ada"
     assert strict_optional_missing_field() == "absent"
@@ -85,3 +117,5 @@ verify json_raw_strict_accessors:
     assert strict_required_index_missing() == "missing array item 9"
     assert strict_index_wrong_shape() == "expected array, got object"
     assert strict_accessors_accept_legacy_value() == "Grace"
+    assert strict_accessors_accept_namespaced_value() == "Lin:5"
+    assert strict_optional_accessors_accept_namespaced_value() == "field absent:index absent"
