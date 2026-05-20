@@ -4,17 +4,18 @@ This note records the first raw JSON surface in Jett. It began as an opaque
 `JsonValue` bridge toward stdlib `json.parse[T]`; the active implementation now
 executes that surface through the self-hosted `json.JsonTree` representation.
 
-Long term, bare `JsonValue` should become a compatibility spelling for the
-native `JsonTree` representation rather than a compiler-owned legacy spelling.
-See `/docs/active/json_value_transition_plan.md`.
+Bare `JsonValue` is now a compatibility spelling for the native `JsonTree`
+representation in stdlib-loaded code. The compiler still keeps a legacy
+fallback for bootstrap/no-stdlib paths. See
+`/docs/active/json_value_transition_plan.md`.
 
 ## Current Compatibility Surface
 
 `json.JsonTree` is the stdlib-owned raw JSON tree. `json.JsonValue` is an
-exported namespaced alias for that tree, while bare `JsonValue` remains a
-compiler-owned compatibility spelling for one transition stage. It is not an
-`any` type: user code can only inspect raw JSON through explicit `json.*`
-accessors, and typed conversion still returns `result[T, string]`.
+exported namespaced alias for that tree, while bare `JsonValue` is a root
+compatibility alias when the bundled stdlib is loaded. It is not an `any` type:
+user code can only inspect raw JSON through explicit `json.*` accessors, and
+typed conversion still returns `result[T, string]`.
 
 Implemented accessors:
 

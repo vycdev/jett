@@ -257,8 +257,9 @@ for current JSON hooks; future backends need the same identity boundary.
    `/docs/completed/json_public_bridge_handoff.md`.
 4. Keep the real public wrapper names in `namespace json`, while retaining
    compiler policy checks for secrets, `view`, map keys, and handled results.
-5. Keep broad bridge/parity tests before removing any Rust-backed fallback
-   implementation paths. Done for typed public parse/serialize, raw
+5. Keep broad bridge/parity tests around the removed Rust-backed fallback
+   implementation paths and the remaining bootstrap/no-stdlib dispatchers.
+   Done for typed public parse/serialize, raw `JsonTree` / compatibility
    `JsonValue` execution in `jett_comptime`, and runtime `main()` reflection
    metadata handoff for namespaced generic JSON.
 6. Continue hardening the self-hosted `JsonTree` parser. Common malformed-input

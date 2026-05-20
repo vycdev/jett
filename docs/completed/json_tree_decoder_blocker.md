@@ -5,7 +5,8 @@ over the self-hosted `JsonTree` parser, plus the current resolution.
 
 ## Current Shape
 
-The staged layer mirrors the current `JsonValue` decoder:
+The staged layer replaced the old `JsonValue` decoder shape with a native
+`JsonTree` decoder:
 
 ```jett
 function json_decode_tree_reflected[T](view raw: JsonTree) returns result[T, string]:
@@ -54,9 +55,9 @@ decoder now passes fixture coverage.
 The raw bridge is no longer Rust-backed in `jett_comptime`: `json.parse_raw`
 delegates to `json_tree_parse`, raw accessors dispatch native `JsonTree` values
 through trusted stdlib hooks, and `JsonValue` is source-compatible with the
-stdlib `json.JsonTree` enum for one compatibility stage. The remaining design
-question is whether that compatibility becomes a real source-level alias once
-stdlib export/alias mechanics are strong enough.
+stdlib `json.JsonTree` enum. In stdlib-loaded code that compatibility now flows
+through a root source alias; only bootstrap/no-stdlib fallback still uses the
+legacy primitive.
 
 The stable boundary is now:
 

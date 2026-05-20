@@ -1,7 +1,9 @@
 # Prelude and Root Alias Design
 
-Jett now has namespaced exports, but it does not yet have a source-level way for
-stdlib code to introduce an unqualified root name such as `JsonValue`.
+Jett now has namespaced exports and a narrow source-level root alias mechanism
+for the bundled stdlib `JsonValue` compatibility spelling. This note records
+that staged design and the broader prelude/root-alias questions that remain
+open.
 
 This matters because `stdlib/json/` can now express:
 
@@ -11,9 +13,15 @@ namespace json
 export type JsonValue = JsonTree
 ```
 
-That gives users `json.JsonValue`, but the legacy spelling is still bare
-`JsonValue`. Today that bare name is compiler-owned compatibility metadata, not
-ordinary stdlib source.
+That gives users `json.JsonValue`, while the implemented root export:
+
+```jett
+export root type JsonValue = json.JsonTree
+```
+
+makes the legacy bare spelling visible in ordinary stdlib-loaded source. The
+remaining compiler-owned piece is the bootstrap/no-stdlib fallback primitive,
+not the normal stdlib-loaded name.
 
 ## Requirements
 

@@ -24,8 +24,9 @@ functions own the runtime implementation body.
   `json.json_tree_parse`, `json.json_tree_serialize`, `json.json_tree_field`,
   `json.json_tree_index`, and scalar-cast helpers.
 - `json.JsonTree` is the self-hosted raw JSON representation. `json.JsonValue`
-  is an exported namespaced alias for `JsonTree`; bare `JsonValue` remains a
-  compiler-owned compatibility spelling for the current transition stage.
+  is an exported namespaced alias for `JsonTree`; bare `JsonValue` is a narrow
+  stdlib root alias in stdlib-loaded code, with a legacy compiler-owned
+  fallback only for bootstrap/no-stdlib paths.
 - The old typed Rust parse/serialize fallback has been removed from public JSON
   calls. Raw JSON execution in `jett_comptime` now uses native `JsonTree`
   values and trusted stdlib facade hooks rather than a separate Rust JSON
@@ -76,9 +77,9 @@ remain compiler-owned while the implementation body is readable `.jett` code.
 
 ## Remaining Follow-Up
 
-- Decide when bare `JsonValue` should move from a compiler-owned compatibility
-  spelling to a real stdlib/prelude alias. See
-  `docs/open_design/prelude_root_aliases.md`.
+- Decide when the remaining bootstrap/no-stdlib `JsonValue` primitive fallback
+  and `TypePrimitive.json_value_type` tag can retire. See
+  `docs/open_design/json_value_primitive_tag_retirement.md`.
 - Decide whether future codegen should use the same trusted hook table as the
   interpreter or lower public JSON calls through another backend-specific path.
 - Keep tightening `JsonTree` parser diagnostics and malformed-input parity as
