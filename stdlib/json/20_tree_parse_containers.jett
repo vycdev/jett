@@ -1,28 +1,36 @@
 namespace json
 function json_tree_parse_scalar(raw: string) returns result[JsonTree, string]:
-    if raw == "null":
+    bytes input = bytes.from_string(raw)
+    return json_tree_parse_scalar_span(view input, 0, bytes.length(view input))
+function json_tree_parse_scalar_span(view input: bytes, start: int64, end: int64) returns result[JsonTree, string]:
+    if json_tree_span_is_null_literal(view input, start, end) == true:
         return ok(JsonTree.null)
-    if raw == "true":
+    if json_tree_span_is_true_literal(view input, start, end) == true:
         return ok(JsonTree.bool_value(true))
-    if raw == "false":
+    if json_tree_span_is_false_literal(view input, start, end) == true:
         return ok(JsonTree.bool_value(false))
-    if string.starts_with(raw, "\"") == true:
-        string value = json_tree_parse_string(raw) handle error:
+    if json_tree_byte_at(view input, start) == 34:
+        string value = json_tree_parse_string_span(view input, start, end) handle error:
             return fail(error)
         return ok(JsonTree.string_value(value))
-    if json_tree_is_number_candidate(raw) == true:
+    if json_tree_is_number_candidate_span(view input, start, end) == true:
+        string raw = json_tree_span_to_trimmed_string(view input, start, end) handle error:
+            return fail(error)
         return ok(JsonTree.number_value(raw))
-    return json_tree_invalid_scalar(raw)
+    return json_tree_invalid_scalar_span(view input, start, end)
 function json_tree_invalid_scalar(raw: string) returns result[JsonTree, string]:
-    if json_tree_looks_like_number(raw) == true:
+    bytes input = bytes.from_string(raw)
+    return json_tree_invalid_scalar_span(view input, 0, bytes.length(view input))
+function json_tree_invalid_scalar_span(view input: bytes, start: int64, end: int64) returns result[JsonTree, string]:
+    if json_tree_looks_like_number_span(view input, start, end) == true:
         return fail("invalid JSON number")
-    if string.starts_with(raw, "null") == true:
+    if json_tree_span_starts_null_literal(view input, start, end) == true:
         return fail("unexpected trailing characters after JSON literal")
-    if string.starts_with(raw, "true") == true:
+    if json_tree_span_starts_true_literal(view input, start, end) == true:
         return fail("unexpected trailing characters after JSON literal")
-    if string.starts_with(raw, "false") == true:
+    if json_tree_span_starts_false_literal(view input, start, end) == true:
         return fail("unexpected trailing characters after JSON literal")
-    if json_tree_is_literal_start(raw) == true:
+    if json_tree_is_literal_start_span(view input, start, end) == true:
         return fail("invalid JSON literal")
     return fail("expected JSON scalar")
 function json_tree_parse_array(raw: string) returns result[JsonTree, string]:

@@ -117,6 +117,8 @@ mutual:
     export function json_tree_as_bool(view value: JsonTree) returns result[bool, string]
 mutual:
     function json_tree_parse_scalar(raw: string) returns result[JsonTree, string]
+    function json_tree_parse_scalar_span(view input: bytes, start: int64, end: int64) returns result[JsonTree, string]
+    function json_tree_invalid_scalar_span(view input: bytes, start: int64, end: int64) returns result[JsonTree, string]
     function json_tree_parse_array(raw: string) returns result[JsonTree, string]
     function json_tree_parse_array_span(view input: bytes, start: int64, end: int64) returns result[JsonTree, string]
     function json_tree_parse_array_body(view input: bytes, start: int64, end: int64) returns result[list[JsonTree], string]
@@ -169,8 +171,17 @@ mutual:
     function json_tree_validate_delimited_value(view input: bytes, length: int64, close_byte: int64, value_name: string) returns result[nothing, string]
     function json_tree_validate_delimited_span(view input: bytes, start: int64, end: int64, close_byte: int64, value_name: string) returns result[nothing, string]
     function json_tree_is_literal_start(raw: string) returns bool
+    function json_tree_is_literal_start_span(view input: bytes, start: int64, end: int64) returns bool
     function json_tree_looks_like_number(raw: string) returns bool
+    function json_tree_looks_like_number_span(view input: bytes, start: int64, end: int64) returns bool
     function json_tree_is_number_candidate(raw: string) returns bool
+    function json_tree_is_number_candidate_span(view input: bytes, start: int64, end: int64) returns bool
+    function json_tree_span_is_null_literal(view input: bytes, start: int64, end: int64) returns bool
+    function json_tree_span_is_true_literal(view input: bytes, start: int64, end: int64) returns bool
+    function json_tree_span_is_false_literal(view input: bytes, start: int64, end: int64) returns bool
+    function json_tree_span_starts_null_literal(view input: bytes, start: int64, end: int64) returns bool
+    function json_tree_span_starts_true_literal(view input: bytes, start: int64, end: int64) returns bool
+    function json_tree_span_starts_false_literal(view input: bytes, start: int64, end: int64) returns bool
     function json_tree_byte_at(view input: bytes, index: int64) returns int64
     function json_tree_number_read_integer(view input: bytes, index: int64, length: int64) returns int64
     function json_tree_number_read_digits(view input: bytes, index: int64, length: int64) returns int64

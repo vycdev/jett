@@ -20,9 +20,7 @@ function json_tree_parse_span(view input: bytes, start: int64, end: int64) retur
         string value = json_tree_parse_string_span(view input, trimmed_start, trimmed_end) handle error:
             return fail(error)
         return ok(JsonTree.string_value(value))
-    string trimmed = json_tree_span_to_trimmed_string(view input, trimmed_start, trimmed_end) handle error:
-        return fail(error)
-    return json_tree_parse_scalar(trimmed)
+    return json_tree_parse_scalar_span(view input, trimmed_start, trimmed_end)
 function json_tree_parse_value(raw: string) returns result[JsonTree, string]:
     bytes input = bytes.from_string(raw)
     return json_tree_parse_span(view input, 0, bytes.length(view input))

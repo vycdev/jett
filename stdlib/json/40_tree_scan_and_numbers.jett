@@ -56,15 +56,24 @@ function json_tree_validate_delimited_span(view input: bytes, start: int64, end:
         return fail("unterminated string in JSON value")
     return fail("unterminated JSON {value_name}")
 function json_tree_is_literal_start(raw: string) returns bool:
-    if string.starts_with(raw, "n") == true:
+    bytes input = bytes.from_string(raw)
+    return json_tree_is_literal_start_span(view input, 0, bytes.length(view input))
+function json_tree_is_literal_start_span(view input: bytes, start: int64, end: int64) returns bool:
+    if start >= end:
+        return false
+    int64 first = json_tree_byte_at(view input, start)
+    if first == 110:
         return true
-    if string.starts_with(raw, "t") == true:
+    if first == 116:
         return true
-    return string.starts_with(raw, "f")
+    return first == 102
 function json_tree_looks_like_number(raw: string) returns bool:
     bytes input = bytes.from_string(raw)
-    int64 first = bytes.get(view input, 0) handle:
-        default -1
+    return json_tree_looks_like_number_span(view input, 0, bytes.length(view input))
+function json_tree_looks_like_number_span(view input: bytes, start: int64, end: int64) returns bool:
+    if start >= end:
+        return false
+    int64 first = json_tree_byte_at(view input, start)
     if first == 45:
         return true
     if first == 43:
@@ -72,22 +81,67 @@ function json_tree_looks_like_number(raw: string) returns bool:
     return json_tree_is_digit_byte(first)
 function json_tree_is_number_candidate(raw: string) returns bool:
     bytes input = bytes.from_string(raw)
-    int64 length = bytes.length(view input)
-    if length == 0:
+    return json_tree_is_number_candidate_span(view input, 0, bytes.length(view input))
+function json_tree_is_number_candidate_span(view input: bytes, start: int64, end: int64) returns bool:
+    if start >= end:
         return false
-    mutable int64 index = 0
+    mutable int64 index = start
     if json_tree_byte_at(view input, index) == 45:
         index = index + 1
-        if index >= length:
+        if index >= end:
             return false
-    index = json_tree_number_read_integer(view input, index, length)
+    index = json_tree_number_read_integer(view input, index, end)
     if index < 0:
         return false
-    index = json_tree_number_read_fraction(view input, index, length)
+    index = json_tree_number_read_fraction(view input, index, end)
     if index < 0:
         return false
-    index = json_tree_number_read_exponent(view input, index, length)
-    return index == length
+    index = json_tree_number_read_exponent(view input, index, end)
+    return index == end
+function json_tree_span_is_null_literal(view input: bytes, start: int64, end: int64) returns bool:
+    if end - start != 4:
+        return false
+    return json_tree_span_starts_null_literal(view input, start, end)
+function json_tree_span_is_true_literal(view input: bytes, start: int64, end: int64) returns bool:
+    if end - start != 4:
+        return false
+    return json_tree_span_starts_true_literal(view input, start, end)
+function json_tree_span_is_false_literal(view input: bytes, start: int64, end: int64) returns bool:
+    if end - start != 5:
+        return false
+    return json_tree_span_starts_false_literal(view input, start, end)
+function json_tree_span_starts_null_literal(view input: bytes, start: int64, end: int64) returns bool:
+    if end - start < 4:
+        return false
+    if json_tree_byte_at(view input, start) != 110:
+        return false
+    if json_tree_byte_at(view input, start + 1) != 117:
+        return false
+    if json_tree_byte_at(view input, start + 2) != 108:
+        return false
+    return json_tree_byte_at(view input, start + 3) == 108
+function json_tree_span_starts_true_literal(view input: bytes, start: int64, end: int64) returns bool:
+    if end - start < 4:
+        return false
+    if json_tree_byte_at(view input, start) != 116:
+        return false
+    if json_tree_byte_at(view input, start + 1) != 114:
+        return false
+    if json_tree_byte_at(view input, start + 2) != 117:
+        return false
+    return json_tree_byte_at(view input, start + 3) == 101
+function json_tree_span_starts_false_literal(view input: bytes, start: int64, end: int64) returns bool:
+    if end - start < 5:
+        return false
+    if json_tree_byte_at(view input, start) != 102:
+        return false
+    if json_tree_byte_at(view input, start + 1) != 97:
+        return false
+    if json_tree_byte_at(view input, start + 2) != 108:
+        return false
+    if json_tree_byte_at(view input, start + 3) != 115:
+        return false
+    return json_tree_byte_at(view input, start + 4) == 101
 function json_tree_byte_at(view input: bytes, index: int64) returns int64:
     return bytes.get(view input, index) handle:
         default -1
