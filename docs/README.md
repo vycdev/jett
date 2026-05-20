@@ -31,6 +31,7 @@ enough pressure from real code:
 - [Type construction block syntax](open_design/type_construction_block_syntax.md)
 - [Namespace-qualified type follow-up](open_design/namespace_qualified_types_followup.md)
 - [State machine type model](open_design/state_machine_type_model.md)
+- [JSON trusted hooks across backends](open_design/json_trusted_hooks_across_backends.md)
 
 ## Completed Records
 
