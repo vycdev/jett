@@ -22,7 +22,7 @@ function json_serialize_public_reflected[T](view value: T) returns string:
     string type_name = info.type_name
     TypePrimitive primitive = info.primitive_tag handle:
         default TypePrimitive.unknown_type
-    if type_name == "json.JsonTree":
+    if json_reflected_raw_type(view info, primitive):
         return json_serialize_public_raw_reflected[T](view value)
     if primitive != TypePrimitive.unknown_type:
         return json_serialize_public_primitive[T](view value, primitive)
@@ -60,8 +60,6 @@ function json_serialize_public_non_integer_primitive[T](view value: T, primitive
     if primitive == TypePrimitive.bytes_type:
         bytes item = value
         return json_stdlib_quote("0x{bytes.to_hex(item)}")
-    if primitive == TypePrimitive.json_value_type:
-        return json_serialize_public_raw_reflected[T](view value)
     return "null"
 function json_serialize_public_integer_primitive[T](view value: T, primitive: TypePrimitive) returns optional[string]:
     match primitive:
