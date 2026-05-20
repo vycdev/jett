@@ -101,7 +101,6 @@ function json_reflected_raw_type(view info: TypeInfo) returns bool:
 mutual:
     export function json_tree_parse(raw: string) returns result[JsonTree, string]
     function json_tree_parse_span(view input: bytes, start: int64, end: int64) returns result[JsonTree, string]
-    function json_tree_parse_value(raw: string) returns result[JsonTree, string]
     export function json_tree_kind(view value: JsonTree) returns string
     function json_tree_kind_error(view value: JsonTree, expected: string) returns string
     export function json_tree_is_null(view value: JsonTree) returns bool
