@@ -395,6 +395,10 @@ run_pass_fixture!(
     run_pass_json_value_reflection_staging,
     "json_value_reflection_staging.jett"
 );
+run_pass_fixture!(
+    run_pass_json_value_reflection_container_metadata,
+    "json_value_reflection_container_metadata.jett"
+);
 run_pass_fixture!(run_pass_json_enum_shapes, "json_enum_shapes.jett");
 run_pass_fixture!(run_pass_json_bitfield_shapes, "json_bitfield_shapes.jett");
 run_pass_fixture!(
