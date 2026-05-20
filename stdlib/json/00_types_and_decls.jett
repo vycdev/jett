@@ -97,6 +97,7 @@ function json_reflected_raw_type(view info: TypeInfo) returns bool:
     return false
 mutual:
     export function json_tree_parse(raw: string) returns result[JsonTree, string]
+    function json_tree_parse_span(view input: bytes, start: int64, end: int64) returns result[JsonTree, string]
     function json_tree_parse_value(raw: string) returns result[JsonTree, string]
     export function json_tree_kind(view value: JsonTree) returns string
     function json_tree_kind_error(view value: JsonTree, expected: string) returns string
@@ -117,9 +118,11 @@ mutual:
 mutual:
     function json_tree_parse_scalar(raw: string) returns result[JsonTree, string]
     function json_tree_parse_array(raw: string) returns result[JsonTree, string]
+    function json_tree_parse_array_span(view input: bytes, start: int64, end: int64) returns result[JsonTree, string]
     function json_tree_parse_array_body(view input: bytes, start: int64, end: int64) returns result[list[JsonTree], string]
     function json_tree_append_array_segment(view input: bytes, items: list[JsonTree], start: int64, end: int64) returns result[list[JsonTree], string]
     function json_tree_parse_object(raw: string) returns result[JsonTree, string]
+    function json_tree_parse_object_span(view input: bytes, start: int64, end: int64) returns result[JsonTree, string]
     function json_tree_parse_object_body(view input: bytes, start: int64, end: int64) returns result[map[string, JsonTree], string]
     function json_tree_insert_object_segment(view input: bytes, fields: map[string, JsonTree], start: int64, end: int64) returns result[map[string, JsonTree], string]
     function json_tree_parse_object_field_span(view input: bytes, start: int64, end: int64) returns result[JsonTreeObjectField, string]
@@ -161,6 +164,7 @@ mutual:
     function json_tree_scan_step_value(view scan: JsonTreeScan, byte: int64) returns result[JsonTreeScan, string]
     function json_tree_finish_scan(view scan: JsonTreeScan) returns result[nothing, string]
     function json_tree_validate_delimited_value(view input: bytes, length: int64, close_byte: int64, value_name: string) returns result[nothing, string]
+    function json_tree_validate_delimited_span(view input: bytes, start: int64, end: int64, close_byte: int64, value_name: string) returns result[nothing, string]
     function json_tree_is_literal_start(raw: string) returns bool
     function json_tree_looks_like_number(raw: string) returns bool
     function json_tree_is_number_candidate(raw: string) returns bool

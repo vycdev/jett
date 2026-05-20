@@ -36,9 +36,11 @@ function json_tree_finish_scan(view scan: JsonTreeScan) returns result[nothing, 
         return fail("unterminated nested JSON value")
     return ok(nothing)
 function json_tree_validate_delimited_value(view input: bytes, length: int64, close_byte: int64, value_name: string) returns result[nothing, string]:
+    return json_tree_validate_delimited_span(view input, 0, length, close_byte, value_name)
+function json_tree_validate_delimited_span(view input: bytes, start: int64, end: int64, close_byte: int64, value_name: string) returns result[nothing, string]:
     mutable JsonTreeScan scan = json_tree_scan_start()
-    mutable int64 index = 0
-    while index < length:
+    mutable int64 index = start
+    while index < end:
         int64 byte = bytes.get(view input, index) handle:
             default -1
         scan = json_tree_scan_step(view scan, byte) handle error:
@@ -46,7 +48,7 @@ function json_tree_validate_delimited_value(view input: bytes, length: int64, cl
         if scan.depth == 0:
             if byte != close_byte:
                 return fail("mismatched closing delimiter in JSON {value_name}")
-            if json_tree_span_is_blank(view input, index + 1, length) == false:
+            if json_tree_span_is_blank(view input, index + 1, end) == false:
                 return fail("unexpected trailing characters after JSON value")
             return ok(nothing)
         index = index + 1

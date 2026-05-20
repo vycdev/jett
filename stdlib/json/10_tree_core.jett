@@ -1,23 +1,27 @@
 namespace json
 function json_tree_parse(raw: string) returns result[JsonTree, string]:
     bytes input = bytes.from_string(raw)
-    string trimmed = json_tree_span_to_trimmed_string(view input, 0, bytes.length(view input)) handle error:
-        return fail(error)
-    if trimmed == "":
+    return json_tree_parse_span(view input, 0, bytes.length(view input))
+function json_tree_parse_span(view input: bytes, start: int64, end: int64) returns result[JsonTree, string]:
+    int64 trimmed_start = json_tree_trim_start(view input, start, end)
+    int64 trimmed_end = json_tree_trim_end(view input, trimmed_start, end)
+    if trimmed_start >= trimmed_end:
         return fail("expected JSON value")
-    JsonTree value = json_tree_parse_value(trimmed) handle error:
+    int64 first = json_tree_byte_at(view input, trimmed_start)
+    if first == 91:
+        return json_tree_parse_array_span(view input, trimmed_start, trimmed_end)
+    if first == 123:
+        return json_tree_parse_object_span(view input, trimmed_start, trimmed_end)
+    if first == 93:
+        return fail("unexpected closing delimiter in JSON value")
+    if first == 125:
+        return fail("unexpected closing delimiter in JSON value")
+    string trimmed = json_tree_span_to_trimmed_string(view input, trimmed_start, trimmed_end) handle error:
         return fail(error)
-    return ok(value)
+    return json_tree_parse_scalar(trimmed)
 function json_tree_parse_value(raw: string) returns result[JsonTree, string]:
-    if string.starts_with(raw, "[") == true:
-        return json_tree_parse_array(raw)
-    if string.starts_with(raw, "{{") == true:
-        return json_tree_parse_object(raw)
-    if string.starts_with(raw, "]") == true:
-        return fail("unexpected closing delimiter in JSON value")
-    if string.starts_with(raw, "}}") == true:
-        return fail("unexpected closing delimiter in JSON value")
-    return json_tree_parse_scalar(raw)
+    bytes input = bytes.from_string(raw)
+    return json_tree_parse_span(view input, 0, bytes.length(view input))
 function json_tree_kind(view value: JsonTree) returns string:
     match value:
         null:

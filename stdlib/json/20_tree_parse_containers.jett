@@ -27,14 +27,15 @@ function json_tree_invalid_scalar(raw: string) returns result[JsonTree, string]:
     return fail("expected JSON scalar")
 function json_tree_parse_array(raw: string) returns result[JsonTree, string]:
     bytes input = bytes.from_string(raw)
-    int64 length = bytes.length(view input)
-    if length == 0:
+    return json_tree_parse_array_span(view input, 0, bytes.length(view input))
+function json_tree_parse_array_span(view input: bytes, start: int64, end: int64) returns result[JsonTree, string]:
+    if start >= end:
         return fail("expected JSON array")
-    if json_tree_byte_at(view input, 0) != 91:
+    if json_tree_byte_at(view input, start) != 91:
         return fail("expected JSON array")
-    nothing checked = json_tree_validate_delimited_value(view input, length, 93, "array") handle error:
+    nothing checked = json_tree_validate_delimited_span(view input, start, end, 93, "array") handle error:
         return fail(error)
-    list[JsonTree] items = json_tree_parse_array_body(view input, 1, length - 1) handle error:
+    list[JsonTree] items = json_tree_parse_array_body(view input, start + 1, end - 1) handle error:
         return fail(error)
     return ok(JsonTree.array_value(items))
 function json_tree_parse_array_body(view input: bytes, start: int64, end: int64) returns result[list[JsonTree], string]:
@@ -46,25 +47,24 @@ function json_tree_parse_array_body(view input: bytes, start: int64, end: int64)
             return fail(error)
     return ok(items)
 function json_tree_append_array_segment(view input: bytes, items: list[JsonTree], start: int64, end: int64) returns result[list[JsonTree], string]:
-    string raw = json_tree_span_to_trimmed_string(view input, start, end) handle error:
-        return fail(error)
-    if raw == "":
+    if json_tree_span_is_blank(view input, start, end) == true:
         return fail("expected JSON value")
     nothing separated = json_tree_validate_single_segment_value(view input, start, end, "expected ',' between JSON values") handle error:
         return fail(error)
-    JsonTree item = json_tree_parse(raw) handle error:
+    JsonTree item = json_tree_parse_span(view input, start, end) handle error:
         return fail(error)
     return ok(list.append[JsonTree](items, item))
 function json_tree_parse_object(raw: string) returns result[JsonTree, string]:
     bytes input = bytes.from_string(raw)
-    int64 length = bytes.length(view input)
-    if length == 0:
+    return json_tree_parse_object_span(view input, 0, bytes.length(view input))
+function json_tree_parse_object_span(view input: bytes, start: int64, end: int64) returns result[JsonTree, string]:
+    if start >= end:
         return fail("expected JSON object")
-    if json_tree_byte_at(view input, 0) != 123:
+    if json_tree_byte_at(view input, start) != 123:
         return fail("expected JSON object")
-    nothing checked = json_tree_validate_delimited_value(view input, length, 125, "object") handle error:
+    nothing checked = json_tree_validate_delimited_span(view input, start, end, 125, "object") handle error:
         return fail(error)
-    map[string, JsonTree] fields = json_tree_parse_object_body(view input, 1, length - 1) handle error:
+    map[string, JsonTree] fields = json_tree_parse_object_body(view input, start + 1, end - 1) handle error:
         return fail(error)
     return ok(JsonTree.object_value(fields))
 function json_tree_parse_object_body(view input: bytes, start: int64, end: int64) returns result[map[string, JsonTree], string]:
@@ -96,9 +96,7 @@ function json_tree_top_level_segments(view input: bytes, start: int64, end: int6
         return fail(error)
     return ok(list.append[JsonTreeSegment](segments, JsonTreeSegment(start: segment_start, end: end)))
 function json_tree_insert_object_segment(view input: bytes, fields: map[string, JsonTree], start: int64, end: int64) returns result[map[string, JsonTree], string]:
-    string raw = json_tree_span_to_trimmed_string(view input, start, end) handle error:
-        return fail(error)
-    if raw == "":
+    if json_tree_span_is_blank(view input, start, end) == true:
         return fail("expected object field")
     JsonTreeObjectField field = json_tree_parse_object_field_span(view input, start, end) handle error:
         return fail(error)
@@ -112,13 +110,11 @@ function json_tree_parse_object_field_span(view input: bytes, start: int64, end:
         return fail(error)
     string key = json_tree_parse_string(raw_key) handle error:
         return fail(error)
-    string raw_value = json_tree_span_to_trimmed_string(view input, colon + 1, end) handle error:
-        return fail(error)
-    if raw_value == "":
+    if json_tree_span_is_blank(view input, colon + 1, end) == true:
         return fail("expected JSON value")
     nothing separated = json_tree_validate_single_segment_value(view input, colon + 1, end, "expected ',' between object fields") handle error:
         return fail(error)
-    JsonTree value = json_tree_parse(raw_value) handle error:
+    JsonTree value = json_tree_parse_span(view input, colon + 1, end) handle error:
         return fail(error)
     return ok(JsonTreeObjectField(key: key, value: value))
 function json_tree_find_top_level_colon(view input: bytes, start: int64, end: int64) returns result[int64, string]:

@@ -278,8 +278,10 @@ for current JSON hooks; future backends need the same identity boundary.
    for those parser errors is pinned across
    `json.json_tree_parse`, `json.parse_raw`, `json.parse[JsonValue]`,
    `json.parse[json.JsonTree]`, `json.parse_exact[JsonValue]`, and
-   `json.parse_exact[json.JsonTree]`. The remaining question is how far
-   `JsonTree` should go toward replacing the raw `JsonValue` compatibility
+   `json.parse_exact[json.JsonTree]`. Container parsing now recurses through
+   byte spans for nested array/object values instead of converting every segment
+   back into a string and reparsing from bytes. The remaining question is how
+   far `JsonTree` should go toward replacing the raw `JsonValue` compatibility
    surface.
 7. Keep the staged `JsonValue` migration narrow. The current implementation
    exposes `json.JsonValue` as an exported namespaced source alias and bare
