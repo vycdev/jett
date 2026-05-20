@@ -30,6 +30,14 @@ function strict_field_wrong_shape() returns string:
     json.JsonTree item = maybe handle:
         return "absent"
     return json.kind(view item)
+function strict_field_array_wrong_shape() returns string:
+    json.JsonTree values = json.parse_raw("[1,2]") handle error:
+        default json.JsonTree.string_value(error)
+    optional[json.JsonTree] maybe = json.object_field(view values, "name") handle error:
+        return error
+    json.JsonTree item = maybe handle:
+        return "absent"
+    return json.kind(view item)
 function strict_required_field_missing() returns string:
     json.JsonTree root = strict_root()
     json.JsonTree item = json.require_field(view root, "absent") handle error:
@@ -53,6 +61,15 @@ function strict_array_index_absent() returns string:
     json.JsonTree item = maybe handle:
         return "absent"
     return json.kind(view item)
+function strict_array_index_negative_absent() returns string:
+    json.JsonTree root = strict_root()
+    json.JsonTree scores = json.require_field(view root, "scores") handle error:
+        return error
+    optional[json.JsonTree] maybe = json.array_index(view scores, -1) handle error:
+        return error
+    json.JsonTree item = maybe handle:
+        return "absent"
+    return json.kind(view item)
 function strict_required_index_missing() returns string:
     json.JsonTree root = strict_root()
     json.JsonTree scores = json.require_field(view root, "scores") handle error:
@@ -60,9 +77,24 @@ function strict_required_index_missing() returns string:
     json.JsonTree item = json.require_index(view scores, 9) handle error:
         return error
     return json.kind(view item)
+function strict_required_negative_index_missing() returns string:
+    json.JsonTree root = strict_root()
+    json.JsonTree scores = json.require_field(view root, "scores") handle error:
+        return error
+    json.JsonTree item = json.require_index(view scores, -1) handle error:
+        return error
+    return json.kind(view item)
 function strict_index_wrong_shape() returns string:
     json.JsonTree root = strict_root()
     optional[json.JsonTree] maybe = json.array_index(view root, 0) handle error:
+        return error
+    json.JsonTree item = maybe handle:
+        return "absent"
+    return json.kind(view item)
+function strict_index_scalar_wrong_shape() returns string:
+    json.JsonTree text = json.parse_raw("\"Ada\"") handle error:
+        default json.JsonTree.string_value(error)
+    optional[json.JsonTree] maybe = json.array_index(view text, 0) handle error:
         return error
     json.JsonTree item = maybe handle:
         return "absent"
@@ -111,11 +143,15 @@ verify json_raw_strict_accessors:
     assert strict_optional_missing_field() == "absent"
     assert strict_present_null_field() == "null"
     assert strict_field_wrong_shape() == "expected object, got string"
+    assert strict_field_array_wrong_shape() == "expected object, got array"
     assert strict_required_field_missing() == "missing object field 'absent'"
     assert strict_array_index_value() == "5"
     assert strict_array_index_absent() == "absent"
+    assert strict_array_index_negative_absent() == "absent"
     assert strict_required_index_missing() == "missing array item 9"
+    assert strict_required_negative_index_missing() == "missing array item -1"
     assert strict_index_wrong_shape() == "expected array, got object"
+    assert strict_index_scalar_wrong_shape() == "expected array, got string"
     assert strict_accessors_accept_legacy_value() == "Grace"
     assert strict_accessors_accept_namespaced_value() == "Lin:5"
     assert strict_optional_accessors_accept_namespaced_value() == "field absent:index absent"

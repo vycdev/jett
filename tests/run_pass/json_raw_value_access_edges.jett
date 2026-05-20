@@ -13,16 +13,34 @@ function index_out_of_bounds_is_absent() returns string:
     json.JsonTree item = json.index(view values, 9) handle:
         return "absent"
     return "present:{json.kind(view item)}"
+function negative_index_is_absent() returns string:
+    json.JsonTree values = json.parse_raw("[1,2]") handle error:
+        return error
+    json.JsonTree item = json.index(view values, -1) handle:
+        return "absent"
+    return "present:{json.kind(view item)}"
 function field_on_non_object_is_absent() returns string:
     json.JsonTree text = json.parse_raw("\"Ada\"") handle error:
         return error
     json.JsonTree field = json.field(view text, "name") handle:
         return "absent"
     return "present:{json.kind(view field)}"
+function field_on_array_is_absent() returns string:
+    json.JsonTree values = json.parse_raw("[1,2]") handle error:
+        return error
+    json.JsonTree field = json.field(view values, "name") handle:
+        return "absent"
+    return "present:{json.kind(view field)}"
 function index_on_non_array_is_absent() returns string:
     json.JsonTree text = json.parse_raw("\"Ada\"") handle error:
         return error
     json.JsonTree item = json.index(view text, 0) handle:
+        return "absent"
+    return "present:{json.kind(view item)}"
+function index_on_object_is_absent() returns string:
+    json.JsonTree root = json.parse_raw("{{\"name\":\"Ada\"}}") handle error:
+        return error
+    json.JsonTree item = json.index(view root, 0) handle:
         return "absent"
     return "present:{json.kind(view item)}"
 function object_keys_wrong_shape_error() returns string:
@@ -40,7 +58,10 @@ function scalar_cast_wrong_shape_error() returns string:
 verify json_raw_value_access_edges:
     assert missing_key_and_present_null() == "missing absent:present null true"
     assert index_out_of_bounds_is_absent() == "absent"
+    assert negative_index_is_absent() == "absent"
     assert field_on_non_object_is_absent() == "absent"
+    assert field_on_array_is_absent() == "absent"
     assert index_on_non_array_is_absent() == "absent"
+    assert index_on_object_is_absent() == "absent"
     assert object_keys_wrong_shape_error() == "expected object, got string"
     assert scalar_cast_wrong_shape_error() == "expected int64, got string"

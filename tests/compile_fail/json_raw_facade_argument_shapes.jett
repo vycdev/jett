@@ -8,11 +8,23 @@ function bad_parse_raw_input() returns json.JsonTree:
 function bad_kind_input() returns string:
     return json.kind("not raw json")
 
+function bad_field_value() returns string:
+    json.JsonTree name = json.field("not raw json", "name") handle:
+        return "missing"
+    return json.as_string(name) handle error:
+        default error
+
 function bad_field_key(root: json.JsonTree) returns string:
     json.JsonTree name = json.field(root, 0) handle:
         return "missing"
     return json.as_string(name) handle error:
         default error
+
+function bad_index_receiver() returns int64:
+    json.JsonTree item = json.index("not raw json", 0) handle:
+        return 0
+    return json.as_int64(item) handle error:
+        default 0
 
 function bad_index_value(root: json.JsonTree) returns int64:
     json.JsonTree item = json.index(root, "0") handle:
