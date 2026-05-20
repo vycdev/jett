@@ -94,6 +94,7 @@ verify json_parse_error_parity:
     assert parse_errors_match("[[1] [2]]") == true
     assert parse_errors_match("[1] trailing") == true
     assert parse_errors_match("[1}}") == true
+    assert parse_errors_match("{{]") == true
     assert parse_errors_match("{{name:1}}") == true
     assert parse_errors_match("{{:1}}") == true
     assert parse_errors_match("{{\"name\"}}") == true
@@ -110,6 +111,9 @@ verify json_parse_error_parity:
     assert parse_errors_match("{{\"name\":1]") == true
     assert parse_errors_match("[1]]") == true
     assert parse_errors_match("]") == true
+    assert parse_errors_match("}}") == true
+    assert parse_errors_match(raw_from_hex("5b310c5d")) == true
+    assert parse_errors_match(raw_from_hex("7b2261223a0c317d")) == true
     assert parse_errors_match("01") == true
     assert parse_errors_match("00") == true
     assert parse_errors_match("-01") == true
