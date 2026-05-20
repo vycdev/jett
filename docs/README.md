@@ -32,6 +32,7 @@ enough pressure from real code:
 - [Namespace-qualified type follow-up](open_design/namespace_qualified_types_followup.md)
 - [State machine type model](open_design/state_machine_type_model.md)
 - [JSON trusted hooks across backends](open_design/json_trusted_hooks_across_backends.md)
+- [JsonValue primitive tag retirement](open_design/json_value_primitive_tag_retirement.md)
 
 ## Completed Records
 
