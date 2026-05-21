@@ -1,0 +1,7 @@
+# ERROR: E0207
+namespace api
+type Port = int64
+namespace app
+function main() returns int64:
+    api.Port port = 443
+    return port

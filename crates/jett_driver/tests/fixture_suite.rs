@@ -597,6 +597,10 @@ compile_fail_fixture!(
     "namespace_private_alias.jett"
 );
 compile_fail_fixture!(
+    compile_fail_namespace_private_type_alias,
+    "namespace_private_type_alias.jett"
+);
+compile_fail_fixture!(
     compile_fail_namespace_private_interface,
     "namespace_private_interface.jett"
 );
@@ -651,6 +655,10 @@ compile_fail_fixture!(
 compile_fail_fixture!(
     compile_fail_namespace_exported_flat_actor,
     "namespace_exported_flat_actor.jett"
+);
+compile_fail_fixture!(
+    compile_fail_json_exported_flat_parse_raw,
+    "json_exported_flat_parse_raw.jett"
 );
 compile_fail_fixture!(
     compile_fail_stdlib_namespace_collision,
@@ -1276,6 +1284,20 @@ fn completions_hide_private_stdlib_json_hooks() {
                 || name == "json.json_serialize_reflected"),
         "private stdlib JSON hooks should not leak into completions"
     );
+    for flat_name in [
+        "JsonTree",
+        "parse",
+        "parse_exact",
+        "parse_raw",
+        "serialize_raw",
+        "serialize",
+        "serialize_public",
+    ] {
+        assert!(
+            !candidates.iter().any(|(name, _)| name == flat_name),
+            "stdlib JSON export `{flat_name}` should require the json namespace"
+        );
+    }
 }
 
 #[test]

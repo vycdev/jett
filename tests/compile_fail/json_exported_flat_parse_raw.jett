@@ -1,0 +1,4 @@
+# ERROR: E0208
+function main() returns JsonValue:
+    return parse_raw("null") handle error:
+        return json.JsonTree.string_value(error)
