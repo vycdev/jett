@@ -373,7 +373,13 @@ impl Interpreter {
                 self.current_qualified_name(name)
                     .filter(|qualified| registry.contains_key(qualified))
             })
-            .or_else(|| registry.contains_key(name).then(|| name.to_string()))
+            .or_else(|| {
+                if self.current_namespace.is_none() && !name.contains('.') {
+                    registry.contains_key(name).then(|| name.to_string())
+                } else {
+                    None
+                }
+            })
     }
 
     fn use_bound_name(path: &str, alias: Option<&Ident>) -> String {
@@ -3045,10 +3051,15 @@ impl Interpreter {
     }
 
     fn type_expr_kind(&self, ty: &TypeExpr) -> &'static str {
+        let ty = self.substitute_type_expr(ty);
+        self.type_expr_kind_inner(&ty)
+    }
+
+    fn type_expr_kind_inner(&self, ty: &TypeExpr) -> &'static str {
         match ty {
             TypeExpr::Named(ident) => {
                 if let Some(bound) = self.current_type_binding(&ident.name) {
-                    return self.type_expr_kind(&bound);
+                    return self.type_expr_kind_inner(&bound);
                 }
                 if self.type_aliases.contains_key(&ident.name) {
                     if self
@@ -3088,7 +3099,7 @@ impl Interpreter {
                     }
                 }
             }
-            TypeExpr::View(inner, _) => self.type_expr_kind(inner),
+            TypeExpr::View(inner, _) => self.type_expr_kind_inner(inner),
             TypeExpr::Function(_, _, _) => "function",
         }
     }
@@ -3270,6 +3281,11 @@ impl Interpreter {
     }
 
     fn type_expr_fields(&self, ty: &TypeExpr) -> Vec<ReflectionField> {
+        let ty = self.substitute_type_expr(ty);
+        self.type_expr_fields_inner(&ty)
+    }
+
+    fn type_expr_fields_inner(&self, ty: &TypeExpr) -> Vec<ReflectionField> {
         match ty {
             TypeExpr::Named(ident) => {
                 if let Some(strukt) = self.structs.get(&ident.name) {
@@ -3340,12 +3356,17 @@ impl Interpreter {
                         .collect()
                 })
                 .unwrap_or_default(),
-            TypeExpr::View(inner, _) => self.type_expr_fields(inner),
+            TypeExpr::View(inner, _) => self.type_expr_fields_inner(inner),
             TypeExpr::Function(_, _, _) => Vec::new(),
         }
     }
 
     fn type_expr_bitfield(&self, ty: &TypeExpr) -> ReflectionBitfield {
+        let ty = self.substitute_type_expr(ty);
+        self.type_expr_bitfield_inner(&ty)
+    }
+
+    fn type_expr_bitfield_inner(&self, ty: &TypeExpr) -> ReflectionBitfield {
         match ty {
             TypeExpr::Named(ident) => self
                 .bitfields
@@ -3362,7 +3383,7 @@ impl Interpreter {
                     network_order: false,
                     fields: Vec::new(),
                 }),
-            TypeExpr::View(inner, _) => self.type_expr_bitfield(inner),
+            TypeExpr::View(inner, _) => self.type_expr_bitfield_inner(inner),
             TypeExpr::Generic(_, _, _) | TypeExpr::Function(_, _, _) => ReflectionBitfield {
                 network_order: false,
                 fields: Vec::new(),
@@ -3412,6 +3433,11 @@ impl Interpreter {
     }
 
     fn type_expr_variants(&self, ty: &TypeExpr) -> Vec<ReflectionVariant> {
+        let ty = self.substitute_type_expr(ty);
+        self.type_expr_variants_inner(&ty)
+    }
+
+    fn type_expr_variants_inner(&self, ty: &TypeExpr) -> Vec<ReflectionVariant> {
         match ty {
             TypeExpr::Named(ident) => self
                 .enums
@@ -3448,7 +3474,7 @@ impl Interpreter {
                         .collect()
                 })
                 .unwrap_or_default(),
-            TypeExpr::View(inner, _) => self.type_expr_variants(inner),
+            TypeExpr::View(inner, _) => self.type_expr_variants_inner(inner),
             TypeExpr::Generic(_, _, _) | TypeExpr::Function(_, _, _) => Vec::new(),
         }
     }
@@ -9315,6 +9341,83 @@ mod tests {
             }))
         );
         assert_eq!(has_secret, Value::Bool(true));
+    }
+
+    #[test]
+    fn direct_reflection_fallback_normalizes_current_namespace_types() {
+        let mut interp = Interpreter::new();
+        interp.register_struct_in_namespace(
+            Some("models"),
+            &struct_def("User", vec![("name", "string")], vec![]),
+        );
+        interp.register_enum_in_namespace(
+            Some("models"),
+            &enum_def_with_values("Status", vec![("active", 0)]),
+        );
+        interp.register_bitfield_in_namespace(
+            Some("models"),
+            &bitfield_def(
+                "Header",
+                vec![(
+                    "version",
+                    BitfieldFieldKind::Bits {
+                        width: 4,
+                        as_type: None,
+                    },
+                )],
+                false,
+            ),
+        );
+        interp.current_namespace = Some("models".to_string());
+
+        let user_ty = type_named("User");
+        assert_eq!(interp.type_expr_kind(&user_ty), "struct");
+        let user_fields = interp.type_expr_fields(&user_ty);
+        assert_eq!(user_fields.len(), 1);
+        assert_eq!(user_fields[0].name, "name");
+
+        let status_ty = type_named("Status");
+        assert_eq!(interp.type_expr_kind(&status_ty), "enum");
+        let variants = interp.type_expr_variants(&status_ty);
+        assert_eq!(variants.len(), 1);
+        assert_eq!(variants[0].name, "active");
+
+        let header_ty = type_named("Header");
+        assert_eq!(interp.type_expr_kind(&header_ty), "bitfield");
+        let bitfield = interp.type_expr_bitfield(&header_ty);
+        assert_eq!(bitfield.fields.len(), 1);
+        assert_eq!(bitfield.fields[0].name, "version");
+    }
+
+    #[test]
+    fn registry_lookup_preserves_root_only_outside_namespace() {
+        let mut interp = Interpreter::new();
+        interp.register_function(&func_def(
+            "helper",
+            vec![],
+            block(vec![return_stmt(string("root"))]),
+        ));
+
+        assert_eq!(
+            interp.registry_name(&interp.functions, "helper").as_deref(),
+            Some("helper")
+        );
+
+        interp.current_namespace = Some("alpha".to_string());
+        assert_eq!(interp.registry_name(&interp.functions, "helper"), None);
+
+        interp.register_function_in_namespace(
+            Some("alpha"),
+            &func_def(
+                "helper",
+                vec![],
+                block(vec![return_stmt(string("namespace"))]),
+            ),
+        );
+        assert_eq!(
+            interp.registry_name(&interp.functions, "helper").as_deref(),
+            Some("alpha.helper")
+        );
     }
 
     #[test]
