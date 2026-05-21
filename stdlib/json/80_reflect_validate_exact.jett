@@ -12,6 +12,7 @@ mutual:
     function json_validate_exact_optional_reflected[T](view raw: JsonTree) returns result[nothing, string]
     function json_validate_exact_result_reflected[T](view raw: JsonTree) returns result[nothing, string]
     function json_validate_exact_enum_reflected[T](view raw: JsonTree, type_name: string) returns result[nothing, string]
+    function json_validate_exact_enum_string_reflected[T](view raw: JsonTree, type_name: string) returns result[nothing, string]
     function json_validate_exact_enum_payload_variant_reflected[T](view payload: JsonTree, type_name: string, variant: TypeVariant, payload_count: int64) returns result[nothing, string]
     function json_validate_exact_record_reflected[T](view raw: JsonTree, type_name: string) returns result[nothing, string]
     function json_validate_exact_record_field_reflected[T](view raw: JsonTree, view field: TypeField) returns result[nothing, string]
@@ -106,7 +107,7 @@ function json_validate_exact_result_reflected[T](view raw: JsonTree) returns res
         return ok(nothing)
 function json_validate_exact_enum_reflected[T](view raw: JsonTree, type_name: string) returns result[nothing, string]:
     if json_tree_is_string(view raw) == true:
-        return ok(nothing)
+        return json_validate_exact_enum_string_reflected[T](view raw, type_name)
     list[string] keys = json_tree_object_keys(view raw) handle error:
         return fail(error)
     if list.length[string](keys) != 1:
@@ -121,6 +122,17 @@ function json_validate_exact_enum_reflected[T](view raw: JsonTree, type_name: st
         if variant.name != variant_name:
             continue
         return json_validate_exact_enum_payload_variant_reflected[T](view payload, type_name, variant, payload_count)
+    return fail("unknown enum variant '{type_name}.{variant_name}'")
+function json_validate_exact_enum_string_reflected[T](view raw: JsonTree, type_name: string) returns result[nothing, string]:
+    string variant_name = json_tree_as_string(view raw) handle error:
+        return fail(error)
+    for variant in type.variants[T]():
+        if variant.name != variant_name:
+            continue
+        int64 expected_count = list.length[TypeField](variant.fields)
+        if expected_count != 0:
+            return fail("enum variant '{type_name}.{variant_name}' expects {expected_count} payload field(s)")
+        return ok(nothing)
     return fail("unknown enum variant '{type_name}.{variant_name}'")
 function json_validate_exact_enum_payload_variant_reflected[T](view payload: JsonTree, type_name: string, variant: TypeVariant, payload_count: int64) returns result[nothing, string]:
     int64 expected_count = list.length[TypeField](variant.fields)
