@@ -116,6 +116,28 @@ fn assert_compile_fail(name: &str) {
     }
 }
 
+fn assert_compile_fail_error_count(name: &str, code: u32, expected_count: usize) {
+    let path = fixture_path("compile_fail", name);
+    let result = build_file(&path);
+    assert!(
+        result.has_errors,
+        "expected {} to fail compilation",
+        path.display()
+    );
+    let actual_count = result
+        .diagnostics
+        .iter()
+        .filter(|diag| diag.severity == Severity::Error && u32::from(diag.code.code()) == code)
+        .count();
+    assert_eq!(
+        actual_count,
+        expected_count,
+        "unexpected E{code:04} count for {}:\n{}",
+        path.display(),
+        error_messages(&path, &result.diagnostics)
+    );
+}
+
 fn assert_run_pass(name: &str) {
     let path = fixture_path("run_pass", name);
     if fixture_has_main(&path) {
@@ -873,6 +895,14 @@ compile_fail_fixture!(
     compile_fail_json_refined_map_key_must_be_string,
     "json_refined_map_key_must_be_string.jett"
 );
+compile_fail_fixture!(
+    compile_fail_json_duplicate_map_key_diagnostics,
+    "json_duplicate_map_key_diagnostics.jett"
+);
+#[test]
+fn compile_fail_json_duplicate_map_key_diagnostics_dedupes() {
+    assert_compile_fail_error_count("json_duplicate_map_key_diagnostics.jett", 343, 1);
+}
 compile_fail_fixture!(
     compile_fail_json_duplicate_serialize_name,
     "json_duplicate_serialize_name.jett"

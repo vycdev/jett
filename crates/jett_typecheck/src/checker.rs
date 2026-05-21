@@ -1641,8 +1641,9 @@ impl<'a> TypeChecker<'a> {
 
     fn json_non_string_map_key_types(&self, ty: TypeId) -> Vec<String> {
         let mut visited = HashSet::new();
+        let mut key_types = HashSet::new();
         let mut keys = Vec::new();
-        self.collect_json_non_string_map_key_types(ty, &mut visited, &mut keys);
+        self.collect_json_non_string_map_key_types(ty, &mut visited, &mut key_types, &mut keys);
         keys
     }
 
@@ -1650,6 +1651,7 @@ impl<'a> TypeChecker<'a> {
         &self,
         ty: TypeId,
         visited: &mut HashSet<TypeId>,
+        key_types: &mut HashSet<TypeId>,
         keys: &mut Vec<String>,
     ) {
         if !visited.insert(ty) {
@@ -1658,27 +1660,27 @@ impl<'a> TypeChecker<'a> {
 
         match self.interner.resolve(ty) {
             Type::List(inner) | Type::Set(inner) | Type::Optional(inner) | Type::Secret(inner) => {
-                self.collect_json_non_string_map_key_types(*inner, visited, keys);
+                self.collect_json_non_string_map_key_types(*inner, visited, key_types, keys);
             }
             Type::Map(key, value) => {
-                if *key != TypeInterner::STRING {
+                if *key != TypeInterner::STRING && key_types.insert(*key) {
                     keys.push(self.type_name(*key));
                 }
-                self.collect_json_non_string_map_key_types(*key, visited, keys);
-                self.collect_json_non_string_map_key_types(*value, visited, keys);
+                self.collect_json_non_string_map_key_types(*key, visited, key_types, keys);
+                self.collect_json_non_string_map_key_types(*value, visited, key_types, keys);
             }
             Type::Result(ok, err) => {
-                self.collect_json_non_string_map_key_types(*ok, visited, keys);
-                self.collect_json_non_string_map_key_types(*err, visited, keys);
+                self.collect_json_non_string_map_key_types(*ok, visited, key_types, keys);
+                self.collect_json_non_string_map_key_types(*err, visited, key_types, keys);
             }
             Type::Struct(sid) => {
                 for (_, field_ty) in &self.interner.resolve_struct(*sid).fields {
-                    self.collect_json_non_string_map_key_types(*field_ty, visited, keys);
+                    self.collect_json_non_string_map_key_types(*field_ty, visited, key_types, keys);
                 }
             }
             Type::Bitfield(bid) => {
                 for field in &self.interner.resolve_bitfield(*bid).fields {
-                    self.collect_json_non_string_map_key_types(field.ty, visited, keys);
+                    self.collect_json_non_string_map_key_types(field.ty, visited, key_types, keys);
                 }
             }
             Type::Enum(eid) => {
@@ -1689,11 +1691,11 @@ impl<'a> TypeChecker<'a> {
                     .iter()
                     .flat_map(|variant| variant.fields.iter())
                 {
-                    self.collect_json_non_string_map_key_types(*field_ty, visited, keys);
+                    self.collect_json_non_string_map_key_types(*field_ty, visited, key_types, keys);
                 }
             }
             Type::Refinement { base, .. } => {
-                self.collect_json_non_string_map_key_types(*base, visited, keys);
+                self.collect_json_non_string_map_key_types(*base, visited, key_types, keys);
             }
             _ => {}
         }

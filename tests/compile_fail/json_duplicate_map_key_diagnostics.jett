@@ -1,0 +1,8 @@
+# ERROR: E0343
+namespace test
+type Label = string where string.char_count(value) > 0
+struct RepeatedLabels:
+    primary: map[Label, int64]
+    secondary: map[Label, string]
+function bad_repeated_key_report(view labels: RepeatedLabels) returns string:
+    return json.serialize[RepeatedLabels](view labels)
