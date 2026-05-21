@@ -49,6 +49,12 @@ function parse_exact_result_unknown_key_error() returns string:
     string ignored = parsed handle error:
         return error.display_name
     return ignored
+function parse_exact_result_non_object_error() returns string:
+    result[string, Profile] parsed = json.parse_exact[result[string, Profile]]("\"value\"") handle error:
+        return error
+    string ignored = parsed handle error:
+        return error.display_name
+    return ignored
 verify json_parse_exact_container_edges:
     assert parse_exact_set_profile_success() == "1"
     assert parse_exact_set_profile_extra_error() == "0: unknown field 'extra' for test.Profile"
@@ -58,3 +64,4 @@ verify json_parse_exact_container_edges:
     assert parse_exact_result_fail_profile_extra_error() == "fail: unknown field 'extra' for test.Profile"
     assert parse_exact_result_multiple_keys_error() == "expected result object with exactly one key"
     assert parse_exact_result_unknown_key_error() == "expected result object with key 'ok' or 'fail'"
+    assert parse_exact_result_non_object_error() == "expected result object, got string"

@@ -252,6 +252,8 @@ function json_decode_tree_optional_reflected[T](view raw: JsonTree) returns resu
             return fail(error)
         return ok(some(item))
 function json_tree_result_payload(view raw: JsonTree) returns result[JsonTreeResultPayload, string]:
+    if json_tree_is_object(view raw) == false:
+        return fail("expected result object, got {json_tree_kind(view raw)}")
     list[string] keys = json_tree_object_keys(view raw) handle error:
         return fail(error)
     if list.length[string](keys) != 1:

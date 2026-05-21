@@ -87,6 +87,12 @@ function parse_result_unknown_key_error() returns string:
     int64 ignored = parsed handle error:
         return error
     return "{ignored}"
+function parse_result_non_object_error() returns string:
+    result[int64, string] parsed = json.parse[result[int64, string]]("\"bad\"") handle error:
+        return error
+    int64 ignored = parsed handle error:
+        return error
+    return "{ignored}"
 function parse_generic_struct_value() returns string:
     Box[string] box = json.parse[Box[string]]("{{\"value\":\"stored\",\"label\":\"name\"}}") handle error:
         return error
@@ -240,6 +246,7 @@ verify json_parse:
     assert parse_result_fail_value() == "bad"
     assert parse_result_multiple_keys_error() == "expected result object with exactly one key"
     assert parse_result_unknown_key_error() == "expected result object with key 'ok' or 'fail'"
+    assert parse_result_non_object_error() == "expected result object, got string"
     assert parse_generic_struct_value() == "stored"
     assert parse_refinement_ok() == "alice"
     assert parse_refinement_error() == "name: refinement type constraint failed for 'test.NonEmpty'"
