@@ -1,0 +1,10 @@
+# ERROR: E0344
+namespace test
+function bad_public_json_value_serialize_view() returns string:
+    JsonValue raw = json.parse_raw("{{\"name\":\"Ada\"}}") handle error:
+        return error
+    return json.serialize_public[JsonValue](raw)
+function bad_public_namespaced_json_value_serialize_view() returns string:
+    json.JsonValue raw = json.parse_raw("{{\"name\":\"Lin\"}}") handle error:
+        return error
+    return json.serialize_public[json.JsonValue](raw)
