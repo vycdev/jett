@@ -13,6 +13,9 @@ function bad_parse_raw_input() returns json.JsonTree:
 function bad_kind_input() returns string:
     return json.kind("not raw json")
 
+function bad_predicate_receiver() returns bool:
+    return json.is_object("not raw json")
+
 function bad_field_value() returns string:
     json.JsonTree name = json.field("not raw json", "name") handle:
         return "missing"
@@ -40,6 +43,27 @@ function bad_index_value(root: json.JsonTree) returns int64:
 function bad_uint64_cast_receiver() returns uint64:
     return json.as_uint64("not raw json") handle error:
         default 0
+
+function bad_string_cast_receiver() returns string:
+    return json.as_string("not raw json") handle error:
+        default error
+
+function bad_float64_cast_receiver() returns float64:
+    return json.as_float64("not raw json") handle error:
+        default 0.0
+
+function bad_bool_cast_receiver() returns bool:
+    return json.as_bool("not raw json") handle error:
+        default false
+
+function bad_array_length_receiver() returns int64:
+    return json.array_length("not raw json") handle error:
+        default 0
+
+function bad_object_keys_receiver() returns int64:
+    list[string] keys = json.object_keys("not raw json") handle error:
+        default list.new[string]()
+    return list.length[string](view keys)
 
 function bad_serialize_raw_input() returns string:
     return json.serialize_raw("not raw json")
