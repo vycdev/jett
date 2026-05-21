@@ -206,8 +206,9 @@ Implemented:
   marker stdlib module.
 - Driver hover coverage now verifies that editor type queries see the
   `json.parse_raw` facade as `result[json.JsonTree, string]`.
-- Driver hover coverage also pins the `JsonTree`-first return types for
-  `json.field`, `json.index`, `json.array_length`, and `json.as_string`.
+- Driver hover coverage also pins the `JsonTree`-first return types for the
+  raw facade surface, including lenient lookups, strict lookup helpers, scalar
+  casts, predicates, key/length helpers, and raw serialization.
 - Driver completion coverage now filters out private namespaced stdlib JSON
   bridge hooks while still exposing the exported `json.JsonTree`,
   `json.JsonValue`, parse/serialize wrappers, and raw facade surface.

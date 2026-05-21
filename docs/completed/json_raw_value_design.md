@@ -34,8 +34,8 @@ Implemented accessors:
 - `json.array_length(view value: json.JsonTree)` returns `result[int64, string]`.
 - `json.object_keys(view value: json.JsonTree)` returns
   `result[list[string], string]`.
-- `json.as_string`, `json.as_int64`, `json.as_float64`, and `json.as_bool`
-  return typed `result` values.
+- `json.as_string`, `json.as_int64`, `json.as_uint64`, `json.as_float64`, and
+  `json.as_bool` return typed `result` values.
 
 ## Stdlib Tree Staging
 
