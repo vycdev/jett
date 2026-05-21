@@ -3,6 +3,11 @@ export struct User:
     id: string serialize "userId"
 export struct Box[T]:
     value: T serialize "item"
+export struct RawHolder:
+    bare: JsonValue
+    alias: json.JsonValue
+    bare_list: list[JsonValue]
+    alias_list: list[json.JsonValue]
 namespace app
 function runtime_reflection_metadata_summary() returns string:
     use models as m
@@ -31,11 +36,45 @@ function runtime_raw_alias_reflection_summary() returns string:
     bool parsed_name = string.contains(parsed_raw, "\"name\":\"Ada\"")
     bool exact_name = string.contains(exact_raw, "\"name\":\"Grace\"")
     return "{bare.kind}:{bare_base.type_name}:{alias.kind}:{alias_base.type_name}:{json.kind(parsed)}:{json.kind(view exact)}:{parsed_name}:{exact_name}"
+function runtime_raw_alias_direct_field_metadata_summary() returns string:
+    use models as m
+    list[TypeField] fields = type.fields[m.RawHolder]()
+    TypeField bare = list.get[TypeField](fields, 0) handle:
+        return "missing bare"
+    TypeField alias = list.get[TypeField](fields, 1) handle:
+        return "missing alias"
+    TypeInfo bare_base = list.get[TypeInfo](bare.type_info.args, 0) handle:
+        return "missing bare base"
+    TypeInfo alias_base = list.get[TypeInfo](alias.type_info.args, 0) handle:
+        return "missing alias base"
+    return "{bare.type_info.kind}:{bare.type_info.type_name}:{bare_base.type_name}:{alias.type_info.kind}:{alias.type_info.type_name}:{alias_base.type_name}"
+function runtime_raw_alias_list_field_metadata_summary() returns string:
+    use models as m
+    list[TypeField] fields = type.fields[m.RawHolder]()
+    TypeField bare_list = list.get[TypeField](fields, 2) handle:
+        return "missing bare list"
+    TypeField alias_list = list.get[TypeField](fields, 3) handle:
+        return "missing alias list"
+    TypeInfo bare_list_arg = list.get[TypeInfo](bare_list.type_info.args, 0) handle:
+        return "missing bare list arg"
+    TypeInfo bare_list_base = list.get[TypeInfo](bare_list_arg.args, 0) handle:
+        return "missing bare list base"
+    TypeInfo alias_list_arg = list.get[TypeInfo](alias_list.type_info.args, 0) handle:
+        return "missing alias list arg"
+    TypeInfo alias_list_base = list.get[TypeInfo](alias_list_arg.args, 0) handle:
+        return "missing alias list base"
+    return "{bare_list.type_info.kind}:{bare_list_arg.kind}:{bare_list_arg.type_name}:{bare_list_base.type_name}:{alias_list.type_info.kind}:{alias_list_arg.kind}:{alias_list_arg.type_name}:{alias_list_base.type_name}"
 function main() returns nothing:
     string summary = runtime_reflection_metadata_summary()
     if summary != "models.Box[models.User]:models.User:item:{{\"item\":{{\"userId\":\"u1\"}}}}:u1":
         int64 fail = 1 / 0
     string raw_summary = runtime_raw_alias_reflection_summary()
     if raw_summary != "alias:json.JsonTree:alias:json.JsonTree:object:object:true:true":
+        int64 fail = 1 / 0
+    string direct_field_summary = runtime_raw_alias_direct_field_metadata_summary()
+    if direct_field_summary != "alias:JsonValue:json.JsonTree:alias:json.JsonValue:json.JsonTree":
+        int64 fail = 1 / 0
+    string list_field_summary = runtime_raw_alias_list_field_metadata_summary()
+    if list_field_summary != "list:alias:JsonValue:json.JsonTree:list:alias:json.JsonValue:json.JsonTree":
         int64 fail = 1 / 0
     return nothing
