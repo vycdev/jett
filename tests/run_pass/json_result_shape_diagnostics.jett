@@ -1,0 +1,50 @@
+namespace test
+struct ResultHolder:
+    outcome: result[int64, string]
+enum WrappedResult:
+    outcome(value: result[int64, string])
+function parse_struct_result_non_object_error() returns string:
+    ResultHolder holder = json.parse[ResultHolder]("{{\"outcome\":\"bad\"}}") handle error:
+        return error
+    int64 value = holder.outcome handle error:
+        return error
+    return "{value}"
+function parse_list_result_multiple_keys_error() returns string:
+    list[result[int64, string]] items = json.parse[list[result[int64, string]]]("[{{\"ok\":1,\"fail\":\"bad\"}}]") handle error:
+        return error
+    return "{list.length[result[int64, string]](view items)}"
+function parse_map_result_unknown_key_error() returns string:
+    map[string, result[int64, string]] items = json.parse[map[string, result[int64, string]]]("{{\"primary\":{{\"value\":1}}}}") handle error:
+        return error
+    return "{map.length[string, result[int64, string]](view items)}"
+function parse_enum_result_non_object_error() returns string:
+    WrappedResult wrapped = json.parse[WrappedResult]("{{\"outcome\":[\"bad\"]}}") handle error:
+        return error
+    return json.serialize[WrappedResult](view wrapped)
+function parse_exact_struct_result_non_object_error() returns string:
+    ResultHolder holder = json.parse_exact[ResultHolder]("{{\"outcome\":\"bad\"}}") handle error:
+        return error
+    int64 value = holder.outcome handle error:
+        return error
+    return "{value}"
+function parse_exact_list_result_multiple_keys_error() returns string:
+    list[result[int64, string]] items = json.parse_exact[list[result[int64, string]]]("[{{\"ok\":1,\"fail\":\"bad\"}}]") handle error:
+        return error
+    return "{list.length[result[int64, string]](view items)}"
+function parse_exact_map_result_unknown_key_error() returns string:
+    map[string, result[int64, string]] items = json.parse_exact[map[string, result[int64, string]]]("{{\"primary\":{{\"value\":1}}}}") handle error:
+        return error
+    return "{map.length[string, result[int64, string]](view items)}"
+function parse_exact_enum_result_non_object_error() returns string:
+    WrappedResult wrapped = json.parse_exact[WrappedResult]("{{\"outcome\":[\"bad\"]}}") handle error:
+        return error
+    return json.serialize[WrappedResult](view wrapped)
+verify json_result_shape_diagnostics:
+    assert parse_struct_result_non_object_error() == "outcome: expected result object, got string"
+    assert parse_list_result_multiple_keys_error() == "0: expected result object with exactly one key"
+    assert parse_map_result_unknown_key_error() == "primary: expected result object with key 'ok' or 'fail'"
+    assert parse_enum_result_non_object_error() == "outcome.value: expected result object, got string"
+    assert parse_exact_struct_result_non_object_error() == "outcome: expected result object, got string"
+    assert parse_exact_list_result_multiple_keys_error() == "0: expected result object with exactly one key"
+    assert parse_exact_map_result_unknown_key_error() == "primary: expected result object with key 'ok' or 'fail'"
+    assert parse_exact_enum_result_non_object_error() == "outcome.value: expected result object, got string"

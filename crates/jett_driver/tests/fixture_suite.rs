@@ -368,6 +368,10 @@ run_pass_fixture!(
     run_pass_json_parse_exact_primitive_edges,
     "json_parse_exact_primitive_edges.jett"
 );
+run_pass_fixture!(
+    run_pass_json_result_shape_diagnostics,
+    "json_result_shape_diagnostics.jett"
+);
 run_pass_fixture!(run_pass_json_shape_matrix, "json_shape_matrix.jett");
 run_pass_fixture!(
     run_pass_json_parse_error_parity,
