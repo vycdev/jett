@@ -1,29 +1,20 @@
 namespace accounts
-
 export type NonEmpty = string where string.char_count(value) > 0
-
 export enum Status:
     active = 1
     frozen = 2
-
 export bitfield Header:
     version: 4 bits
     status: 8 bits as accounts.Status
-
 namespace audit
-
 export type NonEmpty = string where string.starts_with(value, "audit")
-
 export enum Status:
     active = 10
     blocked = 11
-
 export bitfield Header:
     level: 3 bits
     status: 8 bits as audit.Status
-
 namespace app
-
 function accounts_named_owner_summary() returns string:
     use accounts as a
     a.NonEmpty label = "acct" handle error:
@@ -36,11 +27,15 @@ function accounts_named_owner_summary() returns string:
     TypeBitfieldField status_field = list.get[TypeBitfieldField](type.bitfield_fields[a.Header](), 1) handle:
         return "missing account status field"
     a.Header header = a.Header(version: 4, status: a.Status.active)
+    bool reflected_active = false
+    for field in type.fields[a.Header]():
+        if field.name == "status":
+            a.Status reflected = type.field_value[a.Header, a.Status](view header, view field)
+            reflected_active = reflected == a.Status.active
     string raw = json.serialize[a.Header](view header)
     a.Header decoded = json.parse[a.Header](raw) handle error:
         return error
-    return "{label_info.type_name}:{status.discriminant}:{version.name}:{status_field.type_info.type_name}:{decoded.status == a.Status.active}"
-
+    return "{label_info.type_name}:{status.discriminant}:{version.name}:{status_field.type_info.type_name}:{reflected_active}:{decoded.status == a.Status.active}"
 function audit_named_owner_summary() returns string:
     use audit as a
     a.NonEmpty label = "audit-ready" handle error:
@@ -53,11 +48,15 @@ function audit_named_owner_summary() returns string:
     TypeBitfieldField status_field = list.get[TypeBitfieldField](type.bitfield_fields[a.Header](), 1) handle:
         return "missing audit status field"
     a.Header header = a.Header(level: 3, status: a.Status.active)
+    bool reflected_active = false
+    for field in type.fields[a.Header]():
+        if field.name == "status":
+            a.Status reflected = type.field_value[a.Header, a.Status](view header, view field)
+            reflected_active = reflected == a.Status.active
     string raw = json.serialize[a.Header](view header)
     a.Header decoded = json.parse[a.Header](raw) handle error:
         return error
-    return "{label_info.type_name}:{status.discriminant}:{level.name}:{status_field.type_info.type_name}:{decoded.status == a.Status.active}"
-
+    return "{label_info.type_name}:{status.discriminant}:{level.name}:{status_field.type_info.type_name}:{reflected_active}:{decoded.status == a.Status.active}"
 verify reflection_type_id_duplicate_named_owners:
-    assert accounts_named_owner_summary() == "accounts.NonEmpty:1:version:accounts.Status:true"
-    assert audit_named_owner_summary() == "audit.NonEmpty:10:level:audit.Status:true"
+    assert accounts_named_owner_summary() == "accounts.NonEmpty:1:version:accounts.Status:true:true"
+    assert audit_named_owner_summary() == "audit.NonEmpty:10:level:audit.Status:true:true"
