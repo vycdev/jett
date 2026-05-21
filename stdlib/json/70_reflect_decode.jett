@@ -25,7 +25,7 @@ mutual:
     function json_decode_tree_set_reflected[T](view raw: JsonTree) returns result[T, string]
     function json_decode_tree_map_reflected[T](view raw: JsonTree) returns result[T, string]
     function json_decode_tree_optional_reflected[T](view raw: JsonTree) returns result[T, string]
-    function json_tree_result_payload(view raw: JsonTree) returns result[JsonTreeResultPayload, string]
+    function json_tree_result_payload(view raw: JsonTree) returns result[JsonTreeObjectField, string]
     function json_decode_tree_result_reflected[T](view raw: JsonTree) returns result[T, string]
     function json_decode_tree_enum_reflected[T](view raw: JsonTree, type_name: string) returns result[T, string]
     function json_decode_tree_enum_string_reflected[T](view raw: JsonTree, type_name: string) returns result[T, string]
@@ -243,7 +243,7 @@ function json_decode_tree_optional_reflected[T](view raw: JsonTree) returns resu
         Inner item = json_decode_tree_reflected[Inner](view raw) handle error:
             return fail(error)
         return ok(some(item))
-function json_tree_result_payload(view raw: JsonTree) returns result[JsonTreeResultPayload, string]:
+function json_tree_result_payload(view raw: JsonTree) returns result[JsonTreeObjectField, string]:
     if json_tree_is_object(view raw) == false:
         return fail("expected result object, got {json_tree_kind(view raw)}")
     list[string] keys = json_tree_object_keys(view raw) handle error:
@@ -258,9 +258,9 @@ function json_tree_result_payload(view raw: JsonTree) returns result[JsonTreeRes
         return fail(error)
     JsonTree value = maybe_value handle:
         return fail("expected result object with key 'ok' or 'fail'")
-    return ok(JsonTreeResultPayload(key: key, value: value))
+    return ok(JsonTreeObjectField(key: key, value: value))
 function json_decode_tree_result_reflected[T](view raw: JsonTree) returns result[T, string]:
-    JsonTreeResultPayload payload = json_tree_result_payload(view raw) handle error:
+    JsonTreeObjectField payload = json_tree_result_payload(view raw) handle error:
         return fail(error)
     if payload.key == "ok":
         comptime type Ok = type.arg[T](0):

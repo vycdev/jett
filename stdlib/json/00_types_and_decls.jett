@@ -29,9 +29,6 @@ struct JsonTreeSegment:
 struct JsonTreeStringEscape:
     value: string
     next_index: int64
-struct JsonTreeResultPayload:
-    key: string
-    value: JsonTree
 function json_stdlib_hex_digit(value: int64) returns string:
     if value < 10:
         return "{value}"

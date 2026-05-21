@@ -95,7 +95,7 @@ function json_validate_exact_optional_reflected[T](view raw: JsonTree) returns r
     comptime type Inner = type.arg[T](0):
         return json_validate_exact_reflected[Inner](view raw)
 function json_validate_exact_result_reflected[T](view raw: JsonTree) returns result[nothing, string]:
-    JsonTreeResultPayload payload = json_tree_result_payload(view raw) handle error:
+    JsonTreeObjectField payload = json_tree_result_payload(view raw) handle error:
         return fail(error)
     if payload.key == "ok":
         comptime type Ok = type.arg[T](0):
