@@ -21,23 +21,33 @@ function created_payload_type_name[T]() returns string:
 function accounts_event_json_summary() returns string:
     use accounts as a
     a.Event event = a.Event.created(a.User(id: "acct-1"))
+    TypeVariant selected = type.variant_value[a.Event](view event)
     string raw = json.serialize[a.Event](view event)
     a.Event decoded = json.parse[a.Event](raw) handle error:
         return error
     match decoded:
         created(user):
             bool raw_has_id = string.contains(raw, "\"id\":\"acct-1\"")
-            return "{created_payload_type_name[a.Event]()}:{user.id}:{raw_has_id}"
+            for field in selected.fields:
+                if field.name == "user":
+                    a.User reflected = type.variant_field_value[a.Event, a.User](view event, view field)
+                    return "{created_payload_type_name[a.Event]()}:{reflected.id}:{user.id}:{raw_has_id}"
+            return "missing account payload"
 function audit_event_json_summary() returns string:
     use audit as a
     a.Event event = a.Event.created(a.User(service: "svc", attempts: 3))
+    TypeVariant selected = type.variant_value[a.Event](view event)
     string raw = json.serialize[a.Event](view event)
     a.Event decoded = json.parse[a.Event](raw) handle error:
         return error
     match decoded:
         created(user):
             bool raw_has_attempts = string.contains(raw, "\"attempts\":3")
-            return "{created_payload_type_name[a.Event]()}:{user.service}:{user.attempts}:{raw_has_attempts}"
+            for field in selected.fields:
+                if field.name == "user":
+                    a.User reflected = type.variant_field_value[a.Event, a.User](view event, view field)
+                    return "{created_payload_type_name[a.Event]()}:{reflected.service}:{reflected.attempts}:{user.service}:{user.attempts}:{raw_has_attempts}"
+            return "missing audit payload"
 verify reflection_type_id_duplicate_enum_payloads:
-    assert accounts_event_json_summary() == "accounts.User:acct-1:true"
-    assert audit_event_json_summary() == "audit.User:svc:3:true"
+    assert accounts_event_json_summary() == "accounts.User:acct-1:acct-1:true"
+    assert audit_event_json_summary() == "audit.User:svc:3:svc:3:true"
