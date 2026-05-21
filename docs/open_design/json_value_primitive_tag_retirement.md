@@ -99,8 +99,8 @@ Do not do this as the next step.
    `TypePrimitive.json_value_type`.
    Status: done. `stdlib/json/` now routes reflected serialize/decode raw
    targets through `json_reflected_raw_type(...)`, and that helper recognizes
-   only the source-level raw tree spellings. The legacy primitive tag is no
-   longer part of normal stdlib JSON dispatch.
+   `json.JsonTree` plus aliases that resolve to it through `TypeInfo.args`.
+   The legacy primitive tag is no longer part of normal stdlib JSON dispatch.
 3. Change stdlib-loaded reflection for bare `JsonValue` to alias metadata only
    after parse, parse_exact, serialize, serialize_public, raw accessors, and
    container assignment compatibility all pass through the alias path.
