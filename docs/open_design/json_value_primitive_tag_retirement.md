@@ -23,6 +23,9 @@ primitive tag.
   names are undefined rather than backed by hidden Rust semantics.
 - The interpreter's direct/no-metadata fallback still reports the
   `json_value_type` primitive tag for bare `JsonValue` reflection.
+- The typechecker no longer treats the bare text `JsonValue` as primitive while
+  building `TypeInfo`; the tag is produced only when type resolution reaches the
+  legacy `Type::JsonValue` fallback.
 - The stdlib JSON serializer and decoder route raw targets by reflected type
   name: `json.JsonTree`, `json.JsonValue`, and bare `JsonValue`. They no
   longer depend on `TypePrimitive.json_value_type`.
@@ -110,6 +113,9 @@ Do not do this as the next step.
 4. Keep the legacy primitive fallback isolated to bootstrap/no-stdlib
    reflection paths until a later cleanup removes or deprecates
    `TypePrimitive.json_value_type`.
+   Status: in progress. The typechecker now narrows `json_value_type` to the
+   resolved legacy fallback type instead of a textual `JsonValue` shortcut; the
+   direct interpreter fallback and enum variant remain.
 5. Retire `Type::JsonValue` / `TypeInterner::JSON_VALUE` only after bootstrap
    stdlib loading and root aliases no longer need the fallback built-in.
 

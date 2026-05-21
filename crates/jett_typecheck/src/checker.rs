@@ -1421,8 +1421,7 @@ impl<'a> TypeChecker<'a> {
         ReflectionTypeInfo::new(
             type_name,
             self.reflection_kind_for_type_expr(ty, namespace, resolved_ty),
-            self.reflection_primitive_tag_for_type_expr(ty, namespace)
-                .map(str::to_string),
+            self.reflection_primitive_tag_for_type_expr_static(ty, resolved_ty),
             resolved_ty != TypeInterner::ERROR && self.type_contains_secret_data(resolved_ty),
             args,
         )
@@ -1521,26 +1520,6 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
-    fn reflection_primitive_tag_for_type_expr(
-        &self,
-        ty: &TypeExpr,
-        namespace: Option<&str>,
-    ) -> Option<&'static str> {
-        match ty {
-            TypeExpr::Named(ident) => {
-                let name = self.reflection_type_name_in_namespace(ident, namespace);
-                if self.type_aliases.contains_key(&name) {
-                    return None;
-                }
-                Self::reflection_primitive_tag_for_name(&name)
-            }
-            TypeExpr::View(inner, _) => {
-                self.reflection_primitive_tag_for_type_expr(inner, namespace)
-            }
-            TypeExpr::Generic(_, _, _) | TypeExpr::Function(_, _, _) => None,
-        }
-    }
-
     fn reflection_primitive_tag_for_name(name: &str) -> Option<&'static str> {
         match name {
             "int8" => Some("int8_type"),
@@ -1557,7 +1536,6 @@ impl<'a> TypeChecker<'a> {
             "bool" => Some("bool_type"),
             "bytes" => Some("bytes_type"),
             "nothing" => Some("nothing_type"),
-            "JsonValue" => Some("json_value_type"),
             "TypeConstruction" => Some("type_construction_type"),
             _ => None,
         }
