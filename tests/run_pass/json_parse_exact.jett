@@ -31,6 +31,8 @@ struct RawAliasEnvelope:
     id: string
     payload: json.JsonValue
 type ProfileAlias = Profile
+struct AliasHolder:
+    profile: ProfileAlias serialize "profileData"
 enum Wrapped:
     profile_item(profile: Profile)
 enum Protocol:
@@ -104,6 +106,11 @@ function parse_exact_validates_alias_base() returns string:
     ProfileAlias profile = json.parse_exact[ProfileAlias](raw) handle error:
         return error
     return profile.display_name
+function parse_exact_validates_alias_field_base() returns string:
+    string raw = "{{\"profileData\":{{\"displayName\":\"Alice\",\"note\":\"ok\",\"extra\":\"nope\"}}}}"
+    AliasHolder holder = json.parse_exact[AliasHolder](raw) handle error:
+        return error
+    return holder.profile.display_name
 function parse_exact_validates_optional_value() returns string:
     string raw = "{{\"displayName\":\"Alice\",\"note\":\"ok\",\"extra\":\"nope\"}}"
     optional[Profile] profile = json.parse_exact[optional[Profile]](raw) handle error:
@@ -266,6 +273,7 @@ verify json_parse_exact:
     assert parse_exact_accepts_set_shape() == "2:true"
     assert parse_exact_rejects_set_non_array() == "expected array, got object"
     assert parse_exact_validates_alias_base() == "unknown field 'extra' for test.Profile"
+    assert parse_exact_validates_alias_field_base() == "profileData: unknown field 'extra' for test.Profile"
     assert parse_exact_validates_optional_value() == "unknown field 'extra' for test.Profile"
     assert parse_exact_accepts_optional_null() == "none"
     assert parse_exact_validates_result_ok() == "ok: unknown field 'extra' for test.Profile"
