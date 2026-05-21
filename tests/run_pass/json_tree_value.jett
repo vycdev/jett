@@ -32,8 +32,34 @@ function json_tree_escaped_key_summary() returns string:
     fields = map.insert[string, json.JsonTree](fields, "line\nkey", json.JsonTree.string_value("quote \" value"))
     json.JsonTree tree = json.JsonTree.object_value(fields)
     return json.json_tree_serialize(tree)
+function json_tree_control_string_summary() returns string:
+    bytes raw = bytes.from_hex("610162080b0c1f") handle error:
+        return error
+    string text = bytes.to_string(raw) handle error:
+        return error
+    json.JsonTree tree = json.JsonTree.string_value(text)
+    return json.json_tree_serialize(tree)
+function json_tree_all_control_string_summary() returns string:
+    bytes raw = bytes.from_hex("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f") handle error:
+        return error
+    string text = bytes.to_string(raw) handle error:
+        return error
+    json.JsonTree tree = json.JsonTree.string_value(text)
+    return json.serialize_raw(view tree)
+function json_tree_control_key_summary() returns string:
+    bytes raw = bytes.from_hex("610162080b0c1f") handle error:
+        return error
+    string key = bytes.to_string(raw) handle error:
+        return error
+    mutable map[string, json.JsonTree] fields = map.new[string, json.JsonTree]()
+    fields = map.insert[string, json.JsonTree](fields, key, json.JsonTree.null)
+    json.JsonTree tree = json.JsonTree.object_value(fields)
+    return json.serialize_raw(view tree)
 verify json_tree_value:
     assert json_tree_summary() == "{{\"name\":\"Ada\",\"items\":[3,true,null],\"quote\":\"line\\nnext\"}}"
     assert json_tree_roundtrip_through_raw() == true
     assert json_tree_serialize_does_not_consume_tree() == "object:true"
     assert json_tree_escaped_key_summary() == "{{\"line\\nkey\":\"quote \\\" value\"}}"
+    assert json_tree_control_string_summary() == "\"a\\u0001b\\b\\u000b\\f\\u001f\""
+    assert json_tree_all_control_string_summary() == "\"\\u0000\\u0001\\u0002\\u0003\\u0004\\u0005\\u0006\\u0007\\b\\t\\n\\u000b\\f\\r\\u000e\\u000f\\u0010\\u0011\\u0012\\u0013\\u0014\\u0015\\u0016\\u0017\\u0018\\u0019\\u001a\\u001b\\u001c\\u001d\\u001e\\u001f\""
+    assert json_tree_control_key_summary() == "{{\"a\\u0001b\\b\\u000b\\f\\u001f\":null}}"
