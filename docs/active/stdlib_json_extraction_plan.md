@@ -384,3 +384,8 @@ functions should probably use `result` while format policy is still evolving.
   `export` syntax, especially once a full import/prelude model exists?
 - How much abstraction is allowed around trusted reflection loops before
   `comptime type Field = field.type_info:` loses provenance?
+- How much shared helper extraction is safe inside large `mutual` groups?
+  Exact validation already shares list/set array traversal through
+  `json_validate_exact_array_items_reflected[Elem]`, but the analogous decode
+  helper would return `result[list[Elem], string]` and currently needs a closer
+  compiler pass before replacing the duplicate list/set decode loops.
