@@ -334,6 +334,10 @@ run_pass_fixture!(
     "reflection_type_id_duplicate_container_args.jett"
 );
 run_pass_fixture!(
+    run_pass_reflection_type_id_duplicate_aliases,
+    "reflection_type_id_duplicate_aliases.jett"
+);
+run_pass_fixture!(
     run_pass_reflection_type_id_duplicate_construction,
     "reflection_type_id_duplicate_construction.jett"
 );
