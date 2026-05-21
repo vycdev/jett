@@ -1,4 +1,6 @@
 namespace test
+type LocalRaw = json.JsonTree
+type LocalRawAlias = json.JsonValue
 function bare_json_value_reflection_summary() returns string:
     TypeInfo info = type.info[JsonValue]()
     TypePrimitive primitive = info.primitive_tag handle:
@@ -40,8 +42,19 @@ function alias_json_value_raw_behavior() returns string:
     bool serialized_name = string.contains(serialized, "\"name\":\"Lin\"")
     bool public_score = string.contains(public, "\"score\":13")
     return "{json.kind(view parsed)}:{serialized_name}:{public_score}"
+function local_raw_alias_behavior() returns string:
+    LocalRaw parsed = json.parse_exact[LocalRaw]("{{\"extra\":{{\"kept\":true}}}}") handle error:
+        return error
+    LocalRawAlias alias = json.parse[LocalRawAlias]("{{\"name\":\"Mira\"}}") handle error:
+        return error
+    string public = json.serialize_public[LocalRaw](view parsed)
+    string encoded = json.serialize[LocalRawAlias](view alias)
+    bool kept_extra = string.contains(public, "\"extra\":")
+    bool kept_name = string.contains(encoded, "\"name\":\"Mira\"")
+    return "{json.kind(view parsed)}:{json.kind(view alias)}:{kept_extra}:{kept_name}"
 verify json_value_reflection_staging:
     assert bare_json_value_reflection_summary() == "alias:JsonValue:true:enum:json.JsonTree:1:true"
     assert alias_json_value_reflection_summary() == "alias:json.JsonValue:true:enum:json.JsonTree:1"
     assert bare_json_value_raw_behavior() == "object:true:true"
     assert alias_json_value_raw_behavior() == "object:true:true"
+    assert local_raw_alias_behavior() == "object:object:true:true"
