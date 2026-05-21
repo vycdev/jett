@@ -1549,7 +1549,7 @@ mod tests {
     }
 
     fn int_literal(val: i64, start: u32) -> Expr {
-        Expr::IntLiteral(val, sp(start, start + 2))
+        Expr::IntLiteral(val.into(), sp(start, start + 2))
     }
 
     fn ident_expr(name: &str, start: u32) -> Expr {
