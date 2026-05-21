@@ -51,8 +51,8 @@ automatically own policy-bearing public calls such as `json.parse[T](...)`.
 
 ## JSON-Specific State
 
-The reflected JSON implementation has started moving into stdlib under the
-`json` namespace. Prefixed hook names hold the implementation bodies:
+The reflected JSON implementation now lives in stdlib under the `json`
+namespace. Prefixed hook names hold the trusted implementation bodies:
 
 - `stdlib/json/` fragments
 - `JsonTree` as a first self-hosted raw JSON tree representation
@@ -83,13 +83,14 @@ trusted exported public wrappers. Ordinary source can name the exported
 `json.json_tree_parse` raw parser, but cannot name the private reflected hook
 entrypoints directly; compile-fail fixtures pin that visibility boundary.
 
-The run-pass fixtures still own the test-specific type definitions and the
-flat decoder prototype:
+The run-pass fixtures now act as parity and shape coverage for the stdlib
+implementation. They still own test-specific type definitions and small model
+helpers:
 
 - `tests/run_pass/json_reflection_nested_serializer.jett`
 - `tests/run_pass/json_reflection_nested_decoder.jett`
 
-Together they cover the shape needed for a future stdlib module:
+Together they cover the shapes that the current stdlib module must preserve:
 
 - recursive structured type dispatch through `TypeKind` and `TypePrimitive`,
 - primitive values, bytes, null, aliases, refinements, secrets,

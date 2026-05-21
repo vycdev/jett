@@ -1,8 +1,9 @@
 # Reflected Type Construction
 
-This note records the design space for the construction primitive needed before
-`json.parse[T]`, binary decoding, CSV loading, and test-data generation can move
-out of Rust bridges and into `.jett` stdlib code.
+This note records the design space for reflected construction. The first
+builder form has already moved `json.parse[T]` onto the `.jett` stdlib path;
+the remaining design question is how this primitive should evolve for future
+decoders, generators, and possible syntax cleanup.
 
 ## Problem
 
@@ -13,10 +14,10 @@ list[TypeField] fields = type.fields[T]()
 value = type.field_value[T, Field](view item, view field)
 ```
 
-Deserialization needs the reverse operation: given checked field values, build a
-`T` while preserving the exact same rules as ordinary source constructors. The
-first form now exists as the opaque `TypeConstruction` builder for structs,
-bitfields, and enum variants; the final syntax story is still open.
+Deserialization needed the reverse operation: given checked field values, build
+a `T` while preserving the exact same rules as ordinary source constructors.
+That first form now exists as the opaque `TypeConstruction` builder for
+structs, bitfields, and enum variants; the final syntax story is still open.
 
 The missing operation is not JSON-specific. JSON happens to be the current
 pressure point, but the same primitive should serve:

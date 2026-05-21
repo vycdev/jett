@@ -14,9 +14,10 @@ The reflected JSON stdlib now depends on rich metadata:
 - trusted type-argument and field-type bindings,
 - `TypeConstruction` validation.
 
-Most of that works today, but the comptime interpreter still reconstructs much
-of it from parsed AST declarations plus generic substitutions. That is good
-enough for staging, but it is not the final source of truth.
+Most of that now flows through checked `ReflectionMetadata` when a checked
+snapshot is available. The comptime interpreter still keeps AST reconstruction
+fallbacks for bootstrap and direct no-metadata tests, but those fallbacks are
+not the intended production source of truth.
 
 Reflection should eventually describe exactly the type the checker accepted,
 after namespace qualification, alias/refinement resolution, generic
