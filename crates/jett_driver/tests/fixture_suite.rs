@@ -967,10 +967,18 @@ compile_fail_fixture!(
     compile_fail_json_raw_facade_argument_shapes,
     "json_raw_facade_argument_shapes.jett"
 );
+#[test]
+fn compile_fail_json_raw_facade_argument_shapes_count() {
+    assert_compile_fail_error_count("json_raw_facade_argument_shapes.jett", 304, 16);
+}
 compile_fail_fixture!(
     compile_fail_json_raw_strict_accessor_argument_shapes,
     "json_raw_strict_accessor_argument_shapes.jett"
 );
+#[test]
+fn compile_fail_json_raw_strict_accessor_argument_shapes_count() {
+    assert_compile_fail_error_count("json_raw_strict_accessor_argument_shapes.jett", 304, 8);
+}
 compile_fail_fixture!(
     compile_fail_json_raw_cast_requires_handle,
     "json_raw_cast_requires_handle.jett"
