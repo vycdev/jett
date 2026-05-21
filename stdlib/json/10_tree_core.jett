@@ -86,6 +86,30 @@ function json_tree_index(view value: JsonTree, index: int64) returns optional[Js
             return list.get[JsonTree](view items, index)
         other:
             return none
+function json_tree_object_field(view value: JsonTree, key: string) returns result[optional[JsonTree], string]:
+    match value:
+        object_value(fields):
+            return ok(map.get[string, JsonTree](view fields, key))
+        other:
+            return fail(json_tree_kind_error(view value, "object"))
+function json_tree_array_index(view value: JsonTree, index: int64) returns result[optional[JsonTree], string]:
+    match value:
+        array_value(items):
+            return ok(list.get[JsonTree](view items, index))
+        other:
+            return fail(json_tree_kind_error(view value, "array"))
+function json_tree_require_field(view value: JsonTree, key: string) returns result[JsonTree, string]:
+    optional[JsonTree] maybe_item = json_tree_object_field(view value, key) handle error:
+        return fail(error)
+    JsonTree item = maybe_item handle:
+        return fail("missing object field '{key}'")
+    return ok(item)
+function json_tree_require_index(view value: JsonTree, index: int64) returns result[JsonTree, string]:
+    optional[JsonTree] maybe_item = json_tree_array_index(view value, index) handle error:
+        return fail(error)
+    JsonTree item = maybe_item handle:
+        return fail("missing array item {index}")
+    return ok(item)
 function json_tree_array_length(view value: JsonTree) returns result[int64, string]:
     match value:
         array_value(items):

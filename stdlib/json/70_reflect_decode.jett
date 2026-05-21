@@ -209,8 +209,8 @@ function json_decode_tree_list_reflected[T](view raw: JsonTree) returns result[T
             return fail(error)
         mutable list[Elem] items = list.new[Elem]()
         for index in range(length):
-            JsonTree raw_item = json_tree_index(view raw, index) handle:
-                return fail("missing array item {index}")
+            JsonTree raw_item = json_tree_require_index(view raw, index) handle error:
+                return fail(error)
             Elem item = json_decode_tree_reflected[Elem](view raw_item) handle error:
                 return fail("{index}: {error}")
             items = list.append[Elem](items, item)
@@ -221,8 +221,8 @@ function json_decode_tree_set_reflected[T](view raw: JsonTree) returns result[T,
             return fail(error)
         mutable set[Elem] items = set.new[Elem]()
         for index in range(length):
-            JsonTree raw_item = json_tree_index(view raw, index) handle:
-                return fail("missing array item {index}")
+            JsonTree raw_item = json_tree_require_index(view raw, index) handle error:
+                return fail(error)
             Elem item = json_decode_tree_reflected[Elem](view raw_item) handle error:
                 return fail("{index}: {error}")
             items = set.add[Elem](items, item)
@@ -233,8 +233,8 @@ function json_decode_tree_map_reflected[T](view raw: JsonTree) returns result[T,
             return fail(error)
         mutable map[string, Val] entries = map.new[string, Val]()
         for key in keys:
-            JsonTree raw_item = json_tree_field(view raw, key) handle:
-                return fail("missing object field '{key}'")
+            JsonTree raw_item = json_tree_require_field(view raw, key) handle error:
+                return fail(error)
             Val item = json_decode_tree_reflected[Val](view raw_item) handle error:
                 return fail("{key}: {error}")
             entries = map.insert[string, Val](entries, key, item)
@@ -257,7 +257,9 @@ function json_tree_result_payload(view raw: JsonTree) returns result[JsonTreeRes
         return fail("expected result object with exactly one key")
     if key != "ok" and key != "fail":
         return fail("expected result object with key 'ok' or 'fail'")
-    JsonTree value = json_tree_field(view raw, key) handle:
+    optional[JsonTree] maybe_value = json_tree_object_field(view raw, key) handle error:
+        return fail(error)
+    JsonTree value = maybe_value handle:
         return fail("expected result object with key 'ok' or 'fail'")
     return ok(JsonTreeResultPayload(key: key, value: value))
 function json_decode_tree_result_reflected[T](view raw: JsonTree) returns result[T, string]:
@@ -296,7 +298,7 @@ function json_decode_tree_enum_object_reflected[T](view raw: JsonTree, type_name
         return fail("expected enum object with exactly one variant key")
     string variant_name = list.get[string](keys, 0) handle:
         return fail("expected enum object with exactly one variant key")
-    JsonTree payload = json_tree_field(view raw, variant_name) handle:
+    JsonTree payload = json_tree_require_field(view raw, variant_name) handle error:
         return fail("missing enum payload for '{variant_name}'")
     int64 payload_count = json_tree_array_length(view payload) handle error:
         return fail("expected array payload for enum variant '{type_name}.{variant_name}', got {json_tree_kind(view payload)}")
@@ -316,7 +318,7 @@ function json_decode_tree_enum_payload_variant_reflected[T](view payload: JsonTr
     mutable int64 index = 0
     for field in variant.fields:
         comptime type Field = field.type_info:
-            JsonTree raw_item = json_tree_index(view payload, index) handle:
+            JsonTree raw_item = json_tree_require_index(view payload, index) handle error:
                 return fail("missing enum payload item {index}")
             Field decoded = json_decode_tree_reflected[Field](view raw_item) handle error:
                 return fail("{variant.name}.{field.name}: {error}")
@@ -329,7 +331,9 @@ function json_tree_missing_field_reflected(view field: TypeField, owner_name: st
         return ok(JsonTree.null)
     return fail("missing required field '{field.serialize_name}' for {owner_name}")
 function json_tree_record_field_value(view raw: JsonTree, view field: TypeField, owner_name: string) returns result[JsonTree, string]:
-    JsonTree raw_field = json_tree_field(view raw, field.serialize_name) handle:
+    optional[JsonTree] maybe_field = json_tree_object_field(view raw, field.serialize_name) handle error:
+        return fail(error)
+    JsonTree raw_field = maybe_field handle:
         JsonTree missing = json_tree_missing_field_reflected(view field, owner_name) handle error:
             return fail(error)
         default missing
