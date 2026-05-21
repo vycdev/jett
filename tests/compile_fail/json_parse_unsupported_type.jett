@@ -24,12 +24,24 @@ function bad_interface_target(raw: string) returns string:
     Named named = json.parse[Named](raw) handle error:
         return error
     return "named"
+function bad_exact_interface_target(raw: string) returns string:
+    Named named = json.parse_exact[Named](raw) handle error:
+        return error
+    return "named"
 function bad_actor_target(raw: string) returns string:
     Worker worker = json.parse[Worker](raw) handle error:
         return error
     return "worker"
+function bad_exact_actor_target(raw: string) returns string:
+    Worker worker = json.parse_exact[Worker](raw) handle error:
+        return error
+    return "worker"
 function bad_struct_function_field(raw: string) returns string:
     Handler handler = json.parse[Handler](raw) handle error:
+        return error
+    return "handler"
+function bad_exact_struct_function_field(raw: string) returns string:
+    Handler handler = json.parse_exact[Handler](raw) handle error:
         return error
     return "handler"
 function bad_secret_function_field(raw: string) returns string:
