@@ -46,7 +46,7 @@ function json_stdlib_hex_digit(value: int64) returns string:
     if value == 14:
         return "e"
     return "f"
-function json_stdlib_escape_byte(byte: int64) returns optional[string]:
+function json_stdlib_named_escape_byte(byte: int64) returns optional[string]:
     if byte == 34:
         return some("\\\"")
     if byte == 92:
@@ -61,6 +61,12 @@ function json_stdlib_escape_byte(byte: int64) returns optional[string]:
         return some("\\r")
     if byte == 9:
         return some("\\t")
+    return none
+function json_stdlib_escape_byte(byte: int64) returns optional[string]:
+    string named = json_stdlib_named_escape_byte(byte) handle:
+        default ""
+    if named != "":
+        return some(named)
     if byte < 32:
         string high = json_stdlib_hex_digit(byte / 16)
         string low = json_stdlib_hex_digit(byte modulo 16)
