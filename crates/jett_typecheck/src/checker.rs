@@ -138,8 +138,8 @@ struct TypeChecker<'a> {
     // -- Capability / purity tracking --
     /// Function name → is_pure.  Built during the first pass over the module.
     purity_map: HashMap<String, bool>,
-    /// User-defined function name -> parameter and return types. Entries are
-    /// registered under both the historical flat name and `namespace.name`.
+    /// User-defined function name -> parameter and return types. Namespaced
+    /// declarations are registered under their canonical `namespace.name`.
     function_signatures: HashMap<String, (Vec<TypeId>, TypeId)>,
     /// Function signatures originating from compiler-shipped stdlib files.
     trusted_stdlib_function_signatures: HashMap<String, (Vec<TypeId>, TypeId)>,
@@ -8324,8 +8324,6 @@ impl<'a> TypeChecker<'a> {
             _ if self.type_aliases.contains_key(&lookup_name) => {
                 self.resolve_type_alias(&lookup_name, span)
             }
-            _ if self.named_types.contains_key(name) => self.named_types[name],
-            _ if self.type_aliases.contains_key(name) => self.resolve_type_alias(name, span),
             // Capability types are recognised but opaque — no further type
             // checking is performed on values of these types.
             _ if capability::is_capability_type(name) => TypeInterner::ERROR,
@@ -8453,11 +8451,6 @@ impl<'a> TypeChecker<'a> {
                     let concrete_args: Vec<TypeId> =
                         args.iter().map(|a| self.resolve_type_expr(a)).collect();
                     return self.monomorphize_struct(&lookup_name, &concrete_args, span);
-                }
-                if self.generic_struct_templates.contains_key(name) {
-                    let concrete_args: Vec<TypeId> =
-                        args.iter().map(|a| self.resolve_type_expr(a)).collect();
-                    return self.monomorphize_struct(name, &concrete_args, span);
                 }
                 self.sink.emit(errors::unknown_type(name, span));
                 TypeInterner::ERROR
@@ -10709,6 +10702,53 @@ function use_boxes() returns string:
         assert!(
             metadata.get_type_info("Box[int64]").is_none(),
             "ambiguous generic leaf metadata should not be published"
+        );
+    }
+
+    #[test]
+    fn resolved_namespaced_type_lookup_does_not_fall_back_to_root_leaf() {
+        let type_span = sp(0, 4);
+        let mut env = TestEnv::new();
+        let namespaced_type =
+            env.scope_table
+                .new_def("models.User".to_string(), DefKind::Struct, type_span);
+        env.reference(type_span, namespaced_type);
+        let resolve = env.into_resolve_result();
+        let mut checker = TypeChecker::new(&resolve);
+        checker.register_named_type(None, "User", TypeInterner::INT64);
+
+        assert_eq!(
+            checker.resolve_named_type("User", type_span),
+            TypeInterner::ERROR
+        );
+
+        let generic_span = sp(10, 14);
+        let mut env = TestEnv::new();
+        let namespaced_generic =
+            env.scope_table
+                .new_def("models.Box".to_string(), DefKind::Struct, generic_span);
+        env.reference(generic_span, namespaced_generic);
+        let resolve = env.into_resolve_result();
+        let mut checker = TypeChecker::new(&resolve);
+        checker.generic_struct_templates.insert(
+            "Box".to_string(),
+            ast::StructDef {
+                name: ident("Box", generic_span),
+                type_params: vec![ident("T", generic_span)],
+                fields: Vec::new(),
+                methods: Vec::new(),
+                exported: false,
+                span: generic_span,
+            },
+        );
+
+        assert_eq!(
+            checker.resolve_generic_type(
+                "Box",
+                &[TypeExpr::Named(ident("int64", sp(15, 20)))],
+                generic_span,
+            ),
+            TypeInterner::ERROR
         );
     }
 
