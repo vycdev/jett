@@ -74,6 +74,10 @@ function parse_exact_payload_bitfield_extra_error() returns string:
     Packet packet = json.parse_exact[Packet]("{{\"kind\":42,\"payload\":[1],\"extra\":true}}") handle error:
         return error
     return "{packet.kind}"
+function parse_exact_payload_bitfield_item_range_error() returns string:
+    Packet packet = json.parse_exact[Packet]("{{\"kind\":42,\"payload\":[256]}}") handle error:
+        return error
+    return "{packet.kind}"
 function serialize_top_level_unit_enum() returns string:
     Direction direction = Direction.north
     return json.serialize[Direction](view direction)
@@ -103,6 +107,7 @@ verify json_enum_bitfield_exact_edges:
     assert parse_exact_wide_bitfield_extra_error() == "unknown field 'extra' for test.WideHeader"
     assert parse_exact_payload_bitfield_success() == "42:1:255:3"
     assert parse_exact_payload_bitfield_extra_error() == "unknown field 'extra' for test.Packet"
+    assert parse_exact_payload_bitfield_item_range_error() == "payload: 0: expected uint8 in range 0..255"
     assert serialize_top_level_unit_enum() == "\"north\""
     assert serialize_top_level_payload_enum() == "{{\"circle\":[2.5]}}"
     assert serialize_top_level_bitfield() == "{{\"version\":4,\"protocol\":\"tcp\"}}"
