@@ -172,6 +172,15 @@ Duplicate-leaf reflected construction is pinned in
 `tests/run_pass/reflection_type_id_duplicate_construction.jett`, which builds
 `accounts.Record` and `audit.Record` through `type.construct_*` using their
 own checked field metadata.
+Duplicate-leaf built-in container arguments are pinned in
+`tests/run_pass/reflection_type_id_duplicate_container_args.jett`, covering
+`TypeInfo.args`, direct `type.arg[...]`, nested struct field container args,
+and JSON parse/parse_exact/serialize paths through `map`, `optional`, and
+`result` shapes whose payload types share leaf names across namespaces.
+Duplicate-leaf enum payloads and bitfield enum annotations are also covered by
+value-sensitive reflection reads in
+`tests/run_pass/reflection_type_id_duplicate_enum_payloads.jett` and
+`tests/run_pass/reflection_type_id_duplicate_named_owners.jett`.
 `tests/run_pass/json_tree_reflection_variant_metadata.jett` pins the
 stdlib-owned `json.JsonTree` enum variant metadata, including variant names,
 payload field names, container type names, nested `json.JsonTree` arguments,
