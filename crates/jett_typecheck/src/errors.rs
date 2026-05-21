@@ -369,7 +369,7 @@ pub fn bitfield_literal_out_of_range(
     bitfield_name: &str,
     field_name: &str,
     width: u16,
-    value: i64,
+    value: i128,
     span: Span,
 ) -> Diagnostic {
     Diagnostic::error(

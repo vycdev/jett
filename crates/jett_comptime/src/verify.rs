@@ -1978,7 +1978,7 @@ mod tests {
     }
 
     fn int(n: i64) -> Expr {
-        Expr::IntLiteral(n, sp())
+        Expr::IntLiteral(n.into(), sp())
     }
 
     fn var(name: &str) -> Expr {

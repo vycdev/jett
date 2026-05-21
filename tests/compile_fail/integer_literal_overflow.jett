@@ -1,4 +1,8 @@
-# ERROR: E1000
-function main() returns nothing:
-    uint64 value = 9223372036854775808
+# ERROR: E0311
+function bad_int64_overflow() returns nothing:
+    int64 value = 9223372036854775808
+    return nothing
+
+function bad_uint64_overflow() returns nothing:
+    uint64 value = 18446744073709551616
     return nothing

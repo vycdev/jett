@@ -456,7 +456,7 @@ impl TypeExpr {
 #[derive(Debug, Clone)]
 pub enum Expr {
     /// Integer literal: `42`
-    IntLiteral(i64, Span),
+    IntLiteral(i128, Span),
     /// Float literal: `3.14`
     FloatLiteral(f64, Span),
     /// String literal: `"hello"`

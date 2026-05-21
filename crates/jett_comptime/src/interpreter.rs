@@ -793,7 +793,15 @@ impl Interpreter {
     fn eval_expr_flow(&mut self, expr: &Expr) -> Result<ExprFlow, String> {
         match expr {
             // Literals
-            Expr::IntLiteral(n, _) => Ok(ExprFlow::Value(Value::Int64(*n))),
+            Expr::IntLiteral(n, _) => {
+                if (i64::MIN as i128..=i64::MAX as i128).contains(n) {
+                    Ok(ExprFlow::Value(Value::Int64(*n as i64)))
+                } else if (0..=u64::MAX as i128).contains(n) {
+                    Ok(ExprFlow::Value(Value::Uint64(*n as u64)))
+                } else {
+                    Err(format!("integer literal '{n}' is out of runtime range"))
+                }
+            }
             Expr::FloatLiteral(n, _) => Ok(ExprFlow::Value(Value::Float64(*n))),
             Expr::StringLiteral(s, _) => Ok(ExprFlow::Value(Value::String(s.clone()))),
             Expr::StringInterpolation(parts, _) => {
@@ -8954,7 +8962,7 @@ mod tests {
 
     /// Helper: create an int literal expression.
     fn int(n: i64) -> Expr {
-        Expr::IntLiteral(n, sp())
+        Expr::IntLiteral(n.into(), sp())
     }
 
     /// Helper: create a float literal expression.
@@ -13393,7 +13401,7 @@ mod builtin_tests {
     }
 
     fn int(n: i64) -> Expr {
-        Expr::IntLiteral(n, sp())
+        Expr::IntLiteral(n.into(), sp())
     }
 
     fn float(n: f64) -> Expr {

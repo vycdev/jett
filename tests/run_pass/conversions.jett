@@ -45,8 +45,13 @@ function parse_uint64_max_test() returns string:
         return error
     return string.from_uint64(val)
 
+function uint64_literal_max_test() returns string:
+    uint64 val = 18446744073709551615
+    return string.from_uint64(val)
+
 verify parse_uint64_max_test:
     assert parse_uint64_max_test() == "18446744073709551615"
+    assert uint64_literal_max_test() == "18446744073709551615"
 
 # --- float64 from string (result type) ---
 

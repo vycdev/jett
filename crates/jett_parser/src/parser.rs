@@ -116,6 +116,14 @@ impl<'src> Parser<'src> {
         })
     }
 
+    fn parse_i128_token(&mut self, token: &Token, context: &str) -> i128 {
+        let text = self.token_text(token).to_string();
+        text.parse::<i128>().unwrap_or_else(|_| {
+            self.error(format!("{context} is too large"), token.span);
+            0
+        })
+    }
+
     fn skip_newlines(&mut self) {
         while self.peek() == TokenKind::Newline {
             self.advance();
@@ -1948,7 +1956,7 @@ impl<'src> Parser<'src> {
         match tok.kind {
             TokenKind::IntLiteral => {
                 self.advance();
-                let value = self.parse_i64_token(&tok, "integer literal");
+                let value = self.parse_i128_token(&tok, "integer literal");
                 Expr::IntLiteral(value, tok.span)
             }
             TokenKind::FloatLiteral => {

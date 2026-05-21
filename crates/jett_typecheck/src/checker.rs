@@ -653,21 +653,21 @@ impl<'a> TypeChecker<'a> {
         )
     }
 
-    fn int_literal_fits_type(&self, value: i64, id: TypeId) -> bool {
+    fn int_literal_fits_type(&self, value: i128, id: TypeId) -> bool {
         match self.interner.resolve(id) {
-            Type::Int8 => (i8::MIN as i64..=i8::MAX as i64).contains(&value),
-            Type::Int16 => (i16::MIN as i64..=i16::MAX as i64).contains(&value),
-            Type::Int32 => (i32::MIN as i64..=i32::MAX as i64).contains(&value),
-            Type::Int64 => true,
-            Type::Uint8 => (0..=u8::MAX as i64).contains(&value),
-            Type::Uint16 => (0..=u16::MAX as i64).contains(&value),
-            Type::Uint32 => (0..=u32::MAX as i64).contains(&value),
-            Type::Uint64 => value >= 0,
+            Type::Int8 => (i8::MIN as i128..=i8::MAX as i128).contains(&value),
+            Type::Int16 => (i16::MIN as i128..=i16::MAX as i128).contains(&value),
+            Type::Int32 => (i32::MIN as i128..=i32::MAX as i128).contains(&value),
+            Type::Int64 => (i64::MIN as i128..=i64::MAX as i128).contains(&value),
+            Type::Uint8 => (0..=u8::MAX as i128).contains(&value),
+            Type::Uint16 => (0..=u16::MAX as i128).contains(&value),
+            Type::Uint32 => (0..=u32::MAX as i128).contains(&value),
+            Type::Uint64 => (0..=u64::MAX as i128).contains(&value),
             _ => false,
         }
     }
 
-    fn int_literal_matches_expected_type(&self, value: i64, expected_ty: TypeId) -> bool {
+    fn int_literal_matches_expected_type(&self, value: i128, expected_ty: TypeId) -> bool {
         let expected_inner = self.secret_inner_type(expected_ty).unwrap_or(expected_ty);
         self.int_literal_fits_type(value, expected_inner)
     }
@@ -6280,7 +6280,20 @@ impl<'a> TypeChecker<'a> {
 
     fn check_expr(&mut self, expr: &Expr) -> TypeId {
         let ty = match expr {
-            Expr::IntLiteral(_, _) => TypeInterner::INT64,
+            Expr::IntLiteral(value, span) => {
+                if self.int_literal_fits_type(*value, TypeInterner::INT64) {
+                    TypeInterner::INT64
+                } else if self.int_literal_fits_type(*value, TypeInterner::UINT64) {
+                    TypeInterner::UINT64
+                } else {
+                    self.sink.emit(Diagnostic::error(
+                        311,
+                        "integer literal must fit in `int64` or `uint64`",
+                        *span,
+                    ));
+                    TypeInterner::ERROR
+                }
+            }
             Expr::FloatLiteral(_, _) => TypeInterner::FLOAT64,
             Expr::StringLiteral(_, _) => TypeInterner::STRING,
             Expr::BoolLiteral(_, _) => TypeInterner::BOOL,
@@ -7574,13 +7587,13 @@ impl<'a> TypeChecker<'a> {
         bitfield_name: &str,
         field_name: &str,
         width: u16,
-        value: i64,
+        value: i128,
         span: Span,
     ) {
         let max_value = if width >= 63 {
-            i64::MAX
+            i64::MAX as i128
         } else {
-            (1_i64 << width) - 1
+            (1_i128 << width) - 1
         };
 
         if value < 0 || value > max_value {
