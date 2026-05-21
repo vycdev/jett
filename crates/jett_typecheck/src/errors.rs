@@ -598,6 +598,19 @@ pub fn json_unsupported_serialize_type(
     )
 }
 
+/// E0348: JSON parse target contains a type that has no JSON decoding.
+pub fn json_unsupported_parse_type(
+    function_name: &str,
+    unsupported_type: &str,
+    span: Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        348,
+        format!("`{function_name}` cannot parse unsupported JSON type `{unsupported_type}`"),
+        span,
+    )
+}
+
 // Diagnostic codes E0800-E0899 are reserved for function complexity limits.
 
 /// E0800: Function body exceeds the statement count limit.

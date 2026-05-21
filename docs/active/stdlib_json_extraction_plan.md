@@ -195,8 +195,10 @@ Some JSON rules are typechecker policy, not only implementation:
   secret-containing fields.
 - `map[K, V]` JSON encoding and decoding for `serialize`, `serialize_public`,
   `parse`, and `parse_exact` is restricted to `K == string`.
-- serialization rejects non-data values that have no JSON encoding, including
-  functions, actors, interfaces, and the internal `TypeConstruction` builder.
+- serialization and parsing reject non-data values that have no JSON encoding
+  or decoding, including functions, actors, interfaces, and the internal
+  `TypeConstruction` builder. Parse checks descend through `secret[...]`
+  wrappers because secret data still has to be constructed from JSON.
 - `json.parse[T]` and `json.parse_exact[T]` return `result[T, string]`, so
   callers must handle errors.
 
@@ -263,8 +265,8 @@ for current JSON hooks; future backends need the same identity boundary.
    typechecker policy with stdlib-owned interpreter bodies. See
    `/docs/completed/json_public_bridge_handoff.md`.
 4. Keep the real public wrapper names in `namespace json`, while retaining
-   compiler policy checks for secrets, `view`, map keys, unsupported serialize
-   target types, and handled results.
+   compiler policy checks for secrets, `view`, map keys, unsupported
+   parse/serialize target types, and handled results.
 5. Keep broad bridge/parity tests around removed Rust-backed fallback paths and
    the current trusted-wrapper/error paths. Done for typed public
    parse/serialize, raw `JsonTree` / compatibility `JsonValue` execution in

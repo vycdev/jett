@@ -932,6 +932,14 @@ fn compile_fail_json_serialize_unsupported_type_omits_secret_fields() {
     assert_compile_fail_error_count("json_serialize_unsupported_type.jett", 347, 5);
 }
 compile_fail_fixture!(
+    compile_fail_json_parse_unsupported_type,
+    "json_parse_unsupported_type.jett"
+);
+#[test]
+fn compile_fail_json_parse_unsupported_type_covers_secret_fields() {
+    assert_compile_fail_error_count("json_parse_unsupported_type.jett", 348, 8);
+}
+compile_fail_fixture!(
     compile_fail_json_parse_exact_requires_type_arg,
     "json_parse_exact_requires_type_arg.jett"
 );

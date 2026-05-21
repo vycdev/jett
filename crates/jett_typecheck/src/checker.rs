@@ -1648,11 +1648,20 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn json_unsupported_serialize_types(&self, ty: TypeId) -> Vec<String> {
+        self.json_unsupported_data_types(ty, false)
+    }
+
+    fn json_unsupported_parse_types(&self, ty: TypeId) -> Vec<String> {
+        self.json_unsupported_data_types(ty, true)
+    }
+
+    fn json_unsupported_data_types(&self, ty: TypeId, descend_into_secret: bool) -> Vec<String> {
         let mut visited = HashSet::new();
         let mut unsupported_types = HashSet::new();
         let mut unsupported = Vec::new();
-        self.collect_json_unsupported_serialize_types(
+        self.collect_json_unsupported_data_types(
             ty,
+            descend_into_secret,
             &mut visited,
             &mut unsupported_types,
             &mut unsupported,
@@ -1660,7 +1669,7 @@ impl<'a> TypeChecker<'a> {
         unsupported
     }
 
-    fn push_json_unsupported_serialize_type(
+    fn push_json_unsupported_type(
         &self,
         ty: TypeId,
         unsupported_types: &mut HashSet<TypeId>,
@@ -1671,9 +1680,10 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
-    fn collect_json_unsupported_serialize_types(
+    fn collect_json_unsupported_data_types(
         &self,
         ty: TypeId,
+        descend_into_secret: bool,
         visited: &mut HashSet<TypeId>,
         unsupported_types: &mut HashSet<TypeId>,
         unsupported: &mut Vec<String>,
@@ -1703,31 +1713,45 @@ impl<'a> TypeChecker<'a> {
             | Type::Interface(_)
             | Type::Actor(_)
             | Type::Function { .. } => {
-                self.push_json_unsupported_serialize_type(ty, unsupported_types, unsupported);
+                self.push_json_unsupported_type(ty, unsupported_types, unsupported);
             }
             Type::List(inner) | Type::Set(inner) | Type::Optional(inner) => self
-                .collect_json_unsupported_serialize_types(
+                .collect_json_unsupported_data_types(
                     *inner,
+                    descend_into_secret,
                     visited,
                     unsupported_types,
                     unsupported,
                 ),
-            Type::Secret(_) => {}
-            Type::Map(_, value) => self.collect_json_unsupported_serialize_types(
+            Type::Secret(inner) => {
+                if descend_into_secret {
+                    self.collect_json_unsupported_data_types(
+                        *inner,
+                        descend_into_secret,
+                        visited,
+                        unsupported_types,
+                        unsupported,
+                    );
+                }
+            }
+            Type::Map(_, value) => self.collect_json_unsupported_data_types(
                 *value,
+                descend_into_secret,
                 visited,
                 unsupported_types,
                 unsupported,
             ),
             Type::Result(ok, err) => {
-                self.collect_json_unsupported_serialize_types(
+                self.collect_json_unsupported_data_types(
                     *ok,
+                    descend_into_secret,
                     visited,
                     unsupported_types,
                     unsupported,
                 );
-                self.collect_json_unsupported_serialize_types(
+                self.collect_json_unsupported_data_types(
                     *err,
+                    descend_into_secret,
                     visited,
                     unsupported_types,
                     unsupported,
@@ -1735,8 +1759,9 @@ impl<'a> TypeChecker<'a> {
             }
             Type::Struct(sid) => {
                 for (_, field_ty) in &self.interner.resolve_struct(*sid).fields {
-                    self.collect_json_unsupported_serialize_types(
+                    self.collect_json_unsupported_data_types(
                         *field_ty,
+                        descend_into_secret,
                         visited,
                         unsupported_types,
                         unsupported,
@@ -1745,8 +1770,9 @@ impl<'a> TypeChecker<'a> {
             }
             Type::Bitfield(bid) => {
                 for field in &self.interner.resolve_bitfield(*bid).fields {
-                    self.collect_json_unsupported_serialize_types(
+                    self.collect_json_unsupported_data_types(
                         field.ty,
+                        descend_into_secret,
                         visited,
                         unsupported_types,
                         unsupported,
@@ -1761,16 +1787,18 @@ impl<'a> TypeChecker<'a> {
                     .iter()
                     .flat_map(|variant| variant.fields.iter())
                 {
-                    self.collect_json_unsupported_serialize_types(
+                    self.collect_json_unsupported_data_types(
                         *field_ty,
+                        descend_into_secret,
                         visited,
                         unsupported_types,
                         unsupported,
                     );
                 }
             }
-            Type::Refinement { base, .. } => self.collect_json_unsupported_serialize_types(
+            Type::Refinement { base, .. } => self.collect_json_unsupported_data_types(
                 *base,
+                descend_into_secret,
                 visited,
                 unsupported_types,
                 unsupported,
@@ -1883,6 +1911,13 @@ impl<'a> TypeChecker<'a> {
                     for key_type in self.json_non_string_map_key_types(*parsed_ty) {
                         self.sink.emit(errors::json_map_key_must_be_string(
                             &key_type,
+                            arg.value.span(),
+                        ));
+                    }
+                    for unsupported_type in self.json_unsupported_parse_types(*parsed_ty) {
+                        self.sink.emit(errors::json_unsupported_parse_type(
+                            callee_name,
+                            &unsupported_type,
                             arg.value.span(),
                         ));
                     }
