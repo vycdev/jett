@@ -67,13 +67,19 @@ verify json_parse_success_parity:
     assert parse_success_matches("\"\\u0000\"") == true
     assert parse_success_matches("\"\\u001f\"") == true
     assert parse_success_matches("\"\\u007f\"") == true
+    assert parse_success_matches("\"\\u0080\"") == true
+    assert parse_success_matches("\"\\u07ff\"") == true
+    assert parse_success_matches("\"\\u0800\"") == true
     assert parse_success_matches("\"\\u00e9\"") == true
     assert parse_success_matches("\"\\u20ac\"") == true
     assert parse_success_matches("\"\\u20AC\"") == true
     assert parse_success_matches("\"é\"") == true
     assert parse_success_matches("\"€\"") == true
     assert parse_success_matches("\"😀\"") == true
+    assert parse_success_matches("\"\\ud7ff\"") == true
     assert parse_success_matches("\"\\uffff\"") == true
+    assert parse_success_matches("\"\\ue000\"") == true
+    assert parse_success_matches("\"\\ud800\\udc00\"") == true
     assert parse_success_matches("\"\\uD834\\uDD1E\"") == true
     assert parse_success_matches("\"\\ud834\\udd1e\"") == true
     assert parse_success_matches("\"\\udbff\\udfff\"") == true
