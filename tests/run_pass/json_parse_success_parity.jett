@@ -70,6 +70,9 @@ verify json_parse_success_parity:
     assert parse_success_matches("\"\\u00e9\"") == true
     assert parse_success_matches("\"\\u20ac\"") == true
     assert parse_success_matches("\"\\u20AC\"") == true
+    assert parse_success_matches("\"é\"") == true
+    assert parse_success_matches("\"€\"") == true
+    assert parse_success_matches("\"😀\"") == true
     assert parse_success_matches("\"\\uffff\"") == true
     assert parse_success_matches("\"\\uD834\\uDD1E\"") == true
     assert parse_success_matches("\"\\ud834\\udd1e\"") == true
@@ -78,5 +81,6 @@ verify json_parse_success_parity:
     assert parse_success_matches("{{\"a\":1,\"b\":[\"x\",false]}}") == true
     assert parse_success_matches("{{\"\":1}}") == true
     assert parse_success_matches("{{\"\\u0061\\n\":\"line\\rnext\"}}") == true
+    assert parse_success_matches("{{\"café\":\"déjà\",\"emoji\":\"😀\"}}") == true
     assert parse_success_matches(" [ 1 , {{\"a\" : \"b\"}} ] ") == true
     assert parse_success_matches("[1,]") == false
