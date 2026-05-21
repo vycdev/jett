@@ -172,6 +172,11 @@ Duplicate-leaf reflected construction is pinned in
 `tests/run_pass/reflection_type_id_duplicate_construction.jett`, which builds
 `accounts.Record` and `audit.Record` through `type.construct_*` using their
 own checked field metadata.
+`tests/run_pass/json_tree_reflection_variant_metadata.jett` pins the
+stdlib-owned `json.JsonTree` enum variant metadata, including variant names,
+payload field names, container type names, nested `json.JsonTree` arguments,
+primitive tags, and value-sensitive `type.variant_value` /
+`type.variant_field_value` payload reads.
 `ReflectionMetadata::insert_type_info` now also refreshes an existing canonical
 `TypeId` binding when the inserted type name is already bound, matching the
 owner-metadata insertion behavior.

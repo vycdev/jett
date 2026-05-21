@@ -95,8 +95,10 @@ be closed.
 Status: implemented. `json.parse_exact[T](raw)` is a compiler-policy public
 bridge backed by trusted stdlib hooks, and
 `tests/run_pass/json_parse_exact.jett` pins exact top-level, nested, list, and
-map-value validation. The current `json.parse[T]` behavior remains lenient and
-is still pinned by `tests/run_pass/json_unknown_fields.jett`. Current docs now
-describe `parse` as the compatibility-oriented path and `parse_exact` as the
-preferred path for config files, protocol messages, tests, and other closed
-input contracts.
+map-value validation. The same fixture also pins raw-target exact parsing for
+`json.JsonTree`, bare `JsonValue`, and `json.JsonValue`; exact unknown-field
+validation does not inspect inside raw tree targets. The current
+`json.parse[T]` behavior remains lenient and is still pinned by
+`tests/run_pass/json_unknown_fields.jett`. Current docs now describe `parse` as
+the compatibility-oriented path and `parse_exact` as the preferred path for
+config files, protocol messages, tests, and other closed input contracts.
