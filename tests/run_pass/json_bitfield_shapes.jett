@@ -1,45 +1,56 @@
 namespace test
-
 enum Protocol:
     tcp = 6
     udp = 17
-
 bitfield Header:
     version: 4 bits
     protocol: 8 bits as Protocol
-
 bitfield WideHeader:
     sequence: 64 bits
-
+bitfield Packet:
+    kind: 8 bits
+    payload: list[uint8]
 function bitfield_requires_object_error() returns string:
     Header header = json.parse[Header]("[1,2]") handle error:
         return error
     return "{header.version}"
-
 function bitfield_missing_field_error() returns string:
     Header header = json.parse[Header]("{{\"version\":4}}") handle error:
         return error
     return "{header.version}"
-
 function bitfield_extra_field_ignored() returns bool:
     Header header = json.parse[Header]("{{\"version\":4,\"protocol\":\"tcp\",\"extra\":9}}") handle error:
         return false
     return header.version == 4 && header.protocol == Protocol.tcp
-
 function bitfield_enum_numeric_shape_error() returns string:
     Header header = json.parse[Header]("{{\"version\":4,\"protocol\":6}}") handle error:
         return error
     return "{header.version}"
-
 function bitfield_uint64_parse_serialize() returns string:
     WideHeader header = json.parse[WideHeader]("{{\"sequence\":18446744073709551615}}") handle error:
         return error
     string raw = json.serialize[WideHeader](view header)
     return "{string.from_uint64(header.sequence)}:{raw}"
-
+function bitfield_payload_parse_serialize() returns string:
+    Packet packet = json.parse[Packet]("{{\"kind\":42,\"payload\":[1,127,255]}}") handle error:
+        return error
+    uint8 first = list.get[uint8](view packet.payload, 0) handle:
+        default 0
+    uint8 second = list.get[uint8](view packet.payload, 1) handle:
+        default 0
+    uint8 third = list.get[uint8](view packet.payload, 2) handle:
+        default 0
+    string raw = json.serialize[Packet](view packet)
+    return "{packet.kind}:{first}:{second}:{third}:{raw}"
+function bitfield_payload_item_range_error() returns string:
+    Packet packet = json.parse[Packet]("{{\"kind\":42,\"payload\":[256]}}") handle error:
+        return error
+    return "{packet.kind}"
 verify json_bitfield_shapes:
     assert bitfield_requires_object_error() == "expected object, got array"
     assert bitfield_missing_field_error() == "missing required field 'protocol' for test.Header"
     assert bitfield_extra_field_ignored() == true
     assert bitfield_enum_numeric_shape_error() == "protocol: expected enum string or object, got number"
     assert bitfield_uint64_parse_serialize() == "18446744073709551615:{{\"sequence\":18446744073709551615}}"
+    assert bitfield_payload_parse_serialize() == "42:1:127:255:{{\"kind\":42,\"payload\":[1,127,255]}}"
+    assert bitfield_payload_item_range_error() == "payload: 0: expected uint8 in range 0..255"
