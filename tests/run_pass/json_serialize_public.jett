@@ -22,6 +22,17 @@ function public_session_list_json() returns string:
     return json.serialize_public[list[Session]](view sessions)
 function public_primitive_json() returns string:
     return json.serialize_public[int64](42)
+function public_sized_primitive_json() returns string:
+    uint8 small = 255
+    uint64 serial = uint64.from_string("18446744073709551615") handle error:
+        return error
+    float32 ratio = 2.5
+    bytes payload = bytes.from_string("Hi")
+    string small_json = json.serialize_public[uint8](small)
+    string serial_json = json.serialize_public[uint64](serial)
+    string ratio_json = json.serialize_public[float32](ratio)
+    string payload_json = json.serialize_public[bytes](view payload)
+    return "{small_json}:{serial_json}:{ratio_json}:{payload_json}"
 function public_tree_json() returns string:
     json.JsonTree tree = json.json_tree_parse("[1,true,null]") handle error:
         return error
@@ -79,6 +90,8 @@ verify serialize_public_projects_records_inside_lists:
     assert string.contains(raw, "other-token") == false
 verify serialize_public_allows_copy_primitives:
     assert public_primitive_json() == "42"
+verify serialize_public_allows_sized_primitives:
+    assert public_sized_primitive_json() == "255:18446744073709551615:2.5:\"0x4869\""
 verify serialize_public_treats_json_tree_as_raw:
     assert public_tree_json() == "[1,true,null]"
 verify serialize_public_treats_json_value_alias_as_raw:
