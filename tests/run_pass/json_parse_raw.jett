@@ -72,9 +72,25 @@ function raw_roundtrip() returns string:
     json.JsonTree root = json.parse_raw("{{\"name\":\"Ada\",\"score\":5}}") handle error:
         return error
     return json.serialize_raw(view root)
+function raw_decoded_key_lookup_and_serialize() returns string:
+    json.JsonTree root = json.parse_raw("{{\"\\u0061\\n\":\"line\\rnext\",\"slash\\/key\":true}}") handle error:
+        return error
+    json.JsonTree text_raw = json.require_field(view root, "a\n") handle error:
+        return error
+    string text = json.as_string(view text_raw) handle error:
+        return error
+    json.JsonTree slash_raw = json.require_field(view root, "slash/key") handle error:
+        return error
+    bool slash = json.as_bool(view slash_raw) handle error:
+        return error
+    string raw = json.serialize_raw(view root)
+    bool normalized_text = string.contains(raw, "\"a\\n\":\"line\\rnext\"")
+    bool normalized_slash = string.contains(raw, "\"slash/key\":true")
+    return "{bytes.to_hex(bytes.from_string(text))}:{slash}:{normalized_text}:{normalized_slash}"
 verify json_parse_raw:
     assert raw_summary() == "Ada:2:5:true"
     assert raw_object_keys() == 2
     assert raw_kind_predicates() == "true:true:true:true:true:true:true"
     assert raw_invalid_message() == "expected array, got object"
     assert string.contains(raw_roundtrip(), "\"name\":\"Ada\"") == true
+    assert raw_decoded_key_lookup_and_serialize() == "6c696e650d6e657874:true:true:true"
