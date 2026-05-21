@@ -180,6 +180,10 @@ Duplicate-leaf built-in container arguments are pinned in
 `TypeInfo.args`, direct `type.arg[...]`, nested struct field container args,
 and JSON parse/parse_exact/serialize paths through `map`, `optional`, and
 `result` shapes whose payload types share leaf names across namespaces.
+Duplicate-leaf simple aliases are pinned in
+`tests/run_pass/reflection_type_id_duplicate_aliases.jett`, covering alias
+`TypeInfo`, alias base `type.arg[...]` bindings, and JSON parse/serialize plus
+exact validation through alias-typed fields.
 Duplicate-leaf enum payloads and bitfield enum annotations are also covered by
 value-sensitive reflection reads in
 `tests/run_pass/reflection_type_id_duplicate_enum_payloads.jett` and
@@ -212,6 +216,10 @@ during canonical TypeId metadata construction. The old ambiguous string-only
 leaf insertion for names such as `Box[int64]` has been removed from checked
 metadata; namespaced generic owners keep their qualified identities such as
 `accounts.Box[int64]` and `audit.Box[int64]`.
+Nested duplicate-leaf generic owners are pinned in
+`tests/run_pass/reflection_type_id_duplicate_generic_owners.jett`, including
+`Box[Box[User]]` shapes from two namespaces through `TypeInfo.args`,
+`type.fields`, direct `type.arg[...]`, and JSON round-tripping.
 
 ### Stage 5: Remove AST Metadata Fallbacks
 
