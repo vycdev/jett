@@ -163,7 +163,10 @@ known owner `TypeId` at the construction sites. The string-shaped
 `ReflectionMetadata` API remains as a compatibility facade, but owner metadata
 lookups now resolve strictly through canonical id maps after a name is bound;
 only unbound legacy names use the string maps. This keeps stale string-keyed
-metadata from masking incomplete checked metadata. For
+metadata from masking incomplete checked metadata. Direct `type.info`,
+`type.kind`, primitive-tag, secret, and argument reflection over a bound name
+now reports missing checked type-info metadata instead of reconstructing it from
+the interpreter registry. For
 field-bearing checked types, the interpreter no longer silently reconstructs
 field, bitfield, or enum variant metadata from AST when a checked `TypeInfo`
 says the owner should have that metadata but the checked table is missing. The

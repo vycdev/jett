@@ -2626,6 +2626,9 @@ impl Interpreter {
         }
 
         let ty = self.substitute_type_expr(&type_args[0]);
+        if let Some(error) = self.missing_checked_type_info_error(&ty) {
+            return Some(Err(error));
+        }
         Some(match name {
             "type.name" => {
                 if let Some(err) = check_args(name, 0, args) {
@@ -3926,6 +3929,17 @@ impl Interpreter {
             "checked reflection metadata for type '{}' is missing {metadata} metadata",
             type_expr_display(ty)
         )
+    }
+
+    fn missing_checked_type_info_error(&self, ty: &TypeExpr) -> Option<String> {
+        let metadata = self.reflection_metadata.as_ref()?;
+        let type_name = type_expr_display(ty);
+        if metadata.type_id_for_name(&type_name).is_some()
+            && metadata.get_type_info(&type_name).is_none()
+        {
+            return Some(self.missing_checked_metadata_error(ty, "type info"));
+        }
+        None
     }
 
     fn checked_construction_kind(&self, ty: &TypeExpr) -> Option<&'static str> {
@@ -9236,6 +9250,32 @@ mod tests {
             })
             .expect("TypeInfo.has_secret field should exist");
         assert_eq!(has_secret, &Value::Bool(true));
+    }
+
+    #[test]
+    fn bound_type_reflection_reports_missing_checked_type_info() {
+        let mut metadata = ReflectionMetadata::new();
+        metadata.bind_type_name("Box", jett_types::TypeInterner::STRING);
+
+        let mut interp = Interpreter::new();
+        interp.register_struct(&struct_def("Box", vec![("value", "string")], vec![]));
+        interp.set_reflection_metadata(Arc::new(metadata));
+
+        let ty = type_named("Box");
+        let info_error = interp
+            .call_builtin_with_type_args("type.info", std::slice::from_ref(&ty), &[])
+            .expect("type.info should be a typed builtin")
+            .expect_err("bound missing checked type info should be an error");
+        let kind_error = interp
+            .call_builtin_with_type_args("type.kind", std::slice::from_ref(&ty), &[])
+            .expect("type.kind should be a typed builtin")
+            .expect_err("bound missing checked type info should be an error");
+
+        assert_eq!(
+            info_error,
+            "checked reflection metadata for type 'Box' is missing type info metadata"
+        );
+        assert_eq!(kind_error, info_error);
     }
 
     #[test]
