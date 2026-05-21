@@ -140,6 +140,10 @@ function json_tree_int64_parse_error(raw: string) returns string:
     if json_tree_number_text_has_float_marker(raw):
         return "expected int64, got number"
     return "expected int64 in range -9223372036854775808..9223372036854775807"
+function json_tree_uint64_parse_error(raw: string) returns string:
+    if json_tree_number_text_has_float_marker(raw):
+        return "expected uint64, got number"
+    return "expected uint64 in range 0..18446744073709551615"
 function json_tree_as_int64(view value: JsonTree) returns result[int64, string]:
     match value:
         number_value(raw):
@@ -152,7 +156,7 @@ function json_tree_as_uint64(view value: JsonTree) returns result[uint64, string
     match value:
         number_value(raw):
             uint64 item = uint64.from_string(raw) handle error:
-                return fail("expected uint64 in range 0..18446744073709551615")
+                return fail(json_tree_uint64_parse_error(raw))
             return ok(item)
         other:
             return fail(json_tree_kind_error(view value, "uint64"))

@@ -61,6 +61,14 @@ function parse_exact_uint64_range_error() returns string:
     uint64 value = json.parse_exact[uint64]("18446744073709551616") handle error:
         return error
     return "{value}"
+function parse_exact_uint64_fraction_error() returns string:
+    uint64 value = json.parse_exact[uint64]("2.5") handle error:
+        return error
+    return "{value}"
+function parse_exact_uint64_exponent_error() returns string:
+    uint64 value = json.parse_exact[uint64]("1e0") handle error:
+        return error
+    return "{value}"
 function parse_exact_float64_wrong_shape_error() returns string:
     float64 value = json.parse_exact[float64]("\"2.5\"") handle error:
         return error
@@ -79,4 +87,6 @@ verify json_parse_exact_primitive_edges:
     assert parse_exact_int64_underflow_error() == "expected int64 in range -9223372036854775808..9223372036854775807"
     assert parse_exact_int64_overflow_error() == "expected int64 in range -9223372036854775808..9223372036854775807"
     assert parse_exact_uint64_range_error() == "expected uint64 in range 0..18446744073709551615"
+    assert parse_exact_uint64_fraction_error() == "expected uint64, got number"
+    assert parse_exact_uint64_exponent_error() == "expected uint64, got number"
     assert parse_exact_float64_wrong_shape_error() == "expected float64, got string"

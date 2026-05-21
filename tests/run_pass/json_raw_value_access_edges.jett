@@ -127,6 +127,18 @@ function uint64_scalar_cast_negative_error() returns string:
     uint64 value = json.as_uint64(view number) handle error:
         return error
     return string.from_uint64(value)
+function uint64_scalar_cast_fraction_error() returns string:
+    json.JsonTree number = json.parse_raw("2.5") handle error:
+        return error
+    uint64 value = json.as_uint64(view number) handle error:
+        return error
+    return string.from_uint64(value)
+function uint64_scalar_cast_exponent_error() returns string:
+    json.JsonTree number = json.parse_raw("1e0") handle error:
+        return error
+    uint64 value = json.as_uint64(view number) handle error:
+        return error
+    return string.from_uint64(value)
 function int64_scalar_cast_negative_zero() returns string:
     json.JsonTree number = json.parse_raw("-0") handle error:
         return error
@@ -161,5 +173,7 @@ verify json_raw_value_access_edges:
     assert int64_scalar_cast_underflow_error() == "expected int64 in range -9223372036854775808..9223372036854775807"
     assert int64_scalar_cast_overflow_error() == "expected int64 in range -9223372036854775808..9223372036854775807"
     assert uint64_scalar_cast_negative_error() == "expected uint64 in range 0..18446744073709551615"
+    assert uint64_scalar_cast_fraction_error() == "expected uint64, got number"
+    assert uint64_scalar_cast_exponent_error() == "expected uint64, got number"
     assert int64_scalar_cast_negative_zero() == "0"
     assert float64_scalar_cast_exponent() == true

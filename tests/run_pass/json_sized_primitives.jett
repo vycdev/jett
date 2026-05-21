@@ -73,6 +73,14 @@ function parse_uint64_runtime_limit_error() returns string:
     uint64 value = json.parse[uint64]("18446744073709551616") handle error:
         return error
     return "{value}"
+function parse_uint64_fraction_error() returns string:
+    uint64 value = json.parse[uint64]("2.5") handle error:
+        return error
+    return "{value}"
+function parse_uint64_exponent_error() returns string:
+    uint64 value = json.parse[uint64]("1e0") handle error:
+        return error
+    return "{value}"
 function parse_sized_bundle() returns string:
     string raw = "{{\"small\":-5,\"medium\":65535,\"count\":4294967295,\"serial\":18446744073709551615,\"ratio\":2.5,\"values\":[1,255],\"metrics\":{{\"max\":65535}},\"maybe\":-8,\"outcome\":{{\"ok\":9}}}}"
     SizedBundle bundle = json.parse[SizedBundle](raw) handle error:
@@ -134,6 +142,8 @@ verify json_sized_primitives:
     assert parse_uint8_range_error() == "expected uint8 in range 0..255"
     assert parse_uint32_range_error() == "expected uint32 in range 0..4294967295"
     assert parse_uint64_runtime_limit_error() == "expected uint64 in range 0..18446744073709551615"
+    assert parse_uint64_fraction_error() == "expected uint64, got number"
+    assert parse_uint64_exponent_error() == "expected uint64, got number"
     assert parse_sized_bundle() == "-5:65535:4294967295:18446744073709551615:2.5:255:65535:-8:9"
     assert serialize_uint8_max() == "255"
     assert serialize_int16_min() == "-32768"

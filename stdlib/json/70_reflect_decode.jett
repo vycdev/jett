@@ -137,7 +137,7 @@ function json_decode_tree_uint64_reflected[T](view raw: JsonTree) returns result
     match raw:
         number_value(text):
             uint64 item = uint64.from_string(text) handle error:
-                return fail("expected uint64 in range 0..18446744073709551615")
+                return fail(json_tree_uint64_parse_error(text))
             T typed = item
             return ok(typed)
         other:
