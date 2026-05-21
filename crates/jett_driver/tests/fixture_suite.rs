@@ -377,6 +377,10 @@ run_pass_fixture!(
     "json_parse_exact_primitive_edges.jett"
 );
 run_pass_fixture!(
+    run_pass_json_parse_exact_secret_edges,
+    "json_parse_exact_secret_edges.jett"
+);
+run_pass_fixture!(
     run_pass_json_result_shape_diagnostics,
     "json_result_shape_diagnostics.jett"
 );
