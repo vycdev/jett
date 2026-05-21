@@ -1,0 +1,11 @@
+# ERROR: E0346
+namespace test
+struct ExplicitCollision:
+    first: string serialize "id"
+    second: string serialize "id"
+struct DefaultCollision:
+    id: string
+    external_id: string serialize "id"
+struct GenericCollision[T]:
+    value: T serialize "payload"
+    raw: string serialize "payload"

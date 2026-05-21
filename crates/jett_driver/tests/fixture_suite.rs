@@ -874,6 +874,10 @@ compile_fail_fixture!(
     "json_refined_map_key_must_be_string.jett"
 );
 compile_fail_fixture!(
+    compile_fail_json_duplicate_serialize_name,
+    "json_duplicate_serialize_name.jett"
+);
+compile_fail_fixture!(
     compile_fail_json_parse_exact_requires_type_arg,
     "json_parse_exact_requires_type_arg.jett"
 );

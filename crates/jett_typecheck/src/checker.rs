@@ -549,6 +549,22 @@ impl<'a> TypeChecker<'a> {
         self.generic_struct_templates.insert(canonical, def);
     }
 
+    fn check_struct_json_serialize_names(&mut self, def: &ast::StructDef, namespace: Option<&str>) {
+        let type_name = Self::canonical_name(namespace, &def.name.name);
+        let mut seen = HashMap::new();
+        for field in &def.fields {
+            let serialize_name = field.serialize_name.as_deref().unwrap_or(&field.name.name);
+            if let Some(previous_span) = seen.insert(serialize_name.to_string(), field.span) {
+                self.sink.emit(errors::duplicate_json_serialize_name(
+                    &type_name,
+                    serialize_name,
+                    field.span,
+                    previous_span,
+                ));
+            }
+        }
+    }
+
     fn declaration_def_id(&self, span: Span) -> Option<DefId> {
         self.resolve
             .resolutions
@@ -3300,6 +3316,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn predeclare_struct(&mut self, def: &ast::StructDef, namespace: Option<&str>) {
+        self.check_struct_json_serialize_names(def, namespace);
         if !def.type_params.is_empty() {
             // Generic struct — store the template for later monomorphization.
             self.register_generic_struct_template(namespace, &def.name.name, def.clone());

@@ -565,6 +565,26 @@ pub fn invalid_comptime_type_binding(span: Span) -> Diagnostic {
     )
 }
 
+/// E0346: Struct fields cannot share the same JSON serialize name.
+pub fn duplicate_json_serialize_name(
+    type_name: &str,
+    serialize_name: &str,
+    span: Span,
+    previous_span: Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        346,
+        format!(
+            "struct `{type_name}` has more than one field with JSON serialize name `{serialize_name}`"
+        ),
+        span,
+    )
+    .with_label(
+        previous_span,
+        format!("JSON serialize name `{serialize_name}` was first used here"),
+    )
+}
+
 // Diagnostic codes E0800-E0899 are reserved for function complexity limits.
 
 /// E0800: Function body exceeds the statement count limit.
