@@ -1,42 +1,45 @@
 namespace test
-
 struct Profile:
     city: string
-
 struct Session:
     id: string
     profile: Profile
     token: secret[string]
-
 struct PublicSession:
     id: string
     profile: Profile
-
 function session_summary(session: Session) returns string:
     return "{session.id}:{session.profile.city}:{secret.redact(session.token)}"
-
 function public_summary(session: PublicSession) returns string:
     return "{session.id}:{session.profile.city}"
-
 function public_serializer_matches_hook() returns bool:
     Profile profile = Profile(city: "Cluj")
     Session session = Session(id: "s1", profile: profile, token: "secret-token")
     string encoded = json.serialize_public[Session](view session)
     return string.contains(encoded, "token") == false and string.contains(encoded, "secret-token") == false
-
 function full_serializer_matches_hook() returns bool:
     Profile profile = Profile(city: "Cluj")
     PublicSession session = PublicSession(id: "s1", profile: profile)
     string encoded = json.serialize[PublicSession](view session)
     return string.contains(encoded, "profile") == true and string.contains(encoded, "Cluj") == true
-
 function parse_matches_hook() returns string:
     string raw = "{{\"id\":\"s1\",\"profile\":{{\"city\":\"Cluj\"}},\"token\":\"secret-token\"}}"
     Session public_name = json.parse[Session](raw) handle error:
         return error
     return session_summary(public_name)
-
+function parse_exact_matches_hook() returns string:
+    string raw = "{{\"id\":\"s1\",\"profile\":{{\"city\":\"Cluj\"}},\"token\":\"secret-token\"}}"
+    Session public_name = json.parse_exact[Session](raw) handle error:
+        return error
+    return session_summary(public_name)
+function parse_exact_rejects_extra_field() returns string:
+    string raw = "{{\"id\":\"s1\",\"profile\":{{\"city\":\"Cluj\",\"extra\":true}},\"token\":\"secret-token\"}}"
+    Session public_name = json.parse_exact[Session](raw) handle error:
+        return error
+    return session_summary(public_name)
 verify json_stdlib_bridge_delegation:
     assert public_serializer_matches_hook() == true
     assert full_serializer_matches_hook() == true
     assert parse_matches_hook() == "s1:Cluj:***"
+    assert parse_exact_matches_hook() == "s1:Cluj:***"
+    assert parse_exact_rejects_extra_field() == "profile: unknown field 'extra' for test.Profile"
