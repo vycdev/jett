@@ -43,6 +43,12 @@ function strict_required_field_missing() returns string:
     json.JsonTree item = json.require_field(view root, "absent") handle error:
         return error
     return json.kind(view item)
+function strict_required_field_wrong_shape() returns string:
+    json.JsonTree text = json.parse_raw("\"Ada\"") handle error:
+        default json.JsonTree.string_value(error)
+    json.JsonTree item = json.require_field(view text, "name") handle error:
+        return error
+    return json.kind(view item)
 function strict_array_index_value() returns string:
     json.JsonTree root = strict_root()
     json.JsonTree scores = json.require_field(view root, "scores") handle error:
@@ -82,6 +88,11 @@ function strict_required_negative_index_missing() returns string:
     json.JsonTree scores = json.require_field(view root, "scores") handle error:
         return error
     json.JsonTree item = json.require_index(view scores, -1) handle error:
+        return error
+    return json.kind(view item)
+function strict_required_index_wrong_shape() returns string:
+    json.JsonTree root = strict_root()
+    json.JsonTree item = json.require_index(view root, 0) handle error:
         return error
     return json.kind(view item)
 function strict_index_wrong_shape() returns string:
@@ -166,11 +177,13 @@ verify json_raw_strict_accessors:
     assert strict_field_wrong_shape() == "expected object, got string"
     assert strict_field_array_wrong_shape() == "expected object, got array"
     assert strict_required_field_missing() == "missing object field 'absent'"
+    assert strict_required_field_wrong_shape() == "expected object, got string"
     assert strict_array_index_value() == "5"
     assert strict_array_index_absent() == "absent"
     assert strict_array_index_negative_absent() == "absent"
     assert strict_required_index_missing() == "missing array item 9"
     assert strict_required_negative_index_missing() == "missing array item -1"
+    assert strict_required_index_wrong_shape() == "expected array, got object"
     assert strict_index_wrong_shape() == "expected array, got object"
     assert strict_index_scalar_wrong_shape() == "expected array, got string"
     assert strict_accessors_accept_legacy_value() == "Grace"
