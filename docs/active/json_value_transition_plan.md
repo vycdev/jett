@@ -117,6 +117,12 @@ export root type JsonValue = json.JsonTree
 export function parse_raw(raw: string) returns result[JsonTree, string]
 export function serialize_raw(view value: JsonTree) returns string
 export function kind(view value: JsonTree) returns string
+export function is_null(view value: JsonTree) returns bool
+export function is_bool(view value: JsonTree) returns bool
+export function is_number(view value: JsonTree) returns bool
+export function is_string(view value: JsonTree) returns bool
+export function is_array(view value: JsonTree) returns bool
+export function is_object(view value: JsonTree) returns bool
 export function field(view value: JsonTree, key: string) returns optional[JsonTree]
 export function index(view value: JsonTree, index: int64) returns optional[JsonTree]
 export function object_field(view value: JsonTree, key: string) returns result[optional[JsonTree], string]
@@ -127,6 +133,7 @@ export function array_length(view value: JsonTree) returns result[int64, string]
 export function object_keys(view value: JsonTree) returns result[list[string], string]
 export function as_string(view value: JsonTree) returns result[string, string]
 export function as_int64(view value: JsonTree) returns result[int64, string]
+export function as_uint64(view value: JsonTree) returns result[uint64, string]
 export function as_float64(view value: JsonTree) returns result[float64, string]
 export function as_bool(view value: JsonTree) returns result[bool, string]
 ```
@@ -341,11 +348,18 @@ pinned in `tests/run_pass/json_parse.jett`,
 `tests/run_pass/json_serialize_public.jett`. Strict raw accessors are pinned in
 `tests/run_pass/json_raw_strict_accessors.jett` for `json.JsonTree`, bare
 `JsonValue`, and `json.JsonValue`, while lenient raw probing edge cases are
-pinned in `tests/run_pass/json_raw_value_access_edges.jett`. Strict accessor
-argument-shape diagnostics are pinned in
+pinned in `tests/run_pass/json_raw_value_access_edges.jett`. The namespaced
+`json.JsonValue` alias facade surface is pinned in
+`tests/run_pass/json_raw_alias_facade_surface.jett`, covering kind checks,
+predicates, object keys, scalar casts, array indexing, optional lookup, and raw
+serialization. Strict accessor argument-shape diagnostics are pinned in
 `tests/compile_fail/json_raw_strict_accessor_argument_shapes.jett`, and the
 broader raw facade shape diagnostics are pinned in
 `tests/compile_fail/json_raw_facade_argument_shapes.jett`.
+Serialization ownership diagnostics for raw tree values are pinned in
+`tests/compile_fail/json_serialize_json_value_requires_view.jett` and
+`tests/compile_fail/json_serialize_public_json_value_requires_view.jett` across
+bare `JsonValue`, `json.JsonValue`, and direct `json.JsonTree`.
 General JSON examples now prefer `json.JsonTree` / `json.JsonValue`; bare
 `JsonValue` remains concentrated in compatibility, parity, and transition
 fixtures.
