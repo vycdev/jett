@@ -68,6 +68,11 @@ verify json_value_alias_test:
     string raw = json_value_alias_test()
     assert string.contains(raw, "\"name\":\"Grace\"") == true
     assert string.contains(raw, "\"score\":7") == true
+function utf8_fixture_text() returns string:
+    bytes raw = bytes.from_hex("c3a9e282acf09f9880") handle error:
+        return error
+    return bytes.to_string(raw) handle error:
+        default error
 function json_tree_field_test() returns string:
     json.JsonTree tree = json.json_tree_parse("[1,true]") handle error:
         return error
@@ -77,6 +82,25 @@ function json_tree_field_test() returns string:
     return json.serialize[RawPayload](view payload)
 verify json_tree_field_test:
     assert json_tree_field_test() == "{{\"tree\":[1,true],\"alias\":{{\"ok\":true}}}}"
+function json_tree_utf8_field_test() returns string:
+    string text = utf8_fixture_text()
+    json.JsonTree tree = json.JsonTree.string_value(text)
+    json.JsonValue alias = json.JsonTree.string_value(text)
+    RawPayload payload = RawPayload(tree: tree, alias: alias)
+    string raw = json.serialize[RawPayload](view payload)
+    json.JsonTree parsed = json.parse_raw(raw) handle error:
+        return "parse:{error}"
+    json.JsonTree tree_field = json.require_field(view parsed, "tree") handle error:
+        return "tree:{error}"
+    json.JsonTree alias_field = json.require_field(view parsed, "alias") handle error:
+        return "alias:{error}"
+    string tree_text = json.as_string(view tree_field) handle error:
+        return "tree value:{error}"
+    string alias_text = json.as_string(view alias_field) handle error:
+        return "alias value:{error}"
+    return "{bytes.to_hex(bytes.from_string(tree_text))}:{bytes.to_hex(bytes.from_string(alias_text))}"
+verify json_tree_utf8_field_test:
+    assert json_tree_utf8_field_test() == "c3a9e282acf09f9880:c3a9e282acf09f9880"
 function json_string_escape_test() returns string:
     return json.serialize[string]("quote \" backslash \\ newline \n tab \t nul \0")
 verify json_string_escape_test:
