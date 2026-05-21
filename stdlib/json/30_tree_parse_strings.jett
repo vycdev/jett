@@ -89,11 +89,7 @@ function json_tree_parse_unicode_surrogate_pair_at(view input: bytes, index: int
 function json_tree_unicode_codepoint_value(code: int64) returns result[string, string]:
     string hex = json_tree_codepoint_to_utf8_hex(code) handle error:
         return fail(error)
-    bytes raw = bytes.from_hex(hex) handle error:
-        return fail(error)
-    string decoded = bytes.to_string(raw) handle error:
-        return fail(error)
-    return ok(decoded)
+    return json_stdlib_string_from_hex(hex)
 function json_tree_unicode_codepoint(view input: bytes, digit_start: int64) returns result[int64, string]:
     int64 first = json_tree_hex_digit_value(json_tree_byte_at(view input, digit_start))
     int64 second = json_tree_hex_digit_value(json_tree_byte_at(view input, digit_start + 1))
