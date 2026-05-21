@@ -11876,6 +11876,16 @@ mod tests {
     }
 
     #[test]
+    fn json_raw_facades_without_stdlib_wrappers_are_undefined() {
+        let mut interp = Interpreter::new();
+
+        for name in JSON_RAW_FACADE_NAMES {
+            let err = interp.call_function(name, Vec::new()).unwrap_err();
+            assert_eq!(err, format!("undefined function '{name}'"));
+        }
+    }
+
+    #[test]
     fn json_parse_raw_uses_public_stdlib_wrapper() {
         let mut interp = Interpreter::new();
         let mut wrapper = func_def(
