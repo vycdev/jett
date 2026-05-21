@@ -67,12 +67,30 @@ function int64_scalar_cast_fraction_error() returns string:
     int64 value = json.as_int64(view number) handle error:
         return error
     return "{value}"
+function int64_scalar_cast_exponent_error() returns string:
+    json.JsonTree number = json.parse_raw("1e0") handle error:
+        return error
+    int64 value = json.as_int64(view number) handle error:
+        return error
+    return "{value}"
 function uint64_scalar_cast_negative_error() returns string:
     json.JsonTree number = json.parse_raw("-1") handle error:
         return error
     uint64 value = json.as_uint64(view number) handle error:
         return error
     return string.from_uint64(value)
+function int64_scalar_cast_negative_zero() returns string:
+    json.JsonTree number = json.parse_raw("-0") handle error:
+        return error
+    int64 value = json.as_int64(view number) handle error:
+        return error
+    return "{value}"
+function float64_scalar_cast_exponent() returns bool:
+    json.JsonTree number = json.parse_raw("1E+0") handle error:
+        return false
+    float64 value = json.as_float64(view number) handle error:
+        return false
+    return value == 1.0
 verify json_raw_value_access_edges:
     assert missing_key_and_present_null() == "missing absent:present null true"
     assert index_out_of_bounds_is_absent() == "absent"
@@ -85,4 +103,7 @@ verify json_raw_value_access_edges:
     assert scalar_cast_wrong_shape_error() == "expected int64, got string"
     assert uint64_scalar_cast_wrong_shape_error() == "expected uint64, got string"
     assert int64_scalar_cast_fraction_error() == "expected int64, got number"
+    assert int64_scalar_cast_exponent_error() == "expected int64, got number"
     assert uint64_scalar_cast_negative_error() == "expected uint64 in range 0..18446744073709551615"
+    assert int64_scalar_cast_negative_zero() == "0"
+    assert float64_scalar_cast_exponent() == true
