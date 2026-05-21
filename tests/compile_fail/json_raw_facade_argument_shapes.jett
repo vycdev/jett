@@ -1,6 +1,11 @@
 # ERROR: E0304
 namespace test
 
+enum JsonTree:
+    fake
+
+type LocalRaw = JsonTree
+
 function bad_parse_raw_input() returns json.JsonTree:
     return json.parse_raw(5) handle error:
         default json.JsonTree.string_value(error)
@@ -34,3 +39,13 @@ function bad_index_value(root: json.JsonTree) returns int64:
 
 function bad_serialize_raw_input() returns string:
     return json.serialize_raw("not raw json")
+
+function bad_user_json_tree_alias_field() returns string:
+    LocalRaw tree = JsonTree.fake
+    json.JsonTree name = json.field(tree, "name") handle:
+        return json.JsonTree.string_value("missing")
+    return json.kind(view name)
+
+function bad_user_json_tree_alias_serialize_raw() returns string:
+    LocalRaw tree = JsonTree.fake
+    return json.serialize_raw(tree)

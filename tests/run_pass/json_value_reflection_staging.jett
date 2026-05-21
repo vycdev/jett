@@ -47,14 +47,17 @@ function local_raw_alias_behavior() returns string:
         return error
     LocalRawAlias alias = json.parse[LocalRawAlias]("{{\"name\":\"Mira\"}}") handle error:
         return error
+    LocalRaw extra = json.require_field(view parsed, "extra") handle error:
+        return error
     string public = json.serialize_public[LocalRaw](view parsed)
     string encoded = json.serialize[LocalRawAlias](view alias)
     bool kept_extra = string.contains(public, "\"extra\":")
     bool kept_name = string.contains(encoded, "\"name\":\"Mira\"")
-    return "{json.kind(view parsed)}:{json.kind(view alias)}:{kept_extra}:{kept_name}"
+    bool extra_is_object = json.is_object(view extra)
+    return "{json.kind(view parsed)}:{json.kind(view alias)}:{extra_is_object}:{kept_extra}:{kept_name}"
 verify json_value_reflection_staging:
     assert bare_json_value_reflection_summary() == "alias:JsonValue:true:enum:json.JsonTree:1:true"
     assert alias_json_value_reflection_summary() == "alias:json.JsonValue:true:enum:json.JsonTree:1"
     assert bare_json_value_raw_behavior() == "object:true:true"
     assert alias_json_value_raw_behavior() == "object:true:true"
-    assert local_raw_alias_behavior() == "object:object:true:true"
+    assert local_raw_alias_behavior() == "object:object:true:true:true"

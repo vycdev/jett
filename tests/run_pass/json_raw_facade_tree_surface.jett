@@ -1,5 +1,7 @@
 namespace test
 
+type LocalRaw = json.JsonTree
+
 function raw_tree_facade_root() returns json.JsonTree:
     return json.parse_raw("{{\"name\":\"Ada\",\"scores\":[3,5],\"active\":true,\"ratio\":2.5,\"missing\":null}}") handle error:
         default json.JsonTree.string_value(error)
@@ -58,6 +60,18 @@ function raw_tree_facade_still_accepts_legacy_value() returns string:
     return json.as_string(raw) handle error:
         default error
 
+function raw_tree_facade_accepts_local_alias() returns string:
+    LocalRaw root = json.parse_raw("{{\"name\":\"Ada\"}}") handle error:
+        return error
+    LocalRaw name = json.require_field(view root, "name") handle error:
+        return error
+    string encoded = json.serialize_raw(view root)
+    string text = json.as_string(view name) handle error:
+        return error
+    bool mentions_name = string.contains(encoded, "Ada")
+    return "{json.kind(view root)}:{text}:{mentions_name}"
+
 verify json_raw_facade_tree_surface:
     assert raw_tree_facade_summary() == "object:true:5:true:object:Ada:true:2:5:true:true:true:2.5:true"
     assert raw_tree_facade_still_accepts_legacy_value() == "Grace"
+    assert raw_tree_facade_accepts_local_alias() == "object:Ada:true"
