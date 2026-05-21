@@ -27,6 +27,18 @@ function parse_exact_int64_max_text() returns string:
     int64 value = json.parse_exact[int64]("9223372036854775807") handle error:
         return error
     return "{value}"
+function parse_exact_uint8_max_text() returns string:
+    uint8 value = json.parse_exact[uint8]("255") handle error:
+        return error
+    return "{value}"
+function parse_exact_uint16_max_text() returns string:
+    uint16 value = json.parse_exact[uint16]("65535") handle error:
+        return error
+    return "{value}"
+function parse_exact_uint32_max_text() returns string:
+    uint32 value = json.parse_exact[uint32]("4294967295") handle error:
+        return error
+    return "{value}"
 function parse_exact_bundle_summary() returns string:
     PrimitiveBundle bundle = json.parse_exact[PrimitiveBundle]("{{\"payload\":\"0x4869\",\"ratio\":2.5}}") handle error:
         return error
@@ -57,6 +69,18 @@ function parse_exact_int64_overflow_error() returns string:
     int64 value = json.parse_exact[int64]("9223372036854775808") handle error:
         return error
     return "{value}"
+function parse_exact_uint8_range_error() returns string:
+    uint8 value = json.parse_exact[uint8]("256") handle error:
+        return error
+    return "{value}"
+function parse_exact_uint16_range_error() returns string:
+    uint16 value = json.parse_exact[uint16]("65536") handle error:
+        return error
+    return "{value}"
+function parse_exact_uint32_range_error() returns string:
+    uint32 value = json.parse_exact[uint32]("4294967296") handle error:
+        return error
+    return "{value}"
 function parse_exact_uint64_range_error() returns string:
     uint64 value = json.parse_exact[uint64]("18446744073709551616") handle error:
         return error
@@ -79,6 +103,9 @@ verify json_parse_exact_primitive_edges:
     assert parse_exact_float64_text() == "2.5"
     assert parse_exact_int64_min_text() == "-9223372036854775808"
     assert parse_exact_int64_max_text() == "9223372036854775807"
+    assert parse_exact_uint8_max_text() == "255"
+    assert parse_exact_uint16_max_text() == "65535"
+    assert parse_exact_uint32_max_text() == "4294967295"
     assert parse_exact_bundle_summary() == "2:2.5"
     assert parse_exact_bytes_invalid_hex_error() == "expected hex bytes string"
     assert parse_exact_bytes_wrong_shape_error() == "expected string, got number"
@@ -86,6 +113,9 @@ verify json_parse_exact_primitive_edges:
     assert parse_exact_int8_range_error() == "expected int8 in range -128..127"
     assert parse_exact_int64_underflow_error() == "expected int64 in range -9223372036854775808..9223372036854775807"
     assert parse_exact_int64_overflow_error() == "expected int64 in range -9223372036854775808..9223372036854775807"
+    assert parse_exact_uint8_range_error() == "expected uint8 in range 0..255"
+    assert parse_exact_uint16_range_error() == "expected uint16 in range 0..65535"
+    assert parse_exact_uint32_range_error() == "expected uint32 in range 0..4294967295"
     assert parse_exact_uint64_range_error() == "expected uint64 in range 0..18446744073709551615"
     assert parse_exact_uint64_fraction_error() == "expected uint64, got number"
     assert parse_exact_uint64_exponent_error() == "expected uint64, got number"
