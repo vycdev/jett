@@ -419,9 +419,9 @@ Types are interned for O(1) comparison: each unique type gets a `TypeId`. The ty
 | `Orderable` | `int64`, `float64`, `string` | `<`, `>`, `<=`, `>=` |
 | `Displayable` | `int64`, `float64`, `string`, `bool` | String interpolation `{expr}` (compiler-stdlib coupling) |
 | `Hashable` | `int64`, `string`, `bool` | `map` keys, `set` elements |
-| `Serializable` | All structs, all primitives | `json.serialize[T]()`, `json.parse[T]()`, `json.parse_exact[T]()` |
+| `Serializable` | JSON-data structs and primitives | `json.serialize[T]()`, `json.parse[T]()`, `json.parse_exact[T]()` |
 
-These are ordinary `implement` blocks in the standard library, but the compiler has hardcoded knowledge of `Displayable` (for string interpolation) and `Serializable` (for auto-generated serialization).
+These are ordinary `implement` blocks in the standard library, but the compiler has hardcoded knowledge of `Displayable` for string interpolation and JSON policy gates for parse/serialization. The JSON bodies are stdlib-reflected in normal builds; the compiler-owned part is the policy boundary, not format-specific field walking.
 
 #### 6b. Interface Verification
 
