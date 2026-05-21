@@ -118,13 +118,7 @@ function json_tree_span_starts_literal4(view input: bytes, start: int64, end: in
 function json_tree_span_starts_literal5(view input: bytes, start: int64, end: int64, first: int64, second: int64, third: int64, fourth: int64, fifth: int64) returns bool:
     if end - start < 5:
         return false
-    if json_tree_byte_at(view input, start) != first:
-        return false
-    if json_tree_byte_at(view input, start + 1) != second:
-        return false
-    if json_tree_byte_at(view input, start + 2) != third:
-        return false
-    if json_tree_byte_at(view input, start + 3) != fourth:
+    if json_tree_span_starts_literal4(view input, start, end, first, second, third, fourth) == false:
         return false
     return json_tree_byte_at(view input, start + 4) == fifth
 function json_tree_byte_at(view input: bytes, index: int64) returns int64:
