@@ -25,8 +25,38 @@ function parse_exact_bundle_summary() returns string:
     float64 ratio = bundle.ratio
     int64 length = bytes.length(bundle.payload)
     return "{length}:{ratio}"
+function parse_exact_bytes_invalid_hex_error() returns string:
+    bytes value = json.parse_exact[bytes]("\"0xzz\"") handle error:
+        return error
+    return "{bytes.length(value)}"
+function parse_exact_bytes_wrong_shape_error() returns string:
+    bytes value = json.parse_exact[bytes]("5") handle error:
+        return error
+    return "{bytes.length(value)}"
+function parse_exact_nothing_wrong_shape_error() returns string:
+    nothing value = json.parse_exact[nothing]("false") handle error:
+        return error
+    return "accepted"
+function parse_exact_int8_range_error() returns string:
+    int8 value = json.parse_exact[int8]("128") handle error:
+        return error
+    return "{value}"
+function parse_exact_uint64_range_error() returns string:
+    uint64 value = json.parse_exact[uint64]("18446744073709551616") handle error:
+        return error
+    return "{value}"
+function parse_exact_float64_wrong_shape_error() returns string:
+    float64 value = json.parse_exact[float64]("\"2.5\"") handle error:
+        return error
+    return "{value}"
 verify json_parse_exact_primitive_edges:
     assert parse_exact_bytes_summary() == "2:72"
     assert parse_exact_float32_text() == "2.5"
     assert parse_exact_float64_text() == "2.5"
     assert parse_exact_bundle_summary() == "2:2.5"
+    assert parse_exact_bytes_invalid_hex_error() == "expected hex bytes string"
+    assert parse_exact_bytes_wrong_shape_error() == "expected string, got number"
+    assert parse_exact_nothing_wrong_shape_error() == "expected null, got bool"
+    assert parse_exact_int8_range_error() == "expected int8 in range -128..127"
+    assert parse_exact_uint64_range_error() == "expected uint64 in range 0..18446744073709551615"
+    assert parse_exact_float64_wrong_shape_error() == "expected float64, got string"
