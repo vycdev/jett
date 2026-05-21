@@ -16,6 +16,8 @@ mutual:
     function json_decode_tree_integer_range_error(value: int64, primitive: TypePrimitive) returns optional[string]
     function json_decode_tree_range_error(value: int64, minimum: int64, maximum: int64, name: string) returns optional[string]
     function json_decode_tree_other_primitive_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[T, string]
+    function json_decode_tree_bytes_reflected[T](view raw: JsonTree) returns result[T, string]
+    function json_decode_tree_nothing_reflected[T](view raw: JsonTree) returns result[T, string]
     function json_decode_tree_structured_reflected[T](view raw: JsonTree, kind: TypeKind, type_name: string) returns result[T, string]
     function json_decode_tree_list_reflected[T](view raw: JsonTree) returns result[T, string]
     function json_decode_tree_set_reflected[T](view raw: JsonTree) returns result[T, string]
@@ -172,16 +174,20 @@ function json_decode_tree_range_error(value: int64, minimum: int64, maximum: int
     return none
 function json_decode_tree_other_primitive_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[T, string]:
     if primitive == TypePrimitive.bytes_type:
-        string raw_hex = json_tree_as_string(view raw) handle error:
-            return fail(error)
-        bytes item = bytes.from_hex(raw_hex) handle error:
-            return fail("expected hex bytes string")
-        return ok(item)
+        return json_decode_tree_bytes_reflected[T](view raw)
     if primitive == TypePrimitive.nothing_type:
-        if json_tree_is_null(view raw) == false:
-            return fail("expected null, got {json_tree_kind(view raw)}")
-        return ok(nothing)
+        return json_decode_tree_nothing_reflected[T](view raw)
     return fail("unsupported reflected JSON primitive")
+function json_decode_tree_bytes_reflected[T](view raw: JsonTree) returns result[T, string]:
+    string raw_hex = json_tree_as_string(view raw) handle error:
+        return fail(error)
+    bytes item = bytes.from_hex(raw_hex) handle error:
+        return fail("expected hex bytes string")
+    return ok(item)
+function json_decode_tree_nothing_reflected[T](view raw: JsonTree) returns result[T, string]:
+    if json_tree_is_null(view raw) == false:
+        return fail("expected null, got {json_tree_kind(view raw)}")
+    return ok(nothing)
 function json_decode_tree_structured_reflected[T](view raw: JsonTree, kind: TypeKind, type_name: string) returns result[T, string]:
     match kind:
         list_type:
