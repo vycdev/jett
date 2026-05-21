@@ -3905,19 +3905,7 @@ impl Interpreter {
     fn checked_type_info(&self, ty: &TypeExpr) -> Option<&ReflectionTypeInfo> {
         let metadata = self.reflection_metadata.as_ref()?;
         let type_name = type_expr_display(ty);
-        Self::metadata_type_info_by_name(metadata, &type_name)
-    }
-
-    fn metadata_type_info_by_name<'a>(
-        metadata: &'a ReflectionMetadata,
-        type_name: &str,
-    ) -> Option<&'a ReflectionTypeInfo> {
-        if let Some(type_id) = metadata.type_id_for_name(type_name)
-            && let Some(info) = metadata.get_type_info_for_id(type_id)
-        {
-            return Some(info);
-        }
-        metadata.get_type_info(type_name)
+        metadata.get_type_info(&type_name)
     }
 
     fn checked_type_has_secret(&self, ty: &TypeExpr) -> Option<bool> {
@@ -4039,19 +4027,7 @@ impl Interpreter {
     fn checked_type_fields(&self, ty: &TypeExpr) -> Option<&[ReflectionFieldInfo]> {
         let metadata = self.reflection_metadata.as_ref()?;
         let type_name = type_expr_display(ty);
-        Self::metadata_type_fields_by_name(metadata, &type_name)
-    }
-
-    fn metadata_type_fields_by_name<'a>(
-        metadata: &'a ReflectionMetadata,
-        type_name: &str,
-    ) -> Option<&'a [ReflectionFieldInfo]> {
-        if let Some(type_id) = metadata.type_id_for_name(type_name)
-            && let Some(fields) = metadata.get_type_fields_for_id(type_id)
-        {
-            return Some(fields);
-        }
-        metadata.get_type_fields(type_name)
+        metadata.get_type_fields(&type_name)
     }
 
     fn checked_type_fields_value(&self, ty: &TypeExpr) -> Option<Value> {
@@ -4110,19 +4086,7 @@ impl Interpreter {
     fn checked_bitfield(&self, ty: &TypeExpr) -> Option<&ReflectionBitfieldInfo> {
         let metadata = self.reflection_metadata.as_ref()?;
         let type_name = type_expr_display(ty);
-        Self::metadata_bitfield_by_name(metadata, &type_name)
-    }
-
-    fn metadata_bitfield_by_name<'a>(
-        metadata: &'a ReflectionMetadata,
-        type_name: &str,
-    ) -> Option<&'a ReflectionBitfieldInfo> {
-        if let Some(type_id) = metadata.type_id_for_name(type_name)
-            && let Some(bitfield) = metadata.get_bitfield_for_id(type_id)
-        {
-            return Some(bitfield);
-        }
-        metadata.get_bitfield(type_name)
+        metadata.get_bitfield(&type_name)
     }
 
     fn checked_bitfield_value(&self, ty: &TypeExpr) -> Option<Value> {
@@ -4188,19 +4152,7 @@ impl Interpreter {
     fn checked_type_variants(&self, ty: &TypeExpr) -> Option<&[ReflectionVariantInfo]> {
         let metadata = self.reflection_metadata.as_ref()?;
         let type_name = type_expr_display(ty);
-        Self::metadata_type_variants_by_name(metadata, &type_name)
-    }
-
-    fn metadata_type_variants_by_name<'a>(
-        metadata: &'a ReflectionMetadata,
-        type_name: &str,
-    ) -> Option<&'a [ReflectionVariantInfo]> {
-        if let Some(type_id) = metadata.type_id_for_name(type_name)
-            && let Some(variants) = metadata.get_type_variants_for_id(type_id)
-        {
-            return Some(variants);
-        }
-        metadata.get_type_variants(type_name)
+        metadata.get_type_variants(&type_name)
     }
 
     fn checked_type_variants_value(&self, ty: &TypeExpr) -> Option<Value> {

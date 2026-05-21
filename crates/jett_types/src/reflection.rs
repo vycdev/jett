@@ -61,10 +61,8 @@ impl ReflectionMetadata {
     }
 
     pub fn get_type_info(&self, type_name: &str) -> Option<&ReflectionTypeInfo> {
-        if let Some(type_id) = self.type_id_for_name(type_name)
-            && let Some(info) = self.get_type_info_for_id(type_id)
-        {
-            return Some(info);
+        if let Some(type_id) = self.type_id_for_name(type_name) {
+            return self.get_type_info_for_id(type_id);
         }
         self.type_infos.get(type_name)
     }
@@ -98,10 +96,8 @@ impl ReflectionMetadata {
     }
 
     pub fn get_type_fields(&self, type_name: &str) -> Option<&[ReflectionFieldInfo]> {
-        if let Some(type_id) = self.type_id_for_name(type_name)
-            && let Some(fields) = self.get_type_fields_for_id(type_id)
-        {
-            return Some(fields);
+        if let Some(type_id) = self.type_id_for_name(type_name) {
+            return self.get_type_fields_for_id(type_id);
         }
         self.type_fields.get(type_name).map(Vec::as_slice)
     }
@@ -135,10 +131,8 @@ impl ReflectionMetadata {
     }
 
     pub fn get_bitfield(&self, type_name: &str) -> Option<&ReflectionBitfieldInfo> {
-        if let Some(type_id) = self.type_id_for_name(type_name)
-            && let Some(bitfield) = self.get_bitfield_for_id(type_id)
-        {
-            return Some(bitfield);
+        if let Some(type_id) = self.type_id_for_name(type_name) {
+            return self.get_bitfield_for_id(type_id);
         }
         self.bitfields.get(type_name)
     }
@@ -172,10 +166,8 @@ impl ReflectionMetadata {
     }
 
     pub fn get_type_variants(&self, type_name: &str) -> Option<&[ReflectionVariantInfo]> {
-        if let Some(type_id) = self.type_id_for_name(type_name)
-            && let Some(variants) = self.get_type_variants_for_id(type_id)
-        {
-            return Some(variants);
+        if let Some(type_id) = self.type_id_for_name(type_name) {
+            return self.get_type_variants_for_id(type_id);
         }
         self.type_variants.get(type_name).map(Vec::as_slice)
     }
@@ -699,5 +691,44 @@ mod tests {
                 .name,
             "payload"
         );
+    }
+
+    #[test]
+    fn bound_name_lookup_does_not_fall_back_to_string_metadata_when_id_metadata_missing() {
+        let type_id = TypeId(48);
+        let mut metadata = ReflectionMetadata::new();
+
+        metadata.insert_type_info(info("models.Packet", "struct"));
+        metadata.insert_type_fields("models.Packet", vec![field("version", "int64")]);
+        metadata.insert_bitfield(
+            "models.Packet",
+            ReflectionBitfieldInfo::new(
+                true,
+                vec![ReflectionBitfieldFieldInfo::new(
+                    0,
+                    "version",
+                    "bits",
+                    4,
+                    info("int64", "primitive"),
+                    None,
+                )],
+            ),
+        );
+        metadata.insert_type_variants(
+            "models.Packet",
+            vec![ReflectionVariantInfo::new(
+                0,
+                "data",
+                0,
+                false,
+                vec![field("payload", "bytes")],
+            )],
+        );
+        metadata.bind_type_name("PacketAlias", type_id);
+
+        assert_eq!(metadata.get_type_info("PacketAlias"), None);
+        assert_eq!(metadata.get_type_fields("PacketAlias"), None);
+        assert_eq!(metadata.get_bitfield("PacketAlias"), None);
+        assert_eq!(metadata.get_type_variants("PacketAlias"), None);
     }
 }

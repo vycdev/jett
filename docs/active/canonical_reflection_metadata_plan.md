@@ -161,7 +161,9 @@ into their base type's reflection identity. The checker now stores
 struct/generic-struct fields, bitfield layout metadata, and enum variants by the
 known owner `TypeId` at the construction sites. The string-shaped
 `ReflectionMetadata` API remains as a compatibility facade, but owner metadata
-lookups can resolve through canonical id maps after a name is bound. For
+lookups now resolve strictly through canonical id maps after a name is bound;
+only unbound legacy names use the string maps. This keeps stale string-keyed
+metadata from masking incomplete checked metadata. For
 field-bearing checked types, the interpreter no longer silently reconstructs
 field, bitfield, or enum variant metadata from AST when a checked `TypeInfo`
 says the owner should have that metadata but the checked table is missing. The
@@ -248,9 +250,10 @@ masking missing owner metadata with AST reconstruction."
 
 Concrete follow-up:
 
-1. Keep auditing future `ReflectionMetadata` insertions: simple aliases should
-   stay string-only unless they get their own source-level identity; refinements
-   and canonical owners should stay id-bound.
+1. Keep auditing future `ReflectionMetadata` insertions: bound names must have
+   id-backed metadata, simple aliases should stay string-only unless they get
+   their own source-level identity, and refinements plus canonical owners should
+   stay id-bound.
 2. Keep no-metadata interpreter mode working for unit tests and bootstrap.
 3. Apply the same "checked owner metadata must be complete" rule to any future
    value-sensitive reflection operations as they are added.
