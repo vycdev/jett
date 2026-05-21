@@ -875,10 +875,26 @@ compile_fail_fixture!(
     compile_fail_json_serialize_public_top_level_secret_blocked,
     "json_serialize_public_top_level_secret_blocked.jett"
 );
+#[test]
+fn compile_fail_json_serialize_public_top_level_secret_blocked_covers_records() {
+    assert_compile_fail_error_count(
+        "json_serialize_public_top_level_secret_blocked.jett",
+        600,
+        2,
+    );
+}
 compile_fail_fixture!(
     compile_fail_json_serialize_public_secret_container_blocked,
     "json_serialize_public_secret_container_blocked.jett"
 );
+#[test]
+fn compile_fail_json_serialize_public_secret_container_blocked_covers_record_wrappers() {
+    assert_compile_fail_error_count(
+        "json_serialize_public_secret_container_blocked.jett",
+        603,
+        9,
+    );
+}
 compile_fail_fixture!(
     compile_fail_json_serialize_secret_generic_blocked,
     "json_serialize_secret_generic_blocked.jett"
