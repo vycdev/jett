@@ -15,7 +15,8 @@ json.JsonTree field = json.field(view root, "name") handle:
 Both of these cases return `none`:
 
 - the object or array does not contain the requested field/index,
-- the input value has the wrong shape, such as `json.field("text", "name")`.
+- the input raw JSON value has the wrong shape, such as probing a
+  `json.JsonTree.string_value("text")` as though it were an object.
 
 Shape-requiring helpers are stricter:
 
@@ -135,6 +136,10 @@ Argument-shape diagnostics are pinned in
 `tests/compile_fail/json_raw_facade_argument_shapes.jett`. The public strict
 wrappers now share private `JsonTree`-level helpers with reflected decoding and
 exact validation, so the stdlib has one shape-vs-absence vocabulary internally.
+Handle-policy diagnostics for the optional probing helpers and strict
+result-returning helpers are pinned in
+`tests/compile_fail/json_raw_probe_facades_require_handle.jett` and
+`tests/compile_fail/json_raw_result_facades_require_handle.jett`.
 The remaining design question is whether the lenient `json.field` /
 `json.index` names should stay as the primary public spelling forever, or
 whether a later compatibility stage should guide users toward the stricter
