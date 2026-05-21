@@ -1,32 +1,32 @@
 namespace test
-
 struct Profile:
     display_name: string serialize "displayName"
     note: string
-
 struct User:
     id: string
     profile: Profile serialize "profileData"
-
 function parse_ignores_extra_top_level() returns string:
     string raw = "{{\"id\":\"u1\",\"profileData\":{{\"displayName\":\"Alice\",\"note\":\"ok\"}},\"extra\":\"ignored\"}}"
     User user = json.parse[User](raw) handle error:
         return error
     return user.id
-
 function parse_ignores_extra_nested() returns string:
     string raw = "{{\"id\":\"u1\",\"profileData\":{{\"displayName\":\"Alice\",\"note\":\"ok\",\"extra\":\"ignored\"}}}}"
     User user = json.parse[User](raw) handle error:
         return error
     return user.profile.note
-
 function serialize_name_wins_over_source_name() returns string:
     string raw = "{{\"id\":\"u1\",\"profileData\":{{\"displayName\":\"Alice\",\"display_name\":\"Wrong\",\"note\":\"ok\"}}}}"
     User user = json.parse[User](raw) handle error:
         return error
     return user.profile.display_name
-
+function parse_ignores_source_field_when_serialize_name_exists() returns string:
+    string raw = "{{\"id\":\"u1\",\"profileData\":{{\"displayName\":\"Alice\",\"note\":\"ok\"}},\"profile\":{{\"displayName\":\"Wrong\",\"note\":\"ignored\"}}}}"
+    User user = json.parse[User](raw) handle error:
+        return error
+    return user.profile.display_name
 verify json_unknown_fields:
     assert parse_ignores_extra_top_level() == "u1"
     assert parse_ignores_extra_nested() == "ok"
     assert serialize_name_wins_over_source_name() == "Alice"
+    assert parse_ignores_source_field_when_serialize_name_exists() == "Alice"
