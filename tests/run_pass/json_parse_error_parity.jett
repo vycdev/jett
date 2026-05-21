@@ -86,6 +86,8 @@ verify json_parse_error_parity:
     assert parse_errors_match("\"\\ud834\\u0041\"") == true
     assert parse_errors_match("\"\\ud834abcdef\"") == true
     assert parse_errors_match("\"\\ud834\\uddxz\"") == true
+    assert parse_errors_match("\"\\udbff\"") == true
+    assert parse_errors_match("\"\\udbff\\ue000\"") == true
     assert parse_errors_match("[1,]") == true
     assert parse_errors_match("[,1]") == true
     assert parse_errors_match("[1,,2]") == true
