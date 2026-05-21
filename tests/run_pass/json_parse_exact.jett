@@ -72,6 +72,11 @@ function parse_exact_uses_serialize_name() returns string:
     User user = json.parse_exact[User](raw) handle error:
         return error
     return user.profile.display_name
+function parse_exact_rejects_source_name_when_serialize_name_exists() returns string:
+    string raw = "{{\"id\":\"u1\",\"profileData\":{{\"displayName\":\"Alice\",\"note\":\"ok\"}},\"profile\":{{\"displayName\":\"Wrong\",\"note\":\"ignored\"}}}}"
+    User user = json.parse_exact[User](raw) handle error:
+        return error
+    return user.profile.display_name
 function parse_exact_uses_utf8_serialize_name() returns string:
     Utf8Named item = json.parse_exact[Utf8Named]("{{\"café\":\"déjà\",\"note\":\"ok\"}}") handle error:
         return error
@@ -278,6 +283,7 @@ verify json_parse_exact:
     assert parse_exact_rejects_extra_top_level() == "unknown field 'extra' for test.User"
     assert parse_exact_rejects_extra_nested() == "profileData: unknown field 'extra' for test.Profile"
     assert parse_exact_uses_serialize_name() == "profileData: unknown field 'display_name' for test.Profile"
+    assert parse_exact_rejects_source_name_when_serialize_name_exists() == "unknown field 'profile' for test.User"
     assert parse_exact_uses_utf8_serialize_name() == "déjà:ok:true"
     assert parse_exact_validates_list_items() == "0: unknown field 'extra' for test.Profile"
     assert parse_exact_validates_map_values() == "primary: unknown field 'extra' for test.Profile"
