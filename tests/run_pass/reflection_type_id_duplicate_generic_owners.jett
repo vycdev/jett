@@ -1,21 +1,14 @@
 namespace accounts
-
 export struct User:
     id: string
-
 export struct Box[T]:
     value: T
-
 namespace audit
-
 export struct User:
     attempts: int64
-
 export struct Box[T]:
     value: T
-
 namespace app
-
 function account_box_reflection_summary() returns string:
     use accounts as a
     a.User user = a.User(id: "a1")
@@ -23,11 +16,12 @@ function account_box_reflection_summary() returns string:
     TypeInfo info = type.info[a.Box[a.User]]()
     TypeField field = list.get[TypeField](type.fields[a.Box[a.User]](), 0) handle:
         return "missing account field"
-    string raw = json.serialize[a.Box[a.User]](view box)
-    a.Box[a.User] decoded = json.parse[a.Box[a.User]](raw) handle error:
-        return error
-    return "{info.type_name}:{field.type_name}:{decoded.value.id}"
-
+    comptime type Inner = type.arg[a.Box[a.User]](0):
+        TypeInfo inner_info = type.info[Inner]()
+        string raw = json.serialize[a.Box[a.User]](view box)
+        a.Box[a.User] decoded = json.parse[a.Box[a.User]](raw) handle error:
+            return error
+        return "{info.type_name}:{field.type_name}:{inner_info.type_name}:{decoded.value.id}"
 function audit_box_reflection_summary() returns string:
     use audit as a
     a.User user = a.User(attempts: 3)
@@ -35,11 +29,12 @@ function audit_box_reflection_summary() returns string:
     TypeInfo info = type.info[a.Box[a.User]]()
     TypeField field = list.get[TypeField](type.fields[a.Box[a.User]](), 0) handle:
         return "missing audit field"
-    string raw = json.serialize[a.Box[a.User]](view box)
-    a.Box[a.User] decoded = json.parse[a.Box[a.User]](raw) handle error:
-        return error
-    return "{info.type_name}:{field.type_name}:{decoded.value.attempts}"
-
+    comptime type Inner = type.arg[a.Box[a.User]](0):
+        TypeInfo inner_info = type.info[Inner]()
+        string raw = json.serialize[a.Box[a.User]](view box)
+        a.Box[a.User] decoded = json.parse[a.Box[a.User]](raw) handle error:
+            return error
+        return "{info.type_name}:{field.type_name}:{inner_info.type_name}:{decoded.value.attempts}"
 verify reflection_type_id_duplicate_generic_owners:
-    assert account_box_reflection_summary() == "accounts.Box[accounts.User]:accounts.User:a1"
-    assert audit_box_reflection_summary() == "audit.Box[audit.User]:audit.User:3"
+    assert account_box_reflection_summary() == "accounts.Box[accounts.User]:accounts.User:accounts.User:a1"
+    assert audit_box_reflection_summary() == "audit.Box[audit.User]:audit.User:audit.User:3"
