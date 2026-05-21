@@ -300,6 +300,10 @@ run_pass_fixture!(
     "reflection_type_id_duplicate_generic_owners.jett"
 );
 run_pass_fixture!(
+    run_pass_reflection_type_id_duplicate_container_args,
+    "reflection_type_id_duplicate_container_args.jett"
+);
+run_pass_fixture!(
     run_pass_reflection_type_id_duplicate_construction,
     "reflection_type_id_duplicate_construction.jett"
 );

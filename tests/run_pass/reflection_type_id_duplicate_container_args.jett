@@ -1,0 +1,73 @@
+namespace accounts
+export struct User:
+    id: string
+namespace audit
+export struct User:
+    service: string
+    attempts: int64
+namespace app
+struct Envelope:
+    by_id: map[string, accounts.User]
+    audit_by_id: map[string, audit.User]
+    outcome: result[accounts.User, audit.User]
+    maybe_audit: optional[audit.User]
+function map_type_info_value_arg() returns string:
+    TypeInfo info = type.info[map[string, accounts.User]]()
+    TypeInfo arg = list.get[TypeInfo](info.args, 1) handle:
+        return "missing map arg"
+    return "{arg.kind}:{arg.type_name}"
+function direct_map_value_arg() returns string:
+    comptime type Value = type.arg[map[string, accounts.User]](1):
+        TypeInfo info = type.info[Value]()
+        return "{info.kind}:{info.type_name}"
+function direct_result_args() returns string:
+    comptime type Ok = type.arg[result[accounts.User, audit.User]](0):
+        comptime type Err = type.arg[result[accounts.User, audit.User]](1):
+            return "{type.name[Ok]()}:{type.name[Err]()}"
+function envelope_field_arg_summary(field_name: string, target: int64) returns string:
+    for field in type.fields[Envelope]():
+        if field.name != field_name:
+            continue
+        TypeInfo arg = list.get[TypeInfo](field.type_info.args, target) handle:
+            return "missing field arg"
+        return "{field.type_info.type_name}:{arg.kind}:{arg.type_name}"
+    return "missing field"
+function map_json_roundtrip() returns string:
+    accounts.User user = accounts.User(id: "acct-1")
+    map[string, accounts.User] users = map("primary": user)
+    string raw = json.serialize[map[string, accounts.User]](view users)
+    map[string, accounts.User] decoded = json.parse[map[string, accounts.User]](raw) handle error:
+        return error
+    accounts.User primary = map.get[string, accounts.User](decoded, "primary") handle:
+        return "missing primary"
+    bool raw_has_id = string.contains(raw, "\"id\":\"acct-1\"")
+    return "{primary.id}:{raw_has_id}"
+function envelope_parse_exact_summary() returns string:
+    string raw = "{{\"by_id\":{{\"primary\":{{\"id\":\"acct-1\"}}}},\"audit_by_id\":{{\"svc\":{{\"service\":\"auth\",\"attempts\":3}}}},\"outcome\":{{\"fail\":{{\"service\":\"auth\",\"attempts\":5}}}},\"maybe_audit\":{{\"service\":\"batch\",\"attempts\":1}}}}"
+    Envelope envelope = json.parse_exact[Envelope](raw) handle error:
+        return error
+    accounts.User primary = map.get[string, accounts.User](envelope.by_id, "primary") handle:
+        return "missing primary"
+    accounts.User ignored = envelope.outcome handle error:
+        audit.User failure = error
+        audit.User maybe = envelope.maybe_audit handle:
+            return "missing maybe"
+        return "{primary.id}:{failure.service}:{failure.attempts}:{maybe.service}:{maybe.attempts}"
+    return ignored.id
+function envelope_parse_exact_accounts_extra_error() returns string:
+    string raw = "{{\"by_id\":{{\"primary\":{{\"id\":\"acct-1\",\"extra\":true}}}},\"audit_by_id\":{{}},\"outcome\":{{\"ok\":{{\"id\":\"ok\"}}}},\"maybe_audit\":null}}"
+    Envelope envelope = json.parse_exact[Envelope](raw) handle error:
+        return error
+    return "{map.length[string, accounts.User](envelope.by_id)}"
+verify reflection_type_id_duplicate_container_args:
+    assert map_type_info_value_arg() == "struct:accounts.User"
+    assert direct_map_value_arg() == "struct:accounts.User"
+    assert direct_result_args() == "accounts.User:audit.User"
+    assert envelope_field_arg_summary("by_id", 1) == "map[string, accounts.User]:struct:accounts.User"
+    assert envelope_field_arg_summary("audit_by_id", 1) == "map[string, audit.User]:struct:audit.User"
+    assert envelope_field_arg_summary("outcome", 0) == "result[accounts.User, audit.User]:struct:accounts.User"
+    assert envelope_field_arg_summary("outcome", 1) == "result[accounts.User, audit.User]:struct:audit.User"
+    assert envelope_field_arg_summary("maybe_audit", 0) == "optional[audit.User]:struct:audit.User"
+    assert map_json_roundtrip() == "acct-1:true"
+    assert envelope_parse_exact_summary() == "acct-1:auth:5:batch:1"
+    assert envelope_parse_exact_accounts_extra_error() == "by_id: primary: unknown field 'extra' for accounts.User"
