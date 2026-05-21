@@ -23,6 +23,7 @@ mutual:
     function json_decode_tree_structured_reflected[T](view raw: JsonTree, view info: TypeInfo) returns result[T, string]
     function json_decode_tree_list_reflected[T](view raw: JsonTree) returns result[T, string]
     function json_decode_tree_set_reflected[T](view raw: JsonTree) returns result[T, string]
+    function json_decode_tree_array_items_reflected[Elem](view raw: JsonTree) returns result[list[Elem], string]
     function json_decode_tree_map_reflected[T](view raw: JsonTree) returns result[T, string]
     function json_decode_tree_optional_reflected[T](view raw: JsonTree) returns result[T, string]
     function json_tree_result_payload(view raw: JsonTree) returns result[JsonTreeObjectField, string]
@@ -202,28 +203,28 @@ function json_decode_tree_structured_reflected[T](view raw: JsonTree, view info:
             return fail("unsupported reflected JSON type: {type_name}")
 function json_decode_tree_list_reflected[T](view raw: JsonTree) returns result[T, string]:
     comptime type Elem = type.arg[T](0):
-        int64 length = json_tree_array_length(view raw) handle error:
+        list[Elem] items = json_decode_tree_array_items_reflected[Elem](view raw) handle error:
             return fail(error)
-        mutable list[Elem] items = list.new[Elem]()
-        for index in range(length):
-            JsonTree raw_item = json_tree_require_index(view raw, index) handle error:
-                return fail(error)
-            Elem item = json_decode_tree_reflected[Elem](view raw_item) handle error:
-                return fail("{index}: {error}")
-            items = list.append[Elem](items, item)
         return ok(items)
 function json_decode_tree_set_reflected[T](view raw: JsonTree) returns result[T, string]:
     comptime type Elem = type.arg[T](0):
-        int64 length = json_tree_array_length(view raw) handle error:
+        list[Elem] decoded = json_decode_tree_array_items_reflected[Elem](view raw) handle error:
             return fail(error)
         mutable set[Elem] items = set.new[Elem]()
-        for index in range(length):
-            JsonTree raw_item = json_tree_require_index(view raw, index) handle error:
-                return fail(error)
-            Elem item = json_decode_tree_reflected[Elem](view raw_item) handle error:
-                return fail("{index}: {error}")
+        for item in decoded:
             items = set.add[Elem](items, item)
         return ok(items)
+function json_decode_tree_array_items_reflected[Elem](view raw: JsonTree) returns result[list[Elem], string]:
+    int64 length = json_tree_array_length(view raw) handle error:
+        return fail(error)
+    mutable list[Elem] items = list.new[Elem]()
+    for index in range(length):
+        JsonTree raw_item = json_tree_require_index(view raw, index) handle error:
+            return fail(error)
+        Elem item = json_decode_tree_reflected[Elem](view raw_item) handle error:
+            return fail("{index}: {error}")
+        items = list.append[Elem](items, item)
+    return ok(items)
 function json_decode_tree_map_reflected[T](view raw: JsonTree) returns result[T, string]:
     comptime type Val = type.arg[T](1):
         list[string] keys = json_tree_object_keys(view raw) handle error:
