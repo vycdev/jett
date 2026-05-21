@@ -221,6 +221,9 @@ during canonical TypeId metadata construction. The old ambiguous string-only
 leaf insertion for names such as `Box[int64]` has been removed from checked
 metadata; namespaced generic owners keep their qualified identities such as
 `accounts.Box[int64]` and `audit.Box[int64]`.
+Generic reflection branch specialization now preserves `TypeInfo` kind and
+primitive facts through `view info` arguments, so stdlib helpers can carry
+canonical `TypeInfo` metadata by view without losing checked dispatch facts.
 Nested duplicate-leaf generic owners are pinned in
 `tests/run_pass/reflection_type_id_duplicate_generic_owners.jett`, including
 `Box[Box[User]]` shapes from two namespaces through `TypeInfo.args`,

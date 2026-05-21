@@ -4930,6 +4930,7 @@ impl<'a> TypeChecker<'a> {
     fn eval_type_info_facts(&mut self, expr: &Expr) -> Option<ReflectionTypeInfoStaticFacts> {
         match expr {
             Expr::Paren(inner, _) => self.eval_type_info_facts(inner),
+            Expr::View(inner, _) => self.eval_type_info_facts(inner),
             Expr::Ident(ident) => {
                 let kind_tag = self.reflection_type_info_kind_for_ident(ident)?;
                 let primitive_tag = self
