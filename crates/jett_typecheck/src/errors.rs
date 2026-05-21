@@ -537,7 +537,7 @@ pub fn unhandled_optional(span: Span) -> Diagnostic {
 pub fn json_map_key_must_be_string(key_type: &str, span: Span) -> Diagnostic {
     Diagnostic::error(
         343,
-        format!("json serialization requires map keys to be `string`, got `{key_type}`"),
+        format!("JSON object maps require keys to be `string`, got `{key_type}`"),
         span,
     )
 }
