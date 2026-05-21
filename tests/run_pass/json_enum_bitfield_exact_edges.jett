@@ -21,6 +21,10 @@ function parse_exact_unit_enum_success() returns bool:
     Direction direction = json.parse_exact[Direction]("\"north\"") handle error:
         return false
     return direction == Direction.north
+function parse_exact_unit_enum_empty_payload_object_success() returns bool:
+    Shape shape = json.parse_exact[Shape]("{{\"empty\":[]}}") handle error:
+        return false
+    return shape == Shape.empty
 function parse_exact_unit_enum_unknown_error() returns string:
     Direction direction = json.parse_exact[Direction]("\"east\"") handle error:
         return error
@@ -69,6 +73,7 @@ function serialize_top_level_wide_bitfield() returns string:
     return json.serialize[WideHeader](view header)
 verify json_enum_bitfield_exact_edges:
     assert parse_exact_unit_enum_success() == true
+    assert parse_exact_unit_enum_empty_payload_object_success() == true
     assert parse_exact_unit_enum_unknown_error() == "unknown enum variant 'test.Direction.east'"
     assert parse_exact_enum_object_multiple_keys_error() == "expected enum object with exactly one variant key"
     assert parse_exact_enum_payload_not_array_error() == "expected array payload for enum variant 'test.Shape.circle', got number"
