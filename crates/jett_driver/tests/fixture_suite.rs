@@ -877,7 +877,7 @@ compile_fail_fixture!(
 );
 #[test]
 fn compile_fail_json_serialize_secret_container_blocked_count() {
-    assert_compile_fail_error_count("json_serialize_secret_container_blocked.jett", 603, 8);
+    assert_compile_fail_error_count("json_serialize_secret_container_blocked.jett", 603, 10);
 }
 compile_fail_fixture!(
     compile_fail_json_serialize_map_key_must_be_string,
@@ -924,7 +924,7 @@ fn compile_fail_json_serialize_public_top_level_secret_blocked_covers_records() 
     assert_compile_fail_error_count(
         "json_serialize_public_top_level_secret_blocked.jett",
         600,
-        2,
+        4,
     );
 }
 compile_fail_fixture!(
