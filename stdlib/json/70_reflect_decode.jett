@@ -134,14 +134,10 @@ function json_decode_tree_integer_reflected[T](view raw: JsonTree, primitive: Ty
     T typed = item
     return ok(typed)
 function json_decode_tree_uint64_reflected[T](view raw: JsonTree) returns result[T, string]:
-    match raw:
-        number_value(text):
-            uint64 item = uint64.from_string(text) handle error:
-                return fail(json_tree_uint64_parse_error(text))
-            T typed = item
-            return ok(typed)
-        other:
-            return fail(json_tree_kind_error(view raw, "uint64"))
+    uint64 item = json_tree_as_uint64(view raw) handle error:
+        return fail(error)
+    T typed = item
+    return ok(typed)
 function json_decode_tree_float_reflected[T](view raw: JsonTree) returns result[T, string]:
     float64 item = json_tree_as_float64(view raw) handle error:
         return fail(error)
