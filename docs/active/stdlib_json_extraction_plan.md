@@ -286,11 +286,14 @@ for current JSON hooks; future backends need the same identity boundary.
    `json.parse_exact[json.JsonTree]`. Container parsing now recurses through
    byte spans for nested array/object values instead of converting every segment
    back into a string and reparsing from bytes; string scalar values and object
-   keys now parse from byte spans as well. Literal and number scalar dispatch is
-   also byte-span based, materializing a string only for the raw number spelling
-   stored in `JsonTree.number_value`. The remaining question is how far
-   `JsonTree` should go toward replacing the raw `JsonValue` compatibility
-   surface.
+   keys now parse from byte spans as well, and string unescaping now appends
+   unescaped byte chunks rather than slicing one byte at a time. Literal and
+   number scalar dispatch is also byte-span based, materializing a string only
+   for the raw number spelling stored in `JsonTree.number_value`. The strict
+   raw lookup helpers are shared at the private `JsonTree` layer by public
+   wrappers, reflected decoding, and exact validation. The remaining question
+   is how far `JsonTree` should go toward replacing the raw `JsonValue`
+   compatibility surface.
 7. Keep the staged `JsonValue` migration narrow. The current implementation
    exposes `json.JsonValue` as an exported namespaced source alias and bare
    `JsonValue` as an allowlisted stdlib root alias for `json.JsonTree`.

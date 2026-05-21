@@ -269,7 +269,8 @@ Still staged:
   satisfy the trusted public JSON bridge, and untrusted later registration of
   JSON hook or public wrapper names clears trust. Interpreter unit coverage pins
   parse, parse_exact, serialize, serialize_public, and public raw facade wrapper
-  dispatch.
+  dispatch; the shared raw facade policy table now covers every public raw
+  helper name and its implicit-view ownership status.
 - Ordinary source access to private JSON hooks is rejected for tree parsing,
   reflected parsing, exact reflected parsing, reflected decoding, and reflected
   serialization fixtures under `tests/compile_fail/json_private_*.jett`.
