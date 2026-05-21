@@ -181,6 +181,53 @@ function parse_exact_accepts_namespaced_json_value_field_payload() returns strin
     int64 value = json.as_int64(view answer) handle error:
         return error
     return "{envelope.id}:{value}:{json.is_object(view envelope.payload)}"
+function parse_exact_accepts_json_tree_list_payload_extras() returns string:
+    string raw = "[{{\"extra\":48}},{{\"nested\":{{\"unknown\":true}}}}]"
+    list[json.JsonTree] items = json.parse_exact[list[json.JsonTree]](raw) handle error:
+        return error
+    json.JsonTree first = list.get[json.JsonTree](view items, 0) handle:
+        return "missing first"
+    json.JsonTree extra = json.require_field(view first, "extra") handle error:
+        return error
+    int64 value = json.as_int64(view extra) handle error:
+        return error
+    return "{list.length[json.JsonTree](view items)}:{value}:{json.is_object(view first)}"
+function parse_exact_accepts_json_value_map_payload_extras() returns string:
+    string raw = "{{\"primary\":{{\"extra\":\"kept\"}}}}"
+    map[string, json.JsonValue] entries = json.parse_exact[map[string, json.JsonValue]](raw) handle error:
+        return error
+    json.JsonValue payload = map.get[string, json.JsonValue](view entries, "primary") handle:
+        return "missing"
+    json.JsonTree extra = json.require_field(view payload, "extra") handle error:
+        return error
+    string value = json.as_string(view extra) handle error:
+        return error
+    return "{map.length[string, json.JsonValue](view entries)}:{value}"
+function parse_exact_accepts_legacy_json_value_optional_payload_extras() returns string:
+    optional[JsonValue] maybe_payload = json.parse_exact[optional[JsonValue]]("{{\"extra\":\"kept\"}}") handle error:
+        return error
+    JsonValue payload = maybe_payload handle:
+        return "none"
+    JsonValue extra = json.require_field(view payload, "extra") handle error:
+        return error
+    return json.as_string(view extra) handle error:
+        default error
+function parse_exact_accepts_json_tree_result_payload_extras() returns string:
+    result[json.JsonTree, Profile] parsed = json.parse_exact[result[json.JsonTree, Profile]]("{{\"ok\":{{\"extra\":\"kept\"}}}}") handle error:
+        return error
+    json.JsonTree payload = parsed handle error:
+        return error.display_name
+    json.JsonTree extra = json.require_field(view payload, "extra") handle error:
+        return error
+    return json.as_string(view extra) handle error:
+        default error
+function parse_exact_result_keeps_reflected_fail_payload_closed() returns string:
+    string raw = "{{\"fail\":{{\"displayName\":\"Ada\",\"note\":\"bad\",\"extra\":true}}}}"
+    result[json.JsonTree, Profile] parsed = json.parse_exact[result[json.JsonTree, Profile]](raw) handle error:
+        return error
+    json.JsonTree payload = parsed handle error:
+        return error.display_name
+    return json.kind(view payload)
 function parse_exact_qualified_raw_boundary_accepts_payload_extras() returns string:
     string raw = "{{\"id\":\"e1\",\"profile\":{{\"displayName\":\"Ada\",\"note\":\"ok\"}},\"payload\":{{\"extra\":\"kept\",\"nested\":{{\"unknown\":true}}}},\"token\":\"secret-token\"}}"
     external.models.ExactEnvelope envelope = json.parse_exact[external.models.ExactEnvelope](raw) handle error:
@@ -220,5 +267,10 @@ verify json_parse_exact:
     assert parse_exact_accepts_json_tree_field_payload() == "doc:45:true"
     assert parse_exact_accepts_legacy_json_value_field_payload() == "doc:46:true"
     assert parse_exact_accepts_namespaced_json_value_field_payload() == "doc:47:true"
+    assert parse_exact_accepts_json_tree_list_payload_extras() == "2:48:true"
+    assert parse_exact_accepts_json_value_map_payload_extras() == "1:kept"
+    assert parse_exact_accepts_legacy_json_value_optional_payload_extras() == "kept"
+    assert parse_exact_accepts_json_tree_result_payload_extras() == "kept"
+    assert parse_exact_result_keeps_reflected_fail_payload_closed() == "fail: unknown field 'extra' for test.Profile"
     assert parse_exact_qualified_raw_boundary_accepts_payload_extras() == "e1:Ada:kept:***:false:true"
     assert parse_exact_qualified_raw_boundary_rejects_profile_extras() == "profile: unknown field 'extra' for external.models.ExactProfile"
