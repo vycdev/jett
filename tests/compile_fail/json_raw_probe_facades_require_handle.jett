@@ -1,0 +1,13 @@
+# ERROR: E0317
+namespace test
+function raw_root() returns json.JsonTree:
+    return json.parse_raw("{{\"name\":\"Ada\",\"scores\":[3,5]}}") handle error:
+        default json.JsonTree.string_value(error)
+function bad_field_probe_requires_handle() returns string:
+    json.JsonTree name = json.field(view raw_root(), "name")
+    return json.kind(view name)
+function bad_index_probe_requires_handle() returns string:
+    json.JsonTree scores = json.require_field(view raw_root(), "scores") handle error:
+        return error
+    json.JsonTree item = json.index(view scores, 1)
+    return json.kind(view item)

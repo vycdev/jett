@@ -1008,6 +1008,14 @@ compile_fail_fixture!(
     "json_raw_cast_requires_handle.jett"
 );
 compile_fail_fixture!(
+    compile_fail_json_raw_probe_facades_require_handle,
+    "json_raw_probe_facades_require_handle.jett"
+);
+#[test]
+fn compile_fail_json_raw_probe_facades_require_handle_count() {
+    assert_compile_fail_error_count("json_raw_probe_facades_require_handle.jett", 317, 2);
+}
+compile_fail_fixture!(
     compile_fail_json_raw_result_facades_require_handle,
     "json_raw_result_facades_require_handle.jett"
 );
