@@ -85,20 +85,21 @@ Cons:
 
 Prefer Option C for now.
 
-The next implementation bite should add a private reflected helper that checks
-object keys against `type.fields[T]()` using `serialize_name`, then expose a
-public `json.parse_exact[T](raw)` wrapper. Keep `json.parse[T]` lenient during
-the compatibility stage and update docs/examples to recommend `parse_exact`
-for config files, protocol messages, and tests where the input contract should
-be closed.
+That path is implemented: a private reflected validator checks object keys
+against `type.fields[T]()` using `serialize_name`, and the public
+`json.parse_exact[T](raw)` wrapper exposes the exact mode while
+`json.parse[T]` stays lenient.
 
 Status: implemented. `json.parse_exact[T](raw)` is a compiler-policy public
 bridge backed by trusted stdlib hooks, and
-`tests/run_pass/json_parse_exact.jett` pins exact top-level, nested, list, and
-map-value validation. The same fixture also pins raw-target exact parsing for
+`tests/run_pass/json_parse_exact.jett`,
+`tests/run_pass/json_parse_exact_container_edges.jett`, and
+`tests/run_pass/json_parse_exact_secret_edges.jett` pin exact top-level,
+nested, list, map-value, set, result, enum, bitfield, secret-wrapper, and raw
+boundary validation. The fixtures also pin raw-target exact parsing for
 `json.JsonTree`, bare `JsonValue`, and `json.JsonValue`; exact unknown-field
 validation does not inspect inside raw tree targets. The current
 `json.parse[T]` behavior remains lenient and is still pinned by
-`tests/run_pass/json_unknown_fields.jett`. Current docs now describe `parse` as
-the compatibility-oriented path and `parse_exact` as the preferred path for
-config files, protocol messages, tests, and other closed input contracts.
+`tests/run_pass/json_unknown_fields.jett`. Current docs describe `parse` as the
+compatibility-oriented path and `parse_exact` as the preferred path for config
+files, protocol messages, tests, and other closed input contracts.
