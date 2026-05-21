@@ -53,3 +53,31 @@ call remains guarded by a direct primitive comparison or match arm.
 
 Option 1 is the current behavior. Options 2 and 3 need a separate design pass
 because they affect generic specialization beyond JSON.
+
+## Narrow Candidate For Later
+
+A plausible small slice is static-folding trivial helper calls over already
+known `TypeKind` / `TypePrimitive` values without inferring general facts from
+the returned `bool`.
+
+For example, a stdlib helper could classify primitive families:
+
+```jett
+function json_type_primitive_is_integer(primitive: TypePrimitive) returns bool:
+    match primitive:
+        int8_type:
+            return true
+        int16_type:
+            return true
+        # ...
+        other:
+            return false
+```
+
+The checker would evaluate such a helper only when the argument is already a
+static reflection value. It would answer "is this branch reachable for this
+instantiation?", not "what type facts does this arbitrary boolean imply?".
+
+This could reduce repeated primitive-family checks in `stdlib/json/`, but it
+still changes which predicate-shaped generic code typechecks. Keep it as a
+design follow-up rather than slipping it into JSON cleanup.
