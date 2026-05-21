@@ -2,8 +2,12 @@ namespace test
 enum Direction:
     north
     south
+struct Profile:
+    display_name: string serialize "displayName"
+    note: string
 enum Shape:
     circle(radius: float64)
+    profile(profile: Profile)
     empty
 enum Protocol:
     tcp = 6
@@ -19,6 +23,23 @@ function parse_exact_unit_enum_unknown_error() returns string:
     Direction direction = json.parse_exact[Direction]("\"east\"") handle error:
         return error
     return "{direction == Direction.north}"
+function parse_exact_enum_object_multiple_keys_error() returns string:
+    Shape shape = json.parse_exact[Shape]("{{\"circle\":[2.5],\"empty\":[]}}") handle error:
+        return error
+    return json.serialize[Shape](view shape)
+function parse_exact_enum_payload_not_array_error() returns string:
+    Shape shape = json.parse_exact[Shape]("{{\"circle\":2.5}}") handle error:
+        return error
+    return json.serialize[Shape](view shape)
+function parse_exact_enum_payload_arity_error() returns string:
+    Shape shape = json.parse_exact[Shape]("{{\"circle\":[]}}") handle error:
+        return error
+    return json.serialize[Shape](view shape)
+function parse_exact_enum_payload_nested_extra_error() returns string:
+    string raw = "{{\"profile\":[{{\"displayName\":\"Ada\",\"note\":\"ok\",\"extra\":true}}]}}"
+    Shape shape = json.parse_exact[Shape](raw) handle error:
+        return error
+    return json.serialize[Shape](view shape)
 function parse_exact_bitfield_success() returns string:
     Header header = json.parse_exact[Header]("{{\"version\":4,\"protocol\":\"tcp\"}}") handle error:
         return error
@@ -36,6 +57,10 @@ function serialize_top_level_bitfield() returns string:
 verify json_enum_bitfield_exact_edges:
     assert parse_exact_unit_enum_success() == true
     assert parse_exact_unit_enum_unknown_error() == "unknown enum variant 'test.Direction.east'"
+    assert parse_exact_enum_object_multiple_keys_error() == "expected enum object with exactly one key"
+    assert parse_exact_enum_payload_not_array_error() == "expected array, got number"
+    assert parse_exact_enum_payload_arity_error() == "enum variant 'test.Shape.circle' expects 1 payload field(s), got 0"
+    assert parse_exact_enum_payload_nested_extra_error() == "profile.profile: unknown field 'extra' for test.Profile"
     assert parse_exact_bitfield_success() == "4:true"
     assert serialize_top_level_unit_enum() == "\"north\""
     assert serialize_top_level_payload_enum() == "{{\"circle\":[2.5]}}"
