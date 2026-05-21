@@ -75,8 +75,26 @@ function audit_nested_box_reflection_summary() returns string:
             a.Box[a.Box[a.User]] decoded = json.parse[a.Box[a.Box[a.User]]](raw) handle error:
                 return error
             return "{outer_info.type_name}:{outer_arg.type_name}:{outer_field.type_name}:{field_arg.type_name}:{inner_field.type_name}:{type.name[Leaf]()}:{decoded.value.value.attempts}"
+function mixed_nested_box_reflection_summary() returns string:
+    audit.User user = audit.User(attempts: 13)
+    audit.Box[audit.User] inner = audit.Box[audit.User](value: user)
+    accounts.Box[audit.Box[audit.User]] outer = accounts.Box[audit.Box[audit.User]](value: inner)
+    TypeInfo outer_info = type.info[accounts.Box[audit.Box[audit.User]]]()
+    TypeField outer_field = list.get[TypeField](type.fields[accounts.Box[audit.Box[audit.User]]](), 0) handle:
+        return "missing mixed outer field"
+    TypeInfo outer_arg = list.get[TypeInfo](outer_info.args, 0) handle:
+        return "missing mixed outer arg"
+    TypeInfo field_arg = list.get[TypeInfo](outer_field.type_info.args, 0) handle:
+        return "missing mixed field arg"
+    comptime type InnerBox = type.arg[accounts.Box[audit.Box[audit.User]]](0):
+        comptime type Leaf = type.arg[InnerBox](0):
+            string raw = json.serialize[accounts.Box[audit.Box[audit.User]]](view outer)
+            accounts.Box[audit.Box[audit.User]] decoded = json.parse[accounts.Box[audit.Box[audit.User]]](raw) handle error:
+                return error
+            return "{outer_info.type_name}:{outer_arg.type_name}:{outer_field.type_name}:{field_arg.type_name}:{type.name[InnerBox]()}:{type.name[Leaf]()}:{decoded.value.value.attempts}"
 verify reflection_type_id_duplicate_generic_owners:
     assert account_box_reflection_summary() == "accounts.Box[accounts.User]:accounts.User:accounts.User:a1"
     assert account_nested_box_reflection_summary() == "accounts.Box[accounts.Box[accounts.User]]:accounts.Box[accounts.User]:accounts.Box[accounts.User]:accounts.User:accounts.User:accounts.User:nested-a"
     assert audit_box_reflection_summary() == "audit.Box[audit.User]:audit.User:audit.User:3"
     assert audit_nested_box_reflection_summary() == "audit.Box[audit.Box[audit.User]]:audit.Box[audit.User]:audit.Box[audit.User]:audit.User:audit.User:audit.User:8"
+    assert mixed_nested_box_reflection_summary() == "accounts.Box[audit.Box[audit.User]]:audit.Box[audit.User]:audit.Box[audit.User]:audit.User:audit.Box[audit.User]:audit.User:13"
