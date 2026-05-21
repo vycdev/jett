@@ -661,6 +661,10 @@ compile_fail_fixture!(
     "json_exported_flat_parse_raw.jett"
 );
 compile_fail_fixture!(
+    compile_fail_json_exported_flat_json_tree,
+    "json_exported_flat_json_tree.jett"
+);
+compile_fail_fixture!(
     compile_fail_stdlib_namespace_collision,
     "stdlib_namespace_collision.jett"
 );

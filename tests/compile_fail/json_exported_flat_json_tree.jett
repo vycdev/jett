@@ -1,0 +1,3 @@
+# ERROR: E0208
+function main() returns JsonTree:
+    return json.JsonTree.null

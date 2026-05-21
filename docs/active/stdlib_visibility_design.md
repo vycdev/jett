@@ -211,7 +211,9 @@ Implemented:
   casts, predicates, key/length helpers, and raw serialization.
 - Driver completion coverage now filters out private namespaced stdlib JSON
   bridge hooks while still exposing the exported `json.JsonTree`,
-  `json.JsonValue`, parse/serialize wrappers, and raw facade surface.
+  `json.JsonValue`, parse/serialize wrappers, and raw facade surface. The
+  exported JSON surface remains namespaced in source and completions; bare
+  `JsonValue` is the narrow root-compatibility exception.
 - LSP completions are now cursor-position aware for namespace visibility:
   private helpers are offered inside their own namespace but hidden from
   external namespaces.
@@ -252,6 +254,9 @@ Still staged:
 - Namespaced helpers are no longer visible through accidental flat aliases.
 - Exported namespaced declarations are not visible through accidental flat
   aliases from outside their namespace.
+- Stdlib JSON exports follow the same rule: `json.parse_raw` and
+  `json.JsonTree` are available, while flat `parse_raw` and `JsonTree` are
+  rejected; bare `JsonValue` remains the explicit root alias.
 - Public JSON policy remains compiler-owned: `view`, secret, map-key, and
   handled-result rules still fire even if public wrapper declarations exist.
 - Project code cannot reopen compiler-shipped stdlib namespaces such as
