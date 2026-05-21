@@ -356,6 +356,8 @@ serialization. Strict accessor argument-shape diagnostics are pinned in
 `tests/compile_fail/json_raw_strict_accessor_argument_shapes.jett`, and the
 broader raw facade shape diagnostics are pinned in
 `tests/compile_fail/json_raw_facade_argument_shapes.jett`.
+Unhandled-result diagnostics for raw result-returning facades are pinned in
+`tests/compile_fail/json_raw_result_facades_require_handle.jett`.
 Serialization ownership diagnostics for raw tree values are pinned in
 `tests/compile_fail/json_serialize_json_value_requires_view.jett` and
 `tests/compile_fail/json_serialize_public_json_value_requires_view.jett` across
