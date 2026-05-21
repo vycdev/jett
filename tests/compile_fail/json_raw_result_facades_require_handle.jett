@@ -1,0 +1,48 @@
+# ERROR: E0316
+namespace test
+function raw_root() returns json.JsonTree:
+    return json.parse_raw("{{\"name\":\"Ada\",\"scores\":[3,5],\"active\":true,\"ratio\":2.5,\"serial\":18446744073709551615}}") handle error:
+        default json.JsonTree.string_value(error)
+function bad_object_field_requires_handle() returns string:
+    optional[json.JsonTree] maybe = json.object_field(view raw_root(), "name")
+    json.JsonTree item = maybe handle:
+        default json.JsonTree.string_value("missing")
+    return json.kind(view item)
+function bad_array_index_requires_handle() returns string:
+    json.JsonTree scores = json.require_field(view raw_root(), "scores") handle error:
+        return error
+    optional[json.JsonTree] maybe = json.array_index(view scores, 1)
+    json.JsonTree item = maybe handle:
+        default json.JsonTree.string_value("missing")
+    return json.kind(view item)
+function bad_require_field_requires_handle() returns string:
+    json.JsonTree item = json.require_field(view raw_root(), "name")
+    return json.kind(view item)
+function bad_require_index_requires_handle() returns string:
+    json.JsonTree scores = json.require_field(view raw_root(), "scores") handle error:
+        return error
+    json.JsonTree item = json.require_index(view scores, 1)
+    return json.kind(view item)
+function bad_array_length_requires_handle() returns int64:
+    json.JsonTree scores = json.require_field(view raw_root(), "scores") handle error:
+        return 0
+    int64 count = json.array_length(view scores)
+    return count
+function bad_object_keys_requires_handle() returns int64:
+    list[string] keys = json.object_keys(view raw_root())
+    return list.length[string](view keys)
+function bad_uint64_cast_requires_handle() returns uint64:
+    json.JsonTree serial = json.require_field(view raw_root(), "serial") handle error:
+        default json.JsonTree.number_value("0")
+    uint64 value = json.as_uint64(view serial)
+    return value
+function bad_float64_cast_requires_handle() returns float64:
+    json.JsonTree ratio = json.require_field(view raw_root(), "ratio") handle error:
+        default json.JsonTree.number_value("0.0")
+    float64 value = json.as_float64(view ratio)
+    return value
+function bad_bool_cast_requires_handle() returns bool:
+    json.JsonTree active = json.require_field(view raw_root(), "active") handle error:
+        default json.JsonTree.bool_value(false)
+    bool value = json.as_bool(view active)
+    return value
