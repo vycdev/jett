@@ -369,7 +369,7 @@ fixtures.
   friendlier for users. The final public spelling can be decided separately from
   the representation.
 
-## Recommended Next Implementation Bite
+## Recommended Next Decision
 
 Continue the legacy primitive-tag retirement:
 
@@ -377,5 +377,8 @@ Continue the legacy primitive-tag retirement:
    the transition.
 2. Done: stdlib-loaded `type.info[JsonValue]()` now reports alias metadata for
    `json.JsonTree`.
-3. Next: decide when direct bootstrap reflection and `TypePrimitive` itself can
-   stop exposing `json_value_type`.
+3. Next: decide whether direct/no-stdlib reflection should keep a deprecated
+   `JsonValue` primitive fallback, reject bare `JsonValue` without a registered
+   alias, or load enough bootstrap stdlib metadata that the alias path is always
+   available. Only after that decision should the remaining direct interpreter
+   fallback be changed.
