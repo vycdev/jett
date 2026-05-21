@@ -1,0 +1,23 @@
+# ERROR: E0343
+namespace test
+type NonEmpty = string where string.char_count(value) > 0
+struct Wrapped:
+    labels: map[NonEmpty, int64]
+function bad_parse(raw: string) returns map[NonEmpty, int64]:
+    map[NonEmpty, int64] values = json.parse[map[NonEmpty, int64]](raw) handle error:
+        return map()
+    return values
+function bad_parse_exact(raw: string) returns map[NonEmpty, int64]:
+    map[NonEmpty, int64] values = json.parse_exact[map[NonEmpty, int64]](raw) handle error:
+        return map()
+    return values
+function bad_serialize(view values: map[NonEmpty, int64]) returns string:
+    return json.serialize[map[NonEmpty, int64]](view values)
+function bad_serialize_public(view values: map[NonEmpty, int64]) returns string:
+    return json.serialize_public[map[NonEmpty, int64]](view values)
+function bad_nested_parse(raw: string) returns string:
+    Wrapped value = json.parse[Wrapped](raw) handle error:
+        return error
+    return "{map.length[NonEmpty, int64](view value.labels)}"
+function bad_nested_serialize(view value: Wrapped) returns string:
+    return json.serialize[Wrapped](view value)

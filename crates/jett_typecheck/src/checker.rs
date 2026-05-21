@@ -1645,7 +1645,7 @@ impl<'a> TypeChecker<'a> {
                 self.collect_json_non_string_map_key_types(*inner, visited, keys);
             }
             Type::Map(key, value) => {
-                if self.fully_coarsened_type(*key) != TypeInterner::STRING {
+                if *key != TypeInterner::STRING {
                     keys.push(self.type_name(*key));
                 }
                 self.collect_json_non_string_map_key_types(*key, visited, keys);
