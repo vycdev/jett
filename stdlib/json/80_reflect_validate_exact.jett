@@ -110,11 +110,11 @@ function json_validate_exact_enum_reflected[T](view raw: JsonTree, type_name: st
     list[string] keys = json_tree_object_keys(view raw) handle error:
         return fail(error)
     if list.length[string](keys) != 1:
-        return fail("expected enum object with exactly one key")
+        return fail("expected enum object with exactly one variant key")
     string variant_name = list.get[string](keys, 0) handle:
-        return fail("expected enum object with exactly one key")
+        return fail("expected enum object with exactly one variant key")
     JsonTree payload = json_tree_require_field(view raw, variant_name) handle error:
-        return fail("expected enum object with exactly one key")
+        return fail("expected enum object with exactly one variant key")
     int64 payload_count = json_tree_array_length(view payload) handle error:
         return fail("expected array payload for enum variant '{type_name}.{variant_name}', got {json_tree_kind(view payload)}")
     for variant in type.variants[T]():
