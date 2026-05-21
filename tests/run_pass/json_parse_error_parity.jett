@@ -114,6 +114,7 @@ verify json_parse_error_parity:
     assert parse_errors_match("{{\"\\u0061\":1,\"a\":2}}") == true
     assert parse_errors_match("{{\"a/b\":1,\"a\\/b\":2}}") == true
     assert parse_errors_match("{{\"a\\\"b\":1,\"a\\u0022b\":2}}") == true
+    assert parse_errors_match(raw_from_hex("7b22636166c3a9223a312c226361665c7530306539223a327d")) == true
     assert parse_errors_match("{{\"name\":1") == true
     assert parse_errors_match("{{\"name\":1}} trailing") == true
     assert parse_errors_match("{{\"name\":1]") == true
