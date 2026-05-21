@@ -99,8 +99,8 @@ function json_serialize_public_enum_reflected[T](view value: T) returns string:
                 Field item = type.variant_field_value[T, Field](view value, view field)
                 string encoded = json_serialize_public_reflected[Field](view item)
                 parts = list.append[string](parts, encoded)
-        string body = string.join(parts, ",")
-        return "{{{json_stdlib_quote(variant.name)}:[{body}]}}"
+        string payload = json_stdlib_array_from_parts(parts)
+        return json_stdlib_single_entry_object(variant.name, payload)
     return json_stdlib_quote(selected.name)
 function json_serialize_public_non_enum_reflected[T](view value: T, view info: TypeInfo) returns string:
     TypeKind kind = info.kind_tag
@@ -150,9 +150,9 @@ function json_serialize_public_result_reflected[T](view value: T) returns string
             comptime type Err = type.arg[T](1):
                 Err failure = error
                 string encoded = json_serialize_public_reflected[Err](view failure)
-                return "{{{json_stdlib_quote("fail")}:{encoded}}}"
+                return json_stdlib_single_entry_object("fail", encoded)
         string encoded = json_serialize_public_reflected[Ok](view item)
-        return "{{{json_stdlib_quote("ok")}:{encoded}}}"
+        return json_stdlib_single_entry_object("ok", encoded)
 function json_serialize_public_record_reflected[T](view value: T) returns string:
     list[string] fields = list.new[string]()
     for field in type.fields[T]():
