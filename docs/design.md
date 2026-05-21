@@ -3500,7 +3500,7 @@ string response = request
     into validate_auth
     into extract_user_id
     into load_user_profile
-    into json.serialize[User]
+    into view json.serialize[User]
 ```
 
 ```
@@ -3546,7 +3546,7 @@ string user_data = request
         return fail("no user id")
     into load_user_profile handle error:
         return fail("user not found")
-    into json.serialize_public[User]
+    into view json.serialize_public[User]
 ```
 
 Each `handle` block applies to the pipeline step immediately before it. The error handling is co-located with the operation that can fail — no distant `catch` blocks, no forgotten error paths.
@@ -3574,7 +3574,7 @@ function process_request(view fs: Filesystem, view net: Network, view stdout: St
         into fetch_data(view fs) handle error:
             return fail("data fetch failed")
         into transform_response
-        into json.serialize[Response]
+        into view json.serialize[Response]
 
     Stdout.write(view stdout, "processed request")
     return ok(output)
@@ -5254,7 +5254,7 @@ Properties naturally verify serialization round-trips (Rule Set 18):
 ```
 property json_round_trip:
     given user: User
-    string json_string = json.serialize[User](user)
+    string json_string = json.serialize[User](view user)
     User restored = json.parse[User](json_string) handle error:
         assert false "round-trip failed: json.parse returned error"
     assert restored == user
