@@ -14,6 +14,10 @@ struct Profile:
 struct User:
     id: string
     profile: Profile serialize "profileData"
+struct OptionalUser:
+    id: string
+    profile: optional[Profile] serialize "profileData"
+    nickname: optional[string]
 struct RawTreeEnvelope:
     id: string
     payload: json.JsonTree
@@ -37,6 +41,17 @@ function parse_exact_accepts_matching_shape() returns string:
     User user = json.parse_exact[User](raw) handle error:
         return error
     return "{user.id}:{user.profile.display_name}:{user.profile.note}"
+function parse_exact_accepts_missing_optional_fields() returns string:
+    string raw = "{{\"id\":\"u1\"}}"
+    OptionalUser user = json.parse_exact[OptionalUser](raw) handle error:
+        return error
+    Profile profile = user.profile handle:
+        string missing_nickname = user.nickname handle:
+            default "none"
+        return "{user.id}:none:{missing_nickname}"
+    string nickname = user.nickname handle:
+        default "none"
+    return "{user.id}:{profile.display_name}:{nickname}"
 function parse_exact_rejects_extra_top_level() returns string:
     string raw = "{{\"id\":\"u1\",\"profileData\":{{\"displayName\":\"Alice\",\"note\":\"ok\"}},\"extra\":\"nope\"}}"
     User user = json.parse_exact[User](raw) handle error:
@@ -185,6 +200,7 @@ function parse_exact_qualified_raw_boundary_rejects_profile_extras() returns str
     return envelope.id
 verify json_parse_exact:
     assert parse_exact_accepts_matching_shape() == "u1:Alice:ok"
+    assert parse_exact_accepts_missing_optional_fields() == "u1:none:none"
     assert parse_exact_rejects_extra_top_level() == "unknown field 'extra' for test.User"
     assert parse_exact_rejects_extra_nested() == "profileData: unknown field 'extra' for test.Profile"
     assert parse_exact_uses_serialize_name() == "profileData: unknown field 'display_name' for test.Profile"
