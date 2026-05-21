@@ -89,25 +89,11 @@ function json_decode_tree_primitive_reflected[T](view raw: JsonTree, primitive: 
         return ok(decoded_float)
     return ok(decoded_integer)
 function json_decode_tree_integer_primitive_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[optional[T], string]:
-    match primitive:
-        int8_type:
-            return json_decode_tree_integer_some_reflected[T](view raw, primitive)
-        int16_type:
-            return json_decode_tree_integer_some_reflected[T](view raw, primitive)
-        int32_type:
-            return json_decode_tree_integer_some_reflected[T](view raw, primitive)
-        int64_type:
-            return json_decode_tree_integer_some_reflected[T](view raw, primitive)
-        uint8_type:
-            return json_decode_tree_integer_some_reflected[T](view raw, primitive)
-        uint16_type:
-            return json_decode_tree_integer_some_reflected[T](view raw, primitive)
-        uint32_type:
-            return json_decode_tree_integer_some_reflected[T](view raw, primitive)
-        uint64_type:
-            return json_decode_tree_uint64_some_reflected[T](view raw)
-        other:
-            return ok(none)
+    if json_type_primitive_uses_int64_json_integer(primitive):
+        return json_decode_tree_integer_some_reflected[T](view raw, primitive)
+    if primitive == TypePrimitive.uint64_type:
+        return json_decode_tree_uint64_some_reflected[T](view raw)
+    return ok(none)
 function json_decode_tree_integer_some_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[optional[T], string]:
     T item = json_decode_tree_integer_reflected[T](view raw, primitive) handle error:
         return fail(error)

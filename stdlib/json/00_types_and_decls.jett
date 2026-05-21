@@ -106,6 +106,24 @@ function json_reflected_raw_type(view info: TypeInfo) returns bool:
     if base.type_name == info.type_name:
         return false
     return json_reflected_raw_type(view base)
+function json_type_primitive_is_signed_integer(primitive: TypePrimitive) returns bool:
+    if primitive == TypePrimitive.int8_type:
+        return true
+    if primitive == TypePrimitive.int16_type:
+        return true
+    if primitive == TypePrimitive.int32_type:
+        return true
+    return primitive == TypePrimitive.int64_type
+function json_type_primitive_is_narrow_unsigned_integer(primitive: TypePrimitive) returns bool:
+    if primitive == TypePrimitive.uint8_type:
+        return true
+    if primitive == TypePrimitive.uint16_type:
+        return true
+    return primitive == TypePrimitive.uint32_type
+function json_type_primitive_uses_int64_json_integer(primitive: TypePrimitive) returns bool:
+    if json_type_primitive_is_signed_integer(primitive):
+        return true
+    return json_type_primitive_is_narrow_unsigned_integer(primitive)
 mutual:
     export function json_tree_parse(raw: string) returns result[JsonTree, string]
     function json_tree_parse_span(view input: bytes, start: int64, end: int64) returns result[JsonTree, string]

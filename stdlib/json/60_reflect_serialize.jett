@@ -61,25 +61,11 @@ function json_serialize_public_primitive[T](view value: T, primitive: TypePrimit
         return json_serialize_public_bytes_value[T](view value)
     return "null"
 function json_serialize_public_integer_primitive[T](view value: T, primitive: TypePrimitive) returns optional[string]:
-    match primitive:
-        int8_type:
-            return some(json_serialize_public_integer_value[T](view value))
-        int16_type:
-            return some(json_serialize_public_integer_value[T](view value))
-        int32_type:
-            return some(json_serialize_public_integer_value[T](view value))
-        int64_type:
-            return some(json_serialize_public_integer_value[T](view value))
-        uint8_type:
-            return some(json_serialize_public_integer_value[T](view value))
-        uint16_type:
-            return some(json_serialize_public_integer_value[T](view value))
-        uint32_type:
-            return some(json_serialize_public_integer_value[T](view value))
-        uint64_type:
-            return some(json_serialize_public_uint64_value[T](view value))
-        other:
-            return none
+    if json_type_primitive_uses_int64_json_integer(primitive):
+        return some(json_serialize_public_integer_value[T](view value))
+    if primitive == TypePrimitive.uint64_type:
+        return some(json_serialize_public_uint64_value[T](view value))
+    return none
 function json_serialize_public_float_primitive[T](view value: T, primitive: TypePrimitive) returns optional[string]:
     match primitive:
         float32_type:
