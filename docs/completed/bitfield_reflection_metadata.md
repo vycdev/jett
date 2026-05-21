@@ -65,8 +65,9 @@ Rules:
 - `shape == "payload"` for variable payload fields.
 - `shape_tag` provides the structured equivalent of `shape`.
 - `width` is the declared width for fixed fields and `0` for payload fields.
-- `type_info` is the semantic field type: `int64` for unannotated bits, the
-  enum type for `bits as EnumType`, and `list[uint8]` for payloads.
+- `type_info` is the semantic field type: `int64` for unannotated 1..63-bit
+  fields, `uint64` for unannotated 64-bit fields, the enum type for
+  `bits as EnumType`, and `list[uint8]` for payloads.
 - `enum_type` is `some(type.info[EnumType]())` only for `bits as EnumType`;
   otherwise it is `none`.
 

@@ -1,0 +1,32 @@
+bitfield network WideNetworkHeader:
+    sequence: 64 bits
+
+bitfield WideNativeHeader:
+    sequence: 64 bits
+
+function network_uint64_roundtrip() returns string:
+    WideNetworkHeader header = WideNetworkHeader(sequence: 18446744073709551615)
+    bytes raw = WideNetworkHeader.to_bytes(header)
+    int64 length = bytes.length(view raw)
+    int64 first = bytes.get(view raw, 0) handle:
+        return "missing first"
+    int64 last = bytes.get(view raw, 7) handle:
+        return "missing last"
+    WideNetworkHeader decoded = WideNetworkHeader.from_bytes(raw) handle error:
+        return error
+    return "{length}:{first}:{last}:{string.from_uint64(decoded.sequence)}"
+
+function native_uint64_roundtrip() returns string:
+    WideNativeHeader header = WideNativeHeader(sequence: 72623859790382856)
+    bytes raw = WideNativeHeader.to_bytes(header)
+    int64 first = bytes.get(view raw, 0) handle:
+        return "missing first"
+    int64 last = bytes.get(view raw, 7) handle:
+        return "missing last"
+    WideNativeHeader decoded = WideNativeHeader.from_bytes(raw) handle error:
+        return error
+    return "{first}:{last}:{string.from_uint64(decoded.sequence)}"
+
+verify bitfield_uint64_roundtrip:
+    assert network_uint64_roundtrip() == "8:255:255:18446744073709551615"
+    assert native_uint64_roundtrip() == "8:1:72623859790382856"

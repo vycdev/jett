@@ -1,0 +1,7 @@
+# ERROR: E0336
+
+bitfield TooWide:
+    value: 65 bits
+
+function main() returns nothing:
+    return nothing

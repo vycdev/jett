@@ -75,7 +75,7 @@
 | String interpolation | Done |
 | Verify blocks (parsing + execution) | Done |
 | Property-based testing (`property` blocks) | Done |
-| Bitfield declarations | Partial (constructors, field access, enum-annotated fields, payload fields, reflection, and interpreter `to_bytes`/`from_bytes` roundtrips are covered; native codegen still pending) |
+| Bitfield declarations | Partial (constructors, field access, enum-annotated fields, payload fields, 64-bit `uint64` fields, reflection, and interpreter `to_bytes`/`from_bytes` roundtrips are covered; native codegen still pending) |
 | Actor model (`actor`, `spawn`, `send`, `ask`) | Done (capability args, message args, state initializers, and `responds` values typecheck against declared types; exported namespaced actors support qualified and `use`-alias spawn) |
 | Structured concurrency (`run`, `join`, `cancel`) | Done |
 | Interface/implement blocks | Done |

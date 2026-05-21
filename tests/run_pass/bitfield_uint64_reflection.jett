@@ -1,0 +1,20 @@
+bitfield WideCounter:
+    sequence: 64 bits
+
+function wide_counter_field_type() returns string:
+    TypeField field = list.get[TypeField](type.fields[WideCounter](), 0) handle:
+        return "missing field"
+    TypeBitfieldField layout = list.get[TypeBitfieldField](type.bitfield_fields[WideCounter](), 0) handle:
+        return "missing layout"
+    return "{field.type_name}:{field.type_info.type_name}:{layout.type_info.type_name}:{layout.width}"
+
+function wide_counter_field_value() returns string:
+    WideCounter counter = WideCounter(sequence: 18446744073709551615)
+    TypeField field = list.get[TypeField](type.fields[WideCounter](), 0) handle:
+        return "missing field"
+    uint64 value = type.field_value[WideCounter, uint64](view counter, view field)
+    return string.from_uint64(value)
+
+verify bitfield_uint64_reflection:
+    assert wide_counter_field_type() == "uint64:uint64:uint64:64"
+    assert wide_counter_field_value() == "18446744073709551615"

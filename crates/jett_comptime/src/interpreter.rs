@@ -2145,6 +2145,12 @@ impl Interpreter {
         for field in &bitfield.fields {
             match &field.kind {
                 BitfieldFieldKind::Bits { width, as_type } => {
+                    if *width > 64 {
+                        return Err(format!(
+                            "bitfield '{}' field '{}' is {} bit(s) wide; the current runtime supports at most 64 bit(s)",
+                            bitfield.name.name, field.name.name, width,
+                        ));
+                    }
                     let numeric = if *width > 8
                         && width % 8 == 0
                         && !bitfield.network_order
@@ -2188,7 +2194,11 @@ impl Interpreter {
                                 )
                             })?
                     } else {
-                        Value::Int64(numeric as i64)
+                        if *width == 64 {
+                            Value::Uint64(numeric)
+                        } else {
+                            Value::Int64(numeric as i64)
+                        }
                     };
                     fields.push((field.name.name.clone(), value));
                 }
@@ -2269,16 +2279,7 @@ impl Interpreter {
             return Ok(numeric);
         }
 
-        let Value::Int64(int_value) = value else {
-            return Err(format!("field '{}' expects int64", field_name));
-        };
-        if *int_value < 0 || !Self::fits_in_bits(*int_value as u64, width) {
-            return Err(format!(
-                "bitfield '{}' field '{}' is {} bit(s) wide and cannot hold '{}'",
-                bitfield.name.name, field_name, width, int_value
-            ));
-        }
-        Ok(*int_value as u64)
+        Self::plain_bitfield_field_numeric_value(&bitfield.name.name, field_name, width, value)
     }
 
     fn enum_numeric_value(&self, enum_name: &str, variant_name: &str) -> Result<u64, String> {
@@ -2391,16 +2392,58 @@ impl Interpreter {
             return Ok(numeric);
         }
 
-        let Value::Int64(int_value) = value else {
-            return Err(format!("field '{}' expects int64", field_name));
-        };
-        if *int_value < 0 || !Self::fits_in_bits(*int_value as u64, width) {
+        Self::plain_bitfield_field_numeric_value(bitfield_name, field_name, width, value)
+    }
+
+    fn plain_bitfield_field_numeric_value(
+        bitfield_name: &str,
+        field_name: &str,
+        width: u16,
+        value: &Value,
+    ) -> Result<u64, String> {
+        if width > 64 {
             return Err(format!(
-                "bitfield '{}' field '{}' is {} bit(s) wide and cannot hold '{}'",
-                bitfield_name, field_name, width, int_value
+                "bitfield '{}' field '{}' is {} bit(s) wide; the current runtime supports at most 64 bit(s)",
+                bitfield_name, field_name, width,
             ));
         }
-        Ok(*int_value as u64)
+
+        let numeric = match value {
+            Value::Int64(int_value) if *int_value >= 0 => *int_value as u64,
+            Value::Int64(int_value) => {
+                return Err(format!(
+                    "bitfield '{}' field '{}' is {} bit(s) wide and cannot hold '{}'",
+                    bitfield_name, field_name, width, int_value
+                ));
+            }
+            Value::Uint64(uint_value) => *uint_value,
+            _ => {
+                return Err(format!("field '{}' expects int64 or uint64", field_name));
+            }
+        };
+
+        if !Self::fits_in_bits(numeric, width) {
+            return Err(format!(
+                "bitfield '{}' field '{}' is {} bit(s) wide and cannot hold '{}'",
+                bitfield_name, field_name, width, value
+            ));
+        }
+        Ok(numeric)
+    }
+
+    fn normalized_plain_bitfield_field_value(
+        bitfield_name: &str,
+        field_name: &str,
+        width: u16,
+        value: &Value,
+    ) -> Result<Value, String> {
+        let numeric =
+            Self::plain_bitfield_field_numeric_value(bitfield_name, field_name, width, value)?;
+        if width == 64 {
+            Ok(Value::Uint64(numeric))
+        } else {
+            Ok(Value::Int64(numeric as i64))
+        }
     }
 
     fn enum_value_from_numeric(&self, enum_name: &str, numeric: u64) -> Result<Value, String> {
@@ -2445,8 +2488,10 @@ impl Interpreter {
     }
 
     fn fits_in_bits(value: u64, width: u16) -> bool {
-        if width >= 64 {
+        if width == 64 {
             true
+        } else if width > 64 {
+            false
         } else {
             value < (1_u64 << width)
         }
@@ -8292,39 +8337,25 @@ impl Interpreter {
 
             if let BitfieldFieldKind::Bits { width, as_type } = &bitfield.fields[field_index].kind {
                 if as_type.is_none() {
-                    let Value::Int64(int_value) = value else {
-                        return Err(format!(
-                            "bitfield '{}' field '{}' expects int64",
-                            bitfield_name, bitfield.fields[field_index].name.name
-                        ));
-                    };
-
-                    let max_value = if *width >= 63 {
-                        i64::MAX
-                    } else {
-                        (1_i64 << width) - 1
-                    };
-                    let in_range = int_value >= 0 && int_value <= max_value;
                     let literal_input = matches!(arg.value, Expr::IntLiteral(_, _));
+                    let normalized = match Self::normalized_plain_bitfield_field_value(
+                        bitfield_name,
+                        &bitfield.fields[field_index].name.name,
+                        *width,
+                        &value,
+                    ) {
+                        Ok(value) => value,
+                        Err(message) if literal_input => return Err(message),
+                        Err(message) => {
+                            return Ok(Value::ResultFail(Box::new(Value::String(message))));
+                        }
+                    };
 
-                    if literal_input {
-                        if !in_range {
-                            return Err(format!(
-                                "bitfield '{bitfield_name}' field '{}' is {} bit(s) wide and cannot hold '{int_value}'",
-                                bitfield.fields[field_index].name.name, width,
-                            ));
-                        }
-                    } else {
+                    if !literal_input {
                         requires_runtime_validation = true;
-                        if !in_range {
-                            return Ok(Value::ResultFail(Box::new(Value::String(format!(
-                                "bitfield '{bitfield_name}' field '{}' is {} bit(s) wide and cannot hold '{int_value}'",
-                                bitfield.fields[field_index].name.name, width,
-                            )))));
-                        }
                     }
 
-                    fields[field_index] = Some(Value::Int64(int_value));
+                    fields[field_index] = Some(normalized);
                     continue;
                 }
             }

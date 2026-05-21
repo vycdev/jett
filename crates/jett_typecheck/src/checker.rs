@@ -1255,6 +1255,13 @@ impl<'a> TypeChecker<'a> {
                     ast::BitfieldFieldKind::Bits {
                         as_type: Some(ty), ..
                     } => ty.clone(),
+                    ast::BitfieldFieldKind::Bits {
+                        width: 64,
+                        as_type: None,
+                    } => TypeExpr::Named(ast::Ident {
+                        name: "uint64".to_string(),
+                        span: field.span,
+                    }),
                     ast::BitfieldFieldKind::Bits { as_type: None, .. } => {
                         TypeExpr::Named(ast::Ident {
                             name: "int64".to_string(),
@@ -1290,8 +1297,9 @@ impl<'a> TypeChecker<'a> {
                 let (shape, width, ty, enum_ty) = match &field.kind {
                     ast::BitfieldFieldKind::Bits { width, as_type } => {
                         let ty = as_type.clone().unwrap_or_else(|| {
+                            let name = if *width == 64 { "uint64" } else { "int64" };
                             TypeExpr::Named(ast::Ident {
-                                name: "int64".to_string(),
+                                name: name.to_string(),
                                 span: field.span,
                             })
                         });
@@ -3453,6 +3461,13 @@ impl<'a> TypeChecker<'a> {
                             "bit width must be at least 1",
                             field.span,
                         ));
+                    } else if *width > 64 {
+                        self.sink.emit(errors::invalid_bitfield_field(
+                            &def.name.name,
+                            &field.name.name,
+                            "bit width must be at most 64",
+                            field.span,
+                        ));
                     }
 
                     let ty = if let Some(ty_expr) = as_type {
@@ -3507,6 +3522,8 @@ impl<'a> TypeChecker<'a> {
                             }
                         }
                         resolved
+                    } else if *width == 64 {
+                        TypeInterner::UINT64
                     } else {
                         TypeInterner::INT64
                     };
@@ -7591,7 +7608,11 @@ impl<'a> TypeChecker<'a> {
         span: Span,
     ) {
         let max_value = if width >= 63 {
-            i64::MAX as i128
+            if width == 64 {
+                u64::MAX as i128
+            } else {
+                i64::MAX as i128
+            }
         } else {
             (1_i128 << width) - 1
         };
@@ -7945,7 +7966,7 @@ impl<'a> TypeChecker<'a> {
             }
 
             if let TypeBitfieldFieldKind::Bits { width } = field_def.kind {
-                if field_def.ty == TypeInterner::INT64 {
+                if field_def.ty == TypeInterner::INT64 || field_def.ty == TypeInterner::UINT64 {
                     match &arg.value {
                         Expr::IntLiteral(value, literal_span) => self.check_bitfield_literal_range(
                             &bitfield_def.name,

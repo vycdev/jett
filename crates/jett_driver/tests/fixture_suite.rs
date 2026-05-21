@@ -290,6 +290,14 @@ run_pass_fixture!(
     run_pass_bitfield_payload_roundtrip,
     "bitfield_payload_roundtrip.jett"
 );
+run_pass_fixture!(
+    run_pass_bitfield_uint64_roundtrip,
+    "bitfield_uint64_roundtrip.jett"
+);
+run_pass_fixture!(
+    run_pass_bitfield_uint64_reflection,
+    "bitfield_uint64_reflection.jett"
+);
 run_pass_fixture!(run_pass_generic_struct, "generic_struct.jett");
 run_pass_fixture!(run_pass_generic_function, "generic_function.jett");
 run_pass_fixture!(run_pass_comptime_type_bind, "comptime_type_bind.jett");
@@ -687,6 +695,10 @@ compile_fail_fixture!(
 compile_fail_fixture!(
     compile_fail_enum_discriminant_overflow,
     "enum_discriminant_overflow.jett"
+);
+compile_fail_fixture!(
+    compile_fail_bitfield_width_exceeds_runtime_limit,
+    "bitfield_width_exceeds_runtime_limit.jett"
 );
 compile_fail_fixture!(
     compile_fail_uint8_handle_default_out_of_range,

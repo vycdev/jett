@@ -14,9 +14,9 @@ ordinary source and JSON decode/serialize the full unsigned range:
 - property generation for `uint64` can include values above `i64::MAX`.
 
 Integer literals are now stored in the AST wide enough for `u64::MAX`, while
-enum discriminants remain signed `i64` in this stage. Bitfield construction also
-still has signed-runtime assumptions in some paths, so full 64-bit bitfield
-payloads above `i64::MAX` remain separate work.
+enum discriminants remain signed `i64` in this stage. Unannotated 64-bit
+bitfield fields now use `uint64` values, while 1..63-bit fields keep the
+existing `int64` surface.
 
 ## Why Not Fix In JSON Alone
 
@@ -36,9 +36,9 @@ model; that path now exists for ordinary `uint64` literals.
 
    Status: partially implemented. The carrier exists, display/equality,
    conversion builtins, property generation/shrinking, source literals through
-   `u64::MAX`, core uint64 arithmetic and comparisons, and JSON decode/encode
-   have been updated. Bitfield paths that assume signed runtime integers are
-   still open.
+   `u64::MAX`, core uint64 arithmetic and comparisons, JSON decode/encode, and
+   unannotated 64-bit bitfield construction/field access/to-bytes/from-bytes
+   have been updated.
 
 2. **Use one integer carrier with explicit signedness metadata.**
 
@@ -62,8 +62,8 @@ model; that path now exists for ordinary `uint64` literals.
 Keep the JSON path on ordinary unsigned runtime values. The next real step is
 not more JSON work; it is finishing the remaining numeric surfaces:
 
-- audit bitfield construction and bit extraction paths for 64-bit unsigned
-  field values above `i64::MAX`,
+- decide whether bitfield syntax should ever support fields wider than 64 bits
+  or stay explicitly tied to fixed-width primitive carriers,
 - decide whether the interpreter should receive checked expression type maps so
   runtime literal values can always mirror the checked primitive type instead of
   using the current value-range fallback,

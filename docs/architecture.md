@@ -271,7 +271,7 @@ StructDef       → ('export')? 'struct' Name ':' FieldList FunctionDef*    // F
 EnumDef         → ('export')? 'enum' Name ':' VariantList      // Variants may have data fields or integer values (e.g., tcp = 6)
 MachineDef      → 'machine' Name ':' StatesBlock TransitionsBlock
 ActorDef        → 'actor' Name '(' ParamList ')' ':' (ReceiveHandler)*
-BitfieldDef     → ('export')? ('network')? 'bitfield' Name ':' BitfieldList  // Fields: 'name: N bits' or 'name: N bits as EnumType' or 'payload: list[uint8]'
+BitfieldDef     → ('export')? ('network')? 'bitfield' Name ':' BitfieldList  // Fields: 'name: N bits' (1..63 => int64, 64 => uint64), 'name: N bits as EnumType', or 'payload: list[uint8]'
 TypeAlias       → ('export' ('root')?)? 'type' Name GenericParams? '=' Type ('where' Expr)?
                 # 'export root type' is stdlib-only and currently restricted to root compatibility aliases.
 VerifyBlock     → 'verify' Name ':' Block

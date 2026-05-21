@@ -8,6 +8,9 @@ bitfield Header:
     version: 4 bits
     protocol: 8 bits as Protocol
 
+bitfield WideHeader:
+    sequence: 64 bits
+
 function bitfield_requires_object_error() returns string:
     Header header = json.parse[Header]("[1,2]") handle error:
         return error
@@ -28,8 +31,15 @@ function bitfield_enum_numeric_shape_error() returns string:
         return error
     return "{header.version}"
 
+function bitfield_uint64_parse_serialize() returns string:
+    WideHeader header = json.parse[WideHeader]("{{\"sequence\":18446744073709551615}}") handle error:
+        return error
+    string raw = json.serialize[WideHeader](view header)
+    return "{string.from_uint64(header.sequence)}:{raw}"
+
 verify json_bitfield_shapes:
     assert bitfield_requires_object_error() == "expected object, got array"
     assert bitfield_missing_field_error() == "missing required field 'protocol' for test.Header"
     assert bitfield_extra_field_ignored() == true
     assert bitfield_enum_numeric_shape_error() == "protocol: expected enum string or object, got number"
+    assert bitfield_uint64_parse_serialize() == "18446744073709551615:{{\"sequence\":18446744073709551615}}"
