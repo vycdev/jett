@@ -39,17 +39,41 @@ function json_tree_kind_error(view value: JsonTree, expected: string) returns st
     string actual = json_tree_kind(view value)
     return "expected {expected}, got {actual}"
 function json_tree_is_null(view value: JsonTree) returns bool:
-    return json_tree_kind(view value) == "null"
+    match value:
+        null:
+            return true
+        other:
+            return false
 function json_tree_is_bool(view value: JsonTree) returns bool:
-    return json_tree_kind(view value) == "bool"
+    match value:
+        bool_value(item):
+            return true
+        other:
+            return false
 function json_tree_is_number(view value: JsonTree) returns bool:
-    return json_tree_kind(view value) == "number"
+    match value:
+        number_value(raw):
+            return true
+        other:
+            return false
 function json_tree_is_string(view value: JsonTree) returns bool:
-    return json_tree_kind(view value) == "string"
+    match value:
+        string_value(item):
+            return true
+        other:
+            return false
 function json_tree_is_array(view value: JsonTree) returns bool:
-    return json_tree_kind(view value) == "array"
+    match value:
+        array_value(items):
+            return true
+        other:
+            return false
 function json_tree_is_object(view value: JsonTree) returns bool:
-    return json_tree_kind(view value) == "object"
+    match value:
+        object_value(fields):
+            return true
+        other:
+            return false
 function json_tree_field(view value: JsonTree, key: string) returns optional[JsonTree]:
     match value:
         object_value(fields):
