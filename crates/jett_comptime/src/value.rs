@@ -8,6 +8,8 @@ use jett_parser::ast::{Block, Param};
 pub enum Value {
     /// 64-bit signed integer.
     Int64(i64),
+    /// 64-bit unsigned integer.
+    Uint64(u64),
     /// 64-bit floating-point number.
     Float64(f64),
     /// UTF-8 string.
@@ -73,6 +75,7 @@ impl PartialEq for Value {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Value::Int64(a), Value::Int64(b)) => a == b,
+            (Value::Uint64(a), Value::Uint64(b)) => a == b,
             (Value::Float64(a), Value::Float64(b)) => a == b,
             (Value::String(a), Value::String(b)) => a == b,
             (Value::Bool(a), Value::Bool(b)) => a == b,
@@ -145,6 +148,7 @@ impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Value::Int64(n) => write!(f, "{n}"),
+            Value::Uint64(n) => write!(f, "{n}"),
             Value::Float64(n) => write!(f, "{n}"),
             Value::String(s) => write!(f, "{s}"),
             Value::Bool(b) => write!(f, "{b}"),

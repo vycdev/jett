@@ -5554,6 +5554,14 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects an int64 argument"))),
                 }
             }
+            "string.from_uint64" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::Uint64(n) => Some(Ok(Value::String(n.to_string()))),
+                    Value::Int64(n) if *n >= 0 => Some(Ok(Value::String(n.to_string()))),
+                    _ => Some(Err(format!("{name} expects a uint64 argument"))),
+                }
+            }
 
             "string.is_not_empty" => {
                 require_args!(name, 1, args);
@@ -5656,6 +5664,18 @@ impl Interpreter {
                         Ok(n) => Some(Ok(Value::ResultOk(Box::new(Value::Int64(n))))),
                         Err(_) => Some(Ok(Value::ResultFail(Box::new(Value::String(format!(
                             "int64.from_string: cannot parse '{s}' as int64"
+                        )))))),
+                    },
+                    _ => Some(Err(format!("{name} expects a string argument"))),
+                }
+            }
+            "uint64.from_string" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::String(s) => match s.parse::<u64>() {
+                        Ok(n) => Some(Ok(Value::ResultOk(Box::new(Value::Uint64(n))))),
+                        Err(_) => Some(Ok(Value::ResultFail(Box::new(Value::String(format!(
+                            "uint64.from_string: cannot parse '{s}' as uint64"
                         )))))),
                     },
                     _ => Some(Err(format!("{name} expects a string argument"))),
@@ -8485,6 +8505,93 @@ fn is_truthy(val: &Value) -> Result<bool, String> {
     }
 }
 
+fn uint64_arithmetic_operand(value: i64) -> Result<u64, String> {
+    if value >= 0 {
+        Ok(value as u64)
+    } else {
+        Err(format!(
+            "uint64 arithmetic cannot use negative int64 operand {value}"
+        ))
+    }
+}
+
+fn eval_uint64_arithmetic(left: u64, op: BinOp, right: u64) -> Result<Value, String> {
+    match op {
+        BinOp::Add => left
+            .checked_add(right)
+            .map(Value::Uint64)
+            .ok_or_else(|| format!("uint64 overflow: {left} + {right}")),
+        BinOp::Sub => left
+            .checked_sub(right)
+            .map(Value::Uint64)
+            .ok_or_else(|| format!("uint64 overflow: {left} - {right}")),
+        BinOp::Mul => left
+            .checked_mul(right)
+            .map(Value::Uint64)
+            .ok_or_else(|| format!("uint64 overflow: {left} * {right}")),
+        BinOp::Div => {
+            if right == 0 {
+                Err("division by zero".to_string())
+            } else {
+                Ok(Value::Uint64(left / right))
+            }
+        }
+        BinOp::Modulo => {
+            if right == 0 {
+                Err("modulo by zero".to_string())
+            } else {
+                Ok(Value::Uint64(left % right))
+            }
+        }
+        _ => Err("unsupported uint64 arithmetic operator".to_string()),
+    }
+}
+
+fn compare_uint64_values(left: u64, op: BinOp, right: u64) -> Result<Value, String> {
+    let result = match op {
+        BinOp::Eq => left == right,
+        BinOp::NotEq => left != right,
+        BinOp::Lt => left < right,
+        BinOp::Gt => left > right,
+        BinOp::LtEq => left <= right,
+        BinOp::GtEq => left >= right,
+        _ => return Err("unsupported uint64 comparison operator".to_string()),
+    };
+    Ok(Value::Bool(result))
+}
+
+fn compare_uint64_i64(left: u64, op: BinOp, right: i64) -> Result<Value, String> {
+    if right < 0 {
+        let result = match op {
+            BinOp::Eq => false,
+            BinOp::NotEq => true,
+            BinOp::Lt => false,
+            BinOp::Gt => true,
+            BinOp::LtEq => false,
+            BinOp::GtEq => true,
+            _ => return Err("unsupported uint64 comparison operator".to_string()),
+        };
+        return Ok(Value::Bool(result));
+    }
+    compare_uint64_values(left, op, right as u64)
+}
+
+fn compare_i64_uint64(left: i64, op: BinOp, right: u64) -> Result<Value, String> {
+    if left < 0 {
+        let result = match op {
+            BinOp::Eq => false,
+            BinOp::NotEq => true,
+            BinOp::Lt => true,
+            BinOp::Gt => false,
+            BinOp::LtEq => true,
+            BinOp::GtEq => false,
+            _ => return Err("unsupported uint64 comparison operator".to_string()),
+        };
+        return Ok(Value::Bool(result));
+    }
+    compare_uint64_values(left as u64, op, right)
+}
+
 fn eval_binary_op(left: &Value, op: BinOp, right: &Value) -> Result<Value, String> {
     match (left, op, right) {
         // -- Integer arithmetic -----------------------------------------------
@@ -8514,6 +8621,21 @@ fn eval_binary_op(left: &Value, op: BinOp, right: &Value) -> Result<Value, Strin
                 Ok(Value::Int64(a % b))
             }
         }
+        (
+            Value::Uint64(a),
+            op @ (BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Modulo),
+            Value::Uint64(b),
+        ) => eval_uint64_arithmetic(*a, op, *b),
+        (
+            Value::Uint64(a),
+            op @ (BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Modulo),
+            Value::Int64(b),
+        ) => eval_uint64_arithmetic(*a, op, uint64_arithmetic_operand(*b)?),
+        (
+            Value::Int64(a),
+            op @ (BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Modulo),
+            Value::Uint64(b),
+        ) => eval_uint64_arithmetic(uint64_arithmetic_operand(*a)?, op, *b),
 
         // -- Float arithmetic ------------------------------------------------
         (Value::Float64(a), BinOp::Add, Value::Float64(b)) => Ok(Value::Float64(a + b)),
@@ -8532,6 +8654,21 @@ fn eval_binary_op(left: &Value, op: BinOp, right: &Value) -> Result<Value, Strin
         (Value::Int64(a), BinOp::Gt, Value::Int64(b)) => Ok(Value::Bool(a > b)),
         (Value::Int64(a), BinOp::LtEq, Value::Int64(b)) => Ok(Value::Bool(a <= b)),
         (Value::Int64(a), BinOp::GtEq, Value::Int64(b)) => Ok(Value::Bool(a >= b)),
+        (
+            Value::Uint64(a),
+            op @ (BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq),
+            Value::Uint64(b),
+        ) => compare_uint64_values(*a, op, *b),
+        (
+            Value::Uint64(a),
+            op @ (BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq),
+            Value::Int64(b),
+        ) => compare_uint64_i64(*a, op, *b),
+        (
+            Value::Int64(a),
+            op @ (BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq),
+            Value::Uint64(b),
+        ) => compare_i64_uint64(*a, op, *b),
 
         // -- Float comparisons -----------------------------------------------
         (Value::Float64(a), BinOp::Eq, Value::Float64(b)) => Ok(Value::Bool(a == b)),
@@ -8765,6 +8902,7 @@ fn type_expr_display(ty: &TypeExpr) -> String {
 fn runtime_type_name(value: &Value) -> Option<String> {
     match value {
         Value::Int64(_) => Some("int64".to_string()),
+        Value::Uint64(_) => Some("uint64".to_string()),
         Value::Float64(_) => Some("float64".to_string()),
         Value::String(_) => Some("string".to_string()),
         Value::Bool(_) => Some("bool".to_string()),
@@ -13495,6 +13633,18 @@ mod builtin_tests {
     }
 
     #[test]
+    fn builtin_string_from_uint64() {
+        let mut interp = Interpreter::new();
+        assert_eq!(
+            interp
+                .call_builtin("string.from_uint64", &[Value::Uint64(u64::MAX)])
+                .expect("string.from_uint64 should be a builtin")
+                .expect("string.from_uint64 should succeed"),
+            Value::String("18446744073709551615".to_string())
+        );
+    }
+
+    #[test]
     fn builtin_secret_redact() {
         let mut interp = Interpreter::new();
         let expr = dotted_call("secret", "redact", vec![string("top-secret")]);
@@ -13666,6 +13816,32 @@ mod builtin_tests {
             interp.eval_expr(&expr).unwrap(),
             Value::ResultFail(Box::new(Value::String(
                 "int64.from_string: cannot parse 'abc' as int64".to_string(),
+            )))
+        );
+    }
+
+    #[test]
+    fn builtin_uint64_from_string_max() {
+        let mut interp = Interpreter::new();
+        let expr = dotted_call(
+            "uint64",
+            "from_string",
+            vec![string("18446744073709551615")],
+        );
+        assert_eq!(
+            interp.eval_expr(&expr).unwrap(),
+            Value::ResultOk(Box::new(Value::Uint64(u64::MAX)))
+        );
+    }
+
+    #[test]
+    fn builtin_uint64_from_string_error() {
+        let mut interp = Interpreter::new();
+        let expr = dotted_call("uint64", "from_string", vec![string("-1")]);
+        assert_eq!(
+            interp.eval_expr(&expr).unwrap(),
+            Value::ResultFail(Box::new(Value::String(
+                "uint64.from_string: cannot parse '-1' as uint64".to_string(),
             )))
         );
     }

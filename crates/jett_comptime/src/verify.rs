@@ -398,6 +398,17 @@ fn shrink_value(value: &Value) -> Vec<Value> {
             }
             candidates
         }
+        Value::Uint64(n) => {
+            let mut candidates = Vec::new();
+            if *n != 0 {
+                candidates.push(Value::Uint64(0));
+            }
+            if *n > 1 {
+                candidates.push(Value::Uint64(n / 2));
+                candidates.push(Value::Uint64(n - 1));
+            }
+            candidates
+        }
         Value::Float64(f) => {
             let mut candidates = Vec::new();
             if *f != 0.0 {
@@ -733,6 +744,18 @@ fn generate_unsigned_integer_values(max: i64) -> Vec<Value> {
     )
 }
 
+fn generate_uint64_values() -> Vec<Value> {
+    unique_values(vec![
+        Value::Uint64(0),
+        Value::Uint64(1),
+        Value::Uint64(42),
+        Value::Uint64(100),
+        Value::Uint64(i64::MAX as u64),
+        Value::Uint64(i64::MAX as u64 + 1),
+        Value::Uint64(u64::MAX),
+    ])
+}
+
 fn generate_float_values() -> Vec<Value> {
     vec![
         Value::Float64(0.0),
@@ -761,7 +784,7 @@ fn generate_values_for_type_in_namespace(
             "uint8" => generate_unsigned_integer_values(u8::MAX as i64),
             "uint16" => generate_unsigned_integer_values(u16::MAX as i64),
             "uint32" => generate_unsigned_integer_values(u32::MAX as i64),
-            "uint64" => generate_unsigned_integer_values(i64::MAX),
+            "uint64" => generate_uint64_values(),
             "string" => vec![
                 Value::String(String::new()),
                 Value::String("a".to_string()),
@@ -3138,7 +3161,12 @@ mod tests {
         assert!(
             uint64_values
                 .iter()
-                .all(|value| matches!(value, Value::Int64(n) if *n >= 0))
+                .all(|value| matches!(value, Value::Uint64(_)))
+        );
+        assert!(
+            uint64_values
+                .iter()
+                .any(|value| matches!(value, Value::Uint64(n) if *n > i64::MAX as u64))
         );
 
         let float32_values = generate_values_for_type(&type_named("float32"));

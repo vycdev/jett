@@ -6,6 +6,7 @@ mutual:
     function json_serialize_public_integer_primitive[T](view value: T, primitive: TypePrimitive) returns optional[string]
     function json_serialize_public_float_primitive[T](view value: T, primitive: TypePrimitive) returns optional[string]
     function json_serialize_public_integer_value[T](view value: T) returns string
+    function json_serialize_public_uint64_value[T](view value: T) returns string
     function json_serialize_public_float_value[T](view value: T) returns string
     function json_serialize_public_bytes_value[T](view value: T) returns string
     function json_serialize_public_enum_reflected[T](view value: T) returns string
@@ -76,7 +77,7 @@ function json_serialize_public_integer_primitive[T](view value: T, primitive: Ty
         uint32_type:
             return some(json_serialize_public_integer_value[T](view value))
         uint64_type:
-            return some(json_serialize_public_integer_value[T](view value))
+            return some(json_serialize_public_uint64_value[T](view value))
         other:
             return none
 function json_serialize_public_float_primitive[T](view value: T, primitive: TypePrimitive) returns optional[string]:
@@ -90,6 +91,9 @@ function json_serialize_public_float_primitive[T](view value: T, primitive: Type
 function json_serialize_public_integer_value[T](view value: T) returns string:
     int64 item = value
     return "{item}"
+function json_serialize_public_uint64_value[T](view value: T) returns string:
+    uint64 item = value
+    return string.from_uint64(item)
 function json_serialize_public_float_value[T](view value: T) returns string:
     float64 item = value
     return "{item}"

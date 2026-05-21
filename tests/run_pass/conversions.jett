@@ -37,6 +37,17 @@ function parse_int_test() returns int64:
 verify parse_int_test:
     assert parse_int_test() == 123
 
+# --- uint64 from string (result type) ---
+
+function parse_uint64_max_test() returns string:
+    result[uint64, string] r = uint64.from_string("18446744073709551615")
+    uint64 val = r handle error:
+        return error
+    return string.from_uint64(val)
+
+verify parse_uint64_max_test:
+    assert parse_uint64_max_test() == "18446744073709551615"
+
 # --- float64 from string (result type) ---
 
 function parse_float_test() returns float64:

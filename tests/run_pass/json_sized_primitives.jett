@@ -42,7 +42,7 @@ function parse_uint32_max_text() returns string:
     return "{value}"
 
 function parse_uint64_runtime_max_text() returns string:
-    uint64 value = json.parse[uint64]("9223372036854775807") handle error:
+    uint64 value = json.parse[uint64]("18446744073709551615") handle error:
         return error
     return "{value}"
 
@@ -67,12 +67,12 @@ function parse_uint32_range_error() returns string:
     return "{value}"
 
 function parse_uint64_runtime_limit_error() returns string:
-    uint64 value = json.parse[uint64]("9223372036854775808") handle error:
+    uint64 value = json.parse[uint64]("18446744073709551616") handle error:
         return error
     return "{value}"
 
 function parse_sized_bundle() returns string:
-    string raw = "{{\"small\":-5,\"medium\":65535,\"count\":4294967295,\"serial\":9223372036854775807,\"ratio\":2.5,\"values\":[1,255],\"metrics\":{{\"max\":65535}},\"maybe\":-8,\"outcome\":{{\"ok\":9}}}}"
+    string raw = "{{\"small\":-5,\"medium\":65535,\"count\":4294967295,\"serial\":18446744073709551615,\"ratio\":2.5,\"values\":[1,255],\"metrics\":{{\"max\":65535}},\"maybe\":-8,\"outcome\":{{\"ok\":9}}}}"
     SizedBundle bundle = json.parse[SizedBundle](raw) handle error:
         return error
     uint8 second = list.get[uint8](view bundle.values, 1) handle:
@@ -98,7 +98,8 @@ function serialize_uint32_max() returns string:
     return json.serialize[uint32](value)
 
 function serialize_uint64_runtime_max() returns string:
-    uint64 value = 9223372036854775807
+    uint64 value = uint64.from_string("18446744073709551615") handle error:
+        return error
     return json.serialize[uint64](value)
 
 function serialize_float32() returns string:
@@ -113,7 +114,8 @@ function serialize_sized_bundle() returns string:
     int8 maybe_value = -8
     uint32 count = 4294967295
     uint32 outcome_value = 9
-    uint64 serial = 9223372036854775807
+    uint64 serial = uint64.from_string("18446744073709551615") handle error:
+        return error
     float32 ratio = 2.5
     list[uint8] values = list(first, second)
     map[string, uint16] metrics = map("max": max)
@@ -127,16 +129,16 @@ verify json_sized_primitives:
     assert parse_uint8_max_text() == "255"
     assert parse_uint16_max_text() == "65535"
     assert parse_uint32_max_text() == "4294967295"
-    assert parse_uint64_runtime_max_text() == "9223372036854775807"
+    assert parse_uint64_runtime_max_text() == "18446744073709551615"
     assert parse_float32_text() == "2.5"
     assert parse_int8_range_error() == "expected int8 in range -128..127"
     assert parse_uint8_range_error() == "expected uint8 in range 0..255"
     assert parse_uint32_range_error() == "expected uint32 in range 0..4294967295"
-    assert parse_uint64_runtime_limit_error() == "expected uint64 in range 0..9223372036854775807"
-    assert parse_sized_bundle() == "-5:65535:4294967295:9223372036854775807:2.5:255:65535:-8:9"
+    assert parse_uint64_runtime_limit_error() == "expected uint64 in range 0..18446744073709551615"
+    assert parse_sized_bundle() == "-5:65535:4294967295:18446744073709551615:2.5:255:65535:-8:9"
     assert serialize_uint8_max() == "255"
     assert serialize_int16_min() == "-32768"
     assert serialize_uint32_max() == "4294967295"
-    assert serialize_uint64_runtime_max() == "9223372036854775807"
+    assert serialize_uint64_runtime_max() == "18446744073709551615"
     assert serialize_float32() == "2.5"
-    assert serialize_sized_bundle() == "{{\"small\":-5,\"medium\":65535,\"count\":4294967295,\"serial\":9223372036854775807,\"ratio\":2.5,\"values\":[1,255],\"metrics\":{{\"max\":65535}},\"maybe\":-8,\"outcome\":{{\"ok\":9}}}}"
+    assert serialize_sized_bundle() == "{{\"small\":-5,\"medium\":65535,\"count\":4294967295,\"serial\":18446744073709551615,\"ratio\":2.5,\"values\":[1,255],\"metrics\":{{\"max\":65535}},\"maybe\":-8,\"outcome\":{{\"ok\":9}}}}"
