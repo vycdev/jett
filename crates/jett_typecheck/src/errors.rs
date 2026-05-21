@@ -585,6 +585,19 @@ pub fn duplicate_json_serialize_name(
     )
 }
 
+/// E0347: JSON serialization target contains a type that has no JSON encoding.
+pub fn json_unsupported_serialize_type(
+    function_name: &str,
+    unsupported_type: &str,
+    span: Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        347,
+        format!("`{function_name}` cannot serialize unsupported JSON type `{unsupported_type}`"),
+        span,
+    )
+}
+
 // Diagnostic codes E0800-E0899 are reserved for function complexity limits.
 
 /// E0800: Function body exceeds the statement count limit.

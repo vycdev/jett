@@ -1647,6 +1647,137 @@ impl<'a> TypeChecker<'a> {
         keys
     }
 
+    fn json_unsupported_serialize_types(&self, ty: TypeId) -> Vec<String> {
+        let mut visited = HashSet::new();
+        let mut unsupported_types = HashSet::new();
+        let mut unsupported = Vec::new();
+        self.collect_json_unsupported_serialize_types(
+            ty,
+            &mut visited,
+            &mut unsupported_types,
+            &mut unsupported,
+        );
+        unsupported
+    }
+
+    fn push_json_unsupported_serialize_type(
+        &self,
+        ty: TypeId,
+        unsupported_types: &mut HashSet<TypeId>,
+        unsupported: &mut Vec<String>,
+    ) {
+        if unsupported_types.insert(ty) {
+            unsupported.push(self.type_name(ty));
+        }
+    }
+
+    fn collect_json_unsupported_serialize_types(
+        &self,
+        ty: TypeId,
+        visited: &mut HashSet<TypeId>,
+        unsupported_types: &mut HashSet<TypeId>,
+        unsupported: &mut Vec<String>,
+    ) {
+        if !visited.insert(ty) {
+            return;
+        }
+
+        match self.interner.resolve(ty) {
+            Type::Int8
+            | Type::Int16
+            | Type::Int32
+            | Type::Int64
+            | Type::Uint8
+            | Type::Uint16
+            | Type::Uint32
+            | Type::Uint64
+            | Type::Float32
+            | Type::Float64
+            | Type::String
+            | Type::Bool
+            | Type::Bytes
+            | Type::Nothing
+            | Type::JsonValue
+            | Type::Error => {}
+            Type::TypeConstruction
+            | Type::Interface(_)
+            | Type::Actor(_)
+            | Type::Function { .. } => {
+                self.push_json_unsupported_serialize_type(ty, unsupported_types, unsupported);
+            }
+            Type::List(inner) | Type::Set(inner) | Type::Optional(inner) => self
+                .collect_json_unsupported_serialize_types(
+                    *inner,
+                    visited,
+                    unsupported_types,
+                    unsupported,
+                ),
+            Type::Secret(_) => {}
+            Type::Map(_, value) => self.collect_json_unsupported_serialize_types(
+                *value,
+                visited,
+                unsupported_types,
+                unsupported,
+            ),
+            Type::Result(ok, err) => {
+                self.collect_json_unsupported_serialize_types(
+                    *ok,
+                    visited,
+                    unsupported_types,
+                    unsupported,
+                );
+                self.collect_json_unsupported_serialize_types(
+                    *err,
+                    visited,
+                    unsupported_types,
+                    unsupported,
+                );
+            }
+            Type::Struct(sid) => {
+                for (_, field_ty) in &self.interner.resolve_struct(*sid).fields {
+                    self.collect_json_unsupported_serialize_types(
+                        *field_ty,
+                        visited,
+                        unsupported_types,
+                        unsupported,
+                    );
+                }
+            }
+            Type::Bitfield(bid) => {
+                for field in &self.interner.resolve_bitfield(*bid).fields {
+                    self.collect_json_unsupported_serialize_types(
+                        field.ty,
+                        visited,
+                        unsupported_types,
+                        unsupported,
+                    );
+                }
+            }
+            Type::Enum(eid) => {
+                for (_, field_ty) in self
+                    .interner
+                    .resolve_enum(*eid)
+                    .variants
+                    .iter()
+                    .flat_map(|variant| variant.fields.iter())
+                {
+                    self.collect_json_unsupported_serialize_types(
+                        *field_ty,
+                        visited,
+                        unsupported_types,
+                        unsupported,
+                    );
+                }
+            }
+            Type::Refinement { base, .. } => self.collect_json_unsupported_serialize_types(
+                *base,
+                visited,
+                unsupported_types,
+                unsupported,
+            ),
+        }
+    }
+
     fn collect_json_non_string_map_key_types(
         &self,
         ty: TypeId,
@@ -1778,6 +1909,14 @@ impl<'a> TypeChecker<'a> {
         for key_type in self.json_non_string_map_key_types(value_ty) {
             self.sink.emit(errors::json_map_key_must_be_string(
                 &key_type,
+                arg.value.span(),
+            ));
+        }
+
+        for unsupported_type in self.json_unsupported_serialize_types(value_ty) {
+            self.sink.emit(errors::json_unsupported_serialize_type(
+                function_name,
+                &unsupported_type,
                 arg.value.span(),
             ));
         }

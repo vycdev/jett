@@ -908,6 +908,14 @@ compile_fail_fixture!(
     "json_duplicate_serialize_name.jett"
 );
 compile_fail_fixture!(
+    compile_fail_json_serialize_unsupported_type,
+    "json_serialize_unsupported_type.jett"
+);
+#[test]
+fn compile_fail_json_serialize_unsupported_type_omits_secret_fields() {
+    assert_compile_fail_error_count("json_serialize_unsupported_type.jett", 347, 2);
+}
+compile_fail_fixture!(
     compile_fail_json_parse_exact_requires_type_arg,
     "json_parse_exact_requires_type_arg.jett"
 );
