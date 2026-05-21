@@ -16,10 +16,18 @@ function map_type_info_value_arg() returns string:
     TypeInfo arg = list.get[TypeInfo](info.args, 1) handle:
         return "missing map arg"
     return "{arg.kind}:{arg.type_name}"
+function list_type_info_item_arg() returns string:
+    TypeInfo info = type.info[list[accounts.User]]()
+    TypeInfo arg = list.get[TypeInfo](info.args, 0) handle:
+        return "missing list arg"
+    return "{arg.kind}:{arg.type_name}"
 function direct_map_value_arg() returns string:
     comptime type Value = type.arg[map[string, accounts.User]](1):
         TypeInfo info = type.info[Value]()
         return "{info.kind}:{info.type_name}"
+function direct_set_item_arg() returns string:
+    comptime type Item = type.arg[set[audit.User]](0):
+        return type.name[Item]()
 function direct_result_args() returns string:
     comptime type Ok = type.arg[result[accounts.User, audit.User]](0):
         comptime type Err = type.arg[result[accounts.User, audit.User]](1):
@@ -61,7 +69,9 @@ function envelope_parse_exact_accounts_extra_error() returns string:
     return "{map.length[string, accounts.User](envelope.by_id)}"
 verify reflection_type_id_duplicate_container_args:
     assert map_type_info_value_arg() == "struct:accounts.User"
+    assert list_type_info_item_arg() == "struct:accounts.User"
     assert direct_map_value_arg() == "struct:accounts.User"
+    assert direct_set_item_arg() == "audit.User"
     assert direct_result_args() == "accounts.User:audit.User"
     assert envelope_field_arg_summary("by_id", 1) == "map[string, accounts.User]:struct:accounts.User"
     assert envelope_field_arg_summary("audit_by_id", 1) == "map[string, audit.User]:struct:audit.User"
