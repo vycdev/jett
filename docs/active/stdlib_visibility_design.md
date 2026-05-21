@@ -262,8 +262,9 @@ Still staged:
 - Stdlib JSON exports follow the same rule: `json.parse_raw` and
   `json.JsonTree` are available, while flat `parse_raw` and `JsonTree` are
   rejected; bare `JsonValue` remains the explicit root alias.
-- Public JSON policy remains compiler-owned: `view`, secret, map-key, and
-  handled-result rules still fire even if public wrapper declarations exist.
+- Public JSON policy remains compiler-owned: `view`, secret, map-key,
+  unsupported serialize target, and handled-result rules still fire even if
+  public wrapper declarations exist.
 - Project code cannot reopen compiler-shipped stdlib namespaces such as
   `json`; the prepended stdlib namespace declaration wins and later project
   declarations collide instead of replacing trusted symbols. Pinned by
