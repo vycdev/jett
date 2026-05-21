@@ -26,6 +26,7 @@ function json_tree_validate_string_span(view input: bytes, start: int64, end: in
     return fail("unterminated JSON string")
 function json_tree_parse_string_body_span(view input: bytes, start: int64, end: int64) returns result[string, string]:
     mutable bytes output = bytes.new()
+    mutable int64 chunk_start = start
     mutable int64 index = start
     while index < end:
         int64 byte = bytes.get(view input, index) handle:
@@ -35,14 +36,16 @@ function json_tree_parse_string_body_span(view input: bytes, start: int64, end: 
         if byte < 32:
             return fail("unescaped control character in JSON string")
         if byte == 92:
-            index = index + 1
-            JsonTreeStringEscape decoded = json_tree_parse_string_escape_at(view input, index, end) handle error:
+            output = bytes.concat(output, bytes.slice(view input, chunk_start, index))
+            int64 escape_index = index + 1
+            JsonTreeStringEscape decoded = json_tree_parse_string_escape_at(view input, escape_index, end) handle error:
                 return fail(error)
             output = bytes.concat(output, bytes.from_string(decoded.value))
-            index = decoded.next_index
+            index = decoded.next_index + 1
+            chunk_start = index
         else:
-            output = bytes.concat(output, bytes.slice(view input, index, index + 1))
-        index = index + 1
+            index = index + 1
+    output = bytes.concat(output, bytes.slice(view input, chunk_start, end))
     string value = bytes.to_string(output) handle error:
         return fail(error)
     return ok(value)
