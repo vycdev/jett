@@ -1117,8 +1117,13 @@ function hover_raw_facades(view root: json.JsonTree) returns string:
     bool object = json.is_object(root)
     result[list[string], string] keys = json.object_keys(root)
     result[int64, string] integer = json.as_int64(root)
+    result[uint64, string] unsigned = json.as_uint64(root)
     result[float64, string] float = json.as_float64(root)
     result[bool, string] truth = json.as_bool(root)
+    result[optional[json.JsonTree], string] strict_field = json.object_field(root, "name")
+    result[optional[json.JsonTree], string] strict_item = json.array_index(root, 0)
+    result[json.JsonTree, string] required_field = json.require_field(root, "name")
+    result[json.JsonTree, string] required_item = json.require_index(root, 0)
     return "ok"
 "#;
 
@@ -1155,12 +1160,32 @@ function hover_raw_facades(view root: json.JsonTree) returns string:
         Some("result[int64, string]".to_string())
     );
     assert_eq!(
-        hover_type(source, 18, 38),
+        hover_type(source, 18, 40),
+        Some("result[uint64, string]".to_string())
+    );
+    assert_eq!(
+        hover_type(source, 19, 38),
         Some("result[float64, string]".to_string())
     );
     assert_eq!(
-        hover_type(source, 19, 35),
+        hover_type(source, 20, 35),
         Some("result[bool, string]".to_string())
+    );
+    assert_eq!(
+        hover_type(source, 21, 63),
+        Some("result[optional[json.JsonTree], string]".to_string())
+    );
+    assert_eq!(
+        hover_type(source, 22, 62),
+        Some("result[optional[json.JsonTree], string]".to_string())
+    );
+    assert_eq!(
+        hover_type(source, 23, 56),
+        Some("result[json.JsonTree, string]".to_string())
+    );
+    assert_eq!(
+        hover_type(source, 24, 55),
+        Some("result[json.JsonTree, string]".to_string())
     );
 }
 
