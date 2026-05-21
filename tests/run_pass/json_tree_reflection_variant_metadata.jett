@@ -38,6 +38,32 @@ function json_tree_variant_field_arg_shape(variant_name: string, field_name: str
                     return "{arg.kind}:{arg.type_name}"
                 index = index + 1
     return "missing"
+function json_tree_value_variant_name(value: json.JsonTree) returns string:
+    TypeVariant selected = type.variant_value[json.JsonTree](view value)
+    return selected.name
+function json_tree_reflected_string_payload() returns string:
+    json.JsonTree tree = json.JsonTree.string_value("Ada")
+    TypeVariant selected = type.variant_value[json.JsonTree](view tree)
+    for field in selected.fields:
+        if field.name == "value":
+            string value = type.variant_field_value[json.JsonTree, string](view tree, view field)
+            return "{selected.name}:{field.type_name}:{value}"
+    return "missing"
+function json_tree_reflected_array_payload() returns string:
+    mutable list[json.JsonTree] items = list.new[json.JsonTree]()
+    items = list.append[json.JsonTree](items, json.JsonTree.string_value("Lin"))
+    items = list.append[json.JsonTree](items, json.JsonTree.null)
+    json.JsonTree tree = json.JsonTree.array_value(items)
+    TypeVariant selected = type.variant_value[json.JsonTree](view tree)
+    for field in selected.fields:
+        if field.name == "items":
+            list[json.JsonTree] reflected = type.variant_field_value[json.JsonTree, list[json.JsonTree]](view tree, view field)
+            json.JsonTree first = list.get[json.JsonTree](view reflected, 0) handle:
+                return "missing first"
+            string first_text = json.as_string(view first) handle error:
+                return error
+            return "{selected.name}:{field.type_name}:{list.length[json.JsonTree](view reflected)}:{first_text}"
+    return "missing"
 verify json_tree_reflection_variant_metadata:
     assert json_tree_variant_count() == 6
     assert json_tree_variant_names() == "null|bool_value|number_value|string_value|array_value|object_value|"
@@ -56,3 +82,7 @@ verify json_tree_reflection_variant_metadata:
     assert json_tree_variant_field_shape("object_value", "fields") == "fields:map:map[string, json.JsonTree]:false"
     assert json_tree_variant_field_arg_shape("object_value", "fields", 0) == "primitive:string"
     assert json_tree_variant_field_arg_shape("object_value", "fields", 1) == "enum:json.JsonTree"
+    assert json_tree_value_variant_name(json.JsonTree.null) == "null"
+    assert json_tree_value_variant_name(json.JsonTree.string_value("Ada")) == "string_value"
+    assert json_tree_reflected_string_payload() == "string_value:string:Ada"
+    assert json_tree_reflected_array_payload() == "array_value:list[json.JsonTree]:2:Lin"
