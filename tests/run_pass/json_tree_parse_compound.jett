@@ -47,6 +47,8 @@ verify json_tree_parse_compound:
     assert parse_tree_summary("{{\"a\":1,,\"b\":2}}") == "expected object field"
     assert parse_tree_summary("{{\"a\":1,\"a\":2}}") == "duplicate object field 'a'"
     assert parse_tree_summary("{{\"\\u0061\":1,\"a\":2}}") == "duplicate object field 'a'"
+    assert parse_tree_summary("{{\"a/b\":1,\"a\\/b\":2}}") == "duplicate object field 'a/b'"
+    assert parse_tree_summary("{{\"a\\\"b\":1,\"a\\u0022b\":2}}") == "duplicate object field 'a\"b'"
     assert parse_tree_summary("{{\"name\":1") == "unterminated JSON object"
     assert parse_tree_summary("{{\"name\":1}} trailing") == "unexpected trailing characters after JSON value"
     assert parse_tree_summary("{{\"name\":1]") == "mismatched closing delimiter in JSON object"
