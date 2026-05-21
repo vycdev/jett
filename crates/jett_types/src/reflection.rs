@@ -551,8 +551,62 @@ mod tests {
     }
 
     #[test]
+    fn simple_aliases_stay_string_only_while_refinements_are_id_bound() {
+        let string_id = TypeId(45);
+        let refinement_id = TypeId(46);
+        let mut metadata = ReflectionMetadata::new();
+
+        metadata.insert_type_info_for_id(string_id, info("string", "primitive"));
+        metadata.insert_type_info(ReflectionTypeInfo::new(
+            "accounts.Name",
+            "alias",
+            None,
+            false,
+            vec![info("string", "primitive")],
+        ));
+        metadata.insert_type_info_for_id(
+            refinement_id,
+            ReflectionTypeInfo::new(
+                "accounts.NonEmptyName",
+                "refinement",
+                None,
+                false,
+                vec![info("string", "primitive")],
+            ),
+        );
+
+        assert_eq!(metadata.type_id_for_name("string"), Some(string_id));
+        assert_eq!(metadata.type_id_for_name("accounts.Name"), None);
+        assert_eq!(
+            metadata
+                .get_type_info("accounts.Name")
+                .expect("simple alias should keep string metadata")
+                .kind,
+            "alias"
+        );
+        assert_eq!(
+            metadata
+                .get_type_info_for_id(string_id)
+                .expect("base primitive should keep its own id metadata")
+                .type_name,
+            "string"
+        );
+        assert_eq!(
+            metadata.type_id_for_name("accounts.NonEmptyName"),
+            Some(refinement_id)
+        );
+        assert_eq!(
+            metadata
+                .get_type_info_for_id(refinement_id)
+                .expect("refinement should be id-bound")
+                .kind,
+            "refinement"
+        );
+    }
+
+    #[test]
     fn type_name_binding_promotes_existing_string_metadata_to_type_id() {
-        let type_id = TypeId(46);
+        let type_id = TypeId(47);
         let mut metadata = ReflectionMetadata::new();
 
         metadata.insert_type_info(info("models.Packet", "struct"));
