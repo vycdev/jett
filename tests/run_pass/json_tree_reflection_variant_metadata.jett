@@ -1,0 +1,58 @@
+namespace test
+function json_tree_variant_count() returns int64:
+    return list.length[TypeVariant](type.variants[json.JsonTree]())
+function json_tree_variant_names() returns string:
+    string names = ""
+    for variant in type.variants[json.JsonTree]():
+        names = "{names}{variant.name}|"
+    return names
+function json_tree_variant_field_count(variant_name: string) returns int64:
+    for variant in type.variants[json.JsonTree]():
+        if variant.name != variant_name:
+            continue
+        return list.length[TypeField](variant.fields)
+    return -1
+function json_tree_variant_has_secret(variant_name: string) returns bool:
+    for variant in type.variants[json.JsonTree]():
+        if variant.name == variant_name:
+            return variant.has_secret
+    return true
+function json_tree_variant_field_shape(variant_name: string, field_name: string) returns string:
+    for variant in type.variants[json.JsonTree]():
+        if variant.name != variant_name:
+            continue
+        for field in variant.fields:
+            if field.name == field_name:
+                return "{field.name}:{field.kind}:{field.type_name}:{field.has_secret}"
+    return "missing"
+function json_tree_variant_field_arg_shape(variant_name: string, field_name: string, target: int64) returns string:
+    for variant in type.variants[json.JsonTree]():
+        if variant.name != variant_name:
+            continue
+        for field in variant.fields:
+            if field.name != field_name:
+                continue
+            int64 index = 0
+            for arg in field.type_info.args:
+                if index == target:
+                    return "{arg.kind}:{arg.type_name}"
+                index = index + 1
+    return "missing"
+verify json_tree_reflection_variant_metadata:
+    assert json_tree_variant_count() == 6
+    assert json_tree_variant_names() == "null|bool_value|number_value|string_value|array_value|object_value|"
+    assert json_tree_variant_field_count("null") == 0
+    assert json_tree_variant_field_count("bool_value") == 1
+    assert json_tree_variant_field_count("number_value") == 1
+    assert json_tree_variant_field_count("string_value") == 1
+    assert json_tree_variant_field_count("array_value") == 1
+    assert json_tree_variant_field_count("object_value") == 1
+    assert json_tree_variant_has_secret("object_value") == false
+    assert json_tree_variant_field_shape("bool_value", "value") == "value:primitive:bool:false"
+    assert json_tree_variant_field_shape("number_value", "raw") == "raw:primitive:string:false"
+    assert json_tree_variant_field_shape("string_value", "value") == "value:primitive:string:false"
+    assert json_tree_variant_field_shape("array_value", "items") == "items:list:list[json.JsonTree]:false"
+    assert json_tree_variant_field_arg_shape("array_value", "items", 0) == "enum:json.JsonTree"
+    assert json_tree_variant_field_shape("object_value", "fields") == "fields:map:map[string, json.JsonTree]:false"
+    assert json_tree_variant_field_arg_shape("object_value", "fields", 0) == "primitive:string"
+    assert json_tree_variant_field_arg_shape("object_value", "fields", 1) == "enum:json.JsonTree"
