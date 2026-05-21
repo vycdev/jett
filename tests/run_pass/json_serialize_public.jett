@@ -9,6 +9,9 @@ struct SecretBox[T]:
 struct RawPayload:
     tree: json.JsonTree
     alias: json.JsonValue
+enum PublicEvent:
+    idle
+    created(id: string, count: int64)
 function public_session_json() returns string:
     Session session = Session(id: "s1", user_name: "alice", token: "secret-token")
     return json.serialize_public[Session](view session)
@@ -45,6 +48,12 @@ function public_bare_json_value_json() returns string:
     JsonValue raw = json.parse[JsonValue]("{{\"visible\":true,\"score\":8}}") handle error:
         return error
     return json.serialize_public[JsonValue](view raw)
+function public_unit_enum_json() returns string:
+    PublicEvent event = PublicEvent.idle
+    return json.serialize_public[PublicEvent](view event)
+function public_payload_enum_json() returns string:
+    PublicEvent event = PublicEvent.created("e1", 2)
+    return json.serialize_public[PublicEvent](view event)
 function utf8_fixture_text() returns string:
     bytes raw = bytes.from_hex("c3a9e282acf09f9880") handle error:
         return error
@@ -102,5 +111,8 @@ verify serialize_public_treats_bare_json_value_as_raw:
     string raw = public_bare_json_value_json()
     assert string.contains(raw, "\"visible\":true") == true
     assert string.contains(raw, "\"score\":8") == true
+verify serialize_public_handles_top_level_enums:
+    assert public_unit_enum_json() == "\"idle\""
+    assert public_payload_enum_json() == "{{\"created\":[\"e1\",2]}}"
 verify serialize_public_treats_nested_raw_payload_utf8_as_raw:
     assert public_raw_payload_utf8_json() == "c3a9e282acf09f9880:c3a9e282acf09f9880"
