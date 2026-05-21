@@ -205,6 +205,14 @@ function raw_as_float64_accepts_tree() returns float64:
         return 0.0
     return json.as_float64(ratio_raw) handle error:
         default 0.0
+function raw_as_uint64_accepts_tree() returns string:
+    json.JsonTree object_tree = json.json_tree_parse("{{\"serial\":18446744073709551615}}") handle error:
+        return error
+    JsonValue serial_raw = json.field(object_tree, "serial") handle:
+        return "missing serial"
+    uint64 serial = json.as_uint64(serial_raw) handle error:
+        return error
+    return string.from_uint64(serial)
 function raw_is_null_accepts_tree() returns bool:
     json.JsonTree object_tree = sample_object_tree()
     JsonValue missing = json.field(object_tree, "missing") handle:
@@ -264,6 +272,12 @@ function namespaced_json_value_alias_roundtrip() returns string:
     json.JsonTree tree = name
     return json.json_tree_as_string(view tree) handle error:
         default error
+function namespaced_json_value_alias_uint64_accessor() returns string:
+    json.JsonValue raw = json.parse_raw("18446744073709551615") handle error:
+        return error
+    uint64 value = json.as_uint64(view raw) handle error:
+        return error
+    return string.from_uint64(value)
 function namespaced_json_value_alias_to_legacy() returns string:
     json.JsonValue raw = json.json_tree_parse("\"Carol\"") handle error:
         return error
@@ -337,6 +351,7 @@ verify json_value_tree_compatibility:
     assert raw_as_string_accepts_tree() == "Barbara"
     assert raw_as_bool_accepts_tree() == true
     assert raw_as_float64_accepts_tree() == 2.5
+    assert raw_as_uint64_accepts_tree() == "18446744073709551615"
     assert raw_is_null_accepts_tree() == true
     assert raw_is_object_accepts_tree() == true
     assert raw_is_array_accepts_tree() == true
@@ -350,6 +365,7 @@ verify json_value_tree_compatibility:
     assert string.contains(legacy_serialized, "\"name\":\"Ada\"") == true
     assert string.contains(legacy_serialized, "\"score\":5") == true
     assert namespaced_json_value_alias_roundtrip() == "Alice"
+    assert namespaced_json_value_alias_uint64_accessor() == "18446744073709551615"
     assert namespaced_json_value_alias_to_legacy() == "Carol"
     assert namespaced_json_value_alias_container_bridge() == "Alice:Alice"
     assert namespaced_json_value_alias_recursive_bridge() == "Dina:Dina:Dina:***"
