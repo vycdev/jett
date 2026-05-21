@@ -1,13 +1,9 @@
 namespace models
-
 export struct User:
     id: string serialize "userId"
-
 export struct Box[T]:
     value: T serialize "item"
-
 namespace app
-
 function runtime_reflection_metadata_summary() returns string:
     use models as m
     m.User user = m.User(id: "u1")
@@ -19,9 +15,27 @@ function runtime_reflection_metadata_summary() returns string:
     m.Box[m.User] decoded = json.parse[m.Box[m.User]](raw) handle error:
         return error
     return "{info.type_name}:{field.type_name}:{field.serialize_name}:{raw}:{decoded.value.id}"
-
+function runtime_raw_alias_reflection_summary() returns string:
+    TypeInfo bare = type.info[JsonValue]()
+    TypeInfo alias = type.info[json.JsonValue]()
+    TypeInfo bare_base = list.get[TypeInfo](bare.args, 0) handle:
+        return "missing bare base"
+    TypeInfo alias_base = list.get[TypeInfo](alias.args, 0) handle:
+        return "missing alias base"
+    JsonValue parsed = json.parse[JsonValue]("{{\"name\":\"Ada\"}}") handle error:
+        return error
+    json.JsonValue exact = json.parse_exact[json.JsonValue]("{{\"name\":\"Grace\"}}") handle error:
+        return error
+    string parsed_raw = json.serialize[JsonValue](view parsed)
+    string exact_raw = json.serialize_public[json.JsonValue](view exact)
+    bool parsed_name = string.contains(parsed_raw, "\"name\":\"Ada\"")
+    bool exact_name = string.contains(exact_raw, "\"name\":\"Grace\"")
+    return "{bare.kind}:{bare_base.type_name}:{alias.kind}:{alias_base.type_name}:{json.kind(parsed)}:{json.kind(view exact)}:{parsed_name}:{exact_name}"
 function main() returns nothing:
     string summary = runtime_reflection_metadata_summary()
     if summary != "models.Box[models.User]:models.User:item:{{\"item\":{{\"userId\":\"u1\"}}}}:u1":
+        int64 fail = 1 / 0
+    string raw_summary = runtime_raw_alias_reflection_summary()
+    if raw_summary != "alias:json.JsonTree:alias:json.JsonTree:object:object:true:true":
         int64 fail = 1 / 0
     return nothing
