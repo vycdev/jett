@@ -36,6 +36,10 @@ function bad_secret_function_field(raw: string) returns string:
     SecretHandler handler = json.parse[SecretHandler](raw) handle error:
         return error
     return "secret handler"
+function bad_exact_secret_function_field(raw: string) returns string:
+    SecretHandler handler = json.parse_exact[SecretHandler](raw) handle error:
+        return error
+    return "secret handler"
 function bad_list_function_target(raw: string) returns string:
     list[Callback] callbacks = json.parse_exact[list[Callback]](raw) handle error:
         return error
