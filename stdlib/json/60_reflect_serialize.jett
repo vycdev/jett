@@ -123,25 +123,22 @@ function json_serialize_public_list_reflected[T](view value: T) returns string:
         list[string] parts = list.new[string]()
         for item in items:
             parts = list.append[string](parts, json_serialize_public_reflected[Elem](view item))
-        string body = string.join(parts, ",")
-        return "[{body}]"
+        return json_stdlib_array_from_parts(parts)
 function json_serialize_public_set_reflected[T](view value: T) returns string:
     comptime type Elem = type.arg[T](0):
         set[Elem] items = value
         list[string] parts = list.new[string]()
         for item in items:
             parts = list.append[string](parts, json_serialize_public_reflected[Elem](view item))
-        string body = string.join(parts, ",")
-        return "[{body}]"
+        return json_stdlib_array_from_parts(parts)
 function json_serialize_public_map_reflected[T](view value: T) returns string:
     comptime type Val = type.arg[T](1):
         map[string, Val] entries = value
         list[string] parts = list.new[string]()
         for key, item in entries:
             string encoded = json_serialize_public_reflected[Val](view item)
-            parts = list.append[string](parts, "{json_stdlib_quote(key)}:{encoded}")
-        string body = string.join(parts, ",")
-        return "{{{body}}}"
+            parts = list.append[string](parts, json_stdlib_object_entry(key, encoded))
+        return json_stdlib_object_from_parts(parts)
 function json_serialize_public_optional_reflected[T](view value: T) returns string:
     comptime type Inner = type.arg[T](0):
         Inner item = value handle:
@@ -164,6 +161,5 @@ function json_serialize_public_record_reflected[T](view value: T) returns string
         comptime type Field = field.type_info:
             Field item = type.field_value[T, Field](view value, view field)
             string encoded = json_serialize_public_reflected[Field](view item)
-            fields = list.append[string](fields, "{json_stdlib_quote(field.serialize_name)}:{encoded}")
-    string body = string.join(fields, ",")
-    return "{{{body}}}"
+            fields = list.append[string](fields, json_stdlib_object_entry(field.serialize_name, encoded))
+    return json_stdlib_object_from_parts(fields)

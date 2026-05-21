@@ -87,6 +87,14 @@ function json_stdlib_quote(raw: string) returns string:
     string escaped = bytes.to_string(output) handle error:
         default error
     return "\"{escaped}\""
+function json_stdlib_array_from_parts(parts: list[string]) returns string:
+    string body = string.join(parts, ",")
+    return "[{body}]"
+function json_stdlib_object_from_parts(parts: list[string]) returns string:
+    string body = string.join(parts, ",")
+    return "{{{body}}}"
+function json_stdlib_object_entry(key: string, encoded: string) returns string:
+    return "{json_stdlib_quote(key)}:{encoded}"
 function json_stdlib_string_from_hex(hex: string) returns result[string, string]:
     bytes raw = bytes.from_hex(hex) handle error:
         return fail(error)

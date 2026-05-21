@@ -21,12 +21,10 @@ function json_tree_serialize_array(view items: list[JsonTree]) returns string:
     mutable list[string] parts = list.new[string]()
     for item in view items:
         parts = list.append[string](parts, json_tree_serialize(view item))
-    string body = string.join(parts, ",")
-    return "[{body}]"
+    return json_stdlib_array_from_parts(parts)
 function json_tree_serialize_object(view fields: map[string, JsonTree]) returns string:
     mutable list[string] parts = list.new[string]()
     for key, item in view fields:
         string encoded = json_tree_serialize(view item)
-        parts = list.append[string](parts, "{json_stdlib_quote(key)}:{encoded}")
-    string body = string.join(parts, ",")
-    return "{{{body}}}"
+        parts = list.append[string](parts, json_stdlib_object_entry(key, encoded))
+    return json_stdlib_object_from_parts(parts)
