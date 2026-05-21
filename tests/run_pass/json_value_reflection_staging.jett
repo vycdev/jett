@@ -1,6 +1,11 @@
 namespace test
 type LocalRaw = json.JsonTree
 type LocalRawAlias = json.JsonValue
+type LocalRawChain = LocalRawAlias
+struct LocalRawEnvelope:
+    payload: LocalRawChain
+    items: list[LocalRaw]
+    maybe: optional[LocalRawAlias]
 function bare_json_value_reflection_summary() returns string:
     TypeInfo info = type.info[JsonValue]()
     TypePrimitive primitive = info.primitive_tag handle:
@@ -55,9 +60,23 @@ function local_raw_alias_behavior() returns string:
     bool kept_name = string.contains(encoded, "\"name\":\"Mira\"")
     bool extra_is_object = json.is_object(view extra)
     return "{json.kind(view parsed)}:{json.kind(view alias)}:{extra_is_object}:{kept_extra}:{kept_name}"
+function local_raw_alias_container_behavior() returns string:
+    string raw = "{{\"payload\":{{\"extra\":true}},\"items\":[{{\"id\":1}}],\"maybe\":{{\"name\":\"Ada\"}}}}"
+    LocalRawEnvelope envelope = json.parse_exact[LocalRawEnvelope](raw) handle error:
+        return error
+    LocalRaw first = list.get[LocalRaw](view envelope.items, 0) handle:
+        return "missing item"
+    LocalRawAlias maybe = envelope.maybe handle:
+        return "missing maybe"
+    string encoded = json.serialize_public[LocalRawEnvelope](view envelope)
+    bool payload_open = string.contains(encoded, "\"extra\":true")
+    bool item_open = string.contains(json.serialize_raw(view first), "\"id\":1")
+    bool maybe_open = string.contains(json.serialize_public[LocalRawAlias](view maybe), "\"name\":\"Ada\"")
+    return "{payload_open}:{item_open}:{maybe_open}"
 verify json_value_reflection_staging:
     assert bare_json_value_reflection_summary() == "alias:JsonValue:true:enum:json.JsonTree:1:true"
     assert alias_json_value_reflection_summary() == "alias:json.JsonValue:true:enum:json.JsonTree:1"
     assert bare_json_value_raw_behavior() == "object:true:true"
     assert alias_json_value_raw_behavior() == "object:true:true"
     assert local_raw_alias_behavior() == "object:object:true:true:true"
+    assert local_raw_alias_container_behavior() == "true:true:true"
