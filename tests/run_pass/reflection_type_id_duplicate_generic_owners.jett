@@ -22,6 +22,26 @@ function account_box_reflection_summary() returns string:
         a.Box[a.User] decoded = json.parse[a.Box[a.User]](raw) handle error:
             return error
         return "{info.type_name}:{field.type_name}:{inner_info.type_name}:{decoded.value.id}"
+function account_nested_box_reflection_summary() returns string:
+    use accounts as a
+    a.User user = a.User(id: "nested-a")
+    a.Box[a.User] inner = a.Box[a.User](value: user)
+    a.Box[a.Box[a.User]] outer = a.Box[a.Box[a.User]](value: inner)
+    TypeInfo outer_info = type.info[a.Box[a.Box[a.User]]]()
+    TypeField outer_field = list.get[TypeField](type.fields[a.Box[a.Box[a.User]]](), 0) handle:
+        return "missing account outer field"
+    TypeInfo outer_arg = list.get[TypeInfo](outer_info.args, 0) handle:
+        return "missing account outer arg"
+    TypeInfo field_arg = list.get[TypeInfo](outer_field.type_info.args, 0) handle:
+        return "missing account field arg"
+    comptime type InnerBox = type.arg[a.Box[a.Box[a.User]]](0):
+        TypeField inner_field = list.get[TypeField](type.fields[InnerBox](), 0) handle:
+            return "missing account inner field"
+        comptime type Leaf = type.arg[InnerBox](0):
+            string raw = json.serialize[a.Box[a.Box[a.User]]](view outer)
+            a.Box[a.Box[a.User]] decoded = json.parse[a.Box[a.Box[a.User]]](raw) handle error:
+                return error
+            return "{outer_info.type_name}:{outer_arg.type_name}:{outer_field.type_name}:{field_arg.type_name}:{inner_field.type_name}:{type.name[Leaf]()}:{decoded.value.value.id}"
 function audit_box_reflection_summary() returns string:
     use audit as a
     a.User user = a.User(attempts: 3)
@@ -35,6 +55,28 @@ function audit_box_reflection_summary() returns string:
         a.Box[a.User] decoded = json.parse[a.Box[a.User]](raw) handle error:
             return error
         return "{info.type_name}:{field.type_name}:{inner_info.type_name}:{decoded.value.attempts}"
+function audit_nested_box_reflection_summary() returns string:
+    use audit as a
+    a.User user = a.User(attempts: 8)
+    a.Box[a.User] inner = a.Box[a.User](value: user)
+    a.Box[a.Box[a.User]] outer = a.Box[a.Box[a.User]](value: inner)
+    TypeInfo outer_info = type.info[a.Box[a.Box[a.User]]]()
+    TypeField outer_field = list.get[TypeField](type.fields[a.Box[a.Box[a.User]]](), 0) handle:
+        return "missing audit outer field"
+    TypeInfo outer_arg = list.get[TypeInfo](outer_info.args, 0) handle:
+        return "missing audit outer arg"
+    TypeInfo field_arg = list.get[TypeInfo](outer_field.type_info.args, 0) handle:
+        return "missing audit field arg"
+    comptime type InnerBox = type.arg[a.Box[a.Box[a.User]]](0):
+        TypeField inner_field = list.get[TypeField](type.fields[InnerBox](), 0) handle:
+            return "missing audit inner field"
+        comptime type Leaf = type.arg[InnerBox](0):
+            string raw = json.serialize[a.Box[a.Box[a.User]]](view outer)
+            a.Box[a.Box[a.User]] decoded = json.parse[a.Box[a.Box[a.User]]](raw) handle error:
+                return error
+            return "{outer_info.type_name}:{outer_arg.type_name}:{outer_field.type_name}:{field_arg.type_name}:{inner_field.type_name}:{type.name[Leaf]()}:{decoded.value.value.attempts}"
 verify reflection_type_id_duplicate_generic_owners:
     assert account_box_reflection_summary() == "accounts.Box[accounts.User]:accounts.User:accounts.User:a1"
+    assert account_nested_box_reflection_summary() == "accounts.Box[accounts.Box[accounts.User]]:accounts.Box[accounts.User]:accounts.Box[accounts.User]:accounts.User:accounts.User:accounts.User:nested-a"
     assert audit_box_reflection_summary() == "audit.Box[audit.User]:audit.User:audit.User:3"
+    assert audit_nested_box_reflection_summary() == "audit.Box[audit.Box[audit.User]]:audit.Box[audit.User]:audit.Box[audit.User]:audit.User:audit.User:audit.User:8"
