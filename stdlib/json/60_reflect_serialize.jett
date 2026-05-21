@@ -10,7 +10,7 @@ mutual:
     function json_serialize_public_float_value[T](view value: T) returns string
     function json_serialize_public_bytes_value[T](view value: T) returns string
     function json_serialize_public_enum_reflected[T](view value: T) returns string
-    function json_serialize_public_non_enum_reflected[T](view value: T, kind: TypeKind) returns string
+    function json_serialize_public_non_enum_reflected[T](view value: T, view info: TypeInfo) returns string
     function json_serialize_public_list_reflected[T](view value: T) returns string
     function json_serialize_public_set_reflected[T](view value: T) returns string
     function json_serialize_public_map_reflected[T](view value: T) returns string
@@ -36,7 +36,7 @@ function json_serialize_public_reflected[T](view value: T) returns string:
             return json_serialize_public_reflected[Base](view item)
     if kind == TypeKind.enum_type:
         return json_serialize_public_enum_reflected[T](view value)
-    return json_serialize_public_non_enum_reflected[T](view value, kind)
+    return json_serialize_public_non_enum_reflected[T](view value, view info)
 function json_serialize_public_raw_reflected[T](view value: T) returns string:
     JsonTree item = value
     return json_tree_serialize(view item)
@@ -102,7 +102,8 @@ function json_serialize_public_enum_reflected[T](view value: T) returns string:
         string body = string.join(parts, ",")
         return "{{{json_stdlib_quote(variant.name)}:[{body}]}}"
     return json_stdlib_quote(selected.name)
-function json_serialize_public_non_enum_reflected[T](view value: T, kind: TypeKind) returns string:
+function json_serialize_public_non_enum_reflected[T](view value: T, view info: TypeInfo) returns string:
+    TypeKind kind = info.kind_tag
     match kind:
         list_type:
             return json_serialize_public_list_reflected[T](view value)
