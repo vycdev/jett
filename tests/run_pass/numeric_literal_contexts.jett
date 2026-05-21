@@ -1,17 +1,16 @@
 namespace test
-
 function takes_byte(value: uint8) returns uint8:
     return value
-
 function return_byte_sum() returns uint8:
     return 1 + 2
-
 function signed_literal_text() returns string:
     int8 small = -128
     int16 wide = -32768
     float32 ratio = -2.5
     return "{small}:{wide}:{ratio}"
-
+function int64_min_literal_text() returns string:
+    int64 value = -9223372036854775808
+    return "{value}"
 function default_numeric_text() returns string:
     optional[uint8] missing_byte = none
     uint8 byte = missing_byte handle:
@@ -22,29 +21,27 @@ function default_numeric_text() returns string:
     optional[int8] missing_small = none
     int8 small = missing_small handle:
         default -128
-    return "{byte}:{count}:{small}"
-
+    optional[uint64] missing_big = none
+    uint64 big = missing_big handle:
+        default 18446744073709551615
+    return "{byte}:{count}:{small}:{string.from_uint64(big)}"
 actor ByteCounter(seed: uint8):
     mutable uint8 count = seed + 1
-
     receive add(delta: uint8):
         count = count + delta
-
     receive current responds uint8:
         respond count + 1
-
 verify numeric_literal_contexts:
     uint8 local = 1 + 2
     uint8 called = takes_byte(3 + 4)
     uint8 returned = return_byte_sum()
-
     ByteCounter counter = spawn ByteCounter(seed: 4 + 5)
     send counter.add(10 + 11)
     uint8 current = ask counter.current
-
     assert local == 3
     assert called == 7
     assert returned == 3
     assert current == 32
     assert signed_literal_text() == "-128:-32768:-2.5"
-    assert default_numeric_text() == "255:4294967295:-128"
+    assert int64_min_literal_text() == "-9223372036854775808"
+    assert default_numeric_text() == "255:4294967295:-128:18446744073709551615"

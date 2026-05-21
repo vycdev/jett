@@ -889,20 +889,16 @@ impl Interpreter {
             }
 
             // Unary operations
-            Expr::Unary(op, operand, _) => {
-                let val = value_or_signal!(self, operand);
-                match op {
-                    UnaryOp::Not => match val {
+            Expr::Unary(op, operand, _) => match op {
+                UnaryOp::Not => {
+                    let val = value_or_signal!(self, operand);
+                    match val {
                         Value::Bool(b) => Ok(ExprFlow::Value(Value::Bool(!b))),
                         _ => Err("'not' requires a boolean operand".to_string()),
-                    },
-                    UnaryOp::Neg => match val {
-                        Value::Int64(n) => Ok(ExprFlow::Value(Value::Int64(-n))),
-                        Value::Float64(n) => Ok(ExprFlow::Value(Value::Float64(-n))),
-                        _ => Err("unary '-' requires a numeric operand".to_string()),
-                    },
+                    }
                 }
-            }
+                UnaryOp::Neg => self.eval_negation_flow(operand),
+            },
 
             // Function / method calls
             Expr::Call(callee, args, _) => self.eval_call_flow(callee, &[], args),
@@ -1151,6 +1147,30 @@ impl Interpreter {
                 "unsupported expression in comptime: {:?}",
                 std::mem::discriminant(expr)
             )),
+        }
+    }
+
+    fn eval_negation_flow(&mut self, operand: &Expr) -> Result<ExprFlow, String> {
+        if let Expr::IntLiteral(value, _) = operand {
+            let negated = value
+                .checked_neg()
+                .ok_or_else(|| format!("integer literal '-{value}' is out of runtime range"))?;
+            if (i64::MIN as i128..=i64::MAX as i128).contains(&negated) {
+                return Ok(ExprFlow::Value(Value::Int64(negated as i64)));
+            }
+            return Err(format!(
+                "integer literal '-{value}' is out of runtime range"
+            ));
+        }
+
+        let val = value_or_signal!(self, operand);
+        match val {
+            Value::Int64(n) => n
+                .checked_neg()
+                .map(|value| ExprFlow::Value(Value::Int64(value)))
+                .ok_or_else(|| "integer negation overflow".to_string()),
+            Value::Float64(n) => Ok(ExprFlow::Value(Value::Float64(-n))),
+            _ => Err("unary '-' requires a numeric operand".to_string()),
         }
     }
 

@@ -910,6 +910,10 @@ compile_fail_fixture!(
     "comptime_type_bind_requires_literal_type_arg_index.jett"
 );
 compile_fail_fixture!(
+    compile_fail_comptime_type_bind_type_arg_index_out_of_range,
+    "comptime_type_bind_type_arg_index_out_of_range.jett"
+);
+compile_fail_fixture!(
     compile_fail_comptime_type_bind_requires_direct_variant_field_loop,
     "comptime_type_bind_requires_direct_variant_field_loop.jett"
 );
@@ -1095,6 +1099,22 @@ function hover_json() returns json.JsonTree:
         ty,
         Some("result[json.JsonTree, string]".to_string()),
         "expected hover to see stdlib JsonTree raw facade signature"
+    );
+}
+
+#[test]
+fn wide_integer_literal_hover_type_is_uint64() {
+    let source = r#"
+namespace app
+
+function value() returns uint64:
+    return 18446744073709551615
+"#;
+
+    assert_eq!(
+        hover_type(source, 5, 12),
+        Some("uint64".to_string()),
+        "expected a full-range uint64 literal to hover as uint64"
     );
 }
 

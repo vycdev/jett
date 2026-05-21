@@ -1,0 +1,7 @@
+# ERROR: E0345
+namespace test
+function bad() returns string:
+    string found = "missing"
+    comptime type Arg = type.arg[list[string]](18446744073709551615):
+        found = type.name[Arg]()
+    return found
