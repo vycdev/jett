@@ -58,7 +58,7 @@ verify json_enum_bitfield_exact_edges:
     assert parse_exact_unit_enum_success() == true
     assert parse_exact_unit_enum_unknown_error() == "unknown enum variant 'test.Direction.east'"
     assert parse_exact_enum_object_multiple_keys_error() == "expected enum object with exactly one key"
-    assert parse_exact_enum_payload_not_array_error() == "expected array, got number"
+    assert parse_exact_enum_payload_not_array_error() == "expected array payload for enum variant 'test.Shape.circle', got number"
     assert parse_exact_enum_payload_arity_error() == "enum variant 'test.Shape.circle' expects 1 payload field(s), got 0"
     assert parse_exact_enum_payload_nested_extra_error() == "profile.profile: unknown field 'extra' for test.Profile"
     assert parse_exact_bitfield_success() == "4:true"
