@@ -186,6 +186,10 @@ stdlib-owned `json.JsonTree` enum variant metadata, including variant names,
 payload field names, container type names, nested `json.JsonTree` arguments,
 primitive tags, and value-sensitive `type.variant_value` /
 `type.variant_field_value` payload reads.
+`tests/run_pass/json_tree_reflection_construction.jett` pins the same stdlib
+enum as a construction target through `type.construct_variant_start`,
+`type.construct_put`, and `type.construct_finish`, including null, string,
+number, array, and object variants.
 `ReflectionMetadata::insert_type_info` now also refreshes an existing canonical
 `TypeId` binding when the inserted type name is already bound, matching the
 owner-metadata insertion behavior.

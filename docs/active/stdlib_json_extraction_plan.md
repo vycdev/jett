@@ -113,7 +113,8 @@ Together they cover the shape needed for a future stdlib module:
 - dedicated shape coverage now lives in `json_shape_matrix`,
   `json_parse_collection_edges`, `json_parse_exact*`,
   `json_enum_bitfield_exact_edges`, `json_refinement_exact_serialize_edges`,
-  and parser parity fixtures.
+  `json_parse_exact_secret_edges`, `json_tree_reflection_construction`, and
+  parser parity fixtures.
 
 The compiler-known JSON bridge remains the compatibility and policy facade. It
 still owns the public typechecker policy for `json.parse`, `json.parse_exact`,
