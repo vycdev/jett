@@ -327,10 +327,12 @@ for current JSON hooks; future backends need the same identity boundary.
    over known `TypeKind` and `TypePrimitive` values now select only the
    reachable arm, matching Jett's canonical enum-dispatch form rather than
    forcing all generic reflection code through `if` ladders. Primitive JSON
-   dispatch still keeps exact `TypePrimitive.*` comparisons visible at each
-   generic helper split point, using small optional-returning helpers rather
-   than opaque predicates, so the checker can prune invalid primitive casts
-   while the function complexity checker still applies to stdlib code.
+   dispatch still keeps exact `TypePrimitive.*` comparisons visible where a
+   branch chooses a different runtime carrier such as `uint64`; narrow
+   classifier helpers are allowed only when every selected primitive shares the
+   same safe cast target, such as the `int64`-backed integer path. This keeps
+   invalid primitive casts prunable while giving stdlib code headroom under the
+   function complexity checker.
    Predicate-derived facts, diagnostic string facts, and other value-sensitive
    reflection helper shapes remain deferred.
 
