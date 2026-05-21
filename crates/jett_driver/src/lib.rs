@@ -17,6 +17,18 @@ use std::thread;
 
 const RUNTIME_STACK_SIZE: usize = 8 * 1024 * 1024;
 
+struct DiscoveredModules {
+    modules: Vec<Module>,
+    diagnostics: Vec<Diagnostic>,
+}
+
+impl DiscoveredModules {
+    fn extend(&mut self, other: DiscoveredModules) {
+        self.modules.extend(other.modules);
+        self.diagnostics.extend(other.diagnostics);
+    }
+}
+
 /// Result of compiling a single file.
 pub struct BuildResult {
     pub diagnostics: Vec<Diagnostic>,
@@ -39,9 +51,7 @@ pub fn build_source(source: &str, file_path: &str) -> BuildResult {
     let mut parse_result = parse(source, file_id);
     all_diagnostics.extend(parse_result.errors.clone());
 
-    let has_parse_errors = all_diagnostics
-        .iter()
-        .any(|d| d.severity == jett_diagnostics::Severity::Error);
+    let has_parse_errors = has_error_diagnostics(&all_diagnostics);
     if has_parse_errors {
         return BuildResult {
             has_errors: true,
@@ -53,14 +63,23 @@ pub fn build_source(source: &str, file_path: &str) -> BuildResult {
     }
 
     // Phase 3: Resolve names
-    prepend_support_modules(&mut parse_result.module, discover_stdlib_modules());
+    let support_modules = discover_stdlib_modules_with_diagnostics();
+    all_diagnostics.extend(support_modules.diagnostics);
+    if has_error_diagnostics(&all_diagnostics) {
+        return BuildResult {
+            has_errors: true,
+            diagnostics: all_diagnostics,
+            source: source.to_string(),
+            file_path: file_path.to_string(),
+            reflection_metadata: None,
+        };
+    }
+    prepend_support_modules(&mut parse_result.module, support_modules.modules);
 
     let resolve_result = resolve(&parse_result.module);
     all_diagnostics.extend(resolve_result.diagnostics.clone());
 
-    let has_resolve_errors = all_diagnostics
-        .iter()
-        .any(|d| d.severity == jett_diagnostics::Severity::Error);
+    let has_resolve_errors = has_error_diagnostics(&all_diagnostics);
     if has_resolve_errors {
         return BuildResult {
             has_errors: true,
@@ -75,9 +94,7 @@ pub fn build_source(source: &str, file_path: &str) -> BuildResult {
     let check_result = check(&parse_result.module, &resolve_result);
     all_diagnostics.extend(check_result.diagnostics.clone());
 
-    let has_typecheck_errors = all_diagnostics
-        .iter()
-        .any(|d| d.severity == jett_diagnostics::Severity::Error);
+    let has_typecheck_errors = has_error_diagnostics(&all_diagnostics);
     if has_typecheck_errors {
         return BuildResult {
             has_errors: true,
@@ -94,9 +111,7 @@ pub fn build_source(source: &str, file_path: &str) -> BuildResult {
         run_verify_blocks_with_metadata(&parse_result.module, check_result.reflection_metadata);
     all_diagnostics.extend(verify_diagnostics);
 
-    let has_errors = all_diagnostics
-        .iter()
-        .any(|d| d.severity == jett_diagnostics::Severity::Error);
+    let has_errors = has_error_diagnostics(&all_diagnostics);
 
     BuildResult {
         has_errors,
@@ -363,9 +378,7 @@ fn build_file_inner(path: &Path, include_project: bool) -> BuildResult {
     all_diagnostics.extend(parse_result.errors.clone());
 
     // If there are parse errors, stop here — resolve/typecheck won't produce useful results
-    let has_parse_errors = all_diagnostics
-        .iter()
-        .any(|d| d.severity == jett_diagnostics::Severity::Error);
+    let has_parse_errors = has_error_diagnostics(&all_diagnostics);
     if has_parse_errors {
         return BuildResult {
             has_errors: true,
@@ -379,19 +392,27 @@ fn build_file_inner(path: &Path, include_project: bool) -> BuildResult {
     // Multi-file: prepend stdlib and sibling project modules so
     // resolver/typechecker can see cross-file definitions (functions, types,
     // etc.).
-    let mut support_modules = discover_stdlib_modules();
+    let mut support_modules = discover_stdlib_modules_with_diagnostics();
     if include_project {
-        support_modules.extend(discover_project_modules(path));
+        support_modules.extend(discover_project_modules_with_diagnostics(path));
     }
-    prepend_support_modules(&mut parse_result.module, support_modules);
+    all_diagnostics.extend(support_modules.diagnostics);
+    if has_error_diagnostics(&all_diagnostics) {
+        return BuildResult {
+            has_errors: true,
+            diagnostics: all_diagnostics,
+            source,
+            file_path: file_path_str,
+            reflection_metadata: None,
+        };
+    }
+    prepend_support_modules(&mut parse_result.module, support_modules.modules);
 
     // Phase 3: Resolve names
     let resolve_result = resolve(&parse_result.module);
     all_diagnostics.extend(resolve_result.diagnostics.clone());
 
-    let has_resolve_errors = all_diagnostics
-        .iter()
-        .any(|d| d.severity == jett_diagnostics::Severity::Error);
+    let has_resolve_errors = has_error_diagnostics(&all_diagnostics);
     if has_resolve_errors {
         return BuildResult {
             has_errors: true,
@@ -406,9 +427,7 @@ fn build_file_inner(path: &Path, include_project: bool) -> BuildResult {
     let check_result = check(&parse_result.module, &resolve_result);
     all_diagnostics.extend(check_result.diagnostics.clone());
 
-    let has_typecheck_errors = all_diagnostics
-        .iter()
-        .any(|d| d.severity == jett_diagnostics::Severity::Error);
+    let has_typecheck_errors = has_error_diagnostics(&all_diagnostics);
     if has_typecheck_errors {
         return BuildResult {
             has_errors: true,
@@ -425,9 +444,7 @@ fn build_file_inner(path: &Path, include_project: bool) -> BuildResult {
         run_verify_blocks_with_metadata(&parse_result.module, check_result.reflection_metadata);
     all_diagnostics.extend(verify_diagnostics);
 
-    let has_errors = all_diagnostics
-        .iter()
-        .any(|d| d.severity == jett_diagnostics::Severity::Error);
+    let has_errors = has_error_diagnostics(&all_diagnostics);
 
     BuildResult {
         has_errors,
@@ -463,6 +480,12 @@ fn item_file(item: &Item) -> FileId {
         Item::Property(prop) => prop.span.file,
         Item::TypeAlias(alias) => alias.span.file,
     }
+}
+
+fn has_error_diagnostics(diagnostics: &[Diagnostic]) -> bool {
+    diagnostics
+        .iter()
+        .any(|d| d.severity == jett_diagnostics::Severity::Error)
 }
 
 fn update_current_namespace(
@@ -512,7 +535,11 @@ fn prepend_support_modules(module: &mut Module, support_modules: Vec<Module>) {
 
 /// Discover and parse compiler-shipped stdlib modules.
 fn discover_stdlib_modules() -> Vec<Module> {
-    discover_modules_in_dir(&stdlib_root(), None, STDLIB_FILE_ID_START)
+    discover_stdlib_modules_with_diagnostics().modules
+}
+
+fn discover_stdlib_modules_with_diagnostics() -> DiscoveredModules {
+    discover_modules_in_dir(&stdlib_root(), None, STDLIB_FILE_ID_START, "stdlib")
 }
 
 fn stdlib_root() -> PathBuf {
@@ -525,26 +552,45 @@ fn stdlib_root() -> PathBuf {
 /// Discover and parse all sibling .jett files in the project (if a jett.proj exists).
 /// Returns parsed modules for files other than the entry file.
 fn discover_project_modules(entry_path: &Path) -> Vec<Module> {
+    discover_project_modules_with_diagnostics(entry_path).modules
+}
+
+fn discover_project_modules_with_diagnostics(entry_path: &Path) -> DiscoveredModules {
     let canon = entry_path.canonicalize().ok();
     let project_root = find_project_root(entry_path).ok();
     let Some(root) = project_root else {
-        return Vec::new();
+        return DiscoveredModules {
+            modules: Vec::new(),
+            diagnostics: Vec::new(),
+        };
     };
-    discover_modules_in_dir(&root, canon.as_deref(), 1)
+    discover_modules_in_dir(&root, canon.as_deref(), 1, "project")
 }
 
 fn discover_modules_in_dir(
     root: &Path,
     skip_canon: Option<&Path>,
     start_file_id: u32,
-) -> Vec<Module> {
+    module_kind: &str,
+) -> DiscoveredModules {
     let mut files = Vec::new();
-    if collect_jett_files(root, &mut files).is_err() {
-        return Vec::new();
+    if let Err(err) = collect_jett_files(root, &mut files) {
+        return DiscoveredModules {
+            modules: Vec::new(),
+            diagnostics: vec![Diagnostic::error(
+                0,
+                format!(
+                    "failed to scan {module_kind} modules in {}: {err}",
+                    root.display()
+                ),
+                jett_common::Span::new(FileId::new(start_file_id), 0, 0),
+            )],
+        };
     }
     files.sort();
 
     let mut modules = Vec::new();
+    let mut diagnostics = Vec::new();
     for (idx, file_path) in files.iter().enumerate() {
         // Skip the entry file when parsing project siblings.
         let should_skip = skip_canon
@@ -553,20 +599,41 @@ fn discover_modules_in_dir(
         if should_skip {
             continue;
         }
-        if let Ok(source) = fs::read_to_string(file_path) {
-            let file_id = FileId::new(start_file_id + idx as u32);
-            let parsed = parse(&source, file_id);
-            // Only include files that parse without errors.
-            let has_errors = parsed
-                .errors
-                .iter()
-                .any(|d| d.severity == jett_diagnostics::Severity::Error);
-            if !has_errors {
-                modules.push(parsed.module);
+        let file_id = FileId::new(start_file_id + idx as u32);
+        let source = match fs::read_to_string(file_path) {
+            Ok(source) => source,
+            Err(err) => {
+                diagnostics.push(Diagnostic::error(
+                    0,
+                    format!(
+                        "failed to read {module_kind} module {}: {err}",
+                        file_path.display()
+                    ),
+                    jett_common::Span::new(file_id, 0, 0),
+                ));
+                continue;
             }
+        };
+        let parsed = parse(&source, file_id);
+        if has_error_diagnostics(&parsed.errors) {
+            for mut diagnostic in parsed.errors {
+                if diagnostic.severity == jett_diagnostics::Severity::Error {
+                    diagnostic.message = format!(
+                        "failed to parse {module_kind} module {}: {}",
+                        file_path.display(),
+                        diagnostic.message
+                    );
+                    diagnostics.push(diagnostic);
+                }
+            }
+        } else {
+            modules.push(parsed.module);
         }
     }
-    modules
+    DiscoveredModules {
+        modules,
+        diagnostics,
+    }
 }
 
 /// Run a .jett file using the tree-walking interpreter.
@@ -799,10 +866,17 @@ pub fn test_file(path: &Path) -> Result<TestResult, String> {
         return Err(format!("parse errors:\n{}", msgs.join("\n")));
     }
 
-    let mut support_modules = discover_stdlib_modules();
-    support_modules.extend(discover_project_modules(path));
-    strip_test_items_from_support_modules(&mut support_modules);
-    prepend_support_modules(&mut parse_result.module, support_modules);
+    let mut support_modules = discover_stdlib_modules_with_diagnostics();
+    support_modules.extend(discover_project_modules_with_diagnostics(path));
+    let support_errors = error_messages_from_diagnostics(&support_modules.diagnostics);
+    if !support_errors.is_empty() {
+        return Err(format!(
+            "support parse errors:\n{}",
+            support_errors.join("\n")
+        ));
+    }
+    strip_test_items_from_support_modules(&mut support_modules.modules);
+    prepend_support_modules(&mut parse_result.module, support_modules.modules);
 
     let resolve_result = resolve(&parse_result.module);
     let resolve_errors = error_messages_from_diagnostics(&resolve_result.diagnostics);
@@ -896,6 +970,50 @@ pub fn test_project(start_dir: &Path) -> Result<ProjectTestResult, String> {
         total_failed,
         file_results,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_test_dir(name: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("{name}_{nanos}"))
+    }
+
+    #[test]
+    fn support_module_parse_errors_are_reported() {
+        let root = temp_test_dir("jett_driver_support_parse_errors");
+        fs::create_dir_all(&root).expect("temp support dir should be created");
+        let broken = root.join("broken.jett");
+        fs::write(&broken, "namespace broken\nfunction nope(\n")
+            .expect("broken support fixture should be written");
+
+        let discovered = discover_modules_in_dir(&root, None, STDLIB_FILE_ID_START, "stdlib");
+        let errors = error_messages_from_diagnostics(&discovered.diagnostics);
+
+        fs::remove_dir_all(&root).expect("temp support dir should be removed");
+
+        assert!(
+            discovered.modules.is_empty(),
+            "parse-broken support file should not be loaded"
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("failed to parse stdlib module")
+                    && error.contains("broken.jett")),
+            "expected support parse diagnostic to mention the broken stdlib module, got {errors:?}"
+        );
+        assert!(
+            errors.iter().all(|error| !error.contains("undefined name")),
+            "support parse errors should surface before resolver fallout, got {errors:?}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
