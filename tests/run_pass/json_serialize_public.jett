@@ -6,6 +6,9 @@ struct Session:
 struct SecretBox[T]:
     value: T
     label: string serialize "displayLabel"
+struct RawPayload:
+    tree: json.JsonTree
+    alias: json.JsonValue
 function public_session_json() returns string:
     Session session = Session(id: "s1", user_name: "alice", token: "secret-token")
     return json.serialize_public[Session](view session)
@@ -31,6 +34,28 @@ function public_bare_json_value_json() returns string:
     JsonValue raw = json.parse[JsonValue]("{{\"visible\":true,\"score\":8}}") handle error:
         return error
     return json.serialize_public[JsonValue](view raw)
+function utf8_fixture_text() returns string:
+    bytes raw = bytes.from_hex("c3a9e282acf09f9880") handle error:
+        return error
+    return bytes.to_string(raw) handle error:
+        default error
+function public_raw_payload_utf8_json() returns string:
+    string text = utf8_fixture_text()
+    json.JsonTree tree = json.JsonTree.string_value(text)
+    json.JsonValue alias = json.JsonTree.string_value(text)
+    RawPayload payload = RawPayload(tree: tree, alias: alias)
+    string raw = json.serialize_public[RawPayload](view payload)
+    json.JsonTree parsed = json.parse_raw(raw) handle error:
+        return "parse:{error}"
+    json.JsonTree tree_field = json.require_field(view parsed, "tree") handle error:
+        return "tree:{error}"
+    json.JsonTree alias_field = json.require_field(view parsed, "alias") handle error:
+        return "alias:{error}"
+    string tree_text = json.as_string(view tree_field) handle error:
+        return "tree value:{error}"
+    string alias_text = json.as_string(view alias_field) handle error:
+        return "alias value:{error}"
+    return "{bytes.to_hex(bytes.from_string(tree_text))}:{bytes.to_hex(bytes.from_string(alias_text))}"
 verify serialize_public_omits_secret_fields:
     string raw = public_session_json()
     assert string.contains(raw, "id") == true
@@ -64,3 +89,5 @@ verify serialize_public_treats_bare_json_value_as_raw:
     string raw = public_bare_json_value_json()
     assert string.contains(raw, "\"visible\":true") == true
     assert string.contains(raw, "\"score\":8") == true
+verify serialize_public_treats_nested_raw_payload_utf8_as_raw:
+    assert public_raw_payload_utf8_json() == "c3a9e282acf09f9880:c3a9e282acf09f9880"
