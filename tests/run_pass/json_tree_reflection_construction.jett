@@ -1,0 +1,84 @@
+namespace test
+function construct_json_tree_null() returns string:
+    for variant in type.variants[json.JsonTree]():
+        if variant.name != "null":
+            continue
+        TypeConstruction builder = type.construct_variant_start[json.JsonTree](view variant) handle error:
+            return error
+        json.JsonTree built = type.construct_finish[json.JsonTree](builder) handle error:
+            return error
+        return json.serialize_raw(view built)
+    return "missing null variant"
+function construct_json_tree_string() returns string:
+    for variant in type.variants[json.JsonTree]():
+        if variant.name != "string_value":
+            continue
+        mutable TypeConstruction builder = type.construct_variant_start[json.JsonTree](view variant) handle error:
+            return error
+        TypeField field = list.get[TypeField](variant.fields, 0) handle:
+            return "missing string field"
+        builder = type.construct_put[json.JsonTree, string](builder, view field, "Ada") handle error:
+            return error
+        json.JsonTree built = type.construct_finish[json.JsonTree](builder) handle error:
+            return error
+        return json.as_string(view built) handle error:
+            default error
+    return "missing string variant"
+function construct_json_tree_number() returns string:
+    for variant in type.variants[json.JsonTree]():
+        if variant.name != "number_value":
+            continue
+        mutable TypeConstruction builder = type.construct_variant_start[json.JsonTree](view variant) handle error:
+            return error
+        TypeField field = list.get[TypeField](variant.fields, 0) handle:
+            return "missing number field"
+        builder = type.construct_put[json.JsonTree, string](builder, view field, "18446744073709551615") handle error:
+            return error
+        json.JsonTree built = type.construct_finish[json.JsonTree](builder) handle error:
+            return error
+        uint64 value = json.as_uint64(view built) handle error:
+            return error
+        return string.from_uint64(value)
+    return "missing number variant"
+function construct_json_tree_array() returns string:
+    for variant in type.variants[json.JsonTree]():
+        if variant.name != "array_value":
+            continue
+        mutable list[json.JsonTree] items = list.new[json.JsonTree]()
+        items = list.append[json.JsonTree](items, json.JsonTree.string_value("Ada"))
+        items = list.append[json.JsonTree](items, json.JsonTree.null)
+        mutable TypeConstruction builder = type.construct_variant_start[json.JsonTree](view variant) handle error:
+            return error
+        TypeField field = list.get[TypeField](variant.fields, 0) handle:
+            return "missing array field"
+        builder = type.construct_put[json.JsonTree, list[json.JsonTree]](builder, view field, items) handle error:
+            return error
+        json.JsonTree built = type.construct_finish[json.JsonTree](builder) handle error:
+            return error
+        return json.serialize_raw(view built)
+    return "missing array variant"
+function construct_json_tree_object() returns string:
+    for variant in type.variants[json.JsonTree]():
+        if variant.name != "object_value":
+            continue
+        mutable map[string, json.JsonTree] fields = map.new[string, json.JsonTree]()
+        fields = map.insert[string, json.JsonTree](fields, "name", json.JsonTree.string_value("Ada"))
+        mutable TypeConstruction builder = type.construct_variant_start[json.JsonTree](view variant) handle error:
+            return error
+        TypeField field = list.get[TypeField](variant.fields, 0) handle:
+            return "missing object field"
+        builder = type.construct_put[json.JsonTree, map[string, json.JsonTree]](builder, view field, fields) handle error:
+            return error
+        json.JsonTree built = type.construct_finish[json.JsonTree](builder) handle error:
+            return error
+        json.JsonTree name = json.require_field(view built, "name") handle error:
+            return error
+        return json.as_string(view name) handle error:
+            default error
+    return "missing object variant"
+verify json_tree_reflection_construction:
+    assert construct_json_tree_null() == "null"
+    assert construct_json_tree_string() == "Ada"
+    assert construct_json_tree_number() == "18446744073709551615"
+    assert construct_json_tree_array() == "[\"Ada\",null]"
+    assert construct_json_tree_object() == "Ada"

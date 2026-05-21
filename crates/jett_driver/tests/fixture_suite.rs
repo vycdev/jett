@@ -490,6 +490,10 @@ run_pass_fixture!(
     "json_tree_reflection_variant_metadata.jett"
 );
 run_pass_fixture!(
+    run_pass_json_tree_reflection_construction,
+    "json_tree_reflection_construction.jett"
+);
+run_pass_fixture!(
     run_pass_json_tree_reflection_parse_wrapper,
     "json_tree_reflection_parse_wrapper.jett"
 );
