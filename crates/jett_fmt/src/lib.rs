@@ -1,5 +1,5 @@
 use jett_common::FileId;
-use jett_lexer::{Token, TokenKind, tokenize};
+use jett_lexer::{CommentTrivia, Token, TokenKind, tokenize};
 
 /// Format Jett source code to canonical style.
 /// Returns the formatted source text, or the original text with errors if lexing fails.
@@ -17,7 +17,7 @@ pub fn format_source(source: &str, file_id: FileId) -> FormatResult {
         };
     }
 
-    let formatted = reprint_tokens(&lex_result.tokens, source);
+    let formatted = reprint_tokens(&lex_result.tokens, &lex_result.comments, source);
 
     FormatResult {
         output: formatted,
@@ -36,17 +36,31 @@ pub struct FormatResult {
 /// - No trailing whitespace
 /// - Consistent spacing around operators
 /// - Single blank lines between top-level declarations
-fn reprint_tokens(tokens: &[Token], source: &str) -> String {
+fn reprint_tokens(tokens: &[Token], comments: &[CommentTrivia], source: &str) -> String {
     let mut output = String::new();
     let mut indent_level: u32 = 0;
     let mut at_line_start = true;
     let mut prev_kind: Option<TokenKind> = None;
     let mut prev_was_unary_minus = false;
     let mut consecutive_newlines: u32 = 0;
+    let mut comment_index = 0usize;
+    let mut last_source_pos = 0usize;
 
     let mut index = 0usize;
     while index < tokens.len() {
         let token = &tokens[index];
+        emit_comments_before(
+            comments,
+            &mut comment_index,
+            token.span.start as usize,
+            source,
+            &mut output,
+            &mut at_line_start,
+            &mut prev_kind,
+            &mut prev_was_unary_minus,
+            &mut consecutive_newlines,
+            &mut last_source_pos,
+        );
         match token.kind {
             TokenKind::Indent => {
                 indent_level += 1;
@@ -60,12 +74,13 @@ fn reprint_tokens(tokens: &[Token], source: &str) -> String {
             }
             TokenKind::Newline => {
                 consecutive_newlines += 1;
-                if consecutive_newlines <= 2 {
+                if consecutive_newlines <= 2 && (!at_line_start || !output.ends_with('\n')) {
                     output.push('\n');
                 }
                 at_line_start = true;
                 prev_kind = Some(token.kind);
                 prev_was_unary_minus = false;
+                last_source_pos = token.span.end as usize;
                 index += 1;
                 continue;
             }
@@ -91,12 +106,18 @@ fn reprint_tokens(tokens: &[Token], source: &str) -> String {
             output.push_str(&source[start..end]);
             prev_kind = Some(TokenKind::StringLiteral);
             prev_was_unary_minus = false;
+            last_source_pos = end;
             index += 1;
             while index < tokens.len()
                 && tokens[index].kind != TokenKind::Eof
                 && (tokens[index].span.end as usize) <= end
             {
                 index += 1;
+            }
+            while comment_index < comments.len()
+                && (comments[comment_index].span.start as usize) < end
+            {
+                comment_index += 1;
             }
             continue;
         }
@@ -106,8 +127,22 @@ fn reprint_tokens(tokens: &[Token], source: &str) -> String {
 
         prev_was_unary_minus = token.kind == TokenKind::Minus && minus_is_unary(prev_kind);
         prev_kind = Some(token.kind);
+        last_source_pos = token.span.end as usize;
         index += 1;
     }
+
+    emit_comments_before(
+        comments,
+        &mut comment_index,
+        source.len(),
+        source,
+        &mut output,
+        &mut at_line_start,
+        &mut prev_kind,
+        &mut prev_was_unary_minus,
+        &mut consecutive_newlines,
+        &mut last_source_pos,
+    );
 
     // Ensure trailing newline
     if !output.ends_with('\n') {
@@ -120,6 +155,69 @@ fn reprint_tokens(tokens: &[Token], source: &str) -> String {
     }
 
     output
+}
+
+fn emit_comments_before(
+    comments: &[CommentTrivia],
+    comment_index: &mut usize,
+    limit: usize,
+    source: &str,
+    output: &mut String,
+    at_line_start: &mut bool,
+    prev_kind: &mut Option<TokenKind>,
+    prev_was_unary_minus: &mut bool,
+    consecutive_newlines: &mut u32,
+    last_source_pos: &mut usize,
+) {
+    while *comment_index < comments.len() && (comments[*comment_index].span.start as usize) < limit
+    {
+        let comment = &comments[*comment_index];
+        let start = comment.span.start as usize;
+        let end = comment.span.end as usize;
+        let text = &source[start..end];
+        let trailing = !*at_line_start && !has_newline_between(source, *last_source_pos, start);
+
+        if trailing {
+            if !output.ends_with(' ') {
+                output.push(' ');
+            }
+            output.push_str(text);
+            output.push('\n');
+        } else {
+            if !output.is_empty() && !output.ends_with('\n') {
+                output.push('\n');
+            }
+            output.push_str(comment_line_prefix(source, start));
+            output.push_str(text);
+            output.push('\n');
+        }
+
+        *at_line_start = true;
+        *prev_kind = Some(TokenKind::Newline);
+        *prev_was_unary_minus = false;
+        *consecutive_newlines = 1;
+        *last_source_pos = end;
+        *comment_index += 1;
+    }
+}
+
+fn has_newline_between(source: &str, start: usize, end: usize) -> bool {
+    source[start.min(source.len())..end.min(source.len())]
+        .bytes()
+        .any(|byte| byte == b'\n' || byte == b'\r')
+}
+
+fn comment_line_prefix(source: &str, comment_start: usize) -> &str {
+    let line_start = source[..comment_start]
+        .rfind(|ch| ch == '\n' || ch == '\r')
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    let prefix = &source[line_start..comment_start];
+    if prefix.bytes().all(|byte| byte == b' ' || byte == b'\t') {
+        prefix
+    } else {
+        ""
+    }
 }
 
 fn find_string_literal_end(source: &str, start: usize) -> Option<usize> {
@@ -375,5 +473,34 @@ mod tests {
         let formatted = fmt(source);
         assert!(formatted.contains("return -1"));
         assert!(!formatted.contains("return - 1"));
+    }
+
+    #[test]
+    fn format_preserves_top_level_comments() {
+        let source = "# ERROR: E0311\nnamespace test\n";
+        let formatted = fmt(source);
+        assert_eq!(formatted, "# ERROR: E0311\nnamespace test\n");
+    }
+
+    #[test]
+    fn format_preserves_indented_standalone_comments() {
+        let source = "function f() returns nothing:\n    # keep me\n    return nothing\n";
+        let formatted = fmt(source);
+        assert!(formatted.contains("    # keep me\n"));
+        assert!(formatted.contains("    return nothing"));
+    }
+
+    #[test]
+    fn format_preserves_trailing_comments() {
+        let source = "function f() returns int64:\n    return 1 # answer\n";
+        let formatted = fmt(source);
+        assert!(formatted.contains("    return 1 # answer\n"));
+    }
+
+    #[test]
+    fn format_preserves_comment_only_files() {
+        let source = "# first\n# second\n";
+        let formatted = fmt(source);
+        assert_eq!(formatted, "# first\n# second\n");
     }
 }

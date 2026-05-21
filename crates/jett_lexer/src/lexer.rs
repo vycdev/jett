@@ -13,6 +13,8 @@ pub struct Lexer<'src> {
     pos: usize,
     /// All produced tokens
     tokens: Vec<Token>,
+    /// Comment trivia skipped by the parser-facing token stream.
+    comments: Vec<CommentTrivia>,
     /// Stack of indentation levels (in number of spaces). Always starts with [0].
     indent_stack: Vec<u32>,
     /// Whether we are at the beginning of a line (for indentation processing).
@@ -31,6 +33,12 @@ pub struct LexError {
     pub span: Span,
 }
 
+/// A skipped source comment kept for tools that need source-preserving trivia.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommentTrivia {
+    pub span: Span,
+}
+
 impl<'src> Lexer<'src> {
     pub fn new(source: &'src str, file: FileId) -> Self {
         Self {
@@ -38,6 +46,7 @@ impl<'src> Lexer<'src> {
             file,
             pos: 0,
             tokens: Vec::new(),
+            comments: Vec::new(),
             indent_stack: vec![0],
             at_line_start: true,
             emitted_content: false,
@@ -74,6 +83,7 @@ impl<'src> Lexer<'src> {
         LexResult {
             source: self.source,
             tokens: self.tokens,
+            comments: self.comments,
             errors: self.errors,
         }
     }
@@ -292,9 +302,13 @@ impl<'src> Lexer<'src> {
     }
 
     fn skip_comment(&mut self) {
+        let start = self.pos;
         while !self.at_end() && self.current_byte() != b'\n' && self.current_byte() != b'\r' {
             self.pos += 1;
         }
+        self.comments.push(CommentTrivia {
+            span: Span::new(self.file, start as u32, self.pos as u32),
+        });
     }
 
     fn check_trailing_whitespace(&mut self) {
@@ -834,6 +848,7 @@ impl<'src> Lexer<'src> {
 pub struct LexResult<'src> {
     pub source: &'src str,
     pub tokens: Vec<Token>,
+    pub comments: Vec<CommentTrivia>,
     pub errors: Vec<LexError>,
 }
 
@@ -841,6 +856,11 @@ impl<'src> LexResult<'src> {
     /// Returns the text corresponding to a token's span.
     pub fn token_text(&self, token: &Token) -> &'src str {
         &self.source[token.span.start as usize..token.span.end as usize]
+    }
+
+    /// Returns the text corresponding to a comment trivia span.
+    pub fn comment_text(&self, comment: &CommentTrivia) -> &'src str {
+        &self.source[comment.span.start as usize..comment.span.end as usize]
     }
 }
 
@@ -996,6 +1016,15 @@ mod tests {
 
     fn text_of<'a>(result: &'a LexResult<'a>, idx: usize) -> &'a str {
         result.token_text(&result.tokens[idx])
+    }
+
+    fn comment_texts(source: &str) -> Vec<String> {
+        let result = tokenize(source, file());
+        result
+            .comments
+            .iter()
+            .map(|comment| result.comment_text(comment).to_string())
+            .collect()
     }
 
     // ===========================================
@@ -1349,6 +1378,10 @@ mod tests {
     fn test_comment_only_line() {
         let k = kinds_no_eof("# this is a comment");
         assert_eq!(k, Vec::<TokenKind>::new());
+        assert_eq!(
+            comment_texts("# this is a comment"),
+            vec!["# this is a comment"]
+        );
     }
 
     #[test]
@@ -1356,6 +1389,7 @@ mod tests {
         // "x # comment" -> just Ident (comment is skipped)
         let k = kinds_no_eof("x # comment");
         assert_eq!(k, vec![TokenKind::Ident]);
+        assert_eq!(comment_texts("x # comment"), vec!["# comment"]);
     }
 
     #[test]
@@ -1363,6 +1397,10 @@ mod tests {
         let source = "# line 1\n# line 2\n# line 3\n";
         let k = kinds_no_eof(source);
         assert_eq!(k, Vec::<TokenKind>::new());
+        assert_eq!(
+            comment_texts(source),
+            vec!["# line 1", "# line 2", "# line 3"]
+        );
     }
 
     // ===========================================
