@@ -27,7 +27,13 @@ function json_tree_serialize_does_not_consume_tree() returns string:
     string kind = json.json_tree_kind(tree)
     bool has_name = string.contains(raw, "\"Ada\"")
     return "{kind}:{has_name}"
+function json_tree_escaped_key_summary() returns string:
+    mutable map[string, json.JsonTree] fields = map.new[string, json.JsonTree]()
+    fields = map.insert[string, json.JsonTree](fields, "line\nkey", json.JsonTree.string_value("quote \" value"))
+    json.JsonTree tree = json.JsonTree.object_value(fields)
+    return json.json_tree_serialize(tree)
 verify json_tree_value:
     assert json_tree_summary() == "{{\"name\":\"Ada\",\"items\":[3,true,null],\"quote\":\"line\\nnext\"}}"
     assert json_tree_roundtrip_through_raw() == true
     assert json_tree_serialize_does_not_consume_tree() == "object:true"
+    assert json_tree_escaped_key_summary() == "{{\"line\\nkey\":\"quote \\\" value\"}}"
