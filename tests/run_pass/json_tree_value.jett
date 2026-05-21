@@ -55,6 +55,45 @@ function json_tree_control_key_summary() returns string:
     fields = map.insert[string, json.JsonTree](fields, key, json.JsonTree.null)
     json.JsonTree tree = json.JsonTree.object_value(fields)
     return json.serialize_raw(view tree)
+function utf8_fixture_text() returns string:
+    bytes raw = bytes.from_hex("c3a9e282acf09f9880") handle error:
+        return error
+    return bytes.to_string(raw) handle error:
+        default error
+function serialized_string_hex(raw: string) returns string:
+    json.JsonTree parsed = json.parse_raw(raw) handle error:
+        return "parse:{error}"
+    string text = json.as_string(view parsed) handle error:
+        return "value:{error}"
+    bytes encoded = bytes.from_string(text)
+    return bytes.to_hex(encoded)
+function serialized_utf8_object_value_hex(raw: string, key: string) returns string:
+    json.JsonTree parsed = json.parse_raw(raw) handle error:
+        return "parse:{error}"
+    json.JsonTree value = json.require_field(view parsed, key) handle error:
+        return "field:{error}"
+    string text = json.as_string(view value) handle error:
+        return "value:{error}"
+    bytes encoded = bytes.from_string(text)
+    return bytes.to_hex(encoded)
+function json_tree_utf8_serialize_summary() returns string:
+    string text = utf8_fixture_text()
+    json.JsonTree tree = json.JsonTree.string_value(text)
+    string tree_raw = json.json_tree_serialize(view tree)
+    string raw_raw = json.serialize_raw(view tree)
+    string typed_raw = json.serialize[json.JsonTree](view tree)
+    string public_raw = json.serialize_public[json.JsonTree](view tree)
+    return "{serialized_string_hex(tree_raw)}:{serialized_string_hex(raw_raw)}:{serialized_string_hex(typed_raw)}:{serialized_string_hex(public_raw)}"
+function json_tree_utf8_object_key_summary() returns string:
+    string text = utf8_fixture_text()
+    mutable map[string, json.JsonTree] fields = map.new[string, json.JsonTree]()
+    fields = map.insert[string, json.JsonTree](fields, text, json.JsonTree.string_value(text))
+    json.JsonTree tree = json.JsonTree.object_value(fields)
+    string tree_raw = json.json_tree_serialize(view tree)
+    string raw_raw = json.serialize_raw(view tree)
+    string typed_raw = json.serialize[json.JsonTree](view tree)
+    string public_raw = json.serialize_public[json.JsonTree](view tree)
+    return "{serialized_utf8_object_value_hex(tree_raw, text)}:{serialized_utf8_object_value_hex(raw_raw, text)}:{serialized_utf8_object_value_hex(typed_raw, text)}:{serialized_utf8_object_value_hex(public_raw, text)}"
 verify json_tree_value:
     assert json_tree_summary() == "{{\"name\":\"Ada\",\"items\":[3,true,null],\"quote\":\"line\\nnext\"}}"
     assert json_tree_roundtrip_through_raw() == true
@@ -63,3 +102,5 @@ verify json_tree_value:
     assert json_tree_control_string_summary() == "\"a\\u0001b\\b\\u000b\\f\\u001f\""
     assert json_tree_all_control_string_summary() == "\"\\u0000\\u0001\\u0002\\u0003\\u0004\\u0005\\u0006\\u0007\\b\\t\\n\\u000b\\f\\r\\u000e\\u000f\\u0010\\u0011\\u0012\\u0013\\u0014\\u0015\\u0016\\u0017\\u0018\\u0019\\u001a\\u001b\\u001c\\u001d\\u001e\\u001f\""
     assert json_tree_control_key_summary() == "{{\"a\\u0001b\\b\\u000b\\f\\u001f\":null}}"
+    assert json_tree_utf8_serialize_summary() == "c3a9e282acf09f9880:c3a9e282acf09f9880:c3a9e282acf09f9880:c3a9e282acf09f9880"
+    assert json_tree_utf8_object_key_summary() == "c3a9e282acf09f9880:c3a9e282acf09f9880:c3a9e282acf09f9880:c3a9e282acf09f9880"
