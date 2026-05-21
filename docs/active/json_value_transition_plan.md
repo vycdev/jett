@@ -340,8 +340,12 @@ pinned in `tests/run_pass/json_parse.jett`,
 `tests/run_pass/json_serialize.jett`, and
 `tests/run_pass/json_serialize_public.jett`. Strict raw accessors are pinned in
 `tests/run_pass/json_raw_strict_accessors.jett` for `json.JsonTree`, bare
-`JsonValue`, and `json.JsonValue`; strict accessor argument-shape diagnostics
-are pinned in `tests/compile_fail/json_raw_strict_accessor_argument_shapes.jett`.
+`JsonValue`, and `json.JsonValue`, while lenient raw probing edge cases are
+pinned in `tests/run_pass/json_raw_value_access_edges.jett`. Strict accessor
+argument-shape diagnostics are pinned in
+`tests/compile_fail/json_raw_strict_accessor_argument_shapes.jett`, and the
+broader raw facade shape diagnostics are pinned in
+`tests/compile_fail/json_raw_facade_argument_shapes.jett`.
 General JSON examples now prefer `json.JsonTree` / `json.JsonValue`; bare
 `JsonValue` remains concentrated in compatibility, parity, and transition
 fixtures.
