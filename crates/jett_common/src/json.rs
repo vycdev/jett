@@ -99,14 +99,61 @@ pub fn is_json_implicit_view_facade(name: &str) -> bool {
 mod tests {
     use super::*;
 
+    const EXPECTED_RAW_FACADE_NAMES: &[&str] = &[
+        "json.parse_raw",
+        "json.serialize_raw",
+        "json.kind",
+        "json.is_null",
+        "json.is_bool",
+        "json.is_number",
+        "json.is_string",
+        "json.is_array",
+        "json.is_object",
+        "json.field",
+        "json.index",
+        "json.array_length",
+        "json.object_keys",
+        "json.as_string",
+        "json.as_int64",
+        "json.as_uint64",
+        "json.as_float64",
+        "json.as_bool",
+        "json.object_field",
+        "json.array_index",
+        "json.require_field",
+        "json.require_index",
+    ];
+
+    const EXPECTED_VIEW_TREE_HELPER_NAMES: &[&str] = &[
+        "json.json_tree_serialize",
+        "json.json_tree_kind",
+        "json.json_tree_is_null",
+        "json.json_tree_is_bool",
+        "json.json_tree_is_number",
+        "json.json_tree_is_string",
+        "json.json_tree_is_array",
+        "json.json_tree_is_object",
+        "json.json_tree_field",
+        "json.json_tree_index",
+        "json.json_tree_array_length",
+        "json.json_tree_object_keys",
+        "json.json_tree_as_string",
+        "json.json_tree_as_int64",
+        "json.json_tree_as_uint64",
+        "json.json_tree_as_float64",
+        "json.json_tree_as_bool",
+    ];
+
     #[test]
     fn raw_facade_names_pin_public_stdlib_surface() {
-        assert!(is_json_raw_facade("json.parse_raw"));
-        assert!(is_json_raw_facade("json.field"));
-        assert!(is_json_raw_facade("json.index"));
-        assert!(is_json_raw_facade("json.as_bool"));
-        assert!(is_json_raw_facade("json.as_uint64"));
-        assert!(is_json_raw_facade("json.require_field"));
+        assert_eq!(JSON_RAW_FACADE_NAMES, EXPECTED_RAW_FACADE_NAMES);
+        for name in EXPECTED_RAW_FACADE_NAMES {
+            assert!(is_json_raw_facade(name), "{name} should be a raw facade");
+            assert!(
+                is_json_implicit_view_facade(name),
+                "{name} should use implicit-view ownership policy"
+            );
+        }
         assert!(!is_json_raw_facade("json.json_tree_parse"));
     }
 
@@ -141,10 +188,17 @@ mod tests {
 
     #[test]
     fn raw_facade_and_implicit_view_sets_share_policy() {
-        assert!(is_json_raw_facade("json.serialize_raw"));
-        assert!(is_json_implicit_view_facade("json.serialize_raw"));
-        assert!(is_json_implicit_view_facade("json.json_tree_serialize"));
-        assert!(!is_json_raw_facade("json.json_tree_serialize"));
+        assert_eq!(JSON_VIEW_TREE_HELPER_NAMES, EXPECTED_VIEW_TREE_HELPER_NAMES);
+        for name in EXPECTED_VIEW_TREE_HELPER_NAMES {
+            assert!(
+                is_json_implicit_view_facade(name),
+                "{name} should use implicit-view ownership policy"
+            );
+            assert!(
+                !is_json_raw_facade(name),
+                "{name} should stay a private tree helper, not a public raw facade"
+            );
+        }
         assert!(!is_json_implicit_view_facade("json.json_tree_parse"));
         assert!(!is_json_implicit_view_facade("json.parse"));
     }

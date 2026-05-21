@@ -9010,6 +9010,31 @@ mod tests {
 
     use super::*;
 
+    const JSON_RAW_FACADE_NAMES: &[&str] = &[
+        "json.parse_raw",
+        "json.serialize_raw",
+        "json.kind",
+        "json.is_null",
+        "json.is_bool",
+        "json.is_number",
+        "json.is_string",
+        "json.is_array",
+        "json.is_object",
+        "json.field",
+        "json.index",
+        "json.array_length",
+        "json.object_keys",
+        "json.as_string",
+        "json.as_int64",
+        "json.as_uint64",
+        "json.as_float64",
+        "json.as_bool",
+        "json.object_field",
+        "json.array_index",
+        "json.require_field",
+        "json.require_index",
+    ];
+
     /// Helper: create a dummy span for test AST nodes.
     fn sp() -> Span {
         Span::new(FileId::new(0), 0, 0)
@@ -11771,26 +11796,24 @@ mod tests {
     #[test]
     fn json_raw_helpers_use_public_stdlib_wrappers() {
         let mut interp = Interpreter::new();
-        let mut wrapper = func_def(
-            "serialize_raw",
-            vec![("value", "JsonTree")],
-            block(vec![return_stmt(string("public tree"))]),
-        );
-        wrapper.span = stdlib_sp();
-        interp.register_function_in_namespace(Some("json"), &wrapper);
 
-        let value = interp
-            .call_function(
-                "json.serialize_raw",
-                vec![Value::Enum {
-                    type_name: "json.JsonTree".to_string(),
-                    variant: "null".to_string(),
-                    fields: vec![],
-                }],
-            )
-            .unwrap();
+        for name in JSON_RAW_FACADE_NAMES {
+            let short_name = name
+                .strip_prefix("json.")
+                .expect("raw facade names should be qualified");
+            let mut wrapper = func_def(
+                short_name,
+                vec![("value", "JsonTree")],
+                block(vec![return_stmt(string("public tree"))]),
+            );
+            wrapper.span = stdlib_sp();
+            interp.register_function_in_namespace(Some("json"), &wrapper);
 
-        assert_eq!(value, Value::String("public tree".to_string()));
+            assert!(
+                interp.is_trusted_stdlib_first_function(name),
+                "{name} should run through the trusted stdlib wrapper path"
+            );
+        }
     }
 
     #[test]
