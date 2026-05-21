@@ -49,7 +49,19 @@ function object_keys_wrong_shape_error() returns string:
     list[string] keys = json.object_keys(view text) handle error:
         return error
     return "{list.length(keys)}"
-function scalar_cast_wrong_shape_error() returns string:
+function array_length_wrong_shape_error() returns string:
+    json.JsonTree root = json.parse_raw("{{\"name\":\"Ada\"}}") handle error:
+        return error
+    int64 length = json.array_length(view root) handle error:
+        return error
+    return "{length}"
+function string_scalar_cast_wrong_shape_error() returns string:
+    json.JsonTree number = json.parse_raw("42") handle error:
+        return error
+    string value = json.as_string(view number) handle error:
+        return error
+    return value
+function int64_scalar_cast_wrong_shape_error() returns string:
     json.JsonTree text = json.parse_raw("\"Ada\"") handle error:
         return error
     int64 value = json.as_int64(view text) handle error:
@@ -61,6 +73,18 @@ function uint64_scalar_cast_wrong_shape_error() returns string:
     uint64 value = json.as_uint64(view text) handle error:
         return error
     return string.from_uint64(value)
+function float64_scalar_cast_wrong_shape_error() returns string:
+    json.JsonTree text = json.parse_raw("\"Ada\"") handle error:
+        return error
+    float64 value = json.as_float64(view text) handle error:
+        return error
+    return "{value}"
+function bool_scalar_cast_wrong_shape_error() returns string:
+    json.JsonTree number = json.parse_raw("1") handle error:
+        return error
+    bool value = json.as_bool(view number) handle error:
+        return error
+    return "{value}"
 function int64_scalar_cast_fraction_error() returns string:
     json.JsonTree number = json.parse_raw("2.5") handle error:
         return error
@@ -100,8 +124,12 @@ verify json_raw_value_access_edges:
     assert index_on_non_array_is_absent() == "absent"
     assert index_on_object_is_absent() == "absent"
     assert object_keys_wrong_shape_error() == "expected object, got string"
-    assert scalar_cast_wrong_shape_error() == "expected int64, got string"
+    assert array_length_wrong_shape_error() == "expected array, got object"
+    assert string_scalar_cast_wrong_shape_error() == "expected string, got number"
+    assert int64_scalar_cast_wrong_shape_error() == "expected int64, got string"
     assert uint64_scalar_cast_wrong_shape_error() == "expected uint64, got string"
+    assert float64_scalar_cast_wrong_shape_error() == "expected float64, got string"
+    assert bool_scalar_cast_wrong_shape_error() == "expected bool, got number"
     assert int64_scalar_cast_fraction_error() == "expected int64, got number"
     assert int64_scalar_cast_exponent_error() == "expected int64, got number"
     assert uint64_scalar_cast_negative_error() == "expected uint64 in range 0..18446744073709551615"
