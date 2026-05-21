@@ -123,6 +123,7 @@ mutual:
     export function json_tree_object_keys(view value: JsonTree) returns result[list[string], string]
     export function json_tree_as_string(view value: JsonTree) returns result[string, string]
     export function json_tree_as_int64(view value: JsonTree) returns result[int64, string]
+    export function json_tree_as_uint64(view value: JsonTree) returns result[uint64, string]
     export function json_tree_as_float64(view value: JsonTree) returns result[float64, string]
     export function json_tree_as_bool(view value: JsonTree) returns result[bool, string]
 mutual:

@@ -63,7 +63,7 @@ The reflected JSON implementation has started moving into stdlib under the
 - `json_tree_serialize(value: JsonTree)`
 - `json_tree_parse(raw: string)` for staged scalar, array, and object parsing
 - `json_tree_*` traversal helpers for kind checks, field/index lookup, lengths,
-  keys, and scalar casts
+  keys, and scalar casts including full-range `uint64`
 - `json_serialize_reflected[T](view value)`
 - `json_serialize_public_reflected[T](view value)`
 - `json_parse_reflected[T](raw: string)`

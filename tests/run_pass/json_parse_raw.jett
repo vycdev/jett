@@ -68,6 +68,20 @@ function raw_invalid_message() returns string:
     int64 length = json.array_length(view root) handle error:
         return error
     return "{length}"
+function raw_uint64_max() returns string:
+    json.JsonTree root = json.parse_raw("{{\"serial\":18446744073709551615}}") handle error:
+        return error
+    json.JsonTree serial_raw = json.require_field(view root, "serial") handle error:
+        return error
+    uint64 serial = json.as_uint64(view serial_raw) handle error:
+        return error
+    return string.from_uint64(serial)
+function raw_uint64_overflow_message() returns string:
+    json.JsonTree raw = json.parse_raw("18446744073709551616") handle error:
+        return error
+    uint64 value = json.as_uint64(view raw) handle error:
+        return error
+    return string.from_uint64(value)
 function raw_roundtrip() returns string:
     json.JsonTree root = json.parse_raw("{{\"name\":\"Ada\",\"score\":5}}") handle error:
         return error
@@ -92,5 +106,7 @@ verify json_parse_raw:
     assert raw_object_keys() == 2
     assert raw_kind_predicates() == "true:true:true:true:true:true:true"
     assert raw_invalid_message() == "expected array, got object"
+    assert raw_uint64_max() == "18446744073709551615"
+    assert raw_uint64_overflow_message() == "expected uint64 in range 0..18446744073709551615"
     assert string.contains(raw_roundtrip(), "\"name\":\"Ada\"") == true
     assert raw_decoded_key_lookup_and_serialize() == "6c696e650d6e657874:true:true:true"

@@ -63,6 +63,8 @@ export function as_string(view value: JsonTree) returns result[string, string]:
     return json_tree_as_string(view value)
 export function as_int64(view value: JsonTree) returns result[int64, string]:
     return json_tree_as_int64(view value)
+export function as_uint64(view value: JsonTree) returns result[uint64, string]:
+    return json_tree_as_uint64(view value)
 export function as_float64(view value: JsonTree) returns result[float64, string]:
     return json_tree_as_float64(view value)
 export function as_bool(view value: JsonTree) returns result[bool, string]:

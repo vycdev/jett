@@ -112,6 +112,14 @@ function json_tree_as_int64(view value: JsonTree) returns result[int64, string]:
             return ok(item)
         other:
             return fail(json_tree_kind_error(view value, "int64"))
+function json_tree_as_uint64(view value: JsonTree) returns result[uint64, string]:
+    match value:
+        number_value(raw):
+            uint64 item = uint64.from_string(raw) handle error:
+                return fail("expected uint64 in range 0..18446744073709551615")
+            return ok(item)
+        other:
+            return fail(json_tree_kind_error(view value, "uint64"))
 function json_tree_as_float64(view value: JsonTree) returns result[float64, string]:
     match value:
         number_value(raw):

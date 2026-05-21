@@ -47,6 +47,7 @@ const JSON_RAW_FACADE_NAMES: &[&str] = &[
     "json.object_keys",
     "json.as_string",
     "json.as_int64",
+    "json.as_uint64",
     "json.as_float64",
     "json.as_bool",
     "json.object_field",
@@ -70,6 +71,7 @@ const JSON_VIEW_TREE_HELPER_NAMES: &[&str] = &[
     "json.json_tree_object_keys",
     "json.json_tree_as_string",
     "json.json_tree_as_int64",
+    "json.json_tree_as_uint64",
     "json.json_tree_as_float64",
     "json.json_tree_as_bool",
 ];
@@ -103,6 +105,7 @@ mod tests {
         assert!(is_json_raw_facade("json.field"));
         assert!(is_json_raw_facade("json.index"));
         assert!(is_json_raw_facade("json.as_bool"));
+        assert!(is_json_raw_facade("json.as_uint64"));
         assert!(is_json_raw_facade("json.require_field"));
         assert!(!is_json_raw_facade("json.json_tree_parse"));
     }

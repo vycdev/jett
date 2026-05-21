@@ -21,7 +21,8 @@ Shape-requiring helpers are stricter:
 
 - `json.object_keys(value)` returns `result[list[string], string]`,
 - `json.array_length(value)` returns `result[int64, string]`,
-- scalar casts such as `json.as_int64(value)` return `result[T, string]`.
+- scalar casts such as `json.as_int64(value)` and `json.as_uint64(value)`
+  return `result[T, string]`.
 - strict raw lookup helpers now exist for production-style validation:
   `json.object_field`, `json.array_index`, `json.require_field`, and
   `json.require_index`.

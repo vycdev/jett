@@ -55,6 +55,12 @@ function scalar_cast_wrong_shape_error() returns string:
     int64 value = json.as_int64(view text) handle error:
         return error
     return "{value}"
+function uint64_scalar_cast_wrong_shape_error() returns string:
+    json.JsonTree text = json.parse_raw("\"Ada\"") handle error:
+        return error
+    uint64 value = json.as_uint64(view text) handle error:
+        return error
+    return string.from_uint64(value)
 verify json_raw_value_access_edges:
     assert missing_key_and_present_null() == "missing absent:present null true"
     assert index_out_of_bounds_is_absent() == "absent"
@@ -65,3 +71,4 @@ verify json_raw_value_access_edges:
     assert index_on_object_is_absent() == "absent"
     assert object_keys_wrong_shape_error() == "expected object, got string"
     assert scalar_cast_wrong_shape_error() == "expected int64, got string"
+    assert uint64_scalar_cast_wrong_shape_error() == "expected uint64, got string"

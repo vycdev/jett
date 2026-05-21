@@ -37,6 +37,10 @@ function bad_index_value(root: json.JsonTree) returns int64:
     return json.as_int64(item) handle error:
         default 0
 
+function bad_uint64_cast_receiver() returns uint64:
+    return json.as_uint64("not raw json") handle error:
+        default 0
+
 function bad_serialize_raw_input() returns string:
     return json.serialize_raw("not raw json")
 
