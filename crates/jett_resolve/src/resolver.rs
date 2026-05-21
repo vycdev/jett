@@ -1690,6 +1690,89 @@ function same_helper() returns nothing:
     }
 
     #[test]
+    fn stdlib_root_json_value_alias_declares_root_public_name() {
+        let module = parse_module_with_file(
+            r#"
+namespace json
+
+export enum JsonTree:
+    null
+
+export type JsonValue = JsonTree
+export root type JsonValue = json.JsonTree
+"#,
+            FileId::new(STDLIB_FILE_ID_START),
+        );
+
+        let result = resolve(&module);
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "expected no errors, got: {errors:#?}");
+
+        let root_alias = def_by_name(&result, "JsonValue");
+        assert_eq!(root_alias.namespace, None);
+        assert_eq!(root_alias.visibility, crate::scope::DefVisibility::Public);
+
+        let namespaced_alias = def_by_name(&result, "json.JsonValue");
+        assert_eq!(namespaced_alias.namespace.as_deref(), Some("json"));
+        assert_eq!(
+            namespaced_alias.visibility,
+            crate::scope::DefVisibility::Public
+        );
+
+        let root = ScopeId::new(0);
+        assert_eq!(
+            result.scope_table.lookup(root, "JsonValue"),
+            Some(root_alias.id)
+        );
+        assert_eq!(
+            result.scope_table.lookup(root, "json.JsonValue"),
+            Some(namespaced_alias.id)
+        );
+    }
+
+    #[test]
+    fn stdlib_root_export_rejects_non_json_value_alias() {
+        let module = parse_module_with_file(
+            r#"
+export root type OtherRaw = int64
+"#,
+            FileId::new(STDLIB_FILE_ID_START),
+        );
+
+        let result = resolve(&module);
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == Severity::Error && d.code.code() == 209)
+            .collect();
+        assert_eq!(errors.len(), 1, "expected root export error");
+        assert!(errors[0].message.contains("only `JsonValue` is allowed"));
+    }
+
+    #[test]
+    fn stdlib_root_export_rejects_refinement_alias() {
+        let module = parse_module_with_file(
+            r#"
+export root type JsonValue = int64 where value > 0
+"#,
+            FileId::new(STDLIB_FILE_ID_START),
+        );
+
+        let result = resolve(&module);
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == Severity::Error && d.code.code() == 209)
+            .collect();
+        assert_eq!(errors.len(), 1, "expected root export error");
+        assert!(errors[0].message.contains("does not support refinements"));
+    }
+
+    #[test]
     fn namespaced_export_visibility_metadata_is_recorded() {
         let module = parse_module(
             r#"
