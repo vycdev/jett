@@ -819,6 +819,10 @@ compile_fail_fixture!(
     "result_fail_payload_requires_handle.jett"
 );
 compile_fail_fixture!(
+    compile_fail_result_optional_payload_requires_handle,
+    "result_optional_payload_requires_handle.jett"
+);
+compile_fail_fixture!(
     compile_fail_some_payload_requires_handle,
     "some_payload_requires_handle.jett"
 );
@@ -1009,8 +1013,7 @@ compile_fail_fixture!(
 );
 #[test]
 fn compile_fail_json_raw_result_facades_require_handle_count() {
-    assert_compile_fail_error_count("json_raw_result_facades_require_handle.jett", 316, 7);
-    assert_compile_fail_error_count("json_raw_result_facades_require_handle.jett", 311, 2);
+    assert_compile_fail_error_count("json_raw_result_facades_require_handle.jett", 316, 9);
 }
 compile_fail_fixture!(
     compile_fail_json_value_user_json_tree_incompatible,

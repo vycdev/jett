@@ -793,10 +793,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn type_requires_handle_error(&self, expected: TypeId, got: TypeId) -> bool {
-        if matches!(
-            self.interner.resolve(expected),
-            Type::Result(_, _) | Type::Optional(_)
-        ) {
+        if matches!(self.interner.resolve(expected), Type::Result(_, _)) {
             return false;
         }
         match self.interner.resolve(got) {
