@@ -1,0 +1,6 @@
+# ERROR: E0207
+namespace test
+function bad() returns result[nothing, string]:
+    json.JsonTree tree = json.json_tree_parse("null") handle error:
+        return fail(error)
+    return json.json_validate_exact_reflected[json.JsonTree](view tree)

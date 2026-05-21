@@ -1,7 +1,6 @@
+# ERROR: E0207
 namespace test
-
 function bad_full(value: string) returns string:
     return json.json_serialize_reflected[string](view value)
-
 function bad_public(value: string) returns string:
     return json.json_serialize_public_reflected[string](view value)

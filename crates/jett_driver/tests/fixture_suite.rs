@@ -805,6 +805,10 @@ compile_fail_fixture!(
     "json_private_decode_tree_reflected.jett"
 );
 compile_fail_fixture!(
+    compile_fail_json_private_validate_exact_reflected,
+    "json_private_validate_exact_reflected.jett"
+);
+compile_fail_fixture!(
     compile_fail_json_private_serialize_reflected,
     "json_private_serialize_reflected.jett"
 );

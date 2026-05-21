@@ -1,5 +1,5 @@
+# ERROR: E0207
 namespace test
-
 function bad() returns result[string, string]:
     json.JsonTree tree = json.json_tree_parse("\"Ada\"") handle error:
         return fail(error)
