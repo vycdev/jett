@@ -80,6 +80,8 @@ function helper_view_info_list_length_or_zero[T](value: T, view info: TypeInfo) 
 function local_view_info_helper_list_length_or_zero[T](value: T) returns int64:
     TypeInfo info = type.info[T]()
     return helper_view_info_list_length_or_zero[T](value, view info)
+function direct_view_info_helper_list_length_or_zero[T](value: T) returns int64:
+    return helper_view_info_list_length_or_zero[T](value, view type.info[T]())
 function helper_view_info_primitive_string_or_other[T](value: T, view info: TypeInfo) returns string:
     TypePrimitive primitive = info.primitive_tag handle:
         default TypePrimitive.unknown_type
@@ -90,6 +92,8 @@ function helper_view_info_primitive_string_or_other[T](value: T, view info: Type
 function local_view_info_primitive_string_or_other[T](value: T) returns string:
     TypeInfo info = type.info[T]()
     return helper_view_info_primitive_string_or_other[T](value, view info)
+function direct_view_info_primitive_string_or_other[T](value: T) returns string:
+    return helper_view_info_primitive_string_or_other[T](value, view type.info[T]())
 function local_primitive_string_or_other[T](value: T) returns string:
     TypeInfo info = type.info[T]()
     TypePrimitive primitive = info.primitive_tag handle:
@@ -153,8 +157,12 @@ verify generic_reflection_branch_specialization:
     assert local_info_helper_list_length_or_zero[string]("Ada") == 0
     assert local_view_info_helper_list_length_or_zero[list[int64]](numbers) == 3
     assert local_view_info_helper_list_length_or_zero[string]("Ada") == 0
+    assert direct_view_info_helper_list_length_or_zero[list[int64]](more) == 2
+    assert direct_view_info_helper_list_length_or_zero[string]("Ada") == 0
     assert local_view_info_primitive_string_or_other[string]("Ada") == "Ada"
     assert local_view_info_primitive_string_or_other[int64](7) == "other"
+    assert direct_view_info_primitive_string_or_other[string]("Ada") == "Ada"
+    assert direct_view_info_primitive_string_or_other[int64](7) == "other"
     assert local_primitive_string_or_other[string]("Ada") == "Ada"
     assert local_primitive_string_or_other[int64](7) == "other"
     assert local_primitive_helper_string_or_other[string]("Ada") == "Ada"
