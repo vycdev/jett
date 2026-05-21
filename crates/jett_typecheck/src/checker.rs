@@ -915,6 +915,38 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn json_public_projection_allows_secret_data(&self, ty: TypeId) -> bool {
+        let mut visited = HashSet::new();
+        self.json_public_projection_allows_secret_data_inner(ty, &mut visited)
+    }
+
+    fn json_public_projection_allows_secret_data_inner(
+        &self,
+        ty: TypeId,
+        visited: &mut HashSet<TypeId>,
+    ) -> bool {
+        if !visited.insert(ty) {
+            return true;
+        }
+
+        match self.interner.resolve(ty) {
+            Type::Secret(_) => false,
+            Type::List(inner) | Type::Set(inner) | Type::Optional(inner) => {
+                self.json_public_projection_allows_secret_data_inner(*inner, visited)
+            }
+            Type::Map(key, value) | Type::Result(key, value) => {
+                self.json_public_projection_allows_secret_data_inner(*key, visited)
+                    && self.json_public_projection_allows_secret_data_inner(*value, visited)
+            }
+            Type::Struct(_) | Type::Bitfield(_) => true,
+            Type::Enum(_) => !self.type_contains_secret_data(ty),
+            Type::Refinement { base, .. } => {
+                self.json_public_projection_allows_secret_data_inner(*base, visited)
+            }
+            _ => true,
+        }
+    }
+
     fn build_reflection_metadata(&mut self) -> ReflectionMetadata {
         let mut metadata = ReflectionMetadata::new();
 
@@ -1695,6 +1727,17 @@ impl<'a> TypeChecker<'a> {
                 let Some((&value_ty, arg)) = checked_arg_types.first().zip(args.first()) else {
                     return;
                 };
+                if !self.is_secret_type(value_ty)
+                    && self.type_contains_secret_data(value_ty)
+                    && !self.json_public_projection_allows_secret_data(value_ty)
+                {
+                    self.sink.emit(errors::type_contains_secret_data(
+                        "json.serialize_public",
+                        &self.type_name(value_ty),
+                        &self.secret_field_names(value_ty),
+                        arg.value.span(),
+                    ));
+                }
                 self.check_json_public_serialize_policy(callee_name, value_ty, arg);
             }
             "json.parse" | "json.parse_exact" => {

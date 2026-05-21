@@ -12,6 +12,11 @@ function public_session_json() returns string:
 function public_secret_box_json() returns string:
     SecretBox[secret[string]] box = SecretBox[secret[string]](value: "secret-token", label: "shown")
     return json.serialize_public[SecretBox[secret[string]]](view box)
+function public_session_list_json() returns string:
+    Session first = Session(id: "s1", user_name: "alice", token: "secret-token")
+    Session second = Session(id: "s2", user_name: "bob", token: "other-token")
+    list[Session] sessions = list(first, second)
+    return json.serialize_public[list[Session]](view sessions)
 function public_primitive_json() returns string:
     return json.serialize_public[int64](42)
 function public_tree_json() returns string:
@@ -39,6 +44,14 @@ verify serialize_public_uses_generic_secret_type:
     assert string.contains(raw, "shown") == true
     assert string.contains(raw, "value") == false
     assert string.contains(raw, "secret-token") == false
+verify serialize_public_projects_records_inside_lists:
+    string raw = public_session_list_json()
+    assert string.contains(raw, "\"id\":\"s1\"") == true
+    assert string.contains(raw, "\"id\":\"s2\"") == true
+    assert string.contains(raw, "userName") == true
+    assert string.contains(raw, "token") == false
+    assert string.contains(raw, "secret-token") == false
+    assert string.contains(raw, "other-token") == false
 verify serialize_public_allows_copy_primitives:
     assert public_primitive_json() == "42"
 verify serialize_public_treats_json_tree_as_raw:
