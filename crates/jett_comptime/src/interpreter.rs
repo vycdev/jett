@@ -1569,9 +1569,9 @@ impl Interpreter {
 
             Stmt::For(for_stmt) => {
                 let reflected_field_bindings =
-                    self.reflected_field_loop_bindings(&for_stmt.iterable);
+                    self.reflected_field_loop_bindings(&for_stmt.iterable)?;
                 let reflected_variant_bindings =
-                    self.reflected_variant_loop_bindings(&for_stmt.iterable);
+                    self.reflected_variant_loop_bindings(&for_stmt.iterable)?;
                 let reflected_variant_field_owner =
                     self.reflected_variant_field_loop_owner(&for_stmt.iterable)?;
                 let reflected_type_info_bindings =
@@ -3502,11 +3502,16 @@ impl Interpreter {
         }
     }
 
-    fn reflected_field_loop_bindings(&self, iterable: &Expr) -> Option<Vec<ReflectedFieldBinding>> {
-        let owner_ty = comptime_type_fields_binding(iterable)?;
+    fn reflected_field_loop_bindings(
+        &self,
+        iterable: &Expr,
+    ) -> Result<Option<Vec<ReflectedFieldBinding>>, String> {
+        let Some(owner_ty) = comptime_type_fields_binding(iterable) else {
+            return Ok(None);
+        };
         let owner_ty = self.substitute_type_expr(owner_ty);
         if let Some(fields) = self.checked_type_fields(&owner_ty) {
-            return Some(
+            return Ok(Some(
                 fields
                     .iter()
                     .map(|field| ReflectedFieldBinding {
@@ -3515,10 +3520,13 @@ impl Interpreter {
                         ty: Self::reflection_type_info_type_expr(&field.type_info),
                     })
                     .collect(),
-            );
+            ));
+        }
+        if self.checked_metadata_kind_is(&owner_ty, &["struct", "bitfield"]) {
+            return Err(self.missing_checked_metadata_error(&owner_ty, "field"));
         }
 
-        Some(
+        Ok(Some(
             self.type_expr_fields(&owner_ty)
                 .into_iter()
                 .enumerate()
@@ -3528,17 +3536,19 @@ impl Interpreter {
                     ty: field.ty,
                 })
                 .collect(),
-        )
+        ))
     }
 
     fn reflected_variant_loop_bindings(
         &self,
         iterable: &Expr,
-    ) -> Option<Vec<ReflectedVariantBinding>> {
-        let owner_ty = comptime_type_variants_binding(iterable)?;
+    ) -> Result<Option<Vec<ReflectedVariantBinding>>, String> {
+        let Some(owner_ty) = comptime_type_variants_binding(iterable) else {
+            return Ok(None);
+        };
         let owner_ty = self.substitute_type_expr(owner_ty);
         if let Some(variants) = self.checked_type_variants(&owner_ty) {
-            return Some(
+            return Ok(Some(
                 variants
                     .iter()
                     .map(|variant| ReflectedVariantBinding {
@@ -3548,10 +3558,13 @@ impl Interpreter {
                         discriminant: variant.discriminant,
                     })
                     .collect(),
-            );
+            ));
+        }
+        if self.checked_metadata_kind_is(&owner_ty, &["enum"]) {
+            return Err(self.missing_checked_metadata_error(&owner_ty, "variant"));
         }
 
-        Some(
+        Ok(Some(
             self.type_expr_variants(&owner_ty)
                 .into_iter()
                 .enumerate()
@@ -3562,7 +3575,7 @@ impl Interpreter {
                     discriminant: variant.discriminant,
                 })
                 .collect(),
-        )
+        ))
     }
 
     fn reflected_variant_field_loop_owner(
@@ -3617,6 +3630,9 @@ impl Interpreter {
                 metadata_name,
                 type_expr_display(owner_ty)
             ));
+        }
+        if self.checked_metadata_kind_is(owner_ty, &["enum"]) {
+            return Err(self.missing_checked_metadata_error(owner_ty, "variant"));
         }
 
         for variant in self.type_expr_variants(owner_ty) {
@@ -9691,12 +9707,40 @@ mod tests {
         );
         let bindings = interp
             .reflected_field_loop_bindings(&iterable)
+            .expect("type.fields loop should not error")
             .expect("type.fields loop should be recognized");
 
         assert_eq!(bindings.len(), 1);
         assert_eq!(bindings[0].index, 0);
         assert_eq!(bindings[0].name, "value");
         assert_eq!(type_expr_display(&bindings[0].ty), "string");
+    }
+
+    #[test]
+    fn reflected_field_loop_reports_missing_checked_field_metadata() {
+        let mut metadata = ReflectionMetadata::new();
+        metadata.insert_type_info(ReflectionTypeInfo::new(
+            "Box",
+            "struct",
+            None,
+            false,
+            Vec::new(),
+        ));
+
+        let mut interp = Interpreter::new();
+        interp.set_reflection_metadata(Arc::new(metadata));
+
+        let iterable = Expr::GenericCall(
+            Box::new(field_access(var("type"), "fields")),
+            vec![type_named("Box")],
+            Vec::new(),
+            sp(),
+        );
+        let err = interp
+            .reflected_field_loop_bindings(&iterable)
+            .expect_err("missing checked fields should be an error");
+
+        assert!(err.contains("missing field metadata"));
     }
 
     #[test]
@@ -9991,6 +10035,7 @@ mod tests {
         );
         let variant_bindings = interp
             .reflected_variant_loop_bindings(&variant_iterable)
+            .expect("type.variants loop should not error")
             .expect("type.variants loop should be recognized");
         assert_eq!(variant_bindings.len(), 1);
         assert_eq!(variant_bindings[0].name, "token");
@@ -10032,6 +10077,55 @@ mod tests {
         assert_eq!(field_binding.index, 0);
         assert_eq!(field_binding.name, "value");
         assert_eq!(type_expr_display(&field_binding.ty), "string");
+    }
+
+    #[test]
+    fn reflected_variant_loop_reports_missing_checked_variant_metadata() {
+        let mut metadata = ReflectionMetadata::new();
+        metadata.insert_type_info(ReflectionTypeInfo::new(
+            "Choice",
+            "enum",
+            None,
+            false,
+            Vec::new(),
+        ));
+
+        let mut interp = Interpreter::new();
+        interp.set_reflection_metadata(Arc::new(metadata));
+
+        let variant_iterable = Expr::GenericCall(
+            Box::new(field_access(var("type"), "variants")),
+            vec![type_named("Choice")],
+            Vec::new(),
+            sp(),
+        );
+        let err = interp
+            .reflected_variant_loop_bindings(&variant_iterable)
+            .expect_err("missing checked variants should be an error");
+
+        assert!(err.contains("missing variant metadata"));
+    }
+
+    #[test]
+    fn reflected_variant_field_binding_reports_missing_checked_variant_metadata() {
+        let mut metadata = ReflectionMetadata::new();
+        metadata.insert_type_info(ReflectionTypeInfo::new(
+            "Choice",
+            "enum",
+            None,
+            false,
+            Vec::new(),
+        ));
+
+        let mut interp = Interpreter::new();
+        interp.set_reflection_metadata(Arc::new(metadata));
+
+        let field = Interpreter::reflection_field_info_value(&string_field_info(0, "value"));
+        let err = interp
+            .reflected_variant_field_binding_for_value(&type_named("Choice"), Some("token"), &field)
+            .expect_err("missing checked variants should be an error");
+
+        assert!(err.contains("missing variant metadata"));
     }
 
     #[test]
