@@ -7,7 +7,6 @@ mutual:
     function json_serialize_public_float_primitive[T](view value: T, primitive: TypePrimitive) returns optional[string]
     function json_serialize_public_integer_value[T](view value: T) returns string
     function json_serialize_public_float_value[T](view value: T) returns string
-    function json_serialize_public_non_integer_primitive[T](view value: T, primitive: TypePrimitive) returns string
     function json_serialize_public_enum_reflected[T](view value: T) returns string
     function json_serialize_public_non_enum_reflected[T](view value: T, kind: TypeKind) returns string
     function json_serialize_public_list_reflected[T](view value: T) returns string
@@ -44,16 +43,16 @@ function json_serialize_public_primitive[T](view value: T, primitive: TypePrimit
         string item = value
         return json_stdlib_quote(item)
     string integer_json = json_serialize_public_integer_primitive[T](view value, primitive) handle:
-        return json_serialize_public_non_integer_primitive[T](view value, primitive)
-    return integer_json
-function json_serialize_public_non_integer_primitive[T](view value: T, primitive: TypePrimitive) returns string:
+        default ""
+    if integer_json != "":
+        return integer_json
+    if primitive == TypePrimitive.bool_type:
+        bool item = value
+        return "{item}"
     string float_json = json_serialize_public_float_primitive[T](view value, primitive) handle:
         default ""
     if float_json != "":
         return float_json
-    if primitive == TypePrimitive.bool_type:
-        bool item = value
-        return "{item}"
     if primitive == TypePrimitive.nothing_type:
         return "null"
     if primitive == TypePrimitive.bytes_type:
