@@ -54,6 +54,7 @@ verify json_parse_success_parity:
     assert parse_success_matches("null") == true
     assert parse_success_matches("true") == true
     assert parse_success_matches("-0.5e+2") == true
+    assert parse_success_matches("\"\"") == true
     assert parse_success_matches("\"Ada\"") == true
     assert parse_success_matches("\"slash\\/path\"") == true
     assert parse_success_matches("\"quote \\\" and \\\\\"") == true
@@ -65,6 +66,7 @@ verify json_parse_success_parity:
     assert parse_success_matches("\"\\ud834\\udd1e\"") == true
     assert parse_success_matches("[1,true,null]") == true
     assert parse_success_matches("{{\"a\":1,\"b\":[\"x\",false]}}") == true
+    assert parse_success_matches("{{\"\":1}}") == true
     assert parse_success_matches("{{\"\\u0061\\n\":\"line\\rnext\"}}") == true
     assert parse_success_matches(" [ 1 , {{\"a\" : \"b\"}} ] ") == true
     assert parse_success_matches("[1,]") == false
