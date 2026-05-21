@@ -11,6 +11,9 @@ namespace test
 struct Profile:
     display_name: string serialize "displayName"
     note: string
+struct Utf8Named:
+    value: string serialize "café"
+    note: string
 struct User:
     id: string
     profile: Profile serialize "profileData"
@@ -67,6 +70,12 @@ function parse_exact_uses_serialize_name() returns string:
     User user = json.parse_exact[User](raw) handle error:
         return error
     return user.profile.display_name
+function parse_exact_uses_utf8_serialize_name() returns string:
+    Utf8Named item = json.parse_exact[Utf8Named]("{{\"café\":\"déjà\",\"note\":\"ok\"}}") handle error:
+        return error
+    string raw = json.serialize[Utf8Named](view item)
+    bool serialized_name = string.contains(raw, "\"café\":\"déjà\"")
+    return "{item.value}:{item.note}:{serialized_name}"
 function parse_exact_validates_list_items() returns string:
     string raw = "[{{\"displayName\":\"Alice\",\"note\":\"ok\",\"extra\":\"nope\"}}]"
     list[Profile] profiles = json.parse_exact[list[Profile]](raw) handle error:
@@ -251,6 +260,7 @@ verify json_parse_exact:
     assert parse_exact_rejects_extra_top_level() == "unknown field 'extra' for test.User"
     assert parse_exact_rejects_extra_nested() == "profileData: unknown field 'extra' for test.Profile"
     assert parse_exact_uses_serialize_name() == "profileData: unknown field 'display_name' for test.Profile"
+    assert parse_exact_uses_utf8_serialize_name() == "déjà:ok:true"
     assert parse_exact_validates_list_items() == "0: unknown field 'extra' for test.Profile"
     assert parse_exact_validates_map_values() == "primary: unknown field 'extra' for test.Profile"
     assert parse_exact_accepts_set_shape() == "2:true"
