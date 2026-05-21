@@ -174,6 +174,8 @@ mutual:
     function json_tree_span_starts_null_literal(view input: bytes, start: int64, end: int64) returns bool
     function json_tree_span_starts_true_literal(view input: bytes, start: int64, end: int64) returns bool
     function json_tree_span_starts_false_literal(view input: bytes, start: int64, end: int64) returns bool
+    function json_tree_span_starts_literal4(view input: bytes, start: int64, end: int64, first: int64, second: int64, third: int64, fourth: int64) returns bool
+    function json_tree_span_starts_literal5(view input: bytes, start: int64, end: int64, first: int64, second: int64, third: int64, fourth: int64, fifth: int64) returns bool
     function json_tree_byte_at(view input: bytes, index: int64) returns int64
     function json_tree_number_read_integer(view input: bytes, index: int64, length: int64) returns int64
     function json_tree_number_read_digits(view input: bytes, index: int64, length: int64) returns int64
