@@ -1116,7 +1116,7 @@ The boundary between compiler-generated code and stdlib-implemented code is a cr
 | `clone` for structs | `clone value` on a struct | Field-by-field recursive deep copy |
 | Refinement type constraint functions | `type Port = int64 where ...` | Synthesized boolean check function |
 
-Format-specific modules such as `json` should live in `.jett` stdlib code as the reflection API matures. Current interpreter implementations may still bootstrap JSON in Rust, but should consume the same type metadata (`TypeInfo`, `TypeKind`, `TypePrimitive`, `TypeField`, `TypeBitfieldField`, `TypeVariant`, `serialize_name`, field values, layout information, and secret information) that user comptime code can inspect.
+Format-specific modules such as `json` should live in `.jett` stdlib code once reflection can express their behavior. JSON is now staged this way for normal builds: public compiler-policy entrypoints delegate to trusted stdlib wrappers, raw JSON uses the stdlib `json.JsonTree` representation, and typed parse/serialize bodies consume the same type metadata (`TypeInfo`, `TypeKind`, `TypePrimitive`, `TypeField`, `TypeBitfieldField`, `TypeVariant`, `serialize_name`, field values, layout information, and secret information) that user comptime code can inspect. Remaining Rust-side JSON behavior should stay limited to bootstrap/no-stdlib compatibility paths or compiler-owned policy gates.
 
 **2. Stdlib functions** — normal Jett code shipped in `stdlib/`:
 
