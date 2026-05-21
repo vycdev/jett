@@ -637,6 +637,10 @@ compile_fail_fixture!(
     "export_root_type_project_file.jett"
 );
 compile_fail_fixture!(
+    compile_fail_export_root_json_value_project_file,
+    "export_root_json_value_project_file.jett"
+);
+compile_fail_fixture!(
     compile_fail_prelude_json_value_unavailable,
     "prelude_json_value_unavailable.jett"
 );
