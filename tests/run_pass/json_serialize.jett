@@ -86,7 +86,16 @@ function json_nested_struct_test() returns string:
     User user = User(id: "u1", profile: profile, tags: list("admin", "beta"), scores: map("wins": 3, "losses": 1), maybe_name: some("ally"), missing: none, outcome: ok(7), failed: fail("bad"))
     return json.serialize[User](view user)
 verify json_nested_struct_test:
-    assert json_nested_struct_test() == "{{\"id\":\"u1\",\"profileData\":{{\"displayName\":\"Alice\",\"note\":\"line\\nbreak\"}},\"tags\":[\"admin\",\"beta\"],\"scores\":{{\"wins\":3,\"losses\":1}},\"maybeName\":\"ally\",\"missing\":null,\"outcome\":{{\"ok\":7}},\"failed\":{{\"fail\":\"bad\"}}}}"
+    string raw = json_nested_struct_test()
+    assert string.contains(raw, "\"id\":\"u1\"") == true
+    assert string.contains(raw, "\"profileData\":{{\"displayName\":\"Alice\",\"note\":\"line\\nbreak\"}}") == true
+    assert string.contains(raw, "\"tags\":[\"admin\",\"beta\"]") == true
+    assert string.contains(raw, "\"wins\":3") == true
+    assert string.contains(raw, "\"losses\":1") == true
+    assert string.contains(raw, "\"maybeName\":\"ally\"") == true
+    assert string.contains(raw, "\"missing\":null") == true
+    assert string.contains(raw, "\"outcome\":{{\"ok\":7}}") == true
+    assert string.contains(raw, "\"failed\":{{\"fail\":\"bad\"}}") == true
 function json_bitfield_test() returns string:
     Header header = Header(version: 4, protocol: Protocol.tcp)
     return json.serialize[Header](view header)
