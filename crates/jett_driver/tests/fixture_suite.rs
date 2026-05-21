@@ -875,6 +875,10 @@ compile_fail_fixture!(
     compile_fail_json_serialize_json_value_requires_view,
     "json_serialize_json_value_requires_view.jett"
 );
+#[test]
+fn compile_fail_json_serialize_json_value_requires_view_count() {
+    assert_compile_fail_error_count("json_serialize_json_value_requires_view.jett", 344, 3);
+}
 compile_fail_fixture!(
     compile_fail_json_serialize_public_json_value_requires_view,
     "json_serialize_public_json_value_requires_view.jett"
