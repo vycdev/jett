@@ -511,7 +511,7 @@ Track `secret[T]` values through the program:
 - `secret[T]` cannot be passed to `Stdout.write`, `json.serialize`, string interpolation, or any output function.
 - `declassify` is the only way to extract the inner value.
 - `secret.redact()` and `secret.compare()` are safe operations that don't declassify.
-- `json.serialize` on a struct with secret fields is a compile error -> use `json.serialize_public`. Public JSON serialization omits secret-bearing record/bitfield fields; it rejects secret wrappers and secret-bearing enums/containers when there is no field boundary to omit. A future explicit full-serialization path can require a declassification token.
+- `json.serialize` on a struct with secret fields is a compile error -> use `json.serialize_public`. Public JSON serialization omits secret-bearing record/bitfield fields; it may descend through containers to project nested records, but rejects secret wrappers and secret-bearing enums when their secret data cannot be projected away through record/bitfield fields. A future explicit full-serialization path can require a declassification token.
 - **Secret refinement types:** For `type ApiKey = secret[string] where string.char_count(value) == 40`, the `where` clause operates on the inner `string` value — the constraint function implicitly receives the unwrapped value for validation purposes only.
 
 #### 6g. State Machine Validation
