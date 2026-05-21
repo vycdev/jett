@@ -128,11 +128,23 @@ function json_tree_as_string(view value: JsonTree) returns result[string, string
             return ok(item)
         other:
             return fail(json_tree_kind_error(view value, "string"))
+function json_tree_number_text_has_float_marker(raw: string) returns bool:
+    if string.contains(raw, "."):
+        return true
+    if string.contains(raw, "e"):
+        return true
+    if string.contains(raw, "E"):
+        return true
+    return false
+function json_tree_int64_parse_error(raw: string) returns string:
+    if json_tree_number_text_has_float_marker(raw):
+        return "expected int64, got number"
+    return "expected int64 in range -9223372036854775808..9223372036854775807"
 function json_tree_as_int64(view value: JsonTree) returns result[int64, string]:
     match value:
         number_value(raw):
             int64 item = int64.from_string(raw) handle error:
-                return fail("expected int64, got number")
+                return fail(json_tree_int64_parse_error(raw))
             return ok(item)
         other:
             return fail(json_tree_kind_error(view value, "int64"))

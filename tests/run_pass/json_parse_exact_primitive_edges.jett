@@ -19,17 +19,14 @@ function parse_exact_float64_text() returns string:
     float64 value = json.parse_exact[float64]("2.5") handle error:
         return error
     return "{value}"
-
 function parse_exact_int64_min_text() returns string:
     int64 value = json.parse_exact[int64]("-9223372036854775808") handle error:
         return error
     return "{value}"
-
 function parse_exact_int64_max_text() returns string:
     int64 value = json.parse_exact[int64]("9223372036854775807") handle error:
         return error
     return "{value}"
-
 function parse_exact_bundle_summary() returns string:
     PrimitiveBundle bundle = json.parse_exact[PrimitiveBundle]("{{\"payload\":\"0x4869\",\"ratio\":2.5}}") handle error:
         return error
@@ -52,17 +49,14 @@ function parse_exact_int8_range_error() returns string:
     int8 value = json.parse_exact[int8]("128") handle error:
         return error
     return "{value}"
-
 function parse_exact_int64_underflow_error() returns string:
     int64 value = json.parse_exact[int64]("-9223372036854775809") handle error:
         return error
     return "{value}"
-
 function parse_exact_int64_overflow_error() returns string:
     int64 value = json.parse_exact[int64]("9223372036854775808") handle error:
         return error
     return "{value}"
-
 function parse_exact_uint64_range_error() returns string:
     uint64 value = json.parse_exact[uint64]("18446744073709551616") handle error:
         return error
@@ -82,7 +76,7 @@ verify json_parse_exact_primitive_edges:
     assert parse_exact_bytes_wrong_shape_error() == "expected string, got number"
     assert parse_exact_nothing_wrong_shape_error() == "expected null, got bool"
     assert parse_exact_int8_range_error() == "expected int8 in range -128..127"
-    assert parse_exact_int64_underflow_error() == "expected int64, got number"
-    assert parse_exact_int64_overflow_error() == "expected int64, got number"
+    assert parse_exact_int64_underflow_error() == "expected int64 in range -9223372036854775808..9223372036854775807"
+    assert parse_exact_int64_overflow_error() == "expected int64 in range -9223372036854775808..9223372036854775807"
     assert parse_exact_uint64_range_error() == "expected uint64 in range 0..18446744073709551615"
     assert parse_exact_float64_wrong_shape_error() == "expected float64, got string"
