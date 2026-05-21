@@ -1040,7 +1040,7 @@ Every function in Jett has a maximum allowed complexity. If a function exceeds t
 
 | Metric | Limit | Rationale |
 |--------|-------|-----------|
-| Statements per function | 50 max | Keeps each function within a tight attention window. |
+| Statements per function | 100 max | Keeps each function within a bounded attention window while allowing practical orchestration code. |
 | Nesting depth | 4 levels max | Deeply nested code is hard for LLMs to track. Guards and early returns reduce nesting. |
 | Parameters per function | 6 max | Too many parameters signals the function is doing too much. Use a struct. |
 | Cyclomatic complexity | 10 max | Limits the number of branching paths the LLM must reason about simultaneously. |
