@@ -138,6 +138,27 @@ function strict_optional_accessors_accept_namespaced_value() returns string:
     string item_text = json.as_string(view item) handle error:
         return error
     return "{field_text}:{item_text}"
+function strict_accessors_accept_implicit_view_calls() returns string:
+    json.JsonTree root = strict_root()
+    json.JsonTree name = json.require_field(root, "name") handle error:
+        return error
+    optional[json.JsonTree] maybe_scores = json.object_field(root, "scores") handle error:
+        return error
+    json.JsonTree scores = maybe_scores handle:
+        return "missing scores"
+    optional[json.JsonTree] maybe_second = json.array_index(scores, 1) handle error:
+        return error
+    json.JsonTree second = maybe_second handle:
+        return "missing second"
+    json.JsonTree required_second = json.require_index(scores, 1) handle error:
+        return error
+    string name_text = json.as_string(name) handle error:
+        return error
+    int64 loose = json.as_int64(second) handle error:
+        default -1
+    int64 required = json.as_int64(required_second) handle error:
+        default -1
+    return "{name_text}:{loose}:{required}"
 verify json_raw_strict_accessors:
     assert strict_required_field_value() == "Ada"
     assert strict_optional_missing_field() == "absent"
@@ -155,3 +176,4 @@ verify json_raw_strict_accessors:
     assert strict_accessors_accept_legacy_value() == "Grace"
     assert strict_accessors_accept_namespaced_value() == "Lin:5"
     assert strict_optional_accessors_accept_namespaced_value() == "field absent:index absent"
+    assert strict_accessors_accept_implicit_view_calls() == "Ada:5:5"
