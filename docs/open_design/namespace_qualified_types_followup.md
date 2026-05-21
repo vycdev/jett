@@ -42,9 +42,11 @@ JSON code without changing the language's broader namespace semantics.
 
 - Two namespaces can now define the same leaf type name when callers use fully
   qualified names such as `a.User` and `b.User`.
-- Some internal typechecker/interpreter registries still have legacy
-  leaf-oriented fallback paths. Treat those as cleanup targets rather than a
-  public namespace model.
+- Ordinary typechecker and interpreter registries now resolve namespaced
+  declarations through canonical qualified names, namespace aliases, or the
+  current lexical namespace. The remaining leaf-oriented pressure is limited to
+  explicitly deferred areas such as state machines and bootstrap compatibility
+  paths.
 - `use models as m` is a local namespace alias, not a type alias. The registered
   spelling and reflected metadata remain `models.User`.
 - State machines still have some leaf-name-oriented paths. Qualified actor
@@ -129,9 +131,9 @@ Local aliases are acceptable as a function-scoped readability tool because they
 do not change canonical symbol names, reflection metadata, or public API
 identity.
 
-The next implementation step should be to keep replacing flat fallback paths
-with canonical qualified symbols, while treating alias expansion as a local
-front-end convenience.
+The next implementation step is to leave ordinary type/function paths on
+canonical qualified symbols and avoid extending the remaining state-machine
+fallback behavior until the machine type model is explicit.
 
 ## Deferred Machine Work
 

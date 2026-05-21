@@ -187,6 +187,9 @@ Implemented:
 - Verify/property blocks and runtime `main` execute with their lexical
   namespace context, so same-namespace private helpers still resolve without
   flat aliases.
+- Runtime registry lookup now preserves root/global fallback only when no
+  lexical namespace is active; namespaced execution no longer falls through to
+  an unrelated root leaf after same-namespace lookup misses.
 - Parameter, return, and assignment refinement checks resolve aliases in the
   active lexical namespace.
 - Same-namespace private helper access remains allowed.
@@ -254,6 +257,8 @@ Still staged:
 - Namespaced helpers are no longer visible through accidental flat aliases.
 - Exported namespaced declarations are not visible through accidental flat
   aliases from outside their namespace.
+- Typechecker and interpreter fallback tests now pin that a namespaced type or
+  runtime lookup does not silently reuse an unrelated root leaf.
 - Stdlib JSON exports follow the same rule: `json.parse_raw` and
   `json.JsonTree` are available, while flat `parse_raw` and `JsonTree` are
   rejected; bare `JsonValue` remains the explicit root alias.
