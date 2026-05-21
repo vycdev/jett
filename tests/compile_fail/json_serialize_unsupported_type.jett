@@ -11,8 +11,12 @@ struct SecretHandler:
     callback: secret[function(int64) returns int64]
 function bad_function_value(view callback: function(int64) returns int64) returns string:
     return json.serialize[function(int64) returns int64](view callback)
+function bad_public_function_value(view callback: function(int64) returns int64) returns string:
+    return json.serialize_public[function(int64) returns int64](view callback)
 function bad_alias_function_value(view callback: Callback) returns string:
     return json.serialize[Callback](view callback)
+function bad_struct_function_field_full(view handler: Handler) returns string:
+    return json.serialize[Handler](view handler)
 function bad_struct_function_field(view handler: Handler) returns string:
     return json.serialize_public[Handler](view handler)
 function bad_list_function_field(view group: CallbackGroup) returns string:

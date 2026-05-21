@@ -16,6 +16,10 @@ function bad_function_target(raw: string) returns string:
     Callback callback = json.parse[Callback](raw) handle error:
         return error
     return "callback"
+function bad_exact_function_target(raw: string) returns string:
+    Callback callback = json.parse_exact[Callback](raw) handle error:
+        return error
+    return "callback"
 function bad_interface_target(raw: string) returns string:
     Named named = json.parse[Named](raw) handle error:
         return error
@@ -42,5 +46,9 @@ function bad_enum_function_payload(raw: string) returns string:
     return "event"
 function bad_type_construction_target(raw: string) returns string:
     TypeConstruction builder = json.parse_exact[TypeConstruction](raw) handle error:
+        return error
+    return "builder"
+function bad_parse_type_construction_target(raw: string) returns string:
+    TypeConstruction builder = json.parse[TypeConstruction](raw) handle error:
         return error
     return "builder"
