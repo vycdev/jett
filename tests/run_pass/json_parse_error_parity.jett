@@ -77,6 +77,8 @@ verify json_parse_error_parity:
     assert parse_errors_match("\"\\") == true
     assert parse_errors_match("\"\\q\"") == true
     assert parse_errors_match("\"line\nnext\"") == true
+    assert parse_errors_match(raw_from_hex("220022")) == true
+    assert parse_errors_match(raw_from_hex("221f22")) == true
     assert parse_errors_match("\"\\u00xz\"") == true
     assert parse_errors_match("\"\\u004\"") == true
     assert parse_errors_match("\"\\ud834\"") == true

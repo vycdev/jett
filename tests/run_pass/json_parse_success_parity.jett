@@ -53,6 +53,9 @@ function parse_success_matches(raw: string) returns bool:
 verify json_parse_success_parity:
     assert parse_success_matches("null") == true
     assert parse_success_matches("true") == true
+    assert parse_success_matches("0.0") == true
+    assert parse_success_matches("1e0") == true
+    assert parse_success_matches("1E+0") == true
     assert parse_success_matches("-0.5e+2") == true
     assert parse_success_matches("\"\"") == true
     assert parse_success_matches("\"Ada\"") == true
