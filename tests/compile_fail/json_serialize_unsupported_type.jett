@@ -1,14 +1,24 @@
 # ERROR: E0347
 namespace test
+type Callback = function(int64) returns int64
 struct Handler:
     name: string
     callback: function(int64) returns int64
+struct CallbackGroup:
+    callbacks: list[Callback]
 struct SecretHandler:
     name: string
     callback: secret[function(int64) returns int64]
 function bad_function_value(view callback: function(int64) returns int64) returns string:
     return json.serialize[function(int64) returns int64](view callback)
+function bad_alias_function_value(view callback: Callback) returns string:
+    return json.serialize[Callback](view callback)
 function bad_struct_function_field(view handler: Handler) returns string:
     return json.serialize_public[Handler](view handler)
+function bad_list_function_field(view group: CallbackGroup) returns string:
+    return json.serialize_public[CallbackGroup](view group)
+function bad_type_construction_value() returns string:
+    TypeConstruction builder = type.construct_start[Handler]()
+    return json.serialize[TypeConstruction](view builder)
 function public_omits_secret_function_field(view handler: SecretHandler) returns string:
     return json.serialize_public[SecretHandler](view handler)
