@@ -53,10 +53,16 @@ function parse_success_matches(raw: string) returns bool:
 verify json_parse_success_parity:
     assert parse_success_matches("null") == true
     assert parse_success_matches("true") == true
+    assert parse_success_matches("false") == true
+    assert parse_success_matches("0") == true
+    assert parse_success_matches("-0") == true
+    assert parse_success_matches("42") == true
     assert parse_success_matches("0.0") == true
+    assert parse_success_matches("-12.5") == true
     assert parse_success_matches("1e0") == true
     assert parse_success_matches("1E+0") == true
     assert parse_success_matches("-0.5e+2") == true
+    assert parse_success_matches("6.02E23") == true
     assert parse_success_matches("\"\"") == true
     assert parse_success_matches("\"Ada\"") == true
     assert parse_success_matches("\"slash\\/path\"") == true
@@ -83,7 +89,9 @@ verify json_parse_success_parity:
     assert parse_success_matches("\"\\uD834\\uDD1E\"") == true
     assert parse_success_matches("\"\\ud834\\udd1e\"") == true
     assert parse_success_matches("\"\\udbff\\udfff\"") == true
+    assert parse_success_matches("[]") == true
     assert parse_success_matches("[1,true,null]") == true
+    assert parse_success_matches("{{}}") == true
     assert parse_success_matches("{{\"a\":1,\"b\":[\"x\",false]}}") == true
     assert parse_success_matches("{{\"\":1}}") == true
     assert parse_success_matches("{{\"\\u0061\\n\":\"line\\rnext\"}}") == true
