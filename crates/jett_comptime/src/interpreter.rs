@@ -2968,7 +2968,6 @@ impl Interpreter {
                 | "bool"
                 | "bytes"
                 | "nothing"
-                | "JsonValue"
                 | "TypeConstruction"
         )
     }
@@ -3172,7 +3171,6 @@ impl Interpreter {
                 "bool" => Some("bool_type"),
                 "bytes" => Some("bytes_type"),
                 "nothing" => Some("nothing_type"),
-                "JsonValue" => Some("json_value_type"),
                 "TypeConstruction" => Some("type_construction_type"),
                 _ => None,
             },
@@ -3863,6 +3861,141 @@ impl Interpreter {
         }
     }
 
+    fn reflection_compare_type_name(&self, type_name: &str) -> String {
+        self.reflection_compare_type_name_inner(type_name, &mut HashSet::new())
+    }
+
+    fn reflection_compare_type_name_inner(
+        &self,
+        type_name: &str,
+        visited: &mut HashSet<String>,
+    ) -> String {
+        if !visited.insert(type_name.to_string()) {
+            return type_name.to_string();
+        }
+
+        if let Some(base_ty) = self.type_alias_bases.get(type_name) {
+            let namespace =
+                Self::type_name_namespace(type_name).or(self.current_namespace.as_deref());
+            let base_ty = self.substitute_type_expr_in_namespace(base_ty, namespace);
+            return self.reflection_compare_type_expr_inner(&base_ty, visited);
+        }
+
+        if let Some((owner, args)) = Self::split_generic_type_display(type_name) {
+            let owner = self.reflection_compare_type_name_inner(owner, visited);
+            let args = Self::split_type_display_args(args)
+                .into_iter()
+                .map(|arg| self.reflection_compare_type_name_inner(arg.trim(), visited))
+                .collect::<Vec<_>>();
+            return format!("{owner}[{}]", args.join(", "));
+        }
+
+        type_name.to_string()
+    }
+
+    fn reflection_compare_type_expr(&self, ty: &TypeExpr) -> String {
+        let ty = self.substitute_type_expr(ty);
+        self.reflection_compare_type_expr_inner(&ty, &mut HashSet::new())
+    }
+
+    fn reflection_compare_type_expr_inner(
+        &self,
+        ty: &TypeExpr,
+        visited: &mut HashSet<String>,
+    ) -> String {
+        match ty {
+            TypeExpr::Named(ident) => self.reflection_compare_type_name_inner(&ident.name, visited),
+            TypeExpr::Generic(ident, args, _) => {
+                let owner = self.reflection_compare_type_name_inner(&ident.name, visited);
+                let args = args
+                    .iter()
+                    .map(|arg| self.reflection_compare_type_expr_inner(arg, visited))
+                    .collect::<Vec<_>>();
+                format!("{owner}[{}]", args.join(", "))
+            }
+            TypeExpr::View(inner, _) => {
+                format!(
+                    "view {}",
+                    self.reflection_compare_type_expr_inner(inner, visited)
+                )
+            }
+            TypeExpr::StateQualified(inner, state, _) => {
+                format!(
+                    "{} at {}",
+                    self.reflection_compare_type_expr_inner(inner, visited),
+                    state.name
+                )
+            }
+            TypeExpr::Function(params, return_type, _) => {
+                let params = params
+                    .iter()
+                    .map(|param| self.reflection_compare_type_expr_inner(param, visited))
+                    .collect::<Vec<_>>();
+                format!(
+                    "function({}) returns {}",
+                    params.join(", "),
+                    self.reflection_compare_type_expr_inner(return_type, visited)
+                )
+            }
+        }
+    }
+
+    fn reflection_type_names_match(&self, actual: &str, expected: &str) -> bool {
+        self.reflection_compare_type_name(actual) == self.reflection_compare_type_name(expected)
+    }
+
+    fn reflection_type_name_matches_expr(&self, actual: &str, expected: &TypeExpr) -> bool {
+        self.reflection_compare_type_name(actual) == self.reflection_compare_type_expr(expected)
+    }
+
+    fn split_generic_type_display(type_name: &str) -> Option<(&str, &str)> {
+        let open = type_name.find('[')?;
+        if !type_name.ends_with(']') {
+            return None;
+        }
+        let owner = &type_name[..open];
+        if owner.is_empty() {
+            return None;
+        }
+
+        let mut depth = 0_i32;
+        for (index, ch) in type_name.char_indices().skip(open) {
+            match ch {
+                '[' => depth += 1,
+                ']' => {
+                    depth -= 1;
+                    if depth == 0 && index != type_name.len() - 1 {
+                        return None;
+                    }
+                }
+                _ => {}
+            }
+            if depth < 0 {
+                return None;
+            }
+        }
+        (depth == 0).then_some((owner, &type_name[open + 1..type_name.len() - 1]))
+    }
+
+    fn split_type_display_args(args: &str) -> Vec<&str> {
+        let mut parts = Vec::new();
+        let mut start = 0;
+        let mut depth = 0_i32;
+        for (index, ch) in args.char_indices() {
+            match ch {
+                '[' | '(' => depth += 1,
+                ']' | ')' => depth -= 1,
+                ',' if depth == 0 => {
+                    parts.push(&args[start..index]);
+                    start = index + 1;
+                }
+                _ => {}
+            }
+        }
+        parts.push(&args[start..]);
+        parts
+    }
+
     fn type_bitfield_value(&self, bitfield: ReflectionBitfield) -> Value {
         let fields = bitfield
             .fields
@@ -4336,7 +4469,7 @@ impl Interpreter {
                 ));
             }
 
-            if field.type_name != metadata_type_name {
+            if !self.reflection_type_names_match(&field.type_name, &metadata_type_name) {
                 return Err(format!(
                     "type.field_value: field metadata for '{}' has type '{}', but type '{}' reports '{}'",
                     metadata_name,
@@ -4368,7 +4501,7 @@ impl Interpreter {
             }
 
             let actual_type_name = type_expr_display(&field.ty);
-            if actual_type_name != metadata_type_name {
+            if !self.reflection_type_names_match(&actual_type_name, &metadata_type_name) {
                 return Err(format!(
                     "type.field_value: field metadata for '{}' has type '{}', but type '{}' reports '{}'",
                     metadata_name,
@@ -4381,7 +4514,7 @@ impl Interpreter {
         };
 
         let expected_type_name = type_expr_display(expected_field_ty);
-        if actual_type_name != expected_type_name {
+        if !self.reflection_type_name_matches_expr(&actual_type_name, expected_field_ty) {
             return Err(format!(
                 "type.field_value: field '{}' has type '{}', requested '{}'",
                 metadata_name, actual_type_name, expected_type_name
@@ -4503,7 +4636,7 @@ impl Interpreter {
                 ));
             }
 
-            if field.type_name != metadata_type_name {
+            if !self.reflection_type_names_match(&field.type_name, &metadata_type_name) {
                 return Err(format!(
                     "type.variant_field_value: field metadata for '{}' has type '{}', but variant '{}.{}' reports '{}'",
                     metadata_name, metadata_type_name, expected_type_name, variant, field.type_name
@@ -4511,7 +4644,7 @@ impl Interpreter {
             }
 
             let expected_field_type_name = type_expr_display(expected_field_ty);
-            if field.type_name != expected_field_type_name {
+            if !self.reflection_type_name_matches_expr(&field.type_name, expected_field_ty) {
                 return Err(format!(
                     "type.variant_field_value: field '{}' has type '{}', requested '{}'",
                     metadata_name, field.type_name, expected_field_type_name
@@ -4555,7 +4688,7 @@ impl Interpreter {
         }
 
         let actual_type_name = type_expr_display(&field.ty);
-        if actual_type_name != metadata_type_name {
+        if !self.reflection_type_names_match(&actual_type_name, &metadata_type_name) {
             return Err(format!(
                 "type.variant_field_value: field metadata for '{}' has type '{}', but variant '{}.{}' reports '{}'",
                 metadata_name, metadata_type_name, expected_type_name, variant, actual_type_name
@@ -4563,7 +4696,7 @@ impl Interpreter {
         }
 
         let expected_field_type_name = type_expr_display(expected_field_ty);
-        if actual_type_name != expected_field_type_name {
+        if !self.reflection_type_name_matches_expr(&actual_type_name, expected_field_ty) {
             return Err(format!(
                 "type.variant_field_value: field '{}' has type '{}', requested '{}'",
                 metadata_name, actual_type_name, expected_field_type_name
@@ -4716,7 +4849,7 @@ impl Interpreter {
             }
         }
 
-        if actual_type_name != metadata_type_name {
+        if !self.reflection_type_names_match(&actual_type_name, &metadata_type_name) {
             return Ok(result_fail(format!(
                 "type.construct_put: field metadata for '{}' has type '{}', but '{}' reports '{}'",
                 metadata_name, metadata_type_name, expected_owner, actual_type_name
@@ -4724,7 +4857,7 @@ impl Interpreter {
         }
 
         let expected_field_type_name = type_expr_display(expected_field_ty);
-        if actual_type_name != expected_field_type_name {
+        if !self.reflection_type_name_matches_expr(&actual_type_name, expected_field_ty) {
             return Ok(result_fail(format!(
                 "type.construct_put: field '{}' has type '{}', provided as '{}'",
                 metadata_name, actual_type_name, expected_field_type_name
@@ -9541,7 +9674,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_json_value_reflection_keeps_legacy_primitive_without_alias() {
+    fn direct_json_value_reflection_requires_registered_alias() {
         let mut interp = Interpreter::new();
         let ty = type_named("JsonValue");
 
@@ -9554,15 +9687,8 @@ mod tests {
             .expect("type.primitive_tag should be a typed builtin")
             .expect("type.primitive_tag should evaluate");
 
-        assert_eq!(kind, Value::String("primitive".to_string()));
-        assert_eq!(
-            primitive_tag,
-            Value::OptionalSome(Box::new(Value::Enum {
-                type_name: "TypePrimitive".to_string(),
-                variant: "json_value_type".to_string(),
-                fields: Vec::new(),
-            }))
-        );
+        assert_eq!(kind, Value::String("named".to_string()));
+        assert_eq!(primitive_tag, Value::OptionalNone);
     }
 
     #[test]

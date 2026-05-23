@@ -133,8 +133,9 @@ Staging rules:
 - does not change compiler-owned trust for JSON bridge hooks.
 
 `JsonValue` has moved to a source-owned stdlib root alias in normal
-stdlib-loaded code, while `TypePrimitive.json_value_type` remains only as a
-bootstrap/no-stdlib fallback during the transition.
+stdlib-loaded code. The direct interpreter no longer synthesizes
+`TypePrimitive.json_value_type` when that alias is absent; the remaining legacy
+primitive behavior is typechecker/bootstrap-only during the transition.
 
 ## Implementation Staging Notes
 
@@ -165,8 +166,10 @@ Concretely, a safe implementation should:
    access.
 4. Keep source visibility separate from trusted origin. A root alias should not
    make any function implementation trusted.
-5. Done: switch stdlib-loaded `JsonValue` reflection to alias metadata while
-   keeping the legacy primitive fallback for bootstrap/no-stdlib contexts.
+5. Done: switch stdlib-loaded `JsonValue` reflection to alias metadata.
+6. Done: remove the direct interpreter's no-alias `JsonValue` primitive
+   synthesis; direct tests that need bare `JsonValue` should register the root
+   alias just like normal stdlib-loaded code.
 
 Required tests for that first slice:
 
