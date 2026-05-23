@@ -666,6 +666,20 @@ pub fn invalid_machine_transition_call(
     )
 }
 
+/// E0353: A machine state check uses a non-machine value or unknown state.
+pub fn invalid_machine_state_check(
+    got: &str,
+    state_name: &str,
+    reason: &str,
+    span: Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        353,
+        format!("cannot check `{got}` at state `{state_name}`: {reason}"),
+        span,
+    )
+}
+
 // Diagnostic codes E0800-E0899 are reserved for function complexity limits.
 
 /// E0800: Function body exceeds the statement count limit.

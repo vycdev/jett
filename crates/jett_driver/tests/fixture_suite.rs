@@ -232,6 +232,10 @@ compile_pass_fixture!(
     compile_pass_state_machine_transition,
     "state_machine_transition.jett"
 );
+compile_pass_fixture!(
+    compile_pass_state_machine_at_check,
+    "state_machine_at_check.jett"
+);
 
 compile_fail_fixture!(compile_fail_type_mismatch, "type_mismatch.jett");
 compile_fail_fixture!(compile_fail_secret_stdout, "secret_stdout.jett");
@@ -633,6 +637,14 @@ compile_fail_fixture!(
 compile_fail_fixture!(
     compile_fail_state_machine_transition_bare_source,
     "state_machine_transition_bare_source.jett"
+);
+compile_fail_fixture!(
+    compile_fail_state_machine_at_non_machine,
+    "state_machine_at_non_machine.jett"
+);
+compile_fail_fixture!(
+    compile_fail_state_machine_at_unknown_state,
+    "state_machine_at_unknown_state.jett"
 );
 compile_fail_fixture!(
     compile_fail_pipeline_builtin_input_mismatch,

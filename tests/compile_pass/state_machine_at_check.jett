@@ -1,0 +1,13 @@
+machine Session:
+    states:
+        guest
+        logged_in(user_id: string)
+
+    transitions:
+        guest to logged_in
+
+function is_guest(session: Session at logged_in) returns bool:
+    return session at guest
+
+function is_logged_in(session: Session) returns bool:
+    return session at logged_in

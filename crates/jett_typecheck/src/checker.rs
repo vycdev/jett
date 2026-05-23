@@ -6724,11 +6724,7 @@ impl<'a> TypeChecker<'a> {
                 self.fully_coarsened_type(inner_ty)
             }
             Expr::Pipeline(initial, steps, _) => self.check_pipeline(initial, steps),
-            Expr::At(inner, _state, _) => {
-                // `expr at state` returns a bool.
-                self.check_expr(inner);
-                TypeInterner::BOOL
-            }
+            Expr::At(inner, state, span) => self.check_machine_state_check(inner, state, *span),
             Expr::Spawn(inner, _) => self.check_spawn(inner),
             Expr::Send(inner, _) => {
                 self.check_send_ask_inner(inner);
@@ -8541,6 +8537,42 @@ impl<'a> TypeChecker<'a> {
             machine: mid,
             state: target_state,
         })
+    }
+
+    fn check_machine_state_check(
+        &mut self,
+        inner: &Expr,
+        state: &ast::Ident,
+        span: Span,
+    ) -> TypeId {
+        let inner_ty = self.check_expr(inner);
+        let machine_id = match self.interner.resolve(inner_ty).clone() {
+            Type::Machine(mid) => mid,
+            Type::MachineState { machine, .. } => machine,
+            Type::Error => return TypeInterner::BOOL,
+            _ => {
+                self.sink.emit(errors::invalid_machine_state_check(
+                    &self.type_name(inner_ty),
+                    &state.name,
+                    "value is not a machine",
+                    span,
+                ));
+                return TypeInterner::ERROR;
+            }
+        };
+
+        let machine_def = self.interner.resolve_machine(machine_id);
+        if machine_def.state_id(&state.name).is_none() {
+            self.sink.emit(errors::invalid_machine_state_check(
+                &machine_def.name,
+                &state.name,
+                "state is not declared on this machine",
+                state.span,
+            ));
+            return TypeInterner::ERROR;
+        }
+
+        TypeInterner::BOOL
     }
 
     fn check_list_construct(&mut self, elems: &[Expr]) -> TypeId {

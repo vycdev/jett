@@ -25,6 +25,8 @@ Implemented:
   arity/types, and return the corresponding `Machine at state` type.
 - Machine transition calls are checked for source owner/state, declared edge,
   target payload arity/types, and return the target `Machine at state` type.
+- `expr at state` is checked as a boolean state test on machine values, with
+  diagnostics for non-machine values and states not declared on the machine.
 - The comptime interpreter can register machines, construct values with
   `MachineName(state, ...)`, check `value at state`, and run
   `MachineName.transition(value, target, ...)`.
@@ -119,10 +121,8 @@ to a known machine owner.
    - current state and target state form a declared transition edge,
    - target payload fields match the target state's fields,
    - return type is `Machine at target`.
-6. Typecheck `expr at state` as either:
-   - a bool check on any `Machine` value, or
-   - a refinement/narrowing operation if Jett later supports branch-local state
-     narrowing.
+6. Typecheck `expr at state` as a bool check on machine values. Done. It does
+   not narrow branch-local state yet.
 7. After the checked model exists, add namespace fixtures:
    - qualified machine construction,
    - `use`-alias machine construction,

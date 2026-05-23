@@ -1,0 +1,3 @@
+# ERROR: E0353
+function wrong(value: string) returns bool:
+    return value at guest
