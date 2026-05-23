@@ -52,6 +52,11 @@ function parse_exact_unknown_envelope_error() returns string:
     Session session = json.parse_exact[Session](raw) handle error:
         return error
     return "unexpected"
+function parse_exact_machine_type_tag_error() returns string:
+    string raw = "{{\"type\":\"Session\",\"state\":\"guest\",\"payload\":{{}}}}"
+    Session session = json.parse_exact[Session](raw) handle error:
+        return error
+    return "unexpected"
 function parse_exact_unknown_payload_error() returns string:
     string raw = "{{\"state\":\"logged_in\",\"payload\":{{\"user_id\":\"user-4\",\"displayName\":\"Cal\",\"extra\":true}}}}"
     Session session = json.parse_exact[Session](raw) handle error:
@@ -74,6 +79,7 @@ verify json_parse_machine_envelope:
     assert parse_guest_session() == "guest"
     assert parse_nested_session_box() == "user-3:2"
     assert string.contains(parse_exact_unknown_envelope_error(), "unknown field 'version'") == true
+    assert string.contains(parse_exact_machine_type_tag_error(), "unknown field 'type'") == true
     assert string.contains(parse_exact_unknown_payload_error(), "unknown field 'extra'") == true
     assert string.contains(parse_missing_payload_field_error(), "missing required field 'user_id'") == true
     assert parse_secret_machine_public_json() == "{{\"state\":\"issued\",\"payload\":{{\"publicId\":\"tok-1\"}}}}"

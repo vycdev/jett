@@ -1,6 +1,6 @@
 # State Machine JSON Contract
 
-Status: implemented for parse and serialize; migration policy remains open.
+Status: implemented for parse and serialize; migration annotations remain open.
 
 Jett now has checked reflection for state-machine kind tags, declared states,
 state payload fields, transition edges, active state values, and active payload
@@ -16,6 +16,9 @@ builder path followed by `type.construct_put` and `type.construct_finish`.
 - `json.parse` and `json.parse_exact` accept bare `Machine` and
   `Machine at state` targets, including nested machine fields inside structs
   and containers, when all payload fields are JSON-compatible.
+- The wire envelope has exactly two canonical keys, `state` and `payload`.
+  Serializers do not emit a machine type tag, and exact parsing rejects extra
+  envelope keys such as `type`.
 - Machine reflection is available through `type.machine_layout[T]()`,
   `type.machine_states[T]()`, and `type.machine_transitions[T]()`.
 - Value-level machine reflection is available through
@@ -102,11 +105,22 @@ history.
 If a future protocol wants transition-aware messages, that should be a separate
 message type or generated event shape, not ordinary `json.parse[Machine]`.
 
+## Current Decisions
+
+- Do not include the machine type name in the envelope. The static parse target
+  already selects the machine owner, and embedding the source name would make
+  namespace moves and refactors part of the wire contract.
+- Keep machine JSON enabled for every machine whose payload fields are
+  JSON-compatible. This matches structs, enums, bitfields, and containers:
+  serializability is a property the checker can prove from the shape.
+- Treat migration as a future annotation problem, not a parser guess. Payload
+  fields already have `serialize "..."`; state rename aliases or machine-level
+  schema versions should be designed explicitly before they affect parsing.
+
 ## Open Questions
 
-- Should the envelope include a machine type name for debugging, or would that
-  make refactors too brittle?
-- Should machine JSON be opt-in per machine declaration, or enabled for every
-  machine whose payload fields are JSON-compatible?
-- How should a future schema migration story rename states or payload fields
-  without weakening the one-canonical-spelling rule?
+- Should machine declarations eventually support explicit JSON policy
+  annotations, such as disabling the default envelope or naming a schema
+  version?
+- How should a future schema migration story rename states without weakening
+  the one-canonical-spelling rule?

@@ -69,9 +69,9 @@ Implemented:
 
 Remaining work:
 
-- Decide whether machine JSON should be opt-in per machine declaration, and how
-  schema migrations should rename states or payload fields without weakening
-  the one-canonical-spelling rule.
+- Design any future machine JSON policy annotations and schema migration
+  support, especially state renames, without weakening the
+  one-canonical-spelling rule.
 
 ## Why This Should Not Be A Namespace Patch
 
