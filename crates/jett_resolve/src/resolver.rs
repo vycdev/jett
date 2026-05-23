@@ -1448,6 +1448,9 @@ impl Resolver {
         for &def_id in &self.var_defs {
             if !self.used_defs.contains(&def_id) {
                 let info = self.scope_table.def(def_id);
+                if info.span.file.is_stdlib() {
+                    continue;
+                }
                 // Skip the loop variable `_` convention if adopted, but
                 // for now we warn on everything.
                 if info.name.starts_with('_') {
@@ -1460,6 +1463,9 @@ impl Resolver {
         for &def_id in &self.use_defs {
             if !self.used_defs.contains(&def_id) {
                 let info = self.scope_table.def(def_id);
+                if info.span.file.is_stdlib() {
+                    continue;
+                }
                 self.sink.emit(errors::unused_import(&info.name, info.span));
             }
         }
@@ -2557,6 +2563,43 @@ function main() returns int64:
         assert!(warnings[0].message.contains("x"));
     }
 
+    #[test]
+    fn suppress_unused_variable_warning_in_stdlib_file() {
+        let stdlib_span = Span::new(FileId::new(STDLIB_FILE_ID_START), 50, 64);
+        let module = Module {
+            items: vec![Item::Function(FunctionDef {
+                name: ident("main", 0),
+                type_params: vec![],
+                params: vec![],
+                return_type: Some(named_type("nothing", 20)),
+                body: Block {
+                    stmts: vec![Stmt::VarDecl(VarDecl {
+                        mutable: false,
+                        ty: named_type("int64", 50),
+                        name: Ident {
+                            name: "x".to_string(),
+                            span: stdlib_span,
+                        },
+                        value: int_literal(42, 60),
+                        span: stdlib_span,
+                    })],
+                    span: sp(40, 70),
+                },
+                exported: false,
+                span: sp(0, 70),
+            })],
+            span: sp(0, 70),
+        };
+
+        let result = resolve(&module);
+        let warnings: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == Severity::Warning && d.code.code() == 202)
+            .collect();
+        assert!(warnings.is_empty(), "stdlib locals should not warn");
+    }
+
     // ---- Test: nested scope resolution (function body → if block) ----
 
     #[test]
@@ -2854,6 +2897,47 @@ function main() returns int64:
             .collect();
         assert_eq!(warnings.len(), 1, "expected 1 unused-import warning");
         assert!(warnings[0].message.contains("models"));
+    }
+
+    #[test]
+    fn suppress_unused_import_warning_in_stdlib_file() {
+        let stdlib_span = Span::new(FileId::new(STDLIB_FILE_ID_START), 55, 70);
+        let module = Module {
+            items: vec![
+                Item::Namespace(NamespaceDecl {
+                    name: ident("models", 0),
+                    span: sp(0, 16),
+                }),
+                Item::Function(FunctionDef {
+                    name: ident("main", 20),
+                    type_params: vec![],
+                    params: vec![],
+                    return_type: Some(named_type("nothing", 40)),
+                    body: Block {
+                        stmts: vec![Stmt::Use(UseDecl {
+                            path: Ident {
+                                name: "models".to_string(),
+                                span: stdlib_span,
+                            },
+                            alias: None,
+                            span: stdlib_span,
+                        })],
+                        span: sp(50, 75),
+                    },
+                    exported: false,
+                    span: sp(20, 75),
+                }),
+            ],
+            span: sp(0, 75),
+        };
+
+        let result = resolve(&module);
+        let warnings: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == Severity::Warning && d.code.code() == 203)
+            .collect();
+        assert!(warnings.is_empty(), "stdlib imports should not warn");
     }
 
     // ---- Test: underscore-prefixed variables are not flagged as unused ----
