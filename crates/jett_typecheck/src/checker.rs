@@ -7562,6 +7562,15 @@ impl<'a> TypeChecker<'a> {
             }
         }
 
+        if type_args.is_empty()
+            && let Some(callee_name) = callee_name.as_deref()
+            && let Some((owner_name, "transition")) = callee_name.rsplit_once('.')
+            && let Some(owner_ty) = self.named_types.get(owner_name).copied()
+            && let Type::Machine(mid) = *self.interner.resolve(owner_ty)
+        {
+            return self.check_machine_transition_call(mid, args, span);
+        }
+
         // Check for generic struct construction: `Name[T, U](fields...)`.
         if !type_args.is_empty() {
             if let Some(struct_name) = callee_name.as_deref() {
@@ -8409,6 +8418,128 @@ impl<'a> TypeChecker<'a> {
         self.interner.intern(Type::MachineState {
             machine: mid,
             state: state_id,
+        })
+    }
+
+    fn check_machine_transition_call(
+        &mut self,
+        mid: jett_types::MachineId,
+        args: &[ast::CallArg],
+        span: Span,
+    ) -> TypeId {
+        let machine_def = self.interner.resolve_machine(mid).clone();
+        if args.len() < 2 {
+            self.sink.emit(errors::invalid_machine_transition_call(
+                &machine_def.name,
+                "transition",
+                "expected a source value and target state",
+                span,
+            ));
+            for arg in args {
+                self.check_expr(&arg.value);
+            }
+            return TypeInterner::ERROR;
+        }
+
+        let source_ty = self.check_expr(&args[0].value);
+        let source_state = match self.interner.resolve(source_ty).clone() {
+            Type::MachineState { machine, state } if machine == mid => Some(state),
+            Type::Error => None,
+            _ => {
+                self.sink.emit(errors::invalid_machine_transition_call(
+                    &machine_def.name,
+                    "transition",
+                    &format!(
+                        "source value must be `{}` at a known state, got `{}`",
+                        machine_def.name,
+                        self.type_name(source_ty)
+                    ),
+                    args[0].value.span(),
+                ));
+                None
+            }
+        };
+
+        let target_ident = match &args[1].value {
+            Expr::Ident(ident) if args[1].name.is_none() => ident,
+            _ => {
+                self.sink.emit(errors::invalid_machine_transition_call(
+                    &machine_def.name,
+                    "transition",
+                    "second argument must be a bare target state name",
+                    args[1].span,
+                ));
+                for arg in &args[2..] {
+                    self.check_expr(&arg.value);
+                }
+                return TypeInterner::ERROR;
+            }
+        };
+
+        let Some(target_state) = machine_def.state_id(&target_ident.name) else {
+            self.sink.emit(errors::invalid_machine_transition_call(
+                &machine_def.name,
+                &format!("to {}", target_ident.name),
+                &format!("unknown target state `{}`", target_ident.name),
+                target_ident.span,
+            ));
+            for arg in &args[2..] {
+                self.check_expr(&arg.value);
+            }
+            return TypeInterner::ERROR;
+        };
+
+        if let Some(source_state) = source_state
+            && !machine_def.has_transition(source_state, target_state)
+        {
+            let source_name = machine_def
+                .state(source_state)
+                .map(|state| state.name.as_str())
+                .unwrap_or("<unknown>");
+            self.sink.emit(errors::invalid_machine_transition_call(
+                &machine_def.name,
+                &format!("{source_name} to {}", target_ident.name),
+                "edge is not declared",
+                span,
+            ));
+        }
+
+        let target_def = machine_def
+            .state(target_state)
+            .expect("state_id came from the same machine definition");
+        let payload_args = &args[2..];
+        if payload_args.len() != target_def.fields.len() {
+            self.sink.emit(errors::invalid_machine_transition_call(
+                &machine_def.name,
+                &format!("to {}", target_def.name),
+                &format!(
+                    "target state `{}` expects {} payload field(s), got {}",
+                    target_def.name,
+                    target_def.fields.len(),
+                    payload_args.len()
+                ),
+                span,
+            ));
+        }
+
+        for (arg, (field_name, expected_ty)) in payload_args.iter().zip(target_def.fields.iter()) {
+            let arg_ty = self.check_expr_for_expected(&arg.value, *expected_ty, false);
+            if !self.types_compatible(*expected_ty, arg_ty) {
+                self.sink.emit(errors::argument_type_mismatch(
+                    field_name,
+                    &self.type_name(*expected_ty),
+                    &self.type_name(arg_ty),
+                    arg.value.span(),
+                ));
+            }
+        }
+        for arg in payload_args.iter().skip(target_def.fields.len()) {
+            self.check_expr(&arg.value);
+        }
+
+        self.interner.intern(Type::MachineState {
+            machine: mid,
+            state: target_state,
         })
     }
 

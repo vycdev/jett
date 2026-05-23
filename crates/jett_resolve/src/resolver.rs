@@ -1001,10 +1001,14 @@ impl Resolver {
             }
             Expr::Call(callee, args, _) => {
                 self.resolve_expr(callee, item_index);
-                let first_arg_is_machine_state =
-                    self.expr_resolves_to_kind(callee, DefKind::Machine) && !args.is_empty();
+                let state_arg_index = self
+                    .machine_transition_state_arg_index(callee, args)
+                    .or_else(|| {
+                        (self.expr_resolves_to_kind(callee, DefKind::Machine) && !args.is_empty())
+                            .then_some(0)
+                    });
                 for (index, arg) in args.iter().enumerate() {
-                    if first_arg_is_machine_state && index == 0 {
+                    if state_arg_index == Some(index) {
                         continue;
                     }
                     self.resolve_call_arg(arg, item_index);
@@ -1130,6 +1134,18 @@ impl Resolver {
         self.resolutions
             .get(&expr.span())
             .is_some_and(|def_id| self.scope_table.def(*def_id).kind == kind)
+    }
+
+    fn machine_transition_state_arg_index(&self, callee: &Expr, args: &[CallArg]) -> Option<usize> {
+        let Expr::FieldAccess(base, field, _) = callee else {
+            return None;
+        };
+        if field.name != "transition" || args.len() < 2 {
+            return None;
+        }
+        (self.expr_resolves_to_kind(base, DefKind::Machine)
+            || self.expr_resolves_to_kind(callee, DefKind::Machine))
+        .then_some(1)
     }
 
     // ------------------------------------------------------------------

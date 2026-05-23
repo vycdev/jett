@@ -1,0 +1,12 @@
+# ERROR: E0352
+machine Session:
+    states:
+        guest
+        logged_in(user_id: string)
+        banned(reason: string)
+
+    transitions:
+        guest to logged_in
+
+function ban(session: Session at guest) returns Session at banned:
+    return Session.transition(session, banned, "abuse")

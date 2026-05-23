@@ -652,6 +652,20 @@ pub fn invalid_machine_construction(machine_name: &str, reason: &str, span: Span
     )
 }
 
+/// E0352: A machine transition call is not valid for the source/target states.
+pub fn invalid_machine_transition_call(
+    machine_name: &str,
+    transition: &str,
+    reason: &str,
+    span: Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        352,
+        format!("machine `{machine_name}` transition call `{transition}` is invalid: {reason}"),
+        span,
+    )
+}
+
 // Diagnostic codes E0800-E0899 are reserved for function complexity limits.
 
 /// E0800: Function body exceeds the statement count limit.

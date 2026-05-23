@@ -23,6 +23,8 @@ Implemented:
   payload field type resolution.
 - Machine construction calls are checked for an initial state label and payload
   arity/types, and return the corresponding `Machine at state` type.
+- Machine transition calls are checked for source owner/state, declared edge,
+  target payload arity/types, and return the target `Machine at state` type.
 - The comptime interpreter can register machines, construct values with
   `MachineName(state, ...)`, check `value at state`, and run
   `MachineName.transition(value, target, ...)`.
@@ -31,8 +33,6 @@ Implemented:
 
 Not implemented:
 
-- Transition calls are not checked against machine state field types or
-  declared transition edges.
 - State-specific field access is not modeled.
 - Machine declarations currently remain private because the parser AST has no
   `export machine` flag yet.
@@ -114,7 +114,7 @@ to a known machine owner.
    - first argument is a declared state,
    - payload fields match that state's declared fields,
    - return type is `Machine at state`.
-5. Typecheck transitions:
+5. Typecheck transitions. Done:
    - source value has the same machine owner,
    - current state and target state form a declared transition edge,
    - target payload fields match the target state's fields,

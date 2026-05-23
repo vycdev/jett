@@ -1,0 +1,11 @@
+# ERROR: E0352
+machine Session:
+    states:
+        guest
+        logged_in(user_id: string)
+
+    transitions:
+        guest to logged_in
+
+function login(session: Session) returns Session at logged_in:
+    return Session.transition(session, logged_in, "user-1")

@@ -1,0 +1,15 @@
+machine Session:
+    states:
+        guest
+        logged_in(user_id: string)
+        banned(reason: string)
+
+    transitions:
+        guest to logged_in
+        logged_in to banned
+
+function login(session: Session at guest) returns Session at logged_in:
+    return Session.transition(session, logged_in, "user-1")
+
+function ban(session: Session at logged_in) returns Session at banned:
+    return Session.transition(session, banned, "abuse")
