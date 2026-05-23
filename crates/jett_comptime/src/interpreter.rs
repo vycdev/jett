@@ -749,8 +749,12 @@ impl Interpreter {
         }
     }
 
-    fn normalize_value_for_type(&self, ty: &TypeExpr, value: Value) -> Result<Value, String> {
-        match type_expr_name(ty).as_str() {
+    fn normalize_value_for_type_name(
+        &self,
+        type_name: &str,
+        value: Value,
+    ) -> Result<Value, String> {
+        match type_name {
             "uint64" => match value {
                 Value::Int64(n) if n >= 0 => Ok(Value::Uint64(n as u64)),
                 Value::Int64(n) => Err(format!("uint64 value cannot be negative: {n}")),
@@ -758,6 +762,10 @@ impl Interpreter {
             },
             _ => Ok(value),
         }
+    }
+
+    fn normalize_value_for_type(&self, ty: &TypeExpr, value: Value) -> Result<Value, String> {
+        self.normalize_value_for_type_name(&type_expr_name(ty), value)
     }
 
     fn type_name_has_refinement(&self, type_name: &str) -> bool {
@@ -4937,8 +4945,13 @@ impl Interpreter {
             )));
         }
 
+        let value = match self.normalize_value_for_type_name(&actual_type_name, value.clone()) {
+            Ok(value) => value,
+            Err(message) => return Ok(result_fail(message)),
+        };
+
         let mut fields = existing_fields.clone();
-        fields.push((field_index, metadata_name, actual_type_name, value.clone()));
+        fields.push((field_index, metadata_name, actual_type_name, value));
         Ok(result_ok(Value::TypeConstruction {
             type_name: type_name.clone(),
             variant: variant.clone(),
@@ -5167,11 +5180,16 @@ impl Interpreter {
                 )));
             };
 
-            let type_name = type_expr_name(&field.ty);
-            if let Err(message) = self.check_refinement(&type_name, value) {
+            let field_ty = self.substitute_type_expr(&field.ty);
+            let type_name = type_expr_name(&field_ty);
+            let value = match self.normalize_value_for_type(&field_ty, value.clone()) {
+                Ok(value) => value,
+                Err(message) => return Ok(result_fail(message)),
+            };
+            if let Err(message) = self.check_refinement(&type_name, &value) {
                 return Ok(result_fail(message));
             }
-            struct_fields.push((field.name.clone(), value.clone()));
+            struct_fields.push((field.name.clone(), value));
         }
 
         Ok(result_ok(Value::Struct {
@@ -5199,11 +5217,15 @@ impl Interpreter {
                 )));
             };
 
+            let value = match self.normalize_value_for_type_name(&field.type_name, value.clone()) {
+                Ok(value) => value,
+                Err(message) => return Ok(result_fail(message)),
+            };
             let type_name = Self::reflection_field_refinement_name(field);
-            if let Err(message) = self.check_refinement(&type_name, value) {
+            if let Err(message) = self.check_refinement(&type_name, &value) {
                 return Ok(result_fail(message));
             }
-            struct_fields.push((field.name.clone(), value.clone()));
+            struct_fields.push((field.name.clone(), value));
         }
 
         Ok(result_ok(Value::Struct {
@@ -5251,11 +5273,16 @@ impl Interpreter {
                     )));
                 };
 
+                let value =
+                    match self.normalize_value_for_type_name(&field.type_name, value.clone()) {
+                        Ok(value) => value,
+                        Err(message) => return Ok(result_fail(message)),
+                    };
                 let type_name = Self::reflection_field_refinement_name(field);
-                if let Err(message) = self.check_refinement(&type_name, value) {
+                if let Err(message) = self.check_refinement(&type_name, &value) {
                     return Ok(result_fail(message));
                 }
-                enum_fields.push(value.clone());
+                enum_fields.push(value);
             }
 
             return Ok(result_ok(Value::Enum {
@@ -5294,11 +5321,16 @@ impl Interpreter {
                 )));
             };
 
-            let type_name = type_expr_name(&field.ty);
-            if let Err(message) = self.check_refinement(&type_name, value) {
+            let field_ty = self.substitute_type_expr(&field.ty);
+            let type_name = type_expr_name(&field_ty);
+            let value = match self.normalize_value_for_type(&field_ty, value.clone()) {
+                Ok(value) => value,
+                Err(message) => return Ok(result_fail(message)),
+            };
+            if let Err(message) = self.check_refinement(&type_name, &value) {
                 return Ok(result_fail(message));
             }
-            enum_fields.push(value.clone());
+            enum_fields.push(value);
         }
 
         Ok(result_ok(Value::Enum {
@@ -9475,6 +9507,16 @@ mod tests {
         )
     }
 
+    fn uint64_type_info() -> ReflectionTypeInfo {
+        ReflectionTypeInfo::new(
+            "uint64",
+            "primitive",
+            Some("uint64_type".to_string()),
+            false,
+            Vec::new(),
+        )
+    }
+
     fn string_field_info(index: usize, name: &str) -> ReflectionFieldInfo {
         ReflectionFieldInfo::new(
             index,
@@ -9484,6 +9526,18 @@ mod tests {
             name,
             false,
             string_type_info(),
+        )
+    }
+
+    fn uint64_field_info(index: usize, name: &str) -> ReflectionFieldInfo {
+        ReflectionFieldInfo::new(
+            index,
+            name,
+            "uint64",
+            "primitive",
+            name,
+            false,
+            uint64_type_info(),
         )
     }
 
@@ -10723,6 +10777,70 @@ mod tests {
     }
 
     #[test]
+    fn type_construct_put_and_finish_normalize_checked_uint64_struct_field() {
+        let mut metadata = ReflectionMetadata::new();
+        metadata.insert_type_info(ReflectionTypeInfo::new(
+            "Counter",
+            "struct",
+            None,
+            false,
+            Vec::new(),
+        ));
+        metadata.insert_type_fields("Counter", vec![uint64_field_info(0, "value")]);
+
+        let mut interp = Interpreter::new();
+        interp.set_reflection_metadata(Arc::new(metadata));
+
+        let builder = interp
+            .call_builtin_with_type_args("type.construct_start", &[type_named("Counter")], &[])
+            .expect("type.construct_start should be a typed builtin")
+            .expect("type.construct_start should evaluate");
+        let type_fields = interp
+            .call_builtin_with_type_args("type.fields", &[type_named("Counter")], &[])
+            .expect("type.fields should be a typed builtin")
+            .expect("type.fields should evaluate");
+        let Value::List(type_fields) = type_fields else {
+            panic!("expected list of TypeField values");
+        };
+
+        let updated = interp
+            .call_builtin_with_type_args(
+                "type.construct_put",
+                &[type_named("Counter"), type_named("uint64")],
+                &[builder, type_fields[0].clone(), Value::Int64(42)],
+            )
+            .expect("type.construct_put should be a typed builtin")
+            .expect("type.construct_put should evaluate");
+        let Value::ResultOk(updated) = updated else {
+            panic!("expected successful construction update");
+        };
+        let Value::TypeConstruction { fields, .. } = updated.as_ref() else {
+            panic!("expected TypeConstruction");
+        };
+        assert_eq!(fields[0].3, Value::Uint64(42));
+
+        let finished = interp
+            .call_builtin_with_type_args(
+                "type.construct_finish",
+                &[type_named("Counter")],
+                &[(*updated).clone()],
+            )
+            .expect("type.construct_finish should be a typed builtin")
+            .expect("type.construct_finish should evaluate");
+        let Value::ResultOk(finished) = finished else {
+            panic!("expected successful construction finish");
+        };
+
+        assert_eq!(
+            *finished,
+            Value::Struct {
+                type_name: "Counter".to_string(),
+                fields: vec![("value".to_string(), Value::Uint64(42))],
+            }
+        );
+    }
+
+    #[test]
     fn type_construct_enum_payload_and_finish_use_checked_reflection_metadata_when_available() {
         let field_type = ReflectionTypeInfo::new(
             "string",
@@ -10853,6 +10971,100 @@ mod tests {
         assert_eq!(fields[0].1, "value");
         assert_eq!(fields[0].2, "string");
         assert_eq!(fields[0].3, Value::String("ok".to_string()));
+    }
+
+    #[test]
+    fn type_construct_put_and_finish_normalize_checked_uint64_enum_payload() {
+        let mut metadata = ReflectionMetadata::new();
+        metadata.insert_type_info(ReflectionTypeInfo::new(
+            "Choice",
+            "enum",
+            None,
+            false,
+            Vec::new(),
+        ));
+        metadata.insert_type_variants(
+            "Choice",
+            vec![ReflectionVariantInfo::new(
+                0,
+                "token",
+                7,
+                false,
+                vec![uint64_field_info(0, "value")],
+            )],
+        );
+
+        let mut interp = Interpreter::new();
+        interp.set_reflection_metadata(Arc::new(metadata));
+
+        let variants = interp
+            .call_builtin_with_type_args("type.variants", &[type_named("Choice")], &[])
+            .expect("type.variants should be a typed builtin")
+            .expect("type.variants should evaluate");
+        let Value::List(variants) = variants else {
+            panic!("expected list of TypeVariant values");
+        };
+        let Value::Struct {
+            fields: variant_fields,
+            ..
+        } = &variants[0]
+        else {
+            panic!("expected TypeVariant");
+        };
+        let payload_fields = variant_fields
+            .iter()
+            .find_map(
+                |(name, value)| {
+                    if name == "fields" { Some(value) } else { None }
+                },
+            )
+            .expect("TypeVariant.fields should exist");
+        let Value::List(payload_fields) = payload_fields else {
+            panic!("expected TypeVariant.fields list");
+        };
+
+        let builder = interp
+            .call_builtin_with_type_args(
+                "type.construct_variant_start",
+                &[type_named("Choice")],
+                &[variants[0].clone()],
+            )
+            .expect("type.construct_variant_start should be a typed builtin")
+            .expect("type.construct_variant_start should evaluate");
+        let Value::ResultOk(builder) = builder else {
+            panic!("expected successful enum construction start");
+        };
+        let updated = interp
+            .call_builtin_with_type_args(
+                "type.construct_put",
+                &[type_named("Choice"), type_named("uint64")],
+                &[*builder, payload_fields[0].clone(), Value::Int64(42)],
+            )
+            .expect("type.construct_put should be a typed builtin")
+            .expect("type.construct_put should evaluate");
+        let Value::ResultOk(updated) = updated else {
+            panic!("expected successful enum payload update");
+        };
+        let finished = interp
+            .call_builtin_with_type_args(
+                "type.construct_finish",
+                &[type_named("Choice")],
+                &[(*updated).clone()],
+            )
+            .expect("type.construct_finish should be a typed builtin")
+            .expect("type.construct_finish should evaluate");
+        let Value::ResultOk(finished) = finished else {
+            panic!("expected successful enum construction finish");
+        };
+
+        assert_eq!(
+            *finished,
+            Value::Enum {
+                type_name: "Choice".to_string(),
+                variant: "token".to_string(),
+                fields: vec![Value::Uint64(42)],
+            }
+        );
     }
 
     #[test]
