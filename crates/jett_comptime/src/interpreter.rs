@@ -157,6 +157,8 @@ struct ReflectionBitfield {
 pub struct Interpreter {
     /// Stack of lexical scopes. The last element is the innermost scope.
     scopes: Vec<Environment>,
+    /// Runtime type annotations for variables declared in the matching scope.
+    variable_type_scopes: Vec<HashMap<String, TypeExpr>>,
     /// Stack of block-scoped namespace aliases introduced by `use`.
     namespace_alias_scopes: Vec<HashMap<String, String>>,
     /// User-defined functions available for calling.
@@ -218,6 +220,7 @@ impl Interpreter {
     pub fn new() -> Self {
         Self {
             scopes: vec![HashMap::new()],
+            variable_type_scopes: vec![HashMap::new()],
             namespace_alias_scopes: vec![HashMap::new()],
             functions: HashMap::new(),
             trusted_stdlib_functions: HashSet::new(),
@@ -277,17 +280,26 @@ impl Interpreter {
 
     fn push_scope(&mut self) {
         self.scopes.push(HashMap::new());
+        self.variable_type_scopes.push(HashMap::new());
         self.namespace_alias_scopes.push(HashMap::new());
     }
 
     fn pop_scope(&mut self) {
         self.scopes.pop();
+        self.variable_type_scopes.pop();
         self.namespace_alias_scopes.pop();
     }
 
     fn set_variable(&mut self, name: &str, value: Value) {
         if let Some(scope) = self.scopes.last_mut() {
             scope.insert(name.to_string(), value);
+        }
+    }
+
+    fn set_variable_with_type(&mut self, name: &str, value: Value, ty: TypeExpr) {
+        self.set_variable(name, value);
+        if let Some(scope) = self.variable_type_scopes.last_mut() {
+            scope.insert(name.to_string(), ty);
         }
     }
 
@@ -303,9 +315,15 @@ impl Interpreter {
     /// Reassign an existing variable in the nearest enclosing scope that
     /// contains it.  Returns `Err` if the variable was never declared.
     fn assign_variable(&mut self, name: &str, value: Value) -> Result<(), String> {
-        for scope in self.scopes.iter_mut().rev() {
-            if scope.contains_key(name) {
-                scope.insert(name.to_string(), value);
+        for index in (0..self.scopes.len()).rev() {
+            if self.scopes[index].contains_key(name) {
+                let ty = self.variable_type_scopes[index].get(name).cloned();
+                let value = if let Some(ty) = ty {
+                    self.normalize_value_for_type(&ty, value)?
+                } else {
+                    value
+                };
+                self.scopes[index].insert(name.to_string(), value);
                 return Ok(());
             }
         }
@@ -1090,7 +1108,16 @@ impl Interpreter {
                 // Evaluate state field initializers in a temp scope with capabilities in scope.
                 self.push_scope();
                 for (name, val) in &capabilities {
-                    self.set_variable(name, val.clone());
+                    if let Some(param) = actor_def
+                        .capability_params
+                        .iter()
+                        .find(|param| param.name.name == *name)
+                    {
+                        let param_ty = self.substitute_type_expr(&param.ty);
+                        self.set_variable_with_type(name, val.clone(), param_ty);
+                    } else {
+                        self.set_variable(name, val.clone());
+                    }
                 }
                 let mut state = HashMap::new();
                 for field in &actor_def.state_fields {
@@ -1549,7 +1576,7 @@ impl Interpreter {
                     }
                 };
                 let val = self.normalize_value_for_type(&declared_ty, val)?;
-                self.set_variable(&decl.name.name, val);
+                self.set_variable_with_type(&decl.name.name, val, declared_ty);
                 Ok(None)
             }
 
@@ -2066,13 +2093,32 @@ impl Interpreter {
         // Execute handler body in a new scope with state + caps + params.
         self.push_scope();
         for (name, val) in &state_snapshot {
-            self.set_variable(name, val.clone());
+            if let Some(field) = actor_def
+                .state_fields
+                .iter()
+                .find(|field| field.name.name == *name)
+            {
+                let field_ty = self.substitute_type_expr(&field.ty);
+                self.set_variable_with_type(name, val.clone(), field_ty);
+            } else {
+                self.set_variable(name, val.clone());
+            }
         }
         for (name, val) in &caps_snapshot {
-            self.set_variable(name, val.clone());
+            if let Some(param) = actor_def
+                .capability_params
+                .iter()
+                .find(|param| param.name.name == *name)
+            {
+                let param_ty = self.substitute_type_expr(&param.ty);
+                self.set_variable_with_type(name, val.clone(), param_ty);
+            } else {
+                self.set_variable(name, val.clone());
+            }
         }
         for (param, val) in handler.params.iter().zip(normalized_args) {
-            self.set_variable(&param.name.name, val);
+            let param_ty = self.substitute_type_expr(&param.ty);
+            self.set_variable_with_type(&param.name.name, val, param_ty);
         }
 
         // Execute the handler body, collecting signals.
@@ -8032,7 +8078,7 @@ impl Interpreter {
                 let type_name = type_expr_name(&param_ty);
                 let arg = self.normalize_value_for_type(&param_ty, arg)?;
                 self.check_refinement(&type_name, &arg)?;
-                self.set_variable(&param.name.name, arg);
+                self.set_variable_with_type(&param.name.name, arg, param_ty);
             }
 
             let result = self.exec_block_inner(&func.body)?;
@@ -8504,7 +8550,8 @@ impl Interpreter {
                 }
                 self.push_scope();
                 for (param, arg) in params.iter().zip(normalized_args) {
-                    self.set_variable(&param.name.name, arg);
+                    let param_ty = self.substitute_type_expr(&param.ty);
+                    self.set_variable_with_type(&param.name.name, arg, param_ty);
                 }
                 let result = self.exec_block_inner(&body)?;
                 self.pop_scope(); // params
@@ -12900,6 +12947,35 @@ mod tests {
         interp.exec_stmt(&var_decl("x", int(1))).unwrap();
         interp.exec_stmt(&assign("x", int(99))).unwrap();
         assert_eq!(interp.eval_expr(&var("x")).unwrap(), Value::Int64(99));
+    }
+
+    #[test]
+    fn uint64_variable_assignment_normalizes_small_literal_carrier() {
+        let mut interp = Interpreter::new();
+        interp
+            .exec_stmt(&typed_var_decl("uint64", "x", int(1)))
+            .unwrap();
+        interp.exec_stmt(&assign("x", int(42))).unwrap();
+
+        assert_eq!(interp.eval_expr(&var("x")).unwrap(), Value::Uint64(42));
+    }
+
+    #[test]
+    fn uint64_parameter_assignment_normalizes_small_literal_carrier() {
+        let mut interp = Interpreter::new();
+        let reassign = func_def(
+            "reassign_u64",
+            vec![("value", "uint64")],
+            block(vec![assign("value", int(7)), return_stmt(var("value"))]),
+        );
+        interp.register_function(&reassign);
+
+        assert_eq!(
+            interp
+                .call_function("reassign_u64", vec![Value::Int64(1)])
+                .unwrap(),
+            Value::Uint64(7)
+        );
     }
 
     #[test]

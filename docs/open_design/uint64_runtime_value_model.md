@@ -9,6 +9,7 @@ direct local declarations and function parameter/return boundaries annotated as
 struct constructor fields and enum payloads annotated as `uint64`, reflected
 struct fields, enum payloads, and 64-bit bitfield fields, actor capability,
 state, message parameter, and response boundaries annotated as `uint64`,
+assignments back into variables with a remembered `uint64` annotation,
 `uint64.from_string`, property generation, and reflected JSON parsing. This lets
 ordinary source and JSON decode/serialize the full unsigned range:
 
@@ -45,7 +46,8 @@ model; that path now exists for ordinary `uint64` literals.
    boundaries, inline function parameter boundaries, direct and reflected struct
    fields and enum payloads, reflected 64-bit bitfield fields, core uint64
    arithmetic and comparisons, actor spawn/message/state boundaries, JSON
-   decode/encode, and unannotated 64-bit bitfield
+   decode/encode, assignments to variables with remembered direct `uint64`
+   annotations, and unannotated 64-bit bitfield
    construction/field access/to-bytes/from-bytes have been updated.
 
 2. **Use one integer carrier with explicit signedness metadata.**
@@ -73,7 +75,7 @@ not more JSON work; it is finishing the remaining numeric surfaces:
 - decide whether bitfield syntax should ever support fields wider than 64 bits
   or stay explicitly tied to fixed-width primitive carriers,
 - decide whether the interpreter should receive checked expression type maps so
-  assignments, interface dispatch, and other expression-only sites can mirror the
-  checked primitive type instead of relying on explicit-boundary normalization
-  plus the current value-range fallback,
+  interface dispatch and other expression-only sites can mirror the checked
+  primitive type instead of relying on explicit-boundary normalization plus the
+  current value-range fallback,
 - keep overflow diagnostics precise for each fixed-width primitive.
