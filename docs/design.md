@@ -4233,11 +4233,13 @@ Compiler-shipped standard library files may use the narrower
 export root type JsonValue = json.JsonTree
 ```
 
-This form is stdlib-only and type-alias-only. Project files cannot use it, and
-it does not mark any implementation as trusted. The current `JsonValue` root
-alias is a migration bridge for legacy raw JSON code. In stdlib-loaded code,
-reflection reports bare `JsonValue` as an alias to `json.JsonTree`; the legacy
-primitive spelling is not available unless that root alias is loaded.
+This form is stdlib-only and type-alias-only. In the current stage, it is also
+allowlisted to the exact `JsonValue = json.JsonTree` compatibility bridge.
+Project files cannot use it, and it does not mark any implementation as trusted.
+The current `JsonValue` root alias is a migration bridge for legacy raw JSON
+code. In stdlib-loaded code, reflection reports bare `JsonValue` as an alias to
+`json.JsonTree`; the legacy primitive spelling is not available unless that root
+alias is loaded.
 
 Inside a `mutual` block, each public function signature is exported
 individually. This allows one recursive group to expose a small public entry
