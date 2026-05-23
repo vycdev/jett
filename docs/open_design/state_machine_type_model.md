@@ -183,7 +183,10 @@ to a known machine owner.
       `machine_state_type` tags,
     - `type.machine_layout`, `type.machine_states`, and
       `type.machine_transitions` expose state payload fields and transition
-      edges with reserved-safe field names.
+      edges with reserved-safe field names,
+    - non-machine top-level types intentionally return empty machine metadata
+      from those shape-specific probes, so generic reflection code can inspect
+      `type.kind_tag` and then choose a shape without adding effect handling.
 11. Keep machine JSON unsupported until rich reflection lands. Done:
     - `json.parse` / `json.parse_exact` reject bare and state-qualified
       machines,
