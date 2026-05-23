@@ -13,7 +13,28 @@ function label(session: Session) returns string:
         return session.reason
     else:
         return session.ban_reason
+function label_with_negative_middle(session: Session) returns string:
+    if session at logged_in:
+        return session.user_id
+    else if not(session at guest):
+        return session.ban_reason
+    else:
+        return session.reason
+function label_after_non_state_guard(session: Session, include: bool) returns string:
+    if session at logged_in:
+        return session.user_id
+    else if session at guest:
+        return session.reason
+    else if include:
+        return session.ban_reason
+    else:
+        return session.ban_reason
 verify state_machine_else_if_remaining_narrowing:
     assert label(Session(logged_in, "Ada")) == "Ada"
     assert label(Session(guest, "anonymous")) == "anonymous"
     assert label(Session(banned, "policy")) == "policy"
+    assert label_with_negative_middle(Session(logged_in, "Lin")) == "Lin"
+    assert label_with_negative_middle(Session(guest, "guest")) == "guest"
+    assert label_with_negative_middle(Session(banned, "policy")) == "policy"
+    assert label_after_non_state_guard(Session(banned, "policy"), true) == "policy"
+    assert label_after_non_state_guard(Session(banned, "policy"), false) == "policy"

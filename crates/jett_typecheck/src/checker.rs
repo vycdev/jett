@@ -110,6 +110,12 @@ impl ReflectionBranchContext {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MachineStateTruth {
+    Is,
+    IsNot,
+}
+
 // ---------------------------------------------------------------------------
 // Internal type checker
 // ---------------------------------------------------------------------------
@@ -6634,21 +6640,37 @@ impl<'a> TypeChecker<'a> {
                 }
 
                 if selected_branch == 0 {
-                    let narrowing = self.machine_state_narrowing_from_condition(&if_stmt.condition);
+                    let narrowing = self.machine_state_narrowing_for_branch(
+                        Some(&if_stmt.condition),
+                        None::<&Expr>,
+                    );
                     self.check_block_with_type_override(&if_stmt.then_block, narrowing);
                     return;
                 }
 
                 for (index, (else_if_cond, else_if_block)) in if_stmt.else_ifs.iter().enumerate() {
                     if selected_branch == index + 1 {
-                        let narrowing = self.machine_state_narrowing_from_condition(else_if_cond);
+                        let prior_conditions = std::iter::once(&if_stmt.condition).chain(
+                            if_stmt
+                                .else_ifs
+                                .iter()
+                                .take(index)
+                                .map(|(condition, _)| condition),
+                        );
+                        let narrowing = self.machine_state_narrowing_for_branch(
+                            Some(else_if_cond),
+                            prior_conditions,
+                        );
                         self.check_block_with_type_override(else_if_block, narrowing);
                         return;
                     }
                 }
 
                 if let Some(else_block) = &if_stmt.else_block {
-                    self.check_block(else_block);
+                    let prior_conditions = std::iter::once(&if_stmt.condition)
+                        .chain(if_stmt.else_ifs.iter().map(|(condition, _)| condition));
+                    let narrowing = self.machine_state_narrowing_for_branch(None, prior_conditions);
+                    self.check_block_with_type_override(else_block, narrowing);
                 }
                 return;
             }
@@ -6667,17 +6689,23 @@ impl<'a> TypeChecker<'a> {
         }
 
         self.check_condition_expr(&if_stmt.condition);
-        let narrowing = self.machine_state_narrowing_from_condition(&if_stmt.condition);
+        let narrowing =
+            self.machine_state_narrowing_for_branch(Some(&if_stmt.condition), None::<&Expr>);
         self.check_block_with_type_override(&if_stmt.then_block, narrowing);
 
+        let mut prior_conditions = vec![&if_stmt.condition];
         for (else_if_cond, else_if_block) in &if_stmt.else_ifs {
             self.check_condition_expr(else_if_cond);
-            let narrowing = self.machine_state_narrowing_from_condition(else_if_cond);
+            let narrowing = self.machine_state_narrowing_for_branch(
+                Some(else_if_cond),
+                prior_conditions.iter().copied(),
+            );
             self.check_block_with_type_override(else_if_block, narrowing);
+            prior_conditions.push(else_if_cond);
         }
 
         if let Some(else_block) = &if_stmt.else_block {
-            let narrowing = self.machine_state_else_narrowing_from_if(if_stmt);
+            let narrowing = self.machine_state_narrowing_for_branch(None, prior_conditions);
             self.check_block_with_type_override(else_block, narrowing);
         }
     }
@@ -6701,124 +6729,117 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
-    fn machine_state_narrowing_from_condition(
+    fn machine_state_narrowing_for_branch<'b>(
         &mut self,
-        condition: &Expr,
+        true_condition: Option<&'b Expr>,
+        false_conditions: impl IntoIterator<Item = &'b Expr>,
     ) -> Option<(DefId, TypeId)> {
-        if let Some((ident, state)) = Self::positive_machine_state_check(condition) {
-            return self.machine_state_narrowing_to_named_state(ident, state);
-        }
-        let (ident, state) = Self::negative_machine_state_check(condition)?;
-        let def_id = self.ident_def_id(ident)?;
-        let current_ty = *self.type_env.get(&def_id)?;
-        let machine = match self.interner.resolve(current_ty).clone() {
-            Type::Machine(machine) => machine,
-            Type::MachineState { .. } => return None,
-            _ => return None,
-        };
-        let machine_def = self.interner.resolve_machine(machine);
-        if machine_def.states.len() != 2 {
-            return None;
-        }
-        let excluded_state = machine_def.state_id(&state.name)?;
-        let remaining_state = machine_def
-            .states
-            .iter()
-            .enumerate()
-            .find_map(|(index, _)| {
-                let state_id = MachineStateId::new(index as u32);
-                (state_id != excluded_state).then_some(state_id)
-            })?;
-        let narrowed_ty = self.interner.intern(Type::MachineState {
-            machine,
-            state: remaining_state,
-        });
-        Some((def_id, narrowed_ty))
-    }
+        let mut facts = Vec::new();
+        let mut target_def = None;
 
-    fn machine_state_narrowing_to_named_state(
-        &mut self,
-        ident: &ast::Ident,
-        state: &ast::Ident,
-    ) -> Option<(DefId, TypeId)> {
-        let def_id = self.ident_def_id(ident)?;
-        let current_ty = *self.type_env.get(&def_id)?;
-        let machine = match self.interner.resolve(current_ty).clone() {
-            Type::Machine(machine) | Type::MachineState { machine, .. } => machine,
-            _ => return None,
-        };
-        let state_id = self
-            .interner
-            .resolve_machine(machine)
-            .state_id(&state.name)?;
-        let narrowed_ty = self.interner.intern(Type::MachineState {
-            machine,
-            state: state_id,
-        });
-        Some((def_id, narrowed_ty))
-    }
-
-    fn machine_state_else_narrowing_from_if(
-        &mut self,
-        if_stmt: &ast::IfStmt,
-    ) -> Option<(DefId, TypeId)> {
-        if if_stmt.else_ifs.is_empty() {
-            if let Some((ident, state)) = Self::negative_machine_state_check(&if_stmt.condition) {
-                return self.machine_state_narrowing_to_named_state(ident, state);
-            }
-        }
-
-        let mut excluded_states = HashSet::new();
-        let mut narrowed_def = None;
-        let mut narrowed_machine = None;
-
-        for condition in std::iter::once(&if_stmt.condition)
-            .chain(if_stmt.else_ifs.iter().map(|(condition, _)| condition))
+        if let Some(condition) = true_condition
+            && let Some((ident, state, truth)) = Self::machine_state_fact(condition, true)
         {
-            let (ident, state) = Self::positive_machine_state_check(condition)?;
             let def_id = self.ident_def_id(ident)?;
-            if narrowed_def.is_some_and(|existing| existing != def_id) {
-                return None;
-            }
+            target_def = Some(def_id);
+            facts.push((def_id, state, truth));
+        }
 
-            let current_ty = *self.type_env.get(&def_id)?;
-            let machine = match self.interner.resolve(current_ty).clone() {
-                Type::Machine(machine) => machine,
-                Type::MachineState { .. } => return None,
-                _ => return None,
+        for condition in false_conditions {
+            let Some((ident, state, truth)) = Self::machine_state_fact(condition, false) else {
+                continue;
             };
-            if narrowed_machine.is_some_and(|existing| existing != machine) {
+            facts.push((self.ident_def_id(ident)?, state, truth));
+        }
+
+        let target_def = if let Some(target_def) = target_def {
+            target_def
+        } else {
+            let mut candidate = None;
+            for (def_id, _, _) in &facts {
+                if candidate.is_some_and(|existing| existing != *def_id) {
+                    return None;
+                }
+                candidate = Some(*def_id);
+            }
+            candidate?
+        };
+
+        let current_ty = *self.type_env.get(&target_def)?;
+        let (machine, can_narrow_by_complement) = match self.interner.resolve(current_ty).clone() {
+            Type::Machine(machine) => (machine, true),
+            Type::MachineState { machine, .. } => (machine, false),
+            _ => return None,
+        };
+
+        let mut required_state = None;
+        let mut excluded_states = HashSet::new();
+        let state_count = {
+            let machine_def = self.interner.resolve_machine(machine);
+            for (def_id, state, truth) in facts {
+                if def_id != target_def {
+                    continue;
+                }
+                let state_id = machine_def.state_id(&state.name)?;
+                match truth {
+                    MachineStateTruth::Is => {
+                        if required_state.is_some_and(|existing| existing != state_id) {
+                            return None;
+                        }
+                        required_state = Some(state_id);
+                    }
+                    MachineStateTruth::IsNot => {
+                        excluded_states.insert(state_id);
+                    }
+                }
+            }
+            machine_def.states.len()
+        };
+
+        let state = if let Some(state) = required_state {
+            if excluded_states.contains(&state) {
                 return None;
             }
-
-            let state_id = self
-                .interner
-                .resolve_machine(machine)
-                .state_id(&state.name)?;
-            excluded_states.insert(state_id);
-            narrowed_def = Some(def_id);
-            narrowed_machine = Some(machine);
-        }
-
-        let def_id = narrowed_def?;
-        let machine = narrowed_machine?;
-        let machine_def = self.interner.resolve_machine(machine);
-        if excluded_states.len() + 1 != machine_def.states.len() {
-            return None;
-        }
-        let remaining_state = machine_def
-            .states
-            .iter()
-            .enumerate()
-            .find_map(|(index, _)| {
+            state
+        } else {
+            if !can_narrow_by_complement || excluded_states.len() + 1 != state_count {
+                return None;
+            }
+            (0..state_count).find_map(|index| {
                 let state_id = MachineStateId::new(index as u32);
                 (!excluded_states.contains(&state_id)).then_some(state_id)
-            })?;
-        let narrowed_ty = self.interner.intern(Type::MachineState {
-            machine,
-            state: remaining_state,
-        });
-        Some((def_id, narrowed_ty))
+            })?
+        };
+
+        let narrowed_ty = self.interner.intern(Type::MachineState { machine, state });
+        Some((target_def, narrowed_ty))
+    }
+
+    fn machine_state_fact(
+        condition: &Expr,
+        condition_is_true: bool,
+    ) -> Option<(&ast::Ident, &ast::Ident, MachineStateTruth)> {
+        if let Some((ident, state)) = Self::positive_machine_state_check(condition) {
+            return Some((
+                ident,
+                state,
+                if condition_is_true {
+                    MachineStateTruth::Is
+                } else {
+                    MachineStateTruth::IsNot
+                },
+            ));
+        }
+        let (ident, state) = Self::negative_machine_state_check(condition)?;
+        Some((
+            ident,
+            state,
+            if condition_is_true {
+                MachineStateTruth::IsNot
+            } else {
+                MachineStateTruth::Is
+            },
+        ))
     }
 
     fn positive_machine_state_check(condition: &Expr) -> Option<(&ast::Ident, &ast::Ident)> {

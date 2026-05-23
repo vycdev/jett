@@ -32,9 +32,10 @@ Implemented:
   machine variable to `Machine at state` for that branch, so state payload
   fields and transitions are available only under a visible guard.
 - For bare machines, an `if` / `else if` chain that excludes all but one
-  declared state narrows the final `else` branch to that single remaining
-  state. Other negative branches remain opaque until another positive guard
-  proves a specific state.
+  declared state narrows later branches, including `else if` branches guarded
+  by unrelated conditions, and the final `else` branch to that single remaining
+  state. Other negative branches remain opaque until the branch facts prove a
+  specific state.
 - For `if not (value at state):`, the immediate `else` branch narrows to the
   checked state. For bare two-state machines, the guarded branch also narrows
   to the other declared state. Multi-state negative guarded branches remain
@@ -170,8 +171,9 @@ to a known machine owner.
 9. Add branch-local state narrowing. Done:
    - `if session at logged_in:` narrows `session` to `Session at logged_in` in
      that branch,
-   - for bare machines, a final `else` branch narrows when the preceding
-     `if` / `else if` chain has excluded every other declared state,
+   - for bare machines, later `else if` branches and a final `else` branch
+     narrow when the preceding `if` / `else if` chain has excluded every other
+     declared state,
    - for `if not (session at logged_in):`, the immediate `else` branch narrows
      back to `logged_in`, and two-state bare machines also narrow the guarded
      branch to the only other state,
@@ -203,8 +205,8 @@ to a known machine owner.
 
 - Which APIs should intentionally erase state to bare `Machine`, and which
   should preserve a precise `Machine at state` type?
-- Should negative branches learn set-of-states facts, or should narrowing stay
-  limited to positive guards plus exact single-state complements?
+- Should negative branches eventually expose multi-state set facts, or should
+  narrowing stay limited to positive guards plus exact single-state complements?
 - Should `expr at state` eventually narrow fields/paths beyond bare local
   variables?
 - Should machine JSON remain enabled for every machine with JSON-compatible
@@ -216,6 +218,6 @@ to a known machine owner.
 ## Recommendation
 
 Keep new machine features tied to checked machine owners rather than interpreter
-lookup rules. The next high-value design choice is whether branch facts should
-become a general flow-sensitive type mechanism or remain a narrow state-machine
-guard feature with only exact single-state facts.
+lookup rules. Branch facts should remain a narrow state-machine guard feature
+until there is a broader flow-sensitive type design; for now, expose only exact
+single-state facts that make payload fields locally unambiguous.
