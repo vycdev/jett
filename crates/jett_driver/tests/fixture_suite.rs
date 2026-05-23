@@ -1277,6 +1277,18 @@ compile_fail_fixture!(
     "type_bitfield_fields_wrong_arity.jett"
 );
 compile_fail_fixture!(
+    compile_fail_type_machine_layout_wrong_arity,
+    "type_machine_layout_wrong_arity.jett"
+);
+compile_fail_fixture!(
+    compile_fail_type_machine_states_wrong_arity,
+    "type_machine_states_wrong_arity.jett"
+);
+compile_fail_fixture!(
+    compile_fail_type_machine_transitions_wrong_arity,
+    "type_machine_transitions_wrong_arity.jett"
+);
+compile_fail_fixture!(
     compile_fail_type_field_value_wrong_arity,
     "type_field_value_wrong_arity.jett"
 );

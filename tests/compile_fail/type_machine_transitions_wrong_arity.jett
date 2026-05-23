@@ -1,0 +1,5 @@
+# ERROR: E0309
+namespace test
+function bad() returns int64:
+    list[TypeMachineTransition] edges = type.machine_transitions[int64, string]()
+    return list.length(edges)

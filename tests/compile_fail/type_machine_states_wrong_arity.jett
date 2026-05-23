@@ -1,0 +1,5 @@
+# ERROR: E0309
+namespace test
+function bad() returns int64:
+    list[TypeMachineState] states = type.machine_states[int64, string]()
+    return list.length(states)
