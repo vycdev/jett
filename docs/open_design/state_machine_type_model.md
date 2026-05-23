@@ -35,6 +35,10 @@ Implemented:
   declared state narrows the final `else` branch to that single remaining
   state. Other negative branches remain opaque until another positive guard
   proves a specific state.
+- For `if not (value at state):`, the immediate `else` branch narrows to the
+  checked state. For bare two-state machines, the guarded branch also narrows
+  to the other declared state. Multi-state negative guarded branches remain
+  opaque.
 - State-specific payload field access is checked through ordinary field access
   on `Machine at state` values; bare `Machine` values do not expose payload
   fields.
@@ -162,6 +166,9 @@ to a known machine owner.
      that branch,
    - for bare machines, a final `else` branch narrows when the preceding
      `if` / `else if` chain has excluded every other declared state,
+   - for `if not (session at logged_in):`, the immediate `else` branch narrows
+     back to `logged_in`, and two-state bare machines also narrow the guarded
+     branch to the only other state,
    - state-qualified values satisfy bare machine expectations,
    - narrowed bare machine values can call checked transitions.
 10. Add basic machine reflection. Done:

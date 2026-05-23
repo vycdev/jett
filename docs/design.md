@@ -1588,9 +1588,12 @@ function display_name(session: UserAuth) returns string:
 The payload field `session.user_id` is only available inside the guarded branch;
 outside it, `session` is still a bare `UserAuth`.
 For a two-state machine, the `else` branch has a single remaining state, so it
-narrows too. For machines with three or more states, negative branches stay
-opaque unless an `if` / `else if` chain positively checks all but one state; in
-that exact case, the final `else` branch narrows to the only remaining state.
+narrows too. For `if not (session at state):`, reaching the `else` branch proves
+the checked state for any machine. On a two-state bare machine, the guarded
+branch also narrows to the other declared state. For machines with three or more
+states, negative guarded branches stay opaque. A final `else` after a positive
+`if` / `else if` chain still narrows when the chain has excluded every state
+except one.
 
 Reflection exposes the same high-level distinction: `type.info[UserAuth]()`
 reports kind `machine`, while `type.info[UserAuth at logged_in]()` reports

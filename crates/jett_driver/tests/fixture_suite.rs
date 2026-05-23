@@ -292,6 +292,10 @@ run_pass_fixture!(
     "state_machine_else_if_remaining_narrowing.jett"
 );
 run_pass_fixture!(
+    run_pass_state_machine_negative_narrowing,
+    "state_machine_negative_narrowing.jett"
+);
+run_pass_fixture!(
     run_pass_property_generic_lists,
     "property_generic_lists.jett"
 );
@@ -697,6 +701,10 @@ compile_fail_fixture!(
 compile_fail_fixture!(
     compile_fail_state_machine_else_narrowing_multi_state,
     "state_machine_else_narrowing_multi_state.jett"
+);
+compile_fail_fixture!(
+    compile_fail_state_machine_negative_narrowing_multi_state,
+    "state_machine_negative_narrowing_multi_state.jett"
 );
 compile_fail_fixture!(
     compile_fail_namespace_machine_transition_missing_edge,

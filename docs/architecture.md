@@ -536,7 +536,10 @@ For each `machine` type:
   legal transitions there.
 - If the guarded value is a bare machine and an `if` / `else if` chain excludes
   all but one declared state, the final `else` branch narrows to that single
-  remaining state. Other negative branches stay bare.
+  remaining state. For `if not (value at state):`, the immediate `else` branch
+  narrows to the checked state. On two-state bare machines, the guarded branch
+  also narrows to the other state. Other multi-state negative branches stay
+  bare.
 - Basic reflection distinguishes `Machine` and `Machine at state` through
   `TypeInfo.kind` (`machine` / `machine_state`) and structured `TypeKind`
   tags (`machine_type` / `machine_state_type`). Rich state and transition

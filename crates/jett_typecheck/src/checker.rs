@@ -6341,7 +6341,42 @@ impl<'a> TypeChecker<'a> {
         &mut self,
         condition: &Expr,
     ) -> Option<(DefId, TypeId)> {
-        let (ident, state) = Self::positive_machine_state_check(condition)?;
+        if let Some((ident, state)) = Self::positive_machine_state_check(condition) {
+            return self.machine_state_narrowing_to_named_state(ident, state);
+        }
+        let (ident, state) = Self::negative_machine_state_check(condition)?;
+        let def_id = self.ident_def_id(ident)?;
+        let current_ty = *self.type_env.get(&def_id)?;
+        let machine = match self.interner.resolve(current_ty).clone() {
+            Type::Machine(machine) => machine,
+            Type::MachineState { .. } => return None,
+            _ => return None,
+        };
+        let machine_def = self.interner.resolve_machine(machine);
+        if machine_def.states.len() != 2 {
+            return None;
+        }
+        let excluded_state = machine_def.state_id(&state.name)?;
+        let remaining_state = machine_def
+            .states
+            .iter()
+            .enumerate()
+            .find_map(|(index, _)| {
+                let state_id = MachineStateId::new(index as u32);
+                (state_id != excluded_state).then_some(state_id)
+            })?;
+        let narrowed_ty = self.interner.intern(Type::MachineState {
+            machine,
+            state: remaining_state,
+        });
+        Some((def_id, narrowed_ty))
+    }
+
+    fn machine_state_narrowing_to_named_state(
+        &mut self,
+        ident: &ast::Ident,
+        state: &ast::Ident,
+    ) -> Option<(DefId, TypeId)> {
         let def_id = self.ident_def_id(ident)?;
         let current_ty = *self.type_env.get(&def_id)?;
         let machine = match self.interner.resolve(current_ty).clone() {
@@ -6363,6 +6398,12 @@ impl<'a> TypeChecker<'a> {
         &mut self,
         if_stmt: &ast::IfStmt,
     ) -> Option<(DefId, TypeId)> {
+        if if_stmt.else_ifs.is_empty() {
+            if let Some((ident, state)) = Self::negative_machine_state_check(&if_stmt.condition) {
+                return self.machine_state_narrowing_to_named_state(ident, state);
+            }
+        }
+
         let mut excluded_states = HashSet::new();
         let mut narrowed_def = None;
         let mut narrowed_machine = None;
@@ -6423,6 +6464,14 @@ impl<'a> TypeChecker<'a> {
                 let ident = Self::narrowable_ident_expr(inner)?;
                 Some((ident, state))
             }
+            _ => None,
+        }
+    }
+
+    fn negative_machine_state_check(condition: &Expr) -> Option<(&ast::Ident, &ast::Ident)> {
+        match condition {
+            Expr::Paren(inner, _) => Self::negative_machine_state_check(inner),
+            Expr::Unary(UnaryOp::Not, inner, _) => Self::positive_machine_state_check(inner),
             _ => None,
         }
     }

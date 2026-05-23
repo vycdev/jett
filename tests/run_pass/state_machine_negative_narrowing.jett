@@ -1,0 +1,29 @@
+machine TwoSession:
+    states:
+        guest(reason: string)
+        logged_in(user_id: string)
+    transitions:
+        guest to logged_in
+machine Session:
+    states:
+        guest(reason: string)
+        logged_in(user_id: string)
+        banned(reason: string)
+    transitions:
+        guest to logged_in
+        logged_in to banned
+function two_state_label(session: TwoSession) returns string:
+    if not(session at logged_in):
+        return session.reason
+    else:
+        return session.user_id
+function multi_state_else_label(session: Session) returns string:
+    if not(session at logged_in):
+        return "not logged in"
+    else:
+        return session.user_id
+verify state_machine_negative_narrowing:
+    assert two_state_label(TwoSession(logged_in, "Ada")) == "Ada"
+    assert two_state_label(TwoSession(guest, "anonymous")) == "anonymous"
+    assert multi_state_else_label(Session(logged_in, "Grace")) == "Grace"
+    assert multi_state_else_label(Session(banned, "abuse")) == "not logged in"
