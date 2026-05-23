@@ -8456,7 +8456,9 @@ impl Interpreter {
                 ));
             }
 
-            let type_name = type_expr_name(&strukt.fields[field_index].ty);
+            let field_ty = self.substitute_type_expr(&strukt.fields[field_index].ty);
+            let type_name = type_expr_name(&field_ty);
+            let value = self.normalize_value_for_type(&field_ty, value)?;
             if let Err(message) = self.check_refinement(&type_name, &value) {
                 if validates_refinements {
                     return Ok(Value::ResultFail(Box::new(Value::String(message))));
@@ -12664,6 +12666,26 @@ mod tests {
                     ("x".to_string(), Value::Int64(3)),
                     ("y".to_string(), Value::Int64(4)),
                 ],
+            }
+        );
+    }
+
+    #[test]
+    fn struct_constructor_normalizes_uint64_field_carrier() {
+        let mut interp = Interpreter::new();
+        interp.register_struct(&struct_def("Packet", vec![("serial", "uint64")], vec![]));
+
+        let expr = Expr::Call(
+            Box::new(var("Packet")),
+            vec![named_arg("serial", int(42))],
+            sp(),
+        );
+
+        assert_eq!(
+            interp.eval_expr(&expr).unwrap(),
+            Value::Struct {
+                type_name: "Packet".to_string(),
+                fields: vec![("serial".to_string(), Value::Uint64(42))],
             }
         );
     }

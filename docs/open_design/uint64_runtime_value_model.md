@@ -5,8 +5,9 @@
 Jett exposes `uint64` as a primitive type. The interpreter now has a real
 `Value::Uint64(u64)` carrier for values produced by full-range source literals,
 direct local declarations and function parameter/return boundaries annotated as
-`uint64`, `uint64.from_string`, property generation, and reflected JSON parsing.
-This lets ordinary source and JSON decode/serialize the full unsigned range:
+`uint64`, direct struct constructor fields annotated as `uint64`,
+`uint64.from_string`, property generation, and reflected JSON parsing. This lets
+ordinary source and JSON decode/serialize the full unsigned range:
 
 - `uint64 value = 18446744073709551615` succeeds.
 - `int64 value = 9223372036854775808` is rejected.
@@ -38,9 +39,9 @@ model; that path now exists for ordinary `uint64` literals.
    Status: partially implemented. The carrier exists, display/equality,
    conversion builtins, property generation/shrinking, source literals through
    `u64::MAX`, direct local declarations and named function parameter/return
-   boundaries, core uint64 arithmetic and comparisons, JSON decode/encode, and
-   unannotated 64-bit bitfield construction/field access/to-bytes/from-bytes have
-   been updated.
+   boundaries, direct struct constructor fields, core uint64 arithmetic and
+   comparisons, JSON decode/encode, and unannotated 64-bit bitfield
+   construction/field access/to-bytes/from-bytes have been updated.
 
 2. **Use one integer carrier with explicit signedness metadata.**
 
@@ -67,8 +68,8 @@ not more JSON work; it is finishing the remaining numeric surfaces:
 - decide whether bitfield syntax should ever support fields wider than 64 bits
   or stay explicitly tied to fixed-width primitive carriers,
 - decide whether the interpreter should receive checked expression type maps so
-  assignments, composite construction, inline function calls, interface dispatch,
-  and other expression-only sites can mirror the checked primitive type instead
-  of relying on declaration-boundary normalization plus the current value-range
-  fallback,
+  assignments, enum payload construction, reflected construction, inline
+  function calls, interface dispatch, and other expression-only sites can mirror
+  the checked primitive type instead of relying on explicit-boundary
+  normalization plus the current value-range fallback,
 - keep overflow diagnostics precise for each fixed-width primitive.
