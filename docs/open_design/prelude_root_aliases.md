@@ -20,8 +20,8 @@ export root type JsonValue = json.JsonTree
 ```
 
 makes the legacy bare spelling visible in ordinary stdlib-loaded source. The
-remaining compiler-owned piece is the bootstrap/no-stdlib fallback primitive,
-not the normal stdlib-loaded name.
+remaining open piece is broader prelude/root-alias policy; no compiler-owned
+`JsonValue` primitive remains.
 
 ## Requirements
 
@@ -125,9 +125,8 @@ Staging rules:
 
 - valid only in compiler-shipped stdlib files,
 - valid only for `type` aliases in the first pass,
-- takes precedence over the legacy built-in `JsonValue` primitive when the
-  bundled stdlib alias is present; the primitive remains a fallback only when
-  the alias is absent,
+- is the only compatibility path for the bare `JsonValue` spelling; without the
+  bundled stdlib alias, that spelling is unknown rather than a hidden primitive,
 - visible to completion/hover as a prelude alias,
 - reflected as an alias when named through the source alias,
 - does not change compiler-owned trust for JSON bridge hooks.

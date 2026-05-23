@@ -10,10 +10,11 @@ Reflection can now read fields, construct structs/bitfields/enums, inspect type
 arguments, use structured kind and primitive tags, and walk native `JsonTree`
 values. `JsonValue` is now visible through a narrow stdlib root alias and
 reflects as an alias to `json.JsonTree` in stdlib-loaded code. The legacy
-primitive reflection tag remains only as a bootstrap/no-stdlib fallback. The
-remaining boundary is the module and namespace path that would let ordinary
-`.jett` stdlib code carry the compiler-owned policy behind the public
-`json.*` API.
+compiler-owned `JsonValue` primitive and bootstrap/no-stdlib primitive fallback
+have been removed; without the stdlib root alias, bare `JsonValue` is just an
+unknown type. The remaining boundary is the module and namespace path that
+would let ordinary `.jett` stdlib code carry the compiler-owned policy behind
+the public `json.*` API.
 
 ## Current Architecture
 
