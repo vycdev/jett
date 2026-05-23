@@ -1,28 +1,27 @@
 namespace data
-
 export type NameList = list[string]
-
 export type NonEmpty = string where string.char_count(value) > 0
-
 export struct Box[T]:
     value: T
-
+export machine Session:
+    states:
+        guest
+        logged_in(user_id: string)
+    transitions:
+        guest to logged_in
 namespace app
-
 function bound_namespaced_alias_base() returns string:
     use data as d
     string found = "missing"
     comptime type Base = type.arg[d.NameList](0):
         found = type.name[Base]()
     return found
-
 function bound_namespaced_refinement_base() returns string:
     use data as d
     string found = "missing"
     comptime type Base = type.arg[d.NonEmpty](0):
         found = type.name[Base]()
     return found
-
 function bound_namespaced_generic_field() returns string:
     use data as d
     d.Box[list[int64]] box = d.Box[list[int64]](value: list(1, 2, 3))
@@ -32,8 +31,22 @@ function bound_namespaced_generic_field() returns string:
             Field value = type.field_value[d.Box[list[int64]], Field](view box, view field)
             found = "{field.type_info.type_name}:{type.name[Field]()}:{list.length(value)}"
     return found
-
+function bound_namespaced_machine_layout() returns string:
+    use data as d
+    TypeMachine layout = type.machine_layout[d.Session]()
+    string field_type = "missing"
+    for state in type.machine_states[d.Session at logged_in]():
+        if state.name == "logged_in":
+            for field in state.fields:
+                if field.name == "user_id":
+                    field_type = field.type_info.type_name
+    string edge = "missing"
+    for item in type.machine_transitions[d.Session]():
+        if item.source == "guest":
+            edge = "{item.source}->{item.target}"
+    return "{type.name[d.Session]()}:{list.length(layout.states)}:{list.length(layout.edges)}:{field_type}:{edge}"
 verify namespace_comptime_reflection_aliases:
     assert bound_namespaced_alias_base() == "list[string]"
     assert bound_namespaced_refinement_base() == "string"
     assert bound_namespaced_generic_field() == "list[int64]:list[int64]:3"
+    assert bound_namespaced_machine_layout() == "data.Session:2:1:string:guest->logged_in"
