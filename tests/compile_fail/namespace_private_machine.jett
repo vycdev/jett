@@ -1,0 +1,11 @@
+# ERROR: E0207
+namespace auth
+machine Session:
+    states:
+        guest
+        logged_in(user_id: string)
+    transitions:
+        guest to logged_in
+namespace app
+function main() returns auth.Session at guest:
+    return auth.Session(guest)

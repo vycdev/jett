@@ -824,6 +824,14 @@ compile_fail_fixture!(
     "namespace_exported_flat_actor.jett"
 );
 compile_fail_fixture!(
+    compile_fail_namespace_private_machine,
+    "namespace_private_machine.jett"
+);
+compile_fail_fixture!(
+    compile_fail_namespace_exported_flat_machine,
+    "namespace_exported_flat_machine.jett"
+);
+compile_fail_fixture!(
     compile_fail_json_exported_flat_parse_raw,
     "json_exported_flat_parse_raw.jett"
 );
