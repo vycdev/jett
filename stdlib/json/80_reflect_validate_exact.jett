@@ -110,7 +110,7 @@ function json_validate_exact_enum_reflected[T](view raw: JsonTree, type_name: st
     if json_tree_is_string(view raw) == true:
         return json_validate_exact_enum_string_reflected[T](view raw, type_name)
     list[string] keys = json_tree_object_keys(view raw) handle error:
-        return fail(error)
+        return fail("expected enum string or object, got {json_tree_kind(view raw)}")
     if list.length[string](keys) != 1:
         return fail("expected enum object with exactly one variant key")
     string variant_name = list.get[string](keys, 0) handle:
