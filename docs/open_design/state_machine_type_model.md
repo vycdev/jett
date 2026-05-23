@@ -68,7 +68,8 @@ Implemented:
 
 Not implemented:
 
-- State-machine JSON integration is not modeled yet.
+- State-machine JSON integration is not implemented yet; the proposed wire
+  contract lives in `docs/open_design/state_machine_json_contract.md`.
 
 ## Why This Should Not Be A Namespace Patch
 
@@ -200,7 +201,8 @@ to a known machine owner.
 - Should `expr at state` eventually narrow fields/paths beyond bare local
   variables?
 - Should machines participate in JSON serialization immediately, or wait until
-  the state-tag and payload schema policy is stable?
+  the state-tag and payload schema policy in
+  `state_machine_json_contract.md` is stable?
 - Should machine transitions be ordinary static methods, compiler intrinsics, or
   stdlib-like generated functions?
 

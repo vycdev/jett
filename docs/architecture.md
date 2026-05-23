@@ -556,7 +556,8 @@ For each `machine` type:
   `states` and `edges`, and each edge uses `source` / `target`.
 - JSON policy gates reject `Machine` and `Machine at state` targets until that
   serialization contract exists; callers should serialize explicit DTO
-  structs/enums at machine boundaries for now.
+  structs/enums at machine boundaries for now. The current open design prefers
+  an envelope object with `state` and `payload` keys.
 
 #### 6h. Complexity Limits Enforcement
 

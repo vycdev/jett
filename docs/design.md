@@ -3370,7 +3370,7 @@ machine OrderProcess:
 OrderProcess order = OrderProcess(draft, items: list(Item(name: "widget", qty: 2)))
 
 string json_string = json.serialize[OrderProcess](view order)
-# Result: {"state":"draft","items":[{"name":"widget","qty":2}]}
+# Result: {"state":"draft","payload":{"items":[{"name":"widget","qty":2}]}}
 
 OrderProcess restored = json.parse[OrderProcess](json_string) handle error:
     return fail("invalid order data")
@@ -3379,9 +3379,10 @@ OrderProcess restored = json.parse[OrderProcess](json_string) handle error:
 
 When this lands, the serialized form will include the state name and
 deserialization will restore the correct state with the correct state-specific
-data. Until then, code that needs JSON at a state-machine boundary should expose
-an explicit data-transfer struct or enum so the JSON shape remains visible in
-source.
+data. The open design currently prefers an envelope with `state` and `payload`
+keys to avoid collisions with payload fields. Until then, code that needs JSON
+at a state-machine boundary should expose an explicit data-transfer struct or
+enum so the JSON shape remains visible in source.
 
 #### Serialization with Refinement Types
 
