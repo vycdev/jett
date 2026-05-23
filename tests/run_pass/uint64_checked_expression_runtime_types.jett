@@ -26,6 +26,14 @@ function map_value_uint64_dispatch() returns string:
     return Show.show(view(maybe_value handle:
         default fallback
     ))
+function set_to_list_uint64_dispatch() returns string:
+    mutable set[uint64] values = set.new[uint64]()
+    values = set.add[uint64](values, 17)
+    list[uint64] items = set.to_list[uint64](view values)
+    uint64 fallback = 0
+    return Show.show(view(list.get[uint64](view items, 0) handle:
+        default fallback
+    ))
 function optional_uint64_dispatch() returns string:
     optional[uint64] maybe_value = some(11)
     uint64 fallback = 0
@@ -42,5 +50,6 @@ verify uint64_checked_expression_runtime_types:
     assert constructed_list_uint64_dispatch() == "uint64"
     assert appended_list_uint64_dispatch() == "uint64"
     assert map_value_uint64_dispatch() == "uint64"
+    assert set_to_list_uint64_dispatch() == "uint64"
     assert optional_uint64_dispatch() == "uint64"
     assert result_uint64_dispatch() == "uint64"
