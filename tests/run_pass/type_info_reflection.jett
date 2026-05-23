@@ -325,6 +325,13 @@ function active_machine_logged_in_user_id(view session: Session at logged_in) re
         if field.name == "user_id":
             found = type.machine_field_value[Session at logged_in, string](view session, view field)
     return found
+function active_machine_logged_in_user_id_direct_loop(view session: Session at logged_in) returns string:
+    string found = "missing"
+    for field in type.machine_state_value[Session at logged_in](view session).fields:
+        comptime type Field = field.type_info:
+            Field item = type.machine_field_value[Session at logged_in, Field](view session, view field)
+            found = "{field.name}:{item}"
+    return found
 function reflected_guest_state_summary() returns string:
     Session at guest session = Session(guest)
     return active_machine_state_summary(view session)
@@ -334,6 +341,9 @@ function reflected_logged_in_state_summary() returns string:
 function reflected_logged_in_user_id() returns string:
     Session at logged_in session = Session.transition(Session(guest), logged_in, "user-2")
     return active_machine_logged_in_user_id(view session)
+function reflected_logged_in_user_id_direct_loop() returns string:
+    Session at logged_in session = Session.transition(Session(guest), logged_in, "user-3")
+    return active_machine_logged_in_user_id_direct_loop(view session)
 function variant_count[T]() returns int64:
     list[TypeVariant] variants = type.variants[T]()
     return list.length(variants)
@@ -444,6 +454,7 @@ verify type_info_reflection:
     assert reflected_guest_state_summary() == "0:guest:0:false"
     assert reflected_logged_in_state_summary() == "1:logged_in:1:false"
     assert reflected_logged_in_user_id() == "user-2"
+    assert reflected_logged_in_user_id_direct_loop() == "user_id:user-3"
     assert machine_layout_state_count[int64]() == 0
     assert machine_state_count[int64]() == 0
     assert machine_transition_count[int64]() == 0

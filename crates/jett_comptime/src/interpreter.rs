@@ -134,6 +134,11 @@ struct ReflectedVariantFieldOwner {
 }
 
 #[derive(Debug, Clone)]
+struct ReflectedMachineFieldOwner {
+    ty: TypeExpr,
+}
+
+#[derive(Debug, Clone)]
 struct ReflectionVariant {
     name: String,
     discriminant: i64,
@@ -1728,6 +1733,8 @@ impl Interpreter {
                     self.reflected_variant_loop_bindings(&for_stmt.iterable)?;
                 let reflected_variant_field_owner =
                     self.reflected_variant_field_loop_owner(&for_stmt.iterable)?;
+                let reflected_machine_field_owner =
+                    self.reflected_machine_field_loop_owner(&for_stmt.iterable)?;
                 let reflected_type_info_bindings =
                     self.reflected_type_info_arg_loop_bindings(&for_stmt.iterable)?;
                 let iterable = match self.eval_expr_flow(&for_stmt.iterable)? {
@@ -1775,6 +1782,21 @@ impl Interpreter {
                                     self.reflected_field_scopes.push(scope);
                                 })
                                 .is_some();
+                            let pushed_machine_field_scope = reflected_machine_field_owner
+                                .as_ref()
+                                .map(|owner_ty| {
+                                    self.reflected_machine_field_binding_for_value(
+                                        &owner_ty.ty,
+                                        &loop_item,
+                                    )
+                                })
+                                .transpose()?
+                                .map(|binding| {
+                                    let mut scope = HashMap::new();
+                                    scope.insert(for_stmt.variable.name.clone(), binding);
+                                    self.reflected_field_scopes.push(scope);
+                                })
+                                .is_some();
                             let pushed_type_info_scope = reflected_type_info_bindings
                                 .as_ref()
                                 .and_then(|bindings| bindings.get(index))
@@ -1788,6 +1810,9 @@ impl Interpreter {
                             let signal = self.exec_block_inner(&for_stmt.body);
                             if pushed_type_info_scope {
                                 self.reflected_type_info_scopes.pop();
+                            }
+                            if pushed_machine_field_scope {
+                                self.reflected_field_scopes.pop();
                             }
                             if pushed_variant_field_scope {
                                 self.reflected_field_scopes.pop();
@@ -4099,6 +4124,18 @@ impl Interpreter {
         }))
     }
 
+    fn reflected_machine_field_loop_owner(
+        &self,
+        iterable: &Expr,
+    ) -> Result<Option<ReflectedMachineFieldOwner>, String> {
+        let Some(ty) = comptime_type_machine_fields_binding(iterable) else {
+            return Ok(None);
+        };
+        Ok(Some(ReflectedMachineFieldOwner {
+            ty: self.substitute_type_expr(ty),
+        }))
+    }
+
     fn reflected_variant_field_binding_for_value(
         &self,
         owner_ty: &TypeExpr,
@@ -4150,6 +4187,55 @@ impl Interpreter {
         }
         Err(format!(
             "`comptime type` reflected enum field metadata '{}' does not match any payload field on type '{}'",
+            metadata_name,
+            type_expr_display(owner_ty)
+        ))
+    }
+
+    fn reflected_machine_field_binding_for_value(
+        &self,
+        owner_ty: &TypeExpr,
+        field_metadata: &Value,
+    ) -> Result<ReflectedFieldBinding, String> {
+        let (field_index, metadata_name, metadata_type_name) =
+            Self::type_field_metadata_for(field_metadata, "type.machine_field_value")?;
+        if let Some(machine) = self.checked_machine(owner_ty) {
+            for state in &machine.states {
+                let Some(field) = state.fields.get(field_index) else {
+                    continue;
+                };
+                if field.name == metadata_name && field.type_name == metadata_type_name {
+                    return Ok(ReflectedFieldBinding {
+                        index: field_index,
+                        name: field.name.clone(),
+                        ty: Self::reflection_type_info_type_expr(&field.type_info),
+                    });
+                }
+            }
+            return Err(format!(
+                "`comptime type` reflected machine field metadata '{}' does not match any payload field on type '{}'",
+                metadata_name,
+                type_expr_display(owner_ty)
+            ));
+        }
+        if self.checked_metadata_kind_is(owner_ty, &["machine", "machine_state"]) {
+            return Err(self.missing_checked_metadata_error(owner_ty, "machine"));
+        }
+
+        for state in self.type_expr_machine(owner_ty).states {
+            let Some(field) = state.fields.get(field_index) else {
+                continue;
+            };
+            if field.name == metadata_name && type_expr_display(&field.ty) == metadata_type_name {
+                return Ok(ReflectedFieldBinding {
+                    index: field_index,
+                    name: field.name.clone(),
+                    ty: field.ty.clone(),
+                });
+            }
+        }
+        Err(format!(
+            "`comptime type` reflected machine field metadata '{}' does not match any payload field on type '{}'",
             metadata_name,
             type_expr_display(owner_ty)
         ))
@@ -9841,6 +9927,26 @@ fn comptime_type_variant_fields_binding(expr: &Expr) -> Option<&TypeExpr> {
     comptime_type_variant_value_binding(base)
 }
 
+fn comptime_type_machine_state_value_binding(expr: &Expr) -> Option<&TypeExpr> {
+    let Expr::GenericCall(callee, type_args, args, _) = expr else {
+        return None;
+    };
+    if type_args.len() != 1 || args.len() != 1 || !is_type_machine_state_value_callee(callee) {
+        return None;
+    }
+    type_args.first()
+}
+
+fn comptime_type_machine_fields_binding(expr: &Expr) -> Option<&TypeExpr> {
+    let Expr::FieldAccess(base, field, _) = expr else {
+        return None;
+    };
+    if field.name != "fields" {
+        return None;
+    }
+    comptime_type_machine_state_value_binding(base)
+}
+
 fn reflected_variant_fields_binding(expr: &Expr) -> Option<&str> {
     let Expr::FieldAccess(base, field, _) = expr else {
         return None;
@@ -9929,6 +10035,14 @@ fn is_type_variant_value_callee(callee: &Expr) -> bool {
         return false;
     };
     field.name == "variant_value"
+        && matches!(base.as_ref(), Expr::Ident(ident) if ident.name == "type")
+}
+
+fn is_type_machine_state_value_callee(callee: &Expr) -> bool {
+    let Expr::FieldAccess(base, field, _) = callee else {
+        return false;
+    };
+    field.name == "machine_state_value"
         && matches!(base.as_ref(), Expr::Ident(ident) if ident.name == "type")
 }
 

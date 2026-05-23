@@ -5968,6 +5968,25 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn reflected_machine_field_types_for_owner(&self, owner_ty: TypeId) -> Vec<TypeId> {
+        match self.interner.resolve(owner_ty) {
+            Type::Machine(mid) => self
+                .interner
+                .resolve_machine(*mid)
+                .states
+                .iter()
+                .flat_map(|state| state.fields.iter().map(|(_, ty)| *ty))
+                .collect(),
+            Type::MachineState { machine, state } => self
+                .interner
+                .resolve_machine(*machine)
+                .state(*state)
+                .map(|state_def| state_def.fields.iter().map(|(_, ty)| *ty).collect())
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        }
+    }
+
     fn reflected_type_info_arg_types_for_iterable(
         &mut self,
         iterable: &Expr,
@@ -6781,6 +6800,16 @@ impl<'a> TypeChecker<'a> {
                 Vec::new()
             } else {
                 self.reflected_variant_field_types_for_owner(owner_ty)
+            };
+            self.push_reflected_field_type_scope(&for_stmt.variable.name, field_types);
+            true
+        } else if let Some(owner_ty_expr) = comptime_type_machine_fields_binding(&for_stmt.iterable)
+        {
+            let owner_ty = self.resolve_type_expr(owner_ty_expr);
+            let field_types = if owner_ty == TypeInterner::ERROR {
+                Vec::new()
+            } else {
+                self.reflected_machine_field_types_for_owner(owner_ty)
             };
             self.push_reflected_field_type_scope(&for_stmt.variable.name, field_types);
             true
@@ -9670,7 +9699,9 @@ fn comptime_type_variants_binding(expr: &Expr) -> Option<&TypeExpr> {
 }
 
 fn direct_reflected_loop_owner_type(expr: &Expr) -> Option<&TypeExpr> {
-    comptime_type_fields_binding(expr).or_else(|| comptime_type_variants_binding(expr))
+    comptime_type_fields_binding(expr)
+        .or_else(|| comptime_type_variants_binding(expr))
+        .or_else(|| comptime_type_machine_fields_binding(expr))
 }
 
 fn comptime_type_variant_value_binding(expr: &Expr) -> Option<&TypeExpr> {
@@ -9691,6 +9722,26 @@ fn comptime_type_variant_fields_binding(expr: &Expr) -> Option<&TypeExpr> {
         return None;
     }
     comptime_type_variant_value_binding(base)
+}
+
+fn comptime_type_machine_state_value_binding(expr: &Expr) -> Option<&TypeExpr> {
+    let Expr::GenericCall(callee, type_args, args, _) = expr else {
+        return None;
+    };
+    if type_args.len() != 1 || args.len() != 1 || !is_type_machine_state_value_callee(callee) {
+        return None;
+    }
+    type_args.first()
+}
+
+fn comptime_type_machine_fields_binding(expr: &Expr) -> Option<&TypeExpr> {
+    let Expr::FieldAccess(base, field, _) = expr else {
+        return None;
+    };
+    if field.name != "fields" {
+        return None;
+    }
+    comptime_type_machine_state_value_binding(base)
 }
 
 fn reflected_variant_fields_binding(expr: &Expr) -> Option<&str> {
@@ -9781,6 +9832,14 @@ fn is_type_variant_value_callee(callee: &Expr) -> bool {
         return false;
     };
     field.name == "variant_value"
+        && matches!(base.as_ref(), Expr::Ident(ident) if ident.name == "type")
+}
+
+fn is_type_machine_state_value_callee(callee: &Expr) -> bool {
+    let Expr::FieldAccess(base, field, _) = callee else {
+        return false;
+    };
+    field.name == "machine_state_value"
         && matches!(base.as_ref(), Expr::Ident(ident) if ident.name == "type")
 }
 
