@@ -13,8 +13,8 @@ use jett_types::{
     ActorDef as TypeActorDef, ActorMessageDef, BitfieldDef as TypeBitfieldDef,
     BitfieldFieldDef as TypeBitfieldFieldDef, BitfieldFieldKind as TypeBitfieldFieldKind,
     BitfieldId, EnumDef as TypeEnumDef, FunctionSig, InterfaceDef as TypeInterfaceDef,
-    MachineDef as TypeMachineDef, MachineStateDef as TypeMachineStateDef,
-    MachineTransitionDef as TypeMachineTransitionDef, ReflectionBitfieldFieldInfo,
+    MachineDef as TypeMachineDef, MachineId, MachineStateDef as TypeMachineStateDef,
+    MachineStateId, MachineTransitionDef as TypeMachineTransitionDef, ReflectionBitfieldFieldInfo,
     ReflectionBitfieldInfo, ReflectionFieldInfo, ReflectionMetadata, ReflectionTypeInfo,
     ReflectionVariantInfo, StructDef as TypeStructDef, StructId, Type, TypeId, TypeInterner,
     VariantDef,
@@ -7879,6 +7879,19 @@ impl<'a> TypeChecker<'a> {
                         TypeInterner::ERROR
                     }
                 }
+                Type::MachineState { machine, state } => {
+                    match self.machine_state_field_type(*machine, *state, &field.name) {
+                        Ok(field_ty) => self.maybe_wrap_secret(field_ty, true),
+                        Err(type_name) => {
+                            self.sink.emit(errors::type_has_no_member(
+                                &format!("secret[{type_name}]"),
+                                &field.name,
+                                span,
+                            ));
+                            TypeInterner::ERROR
+                        }
+                    }
+                }
                 _ => {
                     self.sink.emit(errors::type_has_no_member(
                         &self.type_name(base_ty),
@@ -7922,6 +7935,16 @@ impl<'a> TypeChecker<'a> {
                     TypeInterner::ERROR
                 }
             }
+            Type::MachineState { machine, state } => {
+                match self.machine_state_field_type(*machine, *state, &field.name) {
+                    Ok(field_ty) => field_ty,
+                    Err(type_name) => {
+                        self.sink
+                            .emit(errors::type_has_no_member(&type_name, &field.name, span));
+                        TypeInterner::ERROR
+                    }
+                }
+            }
             _ => {
                 self.sink.emit(errors::type_has_no_member(
                     &self.type_name(base_ty),
@@ -7931,6 +7954,25 @@ impl<'a> TypeChecker<'a> {
                 TypeInterner::ERROR
             }
         }
+    }
+
+    fn machine_state_field_type(
+        &self,
+        machine: MachineId,
+        state: MachineStateId,
+        field_name: &str,
+    ) -> Result<TypeId, String> {
+        let machine_def = self.interner.resolve_machine(machine);
+        let Some(state_def) = machine_def.state(state) else {
+            return Err(format!("{} at <unknown>", machine_def.name));
+        };
+        let type_name = format!("{} at {}", machine_def.name, state_def.name);
+        state_def
+            .fields
+            .iter()
+            .find(|(name, _)| name == field_name)
+            .map(|(_, ty)| *ty)
+            .ok_or(type_name)
     }
 
     fn check_bitfield_literal_range(

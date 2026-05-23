@@ -27,6 +27,9 @@ Implemented:
   target payload arity/types, and return the target `Machine at state` type.
 - `expr at state` is checked as a boolean state test on machine values, with
   diagnostics for non-machine values and states not declared on the machine.
+- State-specific payload field access is checked through ordinary field access
+  on `Machine at state` values; bare `Machine` values do not expose payload
+  fields.
 - The comptime interpreter can register machines, construct values with
   `MachineName(state, ...)`, check `value at state`, and run
   `MachineName.transition(value, target, ...)`.
@@ -35,7 +38,6 @@ Implemented:
 
 Not implemented:
 
-- State-specific field access is not modeled.
 - Machine declarations currently remain private because the parser AST has no
   `export machine` flag yet.
 - Namespace-qualified machine fixtures do not yet run through the same checked
@@ -123,7 +125,11 @@ to a known machine owner.
    - return type is `Machine at target`.
 6. Typecheck `expr at state` as a bool check on machine values. Done. It does
    not narrow branch-local state yet.
-7. After the checked model exists, add namespace fixtures:
+7. Typecheck state-specific payload field access. Done:
+   - `Machine at state` values expose only that state's payload fields,
+   - bare `Machine` values remain opaque,
+   - fields from other states are rejected by ordinary member diagnostics.
+8. After the checked model exists, add namespace fixtures:
    - qualified machine construction,
    - `use`-alias machine construction,
    - duplicate-leaf machines,
@@ -135,8 +141,8 @@ to a known machine owner.
   always carry a known state type?
 - Should `expr at state` narrow the type inside an `if`, or remain a pure bool
   operation?
-- Should state payload fields use ordinary field access, or require a
-  state-qualified view first?
+- Should `expr at state` eventually provide a branch-local state-qualified view
+  that exposes payload fields inside the guarded branch?
 - Should machines participate in reflection and JSON serialization immediately,
   or wait until the core type model is stable?
 - Should machine transitions be ordinary static methods, compiler intrinsics, or

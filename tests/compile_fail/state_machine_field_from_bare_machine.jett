@@ -1,0 +1,8 @@
+# ERROR: E0319
+machine Session:
+    states:
+        guest
+        logged_in(user_id: string)
+
+function wrong(session: Session) returns string:
+    return session.user_id

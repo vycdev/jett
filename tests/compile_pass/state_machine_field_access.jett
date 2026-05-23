@@ -1,0 +1,13 @@
+machine Session:
+    states:
+        guest
+        logged_in(user_id: string, admin: bool)
+
+    transitions:
+        guest to logged_in
+
+function user_id(session: Session at logged_in) returns string:
+    return session.user_id
+
+function is_admin(session: Session at logged_in) returns bool:
+    return session.admin
