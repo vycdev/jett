@@ -587,7 +587,7 @@ The HIR is the first representation where generic functions are fully expanded. 
 2. **Method resolution:** `Dog.speak(view my_dog)` is resolved to the specific `implement Speaker for Dog` function.
 3. **Auto-view for field access:** `self.x` is annotated as an implicit view operation.
 4. **Primitive copyability:** Primitive types (`int64`, `float64`, `bool`, `string`) are marked as implicitly copyable — they don't follow linear consumption rules.
-5. **Comptime reflection lowering:** Preserve enough type metadata for comptime code to inspect `type.name[T]()`, `type.kind[T]()`, `type.has_secret[T]()`, `type.fields[T]()`, and bitfield layout metadata. JSON serialization should be expressible in terms of these reflection primitives rather than as format-specific HIR magic. Struct, bitfield, and enum deserialization can now use the `TypeConstruction` builder to build `T` from parsed field values; the final construction-block syntax is still pending.
+5. **Comptime reflection lowering:** Preserve enough type metadata for comptime code to inspect `type.name[T]()`, `type.kind[T]()`, `type.has_secret[T]()`, `type.fields[T]()`, bitfield layout metadata, and state-machine state/transition metadata. JSON serialization should be expressible in terms of these reflection primitives rather than as format-specific HIR magic. Struct, bitfield, and enum deserialization can now use the `TypeConstruction` builder to build `T` from parsed field values; the final construction-block syntax is still pending.
 
 ---
 
@@ -1145,6 +1145,9 @@ The boundary between compiler-generated code and stdlib-implemented code is a cr
 | `type.fields[T]()` | Struct/bitfield reflection | Ordered `list[TypeField]` metadata for struct and bitfield fields, including `serialize` names for structs |
 | `type.bitfield_layout[T]()` | Bitfield reflection | `TypeBitfield` metadata for byte order and field-level layout |
 | `type.bitfield_fields[T]()` | Bitfield reflection | Ordered `list[TypeBitfieldField]` metadata for bit widths, payload shape, and enum annotations |
+| `type.machine_layout[T]()` | State-machine reflection | `TypeMachine` metadata for declared states and legal transition edges |
+| `type.machine_states[T]()` | State-machine reflection | Ordered `list[TypeMachineState]` metadata for state payload fields and secret-bearing state flags |
+| `type.machine_transitions[T]()` | State-machine reflection | Ordered `list[TypeMachineTransition]` metadata with source/target state names and indexes |
 | `type.variants[T]()` | Enum reflection | Ordered `list[TypeVariant]` metadata for enum variants, discriminants, and payload fields |
 | `type.variant_value[T](view value)` | Enum reflection | Active `TypeVariant` metadata for an enum value |
 | `type.variant_field_value[T, U](view value, view field)` | Enum reflection | Checked payload field read by reflected `TypeField` metadata |
