@@ -34,6 +34,7 @@ pub enum Value {
     TypeConstruction {
         type_name: String,
         variant: Option<String>,
+        state: Option<String>,
         fields: Vec<(usize, String, String, Value)>,
     },
     /// A user-defined struct instance: `Point(x: 1, y: 2)`.
@@ -90,14 +91,16 @@ impl PartialEq for Value {
                 Value::TypeConstruction {
                     type_name: t1,
                     variant: v1,
+                    state: s1,
                     fields: f1,
                 },
                 Value::TypeConstruction {
                     type_name: t2,
                     variant: v2,
+                    state: s2,
                     fields: f2,
                 },
-            ) => t1 == t2 && v1 == v2 && f1 == f2,
+            ) => t1 == t2 && v1 == v2 && s1 == s2 && f1 == f2,
             (
                 Value::Struct {
                     type_name: t1,
@@ -180,11 +183,15 @@ impl fmt::Display for Value {
             Value::TypeConstruction {
                 type_name,
                 variant,
+                state,
                 fields,
             } => {
                 write!(f, "TypeConstruction[{type_name}")?;
                 if let Some(variant) = variant {
                     write!(f, ".{variant}")?;
+                }
+                if let Some(state) = state {
+                    write!(f, "@{state}")?;
                 }
                 write!(f, "](")?;
                 for (i, (_, name, _, value)) in fields.iter().enumerate() {

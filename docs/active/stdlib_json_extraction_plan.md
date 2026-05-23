@@ -197,8 +197,10 @@ Some JSON rules are typechecker policy, not only implementation:
 - `map[K, V]` JSON encoding and decoding for `serialize`, `serialize_public`,
   `parse`, and `parse_exact` is restricted to `K == string`.
 - serialization and parsing reject non-data values that have no JSON encoding
-  or decoding, including functions, actors, interfaces, machines,
-  state-qualified machine values, and the internal `TypeConstruction` builder.
+  or decoding, including functions, actors, interfaces, and the internal
+  `TypeConstruction` builder. Machine values now have a canonical serialized
+  envelope, while machine parse targets remain blocked until the stdlib decoder
+  consumes that envelope through reflected machine construction.
   Parse checks descend through `secret[...]`
   wrappers because secret data still has to be constructed from JSON.
 - `json.parse[T]` and `json.parse_exact[T]` return `result[T, string]`, so
@@ -333,12 +335,13 @@ for current JSON hooks; future backends need the same identity boundary.
    to checking all branches. Direct top-level `type.arg[T](...)` bindings are
    also checked per concrete generic instantiation, which brings shape-specific
    helpers such as list/map/optional/result JSON helpers into the typed path.
-   Direct reflected `type.fields[T]()` and `type.variants[T]()` loops are also
-   checked per concrete owner in top-level helpers or selected reflection
-   branches, which pulls record and enum JSON helper bodies further into the
-   checked path. Direct top-level value-sensitive reflection statements for
-   variant selection and `TypeConstruction` start/finish are checked per
-   concrete instantiation as well. Reflection-specialized `match` statements
+   Direct reflected `type.fields[T]()`, `type.variants[T]()`, and
+   `type.machine_states[T]()` loops are also checked per concrete owner in
+   top-level helpers or selected reflection branches, which pulls record, enum,
+   and machine JSON helper bodies further into the checked path. Direct
+   top-level value-sensitive reflection statements for variant/state selection
+   and `TypeConstruction` start/finish are checked per concrete instantiation
+   as well. Reflection-specialized `match` statements
    over known `TypeKind` and `TypePrimitive` values now select only the
    reachable arm, matching Jett's canonical enum-dispatch form rather than
    forcing all generic reflection code through `if` ladders. Primitive JSON

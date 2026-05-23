@@ -1,0 +1,14 @@
+# ERROR: E0309
+namespace test
+machine Session:
+    states:
+        guest
+    transitions:
+        guest to guest
+function bad_construct_machine_start_owner() returns nothing:
+    list[TypeMachineState] states = type.machine_states[Session]()
+    TypeMachineState state = list.get[TypeMachineState](states, 0) handle:
+        return nothing
+    TypeConstruction builder = type.construct_machine_start[int64](view state) handle error:
+        return nothing
+    return nothing

@@ -5,10 +5,11 @@ Status: partially implemented.
 Jett now has checked reflection for state-machine kind tags, declared states,
 state payload fields, transition edges, active state values, and active payload
 field reads. JSON serialization now uses that reflection to emit the envelope
-shape below. JSON parsing still remains blocked until reflected construction for
-machine values has an equally explicit checked path. The selected construction
-path is `type.construct_machine_start[T](view state)`, followed by the existing
-typed `type.construct_put` and `type.construct_finish` builder operations.
+shape below. JSON parsing still remains blocked until the stdlib decoder consumes
+the envelope shape, but reflected construction for machine values now has an
+explicit checked path: `type.construct_machine_start[T](view state)`, followed
+by the existing typed `type.construct_put` and `type.construct_finish` builder
+operations.
 
 ## Current Invariant
 

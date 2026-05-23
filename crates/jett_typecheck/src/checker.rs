@@ -195,6 +195,8 @@ struct TypeChecker<'a> {
     reflected_type_info_scopes: Vec<HashMap<String, Vec<TypeId>>>,
     /// Trusted TypeVariant owners currently available from direct `type.variants[T]()` loops.
     reflected_variant_type_scopes: Vec<HashMap<String, TypeId>>,
+    /// Trusted TypeMachineState owners currently available from direct `type.machine_states[T]()` loops.
+    reflected_machine_state_type_scopes: Vec<HashMap<String, TypeId>>,
 
     // -- Generic function support --
     /// AST templates for user-defined generic functions (have type_params).
@@ -259,6 +261,7 @@ impl<'a> TypeChecker<'a> {
             reflected_field_type_scopes: Vec::new(),
             reflected_type_info_scopes: Vec::new(),
             reflected_variant_type_scopes: Vec::new(),
+            reflected_machine_state_type_scopes: Vec::new(),
             generic_function_templates: HashMap::new(),
             checked_generic_function_instantiations: HashSet::new(),
             specialize_reflection_branches: false,
@@ -2476,6 +2479,40 @@ impl<'a> TypeChecker<'a> {
                     )),
                 ))
             }
+            "type.construct_machine_start" => {
+                if type_args.len() != 1 {
+                    self.sink.emit(errors::unknown_type(
+                        &format!("{name} (expected 1 type argument, got {})", type_args.len()),
+                        span,
+                    ));
+                    return Some((vec![TypeInterner::ERROR], TypeInterner::ERROR));
+                }
+                let target_ty = self.resolve_type_expr(&type_args[0]);
+                if !matches!(
+                    self.interner.resolve(target_ty),
+                    Type::Machine(_) | Type::MachineState { .. }
+                ) {
+                    self.sink.emit(errors::unknown_type(
+                        &format!(
+                            "{name} supports only machines and machine states, got {}",
+                            self.type_name(target_ty)
+                        ),
+                        span,
+                    ));
+                }
+                let type_machine_state_ty = self
+                    .named_types
+                    .get("TypeMachineState")
+                    .copied()
+                    .unwrap_or(TypeInterner::ERROR);
+                Some((
+                    vec![type_machine_state_ty],
+                    self.interner.intern(Type::Result(
+                        TypeInterner::TYPE_CONSTRUCTION,
+                        TypeInterner::STRING,
+                    )),
+                ))
+            }
             "type.construct_put" => {
                 if type_args.len() != 2 {
                     self.sink.emit(errors::unknown_type(
@@ -2500,11 +2537,15 @@ impl<'a> TypeChecker<'a> {
                 let target_ty = self.resolve_type_expr(&type_args[0]);
                 if !matches!(
                     self.interner.resolve(target_ty),
-                    Type::Struct(_) | Type::Bitfield(_) | Type::Enum(_)
+                    Type::Struct(_)
+                        | Type::Bitfield(_)
+                        | Type::Enum(_)
+                        | Type::Machine(_)
+                        | Type::MachineState { .. }
                 ) {
                     self.sink.emit(errors::unknown_type(
                         &format!(
-                            "{name} supports only structs, bitfields, and enums, got {}",
+                            "{name} supports only structs, bitfields, enums, and machines, got {}",
                             self.type_name(target_ty)
                         ),
                         span,
@@ -2535,11 +2576,15 @@ impl<'a> TypeChecker<'a> {
                 let target_ty = self.resolve_type_expr(&type_args[0]);
                 if !matches!(
                     self.interner.resolve(target_ty),
-                    Type::Struct(_) | Type::Bitfield(_) | Type::Enum(_)
+                    Type::Struct(_)
+                        | Type::Bitfield(_)
+                        | Type::Enum(_)
+                        | Type::Machine(_)
+                        | Type::MachineState { .. }
                 ) {
                     self.sink.emit(errors::unknown_type(
                         &format!(
-                            "{name} supports only structs, bitfields, and enums, got {}",
+                            "{name} supports only structs, bitfields, enums, and machines, got {}",
                             self.type_name(target_ty)
                         ),
                         span,
@@ -5035,6 +5080,7 @@ impl<'a> TypeChecker<'a> {
                         "type.variant_value"
                             | "type.construct_start"
                             | "type.construct_variant_start"
+                            | "type.construct_machine_start"
                             | "type.construct_finish"
                     )
                 }) && type_args
@@ -5867,6 +5913,14 @@ impl<'a> TypeChecker<'a> {
             .copied()
     }
 
+    fn reflected_machine_state_owner_for_name(&self, name: &str) -> Option<TypeId> {
+        self.reflected_machine_state_type_scopes
+            .iter()
+            .rev()
+            .find_map(|scope| scope.get(name))
+            .copied()
+    }
+
     fn reflection_type_info_kind_for_ident(&self, ident: &ast::Ident) -> Option<String> {
         let def_id = self.ident_def_id(ident)?;
         self.reflection_type_info_kind_scopes
@@ -6165,6 +6219,16 @@ impl<'a> TypeChecker<'a> {
 
     fn pop_reflected_variant_type_scope(&mut self) {
         self.reflected_variant_type_scopes.pop();
+    }
+
+    fn push_reflected_machine_state_type_scope(&mut self, state_name: &str, owner_ty: TypeId) {
+        let mut scope = HashMap::new();
+        scope.insert(state_name.to_string(), owner_ty);
+        self.reflected_machine_state_type_scopes.push(scope);
+    }
+
+    fn pop_reflected_machine_state_type_scope(&mut self) {
+        self.reflected_machine_state_type_scopes.pop();
     }
 
     fn check_trace(&mut self, trace_stmt: &ast::TraceStmt) {
@@ -6857,6 +6921,15 @@ impl<'a> TypeChecker<'a> {
                 false
             };
 
+        let pushed_machine_state_scope =
+            if let Some(owner_ty_expr) = comptime_type_machine_states_binding(&for_stmt.iterable) {
+                let owner_ty = self.resolve_type_expr(owner_ty_expr);
+                self.push_reflected_machine_state_type_scope(&for_stmt.variable.name, owner_ty);
+                true
+            } else {
+                false
+            };
+
         let pushed_field_scope = if let Some(owner_ty_expr) =
             comptime_type_fields_binding(&for_stmt.iterable)
         {
@@ -6888,8 +6961,16 @@ impl<'a> TypeChecker<'a> {
             };
             self.push_reflected_field_type_scope(&for_stmt.variable.name, field_types);
             true
-        } else if let Some(variant_name) = reflected_variant_fields_binding(&for_stmt.iterable) {
-            if let Some(owner_ty) = self.reflected_variant_owner_for_name(variant_name) {
+        } else if let Some(fields_owner_name) =
+            reflected_machine_state_fields_binding(&for_stmt.iterable)
+                .or_else(|| reflected_variant_fields_binding(&for_stmt.iterable))
+        {
+            if let Some(owner_ty) = self.reflected_machine_state_owner_for_name(fields_owner_name) {
+                let field_types = self.reflected_machine_field_types_for_owner(owner_ty);
+                self.push_reflected_field_type_scope(&for_stmt.variable.name, field_types);
+                true
+            } else if let Some(owner_ty) = self.reflected_variant_owner_for_name(fields_owner_name)
+            {
                 let field_types = self.reflected_variant_field_types_for_owner(owner_ty);
                 self.push_reflected_field_type_scope(&for_stmt.variable.name, field_types);
                 true
@@ -6919,6 +7000,9 @@ impl<'a> TypeChecker<'a> {
         }
         if pushed_variant_scope {
             self.pop_reflected_variant_type_scope();
+        }
+        if pushed_machine_state_scope {
+            self.pop_reflected_machine_state_type_scope();
         }
     }
 
@@ -9776,6 +9860,7 @@ fn comptime_type_variants_binding(expr: &Expr) -> Option<&TypeExpr> {
 fn direct_reflected_loop_owner_type(expr: &Expr) -> Option<&TypeExpr> {
     comptime_type_fields_binding(expr)
         .or_else(|| comptime_type_variants_binding(expr))
+        .or_else(|| comptime_type_machine_states_binding(expr))
         .or_else(|| comptime_type_machine_fields_binding(expr))
 }
 
@@ -9809,6 +9894,16 @@ fn comptime_type_machine_state_value_binding(expr: &Expr) -> Option<&TypeExpr> {
     type_args.first()
 }
 
+fn comptime_type_machine_states_binding(expr: &Expr) -> Option<&TypeExpr> {
+    let Expr::GenericCall(callee, type_args, args, _) = expr else {
+        return None;
+    };
+    if type_args.len() != 1 || !args.is_empty() || !is_type_machine_states_callee(callee) {
+        return None;
+    }
+    type_args.first()
+}
+
 fn comptime_type_machine_fields_binding(expr: &Expr) -> Option<&TypeExpr> {
     let Expr::FieldAccess(base, field, _) = expr else {
         return None;
@@ -9817,6 +9912,19 @@ fn comptime_type_machine_fields_binding(expr: &Expr) -> Option<&TypeExpr> {
         return None;
     }
     comptime_type_machine_state_value_binding(base)
+}
+
+fn reflected_machine_state_fields_binding(expr: &Expr) -> Option<&str> {
+    let Expr::FieldAccess(base, field, _) = expr else {
+        return None;
+    };
+    if field.name != "fields" {
+        return None;
+    }
+    let Expr::Ident(ident) = base.as_ref() else {
+        return None;
+    };
+    Some(&ident.name)
 }
 
 fn reflected_variant_fields_binding(expr: &Expr) -> Option<&str> {
@@ -9907,6 +10015,14 @@ fn is_type_variant_value_callee(callee: &Expr) -> bool {
         return false;
     };
     field.name == "variant_value"
+        && matches!(base.as_ref(), Expr::Ident(ident) if ident.name == "type")
+}
+
+fn is_type_machine_states_callee(callee: &Expr) -> bool {
+    let Expr::FieldAccess(base, field, _) = callee else {
+        return false;
+    };
+    field.name == "machine_states"
         && matches!(base.as_ref(), Expr::Ident(ident) if ident.name == "type")
 }
 

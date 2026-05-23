@@ -1,0 +1,15 @@
+# ERROR: E0309
+namespace test
+machine Session:
+    states:
+        guest
+    transitions:
+        guest to guest
+struct Placeholder:
+    value: string
+function bad_construct_machine_start_arity() returns TypeConstruction:
+    list[TypeMachineState] states = type.machine_states[Session]()
+    TypeMachineState state = list.get[TypeMachineState](states, 0) handle:
+        return type.construct_start[Placeholder]()
+    return type.construct_machine_start[Session, string](view state) handle error:
+        return type.construct_start[Placeholder]()

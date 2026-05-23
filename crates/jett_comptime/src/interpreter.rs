@@ -128,6 +128,13 @@ struct ReflectedVariantBinding {
 }
 
 #[derive(Debug, Clone)]
+struct ReflectedMachineStateBinding {
+    ty: TypeExpr,
+    index: usize,
+    name: String,
+}
+
+#[derive(Debug, Clone)]
 struct ReflectedVariantFieldOwner {
     ty: TypeExpr,
     variant: Option<String>,
@@ -217,6 +224,8 @@ pub struct Interpreter {
     reflected_type_info_scopes: Vec<HashMap<String, ReflectedTypeInfoBinding>>,
     /// Trusted TypeVariant metadata currently produced by direct `type.variants[T]()` loops.
     reflected_variant_scopes: Vec<HashMap<String, ReflectedVariantBinding>>,
+    /// Trusted TypeMachineState metadata currently produced by direct `type.machine_states[T]()` loops.
+    reflected_machine_state_scopes: Vec<HashMap<String, ReflectedMachineStateBinding>>,
     /// Checked reflection metadata snapshot, when supplied by the driver.
     reflection_metadata: Option<Arc<ReflectionMetadata>>,
     /// Checked expression type names keyed by source span, when supplied by
@@ -266,6 +275,7 @@ impl Interpreter {
             reflected_field_scopes: Vec::new(),
             reflected_type_info_scopes: Vec::new(),
             reflected_variant_scopes: Vec::new(),
+            reflected_machine_state_scopes: Vec::new(),
             reflection_metadata: None,
             checked_expression_types: None,
             actor_instances: HashMap::new(),
@@ -1731,6 +1741,8 @@ impl Interpreter {
                     self.reflected_field_loop_bindings(&for_stmt.iterable)?;
                 let reflected_variant_bindings =
                     self.reflected_variant_loop_bindings(&for_stmt.iterable)?;
+                let reflected_machine_state_bindings =
+                    self.reflected_machine_state_loop_bindings(&for_stmt.iterable)?;
                 let reflected_variant_field_owner =
                     self.reflected_variant_field_loop_owner(&for_stmt.iterable)?;
                 let reflected_machine_field_owner =
@@ -1764,6 +1776,15 @@ impl Interpreter {
                                     let mut scope = HashMap::new();
                                     scope.insert(for_stmt.variable.name.clone(), binding.clone());
                                     self.reflected_variant_scopes.push(scope);
+                                })
+                                .is_some();
+                            let pushed_machine_state_scope = reflected_machine_state_bindings
+                                .as_ref()
+                                .and_then(|bindings| bindings.get(index))
+                                .map(|binding| {
+                                    let mut scope = HashMap::new();
+                                    scope.insert(for_stmt.variable.name.clone(), binding.clone());
+                                    self.reflected_machine_state_scopes.push(scope);
                                 })
                                 .is_some();
                             let pushed_variant_field_scope = reflected_variant_field_owner
@@ -1822,6 +1843,9 @@ impl Interpreter {
                             }
                             if pushed_variant_scope {
                                 self.reflected_variant_scopes.pop();
+                            }
+                            if pushed_machine_state_scope {
+                                self.reflected_machine_state_scopes.pop();
                             }
                             self.pop_scope();
                             let signal = signal?;
@@ -2808,6 +2832,7 @@ impl Interpreter {
                 | "type.variant_field_value"
                 | "type.construct_start"
                 | "type.construct_variant_start"
+                | "type.construct_machine_start"
                 | "type.construct_put"
                 | "type.construct_finish"
                 | "json.parse"
@@ -2927,6 +2952,7 @@ impl Interpreter {
                 Ok(Value::TypeConstruction {
                     type_name: type_expr_display(&ty),
                     variant: None,
+                    state: None,
                     fields: Vec::new(),
                 })
             }
@@ -2935,6 +2961,12 @@ impl Interpreter {
                     return Some(err);
                 }
                 self.reflected_construct_variant_start(&ty, &args[0])
+            }
+            "type.construct_machine_start" => {
+                if let Some(err) = check_args(name, 1, args) {
+                    return Some(err);
+                }
+                self.reflected_construct_machine_start(&ty, &args[0])
             }
             "type.construct_put" => {
                 if let Some(err) = check_args(name, 3, args) {
@@ -4104,6 +4136,45 @@ impl Interpreter {
         ))
     }
 
+    fn reflected_machine_state_loop_bindings(
+        &self,
+        iterable: &Expr,
+    ) -> Result<Option<Vec<ReflectedMachineStateBinding>>, String> {
+        let Some(owner_ty) = comptime_type_machine_states_binding(iterable) else {
+            return Ok(None);
+        };
+        let owner_ty = self.substitute_type_expr(owner_ty);
+        if let Some(machine) = self.checked_machine(&owner_ty) {
+            return Ok(Some(
+                machine
+                    .states
+                    .iter()
+                    .map(|state| ReflectedMachineStateBinding {
+                        ty: owner_ty.clone(),
+                        index: state.index,
+                        name: state.name.clone(),
+                    })
+                    .collect(),
+            ));
+        }
+        if self.checked_metadata_kind_is(&owner_ty, &["machine", "machine_state"]) {
+            return Err(self.missing_checked_metadata_error(&owner_ty, "machine"));
+        }
+
+        Ok(Some(
+            self.type_expr_machine(&owner_ty)
+                .states
+                .into_iter()
+                .enumerate()
+                .map(|(index, state)| ReflectedMachineStateBinding {
+                    ty: owner_ty.clone(),
+                    index,
+                    name: state.name,
+                })
+                .collect(),
+        ))
+    }
+
     fn reflected_variant_field_loop_owner(
         &self,
         iterable: &Expr,
@@ -4131,12 +4202,19 @@ impl Interpreter {
         &self,
         iterable: &Expr,
     ) -> Result<Option<ReflectedMachineFieldOwner>, String> {
-        let Some(ty) = comptime_type_machine_fields_binding(iterable) else {
+        if let Some(ty) = comptime_type_machine_fields_binding(iterable) {
+            return Ok(Some(ReflectedMachineFieldOwner {
+                ty: self.substitute_type_expr(ty),
+            }));
+        }
+
+        let Some(state_name) = reflected_machine_state_fields_binding(iterable) else {
             return Ok(None);
         };
-        Ok(Some(ReflectedMachineFieldOwner {
-            ty: self.substitute_type_expr(ty),
-        }))
+        let Some(binding) = self.maybe_bound_reflected_machine_state(state_name)? else {
+            return Ok(None);
+        };
+        Ok(Some(ReflectedMachineFieldOwner { ty: binding.ty }))
     }
 
     fn reflected_variant_field_binding_for_value(
@@ -4263,6 +4341,28 @@ impl Interpreter {
             Self::type_variant_metadata(current_value, "`comptime type`")?;
         if index != binding.index || name != binding.name || discriminant != binding.discriminant {
             return Err("`comptime type` reflected variant metadata no longer matches the trusted `type.variants[T]()` loop item".to_string());
+        }
+        Ok(Some(binding.clone()))
+    }
+
+    fn maybe_bound_reflected_machine_state(
+        &self,
+        state_name: &str,
+    ) -> Result<Option<ReflectedMachineStateBinding>, String> {
+        let binding = self
+            .reflected_machine_state_scopes
+            .iter()
+            .rev()
+            .find_map(|scope| scope.get(state_name));
+        let Some(binding) = binding else {
+            return Ok(None);
+        };
+        let current_value = self.get_variable(state_name).ok_or_else(|| {
+            format!("`comptime type` reflected machine state '{state_name}' is not in scope")
+        })?;
+        let (index, name) = Self::type_machine_state_metadata(current_value, "`comptime type`")?;
+        if index != binding.index || name != binding.name {
+            return Err("`comptime type` reflected machine state metadata no longer matches the trusted `type.machine_states[T]()` loop item".to_string());
         }
         Ok(Some(binding.clone()))
     }
@@ -4641,6 +4741,8 @@ impl Interpreter {
                 "struct" => Some("struct"),
                 "bitfield" => Some("bitfield"),
                 "enum" => Some("enum"),
+                "machine" => Some("machine"),
+                "machine_state" => Some("machine_state"),
                 _ => None,
             };
         }
@@ -4649,6 +4751,14 @@ impl Interpreter {
             Some("enum")
         } else if self.checked_bitfield(ty).is_some() {
             Some("bitfield")
+        } else if self.checked_machine(ty).is_some() {
+            match ty {
+                TypeExpr::StateQualified(_, _, _) => Some("machine_state"),
+                TypeExpr::Named(ident) if encoded_machine_state_name(&ident.name).is_some() => {
+                    Some("machine_state")
+                }
+                _ => Some("machine"),
+            }
         } else if self.checked_type_fields(ty).is_some() {
             Some("struct")
         } else {
@@ -5547,6 +5657,7 @@ impl Interpreter {
         let Value::TypeConstruction {
             type_name,
             variant,
+            state,
             fields: existing_fields,
         } = builder
         else {
@@ -5565,9 +5676,12 @@ impl Interpreter {
         let owner_kind = self
             .checked_construction_kind(owner_ty)
             .unwrap_or_else(|| self.type_expr_kind(owner_ty));
-        if !matches!(owner_kind, "struct" | "bitfield" | "enum") {
+        if !matches!(
+            owner_kind,
+            "struct" | "bitfield" | "enum" | "machine" | "machine_state"
+        ) {
             return Ok(result_fail(format!(
-                "type.construct_put supports only structs, bitfields, and enums, got '{}'",
+                "type.construct_put supports only structs, bitfields, enums, and machines, got '{}'",
                 type_expr_display(owner_ty)
             )));
         }
@@ -5579,6 +5693,12 @@ impl Interpreter {
             };
 
         let (field_name, actual_type_name) = if owner_kind == "enum" {
+            if state.is_some() {
+                return Ok(result_fail(format!(
+                    "type.construct_put: machine state builder cannot construct '{}'",
+                    expected_owner
+                )));
+            }
             let Some(variant_name) = variant.as_ref() else {
                 return Ok(result_fail(
                     "type.construct_put: enum construction requires type.construct_variant_start"
@@ -5627,10 +5747,79 @@ impl Interpreter {
                 };
                 (field.name.clone(), type_expr_display(&field.ty))
             }
+        } else if matches!(owner_kind, "machine" | "machine_state") {
+            if variant.is_some() {
+                return Ok(result_fail(format!(
+                    "type.construct_put: enum variant builder cannot construct '{}'",
+                    expected_owner
+                )));
+            }
+            let Some(state_name) = state.as_ref() else {
+                return Ok(result_fail(
+                    "type.construct_put: machine construction requires type.construct_machine_start"
+                        .to_string(),
+                ));
+            };
+
+            if let Some(machine) = self.checked_machine(owner_ty) {
+                let Some(state_metadata) = machine
+                    .states
+                    .iter()
+                    .find(|candidate| candidate.name == *state_name)
+                else {
+                    return Ok(result_fail(format!(
+                        "type.construct_put: machine '{}' has no state '{}'",
+                        type_expr_name(owner_ty),
+                        state_name
+                    )));
+                };
+                let Some(field) = state_metadata.fields.get(field_index) else {
+                    return Ok(result_fail(format!(
+                        "type.construct_put: state '{}.{}' has no payload field at index {}",
+                        type_expr_name(owner_ty),
+                        state_name,
+                        field_index
+                    )));
+                };
+                (field.name.clone(), field.type_name.clone())
+            } else {
+                if self.checked_metadata_kind_is(owner_ty, &["machine", "machine_state"]) {
+                    return Ok(result_fail(
+                        self.missing_checked_metadata_error(owner_ty, "machine"),
+                    ));
+                }
+                let machine = self.type_expr_machine(owner_ty);
+                let Some(state_metadata) = machine
+                    .states
+                    .iter()
+                    .find(|candidate| candidate.name == *state_name)
+                else {
+                    return Ok(result_fail(format!(
+                        "type.construct_put: machine '{}' has no state '{}'",
+                        type_expr_name(owner_ty),
+                        state_name
+                    )));
+                };
+                let Some(field) = state_metadata.fields.get(field_index) else {
+                    return Ok(result_fail(format!(
+                        "type.construct_put: state '{}.{}' has no payload field at index {}",
+                        type_expr_name(owner_ty),
+                        state_name,
+                        field_index
+                    )));
+                };
+                (field.name.clone(), type_expr_display(&field.ty))
+            }
         } else {
             if variant.is_some() {
                 return Ok(result_fail(format!(
                     "type.construct_put: enum variant builder cannot construct '{}'",
+                    expected_owner
+                )));
+            }
+            if state.is_some() {
+                return Ok(result_fail(format!(
+                    "type.construct_put: machine state builder cannot construct '{}'",
                     expected_owner
                 )));
             }
@@ -5665,6 +5854,14 @@ impl Interpreter {
                 return Ok(result_fail(format!(
                     "type.construct_put: field metadata '{}' does not match payload field '{}' on variant '{}.{}'",
                     metadata_name, field_name, expected_owner, variant_name
+                )));
+            } else if let Some(state_name) = state.as_ref() {
+                return Ok(result_fail(format!(
+                    "type.construct_put: field metadata '{}' does not match payload field '{}' on state '{}.{}'",
+                    metadata_name,
+                    field_name,
+                    type_expr_name(owner_ty),
+                    state_name
                 )));
             } else {
                 return Ok(result_fail(format!(
@@ -5709,6 +5906,7 @@ impl Interpreter {
         Ok(result_ok(Value::TypeConstruction {
             type_name: type_name.clone(),
             variant: variant.clone(),
+            state: state.clone(),
             fields,
         }))
     }
@@ -5838,6 +6036,127 @@ impl Interpreter {
         Ok(result_ok(Value::TypeConstruction {
             type_name: expected_owner,
             variant: Some(variant_name),
+            state: None,
+            fields: Vec::new(),
+        }))
+    }
+
+    fn reflected_construct_machine_start(
+        &self,
+        owner_ty: &TypeExpr,
+        state_metadata: &Value,
+    ) -> Result<Value, String> {
+        let owner_kind = self
+            .checked_construction_kind(owner_ty)
+            .unwrap_or_else(|| self.type_expr_kind(owner_ty));
+        if !matches!(owner_kind, "machine" | "machine_state") {
+            return Ok(result_fail(format!(
+                "type.construct_machine_start supports only machines and machine states, got '{}'",
+                type_expr_display(owner_ty)
+            )));
+        }
+
+        let expected_owner = type_expr_display(owner_ty);
+        let expected_machine = type_expr_name(owner_ty);
+        let (state_index, metadata_name) =
+            match Self::type_machine_state_metadata(state_metadata, "type.construct_machine_start")
+            {
+                Ok(metadata) => metadata,
+                Err(message) => return Ok(result_fail(message)),
+            };
+        let metadata_fields = match Self::type_machine_state_payload_field_metadata(
+            state_metadata,
+            "type.construct_machine_start",
+        ) {
+            Ok(fields) => fields,
+            Err(message) => return Ok(result_fail(message)),
+        };
+
+        let state_name = if let Some(machine) = self.checked_machine(owner_ty) {
+            let Some(state) = machine.states.get(state_index) else {
+                return Ok(result_fail(format!(
+                    "type.construct_machine_start: machine '{}' has no state at index {}",
+                    expected_machine, state_index
+                )));
+            };
+            if state.name != metadata_name {
+                return Ok(result_fail(format!(
+                    "type.construct_machine_start: state metadata '{}' does not match state '{}' on '{}'",
+                    metadata_name, state.name, expected_machine
+                )));
+            }
+            if metadata_fields.len() != state.fields.len() {
+                return Ok(result_fail(format!(
+                    "type.construct_machine_start: state '{}.{}' expects {} payload field(s), metadata reports {}",
+                    expected_machine,
+                    state.name,
+                    state.fields.len(),
+                    metadata_fields.len()
+                )));
+            }
+            for (index, field) in state.fields.iter().enumerate() {
+                let (metadata_index, metadata_field_name, metadata_type_name) =
+                    &metadata_fields[index];
+                if *metadata_index != index
+                    || metadata_field_name != &field.name
+                    || metadata_type_name != &field.type_name
+                {
+                    return Ok(result_fail(format!(
+                        "type.construct_machine_start: payload field metadata at index {} does not match state '{}.{}'",
+                        index, expected_machine, state.name
+                    )));
+                }
+            }
+            state.name.clone()
+        } else {
+            if self.checked_metadata_kind_is(owner_ty, &["machine", "machine_state"]) {
+                return Ok(result_fail(
+                    self.missing_checked_metadata_error(owner_ty, "machine"),
+                ));
+            }
+            let machine = self.type_expr_machine(owner_ty);
+            let Some(state) = machine.states.get(state_index) else {
+                return Ok(result_fail(format!(
+                    "type.construct_machine_start: machine '{}' has no state at index {}",
+                    expected_machine, state_index
+                )));
+            };
+            if state.name != metadata_name {
+                return Ok(result_fail(format!(
+                    "type.construct_machine_start: state metadata '{}' does not match state '{}' on '{}'",
+                    metadata_name, state.name, expected_machine
+                )));
+            }
+            if metadata_fields.len() != state.fields.len() {
+                return Ok(result_fail(format!(
+                    "type.construct_machine_start: state '{}.{}' expects {} payload field(s), metadata reports {}",
+                    expected_machine,
+                    state.name,
+                    state.fields.len(),
+                    metadata_fields.len()
+                )));
+            }
+            for (index, field) in state.fields.iter().enumerate() {
+                let (metadata_index, metadata_field_name, metadata_type_name) =
+                    &metadata_fields[index];
+                let actual_type_name = type_expr_display(&field.ty);
+                if *metadata_index != index
+                    || metadata_field_name != &field.name
+                    || metadata_type_name != &actual_type_name
+                {
+                    return Ok(result_fail(format!(
+                        "type.construct_machine_start: payload field metadata at index {} does not match state '{}.{}'",
+                        index, expected_machine, state.name
+                    )));
+                }
+            }
+            state.name.clone()
+        };
+
+        Ok(result_ok(Value::TypeConstruction {
+            type_name: expected_owner,
+            variant: None,
+            state: Some(state_name),
             fields: Vec::new(),
         }))
     }
@@ -5850,6 +6169,7 @@ impl Interpreter {
         let Value::TypeConstruction {
             type_name,
             variant,
+            state,
             fields,
         } = builder
         else {
@@ -5870,19 +6190,44 @@ impl Interpreter {
             Some("struct") => "struct",
             Some("enum") => "enum",
             Some("bitfield") => "bitfield",
+            Some("machine") => "machine",
+            Some("machine_state") => "machine_state",
             _ => ast_owner_kind,
         };
-        if !matches!(owner_kind, "struct" | "bitfield" | "enum") {
+        if !matches!(
+            owner_kind,
+            "struct" | "bitfield" | "enum" | "machine" | "machine_state"
+        ) {
             return Ok(result_fail(format!(
-                "type.construct_finish supports only structs, bitfields, and enums, got '{}'",
+                "type.construct_finish supports only structs, bitfields, enums, and machines, got '{}'",
                 type_expr_display(owner_ty)
             )));
         }
 
         if owner_kind == "enum" {
+            if state.is_some() {
+                return Ok(result_fail(format!(
+                    "type.construct_finish: machine state builder cannot construct '{}'",
+                    expected_owner
+                )));
+            }
             return self.reflected_construct_finish_enum(
                 owner_ty,
                 variant.as_deref(),
+                fields,
+                &expected_owner,
+            );
+        }
+        if matches!(owner_kind, "machine" | "machine_state") {
+            if variant.is_some() {
+                return Ok(result_fail(format!(
+                    "type.construct_finish: enum variant builder cannot construct '{}'",
+                    expected_owner
+                )));
+            }
+            return self.reflected_construct_finish_machine(
+                owner_ty,
+                state.as_deref(),
                 fields,
                 &expected_owner,
             );
@@ -5894,11 +6239,23 @@ impl Interpreter {
                     expected_owner
                 )));
             }
+            if state.is_some() {
+                return Ok(result_fail(format!(
+                    "type.construct_finish: machine state builder cannot construct '{}'",
+                    expected_owner
+                )));
+            }
             return self.reflected_construct_finish_bitfield(owner_ty, fields, &expected_owner);
         }
         if variant.is_some() {
             return Ok(result_fail(format!(
                 "type.construct_finish: enum variant builder cannot construct '{}'",
+                expected_owner
+            )));
+        }
+        if state.is_some() {
+            return Ok(result_fail(format!(
+                "type.construct_finish: machine state builder cannot construct '{}'",
                 expected_owner
             )));
         }
@@ -6094,6 +6451,122 @@ impl Interpreter {
         }))
     }
 
+    fn reflected_construct_finish_machine(
+        &mut self,
+        owner_ty: &TypeExpr,
+        selected_state: Option<&str>,
+        fields: &[(usize, String, String, Value)],
+        _expected_owner: &str,
+    ) -> Result<Value, String> {
+        let Some(state_name) = selected_state else {
+            return Ok(result_fail(
+                "type.construct_finish: machine construction requires type.construct_machine_start"
+                    .to_string(),
+            ));
+        };
+
+        let machine_name = type_expr_name(owner_ty);
+        if let Some(expected_state) = type_expr_state_name(owner_ty)
+            && state_name != expected_state
+        {
+            return Ok(result_fail(format!(
+                "type.construct_finish: machine target '{} at {}' cannot finish state '{}'",
+                machine_name, expected_state, state_name
+            )));
+        }
+
+        if let Some(machine) = self.checked_machine(owner_ty).cloned() {
+            let Some(state) = machine
+                .states
+                .into_iter()
+                .find(|candidate| candidate.name == state_name)
+            else {
+                return Ok(result_fail(format!(
+                    "type.construct_finish: machine '{}' has no state '{}'",
+                    machine_name, state_name
+                )));
+            };
+
+            let mut machine_fields = Vec::with_capacity(state.fields.len());
+            for (index, field) in state.fields.iter().enumerate() {
+                let Some((_, _, _, value)) = fields
+                    .iter()
+                    .find(|(field_index, _, _, _)| *field_index == index)
+                else {
+                    return Ok(result_fail(format!(
+                        "type.construct_finish: state '{}.{}' is missing required payload field '{}'",
+                        machine_name, state.name, field.name
+                    )));
+                };
+
+                let value =
+                    match self.normalize_value_for_type_name(&field.type_name, value.clone()) {
+                        Ok(value) => value,
+                        Err(message) => return Ok(result_fail(message)),
+                    };
+                let type_name = Self::reflection_field_refinement_name(field);
+                if let Err(message) = self.check_refinement(&type_name, &value) {
+                    return Ok(result_fail(message));
+                }
+                machine_fields.push(value);
+            }
+
+            return Ok(result_ok(Value::Machine {
+                type_name: machine_name,
+                state: state.name,
+                fields: machine_fields,
+            }));
+        }
+
+        if self.checked_metadata_kind_is(owner_ty, &["machine", "machine_state"]) {
+            return Ok(result_fail(
+                self.missing_checked_metadata_error(owner_ty, "machine"),
+            ));
+        }
+
+        let Some(state) = self
+            .type_expr_machine(owner_ty)
+            .states
+            .into_iter()
+            .find(|candidate| candidate.name == state_name)
+        else {
+            return Ok(result_fail(format!(
+                "type.construct_finish: machine '{}' has no state '{}'",
+                machine_name, state_name
+            )));
+        };
+
+        let mut machine_fields = Vec::with_capacity(state.fields.len());
+        for (index, field) in state.fields.iter().enumerate() {
+            let Some((_, _, _, value)) = fields
+                .iter()
+                .find(|(field_index, _, _, _)| *field_index == index)
+            else {
+                return Ok(result_fail(format!(
+                    "type.construct_finish: state '{}.{}' is missing required payload field '{}'",
+                    machine_name, state.name, field.name
+                )));
+            };
+
+            let field_ty = self.substitute_type_expr(&field.ty);
+            let type_name = type_expr_name(&field_ty);
+            let value = match self.normalize_value_for_type(&field_ty, value.clone()) {
+                Ok(value) => value,
+                Err(message) => return Ok(result_fail(message)),
+            };
+            if let Err(message) = self.check_refinement(&type_name, &value) {
+                return Ok(result_fail(message));
+            }
+            machine_fields.push(value);
+        }
+
+        Ok(result_ok(Value::Machine {
+            type_name: machine_name,
+            state: state.name,
+            fields: machine_fields,
+        }))
+    }
+
     fn reflected_construct_finish_bitfield(
         &self,
         owner_ty: &TypeExpr,
@@ -6284,6 +6757,77 @@ impl Interpreter {
         let Value::List(field_values) = field_values else {
             return Err(format!(
                 "{caller}: TypeVariant.fields must be list[TypeField], got {field_values}"
+            ));
+        };
+
+        field_values
+            .iter()
+            .map(|field| Self::type_field_metadata_for(field, caller))
+            .collect()
+    }
+
+    fn type_machine_state_metadata(value: &Value, caller: &str) -> Result<(usize, String), String> {
+        let Value::Struct { type_name, fields } = value else {
+            return Err(format!(
+                "{caller}: argument must be TypeMachineState, got {value}"
+            ));
+        };
+        if type_name != "TypeMachineState" {
+            return Err(format!(
+                "{caller}: argument must be TypeMachineState, got {type_name}"
+            ));
+        }
+
+        let field_value = |name: &str| {
+            fields
+                .iter()
+                .find(|(field_name, _)| field_name == name)
+                .map(|(_, field_value)| field_value)
+                .ok_or_else(|| format!("{caller}: TypeMachineState is missing '{name}'"))
+        };
+
+        let index = match field_value("index")? {
+            Value::Int64(index) if *index >= 0 => *index as usize,
+            other => {
+                return Err(format!(
+                    "{caller}: TypeMachineState.index must be a non-negative int64, got {other}"
+                ));
+            }
+        };
+        let name = match field_value("name")? {
+            Value::String(name) => name.clone(),
+            other => {
+                return Err(format!(
+                    "{caller}: TypeMachineState.name must be string, got {other}"
+                ));
+            }
+        };
+
+        Ok((index, name))
+    }
+
+    fn type_machine_state_payload_field_metadata(
+        value: &Value,
+        caller: &str,
+    ) -> Result<Vec<(usize, String, String)>, String> {
+        let Value::Struct { type_name, fields } = value else {
+            return Err(format!(
+                "{caller}: argument must be TypeMachineState, got {value}"
+            ));
+        };
+        if type_name != "TypeMachineState" {
+            return Err(format!(
+                "{caller}: argument must be TypeMachineState, got {type_name}"
+            ));
+        }
+        let field_values = fields
+            .iter()
+            .find(|(field_name, _)| field_name == "fields")
+            .map(|(_, field_value)| field_value)
+            .ok_or_else(|| format!("{caller}: TypeMachineState is missing 'fields'"))?;
+        let Value::List(field_values) = field_values else {
+            return Err(format!(
+                "{caller}: TypeMachineState.fields must be list[TypeField], got {field_values}"
             ));
         };
 
@@ -9955,6 +10499,16 @@ fn comptime_type_machine_state_value_binding(expr: &Expr) -> Option<&TypeExpr> {
     type_args.first()
 }
 
+fn comptime_type_machine_states_binding(expr: &Expr) -> Option<&TypeExpr> {
+    let Expr::GenericCall(callee, type_args, args, _) = expr else {
+        return None;
+    };
+    if type_args.len() != 1 || !args.is_empty() || !is_type_machine_states_callee(callee) {
+        return None;
+    }
+    type_args.first()
+}
+
 fn comptime_type_machine_fields_binding(expr: &Expr) -> Option<&TypeExpr> {
     let Expr::FieldAccess(base, field, _) = expr else {
         return None;
@@ -9963,6 +10517,19 @@ fn comptime_type_machine_fields_binding(expr: &Expr) -> Option<&TypeExpr> {
         return None;
     }
     comptime_type_machine_state_value_binding(base)
+}
+
+fn reflected_machine_state_fields_binding(expr: &Expr) -> Option<&str> {
+    let Expr::FieldAccess(base, field, _) = expr else {
+        return None;
+    };
+    if field.name != "fields" {
+        return None;
+    }
+    let Expr::Ident(ident) = base.as_ref() else {
+        return None;
+    };
+    Some(&ident.name)
 }
 
 fn reflected_variant_fields_binding(expr: &Expr) -> Option<&str> {
@@ -10053,6 +10620,14 @@ fn is_type_variant_value_callee(callee: &Expr) -> bool {
         return false;
     };
     field.name == "variant_value"
+        && matches!(base.as_ref(), Expr::Ident(ident) if ident.name == "type")
+}
+
+fn is_type_machine_states_callee(callee: &Expr) -> bool {
+    let Expr::FieldAccess(base, field, _) = callee else {
+        return false;
+    };
+    field.name == "machine_states"
         && matches!(base.as_ref(), Expr::Ident(ident) if ident.name == "type")
 }
 
@@ -11762,6 +12337,7 @@ mod tests {
         let Value::TypeConstruction {
             type_name,
             variant,
+            state,
             fields,
         } = *updated
         else {
@@ -11770,6 +12346,7 @@ mod tests {
 
         assert_eq!(type_name, "Box");
         assert_eq!(variant, None);
+        assert_eq!(state, None);
         assert_eq!(fields.len(), 1);
         assert_eq!(fields[0].0, 0);
         assert_eq!(fields[0].1, "value");
@@ -11959,6 +12536,7 @@ mod tests {
         let Value::TypeConstruction {
             type_name,
             variant,
+            state,
             fields,
         } = *updated
         else {
@@ -11967,6 +12545,7 @@ mod tests {
 
         assert_eq!(type_name, "Choice");
         assert_eq!(variant, Some("token".to_string()));
+        assert_eq!(state, None);
         assert_eq!(fields.len(), 1);
         assert_eq!(fields[0].0, 0);
         assert_eq!(fields[0].1, "value");
@@ -12316,6 +12895,7 @@ mod tests {
         let builder = Value::TypeConstruction {
             type_name: "Choice".to_string(),
             variant: Some("token".to_string()),
+            state: None,
             fields: Vec::new(),
         };
         let finished = interp
@@ -12572,6 +13152,7 @@ mod tests {
         let builder = Value::TypeConstruction {
             type_name: "Header".to_string(),
             variant: None,
+            state: None,
             fields: vec![(
                 0,
                 "wide".to_string(),

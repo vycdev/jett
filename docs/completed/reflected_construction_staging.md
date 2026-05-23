@@ -61,8 +61,7 @@ for variant in type.variants[T]():
         return type.construct_finish[T](builder)
 ```
 
-State-machine construction should use a separate starter once machine parsing
-is enabled:
+State-machine construction uses a separate starter:
 
 ```jett
 for state in type.machine_states[T]():
@@ -106,10 +105,9 @@ The current implementation is still deliberately narrow:
 - Supports structs, bitfields, and enum variants. Enums require
   `type.construct_variant_start[T](variant)` because a variant must be selected
   before payload fields can be provided.
-- Machine construction should add `type.construct_machine_start[T](state)`
-  rather than reuse the enum starter; a state must be selected before payload
-  fields can be provided, and state-qualified targets must finish in that exact
-  state.
+- Machine construction uses `type.construct_machine_start[T](state)` rather
+  than the enum starter; a state must be selected before payload fields can be
+  provided, and state-qualified targets must finish in that exact state.
 - Require `construct_put` field metadata to match `T` or the selected enum
   variant by index, name, and reflected type. This is not full provenance, but
   it matches the current `type.field_value` safety model.
@@ -131,7 +129,8 @@ For the no-syntax builder:
 - `crates/jett_resolve`: pre-registered `TypeConstruction`.
 - `crates/jett_typecheck`: added builtin signatures for
   `type.construct_start`, `type.construct_variant_start`,
-  `type.construct_put`, and `type.construct_finish`.
+  `type.construct_machine_start`, `type.construct_put`, and
+  `type.construct_finish`.
 - `crates/jett_comptime`: added `Value::TypeConstruction` and
   dispatch the construction builtins.
 - Refinement validation is checked on `construct_finish`; longer term, the

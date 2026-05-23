@@ -556,9 +556,10 @@ For each `machine` type:
   reflection field names avoid reserved syntax tokens: machine layouts use
   `states` and `edges`, and each edge uses `source` / `target`.
 - JSON policy gates allow `Machine` and `Machine at state` serialization through
-  an envelope object with `state` and `payload` keys. The parse gates still
-  reject machine targets until reflected machine construction has a checked
-  design.
+  an envelope object with `state` and `payload` keys. The reflected
+  `type.construct_machine_start` builder path now gives parsing a checked way
+  to construct machine snapshots; the stdlib decoder still has to wire the
+  envelope path before machine parse targets can be unblocked.
 
 #### 6h. Complexity Limits Enforcement
 
@@ -588,7 +589,7 @@ The HIR is the first representation where generic functions are fully expanded. 
 2. **Method resolution:** `Dog.speak(view my_dog)` is resolved to the specific `implement Speaker for Dog` function.
 3. **Auto-view for field access:** `self.x` is annotated as an implicit view operation.
 4. **Primitive copyability:** Primitive types (`int64`, `float64`, `bool`, `string`) are marked as implicitly copyable — they don't follow linear consumption rules.
-5. **Comptime reflection lowering:** Preserve enough type metadata for comptime code to inspect `type.name[T]()`, `type.kind[T]()`, `type.has_secret[T]()`, `type.fields[T]()`, bitfield layout metadata, state-machine state/transition metadata, active machine states, and reflected active-state payload fields. JSON serialization is expressible in terms of these reflection primitives rather than as format-specific HIR magic. Struct, bitfield, and enum deserialization can now use the `TypeConstruction` builder to build `T` from parsed field values; reflected machine construction and the final construction-block syntax are still pending.
+5. **Comptime reflection lowering:** Preserve enough type metadata for comptime code to inspect `type.name[T]()`, `type.kind[T]()`, `type.has_secret[T]()`, `type.fields[T]()`, bitfield layout metadata, state-machine state/transition metadata, active machine states, and reflected active-state payload fields. JSON serialization is expressible in terms of these reflection primitives rather than as format-specific HIR magic. Struct, bitfield, enum, and state-machine deserialization can now use the `TypeConstruction` builder family to build `T` from parsed field values; the final construction-block syntax is still pending.
 
 ---
 
@@ -1157,8 +1158,9 @@ The boundary between compiler-generated code and stdlib-implemented code is a cr
 | `type.field_value[T, U](view value, view field)` | Struct/bitfield reflection | Checked field read by reflected `TypeField` metadata |
 | `type.construct_start[T]()` | Struct/bitfield reflection | Start an opaque `TypeConstruction` builder for constructible `T` |
 | `type.construct_variant_start[T](variant)` | Enum reflection | Start an opaque `TypeConstruction` builder for a checked enum variant |
+| `type.construct_machine_start[T](state)` | State-machine reflection | Start an opaque `TypeConstruction` builder for a checked machine state |
 | `type.construct_put[T, U](builder, field, value)` | Reflection construction | Add a typed field or payload value to a builder after metadata/type checks |
-| `type.construct_finish[T](builder)` | Reflection construction | Finish a builder as `result[T, string]`, checking missing fields, refinements, bitfield widths, and enum payload arity |
+| `type.construct_finish[T](builder)` | Reflection construction | Finish a builder as `result[T, string]`, checking missing fields, refinements, bitfield widths, enum payload arity, and state-qualified machine precision |
 | `T.to_bytes()` / `T.from_bytes()` | Binary serialization | Field-by-field binary packing/unpacking |
 | `Displayable.display()` for structs | Struct implementing `Displayable` | Field-by-field string representation |
 | `clone` for structs | `clone value` on a struct | Field-by-field recursive deep copy |

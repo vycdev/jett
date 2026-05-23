@@ -1,0 +1,76 @@
+namespace test
+machine Session:
+    states:
+        guest
+        logged_in(user_id: string, display_name: string)
+    transitions:
+        guest to logged_in
+function logged_in_state() returns optional[TypeMachineState]:
+    list[TypeMachineState] states = type.machine_states[Session]()
+    return list.get[TypeMachineState](states, 1)
+function construct_logged_in_session() returns string:
+    TypeMachineState state = logged_in_state() handle:
+        return "missing-state"
+    mutable TypeConstruction builder = type.construct_machine_start[Session](view state) handle error:
+        return error
+    TypeField user_field = list.get[TypeField](state.fields, 0) handle:
+        return "missing-user-field"
+    TypeField display_field = list.get[TypeField](state.fields, 1) handle:
+        return "missing-display-field"
+    builder = type.construct_put[Session, string](builder, view user_field, "user-1") handle error:
+        return error
+    builder = type.construct_put[Session, string](builder, view display_field, "Ada") handle error:
+        return error
+    Session built = type.construct_finish[Session](builder) handle error:
+        return error
+    TypeMachineState active = type.machine_state_value[Session](view built)
+    string user_id = type.machine_field_value[Session, string](view built, view user_field)
+    return "{active.name}:{user_id}"
+function construct_state_qualified_session() returns string:
+    TypeMachineState state = logged_in_state() handle:
+        return "missing-state"
+    mutable TypeConstruction builder = type.construct_machine_start[Session at logged_in](view state) handle error:
+        return error
+    TypeField user_field = list.get[TypeField](state.fields, 0) handle:
+        return "missing-user-field"
+    TypeField display_field = list.get[TypeField](state.fields, 1) handle:
+        return "missing-display-field"
+    builder = type.construct_put[Session at logged_in, string](builder, view user_field, "user-2") handle error:
+        return error
+    builder = type.construct_put[Session at logged_in, string](builder, view display_field, "Lin") handle error:
+        return error
+    Session at logged_in built = type.construct_finish[Session at logged_in](builder) handle error:
+        return error
+    string display_name = type.machine_field_value[Session at logged_in, string](view built, view display_field)
+    return "logged_in:{display_name}"
+function state_qualified_mismatch_error() returns string:
+    list[TypeMachineState] states = type.machine_states[Session at logged_in]()
+    TypeMachineState guest = list.get[TypeMachineState](states, 0) handle:
+        return "missing-state"
+    TypeConstruction builder = type.construct_machine_start[Session at logged_in](view guest) handle error:
+        return error
+    Session at logged_in built = type.construct_finish[Session at logged_in](builder) handle error:
+        return error
+    return "unexpected"
+function missing_payload_error() returns string:
+    TypeMachineState state = logged_in_state() handle:
+        return "missing-state"
+    TypeConstruction builder = type.construct_machine_start[Session](view state) handle error:
+        return error
+    Session built = type.construct_finish[Session](builder) handle error:
+        return error
+    return "unexpected"
+function state_field_type_binding() returns string:
+    mutable string summary = "missing"
+    for state in type.machine_states[Session]():
+        for field in state.fields:
+            comptime type Field = field.type_info:
+                if field.name == "display_name":
+                    summary = type.name[Field]()
+    return summary
+verify type_construction_machine:
+    assert construct_logged_in_session() == "logged_in:user-1"
+    assert construct_state_qualified_session() == "logged_in:Lin"
+    assert string.contains(state_qualified_mismatch_error(), "cannot finish state 'guest'") == true
+    assert string.contains(missing_payload_error(), "missing required payload field 'user_id'") == true
+    assert state_field_type_binding() == "string"

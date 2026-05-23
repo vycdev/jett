@@ -422,6 +422,10 @@ run_pass_fixture!(
     run_pass_type_construction_enum,
     "type_construction_enum.jett"
 );
+run_pass_fixture!(
+    run_pass_type_construction_machine,
+    "type_construction_machine.jett"
+);
 run_pass_fixture!(run_pass_actor_counter, "actor_counter.jett");
 run_pass_fixture!(
     run_pass_numeric_literal_contexts,
@@ -1371,6 +1375,14 @@ compile_fail_fixture!(
 compile_fail_fixture!(
     compile_fail_type_construct_variant_start_non_enum_owner,
     "type_construct_variant_start_non_enum_owner.jett"
+);
+compile_fail_fixture!(
+    compile_fail_type_construct_machine_start_non_machine_owner,
+    "type_construct_machine_start_non_machine_owner.jett"
+);
+compile_fail_fixture!(
+    compile_fail_type_construct_machine_start_wrong_arity,
+    "type_construct_machine_start_wrong_arity.jett"
 );
 compile_fail_fixture!(
     compile_fail_type_construct_finish_non_struct_owner,

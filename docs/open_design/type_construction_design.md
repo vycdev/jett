@@ -164,7 +164,7 @@ Verdict: preferred direction, pending syntax.
 5. Done for JSON records/enums: public typed parse now routes through the stdlib `JsonTree`
    parser/decoder. Remaining construction work is about hardening syntax and
    reuse for future decoders, not replacing a Rust-backed `json.parse[T]`.
-6. Next for machines: add an explicit machine starter that selects checked
+6. Done for machines: add an explicit machine starter that selects checked
    `TypeMachineState` metadata, then reuse the existing typed put/finish path.
 
 ## Implementation Notes
@@ -225,10 +225,11 @@ repair code from local context. A dedicated `construct_machine_start` also lets
 diagnostics say "state" instead of "variant" and keeps future transition-aware
 construction room to grow without changing enum behavior.
 
-The builder remains format-agnostic. JSON owns the envelope shape, unknown-key
-policy, `serialize_name` matching, and missing optional-field defaults. The
-construction primitive receives only checked machine-state metadata and decoded
-payload values.
+This path is implemented for the current opaque builder. The builder remains
+format-agnostic. JSON owns the envelope shape, unknown-key policy,
+`serialize_name` matching, and missing optional-field defaults. The construction
+primitive receives only checked machine-state metadata and decoded payload
+values.
 
 ## Open Questions
 
