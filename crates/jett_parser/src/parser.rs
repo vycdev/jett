@@ -1047,15 +1047,13 @@ impl<'src> Parser<'src> {
     // =======================================================================
 
     fn parse_type(&mut self) -> TypeExpr {
-        if self.eat(TokenKind::View).is_some() {
+        let mut ty = if self.eat(TokenKind::View).is_some() {
             let start = self.tokens[self.pos - 1].span;
             let inner = self.parse_type();
             let span = start.merge(inner.span());
-            return TypeExpr::View(Box::new(inner), span);
-        }
-
-        // Function type: `function(T, U) returns V`
-        if self.peek() == TokenKind::Function {
+            TypeExpr::View(Box::new(inner), span)
+        } else if self.peek() == TokenKind::Function {
+            // Function type: `function(T, U) returns V`
             let start = self.advance().span;
             self.expect(TokenKind::LParen);
             let mut param_types = Vec::new();
@@ -1072,27 +1070,35 @@ impl<'src> Parser<'src> {
             self.expect(TokenKind::Returns);
             let return_type = self.parse_type();
             let span = start.merge(return_type.span());
-            return TypeExpr::Function(param_types, Box::new(return_type), span);
-        }
-
-        let ident = self.parse_type_ident();
-
-        // Check for generic parameters: `list[string]`, `map[string, int64]`
-        if self.peek() == TokenKind::LBracket {
-            let start = ident.span;
-            self.advance(); // consume `[`
-            let mut args = Vec::new();
-            if self.peek() != TokenKind::RBracket {
-                args.push(self.parse_type());
-                while self.eat(TokenKind::Comma).is_some() {
-                    args.push(self.parse_type());
-                }
-            }
-            let end = self.expect(TokenKind::RBracket).span;
-            TypeExpr::Generic(ident, args, start.merge(end))
+            TypeExpr::Function(param_types, Box::new(return_type), span)
         } else {
-            TypeExpr::Named(ident)
+            let ident = self.parse_type_ident();
+
+            // Check for generic parameters: `list[string]`, `map[string, int64]`
+            if self.peek() == TokenKind::LBracket {
+                let start = ident.span;
+                self.advance(); // consume `[`
+                let mut args = Vec::new();
+                if self.peek() != TokenKind::RBracket {
+                    args.push(self.parse_type());
+                    while self.eat(TokenKind::Comma).is_some() {
+                        args.push(self.parse_type());
+                    }
+                }
+                let end = self.expect(TokenKind::RBracket).span;
+                TypeExpr::Generic(ident, args, start.merge(end))
+            } else {
+                TypeExpr::Named(ident)
+            }
+        };
+
+        while self.eat(TokenKind::At).is_some() {
+            let state = self.parse_ident();
+            let span = ty.span().merge(state.span);
+            ty = TypeExpr::StateQualified(Box::new(ty), state, span);
         }
+
+        ty
     }
 
     /// Parse a type name — could be a keyword type (`int64`, `string`, etc.) or an identifier.
@@ -4142,6 +4148,36 @@ function f(session: UserAuth) returns bool:
                 },
                 other => panic!("expected Return, got {:?}", other),
             },
+            other => panic!("expected Function, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_state_qualified_type() {
+        let src = "\
+function capture(payment: Payment at authorized) returns Payment at captured:
+    return payment
+";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        match &result.module.items[0] {
+            Item::Function(f) => {
+                match &f.params[0].ty {
+                    TypeExpr::StateQualified(base, state, _) => {
+                        assert!(matches!(base.as_ref(), TypeExpr::Named(i) if i.name == "Payment"));
+                        assert_eq!(state.name, "authorized");
+                    }
+                    other => panic!("expected state-qualified parameter type, got {:?}", other),
+                }
+
+                match f.return_type.as_ref().expect("return type") {
+                    TypeExpr::StateQualified(base, state, _) => {
+                        assert!(matches!(base.as_ref(), TypeExpr::Named(i) if i.name == "Payment"));
+                        assert_eq!(state.name, "captured");
+                    }
+                    other => panic!("expected state-qualified return type, got {:?}", other),
+                }
+            }
             other => panic!("expected Function, got {:?}", other),
         }
     }

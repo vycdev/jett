@@ -95,7 +95,9 @@ typechecker attach the state identifier to a known machine owner.
 1. Add machine definitions to `jett_types` and the type interner. Done:
    `MachineId`, `MachineStateId`, `MachineDef`, `MachineStateDef`,
    `MachineTransitionDef`, `Type::Machine`, and `Type::MachineState`.
-2. Add a state-qualified `TypeExpr` form for `Machine at state`.
+2. Add a state-qualified `TypeExpr` form for `Machine at state`. Done:
+   `TypeExpr::StateQualified(base, state, span)` is parsed in type positions
+   and remains distinct from expression-level `expr at state`.
 3. Typecheck machine declarations:
    - duplicate states,
    - transition endpoints exist,

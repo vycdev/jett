@@ -2920,6 +2920,11 @@ impl Interpreter {
                 Box::new(self.substitute_type_expr_in_namespace(inner, namespace)),
                 *span,
             ),
+            TypeExpr::StateQualified(inner, state, span) => TypeExpr::StateQualified(
+                Box::new(self.substitute_type_expr_in_namespace(inner, namespace)),
+                state.clone(),
+                *span,
+            ),
             TypeExpr::Function(params, return_type, span) => TypeExpr::Function(
                 params
                     .iter()
@@ -3032,6 +3037,15 @@ impl Interpreter {
                 )),
                 *span,
             ),
+            TypeExpr::StateQualified(inner, state, span) => TypeExpr::StateQualified(
+                Box::new(self.substitute_type_expr_with_map_in_namespace(
+                    inner,
+                    substitutions,
+                    namespace,
+                )),
+                state.clone(),
+                *span,
+            ),
             TypeExpr::Function(params, return_type, span) => TypeExpr::Function(
                 params
                     .iter()
@@ -3103,6 +3117,7 @@ impl Interpreter {
                 }
             }
             TypeExpr::View(inner, _) => self.type_expr_kind_inner(inner),
+            TypeExpr::StateQualified(_, _, _) => "machine_state",
             TypeExpr::Function(_, _, _) => "function",
         }
     }
@@ -3135,6 +3150,9 @@ impl Interpreter {
         let ty = self.substitute_type_expr(ty);
         if let TypeExpr::View(inner, _) = &ty {
             return self.type_primitive_tag_value(inner);
+        }
+        if let TypeExpr::StateQualified(_, _, _) = &ty {
+            return Self::primitive_tag_value(None);
         }
 
         let variant = match &ty {
@@ -3274,6 +3292,9 @@ impl Interpreter {
                     .any(|arg| self.type_expr_has_secret_inner(arg, visited))
             }
             TypeExpr::View(inner, _) => self.type_expr_has_secret_inner(inner, visited),
+            TypeExpr::StateQualified(inner, _, _) => {
+                self.type_expr_has_secret_inner(inner, visited)
+            }
             TypeExpr::Function(params, return_type, _) => {
                 params
                     .iter()
@@ -3359,7 +3380,9 @@ impl Interpreter {
                         .collect()
                 })
                 .unwrap_or_default(),
-            TypeExpr::View(inner, _) => self.type_expr_fields_inner(inner),
+            TypeExpr::View(inner, _) | TypeExpr::StateQualified(inner, _, _) => {
+                self.type_expr_fields_inner(inner)
+            }
             TypeExpr::Function(_, _, _) => Vec::new(),
         }
     }
@@ -3386,7 +3409,9 @@ impl Interpreter {
                     network_order: false,
                     fields: Vec::new(),
                 }),
-            TypeExpr::View(inner, _) => self.type_expr_bitfield_inner(inner),
+            TypeExpr::View(inner, _) | TypeExpr::StateQualified(inner, _, _) => {
+                self.type_expr_bitfield_inner(inner)
+            }
             TypeExpr::Generic(_, _, _) | TypeExpr::Function(_, _, _) => ReflectionBitfield {
                 network_order: false,
                 fields: Vec::new(),
@@ -3477,7 +3502,9 @@ impl Interpreter {
                         .collect()
                 })
                 .unwrap_or_default(),
-            TypeExpr::View(inner, _) => self.type_expr_variants_inner(inner),
+            TypeExpr::View(inner, _) | TypeExpr::StateQualified(inner, _, _) => {
+                self.type_expr_variants_inner(inner)
+            }
             TypeExpr::Generic(_, _, _) | TypeExpr::Function(_, _, _) => Vec::new(),
         }
     }
@@ -8777,6 +8804,7 @@ fn type_expr_name(ty: &TypeExpr) -> String {
         TypeExpr::Named(ident) => ident.name.clone(),
         TypeExpr::Generic(ident, _, _) => ident.name.clone(),
         TypeExpr::View(inner, _) => type_expr_name(inner),
+        TypeExpr::StateQualified(inner, _, _) => type_expr_name(inner),
         TypeExpr::Function(_, _, _) => "function".to_string(),
     }
 }
@@ -8955,6 +8983,9 @@ fn type_expr_display(ty: &TypeExpr) -> String {
             format!("{}[{}]", ident.name, args.join(", "))
         }
         TypeExpr::View(inner, _) => format!("view {}", type_expr_display(inner)),
+        TypeExpr::StateQualified(inner, state, _) => {
+            format!("{} at {}", type_expr_display(inner), state.name)
+        }
         TypeExpr::Function(params, return_type, _) => {
             let params = params.iter().map(type_expr_display).collect::<Vec<_>>();
             format!(

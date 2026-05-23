@@ -618,6 +618,10 @@ impl<'a> OwnershipChecker<'a> {
                 // View of a type — resolve the inner type.
                 self.resolve_type_for_ownership(inner)
             }
+            ast::TypeExpr::StateQualified(_, _, _) => {
+                // State-qualified machine values are non-copyable.
+                TypeInterner::BYTES
+            }
             ast::TypeExpr::Function(_, _, _) => {
                 // Function types are non-copyable (closures carry captured env).
                 TypeInterner::BYTES

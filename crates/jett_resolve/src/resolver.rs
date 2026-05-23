@@ -940,6 +940,9 @@ impl Resolver {
             TypeExpr::View(inner, _) => {
                 self.resolve_type_expr(inner, item_index);
             }
+            TypeExpr::StateQualified(inner, _, _) => {
+                self.resolve_type_expr(inner, item_index);
+            }
             TypeExpr::Function(param_types, return_type, _) => {
                 for pt in param_types {
                     self.resolve_type_expr(pt, item_index);

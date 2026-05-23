@@ -436,6 +436,8 @@ pub enum TypeExpr {
     View(Box<TypeExpr>, Span),
     /// `function(T, U) returns V` — a function type
     Function(Vec<TypeExpr>, Box<TypeExpr>, Span),
+    /// `Machine at state` — a state-qualified machine type.
+    StateQualified(Box<TypeExpr>, Ident, Span),
 }
 
 impl TypeExpr {
@@ -445,6 +447,7 @@ impl TypeExpr {
             TypeExpr::Generic(_, _, span) => *span,
             TypeExpr::View(_, span) => *span,
             TypeExpr::Function(_, _, span) => *span,
+            TypeExpr::StateQualified(_, _, span) => *span,
         }
     }
 }

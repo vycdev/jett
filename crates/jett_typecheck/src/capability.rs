@@ -33,6 +33,7 @@ pub fn type_expr_is_capability(ty: &TypeExpr) -> bool {
     match ty {
         TypeExpr::Named(ident) => is_capability_type(&ident.name),
         TypeExpr::View(inner, _) => type_expr_is_capability(inner),
+        TypeExpr::StateQualified(inner, _, _) => type_expr_is_capability(inner),
         TypeExpr::Generic(_, _, _) => false,
         TypeExpr::Function(_, _, _) => false,
     }

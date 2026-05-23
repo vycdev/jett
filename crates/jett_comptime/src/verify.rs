@@ -919,6 +919,15 @@ fn generate_values_for_type_in_namespace(
             bitfield_defs,
             type_alias_defs,
         ),
+        TypeExpr::StateQualified(inner, _, _) => generate_values_for_type_in_namespace(
+            interp,
+            inner,
+            namespace,
+            enum_defs,
+            struct_defs,
+            bitfield_defs,
+            type_alias_defs,
+        ),
         TypeExpr::Function(_, _, _) => vec![], // cannot generate function values
     }
 }
@@ -1777,6 +1786,7 @@ fn property_type_expr_named_type(ty: &TypeExpr) -> Option<String> {
     match ty {
         TypeExpr::Named(ident) => Some(ident.name.clone()),
         TypeExpr::View(inner, _) => property_type_expr_named_type(inner),
+        TypeExpr::StateQualified(inner, _, _) => property_type_expr_named_type(inner),
         TypeExpr::Generic(_, _, _) | TypeExpr::Function(_, _, _) => None,
     }
 }
@@ -1814,6 +1824,11 @@ fn substitute_property_type_params(
         ),
         TypeExpr::View(inner, span) => TypeExpr::View(
             Box::new(substitute_property_type_params(inner, substitutions)),
+            *span,
+        ),
+        TypeExpr::StateQualified(inner, state, span) => TypeExpr::StateQualified(
+            Box::new(substitute_property_type_params(inner, substitutions)),
+            state.clone(),
             *span,
         ),
         TypeExpr::Function(params, return_ty, span) => TypeExpr::Function(
@@ -1876,6 +1891,18 @@ fn qualify_property_type_expr_in_namespace(
                 bitfield_defs,
                 type_alias_defs,
             )),
+            *span,
+        ),
+        TypeExpr::StateQualified(inner, state, span) => TypeExpr::StateQualified(
+            Box::new(qualify_property_type_expr_in_namespace(
+                inner,
+                namespace,
+                enum_defs,
+                struct_defs,
+                bitfield_defs,
+                type_alias_defs,
+            )),
+            state.clone(),
             *span,
         ),
         TypeExpr::Function(params, return_ty, span) => TypeExpr::Function(

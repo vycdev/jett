@@ -1150,6 +1150,9 @@ impl<'a> TypeChecker<'a> {
     fn reflection_kind_tag_for_type_expr(&self, ty: &TypeExpr, resolved_ty: TypeId) -> String {
         match ty {
             TypeExpr::View(inner, _) => self.reflection_kind_tag_for_type_expr(inner, resolved_ty),
+            TypeExpr::StateQualified(_, _, _) => {
+                self.reflection_kind_tag_for_type(resolved_ty).to_string()
+            }
             TypeExpr::Named(ident) => {
                 if let Some(kind_tag) = self.type_var_kind_tags.get(&ident.name) {
                     return kind_tag.clone();
@@ -1235,6 +1238,7 @@ impl<'a> TypeChecker<'a> {
             TypeExpr::View(inner, _) => {
                 self.reflection_primitive_tag_for_type_expr_static(inner, resolved_ty)
             }
+            TypeExpr::StateQualified(_, _, _) => None,
             TypeExpr::Generic(_, _, _) | TypeExpr::Function(_, _, _) => self
                 .reflection_primitive_tag_for_type(resolved_ty)
                 .map(str::to_string),
@@ -1481,6 +1485,7 @@ impl<'a> TypeChecker<'a> {
             TypeExpr::View(inner, _) => {
                 self.reflection_type_info_args_for_type_expr(inner, namespace, resolved_ty)
             }
+            TypeExpr::StateQualified(_, _, _) => Vec::new(),
             TypeExpr::Named(ident) => {
                 let display_name = self.reflection_type_name_in_namespace(ident, namespace);
                 if let Some(alias) = self.type_aliases.get(&display_name).cloned() {
@@ -1533,6 +1538,7 @@ impl<'a> TypeChecker<'a> {
             TypeExpr::View(inner, _) => {
                 self.reflection_kind_for_type_expr(inner, namespace, resolved_ty)
             }
+            TypeExpr::StateQualified(_, _, _) => self.reflection_kind_for_type(resolved_ty),
             TypeExpr::Named(ident) => {
                 let name = self.reflection_type_name_in_namespace(ident, namespace);
                 if let Some(alias) = self.type_aliases.get(&name) {
@@ -1603,6 +1609,13 @@ impl<'a> TypeChecker<'a> {
                 format!(
                     "view {}",
                     self.reflection_type_expr_display(inner, namespace)
+                )
+            }
+            TypeExpr::StateQualified(inner, state, _) => {
+                format!(
+                    "{} at {}",
+                    self.reflection_type_expr_display(inner, namespace),
+                    state.name
                 )
             }
             TypeExpr::Function(params, return_type, _) => {
@@ -4303,6 +4316,13 @@ impl<'a> TypeChecker<'a> {
                 Self::type_expr_matches_decl(func_inner, decl_inner, type_params)
             }
             (
+                TypeExpr::StateQualified(func_inner, func_state, _),
+                TypeExpr::StateQualified(decl_inner, decl_state, _),
+            ) => {
+                func_state.name == decl_state.name
+                    && Self::type_expr_matches_decl(func_inner, decl_inner, type_params)
+            }
+            (
                 TypeExpr::Function(func_params, func_return, _),
                 TypeExpr::Function(decl_params, decl_return, _),
             ) => {
@@ -5281,6 +5301,9 @@ impl<'a> TypeChecker<'a> {
                 .iter()
                 .any(|arg| Self::type_expr_mentions_type_param(arg, type_params)),
             TypeExpr::View(inner, _) => Self::type_expr_mentions_type_param(inner, type_params),
+            TypeExpr::StateQualified(inner, _, _) => {
+                Self::type_expr_mentions_type_param(inner, type_params)
+            }
             TypeExpr::Function(params, return_ty, _) => {
                 params
                     .iter()
@@ -5716,6 +5739,7 @@ impl<'a> TypeChecker<'a> {
     fn type_info_arg_types_for_type_expr(&mut self, ty: &TypeExpr) -> Vec<TypeId> {
         match ty {
             TypeExpr::View(inner, _) => self.type_info_arg_types_for_type_expr(inner),
+            TypeExpr::StateQualified(_, _, _) => Vec::new(),
             TypeExpr::Named(ident) if self.type_aliases.contains_key(&ident.name) => {
                 let alias = self
                     .type_aliases
@@ -8510,7 +8534,40 @@ impl<'a> TypeChecker<'a> {
                     return_type: ret,
                 })
             }
+            TypeExpr::StateQualified(base, state, _span) => {
+                let base_ty = self.resolve_type_expr(base);
+                self.resolve_machine_state_type(base_ty, state)
+            }
         }
+    }
+
+    fn resolve_machine_state_type(&mut self, base_ty: TypeId, state: &ast::Ident) -> TypeId {
+        let machine_id = match self.interner.resolve(base_ty).clone() {
+            Type::Machine(mid) => mid,
+            Type::MachineState { machine, .. } => machine,
+            Type::Error => return TypeInterner::ERROR,
+            _ => {
+                self.sink.emit(errors::unknown_type(
+                    &format!("{} at {}", self.type_name(base_ty), state.name),
+                    state.span,
+                ));
+                return TypeInterner::ERROR;
+            }
+        };
+
+        let machine_def = self.interner.resolve_machine(machine_id);
+        let Some(state_id) = machine_def.state_id(&state.name) else {
+            self.sink.emit(errors::unknown_type(
+                &format!("{} at {}", machine_def.name, state.name),
+                state.span,
+            ));
+            return TypeInterner::ERROR;
+        };
+
+        self.interner.intern(Type::MachineState {
+            machine: machine_id,
+            state: state_id,
+        })
     }
 
     fn resolve_named_type(&mut self, name: &str, span: Span) -> TypeId {
