@@ -26,7 +26,6 @@ machine Session:
     states:
         guest
         logged_in(user_id: string)
-
     transitions:
         guest to logged_in
 struct User:
@@ -259,6 +258,54 @@ function bitfield_field_enum_kind[T](field_name: string) returns string:
                 default field.type_info
             found = info.kind
     return found
+function machine_layout_state_count[T]() returns int64:
+    TypeMachine info = type.machine_layout[T]()
+    return list.length(info.states)
+function machine_state_count[T]() returns int64:
+    list[TypeMachineState] states = type.machine_states[T]()
+    return list.length(states)
+function machine_state_field_count[T](state_name: string) returns int64:
+    list[TypeMachineState] states = type.machine_states[T]()
+    int64 found = -1
+    for state in states:
+        if state.name == state_name:
+            found = list.length(state.fields)
+    return found
+function machine_state_field_type_name[T](state_name: string, target: int64) returns string:
+    list[TypeMachineState] states = type.machine_states[T]()
+    string found = "missing"
+    for state in states:
+        if state.name == state_name:
+            int64 index = 0
+            for field in state.fields:
+                if index == target:
+                    found = field.type_info.type_name
+                index = index + 1
+    return found
+function machine_state_has_secret[T](state_name: string) returns bool:
+    list[TypeMachineState] states = type.machine_states[T]()
+    bool found = false
+    for state in states:
+        if state.name == state_name:
+            found = state.has_secret
+    return found
+function machine_transition_count[T]() returns int64:
+    list[TypeMachineTransition] edges = type.machine_transitions[T]()
+    return list.length(edges)
+function machine_transition_target[T](source_name: string) returns string:
+    list[TypeMachineTransition] edges = type.machine_transitions[T]()
+    string found = "missing"
+    for edge in edges:
+        if edge.source == source_name:
+            found = edge.target
+    return found
+function machine_transition_source_index[T](source_name: string) returns int64:
+    list[TypeMachineTransition] edges = type.machine_transitions[T]()
+    int64 found = -1
+    for edge in edges:
+        if edge.source == source_name:
+            found = edge.source_index
+    return found
 function variant_count[T]() returns int64:
     list[TypeVariant] variants = type.variants[T]()
     return list.length(variants)
@@ -348,6 +395,16 @@ verify type_info_reflection:
     assert type_info_kind[Session at logged_in]() == "machine_state"
     assert type_info_kind_tag_is[Session at logged_in](TypeKind.machine_state_type) == true
     assert direct_type_kind_tag_is[Session at logged_in](TypeKind.machine_state_type) == true
+    assert machine_layout_state_count[Session]() == 2
+    assert machine_state_count[Session]() == 2
+    assert machine_state_count[Session at logged_in]() == 2
+    assert machine_state_field_count[Session]("guest") == 0
+    assert machine_state_field_count[Session]("logged_in") == 1
+    assert machine_state_field_type_name[Session]("logged_in", 0) == "string"
+    assert machine_state_has_secret[Session]("logged_in") == false
+    assert machine_transition_count[Session]() == 1
+    assert machine_transition_target[Session]("guest") == "logged_in"
+    assert machine_transition_source_index[Session]("guest") == 0
     assert field_count[Header]() == 1
     assert field_kind[Header]("version") == "primitive"
     assert field_kind_tag_is[Complex]("names", TypeKind.list_type) == true

@@ -140,9 +140,9 @@ decide how much root shorthand should exist.
 ## Suggested Next Tests
 
 - State machines: qualified construction/transition, duplicate-leaf machines,
-  branch-local state facts, and basic `TypeKind` reflection are covered; rich
-  state/transition reflection and JSON integration remain deferred in the state
-  machine type-model note.
+  branch-local state facts, `TypeKind` reflection, and checked state/transition
+  metadata are covered; JSON integration remains deferred in the state machine
+  type-model note.
 - Interfaces: the direct qualified, `use`-alias, and duplicate-leaf interface
   paths are now covered by run-pass fixtures.
 - Structs, enums, generic structs, bitfields, same-leaf functions, type names,

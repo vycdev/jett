@@ -111,6 +111,9 @@ impl Resolver {
             "TypeBitfield",
             "TypeBitfieldField",
             "TypeBitfieldFieldShape",
+            "TypeMachine",
+            "TypeMachineState",
+            "TypeMachineTransition",
             "TypeVariant",
             "type",
             // Capability types
@@ -1506,6 +1509,9 @@ fn is_builtin_type(name: &str) -> bool {
             | "TypeBitfield"
             | "TypeBitfieldField"
             | "TypeBitfieldFieldShape"
+            | "TypeMachine"
+            | "TypeMachineState"
+            | "TypeMachineTransition"
             | "TypeVariant"
     )
 }

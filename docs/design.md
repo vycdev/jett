@@ -1597,8 +1597,12 @@ except one.
 
 Reflection exposes the same high-level distinction: `type.info[UserAuth]()`
 reports kind `machine`, while `type.info[UserAuth at logged_in]()` reports
-kind `machine_state`. Detailed reflection over the declared states and
-transitions is a later surface.
+kind `machine_state`. `type.machine_layout[UserAuth]()` returns the checked
+machine shape, `type.machine_states[UserAuth]()` returns each state with its
+payload fields, and `type.machine_transitions[UserAuth]()` returns the legal
+transition edges. The reflected layout uses `states` and `edges`, with edge
+fields named `source` and `target`, so the API stays usable without colliding
+with reserved state-machine syntax.
 
 **4. State machines can carry data per state.**
 
@@ -3349,8 +3353,9 @@ Calling `json.serialize` on a struct with secret fields is a compile error. The 
 State-machine JSON is a target design, not a current compiler guarantee. The
 current compiler deliberately rejects `json.serialize`, `json.serialize_public`,
 `json.parse`, and `json.parse_exact` for both bare `Machine` and
-`Machine at state` targets because rich machine reflection has not stabilized
-the state/transition metadata contract yet.
+`Machine at state` targets. Machine reflection can now describe states and
+transition edges, but JSON still needs a deliberate serialization contract for
+state tags, payload shape, transition compatibility, and schema evolution.
 
 The intended future shape is auto-generated serialization with the state tag
 included:

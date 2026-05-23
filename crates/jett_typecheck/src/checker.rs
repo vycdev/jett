@@ -15,9 +15,9 @@ use jett_types::{
     BitfieldId, EnumDef as TypeEnumDef, FunctionSig, InterfaceDef as TypeInterfaceDef,
     MachineDef as TypeMachineDef, MachineId, MachineStateDef as TypeMachineStateDef,
     MachineStateId, MachineTransitionDef as TypeMachineTransitionDef, ReflectionBitfieldFieldInfo,
-    ReflectionBitfieldInfo, ReflectionFieldInfo, ReflectionMetadata, ReflectionTypeInfo,
-    ReflectionVariantInfo, StructDef as TypeStructDef, StructId, Type, TypeId, TypeInterner,
-    VariantDef,
+    ReflectionBitfieldInfo, ReflectionFieldInfo, ReflectionMachineInfo, ReflectionMachineStateInfo,
+    ReflectionMachineTransitionInfo, ReflectionMetadata, ReflectionTypeInfo, ReflectionVariantInfo,
+    StructDef as TypeStructDef, StructId, Type, TypeId, TypeInterner, VariantDef,
 };
 
 use crate::capability;
@@ -167,6 +167,8 @@ struct TypeChecker<'a> {
     reflection_fields_by_id: HashMap<TypeId, (String, Vec<ReflectionFieldInfo>)>,
     /// Checked bitfield layout snapshots keyed by the canonical owner TypeId.
     reflection_bitfields_by_id: HashMap<TypeId, (String, ReflectionBitfieldInfo)>,
+    /// Checked machine layout snapshots keyed by the canonical owner TypeId.
+    reflection_machines_by_id: HashMap<TypeId, (String, ReflectionMachineInfo)>,
     /// Checked enum variant snapshots keyed by the canonical owner TypeId.
     reflection_variants_by_id: HashMap<TypeId, (String, Vec<ReflectionVariantInfo>)>,
     /// Active type variable substitution during monomorphization (type_param_name → TypeId).
@@ -246,6 +248,7 @@ impl<'a> TypeChecker<'a> {
             monomorphized_structs: HashMap::new(),
             reflection_fields_by_id: HashMap::new(),
             reflection_bitfields_by_id: HashMap::new(),
+            reflection_machines_by_id: HashMap::new(),
             reflection_variants_by_id: HashMap::new(),
             type_var_subst: HashMap::new(),
             type_var_kind_tags: HashMap::new(),
@@ -414,6 +417,55 @@ impl<'a> TypeChecker<'a> {
         let type_variant_ty = self.interner.intern(Type::Struct(type_variant_sid));
         self.named_types
             .insert("TypeVariant".to_string(), type_variant_ty);
+
+        let type_machine_state_fields_ty = self.interner.intern(Type::List(type_field_ty));
+        let type_machine_state_sid = self.interner.add_struct(TypeStructDef {
+            name: "TypeMachineState".to_string(),
+            fields: vec![
+                ("index".to_string(), TypeInterner::INT64),
+                ("name".to_string(), TypeInterner::STRING),
+                ("has_secret".to_string(), TypeInterner::BOOL),
+                ("fields".to_string(), type_machine_state_fields_ty),
+            ],
+            methods: Vec::new(),
+        });
+        let type_machine_state_ty = self.interner.intern(Type::Struct(type_machine_state_sid));
+        self.named_types
+            .insert("TypeMachineState".to_string(), type_machine_state_ty);
+
+        let type_machine_transition_sid = self.interner.add_struct(TypeStructDef {
+            name: "TypeMachineTransition".to_string(),
+            fields: vec![
+                ("index".to_string(), TypeInterner::INT64),
+                ("source_index".to_string(), TypeInterner::INT64),
+                ("source".to_string(), TypeInterner::STRING),
+                ("target_index".to_string(), TypeInterner::INT64),
+                ("target".to_string(), TypeInterner::STRING),
+            ],
+            methods: Vec::new(),
+        });
+        let type_machine_transition_ty = self
+            .interner
+            .intern(Type::Struct(type_machine_transition_sid));
+        self.named_types.insert(
+            "TypeMachineTransition".to_string(),
+            type_machine_transition_ty,
+        );
+
+        let type_machine_states_ty = self.interner.intern(Type::List(type_machine_state_ty));
+        let type_machine_transitions_ty =
+            self.interner.intern(Type::List(type_machine_transition_ty));
+        let type_machine_sid = self.interner.add_struct(TypeStructDef {
+            name: "TypeMachine".to_string(),
+            fields: vec![
+                ("states".to_string(), type_machine_states_ty),
+                ("edges".to_string(), type_machine_transitions_ty),
+            ],
+            methods: Vec::new(),
+        });
+        let type_machine_ty = self.interner.intern(Type::Struct(type_machine_sid));
+        self.named_types
+            .insert("TypeMachine".to_string(), type_machine_ty);
     }
 
     fn metadata_unit_variants(names: &[&str]) -> Vec<VariantDef> {
@@ -1014,6 +1066,10 @@ impl<'a> TypeChecker<'a> {
 
         for (type_id, (type_name, bitfield)) in self.reflection_bitfields_by_id.clone() {
             metadata.insert_bitfield_for_id(type_id, type_name, bitfield);
+        }
+
+        for (type_id, (type_name, machine)) in self.reflection_machines_by_id.clone() {
+            metadata.insert_machine_for_id(type_id, type_name, machine);
         }
 
         for (type_id, (type_name, variants)) in self.reflection_variants_by_id.clone() {
@@ -2471,6 +2527,60 @@ impl<'a> TypeChecker<'a> {
                     self.interner.intern(Type::List(type_bitfield_field_ty)),
                 ))
             }
+            "type.machine_layout" => {
+                if type_args.len() != 1 {
+                    self.sink.emit(errors::unknown_type(
+                        &format!("{name} (expected 1 type argument, got {})", type_args.len()),
+                        span,
+                    ));
+                    return Some((vec![], TypeInterner::ERROR));
+                }
+                let _ = self.resolve_type_expr(&type_args[0]);
+                let type_machine_ty = self
+                    .named_types
+                    .get("TypeMachine")
+                    .copied()
+                    .unwrap_or(TypeInterner::ERROR);
+                Some((vec![], type_machine_ty))
+            }
+            "type.machine_states" => {
+                if type_args.len() != 1 {
+                    self.sink.emit(errors::unknown_type(
+                        &format!("{name} (expected 1 type argument, got {})", type_args.len()),
+                        span,
+                    ));
+                    return Some((vec![], TypeInterner::ERROR));
+                }
+                let _ = self.resolve_type_expr(&type_args[0]);
+                let type_machine_state_ty = self
+                    .named_types
+                    .get("TypeMachineState")
+                    .copied()
+                    .unwrap_or(TypeInterner::ERROR);
+                Some((
+                    vec![],
+                    self.interner.intern(Type::List(type_machine_state_ty)),
+                ))
+            }
+            "type.machine_transitions" => {
+                if type_args.len() != 1 {
+                    self.sink.emit(errors::unknown_type(
+                        &format!("{name} (expected 1 type argument, got {})", type_args.len()),
+                        span,
+                    ));
+                    return Some((vec![], TypeInterner::ERROR));
+                }
+                let _ = self.resolve_type_expr(&type_args[0]);
+                let type_machine_transition_ty = self
+                    .named_types
+                    .get("TypeMachineTransition")
+                    .copied()
+                    .unwrap_or(TypeInterner::ERROR);
+                Some((
+                    vec![],
+                    self.interner.intern(Type::List(type_machine_transition_ty)),
+                ))
+            }
             "type.variants" => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
@@ -3415,6 +3525,7 @@ impl<'a> TypeChecker<'a> {
 
         let mut state_ids = HashMap::new();
         let mut states = Vec::new();
+        let mut reflection_states = Vec::new();
         for state in &def.states {
             if let Some(previous_span) = state_ids.get(&state.name.name).map(|(_, span)| *span) {
                 self.sink.emit(errors::duplicate_machine_state(
@@ -3428,47 +3539,85 @@ impl<'a> TypeChecker<'a> {
 
             let state_id = jett_types::MachineStateId::new(states.len() as u32);
             state_ids.insert(state.name.name.clone(), (state_id, state.name.span));
+            let resolved_fields = state
+                .fields
+                .iter()
+                .map(|field| (field.name.name.clone(), self.resolve_type_expr(&field.ty)))
+                .collect::<Vec<_>>();
+            let reflection_fields = state
+                .fields
+                .iter()
+                .zip(resolved_fields.iter())
+                .enumerate()
+                .map(|(index, (field, (_, field_ty)))| {
+                    self.reflection_field_info_for_type_expr(
+                        index,
+                        &field.name.name,
+                        field.serialize_name.as_deref().unwrap_or(&field.name.name),
+                        &field.ty,
+                        namespace,
+                        *field_ty,
+                    )
+                })
+                .collect::<Vec<_>>();
+            let has_secret = reflection_fields.iter().any(|field| field.has_secret);
+            reflection_states.push(ReflectionMachineStateInfo::new(
+                state_id.index() as usize,
+                &state.name.name,
+                has_secret,
+                reflection_fields,
+            ));
             states.push(TypeMachineStateDef {
                 name: state.name.name.clone(),
-                fields: state
-                    .fields
-                    .iter()
-                    .map(|field| (field.name.name.clone(), self.resolve_type_expr(&field.ty)))
-                    .collect(),
+                fields: resolved_fields,
             });
         }
 
-        let transitions = def
-            .transitions
-            .iter()
-            .filter_map(|transition| {
-                let transition_name = format!("{} to {}", transition.from.name, transition.to.name);
-                let from = state_ids.get(&transition.from.name).map(|(id, _)| *id);
-                let to = state_ids.get(&transition.to.name).map(|(id, _)| *id);
+        let mut transitions = Vec::new();
+        let mut reflection_transitions = Vec::new();
+        for transition in &def.transitions {
+            let transition_name = format!("{} to {}", transition.from.name, transition.to.name);
+            let from = state_ids.get(&transition.from.name).map(|(id, _)| *id);
+            let to = state_ids.get(&transition.to.name).map(|(id, _)| *id);
 
-                match (from, to) {
-                    (Some(from), Some(to)) => Some(TypeMachineTransitionDef { from, to }),
-                    (None, _) => {
-                        self.sink.emit(errors::invalid_machine_transition(
-                            &canonical_name,
-                            &transition_name,
-                            &format!("unknown source state `{}`", transition.from.name),
-                            transition.from.span,
-                        ));
-                        None
-                    }
-                    (_, None) => {
-                        self.sink.emit(errors::invalid_machine_transition(
-                            &canonical_name,
-                            &transition_name,
-                            &format!("unknown target state `{}`", transition.to.name),
-                            transition.to.span,
-                        ));
-                        None
-                    }
+            match (from, to) {
+                (Some(from), Some(to)) => {
+                    let index = transitions.len();
+                    transitions.push(TypeMachineTransitionDef { from, to });
+                    reflection_transitions.push(ReflectionMachineTransitionInfo::new(
+                        index,
+                        from.index() as usize,
+                        &transition.from.name,
+                        to.index() as usize,
+                        &transition.to.name,
+                    ));
                 }
-            })
-            .collect();
+                (None, _) => {
+                    self.sink.emit(errors::invalid_machine_transition(
+                        &canonical_name,
+                        &transition_name,
+                        &format!("unknown source state `{}`", transition.from.name),
+                        transition.from.span,
+                    ));
+                }
+                (_, None) => {
+                    self.sink.emit(errors::invalid_machine_transition(
+                        &canonical_name,
+                        &transition_name,
+                        &format!("unknown target state `{}`", transition.to.name),
+                        transition.to.span,
+                    ));
+                }
+            }
+        }
+
+        self.reflection_machines_by_id.insert(
+            ty,
+            (
+                canonical_name.clone(),
+                ReflectionMachineInfo::new(reflection_states, reflection_transitions),
+            ),
+        );
 
         self.interner.update_machine(
             mid,

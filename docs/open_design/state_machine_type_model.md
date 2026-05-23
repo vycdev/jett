@@ -55,6 +55,10 @@ Implemented:
 - Reflection reports machines with `TypeInfo.kind == "machine"` and
   `TypeKind.machine_type`, and state-qualified machine values with
   `TypeInfo.kind == "machine_state"` and `TypeKind.machine_state_type`.
+  `type.machine_layout[T]()`, `type.machine_states[T]()`, and
+  `type.machine_transitions[T]()` expose checked state payload fields and legal
+  transition edges. Reflected machine layouts use `states` and `edges`; edges
+  use `source` and `target` field names to avoid reserved syntax tokens.
 - JSON compiler policy rejects `Machine` and `Machine at state` targets for
   `json.parse`, `json.parse_exact`, `json.serialize`, and
   `json.serialize_public`; this keeps state-machine JSON a deliberate future
@@ -64,8 +68,7 @@ Implemented:
 
 Not implemented:
 
-- Rich machine reflection for state/transition metadata and JSON integration
-  are not modeled yet.
+- State-machine JSON integration is not modeled yet.
 
 ## Why This Should Not Be A Namespace Patch
 
@@ -103,9 +106,10 @@ lands:
 - per-state payload fields,
 - declared transition edges keyed by per-machine state ids,
 - namespace/export visibility through the existing resolver policy,
-- reflection hooks later, if state machines become serializable or inspectable.
-  The first reflection slice only exposes the high-level `machine` and
-  `machine_state` kind tags.
+- reflection hooks for serialization policy, if state machines become
+  serializable. The current reflection slice exposes the high-level `machine`
+  and `machine_state` kind tags plus checked state payload and transition edge
+  metadata.
 
 The base metadata now lives beside struct/enum/actor definitions in
 `jett_types`, not only inside the interpreter, and the checker populates it from
@@ -171,11 +175,14 @@ to a known machine owner.
      branch to the only other state,
    - state-qualified values satisfy bare machine expectations,
    - narrowed bare machine values can call checked transitions.
-10. Add basic machine reflection. Done:
+10. Add machine reflection. Done:
     - `type.info[Machine]()` reports kind `machine`,
     - `type.info[Machine at state]()` reports kind `machine_state`,
     - `type.kind_tag` exposes structured `machine_type` and
-      `machine_state_type` tags.
+      `machine_state_type` tags,
+    - `type.machine_layout`, `type.machine_states`, and
+      `type.machine_transitions` expose state payload fields and transition
+      edges with reserved-safe field names.
 11. Keep machine JSON unsupported until rich reflection lands. Done:
     - `json.parse` / `json.parse_exact` reject bare and state-qualified
       machines,
@@ -192,10 +199,8 @@ to a known machine owner.
   limited to positive guards plus exact single-state complements?
 - Should `expr at state` eventually narrow fields/paths beyond bare local
   variables?
-- What shape should rich machine reflection use for state payloads and
-  transition edges?
 - Should machines participate in JSON serialization immediately, or wait until
-  rich machine reflection is stable?
+  the state-tag and payload schema policy is stable?
 - Should machine transitions be ordinary static methods, compiler intrinsics, or
   stdlib-like generated functions?
 

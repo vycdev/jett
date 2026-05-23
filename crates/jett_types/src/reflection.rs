@@ -10,10 +10,12 @@ pub struct ReflectionMetadata {
     type_infos_by_id: HashMap<TypeId, ReflectionTypeInfo>,
     type_fields_by_id: HashMap<TypeId, Vec<ReflectionFieldInfo>>,
     bitfields_by_id: HashMap<TypeId, ReflectionBitfieldInfo>,
+    machines_by_id: HashMap<TypeId, ReflectionMachineInfo>,
     type_variants_by_id: HashMap<TypeId, Vec<ReflectionVariantInfo>>,
     type_infos: HashMap<String, ReflectionTypeInfo>,
     type_fields: HashMap<String, Vec<ReflectionFieldInfo>>,
     bitfields: HashMap<String, ReflectionBitfieldInfo>,
+    machines: HashMap<String, ReflectionMachineInfo>,
     type_variants: HashMap<String, Vec<ReflectionVariantInfo>>,
 }
 
@@ -33,6 +35,9 @@ impl ReflectionMetadata {
         }
         if let Some(bitfield) = self.bitfields.get(&type_name) {
             self.bitfields_by_id.insert(type_id, bitfield.clone());
+        }
+        if let Some(machine) = self.machines.get(&type_name) {
+            self.machines_by_id.insert(type_id, machine.clone());
         }
         if let Some(variants) = self.type_variants.get(&type_name) {
             self.type_variants_by_id.insert(type_id, variants.clone());
@@ -135,6 +140,37 @@ impl ReflectionMetadata {
             return self.get_bitfield_for_id(type_id);
         }
         self.bitfields.get(type_name)
+    }
+
+    pub fn insert_machine(&mut self, type_name: impl Into<String>, machine: ReflectionMachineInfo) {
+        let type_name = type_name.into();
+        if let Some(type_id) = self.type_ids_by_name.get(&type_name) {
+            self.machines_by_id.insert(*type_id, machine.clone());
+        }
+        self.machines.insert(type_name, machine);
+    }
+
+    pub fn insert_machine_for_id(
+        &mut self,
+        type_id: TypeId,
+        type_name: impl Into<String>,
+        machine: ReflectionMachineInfo,
+    ) {
+        let type_name = type_name.into();
+        self.bind_type_name(type_name.clone(), type_id);
+        self.machines_by_id.insert(type_id, machine.clone());
+        self.machines.insert(type_name, machine);
+    }
+
+    pub fn get_machine_for_id(&self, type_id: TypeId) -> Option<&ReflectionMachineInfo> {
+        self.machines_by_id.get(&type_id)
+    }
+
+    pub fn get_machine(&self, type_name: &str) -> Option<&ReflectionMachineInfo> {
+        if let Some(type_id) = self.type_id_for_name(type_name) {
+            return self.get_machine_for_id(type_id);
+        }
+        self.machines.get(type_name)
     }
 
     pub fn insert_type_variants(
@@ -262,6 +298,75 @@ pub struct ReflectionBitfieldFieldInfo {
     pub enum_type: Option<ReflectionTypeInfo>,
 }
 
+/// Canonical metadata for `TypeMachine`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReflectionMachineInfo {
+    pub states: Vec<ReflectionMachineStateInfo>,
+    pub edges: Vec<ReflectionMachineTransitionInfo>,
+}
+
+impl ReflectionMachineInfo {
+    pub fn new(
+        states: Vec<ReflectionMachineStateInfo>,
+        edges: Vec<ReflectionMachineTransitionInfo>,
+    ) -> Self {
+        Self { states, edges }
+    }
+}
+
+/// Canonical metadata for `TypeMachineState`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReflectionMachineStateInfo {
+    pub index: usize,
+    pub name: String,
+    pub has_secret: bool,
+    pub fields: Vec<ReflectionFieldInfo>,
+}
+
+impl ReflectionMachineStateInfo {
+    pub fn new(
+        index: usize,
+        name: impl Into<String>,
+        has_secret: bool,
+        fields: Vec<ReflectionFieldInfo>,
+    ) -> Self {
+        Self {
+            index,
+            name: name.into(),
+            has_secret,
+            fields,
+        }
+    }
+}
+
+/// Canonical metadata for `TypeMachineTransition`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReflectionMachineTransitionInfo {
+    pub index: usize,
+    pub source_index: usize,
+    pub source: String,
+    pub target_index: usize,
+    pub target: String,
+}
+
+impl ReflectionMachineTransitionInfo {
+    pub fn new(
+        index: usize,
+        source_index: usize,
+        source: impl Into<String>,
+        target_index: usize,
+        target: impl Into<String>,
+    ) -> Self {
+        Self {
+            index,
+            source_index,
+            source: source.into(),
+            target_index,
+            target: target.into(),
+        }
+    }
+}
+
 impl ReflectionBitfieldFieldInfo {
     pub fn new(
         index: usize,
@@ -330,6 +435,20 @@ mod tests {
         )
     }
 
+    fn machine(state_name: &str) -> ReflectionMachineInfo {
+        ReflectionMachineInfo::new(
+            vec![ReflectionMachineStateInfo::new(
+                0,
+                state_name,
+                false,
+                vec![field("value", "int64")],
+            )],
+            vec![ReflectionMachineTransitionInfo::new(
+                0, 0, state_name, 0, state_name,
+            )],
+        )
+    }
+
     #[test]
     fn type_id_lookup_preserves_legacy_string_lookup() {
         let type_id = TypeId(42);
@@ -392,6 +511,7 @@ mod tests {
                 )],
             ),
         );
+        metadata.insert_machine("models.Packet", machine("old"));
         metadata.insert_type_variants(
             "models.Packet",
             vec![ReflectionVariantInfo::new(
@@ -418,6 +538,7 @@ mod tests {
                 )],
             ),
         );
+        metadata.insert_machine("models.Packet", machine("ready"));
         metadata.insert_type_variants(
             "models.Packet",
             vec![ReflectionVariantInfo::new(
@@ -441,6 +562,14 @@ mod tests {
                 .get_bitfield_for_id(type_id)
                 .expect("type id should see refreshed bitfield")
                 .network_order
+        );
+        assert_eq!(
+            metadata
+                .get_machine_for_id(type_id)
+                .expect("type id should see refreshed machine")
+                .states[0]
+                .name,
+            "ready"
         );
         assert_eq!(
             metadata
@@ -505,6 +634,7 @@ mod tests {
                 )],
             ),
         );
+        metadata.insert_machine_for_id(type_id, "models.Packet", machine("ready"));
         metadata.insert_type_variants_for_id(
             type_id,
             "models.Packet",
@@ -531,6 +661,14 @@ mod tests {
                 .get_bitfield("PacketAlias")
                 .expect("alias should see id-keyed bitfield")
                 .network_order
+        );
+        assert_eq!(
+            metadata
+                .get_machine("PacketAlias")
+                .expect("alias should see id-keyed machine")
+                .states[0]
+                .name,
+            "ready"
         );
         assert_eq!(
             metadata
@@ -617,6 +755,7 @@ mod tests {
                 )],
             ),
         );
+        metadata.insert_machine("models.Packet", machine("ready"));
         metadata.insert_type_variants(
             "models.Packet",
             vec![ReflectionVariantInfo::new(
@@ -677,6 +816,22 @@ mod tests {
         );
         assert_eq!(
             metadata
+                .get_machine("PacketAlias")
+                .expect("alias should see promoted machine")
+                .states[0]
+                .name,
+            "ready"
+        );
+        assert_eq!(
+            metadata
+                .get_machine_for_id(alias_type_id)
+                .expect("type id should see promoted machine")
+                .states[0]
+                .name,
+            "ready"
+        );
+        assert_eq!(
+            metadata
                 .get_type_variants("PacketAlias")
                 .expect("alias should see promoted variants")[0]
                 .fields[0]
@@ -714,6 +869,7 @@ mod tests {
                 )],
             ),
         );
+        metadata.insert_machine("models.Packet", machine("ready"));
         metadata.insert_type_variants(
             "models.Packet",
             vec![ReflectionVariantInfo::new(
@@ -729,6 +885,7 @@ mod tests {
         assert_eq!(metadata.get_type_info("PacketAlias"), None);
         assert_eq!(metadata.get_type_fields("PacketAlias"), None);
         assert_eq!(metadata.get_bitfield("PacketAlias"), None);
+        assert_eq!(metadata.get_machine("PacketAlias"), None);
         assert_eq!(metadata.get_type_variants("PacketAlias"), None);
     }
 }

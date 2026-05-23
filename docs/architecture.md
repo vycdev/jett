@@ -547,12 +547,15 @@ For each `machine` type:
   narrows to the checked state. On two-state bare machines, the guarded branch
   also narrows to the other state. Other multi-state negative branches stay
   bare.
-- Basic reflection distinguishes `Machine` and `Machine at state` through
+- Reflection distinguishes `Machine` and `Machine at state` through
   `TypeInfo.kind` (`machine` / `machine_state`) and structured `TypeKind`
-  tags (`machine_type` / `machine_state_type`). Rich state and transition
-  metadata is deferred.
+  tags (`machine_type` / `machine_state_type`). `type.machine_layout[T]()`,
+  `type.machine_states[T]()`, and `type.machine_transitions[T]()` expose the
+  checked state list, state payload fields, and transition edges. Public
+  reflection field names avoid reserved syntax tokens: machine layouts use
+  `states` and `edges`, and each edge uses `source` / `target`.
 - JSON policy gates reject `Machine` and `Machine at state` targets until that
-  richer metadata contract exists; callers should serialize explicit DTO
+  serialization contract exists; callers should serialize explicit DTO
   structs/enums at machine boundaries for now.
 
 #### 6h. Complexity Limits Enforcement

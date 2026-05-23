@@ -10,8 +10,9 @@ use jett_parser::ast::{
     StringPart, StructDef, TypeAlias, TypeExpr, UnaryOp,
 };
 use jett_types::{
-    ReflectionBitfieldFieldInfo, ReflectionBitfieldInfo, ReflectionFieldInfo, ReflectionMetadata,
-    ReflectionTypeInfo, ReflectionVariantInfo,
+    ReflectionBitfieldFieldInfo, ReflectionBitfieldInfo, ReflectionFieldInfo,
+    ReflectionMachineInfo, ReflectionMachineStateInfo, ReflectionMachineTransitionInfo,
+    ReflectionMetadata, ReflectionTypeInfo, ReflectionVariantInfo,
 };
 
 use crate::value::Value;
@@ -152,6 +153,26 @@ struct ReflectionBitfieldField {
 struct ReflectionBitfield {
     network_order: bool,
     fields: Vec<ReflectionBitfieldField>,
+}
+
+#[derive(Debug, Clone)]
+struct ReflectionMachine {
+    states: Vec<ReflectionMachineState>,
+    edges: Vec<ReflectionMachineTransition>,
+}
+
+#[derive(Debug, Clone)]
+struct ReflectionMachineState {
+    name: String,
+    fields: Vec<ReflectionField>,
+}
+
+#[derive(Debug, Clone)]
+struct ReflectionMachineTransition {
+    source_index: usize,
+    source: String,
+    target_index: usize,
+    target: String,
 }
 
 pub struct Interpreter {
@@ -2751,6 +2772,9 @@ impl Interpreter {
                 | "type.fields"
                 | "type.bitfield_layout"
                 | "type.bitfield_fields"
+                | "type.machine_layout"
+                | "type.machine_states"
+                | "type.machine_transitions"
                 | "type.variants"
                 | "type.variant_value"
                 | "type.field_value"
@@ -2950,6 +2974,67 @@ impl Interpreter {
                         .into_iter()
                         .enumerate()
                         .map(|(index, field)| self.type_bitfield_field_value(index, field))
+                        .collect(),
+                ))
+            }
+            "type.machine_layout" => {
+                if let Some(err) = check_args(name, 0, args) {
+                    return Some(err);
+                }
+                if let Some(value) = self.checked_machine_value(&ty) {
+                    return Some(Ok(value));
+                }
+                if self.checked_metadata_kind_is(&ty, &["machine", "machine_state"]) {
+                    return Some(Err(format!(
+                        "checked reflection metadata for type '{}' is missing machine metadata",
+                        type_expr_display(&ty)
+                    )));
+                }
+                Ok(self.type_machine_value(self.type_expr_machine(&ty)))
+            }
+            "type.machine_states" => {
+                if let Some(err) = check_args(name, 0, args) {
+                    return Some(err);
+                }
+                if let Some(value) = self.checked_machine_states_value(&ty) {
+                    return Some(Ok(value));
+                }
+                if self.checked_metadata_kind_is(&ty, &["machine", "machine_state"]) {
+                    return Some(Err(format!(
+                        "checked reflection metadata for type '{}' is missing machine metadata",
+                        type_expr_display(&ty)
+                    )));
+                }
+                Ok(Value::List(
+                    self.type_expr_machine(&ty)
+                        .states
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, state)| self.type_machine_state_value(index, state))
+                        .collect(),
+                ))
+            }
+            "type.machine_transitions" => {
+                if let Some(err) = check_args(name, 0, args) {
+                    return Some(err);
+                }
+                if let Some(value) = self.checked_machine_transitions_value(&ty) {
+                    return Some(Ok(value));
+                }
+                if self.checked_metadata_kind_is(&ty, &["machine", "machine_state"]) {
+                    return Some(Err(format!(
+                        "checked reflection metadata for type '{}' is missing machine metadata",
+                        type_expr_display(&ty)
+                    )));
+                }
+                Ok(Value::List(
+                    self.type_expr_machine(&ty)
+                        .edges
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, transition)| {
+                            Self::type_machine_transition_value(index, transition)
+                        })
                         .collect(),
                 ))
             }
@@ -3426,6 +3511,20 @@ impl Interpreter {
                         ),
                     });
                 }
+                if let Some(machine) = self.machines.get(&ident.name) {
+                    let namespace = Self::type_name_namespace(&ident.name)
+                        .or(self.current_namespace.as_deref());
+                    return machine
+                        .states
+                        .iter()
+                        .flat_map(|state| state.fields.iter())
+                        .any(|field| {
+                            self.type_expr_has_secret_inner(
+                                &self.substitute_type_expr_in_namespace(&field.ty, namespace),
+                                visited,
+                            )
+                        });
+                }
                 false
             }
             TypeExpr::Generic(ident, args, _) => {
@@ -3618,6 +3717,139 @@ impl Interpreter {
                 },
             })
             .collect()
+    }
+
+    fn type_expr_machine(&self, ty: &TypeExpr) -> ReflectionMachine {
+        let ty = self.substitute_type_expr(ty);
+        self.type_expr_machine_inner(&ty)
+    }
+
+    fn type_expr_machine_inner(&self, ty: &TypeExpr) -> ReflectionMachine {
+        match ty {
+            TypeExpr::Named(ident) => self
+                .machines
+                .get(&ident.name)
+                .map(|machine| {
+                    let namespace = Self::type_name_namespace(&ident.name)
+                        .or(self.current_namespace.as_deref());
+                    let states = machine
+                        .states
+                        .iter()
+                        .map(|state| ReflectionMachineState {
+                            name: state.name.name.clone(),
+                            fields: state
+                                .fields
+                                .iter()
+                                .map(|field| ReflectionField {
+                                    name: field.name.name.clone(),
+                                    ty: self
+                                        .substitute_type_expr_in_namespace(&field.ty, namespace),
+                                    serialize_name: field
+                                        .serialize_name
+                                        .clone()
+                                        .unwrap_or_else(|| field.name.name.clone()),
+                                })
+                                .collect(),
+                        })
+                        .collect::<Vec<_>>();
+                    let edges = machine
+                        .transitions
+                        .iter()
+                        .filter_map(|transition| {
+                            let source_index = states
+                                .iter()
+                                .position(|state| state.name == transition.from.name)?;
+                            let target_index = states
+                                .iter()
+                                .position(|state| state.name == transition.to.name)?;
+                            Some(ReflectionMachineTransition {
+                                source_index,
+                                source: transition.from.name.clone(),
+                                target_index,
+                                target: transition.to.name.clone(),
+                            })
+                        })
+                        .collect();
+                    ReflectionMachine { states, edges }
+                })
+                .unwrap_or_else(|| ReflectionMachine {
+                    states: Vec::new(),
+                    edges: Vec::new(),
+                }),
+            TypeExpr::View(inner, _) | TypeExpr::StateQualified(inner, _, _) => {
+                self.type_expr_machine_inner(inner)
+            }
+            TypeExpr::Generic(_, _, _) | TypeExpr::Function(_, _, _) => ReflectionMachine {
+                states: Vec::new(),
+                edges: Vec::new(),
+            },
+        }
+    }
+
+    fn type_machine_value(&self, machine: ReflectionMachine) -> Value {
+        let states = machine
+            .states
+            .into_iter()
+            .enumerate()
+            .map(|(index, state)| self.type_machine_state_value(index, state))
+            .collect();
+        let edges = machine
+            .edges
+            .into_iter()
+            .enumerate()
+            .map(|(index, transition)| Self::type_machine_transition_value(index, transition))
+            .collect();
+        Value::Struct {
+            type_name: "TypeMachine".to_string(),
+            fields: vec![
+                ("states".to_string(), Value::List(states)),
+                ("edges".to_string(), Value::List(edges)),
+            ],
+        }
+    }
+
+    fn type_machine_state_value(&self, index: usize, state: ReflectionMachineState) -> Value {
+        let has_secret = state
+            .fields
+            .iter()
+            .any(|field| self.type_expr_has_secret(&field.ty));
+        let fields = state
+            .fields
+            .into_iter()
+            .enumerate()
+            .map(|(index, field)| self.type_field_value(index, field))
+            .collect();
+        Value::Struct {
+            type_name: "TypeMachineState".to_string(),
+            fields: vec![
+                ("index".to_string(), Value::Int64(index as i64)),
+                ("name".to_string(), Value::String(state.name)),
+                ("has_secret".to_string(), Value::Bool(has_secret)),
+                ("fields".to_string(), Value::List(fields)),
+            ],
+        }
+    }
+
+    fn type_machine_transition_value(
+        index: usize,
+        transition: ReflectionMachineTransition,
+    ) -> Value {
+        Value::Struct {
+            type_name: "TypeMachineTransition".to_string(),
+            fields: vec![
+                ("index".to_string(), Value::Int64(index as i64)),
+                (
+                    "source_index".to_string(),
+                    Value::Int64(transition.source_index as i64),
+                ),
+                ("source".to_string(), Value::String(transition.source)),
+                (
+                    "target_index".to_string(),
+                    Value::Int64(transition.target_index as i64),
+                ),
+                ("target".to_string(), Value::String(transition.target)),
+            ],
+        }
     }
 
     fn type_expr_variants(&self, ty: &TypeExpr) -> Vec<ReflectionVariant> {
@@ -4481,6 +4713,109 @@ impl Interpreter {
                     Self::reflection_type_info_value(&field.type_info),
                 ),
                 ("enum_type".to_string(), enum_type),
+            ],
+        }
+    }
+
+    fn checked_machine(&self, ty: &TypeExpr) -> Option<&ReflectionMachineInfo> {
+        let metadata = self.reflection_metadata.as_ref()?;
+        let type_name = type_expr_display(ty);
+        metadata.get_machine(&type_name).or_else(|| {
+            if let TypeExpr::StateQualified(inner, _, _) = ty {
+                metadata.get_machine(&type_expr_display(inner))
+            } else {
+                None
+            }
+        })
+    }
+
+    fn checked_machine_value(&self, ty: &TypeExpr) -> Option<Value> {
+        self.checked_machine(ty)
+            .map(Self::reflection_machine_info_value)
+    }
+
+    fn checked_machine_states_value(&self, ty: &TypeExpr) -> Option<Value> {
+        let machine = self.checked_machine(ty)?;
+        Some(Value::List(
+            machine
+                .states
+                .iter()
+                .map(Self::reflection_machine_state_info_value)
+                .collect(),
+        ))
+    }
+
+    fn checked_machine_transitions_value(&self, ty: &TypeExpr) -> Option<Value> {
+        let machine = self.checked_machine(ty)?;
+        Some(Value::List(
+            machine
+                .edges
+                .iter()
+                .map(Self::reflection_machine_transition_info_value)
+                .collect(),
+        ))
+    }
+
+    fn reflection_machine_info_value(machine: &ReflectionMachineInfo) -> Value {
+        let states = machine
+            .states
+            .iter()
+            .map(Self::reflection_machine_state_info_value)
+            .collect();
+        let edges = machine
+            .edges
+            .iter()
+            .map(Self::reflection_machine_transition_info_value)
+            .collect();
+        Value::Struct {
+            type_name: "TypeMachine".to_string(),
+            fields: vec![
+                ("states".to_string(), Value::List(states)),
+                ("edges".to_string(), Value::List(edges)),
+            ],
+        }
+    }
+
+    fn reflection_machine_state_info_value(state: &ReflectionMachineStateInfo) -> Value {
+        let fields = state
+            .fields
+            .iter()
+            .map(Self::reflection_field_info_value)
+            .collect();
+        Value::Struct {
+            type_name: "TypeMachineState".to_string(),
+            fields: vec![
+                ("index".to_string(), Value::Int64(state.index as i64)),
+                ("name".to_string(), Value::String(state.name.clone())),
+                ("has_secret".to_string(), Value::Bool(state.has_secret)),
+                ("fields".to_string(), Value::List(fields)),
+            ],
+        }
+    }
+
+    fn reflection_machine_transition_info_value(
+        transition: &ReflectionMachineTransitionInfo,
+    ) -> Value {
+        Value::Struct {
+            type_name: "TypeMachineTransition".to_string(),
+            fields: vec![
+                ("index".to_string(), Value::Int64(transition.index as i64)),
+                (
+                    "source_index".to_string(),
+                    Value::Int64(transition.source_index as i64),
+                ),
+                (
+                    "source".to_string(),
+                    Value::String(transition.source.clone()),
+                ),
+                (
+                    "target_index".to_string(),
+                    Value::Int64(transition.target_index as i64),
+                ),
+                (
+                    "target".to_string(),
+                    Value::String(transition.target.clone()),
+                ),
             ],
         }
     }
