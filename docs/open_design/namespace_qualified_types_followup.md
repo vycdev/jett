@@ -138,8 +138,9 @@ fallback behavior until the machine type model is explicit.
 
 ## Suggested Next Tests
 
-- State machines: runtime execution, reflection, and JSON integration can be
-  covered after those surfaces are intentionally modeled.
+- State machines: qualified construction/transition and basic `TypeKind`
+  reflection are covered; rich state/transition reflection and JSON
+  integration remain deferred.
 - Interfaces: the direct qualified, `use`-alias, and duplicate-leaf interface
   paths are now covered by run-pass fixtures.
 - Structs, enums, generic structs, bitfields, same-leaf functions, type names,

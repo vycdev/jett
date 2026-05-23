@@ -282,6 +282,8 @@ impl<'a> TypeChecker<'a> {
                 "result_type",
                 "secret_type",
                 "function_type",
+                "machine_type",
+                "machine_state_type",
                 "unknown_type",
             ]),
         });
@@ -1136,11 +1138,9 @@ impl<'a> TypeChecker<'a> {
             Type::Enum(_) => "enum_type",
             Type::Function { .. } => "function_type",
             Type::Refinement { .. } => "refinement_type",
-            Type::Machine(_)
-            | Type::MachineState { .. }
-            | Type::Interface(_)
-            | Type::Actor(_)
-            | Type::Error => "unknown_type",
+            Type::Machine(_) => "machine_type",
+            Type::MachineState { .. } => "machine_state_type",
+            Type::Interface(_) | Type::Actor(_) | Type::Error => "unknown_type",
         }
     }
 

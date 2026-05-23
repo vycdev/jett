@@ -22,6 +22,13 @@ bitfield Packet:
 bitfield network NetworkPacket:
     version: 4 bits
     header_length: 4 bits
+machine Session:
+    states:
+        guest
+        logged_in(user_id: string)
+
+    transitions:
+        guest to logged_in
 struct User:
     id: string
 struct Complex:
@@ -335,6 +342,12 @@ verify type_info_reflection:
     assert type_info_kind_tag_is[Direction](TypeKind.enum_type) == true
     assert type_info_kind[Header]() == "bitfield"
     assert type_info_kind_tag_is[Header](TypeKind.bitfield_type) == true
+    assert type_info_kind[Session]() == "machine"
+    assert type_info_kind_tag_is[Session](TypeKind.machine_type) == true
+    assert direct_type_kind_tag_is[Session](TypeKind.machine_type) == true
+    assert type_info_kind[Session at logged_in]() == "machine_state"
+    assert type_info_kind_tag_is[Session at logged_in](TypeKind.machine_state_type) == true
+    assert direct_type_kind_tag_is[Session at logged_in](TypeKind.machine_state_type) == true
     assert field_count[Header]() == 1
     assert field_kind[Header]("version") == "primitive"
     assert field_kind_tag_is[Complex]("names", TypeKind.list_type) == true

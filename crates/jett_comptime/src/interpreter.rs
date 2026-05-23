@@ -2978,6 +2978,7 @@ impl Interpreter {
             || self.enums.contains_key(name)
             || self.type_alias_bases.contains_key(name)
             || self.type_aliases.contains_key(name)
+            || self.machines.contains_key(name)
             || self.actor_defs.contains_key(name)
     }
 
@@ -3095,6 +3096,8 @@ impl Interpreter {
                     "enum"
                 } else if self.bitfields.contains_key(&ident.name) {
                     "bitfield"
+                } else if self.machines.contains_key(&ident.name) {
+                    "machine"
                 } else {
                     "named"
                 }
@@ -3136,6 +3139,8 @@ impl Interpreter {
             "result" => "result_type",
             "secret" => "secret_type",
             "function" => "function_type",
+            "machine" => "machine_type",
+            "machine_state" => "machine_state_type",
             _ => "unknown_type",
         };
         Value::Enum {

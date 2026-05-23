@@ -528,6 +528,10 @@ For each `machine` type:
   `if value at state:` guard narrows that local variable back to
   `Machine at state` for the guarded branch, exposing state payload fields and
   legal transitions there.
+- Basic reflection distinguishes `Machine` and `Machine at state` through
+  `TypeInfo.kind` (`machine` / `machine_state`) and structured `TypeKind`
+  tags (`machine_type` / `machine_state_type`). Rich state and transition
+  metadata is deferred.
 
 #### 6h. Complexity Limits Enforcement
 

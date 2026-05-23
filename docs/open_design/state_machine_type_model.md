@@ -43,12 +43,16 @@ Implemented:
   `MachineName.transition(value, target, ...)`.
 - The comptime interpreter can read state payload fields from machine values,
   so `verify` execution matches the checked `Machine at state` field model.
+- Reflection reports machines with `TypeInfo.kind == "machine"` and
+  `TypeKind.machine_type`, and state-qualified machine values with
+  `TypeInfo.kind == "machine_state"` and `TypeKind.machine_state_type`.
 - Interpreter unit tests cover construction, valid transitions, rejected
   invalid transitions, and `at` checks through hand-built AST modules.
 
 Not implemented:
 
-- Machine reflection and JSON integration are not modeled yet.
+- Rich machine reflection for state/transition metadata and JSON integration
+  are not modeled yet.
 
 ## Why This Should Not Be A Namespace Patch
 
@@ -87,6 +91,8 @@ lands:
 - declared transition edges keyed by per-machine state ids,
 - namespace/export visibility through the existing resolver policy,
 - reflection hooks later, if state machines become serializable or inspectable.
+  The first reflection slice only exposes the high-level `machine` and
+  `machine_state` kind tags.
 
 The base metadata now lives beside struct/enum/actor definitions in
 `jett_types`, not only inside the interpreter, and the checker populates it from
@@ -146,6 +152,11 @@ to a known machine owner.
      that branch,
    - state-qualified values satisfy bare machine expectations,
    - narrowed bare machine values can call checked transitions.
+10. Add basic machine reflection. Done:
+    - `type.info[Machine]()` reports kind `machine`,
+    - `type.info[Machine at state]()` reports kind `machine_state`,
+    - `type.kind_tag` exposes structured `machine_type` and
+      `machine_state_type` tags.
 
 ## Open Questions
 
@@ -155,8 +166,10 @@ to a known machine owner.
   stay limited to positive guards?
 - Should `expr at state` eventually narrow fields/paths beyond bare local
   variables?
-- Should machines participate in reflection and JSON serialization immediately,
-  or wait until the core type model is stable?
+- What shape should rich machine reflection use for state payloads and
+  transition edges?
+- Should machines participate in JSON serialization immediately, or wait until
+  rich machine reflection is stable?
 - Should machine transitions be ordinary static methods, compiler intrinsics, or
   stdlib-like generated functions?
 

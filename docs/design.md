@@ -1588,6 +1588,11 @@ function display_name(session: UserAuth) returns string:
 The payload field `session.user_id` is only available inside the guarded branch;
 outside it, `session` is still a bare `UserAuth`.
 
+Reflection exposes the same high-level distinction: `type.info[UserAuth]()`
+reports kind `machine`, while `type.info[UserAuth at logged_in]()` reports
+kind `machine_state`. Detailed reflection over the declared states and
+transitions is a later surface.
+
 **4. State machines can carry data per state.**
 
 States are not just labels — they can hold data that is only available in that state:
