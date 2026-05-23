@@ -1,6 +1,7 @@
 # JSON Trusted Hooks Across Backends
 
-Status: open design.
+Status: implemented for interpreter/typechecker dispatch; future backend
+lowering remains open.
 
 The interpreter and typechecker now treat compiler-shipped JSON stdlib hooks as
 trusted implementation details. Future native or bytecode backends need the same
@@ -51,6 +52,26 @@ This keeps the rule aligned across:
 - a future LLVM/native backend,
 - tooling that performs hover, completion, or policy validation.
 
+## Implemented Interpreter Contract
+
+The current stdlib-loaded interpreter path already follows the preferred
+shape:
+
+- public `json.parse`, `json.parse_exact`, `json.serialize`, and
+  `json.serialize_public` calls use the shared bridge table in
+  `jett_common::json`,
+- each bridge requires the private hook and the exported public wrapper to both
+  come from trusted bundled stdlib files,
+- the exported wrapper remains the ordinary body boundary after compiler policy
+  checks pass,
+- untrusted re-registration clears trust for the affected symbol instead of
+  inheriting the original stdlib identity,
+- raw JSON compatibility names such as `json.JsonValue` and bare `JsonValue`
+  are source aliases only; they do not make an implementation trusted.
+
+Future bytecode or native backends should preserve the same identity checks at
+their lowering boundary rather than matching source names directly.
+
 ## Alternatives
 
 1. Lower from trusted symbol metadata. This is the preferred path because it
@@ -78,10 +99,5 @@ Future backend work should mirror the existing interpreter/typechecker boundary:
 - How will the future import/prelude system represent bundled stdlib identity?
 - Should native codegen call reflected hooks directly, lower through a runtime
   ABI, or specialize common JSON shapes after typechecking?
-- Done for stdlib-loaded code: bare `JsonValue` now reflects through the root
-  alias to `json.JsonTree`. The direct interpreter no longer synthesizes a
-  legacy primitive tag without that alias, the typechecker now rejects bare
-  `JsonValue` without the root alias, and `TypePrimitive.json_value_type` has
-  been removed.
 - Should the hook table remain JSON-specific, or become a general compiler
   policy-hook registry once other stdlib features need the same treatment?
