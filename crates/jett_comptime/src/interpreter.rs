@@ -8476,13 +8476,19 @@ impl Interpreter {
                         args.len()
                     ));
                 }
+                let mut normalized_args = Vec::with_capacity(args.len());
+                for (param, arg) in params.iter().zip(args) {
+                    let param_ty = self.substitute_type_expr(&param.ty);
+                    normalized_args.push(self.normalize_value_for_type(&param_ty, arg)?);
+                }
+
                 // Push the captured environment as a scope, then the parameter scope on top.
                 self.push_scope();
                 for (name, value) in &captures {
                     self.set_variable(name, value.clone());
                 }
                 self.push_scope();
-                for (param, arg) in params.iter().zip(args) {
+                for (param, arg) in params.iter().zip(normalized_args) {
                     self.set_variable(&param.name.name, arg);
                 }
                 let result = self.exec_block_inner(&body)?;
@@ -12762,6 +12768,29 @@ mod tests {
         assert_eq!(
             interp.call_function("make_u64", Vec::new()).unwrap(),
             Value::Uint64(7)
+        );
+    }
+
+    #[test]
+    fn uint64_inline_function_parameter_normalizes_small_literal_carrier() {
+        let mut interp = Interpreter::new();
+        let fn_value = Value::Function {
+            params: vec![Param {
+                view: false,
+                mutable: false,
+                name: ident("value"),
+                ty: type_named("uint64"),
+                span: sp(),
+            }],
+            body: block(vec![return_stmt(var("value"))]),
+            captures: HashMap::new(),
+        };
+
+        assert_eq!(
+            interp
+                .call_fn_value(fn_value, vec![Value::Int64(42)])
+                .unwrap(),
+            Value::Uint64(42)
         );
     }
 
