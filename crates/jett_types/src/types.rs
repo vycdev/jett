@@ -1,4 +1,4 @@
-use crate::defs::{ActorId, BitfieldId, EnumId, InterfaceId, StructId};
+use crate::defs::{ActorId, BitfieldId, EnumId, InterfaceId, MachineId, MachineStateId, StructId};
 
 /// A unique handle to an interned type. Cheap to copy and compare.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -65,6 +65,13 @@ pub enum Type {
     Interface(InterfaceId),
     /// A user-defined actor.
     Actor(ActorId),
+    /// A user-defined state machine, without a statically known current state.
+    Machine(MachineId),
+    /// A state-qualified machine value: `Machine at state`.
+    MachineState {
+        machine: MachineId,
+        state: MachineStateId,
+    },
 
     // -- Function type -------------------------------------------------------
     /// `function(T, U) returns V`

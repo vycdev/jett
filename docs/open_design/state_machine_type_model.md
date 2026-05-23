@@ -14,6 +14,8 @@ Implemented:
 - The parser accepts `machine Name:` declarations with `states:` and
   `transitions:` blocks.
 - The resolver declares machine names, including namespaced machine names.
+- `jett_types` has checked-machine metadata handles and explicit
+  `Type::Machine` / `Type::MachineState` variants.
 - The comptime interpreter can register machines, construct values with
   `MachineName(state, ...)`, check `value at state`, and run
   `MachineName.transition(value, target, ...)`.
@@ -22,7 +24,6 @@ Implemented:
 
 Not implemented:
 
-- `jett_types::Type` has no machine variant.
 - `TypeExpr` has no state-qualified form for `Machine at state`.
 - The typechecker does not predeclare, finish, or check machine declarations as
   named types.
@@ -57,21 +58,22 @@ Possible representation:
 
 ```text
 Type::Machine(MachineId)
-Type::MachineState { machine: MachineId, state: StateId }
+Type::MachineState { machine: MachineId, state: MachineStateId }
 ```
 
-The checked machine metadata should include:
+The checked machine metadata includes, or should include as checker integration
+lands:
 
 - canonical qualified machine name,
 - ordered states,
 - per-state payload fields,
-- declared transition edges,
-- state ids keyed by machine owner,
-- namespace/export visibility,
+- declared transition edges keyed by per-machine state ids,
+- namespace/export visibility through the existing resolver policy,
 - reflection hooks later, if state machines become serializable or inspectable.
 
-This should live beside struct/enum/actor definitions in `jett_types`, not only
-inside the interpreter.
+The base metadata now lives beside struct/enum/actor definitions in
+`jett_types`, not only inside the interpreter. The checker still needs to
+populate it from source declarations.
 
 ## Parser Syntax Gap
 
@@ -90,7 +92,9 @@ typechecker attach the state identifier to a known machine owner.
 
 ## Staging Plan
 
-1. Add machine definitions to `jett_types` and the type interner.
+1. Add machine definitions to `jett_types` and the type interner. Done:
+   `MachineId`, `MachineStateId`, `MachineDef`, `MachineStateDef`,
+   `MachineTransitionDef`, `Type::Machine`, and `Type::MachineState`.
 2. Add a state-qualified `TypeExpr` form for `Machine at state`.
 3. Typecheck machine declarations:
    - duplicate states,

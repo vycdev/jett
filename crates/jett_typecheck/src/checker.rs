@@ -460,6 +460,14 @@ impl<'a> TypeChecker<'a> {
             Type::Enum(eid) => self.interner.resolve_enum(*eid).name.clone(),
             Type::Interface(iid) => self.interner.resolve_interface(*iid).name.clone(),
             Type::Actor(aid) => self.interner.resolve_actor(*aid).name.clone(),
+            Type::Machine(mid) => self.interner.resolve_machine(*mid).name.clone(),
+            Type::MachineState { machine, state } => {
+                let machine_def = self.interner.resolve_machine(*machine);
+                match machine_def.state(*state) {
+                    Some(state_def) => format!("{} at {}", machine_def.name, state_def.name),
+                    None => format!("{} at <unknown>", machine_def.name),
+                }
+            }
             Type::Function {
                 params,
                 return_type,
@@ -923,6 +931,22 @@ impl<'a> TypeChecker<'a> {
                 .iter()
                 .flat_map(|variant| variant.fields.iter())
                 .any(|(_, field_ty)| self.type_contains_secret_data_inner(*field_ty, visited)),
+            Type::Machine(mid) => self
+                .interner
+                .resolve_machine(*mid)
+                .states
+                .iter()
+                .flat_map(|state| state.fields.iter())
+                .any(|(_, field_ty)| self.type_contains_secret_data_inner(*field_ty, visited)),
+            Type::MachineState { machine, state } => self
+                .interner
+                .resolve_machine(*machine)
+                .state(*state)
+                .is_some_and(|state_def| {
+                    state_def.fields.iter().any(|(_, field_ty)| {
+                        self.type_contains_secret_data_inner(*field_ty, visited)
+                    })
+                }),
             Type::Refinement { base, .. } => self.type_contains_secret_data_inner(*base, visited),
             _ => false,
         }
@@ -953,6 +977,7 @@ impl<'a> TypeChecker<'a> {
             }
             Type::Struct(_) | Type::Bitfield(_) => true,
             Type::Enum(_) => !self.type_contains_secret_data(ty),
+            Type::Machine(_) | Type::MachineState { .. } => !self.type_contains_secret_data(ty),
             Type::Refinement { base, .. } => {
                 self.json_public_projection_allows_secret_data_inner(*base, visited)
             }
@@ -1079,6 +1104,8 @@ impl<'a> TypeChecker<'a> {
             Type::Enum(_) => "enum",
             Type::Function { .. } => "function",
             Type::Refinement { .. } => "refinement",
+            Type::Machine(_) => "machine",
+            Type::MachineState { .. } => "machine_state",
             Type::Interface(_) | Type::Actor(_) | Type::Error => "unknown",
         }
     }
@@ -1112,7 +1139,11 @@ impl<'a> TypeChecker<'a> {
             Type::Enum(_) => "enum_type",
             Type::Function { .. } => "function_type",
             Type::Refinement { .. } => "refinement_type",
-            Type::Interface(_) | Type::Actor(_) | Type::Error => "unknown_type",
+            Type::Machine(_)
+            | Type::MachineState { .. }
+            | Type::Interface(_)
+            | Type::Actor(_)
+            | Type::Error => "unknown_type",
         }
     }
 
@@ -1709,6 +1740,8 @@ impl<'a> TypeChecker<'a> {
             Type::TypeConstruction
             | Type::Interface(_)
             | Type::Actor(_)
+            | Type::Machine(_)
+            | Type::MachineState { .. }
             | Type::Function { .. } => {
                 self.push_json_unsupported_type(ty, unsupported_types, unsupported);
             }

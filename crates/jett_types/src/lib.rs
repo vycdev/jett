@@ -7,8 +7,8 @@ mod types;
 
 pub use defs::{
     ActorDef, ActorId, ActorMessageDef, BitfieldDef, BitfieldFieldDef, BitfieldFieldKind,
-    BitfieldId, EnumDef, EnumId, FunctionSig, InterfaceDef, InterfaceId, StructDef, StructId,
-    VariantDef,
+    BitfieldId, EnumDef, EnumId, FunctionSig, InterfaceDef, InterfaceId, MachineDef, MachineId,
+    MachineStateDef, MachineStateId, MachineTransitionDef, StructDef, StructId, VariantDef,
 };
 pub use interner::TypeInterner;
 pub use reflection::{

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::defs::{
     ActorDef, ActorId, BitfieldDef, BitfieldId, EnumDef, EnumId, InterfaceDef, InterfaceId,
-    StructDef, StructId,
+    MachineDef, MachineId, StructDef, StructId,
 };
 use crate::types::{Type, TypeId};
 
@@ -26,6 +26,8 @@ pub struct TypeInterner {
     interfaces: Vec<InterfaceDef>,
     /// User-defined actor definitions.
     actors: Vec<ActorDef>,
+    /// User-defined state machine definitions.
+    machines: Vec<MachineDef>,
 }
 
 // Constant TypeId values for every primitive type.
@@ -86,6 +88,7 @@ impl TypeInterner {
             enums: Vec::new(),
             interfaces: Vec::new(),
             actors: Vec::new(),
+            machines: Vec::new(),
         }
     }
 
@@ -208,6 +211,23 @@ impl TypeInterner {
         self.actors[id.0 as usize] = def;
     }
 
+    /// Register a new state machine definition and return its [`MachineId`].
+    pub fn add_machine(&mut self, def: MachineDef) -> MachineId {
+        let id = MachineId(self.machines.len() as u32);
+        self.machines.push(def);
+        id
+    }
+
+    /// Look up a state machine definition by its [`MachineId`].
+    pub fn resolve_machine(&self, id: MachineId) -> &MachineDef {
+        &self.machines[id.0 as usize]
+    }
+
+    /// Replace an existing state machine definition.
+    pub fn update_machine(&mut self, id: MachineId, def: MachineDef) {
+        self.machines[id.0 as usize] = def;
+    }
+
     /// Return a human-readable name for the type with the given [`TypeId`].
     pub fn type_name(&self, id: TypeId) -> String {
         match self.resolve(id) {
@@ -240,6 +260,14 @@ impl TypeInterner {
             Type::Enum(eid) => self.resolve_enum(*eid).name.clone(),
             Type::Interface(iid) => self.resolve_interface(*iid).name.clone(),
             Type::Actor(aid) => self.resolve_actor(*aid).name.clone(),
+            Type::Machine(mid) => self.resolve_machine(*mid).name.clone(),
+            Type::MachineState { machine, state } => {
+                let machine_def = self.resolve_machine(*machine);
+                match machine_def.state(*state) {
+                    Some(state_def) => format!("{} at {}", machine_def.name, state_def.name),
+                    None => format!("{} at <unknown>", machine_def.name),
+                }
+            }
             Type::Refinement { name, .. } => name.clone(),
             Type::Function {
                 params,
@@ -276,7 +304,7 @@ impl Default for TypeInterner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::defs::VariantDef;
+    use crate::defs::{MachineDef, MachineStateDef, MachineTransitionDef, VariantDef};
 
     // -- Primitive constant IDs -----------------------------------------------
 
@@ -520,6 +548,66 @@ mod tests {
         // Intern the enum type and check round-trip
         let enum_type_id = interner.intern(Type::Enum(eid));
         assert_eq!(*interner.resolve(enum_type_id), Type::Enum(eid));
+    }
+
+    #[test]
+    fn machine_definition_storage() {
+        let mut interner = TypeInterner::new();
+
+        let machine_def = MachineDef {
+            name: "Session".to_string(),
+            states: vec![
+                MachineStateDef {
+                    name: "guest".to_string(),
+                    fields: Vec::new(),
+                },
+                MachineStateDef {
+                    name: "logged_in".to_string(),
+                    fields: vec![("user_id".to_string(), TypeInterner::STRING)],
+                },
+            ],
+            transitions: vec![MachineTransitionDef {
+                from: crate::defs::MachineStateId(0),
+                to: crate::defs::MachineStateId(1),
+            }],
+        };
+
+        let mid = interner.add_machine(machine_def);
+        let resolved = interner.resolve_machine(mid);
+        assert_eq!(resolved.name, "Session");
+        assert_eq!(resolved.states.len(), 2);
+        assert_eq!(resolved.states[1].name, "logged_in");
+        assert_eq!(resolved.states[1].fields[0].1, TypeInterner::STRING);
+
+        let guest = resolved.state_id("guest").expect("guest state id");
+        let logged_in = resolved.state_id("logged_in").expect("logged_in state id");
+        assert!(resolved.has_transition(guest, logged_in));
+
+        let machine_type_id = interner.intern(Type::Machine(mid));
+        assert_eq!(*interner.resolve(machine_type_id), Type::Machine(mid));
+    }
+
+    #[test]
+    fn machine_state_type_names_include_owner_and_state() {
+        let mut interner = TypeInterner::new();
+        let mid = interner.add_machine(MachineDef {
+            name: "auth.Session".to_string(),
+            states: vec![MachineStateDef {
+                name: "guest".to_string(),
+                fields: Vec::new(),
+            }],
+            transitions: Vec::new(),
+        });
+        let guest = interner
+            .resolve_machine(mid)
+            .state_id("guest")
+            .expect("guest state id");
+        let state_ty = interner.intern(Type::MachineState {
+            machine: mid,
+            state: guest,
+        });
+
+        assert_eq!(interner.type_name(state_ty), "auth.Session at guest");
     }
 
     // -- Type resolution ------------------------------------------------------

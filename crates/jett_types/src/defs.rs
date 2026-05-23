@@ -140,3 +140,71 @@ pub struct ActorDef {
     pub state_fields: Vec<(String, TypeId)>,
     pub messages: Vec<ActorMessageDef>,
 }
+
+// ---------------------------------------------------------------------------
+// State machine definitions
+// ---------------------------------------------------------------------------
+
+/// Handle to a state machine definition in the type registry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct MachineId(pub(crate) u32);
+
+impl MachineId {
+    pub fn index(self) -> u32 {
+        self.0
+    }
+}
+
+/// Handle to a state within a machine definition.
+///
+/// State identifiers are local to their owning [`MachineId`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct MachineStateId(pub(crate) u32);
+
+impl MachineStateId {
+    pub fn index(self) -> u32 {
+        self.0
+    }
+}
+
+/// A single state in a checked machine definition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MachineStateDef {
+    pub name: String,
+    /// Payload fields available when the machine value is at this state.
+    pub fields: Vec<(String, TypeId)>,
+}
+
+/// An allowed transition edge between two states in the same machine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MachineTransitionDef {
+    pub from: MachineStateId,
+    pub to: MachineStateId,
+}
+
+/// Describes a user-defined state machine type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MachineDef {
+    pub name: String,
+    pub states: Vec<MachineStateDef>,
+    pub transitions: Vec<MachineTransitionDef>,
+}
+
+impl MachineDef {
+    pub fn state_id(&self, name: &str) -> Option<MachineStateId> {
+        self.states
+            .iter()
+            .position(|state| state.name == name)
+            .map(|index| MachineStateId(index as u32))
+    }
+
+    pub fn state(&self, id: MachineStateId) -> Option<&MachineStateDef> {
+        self.states.get(id.0 as usize)
+    }
+
+    pub fn has_transition(&self, from: MachineStateId, to: MachineStateId) -> bool {
+        self.transitions
+            .iter()
+            .any(|transition| transition.from == from && transition.to == to)
+    }
+}
