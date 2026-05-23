@@ -10776,6 +10776,108 @@ mod tests {
     }
 
     #[test]
+    fn type_machine_uses_checked_reflection_metadata_when_available() {
+        let mut metadata = ReflectionMetadata::new();
+        metadata.insert_machine(
+            "Session",
+            ReflectionMachineInfo::new(
+                vec![
+                    ReflectionMachineStateInfo::new(0, "guest", false, Vec::new()),
+                    ReflectionMachineStateInfo::new(
+                        1,
+                        "logged_in",
+                        false,
+                        vec![string_field_info(0, "user_id")],
+                    ),
+                ],
+                vec![ReflectionMachineTransitionInfo::new(
+                    0,
+                    0,
+                    "guest",
+                    1,
+                    "logged_in",
+                )],
+            ),
+        );
+
+        let mut interp = Interpreter::new();
+        interp.set_reflection_metadata(Arc::new(metadata));
+
+        let layout = interp
+            .call_builtin_with_type_args("type.machine_layout", &[type_named("Session")], &[])
+            .expect("type.machine_layout should be a typed builtin")
+            .expect("type.machine_layout should evaluate");
+        let Value::Struct { fields, .. } = layout else {
+            panic!("expected TypeMachine struct");
+        };
+        let edges = fields
+            .iter()
+            .find_map(|(name, value)| if name == "edges" { Some(value) } else { None })
+            .expect("TypeMachine.edges should exist");
+        let Value::List(edges) = edges else {
+            panic!("expected TypeMachine.edges to be a list");
+        };
+        assert_eq!(edges.len(), 1);
+
+        let states = interp
+            .call_builtin_with_type_args("type.machine_states", &[type_named("Session")], &[])
+            .expect("type.machine_states should be a typed builtin")
+            .expect("type.machine_states should evaluate");
+        let Value::List(states) = states else {
+            panic!("expected list of TypeMachineState values");
+        };
+        let Value::Struct { fields, .. } = &states[1] else {
+            panic!("expected TypeMachineState struct");
+        };
+        let state_fields = fields
+            .iter()
+            .find_map(|(name, value)| if name == "fields" { Some(value) } else { None })
+            .expect("TypeMachineState.fields should exist");
+        let Value::List(state_fields) = state_fields else {
+            panic!("expected TypeMachineState.fields to be a list");
+        };
+        assert_eq!(state_fields.len(), 1);
+
+        let edges = interp
+            .call_builtin_with_type_args("type.machine_transitions", &[type_named("Session")], &[])
+            .expect("type.machine_transitions should be a typed builtin")
+            .expect("type.machine_transitions should evaluate");
+        let Value::List(edges) = edges else {
+            panic!("expected list of TypeMachineTransition values");
+        };
+        let Value::Struct { fields, .. } = &edges[0] else {
+            panic!("expected TypeMachineTransition struct");
+        };
+        let target = fields
+            .iter()
+            .find_map(|(name, value)| if name == "target" { Some(value) } else { None })
+            .expect("TypeMachineTransition.target should exist");
+        assert_eq!(target, &Value::String("logged_in".to_string()));
+    }
+
+    #[test]
+    fn type_machine_reports_missing_checked_machine_metadata() {
+        let mut metadata = ReflectionMetadata::new();
+        metadata.insert_type_info(ReflectionTypeInfo::new(
+            "Session",
+            "machine",
+            None,
+            false,
+            Vec::new(),
+        ));
+
+        let mut interp = Interpreter::new();
+        interp.set_reflection_metadata(Arc::new(metadata));
+
+        let err = interp
+            .call_builtin_with_type_args("type.machine_layout", &[type_named("Session")], &[])
+            .expect("type.machine_layout should be a typed builtin")
+            .expect_err("missing checked machine layout should be an error");
+
+        assert!(err.contains("missing machine metadata"));
+    }
+
+    #[test]
     fn type_variants_uses_checked_reflection_metadata_when_available() {
         let field_info = ReflectionTypeInfo::new(
             "secret[string]",

@@ -11,6 +11,7 @@ The reflected JSON stdlib now depends on rich metadata:
 - `TypeField` with `serialize_name`, `type_info`, and `has_secret`,
 - bitfield layout metadata,
 - enum variants and payload fields,
+- state-machine states, payload fields, and transition edges,
 - trusted type-argument and field-type bindings,
 - `TypeConstruction` validation.
 
@@ -48,6 +49,7 @@ CheckedProgram
     structs: StructDef records keyed by canonical TypeId
     enums: EnumDef records keyed by canonical TypeId
     bitfields: BitfieldDef records keyed by canonical TypeId
+    machines: MachineDef records keyed by canonical TypeId
     aliases/refinements: canonical base TypeId plus constraint metadata
     namespaces: canonical qualified names
     generic instantiations: substituted canonical TypeId records
@@ -84,17 +86,19 @@ only what reflection needs:
 - struct fields,
 - bitfield fields and layout,
 - enum variants and payload fields,
+- state-machine states, payload fields, and transition edges,
 - alias/refinement base links,
 - secret-containment facts.
 
 This keeps the interpreter from depending directly on every checker internal.
 
-Status: started for `TypeInfo`, `TypeField`, bitfield metadata, and enum
-variant metadata: display name, kind, primitive tag, secret-containment, nested
-type arguments, field order, field serialize names, field `TypeInfo` records,
-bitfield network order, bitfield shapes, widths, bitfield enum annotations,
-variant discriminants, and variant payload fields are captured from the checked
-type state.
+Status: started for `TypeInfo`, `TypeField`, bitfield metadata, enum variant
+metadata, and state-machine metadata: display name, kind, primitive tag,
+secret-containment, nested type arguments, field order, field serialize names,
+field `TypeInfo` records, bitfield network order, bitfield shapes, widths,
+bitfield enum annotations, variant discriminants, variant payload fields,
+machine state names, state payload fields, and transition edges are captured
+from the checked type state.
 
 ### Stage 3: Route Reflection Builtins Through The Snapshot
 
@@ -105,14 +109,19 @@ Move these APIs first:
 - `type.fields`
 - `type.bitfield_layout`
 - `type.bitfield_fields`
+- `type.machine_layout`
+- `type.machine_states`
+- `type.machine_transitions`
 - `type.variants`
 
 Status: `type.name[T]()`, `type.kind[T]()`, `type.kind_tag[T]()`,
 `type.primitive_tag[T]()`, `type.has_secret[T]()`, `type.info[T]()`,
 `type.arg[T](index)`, `type.fields[T]()`, `type.bitfield_layout[T]()`,
-`type.bitfield_fields[T]()` and `type.variants[T]()` now prefer the checked
-snapshot when metadata for the requested type name is present, and fall back to
-the previous AST path during bootstrap and direct interpreter tests. Trusted
+`type.bitfield_fields[T]()`, `type.machine_layout[T]()`,
+`type.machine_states[T]()`, `type.machine_transitions[T]()` and
+`type.variants[T]()` now prefer the checked snapshot when metadata for the
+requested type name is present, and fall back to the previous AST path during
+bootstrap and direct interpreter tests. Trusted
 `comptime type` bindings over direct `type.arg[T](index)`, `TypeInfo.args`,
 `type.fields[T]()` loops, and `type.variants[T]()` / variant payload loops also
 prefer checked metadata when constructing the compile-time type binding scope.
@@ -159,8 +168,9 @@ scaffold alongside its legacy string maps. The typechecker seeds canonical
 `TypeInfo` entries by checked `TypeId`, including real named owners and
 refinements while keeping simple aliases string-only so they do not collapse
 into their base type's reflection identity. The checker now stores
-struct/generic-struct fields, bitfield layout metadata, and enum variants by the
-known owner `TypeId` at the construction sites. The string-shaped
+struct/generic-struct fields, bitfield layout metadata, machine layouts, and
+enum variants by the known owner `TypeId` at the construction sites. The
+string-shaped
 `ReflectionMetadata` API remains as a compatibility facade, but owner metadata
 lookups now resolve strictly through canonical id maps after a name is bound;
 only unbound legacy names use the string maps. This keeps stale string-keyed
@@ -169,11 +179,12 @@ metadata from masking incomplete checked metadata. Direct `type.info`,
 now reports missing checked type-info metadata instead of reconstructing it from
 the interpreter registry. For
 field-bearing checked types, the interpreter no longer silently reconstructs
-field, bitfield, or enum variant metadata from AST when a checked `TypeInfo`
-says the owner should have that metadata but the checked table is missing. The
-same completeness rule now applies to value-sensitive field/variant access and
-reflected construction paths, so missing checked owner metadata is surfaced
-instead of masked by interpreter-local AST reconstruction. Bitfield enum
+field, bitfield, machine, or enum variant metadata from AST when a checked
+`TypeInfo` says the owner should have that metadata but the checked table is
+missing. The same completeness rule now applies to value-sensitive
+field/variant access and reflected construction paths, so missing checked owner
+metadata is surfaced instead of masked by interpreter-local AST reconstruction.
+Bitfield enum
 annotations now follow the same rule: if checked metadata says the referenced
 enum exists but variant metadata is absent, enum discriminant lookup reports the
 metadata gap instead of falling back to the interpreter enum registry.
@@ -207,15 +218,16 @@ number, array, and object variants.
 `TypeId` binding when the inserted type name is already bound, matching the
 owner-metadata insertion behavior.
 `ReflectionMetadata::bind_type_name` now promotes any existing string-keyed type
-info, fields, bitfield layout, or variant metadata into the canonical `TypeId`
-tables when the binding is added after the metadata. The metadata API also
+info, fields, bitfield layout, machine layout, or variant metadata into the
+canonical `TypeId` tables when the binding is added after the metadata. The
+metadata API also
 exposes explicit `type_id_for_name` and `get_*_for_id` accessors, and the
 comptime interpreter's checked reflection helpers use those id accessors first
 before preserving the legacy string fallback. The typechecker no longer keeps
 parallel string-only owner metadata maps for checked struct fields, bitfield
-layouts, or enum variants; production owner metadata now flows through the
-`TypeId` keyed path and relies on `ReflectionMetadata` to preserve legacy name
-lookup compatibility.
+layouts, machine layouts, or enum variants; production owner metadata now flows
+through the `TypeId` keyed path and relies on `ReflectionMetadata` to preserve
+legacy name lookup compatibility.
 Monomorphized generic struct `TypeInfo` now also gets concrete type arguments
 from the checker-owned `(generic owner, TypeId args) -> concrete TypeId` cache
 during canonical TypeId metadata construction. The old ambiguous string-only
