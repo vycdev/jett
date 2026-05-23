@@ -11,14 +11,14 @@ function user_id_or_guest(session: Session) returns string:
         return session.user_id
     return "guest"
 
-function login_guest(session: Session) returns Session:
+function login_if_guest(session: Session) returns Session:
     if session at guest:
         return Session.transition(session, logged_in, "Ada")
-    return Session(logged_in, "already")
+    return session
 
 verify state_machine_branch_narrowing:
     Session guest = Session(guest)
     assert user_id_or_guest(guest) == "guest"
-    Session logged = login_guest(guest)
+    Session logged = login_if_guest(guest)
     assert logged at logged_in
     assert user_id_or_guest(logged) == "Ada"

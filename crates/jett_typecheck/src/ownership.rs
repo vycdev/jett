@@ -168,6 +168,9 @@ impl<'a> OwnershipChecker<'a> {
     fn check_block(&mut self, block: &Block) {
         for stmt in &block.stmts {
             self.check_stmt(stmt);
+            if Self::stmt_definitely_exits(stmt) {
+                break;
+            }
         }
     }
 
@@ -251,15 +254,106 @@ impl<'a> OwnershipChecker<'a> {
 
     fn check_if(&mut self, if_stmt: &ast::IfStmt) {
         self.check_expr_ownership(&if_stmt.condition);
-        self.check_block(&if_stmt.then_block);
+        let mut condition_state = self.states.clone();
+        let mut fallthrough_states = Vec::new();
+
+        let then_state = self.check_block_from_state(&condition_state, &if_stmt.then_block);
+        if Self::block_can_fall_through(&if_stmt.then_block) {
+            fallthrough_states.push(then_state);
+        }
 
         for (cond, block) in &if_stmt.else_ifs {
+            self.states = condition_state.clone();
             self.check_expr_ownership(cond);
-            self.check_block(block);
+            condition_state = self.states.clone();
+            let branch_state = self.check_block_from_state(&condition_state, block);
+            if Self::block_can_fall_through(block) {
+                fallthrough_states.push(branch_state);
+            }
         }
 
         if let Some(else_block) = &if_stmt.else_block {
-            self.check_block(else_block);
+            let else_state = self.check_block_from_state(&condition_state, else_block);
+            if Self::block_can_fall_through(else_block) {
+                fallthrough_states.push(else_state);
+            }
+        } else {
+            fallthrough_states.push(condition_state.clone());
+        }
+
+        self.states = self.merge_fallthrough_states(&condition_state, &fallthrough_states);
+    }
+
+    fn check_block_from_state(
+        &mut self,
+        state: &HashMap<String, VarInfo>,
+        block: &Block,
+    ) -> HashMap<String, VarInfo> {
+        self.states = state.clone();
+        self.check_block(block);
+        self.states.clone()
+    }
+
+    fn merge_fallthrough_states(
+        &self,
+        baseline: &HashMap<String, VarInfo>,
+        branches: &[HashMap<String, VarInfo>],
+    ) -> HashMap<String, VarInfo> {
+        if branches.is_empty() {
+            return baseline.clone();
+        }
+
+        let mut merged = baseline.clone();
+        for (name, baseline_info) in baseline {
+            let mut branch_infos = branches
+                .iter()
+                .filter_map(|branch| branch.get(name))
+                .peekable();
+            let Some(first_info) = branch_infos.peek().copied() else {
+                continue;
+            };
+            let mut result = first_info.clone();
+            for branch_info in branch_infos {
+                if branch_info.state == OwnershipState::Consumed {
+                    result.state = OwnershipState::Consumed;
+                    result.consumed_span = branch_info.consumed_span;
+                    break;
+                }
+                if result.state != OwnershipState::Consumed {
+                    result.state = branch_info.state;
+                    result.consumed_span = branch_info.consumed_span;
+                }
+            }
+            if branches.iter().any(|branch| !branch.contains_key(name)) {
+                result = baseline_info.clone();
+            }
+            merged.insert(name.clone(), result);
+        }
+        merged
+    }
+
+    fn block_can_fall_through(block: &Block) -> bool {
+        !block.stmts.iter().any(Self::stmt_definitely_exits)
+    }
+
+    fn stmt_definitely_exits(stmt: &Stmt) -> bool {
+        match stmt {
+            Stmt::Return(_) | Stmt::Respond(_) => true,
+            Stmt::If(if_stmt) => {
+                if if_stmt.else_block.is_none() {
+                    return false;
+                }
+                Self::block_can_fall_through(&if_stmt.then_block) == false
+                    && if_stmt
+                        .else_ifs
+                        .iter()
+                        .all(|(_, block)| !Self::block_can_fall_through(block))
+                    && if_stmt
+                        .else_block
+                        .as_ref()
+                        .is_some_and(|block| !Self::block_can_fall_through(block))
+            }
+            _ => false,
         }
     }
 

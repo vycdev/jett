@@ -1,0 +1,11 @@
+# ERROR: E0400
+struct Payload:
+    value: string
+
+function take(payload: Payload) returns nothing:
+    return nothing
+
+function bad(payload: Payload) returns string:
+    if true:
+        take(payload)
+    return payload.value

@@ -252,6 +252,10 @@ compile_pass_fixture!(
     compile_pass_namespace_duplicate_leaf_machines,
     "namespace_duplicate_leaf_machines.jett"
 );
+compile_pass_fixture!(
+    compile_pass_ownership_branch_return_consumes,
+    "ownership_branch_return_consumes.jett"
+);
 
 compile_fail_fixture!(compile_fail_type_mismatch, "type_mismatch.jett");
 compile_fail_fixture!(compile_fail_secret_stdout, "secret_stdout.jett");
@@ -681,6 +685,10 @@ compile_fail_fixture!(
 compile_fail_fixture!(
     compile_fail_namespace_machine_transition_missing_edge,
     "namespace_machine_transition_missing_edge.jett"
+);
+compile_fail_fixture!(
+    compile_fail_ownership_branch_partial_move,
+    "ownership_branch_partial_move.jett"
 );
 compile_fail_fixture!(
     compile_fail_pipeline_builtin_input_mismatch,
