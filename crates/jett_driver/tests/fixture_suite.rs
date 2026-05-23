@@ -454,6 +454,10 @@ run_pass_fixture!(
     "json_serialize_machine_envelope.jett"
 );
 run_pass_fixture!(
+    run_pass_json_parse_machine_envelope,
+    "json_parse_machine_envelope.jett"
+);
+run_pass_fixture!(
     run_pass_json_serialize_public_omits_secret_fields,
     "json_serialize_public_omits_secret_fields.jett"
 );
@@ -1153,8 +1157,8 @@ compile_fail_fixture!(
     "json_parse_machine_unsupported.jett"
 );
 #[test]
-fn compile_fail_json_parse_machine_unsupported_covers_state_types() {
-    assert_compile_fail_error_count("json_parse_machine_unsupported.jett", 348, 10);
+fn compile_fail_json_parse_machine_unsupported_covers_machine_payloads() {
+    assert_compile_fail_error_count("json_parse_machine_unsupported.jett", 348, 8);
 }
 compile_fail_fixture!(
     compile_fail_json_parse_exact_requires_type_arg,

@@ -59,17 +59,18 @@ Implemented:
   `type.machine_transitions[T]()` expose checked state payload fields and legal
   transition edges. Reflected machine layouts use `states` and `edges`; edges
   use `source` and `target` field names to avoid reserved syntax tokens.
-- JSON compiler policy now allows `json.serialize` and
-  `json.serialize_public` for `Machine` and `Machine at state` targets through
-  the explicit state/payload envelope. `json.parse` and `json.parse_exact`
-  still reject machines until reflected machine construction is designed.
+- JSON compiler policy now allows `json.serialize`, `json.serialize_public`,
+  `json.parse`, and `json.parse_exact` for `Machine` and `Machine at state`
+  targets through the explicit state/payload envelope when every payload field
+  is JSON-compatible.
 - Interpreter unit tests cover construction, valid transitions, rejected
   invalid transitions, and `at` checks through hand-built AST modules.
 
-Not implemented:
+Remaining work:
 
-- State-machine JSON parsing is not implemented yet; the serialization wire
-  contract lives in `docs/open_design/state_machine_json_contract.md`.
+- Decide whether machine JSON should be opt-in per machine declaration, and how
+  schema migrations should rename states or payload fields without weakening
+  the one-canonical-spelling rule.
 
 ## Why This Should Not Be A Namespace Patch
 

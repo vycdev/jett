@@ -1,0 +1,79 @@
+namespace test
+machine Session:
+    states:
+        guest
+        logged_in(user_id: string, display_name: string serialize "displayName", nickname: optional[string])
+    transitions:
+        guest to logged_in
+machine TokenLifecycle:
+    states:
+        issued(token: secret[string], public_id: string serialize "publicId")
+        revoked
+    transitions:
+        issued to revoked
+struct SessionBox:
+    current: Session at logged_in
+    history: list[Session]
+function parsed_session_user_id(view session: Session) returns string:
+    TypeMachineState state = type.machine_state_value[Session](view session)
+    TypeField user_field = list.get[TypeField](state.fields, 0) handle:
+        return "missing-field"
+    string user_id = type.machine_field_value[Session, string](view session, view user_field)
+    return "{state.name}:{user_id}"
+function parse_logged_in_session() returns string:
+    string raw = "{{\"state\":\"logged_in\",\"payload\":{{\"user_id\":\"user-1\",\"displayName\":\"Ada\"}}}}"
+    Session session = json.parse[Session](raw) handle error:
+        return error
+    return parsed_session_user_id(view session)
+function parse_state_qualified_session() returns string:
+    string raw = "{{\"state\":\"logged_in\",\"payload\":{{\"user_id\":\"user-2\",\"displayName\":\"Lin\",\"nickname\":\"l\"}}}}"
+    Session at logged_in session = json.parse[Session at logged_in](raw) handle error:
+        return error
+    string nickname = session.nickname handle:
+        default "none"
+    return "{session.user_id}:{session.display_name}:{nickname}"
+function parse_state_mismatch_error() returns string:
+    string raw = "{{\"state\":\"guest\",\"payload\":{{}}}}"
+    Session at logged_in session = json.parse[Session at logged_in](raw) handle error:
+        return error
+    return "unexpected"
+function parse_guest_session() returns string:
+    Session session = json.parse[Session]("{{\"state\":\"guest\",\"payload\":{{}}}}") handle error:
+        return error
+    TypeMachineState state = type.machine_state_value[Session](view session)
+    return state.name
+function parse_nested_session_box() returns string:
+    string raw = "{{\"current\":{{\"state\":\"logged_in\",\"payload\":{{\"user_id\":\"user-3\",\"displayName\":\"Bea\"}}}},\"history\":[{{\"state\":\"guest\",\"payload\":{{}}}},{{\"state\":\"logged_in\",\"payload\":{{\"user_id\":\"user-3\",\"displayName\":\"Bea\"}}}}]}}"
+    SessionBox box = json.parse[SessionBox](raw) handle error:
+        return error
+    return "{box.current.user_id}:{list.length[Session](box.history)}"
+function parse_exact_unknown_envelope_error() returns string:
+    string raw = "{{\"state\":\"guest\",\"payload\":{{}},\"version\":1}}"
+    Session session = json.parse_exact[Session](raw) handle error:
+        return error
+    return "unexpected"
+function parse_exact_unknown_payload_error() returns string:
+    string raw = "{{\"state\":\"logged_in\",\"payload\":{{\"user_id\":\"user-4\",\"displayName\":\"Cal\",\"extra\":true}}}}"
+    Session session = json.parse_exact[Session](raw) handle error:
+        return error
+    return "unexpected"
+function parse_missing_payload_field_error() returns string:
+    string raw = "{{\"state\":\"logged_in\",\"payload\":{{\"displayName\":\"Dee\"}}}}"
+    Session session = json.parse[Session](raw) handle error:
+        return error
+    return "unexpected"
+function parse_secret_machine_public_json() returns string:
+    string raw = "{{\"state\":\"issued\",\"payload\":{{\"token\":\"secret-token\",\"publicId\":\"tok-1\"}}}}"
+    TokenLifecycle token = json.parse[TokenLifecycle](raw) handle error:
+        return error
+    return json.serialize_public[TokenLifecycle](view token)
+verify json_parse_machine_envelope:
+    assert parse_logged_in_session() == "logged_in:user-1"
+    assert parse_state_qualified_session() == "user-2:Lin:l"
+    assert string.contains(parse_state_mismatch_error(), "cannot finish state 'guest'") == true
+    assert parse_guest_session() == "guest"
+    assert parse_nested_session_box() == "user-3:2"
+    assert string.contains(parse_exact_unknown_envelope_error(), "unknown field 'version'") == true
+    assert string.contains(parse_exact_unknown_payload_error(), "unknown field 'extra'") == true
+    assert string.contains(parse_missing_payload_field_error(), "missing required field 'user_id'") == true
+    assert parse_secret_machine_public_json() == "{{\"state\":\"issued\",\"payload\":{{\"publicId\":\"tok-1\"}}}}"

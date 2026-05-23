@@ -17,11 +17,10 @@ value = type.field_value[T, Field](view item, view field)
 Deserialization needed the reverse operation: given checked field values, build
 a `T` while preserving the exact same rules as ordinary source constructors.
 That first form now exists as the opaque `TypeConstruction` builder for
-structs, bitfields, and enum variants; the final syntax story is still open.
-The next pressure point is state-machine JSON parsing, which needs the same
-reverse-construction guarantee for a selected machine state and its payload.
+structs, bitfields, enum variants, and selected state-machine snapshots; the
+final syntax story is still open.
 
-The missing operation is not JSON-specific. JSON happens to be the current
+The construction primitive is not JSON-specific. JSON happened to be the first
 pressure point, but the same primitive should serve:
 
 - `json.parse[T]`,

@@ -198,9 +198,9 @@ Some JSON rules are typechecker policy, not only implementation:
   `parse`, and `parse_exact` is restricted to `K == string`.
 - serialization and parsing reject non-data values that have no JSON encoding
   or decoding, including functions, actors, interfaces, and the internal
-  `TypeConstruction` builder. Machine values now have a canonical serialized
-  envelope, while machine parse targets remain blocked until the stdlib decoder
-  consumes that envelope through reflected machine construction.
+  `TypeConstruction` builder. Machine values use the canonical state/payload
+  envelope for both parse and serialize when every payload field is
+  JSON-compatible.
   Parse checks descend through `secret[...]`
   wrappers because secret data still has to be constructed from JSON.
 - `json.parse[T]` and `json.parse_exact[T]` return `result[T, string]`, so

@@ -426,9 +426,9 @@ Types are interned for O(1) comparison: each unique type gets a `TypeId`. The ty
 
 These are ordinary `implement` blocks in the standard library, but the compiler has hardcoded knowledge of `Displayable` for string interpolation and JSON policy gates for parse/serialization. The JSON bodies are stdlib-reflected in normal builds; the compiler-owned part is the policy boundary, not format-specific field walking.
 Functions, actors, interfaces, and `TypeConstruction` are explicitly outside
-the current JSON data surface. Bare and state-qualified machine values can be
-serialized through the state/payload envelope, but typed machine parsing remains
-outside the current constructible JSON surface.
+the current JSON data surface. Bare and state-qualified machine values serialize
+and parse through the state/payload envelope when every payload field is
+JSON-compatible.
 
 #### 6b. Interface Verification
 
@@ -555,11 +555,11 @@ For each `machine` type:
   checked state list, state payload fields, and transition edges. Public
   reflection field names avoid reserved syntax tokens: machine layouts use
   `states` and `edges`, and each edge uses `source` / `target`.
-- JSON policy gates allow `Machine` and `Machine at state` serialization through
-  an envelope object with `state` and `payload` keys. The reflected
-  `type.construct_machine_start` builder path now gives parsing a checked way
-  to construct machine snapshots; the stdlib decoder still has to wire the
-  envelope path before machine parse targets can be unblocked.
+- JSON policy gates allow `Machine` and `Machine at state` serialization and
+  parsing through an envelope object with `state` and `payload` keys. The
+  reflected `type.construct_machine_start` builder path gives parsing a checked
+  way to construct machine snapshots while preserving state-qualified target
+  precision.
 
 #### 6h. Complexity Limits Enforcement
 

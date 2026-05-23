@@ -1,31 +1,28 @@
 # State Machine JSON Contract
 
-Status: partially implemented.
+Status: implemented for parse and serialize; migration policy remains open.
 
 Jett now has checked reflection for state-machine kind tags, declared states,
 state payload fields, transition edges, active state values, and active payload
-field reads. JSON serialization now uses that reflection to emit the envelope
-shape below. JSON parsing still remains blocked until the stdlib decoder consumes
-the envelope shape, but reflected construction for machine values now has an
-explicit checked path: `type.construct_machine_start[T](view state)`, followed
-by the existing typed `type.construct_put` and `type.construct_finish` builder
-operations.
+field reads. JSON serialization emits the envelope shape below, and JSON parsing
+consumes the same shape through the checked `type.construct_machine_start[T]`
+builder path followed by `type.construct_put` and `type.construct_finish`.
 
 ## Current Invariant
 
 - `json.serialize` and `json.serialize_public` accept bare `Machine` and
   `Machine at state` targets, including nested machine fields inside structs
   and containers, when all serialized payload fields are JSON-compatible.
-- `json.parse` and `json.parse_exact` still reject bare `Machine` and
+- `json.parse` and `json.parse_exact` accept bare `Machine` and
   `Machine at state` targets, including nested machine fields inside structs
-  and containers.
+  and containers, when all payload fields are JSON-compatible.
 - Machine reflection is available through `type.machine_layout[T]()`,
   `type.machine_states[T]()`, and `type.machine_transitions[T]()`.
 - Value-level machine reflection is available through
   `type.machine_state_value[T](view value)` and
-  `type.machine_field_value[T, U](view value, view field)`, which is enough for
-  future serializers to discover the active state and payload values without
-  dynamic field-name strings.
+  `type.machine_field_value[T, U](view value, view field)`, which lets
+  serializers discover the active state and payload values without dynamic
+  field-name strings.
 - Reflection metadata uses ordinary field names (`states`, `edges`, `source`,
   `target`) instead of reserved state-machine syntax tokens.
 

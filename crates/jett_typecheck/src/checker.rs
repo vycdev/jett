@@ -1749,7 +1749,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn json_unsupported_parse_types(&self, ty: TypeId) -> Vec<String> {
-        self.json_unsupported_data_types(ty, true, false)
+        self.json_unsupported_data_types(ty, true, true)
     }
 
     fn json_unsupported_data_types(
