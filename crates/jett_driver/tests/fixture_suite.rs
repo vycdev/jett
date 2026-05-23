@@ -458,6 +458,10 @@ run_pass_fixture!(
     "json_parse_machine_envelope.jett"
 );
 run_pass_fixture!(
+    run_pass_json_namespace_duplicate_machine_envelope,
+    "json_namespace_duplicate_machine_envelope.jett"
+);
+run_pass_fixture!(
     run_pass_json_serialize_public_omits_secret_fields,
     "json_serialize_public_omits_secret_fields.jett"
 );

@@ -1,0 +1,68 @@
+namespace accounts
+export machine Session:
+    states:
+        guest
+        logged_in(user_id: string serialize "userId")
+    transitions:
+        guest to logged_in
+namespace audit
+export machine Session:
+    states:
+        guest
+        elevated(level: int64)
+    transitions:
+        guest to elevated
+namespace app
+struct Snapshot:
+    account: accounts.Session at logged_in
+    audit: audit.Session at elevated
+    history: list[accounts.Session]
+function account_login() returns accounts.Session at logged_in:
+    return accounts.Session.transition(accounts.Session(guest), logged_in, "acct-1")
+function audit_elevate() returns audit.Session at elevated:
+    return audit.Session.transition(audit.Session(guest), elevated, 3)
+function account_user_id(session: accounts.Session at logged_in) returns string:
+    return session.user_id
+function audit_level(session: audit.Session at elevated) returns int64:
+    return session.level
+function alias_account_login() returns accounts.Session at logged_in:
+    use accounts as a
+    return a.Session.transition(a.Session(guest), logged_in, "acct-2")
+function account_json_roundtrip() returns string:
+    accounts.Session at logged_in session = account_login()
+    string raw = json.serialize[accounts.Session at logged_in](view session)
+    accounts.Session at logged_in decoded = json.parse_exact[accounts.Session at logged_in](raw) handle error:
+        return error
+    return "{type.name[accounts.Session]()}:{decoded.user_id}"
+function audit_json_parse() returns string:
+    string raw = "{{\"state\":\"elevated\",\"payload\":{{\"level\":3}}}}"
+    audit.Session at elevated decoded = json.parse[audit.Session at elevated](raw) handle error:
+        return error
+    return "{type.name[audit.Session]()}:{decoded.level}"
+function nested_duplicate_machine_parse_exact() returns string:
+    string raw = "{{\"account\":{{\"state\":\"logged_in\",\"payload\":{{\"userId\":\"acct-2\"}}}},\"audit\":{{\"state\":\"elevated\",\"payload\":{{\"level\":5}}}},\"history\":[{{\"state\":\"guest\",\"payload\":{{}}}},{{\"state\":\"logged_in\",\"payload\":{{\"userId\":\"acct-2\"}}}}]}}"
+    Snapshot snapshot = json.parse_exact[Snapshot](raw) handle error:
+        return error
+    return "{snapshot.account.user_id}:{snapshot.audit.level}:{list.length[accounts.Session](snapshot.history)}"
+function account_unknown_payload_error() returns string:
+    string raw = "{{\"state\":\"logged_in\",\"payload\":{{\"userId\":\"acct-3\",\"level\":1}}}}"
+    accounts.Session item = json.parse_exact[accounts.Session](raw) handle error:
+        return error
+    return "unexpected"
+function audit_unknown_payload_error() returns string:
+    string raw = "{{\"state\":\"elevated\",\"payload\":{{\"level\":3,\"userId\":\"acct-3\"}}}}"
+    audit.Session item = json.parse_exact[audit.Session](raw) handle error:
+        return error
+    return "unexpected"
+function account_state_mismatch_error() returns string:
+    string raw = "{{\"state\":\"guest\",\"payload\":{{}}}}"
+    accounts.Session at logged_in item = json.parse[accounts.Session at logged_in](raw) handle error:
+        return error
+    return "unexpected"
+verify json_namespace_duplicate_machine_envelope:
+    assert account_json_roundtrip() == "accounts.Session:acct-1"
+    assert audit_json_parse() == "audit.Session:3"
+    assert nested_duplicate_machine_parse_exact() == "acct-2:5:2"
+    assert string.contains(account_unknown_payload_error(), "unknown field 'level' for accounts.Session.logged_in") == true
+    assert string.contains(audit_unknown_payload_error(), "unknown field 'userId' for audit.Session.elevated") == true
+    assert string.contains(account_state_mismatch_error(), "cannot finish state 'guest'") == true
