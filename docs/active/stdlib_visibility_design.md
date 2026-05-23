@@ -165,7 +165,7 @@ represented outside the current interpreter registry.
 Implemented:
 
 - `export` syntax for top-level `function`, `struct`, `enum`, `bitfield`,
-  `type`, and `interface` declarations.
+  `type`, `interface`, `machine`, and `actor` declarations.
 - Per-declaration `export function` syntax inside `mutual` blocks, allowing a
   mixed public/private recursive API surface.
 - Resolver visibility metadata on definitions, including namespace identity.
@@ -229,8 +229,9 @@ Still staged:
 
 1. Add visibility metadata to declarations in AST/resolver/typechecker.
    Prefer `export function`, `export struct`, `export enum`, `export bitfield`,
-   `export type`, and `export interface` over export lists for the first pass;
-   that keeps the public API mechanically searchable.
+   `export type`, `export interface`, `export machine`, and `export actor` over
+   export lists for the first pass; that keeps the public API mechanically
+   searchable.
 2. Preserve current behavior for declarations outside a namespace.
 3. Make namespace declarations private by default outside their namespace.
    Within the same namespace, unqualified helper calls continue to resolve
