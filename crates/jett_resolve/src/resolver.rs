@@ -1304,10 +1304,11 @@ impl Resolver {
         None
     }
 
-    fn expand_namespace_alias_path(&self, path: &str) -> Option<String> {
+    fn expand_namespace_alias_path(&mut self, path: &str) -> Option<String> {
         let (prefix, suffix) = path.split_once('.')?;
         let alias_def = self.lookup_local_non_root(prefix)?;
         let target = self.namespace_aliases.get(&alias_def)?;
+        self.used_defs.insert(alias_def);
         Some(format!("{target}.{suffix}"))
     }
 
@@ -2897,6 +2898,72 @@ function main() returns int64:
             .collect();
         assert_eq!(warnings.len(), 1, "expected 1 unused-import warning");
         assert!(warnings[0].message.contains("models"));
+    }
+
+    #[test]
+    fn namespace_alias_path_counts_as_used_import() {
+        let module = Module {
+            items: vec![
+                Item::Namespace(NamespaceDecl {
+                    name: ident("accounts", 0),
+                    span: sp(0, 18),
+                }),
+                Item::Struct(StructDef {
+                    name: ident("User", 20),
+                    type_params: vec![],
+                    fields: vec![],
+                    methods: vec![],
+                    exported: true,
+                    span: sp(20, 30),
+                }),
+                Item::Namespace(NamespaceDecl {
+                    name: ident("app", 40),
+                    span: sp(40, 53),
+                }),
+                Item::Function(FunctionDef {
+                    name: ident("main", 60),
+                    type_params: vec![],
+                    params: vec![],
+                    return_type: Some(named_type("nothing", 80)),
+                    body: Block {
+                        stmts: vec![
+                            Stmt::Use(UseDecl {
+                                path: ident("accounts", 100),
+                                alias: Some(ident("a", 112)),
+                                span: sp(95, 113),
+                            }),
+                            Stmt::Expr(ExprStmt {
+                                expr: Expr::Call(
+                                    Box::new(Expr::FieldAccess(
+                                        Box::new(ident_expr("a", 120)),
+                                        ident("User", 122),
+                                        sp(120, 126),
+                                    )),
+                                    vec![],
+                                    sp(120, 128),
+                                ),
+                                span: sp(120, 128),
+                            }),
+                        ],
+                        span: sp(90, 130),
+                    },
+                    exported: false,
+                    span: sp(60, 130),
+                }),
+            ],
+            span: sp(0, 130),
+        };
+
+        let result = resolve(&module);
+        let warnings: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == Severity::Warning && d.code.code() == 203)
+            .collect();
+        assert!(
+            warnings.is_empty(),
+            "used namespace aliases should not warn"
+        );
     }
 
     #[test]
