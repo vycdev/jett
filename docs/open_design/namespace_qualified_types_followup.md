@@ -47,9 +47,9 @@ JSON code without changing the language's broader namespace semantics.
   qualified names such as `a.User` and `b.User`.
 - Ordinary typechecker and interpreter registries now resolve namespaced
   declarations through canonical qualified names, namespace aliases, or the
-  current lexical namespace. The remaining leaf-oriented pressure is limited to
-  explicitly deferred areas such as state machines and bootstrap compatibility
-  paths.
+  current lexical namespace. The remaining leaf-oriented pressure is now mainly
+  in bootstrap/no-stdlib compatibility paths and the future import/prelude
+  design, not in checked user type metadata.
 - `use models as m` is a local namespace alias, not a type alias. The registered
   spelling and reflected metadata remain `models.User`.
 - Qualified struct, enum, bitfield, generic struct, reflection, JSON, interface
@@ -132,15 +132,17 @@ Local aliases are acceptable as a function-scoped readability tool because they
 do not change canonical symbol names, reflection metadata, or public API
 identity.
 
-The next implementation step is to leave ordinary type/function paths on
-canonical qualified symbols and avoid extending the remaining state-machine
-fallback behavior until the machine type model is explicit.
+The implemented path is now Option C for checked user-facing metadata. The next
+implementation step is to keep ordinary type/function paths on canonical
+qualified symbols while future import/prelude and bootstrap compatibility work
+decide how much root shorthand should exist.
 
 ## Suggested Next Tests
 
-- State machines: qualified construction/transition and basic `TypeKind`
-  reflection are covered; rich state/transition reflection and JSON
-  integration remain deferred.
+- State machines: qualified construction/transition, duplicate-leaf machines,
+  branch-local state facts, and basic `TypeKind` reflection are covered; rich
+  state/transition reflection and JSON integration remain deferred in the state
+  machine type-model note.
 - Interfaces: the direct qualified, `use`-alias, and duplicate-leaf interface
   paths are now covered by run-pass fixtures.
 - Structs, enums, generic structs, bitfields, same-leaf functions, type names,
