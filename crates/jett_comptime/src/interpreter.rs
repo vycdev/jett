@@ -5360,19 +5360,32 @@ impl Interpreter {
                     )));
                 };
 
+                let mut value = value.clone();
                 if field.shape == "bits" {
-                    if let Err(message) = self.checked_bitfield_field_numeric_value(
-                        &bitfield_name,
-                        &field.name,
-                        field.width,
-                        field.enum_type.as_ref(),
-                        value,
-                    ) {
-                        return Ok(result_fail(message));
+                    if field.enum_type.is_some() {
+                        if let Err(message) = self.checked_bitfield_field_numeric_value(
+                            &bitfield_name,
+                            &field.name,
+                            field.width,
+                            field.enum_type.as_ref(),
+                            &value,
+                        ) {
+                            return Ok(result_fail(message));
+                        }
+                    } else {
+                        value = match Self::normalized_plain_bitfield_field_value(
+                            &bitfield_name,
+                            &field.name,
+                            field.width as u16,
+                            &value,
+                        ) {
+                            Ok(value) => value,
+                            Err(message) => return Ok(result_fail(message)),
+                        };
                     }
                 }
 
-                bitfield_fields.push((field.name.clone(), value.clone()));
+                bitfield_fields.push((field.name.clone(), value));
             }
 
             return Ok(result_ok(Value::Struct {
@@ -5407,15 +5420,30 @@ impl Interpreter {
 
             if let Some(field_def) = bitfield.fields.get(index) {
                 if let BitfieldFieldKind::Bits { width, as_type } = &field_def.kind {
-                    if let Err(message) = self.bitfield_field_numeric_value(
-                        &bitfield,
-                        &field_def.name.name,
-                        *width,
-                        as_type.as_ref(),
-                        value,
-                    ) {
-                        return Ok(result_fail(message));
-                    }
+                    let value = if as_type.is_none() {
+                        match Self::normalized_plain_bitfield_field_value(
+                            &bitfield.name.name,
+                            &field_def.name.name,
+                            *width,
+                            value,
+                        ) {
+                            Ok(value) => value,
+                            Err(message) => return Ok(result_fail(message)),
+                        }
+                    } else {
+                        if let Err(message) = self.bitfield_field_numeric_value(
+                            &bitfield,
+                            &field_def.name.name,
+                            *width,
+                            as_type.as_ref(),
+                            value,
+                        ) {
+                            return Ok(result_fail(message));
+                        }
+                        value.clone()
+                    };
+                    bitfield_fields.push((field.name.clone(), value));
+                    continue;
                 }
             }
 
@@ -11537,6 +11565,62 @@ mod tests {
                 "bitfield 'Header' field 'version' is 4 bit(s) wide and cannot hold '16'"
                     .to_string()
             )
+        );
+    }
+
+    #[test]
+    fn type_construct_bitfield_finish_normalizes_checked_uint64_bits() {
+        let mut metadata = ReflectionMetadata::new();
+        metadata.insert_type_info(ReflectionTypeInfo::new(
+            "Header",
+            "bitfield",
+            None,
+            false,
+            Vec::new(),
+        ));
+        metadata.insert_bitfield(
+            "Header",
+            ReflectionBitfieldInfo::new(
+                true,
+                vec![ReflectionBitfieldFieldInfo::new(
+                    0,
+                    "wide",
+                    "bits",
+                    64,
+                    uint64_type_info(),
+                    None,
+                )],
+            ),
+        );
+
+        let mut interp = Interpreter::new();
+        interp.set_reflection_metadata(Arc::new(metadata));
+
+        let builder = Value::TypeConstruction {
+            type_name: "Header".to_string(),
+            variant: None,
+            fields: vec![(
+                0,
+                "wide".to_string(),
+                "uint64".to_string(),
+                Value::Int64(42),
+            )],
+        };
+        let finished = interp
+            .call_builtin_with_type_args(
+                "type.construct_finish",
+                &[type_named("Header")],
+                &[builder],
+            )
+            .expect("type.construct_finish should be a typed builtin")
+            .expect("type.construct_finish should evaluate");
+
+        assert_eq!(
+            finished,
+            result_ok(Value::Struct {
+                type_name: "Header".to_string(),
+                fields: vec![("wide".to_string(), Value::Uint64(42))],
+            })
         );
     }
 
