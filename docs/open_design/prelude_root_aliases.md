@@ -160,7 +160,8 @@ Concretely, a safe implementation should:
 1. Done: parser support for `export root type`, with parser rejection for
    non-type `export root` items.
 2. Done: resolver support is stdlib-only, type-alias-only, and allowlisted to
-   `JsonValue`; project-file root aliases are rejected.
+   `JsonValue = json.JsonTree`; project-file root aliases and any other target
+   are rejected.
 3. Done: root exports register as root-scope names rather than
    namespace-private or namespace-public names; otherwise namespace visibility
    diagnostics would treat `JsonValue` as an external `prelude.JsonValue`

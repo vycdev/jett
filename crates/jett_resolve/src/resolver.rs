@@ -345,6 +345,13 @@ impl Resolver {
             ));
             return None;
         }
+        if !matches!(&alias.base_type, TypeExpr::Named(ident) if ident.name == "json.JsonTree") {
+            self.sink.emit(errors::invalid_root_export(
+                "`export root type JsonValue` must alias `json.JsonTree` in this stage",
+                alias.base_type.span(),
+            ));
+            return None;
+        }
 
         self.declare_top_level_with_metadata(
             &alias.name.name,
@@ -1821,6 +1828,25 @@ export root type JsonValue = int64 where value > 0
             .collect();
         assert_eq!(errors.len(), 1, "expected root export error");
         assert!(errors[0].message.contains("does not support refinements"));
+    }
+
+    #[test]
+    fn stdlib_root_export_rejects_non_json_tree_target() {
+        let module = parse_module_with_file(
+            r#"
+export root type JsonValue = int64
+"#,
+            FileId::new(STDLIB_FILE_ID_START),
+        );
+
+        let result = resolve(&module);
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == Severity::Error && d.code.code() == 209)
+            .collect();
+        assert_eq!(errors.len(), 1, "expected root export error");
+        assert!(errors[0].message.contains("must alias `json.JsonTree`"));
     }
 
     #[test]
