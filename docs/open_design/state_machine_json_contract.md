@@ -1,17 +1,21 @@
 # State Machine JSON Contract
 
-Status: open design.
+Status: partially implemented.
 
 Jett now has checked reflection for state-machine kind tags, declared states,
-state payload fields, and transition edges. JSON support should still remain
-blocked until the wire contract is explicit enough that an agent can predict it
-from local source.
+state payload fields, transition edges, active state values, and active payload
+field reads. JSON serialization now uses that reflection to emit the envelope
+shape below. JSON parsing still remains blocked until reflected construction for
+machine values has an equally explicit checked path.
 
 ## Current Invariant
 
-- `json.parse`, `json.parse_exact`, `json.serialize`, and
-  `json.serialize_public` reject bare `Machine` and `Machine at state` targets,
-  including nested machine fields inside structs and containers.
+- `json.serialize` and `json.serialize_public` accept bare `Machine` and
+  `Machine at state` targets, including nested machine fields inside structs
+  and containers, when all serialized payload fields are JSON-compatible.
+- `json.parse` and `json.parse_exact` still reject bare `Machine` and
+  `Machine at state` targets, including nested machine fields inside structs
+  and containers.
 - Machine reflection is available through `type.machine_layout[T]()`,
   `type.machine_states[T]()`, and `type.machine_transitions[T]()`.
 - Value-level machine reflection is available through
@@ -70,12 +74,12 @@ unknown or missing `state` tag.
 
 ## Serialize Semantics
 
-`json.serialize[Machine]` and `json.serialize[Machine at state]` should emit the
-same envelope shape. The state-qualified type is a static precision fact, not a
+`json.serialize[Machine]` and `json.serialize[Machine at state]` emit the same
+envelope shape. The state-qualified type is a static precision fact, not a
 different wire format.
 
-`json.serialize_public` should project state payload fields by the same public
-record rules used for structs:
+`json.serialize_public` projects state payload fields by the same public record
+rules used for structs:
 
 - omit secret-bearing payload fields that can be projected away,
 - reject secret wrappers and secret-bearing enum payloads that cannot be

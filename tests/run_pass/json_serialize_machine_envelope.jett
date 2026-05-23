@@ -1,0 +1,41 @@
+namespace test
+machine Session:
+    states:
+        guest
+        logged_in(user_id: string, display_name: string serialize "displayName")
+    transitions:
+        guest to logged_in
+machine TokenLifecycle:
+    states:
+        issued(token: secret[string], public_id: string serialize "publicId")
+        revoked
+    transitions:
+        issued to revoked
+struct SessionBox:
+    current: Session at logged_in
+    history: list[Session]
+function logged_in_session_json() returns string:
+    Session session = Session.transition(Session(guest), logged_in, "user-1", "Ada")
+    return json.serialize[Session](view session)
+function logged_in_state_json() returns string:
+    Session at logged_in session = Session(logged_in, "user-2", "Lin")
+    return json.serialize[Session at logged_in](view session)
+function guest_session_json() returns string:
+    Session session = Session(guest)
+    return json.serialize[Session](view session)
+function nested_session_json() returns string:
+    Session at logged_in active = Session.transition(Session(guest), logged_in, "user-3", "Bea")
+    Session logged = active
+    SessionBox box = SessionBox(current: active, history: list(Session(guest), logged))
+    return json.serialize[SessionBox](view box)
+function public_token_json() returns string:
+    TokenLifecycle token = TokenLifecycle(issued, "secret-token", "tok-1")
+    return json.serialize_public[TokenLifecycle](view token)
+verify json_serialize_machine_envelope:
+    assert logged_in_session_json() == "{{\"state\":\"logged_in\",\"payload\":{{\"user_id\":\"user-1\",\"displayName\":\"Ada\"}}}}"
+    assert logged_in_state_json() == "{{\"state\":\"logged_in\",\"payload\":{{\"user_id\":\"user-2\",\"displayName\":\"Lin\"}}}}"
+    assert guest_session_json() == "{{\"state\":\"guest\",\"payload\":{{}}}}"
+    string nested = nested_session_json()
+    assert string.contains(nested, "\"current\":{{\"state\":\"logged_in\",\"payload\":{{\"user_id\":\"user-3\",\"displayName\":\"Bea\"}}}}") == true
+    assert string.contains(nested, "\"history\":[{{\"state\":\"guest\",\"payload\":{{}}}},{{\"state\":\"logged_in\",\"payload\":{{\"user_id\":\"user-3\",\"displayName\":\"Bea\"}}}}]") == true
+    assert public_token_json() == "{{\"state\":\"issued\",\"payload\":{{\"publicId\":\"tok-1\"}}}}"

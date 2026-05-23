@@ -16,6 +16,7 @@ mutual:
     function json_serialize_public_map_reflected[T](view value: T) returns string
     function json_serialize_public_optional_reflected[T](view value: T) returns string
     function json_serialize_public_result_reflected[T](view value: T) returns string
+    function json_serialize_public_machine_reflected[T](view value: T) returns string
     function json_serialize_public_record_reflected[T](view value: T) returns string
 function json_serialize_public_reflected[T](view value: T) returns string:
     TypeInfo info = type.info[T]()
@@ -115,6 +116,10 @@ function json_serialize_public_non_enum_reflected[T](view value: T, view info: T
             return json_serialize_public_optional_reflected[T](view value)
         result_type:
             return json_serialize_public_result_reflected[T](view value)
+        machine_type:
+            return json_serialize_public_machine_reflected[T](view value)
+        machine_state_type:
+            return json_serialize_public_machine_reflected[T](view value)
         other:
             return json_serialize_public_record_reflected[T](view value)
 function json_serialize_public_list_reflected[T](view value: T) returns string:
@@ -153,6 +158,21 @@ function json_serialize_public_result_reflected[T](view value: T) returns string
                 return json_stdlib_single_entry_object("fail", encoded)
         string encoded = json_serialize_public_reflected[Ok](view item)
         return json_stdlib_single_entry_object("ok", encoded)
+function json_serialize_public_machine_reflected[T](view value: T) returns string:
+    TypeMachineState state = type.machine_state_value[T](view value)
+    list[string] payload_fields = list.new[string]()
+    for field in type.machine_state_value[T](view value).fields:
+        if field.has_secret == true:
+            continue
+        comptime type Field = field.type_info:
+            Field item = type.machine_field_value[T, Field](view value, view field)
+            string encoded = json_serialize_public_reflected[Field](view item)
+            payload_fields = list.append[string](payload_fields, json_stdlib_object_entry(field.serialize_name, encoded))
+    string payload = json_stdlib_object_from_parts(payload_fields)
+    list[string] envelope = list.new[string]()
+    envelope = list.append[string](envelope, json_stdlib_object_entry("state", json_stdlib_quote(state.name)))
+    envelope = list.append[string](envelope, json_stdlib_object_entry("payload", payload))
+    return json_stdlib_object_from_parts(envelope)
 function json_serialize_public_record_reflected[T](view value: T) returns string:
     list[string] fields = list.new[string]()
     for field in type.fields[T]():

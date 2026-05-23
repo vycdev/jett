@@ -422,12 +422,13 @@ Types are interned for O(1) comparison: each unique type gets a `TypeId`. The ty
 | `Orderable` | `int64`, `float64`, `string` | `<`, `>`, `<=`, `>=` |
 | `Displayable` | `int64`, `float64`, `string`, `bool` | String interpolation `{expr}` (compiler-stdlib coupling) |
 | `Hashable` | `int64`, `string`, `bool` | `map` keys, `set` elements |
-| `Serializable` | JSON-data primitives, structs, enums, bitfields, and raw JSON tree aliases | `json.serialize[T]()`, `json.parse[T]()`, `json.parse_exact[T]()` |
+| `Serializable` | JSON-data primitives, structs, enums, bitfields, serializable machine values, and raw JSON tree aliases | `json.serialize[T]()`, `json.parse[T]()`, `json.parse_exact[T]()` |
 
 These are ordinary `implement` blocks in the standard library, but the compiler has hardcoded knowledge of `Displayable` for string interpolation and JSON policy gates for parse/serialization. The JSON bodies are stdlib-reflected in normal builds; the compiler-owned part is the policy boundary, not format-specific field walking.
-Functions, actors, interfaces, `TypeConstruction`, bare machines, and
-state-qualified machine values are explicitly outside the current JSON data
-surface.
+Functions, actors, interfaces, and `TypeConstruction` are explicitly outside
+the current JSON data surface. Bare and state-qualified machine values can be
+serialized through the state/payload envelope, but typed machine parsing remains
+outside the current constructible JSON surface.
 
 #### 6b. Interface Verification
 
@@ -554,10 +555,10 @@ For each `machine` type:
   checked state list, state payload fields, and transition edges. Public
   reflection field names avoid reserved syntax tokens: machine layouts use
   `states` and `edges`, and each edge uses `source` / `target`.
-- JSON policy gates reject `Machine` and `Machine at state` targets until that
-  serialization contract exists; callers should serialize explicit DTO
-  structs/enums at machine boundaries for now. The current open design prefers
-  an envelope object with `state` and `payload` keys.
+- JSON policy gates allow `Machine` and `Machine at state` serialization through
+  an envelope object with `state` and `payload` keys. The parse gates still
+  reject machine targets until reflected machine construction has a checked
+  design.
 
 #### 6h. Complexity Limits Enforcement
 
@@ -587,7 +588,7 @@ The HIR is the first representation where generic functions are fully expanded. 
 2. **Method resolution:** `Dog.speak(view my_dog)` is resolved to the specific `implement Speaker for Dog` function.
 3. **Auto-view for field access:** `self.x` is annotated as an implicit view operation.
 4. **Primitive copyability:** Primitive types (`int64`, `float64`, `bool`, `string`) are marked as implicitly copyable — they don't follow linear consumption rules.
-5. **Comptime reflection lowering:** Preserve enough type metadata for comptime code to inspect `type.name[T]()`, `type.kind[T]()`, `type.has_secret[T]()`, `type.fields[T]()`, bitfield layout metadata, and state-machine state/transition metadata. JSON serialization should be expressible in terms of these reflection primitives rather than as format-specific HIR magic. Struct, bitfield, and enum deserialization can now use the `TypeConstruction` builder to build `T` from parsed field values; the final construction-block syntax is still pending.
+5. **Comptime reflection lowering:** Preserve enough type metadata for comptime code to inspect `type.name[T]()`, `type.kind[T]()`, `type.has_secret[T]()`, `type.fields[T]()`, bitfield layout metadata, state-machine state/transition metadata, active machine states, and reflected active-state payload fields. JSON serialization is expressible in terms of these reflection primitives rather than as format-specific HIR magic. Struct, bitfield, and enum deserialization can now use the `TypeConstruction` builder to build `T` from parsed field values; reflected machine construction and the final construction-block syntax are still pending.
 
 ---
 
@@ -1171,7 +1172,7 @@ diagnostic. Code that requires a particular shape should first check
 `type.variant_value`, `type.machine_state_value`, `type.machine_field_value`,
 and reflection construction remain checked.
 
-Format-specific modules such as `json` should live in `.jett` stdlib code once reflection can express their behavior. JSON is now staged this way for normal builds: public compiler-policy entrypoints delegate to trusted stdlib wrappers, raw JSON uses the stdlib `json.JsonTree` representation, and typed parse/serialize bodies consume the same type metadata (`TypeInfo`, `TypeKind`, `TypePrimitive`, `TypeField`, `TypeBitfieldField`, `TypeVariant`, `serialize_name`, field values, layout information, and secret information) that user comptime code can inspect. Remaining Rust-side JSON behavior should stay limited to bootstrap/no-stdlib compatibility paths or compiler-owned policy gates.
+Format-specific modules such as `json` should live in `.jett` stdlib code once reflection can express their behavior. JSON is now staged this way for normal builds: public compiler-policy entrypoints delegate to trusted stdlib wrappers, raw JSON uses the stdlib `json.JsonTree` representation, and typed parse/serialize bodies consume the same type metadata (`TypeInfo`, `TypeKind`, `TypePrimitive`, `TypeField`, `TypeBitfieldField`, `TypeMachineState`, `TypeVariant`, `serialize_name`, field values, active machine state values, layout information, and secret information) that user comptime code can inspect. Remaining Rust-side JSON behavior should stay limited to bootstrap/no-stdlib compatibility paths or compiler-owned policy gates.
 
 **2. Stdlib functions** — normal Jett code shipped in `stdlib/`:
 

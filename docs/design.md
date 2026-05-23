@@ -3350,15 +3350,15 @@ Calling `json.serialize` on a struct with secret fields is a compile error. The 
 
 #### Serialization with State Machines
 
-State-machine JSON is a target design, not a current compiler guarantee. The
-current compiler deliberately rejects `json.serialize`, `json.serialize_public`,
-`json.parse`, and `json.parse_exact` for both bare `Machine` and
-`Machine at state` targets. Machine reflection can now describe states and
-transition edges, but JSON still needs a deliberate serialization contract for
-state tags, payload shape, transition compatibility, and schema evolution.
+State-machine values serialize through the same canonical JSON entrypoints as
+records and enums. `json.serialize[Machine](view value)` and
+`json.serialize[Machine at state](view value)` emit an envelope with the active
+state tag and that state's payload fields. `json.serialize_public` uses the same
+envelope but omits secret-bearing payload fields, just like public record
+projection. Typed machine parsing is still deliberately blocked until reflected
+machine construction has a checked design.
 
-The intended future shape is auto-generated serialization with the state tag
-included:
+The serialized shape includes the state tag:
 
 ```
 machine OrderProcess:
@@ -3374,15 +3374,12 @@ string json_string = json.serialize[OrderProcess](view order)
 
 OrderProcess restored = json.parse[OrderProcess](json_string) handle error:
     return fail("invalid order data")
-# restored is in the "draft" state with the same items
+# currently rejected: machine JSON parsing is not implemented yet
 ```
 
-When this lands, the serialized form will include the state name and
-deserialization will restore the correct state with the correct state-specific
-data. The open design currently prefers an envelope with `state` and `payload`
-keys to avoid collisions with payload fields. Until then, code that needs JSON
-at a state-machine boundary should expose an explicit data-transfer struct or
-enum so the JSON shape remains visible in source.
+The envelope uses `state` and `payload` keys to avoid collisions with payload
+fields. Transition edges are reflection metadata, not wire validation: ordinary
+JSON documents describe the current state, not the history that reached it.
 
 #### Serialization with Refinement Types
 
@@ -6466,7 +6463,7 @@ External dependencies live in the `deps/` directory as vendored `.jett` files tr
 ## Open Questions
 
 - **Comptime boundaries** — what standard library functions are available at comptime? All pure functions? Only a subset? File I/O at comptime (for code generation from schemas)?
-- **Comptime struct, enum, bitfield, and machine introspection** — the reflection surface now includes `type.name[T]()`, `type.kind[T]()`, `type.kind_tag[T]()`, `type.primitive_tag[T]()`, `type.has_secret[T]()`, `type.info[T]()`, `type.arg[T](index)`, `type.fields[T]()`, `type.bitfield_layout[T]()`, `type.bitfield_fields[T]()`, `type.machine_layout[T]()`, `type.machine_states[T]()`, `type.machine_transitions[T]()`, `type.machine_state_value[T](view value)`, `type.machine_field_value[T, U](view value, view field)`, `type.variants[T]()`, `type.variant_value[T](view value)`, checked `type.field_value[T, U](view value, view field)`, checked `type.variant_field_value[T, U](view value, view field)`, and reflected struct/bitfield/enum construction through `type.construct_start[T]()`, `type.construct_variant_start[T](variant)`, `type.construct_put[T, U](builder, field, value)`, and `type.construct_finish[T](builder)`. `type.info[T]()` returns recursive `TypeInfo`, including base metadata for aliases and refinements, structured `TypeKind` tags, and optional structured `TypePrimitive` tags for primitive types; `type.arg[T](index)` returns indexed wrapper/base metadata and direct literal-index calls can bind scoped comptime types; `type.fields[T]()` returns `list[TypeField]` for struct and bitfield fields, including `index`, `name`, `type_name`, `kind`, `serialize_name`, `has_secret`, and `type_info`; `type.bitfield_layout[T]()` returns `TypeBitfield` with byte-order metadata and field layout; `type.bitfield_fields[T]()` returns `list[TypeBitfieldField]` with bit widths, payload shape, semantic field type, and optional enum annotation metadata; `type.machine_layout[T]()` returns `TypeMachine` with ordered states and transition edges; `type.machine_states[T]()` returns `list[TypeMachineState]` with state payload fields and state-level `has_secret`; `type.machine_transitions[T]()` returns `list[TypeMachineTransition]` with source/target names and indexes; `type.machine_state_value[T](view value)` exposes the active state for a concrete machine value; `type.machine_field_value[T, U](view value, view field)` reads an active-state payload field through reflected metadata; `type.variants[T]()` returns `list[TypeVariant]` with discriminants and enum payload fields represented as `TypeField` metadata, while `type.variant_value[T](view value)` exposes the active variant for a concrete enum value. Shape-specific aggregate reflection APIs are total probes: for non-matching top-level kinds they return empty metadata, while value-carrying and construction APIs remain checked. Field-level `serialize "..."` names are carried into `serialize_name`, and normal JSON execution now uses trusted stdlib `.jett` wrappers for raw `JsonTree` parsing/access plus reflected typed parse/serialize, while compiler-owned public entrypoints still enforce policy for handled parse results, `view`, map keys, unsupported parse/serialize targets, and secret exposure. Still open: finalizing which JSON policy gates can become ordinary stdlib constraints, deciding the final public raw JSON spelling policy, state-machine JSON wire support, and the final construction-block syntax. See `docs/active/stdlib_json_extraction_plan.md` and `docs/active/canonical_reflection_metadata_plan.md`.
+- **Comptime struct, enum, bitfield, and machine introspection** — the reflection surface now includes `type.name[T]()`, `type.kind[T]()`, `type.kind_tag[T]()`, `type.primitive_tag[T]()`, `type.has_secret[T]()`, `type.info[T]()`, `type.arg[T](index)`, `type.fields[T]()`, `type.bitfield_layout[T]()`, `type.bitfield_fields[T]()`, `type.machine_layout[T]()`, `type.machine_states[T]()`, `type.machine_transitions[T]()`, `type.machine_state_value[T](view value)`, `type.machine_field_value[T, U](view value, view field)`, `type.variants[T]()`, `type.variant_value[T](view value)`, checked `type.field_value[T, U](view value, view field)`, checked `type.variant_field_value[T, U](view value, view field)`, and reflected struct/bitfield/enum construction through `type.construct_start[T]()`, `type.construct_variant_start[T](variant)`, `type.construct_put[T, U](builder, field, value)`, and `type.construct_finish[T](builder)`. `type.info[T]()` returns recursive `TypeInfo`, including base metadata for aliases and refinements, structured `TypeKind` tags, and optional structured `TypePrimitive` tags for primitive types; `type.arg[T](index)` returns indexed wrapper/base metadata and direct literal-index calls can bind scoped comptime types; `type.fields[T]()` returns `list[TypeField]` for struct and bitfield fields, including `index`, `name`, `type_name`, `kind`, `serialize_name`, `has_secret`, and `type_info`; `type.bitfield_layout[T]()` returns `TypeBitfield` with byte-order metadata and field layout; `type.bitfield_fields[T]()` returns `list[TypeBitfieldField]` with bit widths, payload shape, semantic field type, and optional enum annotation metadata; `type.machine_layout[T]()` returns `TypeMachine` with ordered states and transition edges; `type.machine_states[T]()` returns `list[TypeMachineState]` with state payload fields and state-level `has_secret`; `type.machine_transitions[T]()` returns `list[TypeMachineTransition]` with source/target names and indexes; `type.machine_state_value[T](view value)` exposes the active state for a concrete machine value; `type.machine_field_value[T, U](view value, view field)` reads an active-state payload field through reflected metadata; `type.variants[T]()` returns `list[TypeVariant]` with discriminants and enum payload fields represented as `TypeField` metadata, while `type.variant_value[T](view value)` exposes the active variant for a concrete enum value. Shape-specific aggregate reflection APIs are total probes: for non-matching top-level kinds they return empty metadata, while value-carrying and construction APIs remain checked. Field-level `serialize "..."` names are carried into `serialize_name`, and normal JSON execution now uses trusted stdlib `.jett` wrappers for raw `JsonTree` parsing/access plus reflected typed parse/serialize, while compiler-owned public entrypoints still enforce policy for handled parse results, `view`, map keys, unsupported parse/serialize targets, and secret exposure. Still open: finalizing which JSON policy gates can become ordinary stdlib constraints, deciding the final public raw JSON spelling policy, machine JSON parse construction, and the final construction-block syntax. See `docs/active/stdlib_json_extraction_plan.md` and `docs/active/canonical_reflection_metadata_plan.md`.
 - **Hot reloading** — can code be swapped in a running program without restarting? Important for web servers, long-lived processes, and rapid iteration. Open questions: how does it interact with actors holding state? What happens to in-flight messages? Does it require recompile + process restart, or true in-place code swap? How do linear types and capabilities interact with swapped functions?
 - **C binding file format** — what exactly do the generated `.jett` binding files look like? How are opaque handle types declared? How does the compiler know a function is an FFI call vs a normal Jett function? Is there a special `extern` or `foreign` keyword? How are C calling conventions, struct layouts, and memory ownership rules expressed in the binding file? The current examples are sketches — the actual syntax needs to be designed.
 - **Self-hosting timeline** — at what point is Jett mature enough to rewrite the compiler from Rust into Jett?

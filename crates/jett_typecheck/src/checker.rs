@@ -1028,9 +1028,10 @@ impl<'a> TypeChecker<'a> {
                 self.json_public_projection_allows_secret_data_inner(*key, visited)
                     && self.json_public_projection_allows_secret_data_inner(*value, visited)
             }
-            Type::Struct(_) | Type::Bitfield(_) => true,
+            Type::Struct(_) | Type::Bitfield(_) | Type::Machine(_) | Type::MachineState { .. } => {
+                true
+            }
             Type::Enum(_) => !self.type_contains_secret_data(ty),
-            Type::Machine(_) | Type::MachineState { .. } => !self.type_contains_secret_data(ty),
             Type::Refinement { base, .. } => {
                 self.json_public_projection_allows_secret_data_inner(*base, visited)
             }
@@ -1741,20 +1742,26 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn json_unsupported_serialize_types(&self, ty: TypeId) -> Vec<String> {
-        self.json_unsupported_data_types(ty, false)
+        self.json_unsupported_data_types(ty, false, true)
     }
 
     fn json_unsupported_parse_types(&self, ty: TypeId) -> Vec<String> {
-        self.json_unsupported_data_types(ty, true)
+        self.json_unsupported_data_types(ty, true, false)
     }
 
-    fn json_unsupported_data_types(&self, ty: TypeId, descend_into_secret: bool) -> Vec<String> {
+    fn json_unsupported_data_types(
+        &self,
+        ty: TypeId,
+        descend_into_secret: bool,
+        allow_machine_values: bool,
+    ) -> Vec<String> {
         let mut visited = HashSet::new();
         let mut unsupported_types = HashSet::new();
         let mut unsupported = Vec::new();
         self.collect_json_unsupported_data_types(
             ty,
             descend_into_secret,
+            allow_machine_values,
             &mut visited,
             &mut unsupported_types,
             &mut unsupported,
@@ -1777,6 +1784,7 @@ impl<'a> TypeChecker<'a> {
         &self,
         ty: TypeId,
         descend_into_secret: bool,
+        allow_machine_values: bool,
         visited: &mut HashSet<TypeId>,
         unsupported_types: &mut HashSet<TypeId>,
         unsupported: &mut Vec<String>,
@@ -1804,15 +1812,54 @@ impl<'a> TypeChecker<'a> {
             Type::TypeConstruction
             | Type::Interface(_)
             | Type::Actor(_)
-            | Type::Machine(_)
-            | Type::MachineState { .. }
             | Type::Function { .. } => {
                 self.push_json_unsupported_type(ty, unsupported_types, unsupported);
+            }
+            Type::Machine(mid) => {
+                if !allow_machine_values {
+                    self.push_json_unsupported_type(ty, unsupported_types, unsupported);
+                    return;
+                }
+                for (_, field_ty) in self
+                    .interner
+                    .resolve_machine(*mid)
+                    .states
+                    .iter()
+                    .flat_map(|state| state.fields.iter())
+                {
+                    self.collect_json_unsupported_data_types(
+                        *field_ty,
+                        descend_into_secret,
+                        allow_machine_values,
+                        visited,
+                        unsupported_types,
+                        unsupported,
+                    );
+                }
+            }
+            Type::MachineState { machine, state } => {
+                if !allow_machine_values {
+                    self.push_json_unsupported_type(ty, unsupported_types, unsupported);
+                    return;
+                }
+                if let Some(state_def) = self.interner.resolve_machine(*machine).state(*state) {
+                    for (_, field_ty) in &state_def.fields {
+                        self.collect_json_unsupported_data_types(
+                            *field_ty,
+                            descend_into_secret,
+                            allow_machine_values,
+                            visited,
+                            unsupported_types,
+                            unsupported,
+                        );
+                    }
+                }
             }
             Type::List(inner) | Type::Set(inner) | Type::Optional(inner) => self
                 .collect_json_unsupported_data_types(
                     *inner,
                     descend_into_secret,
+                    allow_machine_values,
                     visited,
                     unsupported_types,
                     unsupported,
@@ -1822,6 +1869,7 @@ impl<'a> TypeChecker<'a> {
                     self.collect_json_unsupported_data_types(
                         *inner,
                         descend_into_secret,
+                        allow_machine_values,
                         visited,
                         unsupported_types,
                         unsupported,
@@ -1831,6 +1879,7 @@ impl<'a> TypeChecker<'a> {
             Type::Map(_, value) => self.collect_json_unsupported_data_types(
                 *value,
                 descend_into_secret,
+                allow_machine_values,
                 visited,
                 unsupported_types,
                 unsupported,
@@ -1839,6 +1888,7 @@ impl<'a> TypeChecker<'a> {
                 self.collect_json_unsupported_data_types(
                     *ok,
                     descend_into_secret,
+                    allow_machine_values,
                     visited,
                     unsupported_types,
                     unsupported,
@@ -1846,6 +1896,7 @@ impl<'a> TypeChecker<'a> {
                 self.collect_json_unsupported_data_types(
                     *err,
                     descend_into_secret,
+                    allow_machine_values,
                     visited,
                     unsupported_types,
                     unsupported,
@@ -1856,6 +1907,7 @@ impl<'a> TypeChecker<'a> {
                     self.collect_json_unsupported_data_types(
                         *field_ty,
                         descend_into_secret,
+                        allow_machine_values,
                         visited,
                         unsupported_types,
                         unsupported,
@@ -1867,6 +1919,7 @@ impl<'a> TypeChecker<'a> {
                     self.collect_json_unsupported_data_types(
                         field.ty,
                         descend_into_secret,
+                        allow_machine_values,
                         visited,
                         unsupported_types,
                         unsupported,
@@ -1884,6 +1937,7 @@ impl<'a> TypeChecker<'a> {
                     self.collect_json_unsupported_data_types(
                         *field_ty,
                         descend_into_secret,
+                        allow_machine_values,
                         visited,
                         unsupported_types,
                         unsupported,
@@ -1893,6 +1947,7 @@ impl<'a> TypeChecker<'a> {
             Type::Refinement { base, .. } => self.collect_json_unsupported_data_types(
                 *base,
                 descend_into_secret,
+                allow_machine_values,
                 visited,
                 unsupported_types,
                 unsupported,
@@ -1945,6 +2000,26 @@ impl<'a> TypeChecker<'a> {
                     .flat_map(|variant| variant.fields.iter())
                 {
                     self.collect_json_non_string_map_key_types(*field_ty, visited, key_types, keys);
+                }
+            }
+            Type::Machine(mid) => {
+                for (_, field_ty) in self
+                    .interner
+                    .resolve_machine(*mid)
+                    .states
+                    .iter()
+                    .flat_map(|state| state.fields.iter())
+                {
+                    self.collect_json_non_string_map_key_types(*field_ty, visited, key_types, keys);
+                }
+            }
+            Type::MachineState { machine, state } => {
+                if let Some(state_def) = self.interner.resolve_machine(*machine).state(*state) {
+                    for (_, field_ty) in &state_def.fields {
+                        self.collect_json_non_string_map_key_types(
+                            *field_ty, visited, key_types, keys,
+                        );
+                    }
                 }
             }
             Type::Refinement { base, .. } => {

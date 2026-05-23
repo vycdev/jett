@@ -3801,56 +3801,59 @@ impl Interpreter {
 
     fn type_expr_machine_inner(&self, ty: &TypeExpr) -> ReflectionMachine {
         match ty {
-            TypeExpr::Named(ident) => self
-                .machines
-                .get(&ident.name)
-                .map(|machine| {
-                    let namespace = Self::type_name_namespace(&ident.name)
-                        .or(self.current_namespace.as_deref());
-                    let states = machine
-                        .states
-                        .iter()
-                        .map(|state| ReflectionMachineState {
-                            name: state.name.name.clone(),
-                            fields: state
-                                .fields
-                                .iter()
-                                .map(|field| ReflectionField {
-                                    name: field.name.name.clone(),
-                                    ty: self
-                                        .substitute_type_expr_in_namespace(&field.ty, namespace),
-                                    serialize_name: field
-                                        .serialize_name
-                                        .clone()
-                                        .unwrap_or_else(|| field.name.name.clone()),
-                                })
-                                .collect(),
-                        })
-                        .collect::<Vec<_>>();
-                    let edges = machine
-                        .transitions
-                        .iter()
-                        .filter_map(|transition| {
-                            let source_index = states
-                                .iter()
-                                .position(|state| state.name == transition.from.name)?;
-                            let target_index = states
-                                .iter()
-                                .position(|state| state.name == transition.to.name)?;
-                            Some(ReflectionMachineTransition {
-                                source_index,
-                                source: transition.from.name.clone(),
-                                target_index,
-                                target: transition.to.name.clone(),
+            TypeExpr::Named(ident) => {
+                let machine_name = encoded_machine_base_name(&ident.name);
+                self.machines
+                    .get(machine_name)
+                    .map(|machine| {
+                        let namespace = Self::type_name_namespace(machine_name)
+                            .or(self.current_namespace.as_deref());
+                        let states = machine
+                            .states
+                            .iter()
+                            .map(|state| ReflectionMachineState {
+                                name: state.name.name.clone(),
+                                fields: state
+                                    .fields
+                                    .iter()
+                                    .map(|field| ReflectionField {
+                                        name: field.name.name.clone(),
+                                        ty: self.substitute_type_expr_in_namespace(
+                                            &field.ty, namespace,
+                                        ),
+                                        serialize_name: field
+                                            .serialize_name
+                                            .clone()
+                                            .unwrap_or_else(|| field.name.name.clone()),
+                                    })
+                                    .collect(),
                             })
-                        })
-                        .collect();
-                    ReflectionMachine { states, edges }
-                })
-                .unwrap_or_else(|| ReflectionMachine {
-                    states: Vec::new(),
-                    edges: Vec::new(),
-                }),
+                            .collect::<Vec<_>>();
+                        let edges = machine
+                            .transitions
+                            .iter()
+                            .filter_map(|transition| {
+                                let source_index = states
+                                    .iter()
+                                    .position(|state| state.name == transition.from.name)?;
+                                let target_index = states
+                                    .iter()
+                                    .position(|state| state.name == transition.to.name)?;
+                                Some(ReflectionMachineTransition {
+                                    source_index,
+                                    source: transition.from.name.clone(),
+                                    target_index,
+                                    target: transition.to.name.clone(),
+                                })
+                            })
+                            .collect();
+                        ReflectionMachine { states, edges }
+                    })
+                    .unwrap_or_else(|| ReflectionMachine {
+                        states: Vec::new(),
+                        edges: Vec::new(),
+                    })
+            }
             TypeExpr::View(inner, _) | TypeExpr::StateQualified(inner, _, _) => {
                 self.type_expr_machine_inner(inner)
             }
@@ -4856,13 +4859,17 @@ impl Interpreter {
     fn checked_machine(&self, ty: &TypeExpr) -> Option<&ReflectionMachineInfo> {
         let metadata = self.reflection_metadata.as_ref()?;
         let type_name = type_expr_display(ty);
-        metadata.get_machine(&type_name).or_else(|| {
-            if let TypeExpr::StateQualified(inner, _, _) = ty {
-                metadata.get_machine(&type_expr_display(inner))
-            } else {
-                None
-            }
-        })
+        let base_name = type_expr_name(ty);
+        metadata
+            .get_machine(&type_name)
+            .or_else(|| metadata.get_machine(&base_name))
+            .or_else(|| {
+                if let TypeExpr::StateQualified(inner, _, _) = ty {
+                    metadata.get_machine(&type_expr_display(inner))
+                } else {
+                    None
+                }
+            })
     }
 
     fn checked_machine_value(&self, ty: &TypeExpr) -> Option<Value> {
@@ -9844,7 +9851,7 @@ fn eval_binary_op(left: &Value, op: BinOp, right: &Value) -> Result<Value, Strin
 /// Extract the simple name from a `TypeExpr` (e.g. `"int64"`, `"Port"`, `"list"`).
 fn type_expr_name(ty: &TypeExpr) -> String {
     match ty {
-        TypeExpr::Named(ident) => ident.name.clone(),
+        TypeExpr::Named(ident) => encoded_machine_base_name(&ident.name).to_string(),
         TypeExpr::Generic(ident, _, _) => ident.name.clone(),
         TypeExpr::View(inner, _) => type_expr_name(inner),
         TypeExpr::StateQualified(inner, _, _) => type_expr_name(inner),
@@ -9854,10 +9861,21 @@ fn type_expr_name(ty: &TypeExpr) -> String {
 
 fn type_expr_state_name(ty: &TypeExpr) -> Option<&str> {
     match ty {
+        TypeExpr::Named(ident) => encoded_machine_state_name(&ident.name),
         TypeExpr::View(inner, _) => type_expr_state_name(inner),
         TypeExpr::StateQualified(_, state, _) => Some(&state.name),
         _ => None,
     }
+}
+
+fn encoded_machine_base_name(name: &str) -> &str {
+    name.split_once(" at ")
+        .map(|(base, _)| base)
+        .unwrap_or(name)
+}
+
+fn encoded_machine_state_name(name: &str) -> Option<&str> {
+    name.split_once(" at ").map(|(_, state)| state)
 }
 
 fn comptime_type_info_binding(expr: &Expr) -> Option<&TypeExpr> {

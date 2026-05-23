@@ -59,16 +59,16 @@ Implemented:
   `type.machine_transitions[T]()` expose checked state payload fields and legal
   transition edges. Reflected machine layouts use `states` and `edges`; edges
   use `source` and `target` field names to avoid reserved syntax tokens.
-- JSON compiler policy rejects `Machine` and `Machine at state` targets for
-  `json.parse`, `json.parse_exact`, `json.serialize`, and
-  `json.serialize_public`; this keeps state-machine JSON a deliberate future
-  design choice instead of an accidental reflection fallback.
+- JSON compiler policy now allows `json.serialize` and
+  `json.serialize_public` for `Machine` and `Machine at state` targets through
+  the explicit state/payload envelope. `json.parse` and `json.parse_exact`
+  still reject machines until reflected machine construction is designed.
 - Interpreter unit tests cover construction, valid transitions, rejected
   invalid transitions, and `at` checks through hand-built AST modules.
 
 Not implemented:
 
-- State-machine JSON integration is not implemented yet; the proposed wire
+- State-machine JSON parsing is not implemented yet; the serialization wire
   contract lives in `docs/open_design/state_machine_json_contract.md`.
 
 ## Why This Should Not Be A Namespace Patch
@@ -190,13 +190,13 @@ to a known machine owner.
     - non-machine top-level types intentionally return empty machine metadata
       from those shape-specific probes, so generic reflection code can inspect
       `type.kind_tag` and then choose a shape without adding effect handling.
-11. Keep machine JSON unsupported until rich reflection lands. Done:
+11. Keep machine parsing unsupported until reflected construction lands. Done:
+    - `json.serialize` / `json.serialize_public` emit the explicit
+      state/payload envelope for bare and state-qualified machines,
     - `json.parse` / `json.parse_exact` reject bare and state-qualified
       machines,
-    - `json.serialize` / `json.serialize_public` reject bare and
-      state-qualified machines,
-    - wrapper and container traversal reports the underlying machine type
-      instead of silently treating it as a record.
+    - wrapper and container traversal still reports parse-time machine targets
+      instead of silently treating them as records.
 
 ## Open Questions
 
@@ -206,9 +206,9 @@ to a known machine owner.
   limited to positive guards plus exact single-state complements?
 - Should `expr at state` eventually narrow fields/paths beyond bare local
   variables?
-- Should machines participate in JSON serialization immediately, or wait until
-  the state-tag and payload schema policy in
-  `state_machine_json_contract.md` is stable?
+- Should machines participate in JSON parsing through a reflected construction
+  primitive, a dedicated machine-construction primitive, or compiler-owned
+  machine decode hooks?
 - Should machine transitions be ordinary static methods, compiler intrinsics, or
   stdlib-like generated functions?
 

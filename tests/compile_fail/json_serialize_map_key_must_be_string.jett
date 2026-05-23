@@ -1,6 +1,13 @@
 # ERROR: E0343
 namespace test
-
+machine Session:
+    states:
+        ready(values: map[int64, string])
+        closed
+    transitions:
+        ready to closed
 function bad_json_map_key() returns string:
     map[int64, string] values = map(1: "one")
     return json.serialize[map[int64, string]](view values)
+function bad_machine_payload_map_key(view session: Session) returns string:
+    return json.serialize[Session](view session)

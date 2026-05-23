@@ -446,6 +446,10 @@ run_pass_fixture!(run_pass_json_serialize, "json_serialize.jett");
 run_pass_fixture!(run_pass_json_sized_primitives, "json_sized_primitives.jett");
 run_pass_fixture!(run_pass_json_serialize_public, "json_serialize_public.jett");
 run_pass_fixture!(
+    run_pass_json_serialize_machine_envelope,
+    "json_serialize_machine_envelope.jett"
+);
+run_pass_fixture!(
     run_pass_json_serialize_public_omits_secret_fields,
     "json_serialize_public_omits_secret_fields.jett"
 );
@@ -1028,6 +1032,10 @@ compile_fail_fixture!(
     compile_fail_json_serialize_map_key_must_be_string,
     "json_serialize_map_key_must_be_string.jett"
 );
+#[test]
+fn compile_fail_json_serialize_map_key_must_be_string_covers_machine_payloads() {
+    assert_compile_fail_error_count("json_serialize_map_key_must_be_string.jett", 343, 2);
+}
 compile_fail_fixture!(
     compile_fail_json_serialize_public_map_key_must_be_string,
     "json_serialize_public_map_key_must_be_string.jett"
@@ -1121,12 +1129,12 @@ fn compile_fail_json_serialize_unsupported_type_omits_secret_fields() {
     assert_compile_fail_error_count("json_serialize_unsupported_type.jett", 347, 22);
 }
 compile_fail_fixture!(
-    compile_fail_json_serialize_machine_unsupported,
-    "json_serialize_machine_unsupported.jett"
+    compile_fail_json_serialize_machine_secret_blocked,
+    "json_serialize_machine_secret_blocked.jett"
 );
 #[test]
-fn compile_fail_json_serialize_machine_unsupported_covers_state_types() {
-    assert_compile_fail_error_count("json_serialize_machine_unsupported.jett", 347, 10);
+fn compile_fail_json_serialize_machine_secret_blocked_covers_state_types() {
+    assert_compile_fail_error_count("json_serialize_machine_secret_blocked.jett", 603, 3);
 }
 compile_fail_fixture!(
     compile_fail_json_parse_unsupported_type,
