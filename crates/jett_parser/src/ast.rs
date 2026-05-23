@@ -251,6 +251,7 @@ pub struct ReceiveHandler {
 #[derive(Debug, Clone)]
 pub struct MachineDef {
     pub name: Ident,
+    pub exported: bool,
     pub states: Vec<MachineState>,
     pub transitions: Vec<MachineTransition>,
     pub span: Span,

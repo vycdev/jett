@@ -7559,10 +7559,7 @@ impl<'a> TypeChecker<'a> {
         }
 
         if type_args.is_empty()
-            && let Some(callee_name) = callee_name.as_deref()
-            && let Some((owner_name, "transition")) = callee_name.rsplit_once('.')
-            && let Some(owner_ty) = self.named_types.get(owner_name).copied()
-            && let Type::Machine(mid) = *self.interner.resolve(owner_ty)
+            && let Some(mid) = self.machine_transition_owner(callee)
         {
             return self.check_machine_transition_call(mid, args, span);
         }
@@ -8579,6 +8576,39 @@ impl<'a> TypeChecker<'a> {
             machine: mid,
             state: target_state,
         })
+    }
+
+    fn machine_transition_owner(&self, callee: &Expr) -> Option<MachineId> {
+        let Expr::FieldAccess(base, field, _) = callee else {
+            return None;
+        };
+        if field.name != "transition" {
+            return None;
+        }
+
+        if let Some(def_id) = self
+            .resolve
+            .resolutions
+            .get(&callee.span())
+            .copied()
+            .or_else(|| self.decl_defs.get(&callee.span()).copied())
+        {
+            let def = self.resolve.scope_table.def(def_id);
+            if def.kind == DefKind::Machine {
+                if let Some(owner_ty) = self.named_types.get(&def.name).copied() {
+                    if let Type::Machine(mid) = *self.interner.resolve(owner_ty) {
+                        return Some(mid);
+                    }
+                }
+            }
+        }
+
+        let owner_name = self.expanded_dotted_expr_name(base)?;
+        let owner_ty = self.named_types.get(&owner_name).copied()?;
+        match self.interner.resolve(owner_ty) {
+            Type::Machine(mid) => Some(*mid),
+            _ => None,
+        }
     }
 
     fn check_machine_state_check(

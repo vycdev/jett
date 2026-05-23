@@ -30,6 +30,9 @@ Implemented:
 - State-specific payload field access is checked through ordinary field access
   on `Machine at state` values; bare `Machine` values do not expose payload
   fields.
+- `export machine` is parsed and feeds namespace visibility, so exported
+  namespaced machines can be used through qualified names and function-local
+  namespace aliases.
 - The comptime interpreter can register machines, construct values with
   `MachineName(state, ...)`, check `value at state`, and run
   `MachineName.transition(value, target, ...)`.
@@ -38,10 +41,7 @@ Implemented:
 
 Not implemented:
 
-- Machine declarations currently remain private because the parser AST has no
-  `export machine` flag yet.
-- Namespace-qualified machine fixtures do not yet run through the same checked
-  surface as structs, enums, actors, interfaces, and JSON-facing types.
+- Machine reflection and JSON integration are not modeled yet.
 
 ## Why This Should Not Be A Namespace Patch
 
@@ -112,8 +112,7 @@ to a known machine owner.
    - duplicate states,
    - transition endpoints exist,
    - per-state field types resolve,
-   - namespace ownership matches other top-level types. `export machine` still
-     needs a parser/AST visibility flag.
+   - namespace ownership matches other top-level types.
 4. Typecheck machine construction. Done:
    - first argument is a declared state,
    - payload fields match that state's declared fields,
@@ -129,7 +128,7 @@ to a known machine owner.
    - `Machine at state` values expose only that state's payload fields,
    - bare `Machine` values remain opaque,
    - fields from other states are rejected by ordinary member diagnostics.
-8. After the checked model exists, add namespace fixtures:
+8. After the checked model exists, add namespace fixtures. Done:
    - qualified machine construction,
    - `use`-alias machine construction,
    - duplicate-leaf machines,

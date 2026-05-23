@@ -258,7 +258,7 @@ impl Resolver {
                         DefKind::Machine,
                         m.name.span,
                         index,
-                        false,
+                        m.exported,
                     );
                 }
                 Item::Actor(a) => {
@@ -1310,12 +1310,20 @@ impl Resolver {
 
     fn resolve_namespace_prefix(&mut self, path: &str, span: Span, item_index: usize) -> bool {
         if let Some(expanded) = self.expand_namespace_alias_path(path) {
-            if let Some(def_id) = self.scope_table.lookup(self.current_scope, &expanded) {
-                self.record_resolution(&expanded, span, item_index, def_id);
+            if self.resolve_namespace_prefix_candidate(&expanded, span, item_index) {
                 return true;
             }
         }
 
+        self.resolve_namespace_prefix_candidate(path, span, item_index)
+    }
+
+    fn resolve_namespace_prefix_candidate(
+        &mut self,
+        path: &str,
+        span: Span,
+        item_index: usize,
+    ) -> bool {
         if let Some(def_id) = self.scope_table.lookup(self.current_scope, path) {
             self.record_resolution(path, span, item_index, def_id);
             return true;

@@ -4171,6 +4171,18 @@ export type Port = int64 where value > 0
 
 export interface Displayable:
     function display(view value: self) returns string
+
+export machine Session:
+    states:
+        guest
+        logged_in(user_id: string)
+
+    transitions:
+        guest to logged_in
+
+export actor Worker:
+    receive ping:
+        return nothing
 ```
 
 Compiler-shipped standard library files may use the narrower

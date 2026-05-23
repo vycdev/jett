@@ -34,6 +34,9 @@ toward canonical qualified declarations:
 - Duplicate-leaf actors can now coexist when callers use fully qualified names
   or explicit namespace aliases; actor runtime registration and message dispatch
   preserve the canonical owner identity.
+- Exported state machines can now be constructed and transitioned through
+  qualified names and function-local namespace aliases, including duplicate
+  leaf names across namespaces.
 
 That was the right first bite because it unblocks stdlib-style reflection and
 JSON code without changing the language's broader namespace semantics.
@@ -49,11 +52,9 @@ JSON code without changing the language's broader namespace semantics.
   paths.
 - `use models as m` is a local namespace alias, not a type alias. The registered
   spelling and reflected metadata remain `models.User`.
-- State machines still have some leaf-name-oriented paths. Qualified actor
-  spawn and duplicate-leaf actor owners are covered for exported actors.
-  Qualified struct, enum, bitfield, generic struct, reflection, JSON, and
-  interface implementation paths are covered first because they were the JSON
-  extraction blocker.
+- Qualified struct, enum, bitfield, generic struct, reflection, JSON, interface
+  implementation, actor, and state-machine paths are covered by canonical
+  names where those features have checked type metadata.
 - Typechecker canonical names for namespaced user types now use the qualified
   spelling in reflection and `TypeId` display paths covered by the current
   tests.
@@ -135,23 +136,10 @@ The next implementation step is to leave ordinary type/function paths on
 canonical qualified symbols and avoid extending the remaining state-machine
 fallback behavior until the machine type model is explicit.
 
-## Deferred Machine Work
-
-Actor spawn now accepts qualified and `use`-alias names for exported actors,
-namespaced actor bodies are checked through their canonical `namespace.Actor`
-metadata, and duplicate-leaf actor owners are covered by
-`tests/run_pass/namespace_duplicate_leaf_actors.jett`.
-
-State machines have more runtime namespace support than actor spawn, but their
-type-system story is still thin. Treat namespaced machine tests as design probes
-until the machine type model is made explicit. See
-`docs/open_design/state_machine_type_model.md`.
-
 ## Suggested Next Tests
 
-- State machines: add a small namespaced machine fixture once the machine type
-  model is explicit enough for diagnostics and reflection to agree on canonical
-  names.
+- State machines: runtime execution, reflection, and JSON integration can be
+  covered after those surfaces are intentionally modeled.
 - Interfaces: the direct qualified, `use`-alias, and duplicate-leaf interface
   paths are now covered by run-pass fixtures.
 - Structs, enums, generic structs, bitfields, same-leaf functions, type names,

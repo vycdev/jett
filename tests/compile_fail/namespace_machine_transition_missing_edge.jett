@@ -1,0 +1,15 @@
+# ERROR: E0352
+namespace auth
+
+export machine Session:
+    states:
+        guest
+        logged_in(user_id: string)
+
+    transitions:
+        guest to logged_in
+
+namespace app
+
+function bad(session: auth.Session at logged_in) returns auth.Session at guest:
+    return auth.Session.transition(session, guest)

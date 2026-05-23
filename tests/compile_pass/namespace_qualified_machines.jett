@@ -1,0 +1,24 @@
+namespace auth
+
+export machine Session:
+    states:
+        guest
+        logged_in(user_id: string)
+
+    transitions:
+        guest to logged_in
+
+namespace app
+
+function direct_guest() returns auth.Session at guest:
+    return auth.Session(guest)
+
+function direct_login(session: auth.Session at guest) returns auth.Session at logged_in:
+    return auth.Session.transition(session, logged_in, "user-1")
+
+function alias_login() returns auth.Session at logged_in:
+    use auth as a
+    return a.Session.transition(a.Session(guest), logged_in, "user-2")
+
+function user_id(session: auth.Session at logged_in) returns string:
+    return session.user_id

@@ -2745,6 +2745,7 @@ mod tests {
     fn machine_def() -> MachineDef {
         MachineDef {
             name: ident("UserAuth"),
+            exported: false,
             states: vec![
                 MachineState {
                     name: ident("guest"),
