@@ -1077,6 +1077,8 @@ impl Interpreter {
                 let mut capabilities = HashMap::new();
                 for (arg, param) in args.iter().zip(actor_def.capability_params.iter()) {
                     let val = value_or_signal!(self, &arg.value);
+                    let param_ty = self.substitute_type_expr(&param.ty);
+                    let val = self.normalize_value_for_type(&param_ty, val)?;
                     let name = arg
                         .name
                         .as_ref()
@@ -1093,6 +1095,8 @@ impl Interpreter {
                 let mut state = HashMap::new();
                 for field in &actor_def.state_fields {
                     let val = value_or_signal!(self, &field.value);
+                    let field_ty = self.substitute_type_expr(&field.ty);
+                    let val = self.normalize_value_for_type(&field_ty, val)?;
                     state.insert(field.name.name.clone(), val);
                 }
                 self.pop_scope();
@@ -2053,6 +2057,11 @@ impl Interpreter {
             .find(|h| h.name.name == handler_name)
             .ok_or_else(|| format!("actor '{type_name}' has no handler '{handler_name}'"))?
             .clone();
+        let mut normalized_args = Vec::with_capacity(arg_values.len());
+        for (param, value) in handler.params.iter().zip(arg_values) {
+            let param_ty = self.substitute_type_expr(&param.ty);
+            normalized_args.push(self.normalize_value_for_type(&param_ty, value)?);
+        }
 
         // Execute handler body in a new scope with state + caps + params.
         self.push_scope();
@@ -2062,8 +2071,8 @@ impl Interpreter {
         for (name, val) in &caps_snapshot {
             self.set_variable(name, val.clone());
         }
-        for (param, val) in handler.params.iter().zip(arg_values.iter()) {
-            self.set_variable(&param.name.name, val.clone());
+        for (param, val) in handler.params.iter().zip(normalized_args) {
+            self.set_variable(&param.name.name, val);
         }
 
         // Execute the handler body, collecting signals.
@@ -2082,11 +2091,13 @@ impl Interpreter {
         }
 
         // Collect updated state field values before popping scope.
-        let state_field_names: Vec<String> = state_snapshot.keys().cloned().collect();
         let mut updated_state = state_snapshot;
-        for name in &state_field_names {
+        for field in &actor_def.state_fields {
+            let name = &field.name.name;
             // Check innermost scope(s) for the updated value.
             if let Some(val) = self.scopes.last().and_then(|s| s.get(name)).cloned() {
+                let field_ty = self.substitute_type_expr(&field.ty);
+                let val = self.normalize_value_for_type(&field_ty, val)?;
                 updated_state.insert(name.clone(), val);
             }
         }
@@ -2099,6 +2110,10 @@ impl Interpreter {
         }
 
         if is_ask {
+            if let Some(responds) = &handler.responds {
+                let responds = self.substitute_type_expr(responds);
+                respond_value = self.normalize_value_for_type(&responds, respond_value)?;
+            }
             Ok(respond_value)
         } else {
             Ok(Value::Nothing)
@@ -9468,6 +9483,10 @@ mod tests {
         })
     }
 
+    fn respond_stmt(value: Expr) -> Stmt {
+        Stmt::Respond(RespondStmt { value, span: sp() })
+    }
+
     /// Helper: create a function call expression.
     fn call(name: &str, args: Vec<Expr>) -> Expr {
         Expr::Call(
@@ -12792,6 +12811,87 @@ mod tests {
                 .unwrap(),
             Value::Uint64(42)
         );
+    }
+
+    #[test]
+    fn uint64_actor_boundaries_normalize_small_literal_carriers() {
+        let mut interp = Interpreter::new();
+        let uint64_param = |name: &str| Param {
+            view: false,
+            mutable: false,
+            name: ident(name),
+            ty: type_named("uint64"),
+            span: sp(),
+        };
+        let actor = ActorDef {
+            name: ident("Probe"),
+            capability_params: vec![uint64_param("seed")],
+            state_fields: vec![VarDecl {
+                mutable: true,
+                ty: type_named("uint64"),
+                name: ident("stored"),
+                value: var("seed"),
+                span: sp(),
+            }],
+            handlers: vec![
+                ReceiveHandler {
+                    name: ident("echo"),
+                    params: vec![uint64_param("value")],
+                    responds: Some(type_named("uint64")),
+                    body: block(vec![respond_stmt(var("value"))]),
+                    span: sp(),
+                },
+                ReceiveHandler {
+                    name: ident("stored"),
+                    params: vec![],
+                    responds: Some(type_named("uint64")),
+                    body: block(vec![respond_stmt(var("stored"))]),
+                    span: sp(),
+                },
+                ReceiveHandler {
+                    name: ident("reset"),
+                    params: vec![],
+                    responds: Some(type_named("uint64")),
+                    body: block(vec![assign("stored", int(7)), respond_stmt(var("stored"))]),
+                    span: sp(),
+                },
+            ],
+            exported: false,
+            span: sp(),
+        };
+        interp.register_actor(&actor);
+
+        let actor_value = interp
+            .eval_expr(&Expr::Spawn(
+                Box::new(Expr::Call(
+                    Box::new(var("Probe")),
+                    vec![named_arg("seed", int(42))],
+                    sp(),
+                )),
+                sp(),
+            ))
+            .unwrap();
+        interp.set_variable("probe", actor_value);
+
+        let ask_echo = Expr::Ask(
+            Box::new(Expr::Call(
+                Box::new(field_access(var("probe"), "echo")),
+                vec![CallArg {
+                    name: None,
+                    value: int(5),
+                    span: sp(),
+                }],
+                sp(),
+            )),
+            sp(),
+        );
+        let ask_stored = Expr::Ask(Box::new(field_access(var("probe"), "stored")), sp());
+        let ask_reset = Expr::Ask(Box::new(field_access(var("probe"), "reset")), sp());
+
+        assert_eq!(interp.eval_expr(&ask_echo).unwrap(), Value::Uint64(5));
+        assert_eq!(interp.eval_expr(&ask_stored).unwrap(), Value::Uint64(42));
+        assert_eq!(interp.eval_expr(&ask_reset).unwrap(), Value::Uint64(7));
+        assert_eq!(interp.eval_expr(&ask_stored).unwrap(), Value::Uint64(7));
     }
 
     #[test]

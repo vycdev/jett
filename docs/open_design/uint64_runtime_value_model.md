@@ -7,9 +7,10 @@ Jett exposes `uint64` as a primitive type. The interpreter now has a real
 direct local declarations and function parameter/return boundaries annotated as
 `uint64`, inline function parameter boundaries annotated as `uint64`, direct
 struct constructor fields and enum payloads annotated as `uint64`, reflected
-struct fields, enum payloads, and 64-bit bitfield fields, `uint64.from_string`,
-property generation, and reflected JSON parsing. This lets ordinary source and
-JSON decode/serialize the full unsigned range:
+struct fields, enum payloads, and 64-bit bitfield fields, actor capability,
+state, message parameter, and response boundaries annotated as `uint64`,
+`uint64.from_string`, property generation, and reflected JSON parsing. This lets
+ordinary source and JSON decode/serialize the full unsigned range:
 
 - `uint64 value = 18446744073709551615` succeeds.
 - `int64 value = 9223372036854775808` is rejected.
@@ -43,7 +44,8 @@ model; that path now exists for ordinary `uint64` literals.
    `u64::MAX`, direct local declarations and named function parameter/return
    boundaries, inline function parameter boundaries, direct and reflected struct
    fields and enum payloads, reflected 64-bit bitfield fields, core uint64
-   arithmetic and comparisons, JSON decode/encode, and unannotated 64-bit bitfield
+   arithmetic and comparisons, actor spawn/message/state boundaries, JSON
+   decode/encode, and unannotated 64-bit bitfield
    construction/field access/to-bytes/from-bytes have been updated.
 
 2. **Use one integer carrier with explicit signedness metadata.**
