@@ -9,6 +9,8 @@ struct CallbackGroup:
 struct SecretHandler:
     name: string
     callback: secret[function(int64) returns int64]
+enum Event:
+    callback(value: Callback)
 function bad_function_value(view callback: function(int64) returns int64) returns string:
     return json.serialize[function(int64) returns int64](view callback)
 function bad_public_function_value(view callback: function(int64) returns int64) returns string:
@@ -21,8 +23,39 @@ function bad_struct_function_field(view handler: Handler) returns string:
     return json.serialize_public[Handler](view handler)
 function bad_list_function_field(view group: CallbackGroup) returns string:
     return json.serialize_public[CallbackGroup](view group)
+function bad_list_function_value(view callbacks: list[Callback]) returns string:
+    return json.serialize[list[Callback]](view callbacks)
+function bad_public_list_function_value(view callbacks: list[Callback]) returns string:
+    return json.serialize_public[list[Callback]](view callbacks)
+function bad_set_function_value(view callbacks: set[Callback]) returns string:
+    return json.serialize[set[Callback]](view callbacks)
+function bad_public_set_function_value(view callbacks: set[Callback]) returns string:
+    return json.serialize_public[set[Callback]](view callbacks)
+function bad_map_function_value(view callbacks: map[string, Callback]) returns string:
+    return json.serialize[map[string, Callback]](view callbacks)
+function bad_public_map_function_value(view callbacks: map[string, Callback]) returns string:
+    return json.serialize_public[map[string, Callback]](view callbacks)
+function bad_optional_function_value(view callback: optional[Callback]) returns string:
+    return json.serialize[optional[Callback]](view callback)
+function bad_public_optional_function_value(view callback: optional[Callback]) returns string:
+    return json.serialize_public[optional[Callback]](view callback)
+function bad_result_ok_function_value(view callback: result[Callback, string]) returns string:
+    return json.serialize[result[Callback, string]](view callback)
+function bad_public_result_ok_function_value(view callback: result[Callback, string]) returns string:
+    return json.serialize_public[result[Callback, string]](view callback)
+function bad_result_error_function_value(view callback: result[string, Callback]) returns string:
+    return json.serialize[result[string, Callback]](view callback)
+function bad_public_result_error_function_value(view callback: result[string, Callback]) returns string:
+    return json.serialize_public[result[string, Callback]](view callback)
+function bad_enum_function_payload(view event: Event) returns string:
+    return json.serialize[Event](view event)
+function bad_public_enum_function_payload(view event: Event) returns string:
+    return json.serialize_public[Event](view event)
 function bad_type_construction_value() returns string:
     TypeConstruction builder = type.construct_start[Handler]()
     return json.serialize[TypeConstruction](view builder)
+function bad_public_type_construction_value() returns string:
+    TypeConstruction builder = type.construct_start[Handler]()
+    return json.serialize_public[TypeConstruction](view builder)
 function public_omits_secret_function_field(view handler: SecretHandler) returns string:
     return json.serialize_public[SecretHandler](view handler)
