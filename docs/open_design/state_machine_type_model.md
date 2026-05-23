@@ -27,9 +27,14 @@ Implemented:
   target payload arity/types, and return the target `Machine at state` type.
 - `expr at state` is checked as a boolean state test on machine values, with
   diagnostics for non-machine values and states not declared on the machine.
+- A positive `if value at state:` check narrows a bare or state-qualified
+  machine variable to `Machine at state` for that branch, so state payload
+  fields and transitions are available only under a visible guard.
 - State-specific payload field access is checked through ordinary field access
   on `Machine at state` values; bare `Machine` values do not expose payload
   fields.
+- State-qualified values can flow into bare `Machine` expectations, which
+  allows APIs to erase state and regain precision through explicit `at` guards.
 - `export machine` is parsed and feeds namespace visibility, so exported
   namespaced machines can be used through qualified names and function-local
   namespace aliases.
@@ -125,7 +130,8 @@ to a known machine owner.
    - target payload fields match the target state's fields,
    - return type is `Machine at target`.
 6. Typecheck `expr at state` as a bool check on machine values. Done. It does
-   not narrow branch-local state yet.
+   not narrow arbitrary expressions, but a positive `if name at state:` guard
+   narrows that variable in the guarded branch.
 7. Typecheck state-specific payload field access. Done:
    - `Machine at state` values expose only that state's payload fields,
    - bare `Machine` values remain opaque,
@@ -135,15 +141,20 @@ to a known machine owner.
    - `use`-alias machine construction,
    - duplicate-leaf machines,
    - transition error diagnostics with canonical names.
+9. Add branch-local state narrowing. Done:
+   - `if session at logged_in:` narrows `session` to `Session at logged_in` in
+     that branch,
+   - state-qualified values satisfy bare machine expectations,
+   - narrowed bare machine values can call checked transitions.
 
 ## Open Questions
 
-- Should bare machine variables ever have type `Machine`, or should every value
-  always carry a known state type?
-- Should `expr at state` narrow the type inside an `if`, or remain a pure bool
-  operation?
-- Should `expr at state` eventually provide a branch-local state-qualified view
-  that exposes payload fields inside the guarded branch?
+- Which APIs should intentionally erase state to bare `Machine`, and which
+  should preserve a precise `Machine at state` type?
+- Should negative branches learn complementary state facts, or should narrowing
+  stay limited to positive guards?
+- Should `expr at state` eventually narrow fields/paths beyond bare local
+  variables?
 - Should machines participate in reflection and JSON serialization immediately,
   or wait until the core type model is stable?
 - Should machine transitions be ordinary static methods, compiler intrinsics, or
@@ -151,6 +162,7 @@ to a known machine owner.
 
 ## Recommendation
 
-Implement the checked type model before adding more source-level machine
-fixtures. Namespaced machine support should be a consequence of canonical
-machine owners, not a separate interpreter lookup rule.
+Keep new machine features tied to checked machine owners rather than interpreter
+lookup rules. The next high-value design choice is whether branch facts should
+become a general flow-sensitive type mechanism or remain a narrow state-machine
+guard feature.

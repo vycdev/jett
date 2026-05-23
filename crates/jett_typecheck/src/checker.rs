@@ -2019,6 +2019,9 @@ impl<'a> TypeChecker<'a> {
                 self.types_compatible(*expected_key, *got_key)
                     && self.types_compatible(*expected_val, *got_val)
             }
+            (Type::Machine(expected_machine), Type::MachineState { machine, .. }) => {
+                expected_machine == machine
+            }
             _ => false,
         }
     }
@@ -6267,13 +6270,15 @@ impl<'a> TypeChecker<'a> {
                 }
 
                 if selected_branch == 0 {
-                    self.check_block(&if_stmt.then_block);
+                    let narrowing = self.machine_state_narrowing_from_condition(&if_stmt.condition);
+                    self.check_block_with_type_override(&if_stmt.then_block, narrowing);
                     return;
                 }
 
-                for (index, (_, else_if_block)) in if_stmt.else_ifs.iter().enumerate() {
+                for (index, (else_if_cond, else_if_block)) in if_stmt.else_ifs.iter().enumerate() {
                     if selected_branch == index + 1 {
-                        self.check_block(else_if_block);
+                        let narrowing = self.machine_state_narrowing_from_condition(else_if_cond);
+                        self.check_block_with_type_override(else_if_block, narrowing);
                         return;
                     }
                 }
@@ -6298,15 +6303,77 @@ impl<'a> TypeChecker<'a> {
         }
 
         self.check_condition_expr(&if_stmt.condition);
-        self.check_block(&if_stmt.then_block);
+        let narrowing = self.machine_state_narrowing_from_condition(&if_stmt.condition);
+        self.check_block_with_type_override(&if_stmt.then_block, narrowing);
 
         for (else_if_cond, else_if_block) in &if_stmt.else_ifs {
             self.check_condition_expr(else_if_cond);
-            self.check_block(else_if_block);
+            let narrowing = self.machine_state_narrowing_from_condition(else_if_cond);
+            self.check_block_with_type_override(else_if_block, narrowing);
         }
 
         if let Some(else_block) = &if_stmt.else_block {
             self.check_block(else_block);
+        }
+    }
+
+    fn check_block_with_type_override(
+        &mut self,
+        block: &Block,
+        override_ty: Option<(DefId, TypeId)>,
+    ) {
+        let Some((def_id, narrowed_ty)) = override_ty else {
+            self.check_block(block);
+            return;
+        };
+
+        let previous = self.type_env.insert(def_id, narrowed_ty);
+        self.check_block(block);
+        if let Some(previous) = previous {
+            self.type_env.insert(def_id, previous);
+        } else {
+            self.type_env.remove(&def_id);
+        }
+    }
+
+    fn machine_state_narrowing_from_condition(
+        &mut self,
+        condition: &Expr,
+    ) -> Option<(DefId, TypeId)> {
+        let (ident, state) = Self::positive_machine_state_check(condition)?;
+        let def_id = self.ident_def_id(ident)?;
+        let current_ty = *self.type_env.get(&def_id)?;
+        let machine = match self.interner.resolve(current_ty).clone() {
+            Type::Machine(machine) | Type::MachineState { machine, .. } => machine,
+            _ => return None,
+        };
+        let state_id = self
+            .interner
+            .resolve_machine(machine)
+            .state_id(&state.name)?;
+        let narrowed_ty = self.interner.intern(Type::MachineState {
+            machine,
+            state: state_id,
+        });
+        Some((def_id, narrowed_ty))
+    }
+
+    fn positive_machine_state_check(condition: &Expr) -> Option<(&ast::Ident, &ast::Ident)> {
+        match condition {
+            Expr::Paren(inner, _) => Self::positive_machine_state_check(inner),
+            Expr::At(inner, state, _) => {
+                let ident = Self::narrowable_ident_expr(inner)?;
+                Some((ident, state))
+            }
+            _ => None,
+        }
+    }
+
+    fn narrowable_ident_expr(expr: &Expr) -> Option<&ast::Ident> {
+        match expr {
+            Expr::Ident(ident) => Some(ident),
+            Expr::Paren(inner, _) => Self::narrowable_ident_expr(inner),
+            _ => None,
         }
     }
 

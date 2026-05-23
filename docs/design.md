@@ -1574,6 +1574,20 @@ result[Comment, string] result = post_comment(view clock, session, "hello")
 # hint: transition the session to "logged_in" before calling post_comment
 ```
 
+APIs may also intentionally accept a bare `UserAuth` when they need to inspect
+more than one possible state. In that shape, a positive state check narrows the
+local variable for the guarded branch:
+
+```
+function display_name(session: UserAuth) returns string:
+    if session at logged_in:
+        return session.user_id
+    return "guest"
+```
+
+The payload field `session.user_id` is only available inside the guarded branch;
+outside it, `session` is still a bare `UserAuth`.
+
 **4. State machines can carry data per state.**
 
 States are not just labels — they can hold data that is only available in that state:

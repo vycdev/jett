@@ -523,6 +523,11 @@ For each `machine` type:
   - The transition is declared in the machine's `transitions` block.
   - All state-specific data fields are provided.
 - Function parameters with `Machine at state` are only callable when the machine is in that state.
+- A value with type `Machine at state` can flow to a bare `Machine` expectation
+  when an API intentionally erases precise state. A positive
+  `if value at state:` guard narrows that local variable back to
+  `Machine at state` for the guarded branch, exposing state payload fields and
+  legal transitions there.
 
 #### 6h. Complexity Limits Enforcement
 

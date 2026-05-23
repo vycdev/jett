@@ -1,0 +1,20 @@
+machine Session:
+    states:
+        guest
+        logged_in(user_id: string)
+
+    transitions:
+        guest to logged_in
+
+function user_id_or_guest(session: Session) returns string:
+    if session at logged_in:
+        return session.user_id
+    return "guest"
+
+function login_guest(session: Session) returns Session:
+    if session at guest:
+        return Session.transition(session, logged_in, "Ada")
+    return Session(logged_in, "already")
+
+function erased_logged_in() returns Session:
+    return Session(logged_in, "Grace")

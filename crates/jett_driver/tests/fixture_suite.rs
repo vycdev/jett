@@ -241,6 +241,10 @@ compile_pass_fixture!(
     "state_machine_field_access.jett"
 );
 compile_pass_fixture!(
+    compile_pass_state_machine_branch_narrowing,
+    "state_machine_branch_narrowing.jett"
+);
+compile_pass_fixture!(
     compile_pass_namespace_qualified_machines,
     "namespace_qualified_machines.jett"
 );
@@ -266,6 +270,10 @@ run_pass_fixture!(run_pass_multi_verify, "multi_verify.jett");
 run_pass_fixture!(
     run_pass_state_machine_runtime_fields,
     "state_machine_runtime_fields.jett"
+);
+run_pass_fixture!(
+    run_pass_state_machine_branch_narrowing,
+    "state_machine_branch_narrowing.jett"
 );
 run_pass_fixture!(
     run_pass_property_generic_lists,
