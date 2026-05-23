@@ -1259,13 +1259,16 @@ impl Interpreter {
                 )?))
             }
             // Handle enum variant construction: Type.variant(args)
-            Expr::EnumVariant(type_name, variant, _) => Ok(ExprFlow::Value(Value::Enum {
-                type_name: self
+            Expr::EnumVariant(type_name, variant, _) => {
+                let enum_name = self
                     .registry_name(&self.enums, &type_name.name)
-                    .unwrap_or_else(|| type_name.name.clone()),
-                variant: variant.name.clone(),
-                fields: arg_values,
-            })),
+                    .unwrap_or_else(|| type_name.name.clone());
+                Ok(ExprFlow::Value(self.construct_enum_variant(
+                    &enum_name,
+                    &variant.name,
+                    arg_values,
+                )?))
+            }
             // Handle dotted names: string.trim(...), Stdout.write(...), etc.
             // Also handles enum variant construction: Shape.circle(5.0)
             Expr::FieldAccess(obj, field, _) => {
@@ -1323,20 +1326,20 @@ impl Interpreter {
                 // user function matched.
                 if let Some(owner_name) = Self::dotted_expr_name(obj) {
                     if let Some(enum_name) = self.registry_name(&self.enums, &owner_name) {
-                        return Ok(ExprFlow::Value(Value::Enum {
-                            type_name: enum_name,
-                            variant: field.name.clone(),
-                            fields: arg_values,
-                        }));
+                        return Ok(ExprFlow::Value(self.construct_enum_variant(
+                            &enum_name,
+                            &field.name,
+                            arg_values,
+                        )?));
                     }
                 }
                 if let Expr::Ident(ident) = obj.as_ref() {
                     if let Some(enum_name) = self.registry_name(&self.enums, &ident.name) {
-                        return Ok(ExprFlow::Value(Value::Enum {
-                            type_name: enum_name,
-                            variant: field.name.clone(),
-                            fields: arg_values,
-                        }));
+                        return Ok(ExprFlow::Value(self.construct_enum_variant(
+                            &enum_name,
+                            &field.name,
+                            arg_values,
+                        )?));
                     }
                 }
                 match dotted {
@@ -1348,6 +1351,48 @@ impl Interpreter {
             }
             _ => Err("only named function calls are supported in comptime".to_string()),
         }
+    }
+
+    fn construct_enum_variant(
+        &self,
+        enum_name: &str,
+        variant_name: &str,
+        arg_values: Vec<Value>,
+    ) -> Result<Value, String> {
+        let Some(enm) = self.enums.get(enum_name) else {
+            return Ok(Value::Enum {
+                type_name: enum_name.to_string(),
+                variant: variant_name.to_string(),
+                fields: arg_values,
+            });
+        };
+        let variant = enm
+            .variants
+            .iter()
+            .find(|candidate| candidate.name.name == variant_name)
+            .ok_or_else(|| format!("enum '{enum_name}' has no variant '{variant_name}'"))?;
+
+        if arg_values.len() != variant.fields.len() {
+            return Err(format!(
+                "enum variant '{}.{}' expects {} field argument(s), got {}",
+                enum_name,
+                variant_name,
+                variant.fields.len(),
+                arg_values.len()
+            ));
+        }
+
+        let mut fields = Vec::with_capacity(variant.fields.len());
+        for (field, value) in variant.fields.iter().zip(arg_values) {
+            let field_ty = self.substitute_type_expr(&field.ty);
+            fields.push(self.normalize_value_for_type(&field_ty, value)?);
+        }
+
+        Ok(Value::Enum {
+            type_name: enum_name.to_string(),
+            variant: variant_name.to_string(),
+            fields,
+        })
     }
 
     fn eval_pipeline_step(
@@ -11469,6 +11514,30 @@ mod tests {
         }
     }
 
+    fn enum_def_with_field(
+        name: &str,
+        variant_name: &str,
+        field_name: &str,
+        field_ty: &str,
+    ) -> EnumDef {
+        EnumDef {
+            name: ident(name),
+            variants: vec![jett_parser::ast::Variant {
+                name: ident(variant_name),
+                fields: vec![FieldDef {
+                    name: ident(field_name),
+                    ty: type_named(field_ty),
+                    serialize_name: None,
+                    span: sp(),
+                }],
+                discriminant: None,
+                span: sp(),
+            }],
+            exported: false,
+            span: sp(),
+        }
+    }
+
     /// Helper: create a simple bitfield definition.
     fn bitfield_def(
         name: &str,
@@ -13083,6 +13152,31 @@ mod tests {
                     },
                 )],
             }))
+        );
+    }
+
+    #[test]
+    fn enum_variant_constructor_normalizes_uint64_payload_carrier() {
+        let mut interp = Interpreter::new();
+        interp.register_enum(&enum_def_with_field("Event", "serial", "value", "uint64"));
+
+        let expr = Expr::Call(
+            Box::new(Expr::EnumVariant(ident("Event"), ident("serial"), sp())),
+            vec![CallArg {
+                name: None,
+                value: int(42),
+                span: sp(),
+            }],
+            sp(),
+        );
+
+        assert_eq!(
+            interp.eval_expr(&expr).unwrap(),
+            Value::Enum {
+                type_name: "Event".to_string(),
+                variant: "serial".to_string(),
+                fields: vec![Value::Uint64(42)],
+            }
         );
     }
 
