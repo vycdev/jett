@@ -14,7 +14,8 @@ Implemented:
 - The parser accepts `machine Name:` declarations with `states:` and
   `transitions:` blocks.
 - The parser has a distinct `TypeExpr::StateQualified(base, state, span)` form
-  for type-position `Machine at state`.
+  for type-position `Machine at state`, including signatures, fields, generic
+  type arguments, and local variable declarations.
 - The resolver declares machine names, including namespaced machine names.
 - `jett_types` has checked-machine metadata handles and explicit
   `Type::Machine` / `Type::MachineState` variants.
@@ -124,7 +125,8 @@ to a known machine owner.
    `MachineTransitionDef`, `Type::Machine`, and `Type::MachineState`.
 2. Add a state-qualified `TypeExpr` form for `Machine at state`. Done:
    `TypeExpr::StateQualified(base, state, span)` is parsed in type positions
-   and remains distinct from expression-level `expr at state`.
+   including local variable declarations, and remains distinct from
+   expression-level `expr at state`.
 3. Typecheck machine declarations. Done for the current machine surface:
    - duplicate states,
    - transition endpoints exist,

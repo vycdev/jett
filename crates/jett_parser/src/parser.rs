@@ -1636,6 +1636,7 @@ impl<'src> Parser<'src> {
                 lookahead += 1;
             }
         }
+        lookahead = self.skip_state_type_qualifiers(lookahead);
 
         // Now we should see an identifier (or contextual keyword) followed by `=`
         let name_kind = self.peek_nth(lookahead);
@@ -1725,6 +1726,7 @@ impl<'src> Parser<'src> {
                 lookahead += 1;
             }
         }
+        lookahead = self.skip_state_type_qualifiers(lookahead);
         let name_kind = self.peek_nth(lookahead);
         (name_kind == TokenKind::Ident || self.is_contextual_ident(name_kind))
             && self.peek_nth(lookahead + 1) == TokenKind::Eq
@@ -1732,6 +1734,16 @@ impl<'src> Parser<'src> {
 
     fn skip_dotted_type_path(&self, mut lookahead: usize) -> usize {
         while self.peek_nth(lookahead) == TokenKind::Dot
+            && (self.peek_nth(lookahead + 1) == TokenKind::Ident
+                || self.is_contextual_ident(self.peek_nth(lookahead + 1)))
+        {
+            lookahead += 2;
+        }
+        lookahead
+    }
+
+    fn skip_state_type_qualifiers(&self, mut lookahead: usize) -> usize {
+        while self.peek_nth(lookahead) == TokenKind::At
             && (self.peek_nth(lookahead + 1) == TokenKind::Ident
                 || self.is_contextual_ident(self.peek_nth(lookahead + 1)))
         {
@@ -4186,6 +4198,35 @@ function capture(payment: Payment at authorized) returns Payment at captured:
                     other => panic!("expected state-qualified return type, got {:?}", other),
                 }
             }
+            other => panic!("expected Function, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_state_qualified_local_var_decl() {
+        let src = "\
+function capture(payment: Payment at captured) returns string:
+    Payment at captured current = payment
+    return current.receipt_id
+";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        match &result.module.items[0] {
+            Item::Function(f) => match &f.body.stmts[0] {
+                Stmt::VarDecl(v) => {
+                    assert_eq!(v.name.name, "current");
+                    match &v.ty {
+                        TypeExpr::StateQualified(base, state, _) => {
+                            assert!(
+                                matches!(base.as_ref(), TypeExpr::Named(i) if i.name == "Payment")
+                            );
+                            assert_eq!(state.name, "captured");
+                        }
+                        other => panic!("expected state-qualified local type, got {:?}", other),
+                    }
+                }
+                other => panic!("expected VarDecl, got {:?}", other),
+            },
             other => panic!("expected Function, got {:?}", other),
         }
     }

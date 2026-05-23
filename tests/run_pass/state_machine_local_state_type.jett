@@ -1,0 +1,16 @@
+machine Session:
+    states:
+        guest
+        logged_in(user_id: string)
+    transitions:
+        guest to logged_in
+function local_transition_user_id() returns string:
+    Session at guest guest_session = Session(guest)
+    Session at logged_in logged = Session.transition(guest_session, logged_in, "Ada")
+    return logged.user_id
+function local_constructor_user_id() returns string:
+    Session at logged_in logged = Session(logged_in, "Grace")
+    return logged.user_id
+verify state_machine_local_state_type:
+    assert local_transition_user_id() == "Ada"
+    assert local_constructor_user_id() == "Grace"

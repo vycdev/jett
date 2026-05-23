@@ -280,6 +280,10 @@ run_pass_fixture!(
     "state_machine_branch_narrowing.jett"
 );
 run_pass_fixture!(
+    run_pass_state_machine_local_state_type,
+    "state_machine_local_state_type.jett"
+);
+run_pass_fixture!(
     run_pass_property_generic_lists,
     "property_generic_lists.jett"
 );

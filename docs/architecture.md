@@ -526,6 +526,9 @@ For each `machine` type:
   - The transition is declared in the machine's `transitions` block.
   - All state-specific data fields are provided.
 - Function parameters with `Machine at state` are only callable when the machine is in that state.
+- State-qualified type annotations are accepted anywhere ordinary type
+  annotations are accepted, including local variable declarations, so local
+  temporaries can preserve precise state after construction or transition.
 - A value with type `Machine at state` can flow to a bare `Machine` expectation
   when an API intentionally erases precise state. A positive
   `if value at state:` guard narrows that local variable back to
