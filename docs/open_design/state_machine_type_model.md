@@ -191,13 +191,13 @@ to a known machine owner.
     - non-machine top-level types intentionally return empty machine metadata
       from those shape-specific probes, so generic reflection code can inspect
       `type.kind_tag` and then choose a shape without adding effect handling.
-11. Keep machine parsing unsupported until reflected construction lands. Done:
+11. Add machine JSON through reflected construction. Done:
     - `json.serialize` / `json.serialize_public` emit the explicit
       state/payload envelope for bare and state-qualified machines,
-    - `json.parse` / `json.parse_exact` reject bare and state-qualified
-      machines,
-    - wrapper and container traversal still reports parse-time machine targets
-      instead of silently treating them as records.
+    - `json.parse` / `json.parse_exact` consume the same envelope for bare and
+      state-qualified machines,
+    - wrapper and container traversal descends into machine payload fields and
+      still rejects any payload type that has no JSON decoding.
 
 ## Open Questions
 
@@ -207,9 +207,9 @@ to a known machine owner.
   limited to positive guards plus exact single-state complements?
 - Should `expr at state` eventually narrow fields/paths beyond bare local
   variables?
-- Should machines participate in JSON parsing through a reflected construction
-  primitive, a dedicated machine-construction primitive, or compiler-owned
-  machine decode hooks?
+- Should machine JSON remain enabled for every machine with JSON-compatible
+  payload fields, or should declarations eventually opt in to the envelope
+  contract?
 - Should machine transitions be ordinary static methods, compiler intrinsics, or
   stdlib-like generated functions?
 
