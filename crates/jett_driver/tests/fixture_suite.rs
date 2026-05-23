@@ -1381,6 +1381,10 @@ compile_fail_fixture!(
     "type_construct_start_wrong_arity.jett"
 );
 compile_fail_fixture!(
+    compile_fail_reflection_metadata_constructor,
+    "reflection_metadata_constructor.jett"
+);
+compile_fail_fixture!(
     compile_fail_type_construct_variant_start_non_enum_owner,
     "type_construct_variant_start_non_enum_owner.jett"
 );

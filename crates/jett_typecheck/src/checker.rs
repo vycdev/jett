@@ -717,6 +717,20 @@ impl<'a> TypeChecker<'a> {
             .is_some_and(|ty| matches!(self.interner.resolve(*ty), Type::Bitfield(_)))
     }
 
+    fn is_reflection_metadata_type_name(name: &str) -> bool {
+        matches!(
+            name,
+            "TypeInfo"
+                | "TypeField"
+                | "TypeBitfield"
+                | "TypeBitfieldField"
+                | "TypeMachine"
+                | "TypeMachineState"
+                | "TypeMachineTransition"
+                | "TypeVariant"
+        )
+    }
+
     /// Returns true if the type is numeric (any integer or float type).
     fn is_numeric(&self, id: TypeId) -> bool {
         matches!(
@@ -8131,7 +8145,17 @@ impl<'a> TypeChecker<'a> {
             if let Some(type_name) = callee_name.as_deref() {
                 if let Some(type_id) = self.named_types.get(type_name).copied() {
                     match self.interner.resolve(type_id).clone() {
-                        Type::Struct(sid) => return self.check_struct_constructor(sid, args, span),
+                        Type::Struct(sid) => {
+                            if Self::is_reflection_metadata_type_name(type_name) {
+                                self.sink
+                                    .emit(errors::reflection_metadata_constructor(type_name, span));
+                                for arg in args {
+                                    self.check_expr(&arg.value);
+                                }
+                                return TypeInterner::ERROR;
+                            }
+                            return self.check_struct_constructor(sid, args, span);
+                        }
                         Type::Bitfield(bid) => {
                             return self.check_bitfield_constructor(bid, args, span);
                         }

@@ -1174,6 +1174,13 @@ diagnostic. Code that requires a particular shape should first check
 `type.variant_value`, `type.machine_state_value`, `type.machine_field_value`,
 and reflection construction remain checked.
 
+Reflection metadata records are compiler-produced values. User code may inspect
+and pass `TypeInfo`, `TypeField`, `TypeBitfield`, `TypeBitfieldField`,
+`TypeMachine`, `TypeMachineState`, `TypeMachineTransition`, and `TypeVariant`
+values returned by reflection intrinsics, but direct source constructors for
+those metadata records are rejected. This keeps metadata authority tied to the
+compiler rather than to lookalike user-created structs.
+
 Format-specific modules such as `json` should live in `.jett` stdlib code once reflection can express their behavior. JSON is now staged this way for normal builds: public compiler-policy entrypoints delegate to trusted stdlib wrappers, raw JSON uses the stdlib `json.JsonTree` representation, and typed parse/serialize bodies consume the same type metadata (`TypeInfo`, `TypeKind`, `TypePrimitive`, `TypeField`, `TypeBitfieldField`, `TypeMachineState`, `TypeVariant`, `serialize_name`, field values, active machine state values, layout information, and secret information) that user comptime code can inspect. Remaining Rust-side JSON behavior should stay limited to bootstrap/no-stdlib compatibility paths or compiler-owned policy gates.
 
 **2. Stdlib functions** — normal Jett code shipped in `stdlib/`:

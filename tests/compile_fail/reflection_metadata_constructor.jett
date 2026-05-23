@@ -1,0 +1,8 @@
+# ERROR: E0354
+namespace test
+
+enum Direction:
+    north
+
+function forged_variant_metadata() returns TypeVariant:
+    return TypeVariant(index: 0, name: "north", discriminant: 0, has_secret: false, fields: list.new[TypeField]())

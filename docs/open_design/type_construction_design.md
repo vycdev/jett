@@ -80,7 +80,10 @@ should reuse the same typechecker and interpreter rules where possible.
   only runtime `TypeInfo`. Jett's purpose is to make the checker do useful work.
 - **Trusted metadata matters.** Compiler-produced `TypeField`, `TypeVariant`,
   and `TypeInfo` can drive construction. User-created structs that merely look
-  like metadata must not be trusted.
+  like metadata must not be trusted. The current typechecker rejects direct
+  source constructors for compiler-owned reflection metadata records; runtime
+  construction still validates the supplied metadata contents against the
+  selected target.
 - **Errors are explicit.** Construction from parsed or decoded data should
   surface as `result[T, string]`, forcing a `handle error:` boundary.
 - **Format policy stays outside construction.** JSON `serialize_name`, missing

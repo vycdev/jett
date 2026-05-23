@@ -680,6 +680,17 @@ pub fn invalid_machine_state_check(
     )
 }
 
+/// E0354: Compiler-owned reflection metadata cannot be constructed directly.
+pub fn reflection_metadata_constructor(type_name: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        354,
+        format!(
+            "`{type_name}` is compiler-owned reflection metadata and cannot be constructed directly"
+        ),
+        span,
+    )
+}
+
 // Diagnostic codes E0800-E0899 are reserved for function complexity limits.
 
 /// E0800: Function body exceeds the statement count limit.
