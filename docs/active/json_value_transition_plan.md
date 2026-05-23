@@ -52,8 +52,8 @@ about: two names, two traversal surfaces, one conceptual data model.
 - In stdlib-loaded code, the root `JsonValue` spelling now resolves and
   reflects through the stdlib alias to `json.JsonTree`. Bare `JsonValue`
   without that alias is now unknown to the typechecker and direct comptime
-  interpreter; the legacy `Type::JsonValue` placeholder remains internal until
-  a later removal.
+  interpreter; the old compiler-owned `Type::JsonValue` placeholder and
+  `TypePrimitive.json_value_type` tag have been removed.
 - The stdlib JSON module exports `json.JsonValue` as a source alias to
   `json.JsonTree`, and exports a narrow root alias
   `JsonValue = json.JsonTree` for source visibility.
@@ -101,8 +101,7 @@ The implementation under that spelling has changed from Rust-backed
 `serde_json::Value` to native `JsonTree`. New raw facade signatures should
 prefer `JsonTree`; the narrow stdlib root alias now handles the unqualified
 `JsonValue` compatibility spelling. The remaining migration questions are
-when to retire the legacy primitive tag and whether root aliases should
-generalize beyond this compatibility bridge.
+whether root aliases should generalize beyond this compatibility bridge.
 
 ## Target API Shape
 
@@ -143,8 +142,8 @@ export function as_bool(view value: JsonTree) returns result[bool, string]
 `json.JsonValue` is now expressible as a normal exported stdlib alias, and bare
 `JsonValue` is now expressible as a narrow stdlib root alias. In normal
 stdlib-loaded builds it reflects as an alias to `json.JsonTree`; direct
-interpreter reflection also requires that alias path now. The remaining legacy
-legacy primitive placeholder is internal/bootstrap-only. See
+interpreter reflection also requires that alias path now. The legacy primitive
+placeholder has been removed. See
 `docs/open_design/prelude_root_aliases.md` for the recommended staged design.
 
 `field` and `index` are probing helpers: wrong shape and absence both produce
@@ -176,9 +175,9 @@ The staged direction is:
    alias to `json.JsonTree`, matching `json.JsonValue`.
 6. Done for direct interpreter reflection: bare `JsonValue` without a
    registered alias is now just an unresolved named type with no primitive tag.
-   A later cleanup can decide whether to deprecate or remove
-   `TypePrimitive.json_value_type` after the internal placeholder has a staged
-   replacement.
+7. Done: remove `Type::JsonValue`, `TypeInterner::JSON_VALUE`, and
+   `TypePrimitive.json_value_type`; source compatibility now comes only from
+   stdlib aliases.
 
 This keeps canonical identity clear: `json.JsonTree` is the real type;
 `JsonValue` is a source-compatibility spelling.
@@ -256,12 +255,8 @@ Once the runtime representation is native:
   calls, or make `JsonValue` an alias to `JsonTree`.
 - Update `type.info[JsonValue]()` to follow the stdlib root alias when the
   bundled stdlib is loaded.
-- Decide whether `TypePrimitive.json_value_type` should remain as an inert
-  deprecated enum variant or disappear with the internal placeholder.
-
-Recommendation: keep `TypePrimitive.json_value_type` only while staged cleanup
-needs it for compatibility, and document it as legacy now that `JsonTree` is
-the preferred spelling.
+- Remove the legacy compiler primitive once stdlib alias compatibility is
+  pinned.
 
 Status: implemented through a narrow source-level root alias. Normal
 stdlib-loaded code resolves `JsonValue` through that alias, so it shares the
@@ -380,8 +375,8 @@ fixtures.
   open question is whether this stays an allowlisted compatibility-only feature
   or grows into a broader prelude policy.
 - **Reflection metadata:** because `JsonValue` is now a stdlib root alias in
-  stdlib-loaded code, `type.info[JsonValue]()` alias metadata must stay pinned
-  while the no-stdlib primitive fallback remains documented separately.
+  stdlib-loaded code, `type.info[JsonValue]()` alias metadata must stay pinned;
+  no-stdlib contexts should not synthesize hidden raw JSON semantics.
 - **View iteration:** native raw serialization over `view JsonTree` now uses
   viewed list/map iteration; the remaining question is whether the broader
   language should make view-parameter calls implicitly non-consuming for
@@ -395,7 +390,7 @@ fixtures.
 
 ## Recommended Next Decision
 
-Continue the legacy primitive-tag retirement:
+Decide the long-term raw JSON spelling policy:
 
 1. Keep bare `JsonValue` in compatibility fixtures and design notes that explain
    the transition.
@@ -406,6 +401,6 @@ Continue the legacy primitive-tag retirement:
    unresolved named type with no primitive tag.
 4. Done: remove the typechecker fallback for bare `JsonValue` without the
    stdlib root alias.
-5. Next: remove `Type::JsonValue`, `TypeInterner::JSON_VALUE`, and
-   `TypePrimitive.json_value_type` once no bootstrap/internal path needs the
-   placeholder.
+5. Done: remove `Type::JsonValue`, `TypeInterner::JSON_VALUE`, and
+   `TypePrimitive.json_value_type`; the remaining question is public spelling
+   policy, not a compiler primitive.

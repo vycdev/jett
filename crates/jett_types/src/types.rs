@@ -37,7 +37,6 @@ pub enum Type {
     Bool,
     Bytes,
     Nothing,
-    JsonValue,
     TypeConstruction,
 
     // -- Generic built-in types ----------------------------------------------

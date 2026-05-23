@@ -201,9 +201,8 @@ Implemented:
 - The stdlib JSON module exports `json.JsonValue = JsonTree` as the namespaced
   source-level alias and `export root type JsonValue = json.JsonTree` as the
   narrow root compatibility alias. In stdlib-loaded code the unqualified
-  spelling now reflects as an alias to `json.JsonTree`; the legacy
-  `TypePrimitive.json_value_type` tag remains only for bootstrap/no-stdlib
-  fallback paths.
+  spelling now reflects as an alias to `json.JsonTree`; the legacy compiler
+  primitive and `TypePrimitive.json_value_type` tag have been removed.
 - Driver-level `build_source` coverage now verifies that in-memory/LSP-style
   validation sees the exported `json.JsonTree` raw facade surface, not only the
   marker stdlib module.
@@ -295,5 +294,4 @@ Still staged:
 - Codegen should eventually get equivalent trusted-origin coverage once JSON
   bridge delegation moves beyond the comptime/runtime interpreter.
 - The future import/prelude design should decide whether additional root aliases
-  are ever allowed and when the legacy `TypePrimitive.json_value_type`
-  compatibility tag can retire.
+  are ever allowed.

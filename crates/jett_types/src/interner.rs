@@ -48,8 +48,7 @@ impl TypeInterner {
     pub const BYTES: TypeId = TypeId(12);
     pub const NOTHING: TypeId = TypeId(13);
     pub const ERROR: TypeId = TypeId(14);
-    pub const JSON_VALUE: TypeId = TypeId(15);
-    pub const TYPE_CONSTRUCTION: TypeId = TypeId(16);
+    pub const TYPE_CONSTRUCTION: TypeId = TypeId(15);
 }
 
 impl TypeInterner {
@@ -71,8 +70,7 @@ impl TypeInterner {
             Type::Bytes,            // 12
             Type::Nothing,          // 13
             Type::Error,            // 14
-            Type::JsonValue,        // 15
-            Type::TypeConstruction, // 16
+            Type::TypeConstruction, // 15
         ];
 
         let mut map = HashMap::with_capacity(primitives.len());
@@ -245,7 +243,6 @@ impl TypeInterner {
             Type::Bool => "bool".to_string(),
             Type::Bytes => "bytes".to_string(),
             Type::Nothing => "nothing".to_string(),
-            Type::JsonValue => "JsonValue".to_string(),
             Type::TypeConstruction => "TypeConstruction".to_string(),
             Type::List(inner) => format!("list[{}]", self.type_name(*inner)),
             Type::Map(k, v) => format!("map[{}, {}]", self.type_name(*k), self.type_name(*v)),
@@ -326,7 +323,6 @@ mod tests {
         assert_eq!(*interner.resolve(TypeInterner::BYTES), Type::Bytes);
         assert_eq!(*interner.resolve(TypeInterner::NOTHING), Type::Nothing);
         assert_eq!(*interner.resolve(TypeInterner::ERROR), Type::Error);
-        assert_eq!(*interner.resolve(TypeInterner::JSON_VALUE), Type::JsonValue);
         assert_eq!(
             *interner.resolve(TypeInterner::TYPE_CONSTRUCTION),
             Type::TypeConstruction
@@ -625,9 +621,9 @@ mod tests {
     #[test]
     fn interner_len_includes_primitives() {
         let interner = TypeInterner::new();
-        // 17 built-in leaves: int8..uint64 (8) + float32/64 (2) +
-        // string, bool, bytes, nothing, error, JsonValue, TypeConstruction (7)
-        assert_eq!(interner.len(), 17);
+        // 16 built-in leaves: int8..uint64 (8) + float32/64 (2) +
+        // string, bool, bytes, nothing, error, TypeConstruction (6)
+        assert_eq!(interner.len(), 16);
     }
 
     #[test]

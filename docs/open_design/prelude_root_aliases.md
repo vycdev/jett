@@ -135,13 +135,14 @@ Staging rules:
 `JsonValue` has moved to a source-owned stdlib root alias in normal
 stdlib-loaded code. The direct interpreter no longer synthesizes
 `TypePrimitive.json_value_type` when that alias is absent, and the typechecker
-now reports bare `JsonValue` as unknown without the root alias. The remaining
-legacy primitive pieces are internal placeholders during the transition.
+now reports bare `JsonValue` as unknown without the root alias. The legacy
+compiler-owned `JsonValue` primitive and `TypePrimitive.json_value_type` tag
+have been removed.
 
 ## Implementation Staging Notes
 
-The first narrow slice is implemented for `JsonValue`. It deliberately does not
-remove the compiler-owned `JsonValue` primitive fallback in the same change.
+The first narrow slice is implemented for `JsonValue`, and the later primitive
+fallback cleanup has now followed it.
 
 The important staged invariant is:
 
@@ -171,6 +172,9 @@ Concretely, a safe implementation should:
 6. Done: remove the direct interpreter's no-alias `JsonValue` primitive
    synthesis; direct tests that need bare `JsonValue` should register the root
    alias just like normal stdlib-loaded code.
+7. Done: remove the compiler-owned `JsonValue` type placeholder and
+   `TypePrimitive.json_value_type`; source compatibility now flows only through
+   stdlib aliases.
 
 Required tests for that first slice:
 
@@ -190,7 +194,7 @@ Required tests for that first slice:
   remain hidden.
 
 Status: parser, resolver, stdlib declaration, completion, compatibility, and
-reflection-staging coverage are in place for `JsonValue`. The remaining design
-work is broader prelude policy: whether more root aliases should ever exist, how
-they are documented in generated API references, and when the legacy
-`TypePrimitive.json_value_type` compatibility tag can be retired.
+reflection-staging coverage are in place for `JsonValue`, and the legacy
+primitive tag is retired. The remaining design work is broader prelude policy:
+whether more root aliases should ever exist and how they are documented in
+generated API references.

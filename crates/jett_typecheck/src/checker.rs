@@ -306,7 +306,6 @@ impl<'a> TypeChecker<'a> {
                 "bool_type",
                 "bytes_type",
                 "nothing_type",
-                "json_value_type",
                 "type_construction_type",
                 "unknown_type",
             ]),
@@ -447,7 +446,6 @@ impl<'a> TypeChecker<'a> {
             Type::Bool => "bool".to_string(),
             Type::Bytes => "bytes".to_string(),
             Type::Nothing => "nothing".to_string(),
-            Type::JsonValue => "JsonValue".to_string(),
             Type::TypeConstruction => "TypeConstruction".to_string(),
             Type::List(inner) => format!("list[{}]", self.type_name(*inner)),
             Type::Map(k, v) => format!("map[{}, {}]", self.type_name(*k), self.type_name(*v)),
@@ -737,7 +735,6 @@ impl<'a> TypeChecker<'a> {
             | Type::String
             | Type::Bool
             | Type::Nothing
-            | Type::JsonValue
             | Type::Error => false,
             Type::Refinement { base, .. } => self.json_read_requires_view(*base),
             _ => true,
@@ -1093,7 +1090,6 @@ impl<'a> TypeChecker<'a> {
             | Type::Bool
             | Type::Bytes
             | Type::Nothing
-            | Type::JsonValue
             | Type::TypeConstruction => "primitive",
             Type::List(_) => "list",
             Type::Map(_, _) => "map",
@@ -1128,7 +1124,6 @@ impl<'a> TypeChecker<'a> {
             | Type::Bool
             | Type::Bytes
             | Type::Nothing
-            | Type::JsonValue
             | Type::TypeConstruction => "primitive_type",
             Type::List(_) => "list_type",
             Type::Map(_, _) => "map_type",
@@ -1214,7 +1209,6 @@ impl<'a> TypeChecker<'a> {
             Type::Bool => Some("bool_type"),
             Type::Bytes => Some("bytes_type"),
             Type::Nothing => Some("nothing_type"),
-            Type::JsonValue => Some("json_value_type"),
             Type::TypeConstruction => Some("type_construction_type"),
             _ => None,
         }
@@ -1750,7 +1744,6 @@ impl<'a> TypeChecker<'a> {
             | Type::Bool
             | Type::Bytes
             | Type::Nothing
-            | Type::JsonValue
             | Type::Error => {}
             Type::TypeConstruction
             | Type::Interface(_)
@@ -12208,7 +12201,6 @@ function main() returns JsonValue:
         let bare_ty = checker.resolve_named_type("JsonValue", span);
         let tree_ty = checker.resolve_named_type("json.JsonTree", span);
         assert_eq!(bare_ty, tree_ty);
-        assert_ne!(bare_ty, TypeInterner::JSON_VALUE);
 
         let metadata = checker.build_reflection_metadata();
         let info = metadata

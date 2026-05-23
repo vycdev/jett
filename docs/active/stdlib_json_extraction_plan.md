@@ -308,13 +308,12 @@ for current JSON hooks; future backends need the same identity boundary.
 7. Keep the staged `JsonValue` migration narrow. The current implementation
    exposes `json.JsonValue` as an exported namespaced source alias and bare
    `JsonValue` as an allowlisted stdlib root alias for `json.JsonTree`.
-   Stdlib-loaded code now resolves and reflects through that alias; the
-   compiler-owned `JsonValue` primitive remains only as a bootstrap/no-stdlib
-   fallback. See
+   Stdlib-loaded code now resolves and reflects through that alias, and the
+   compiler-owned `JsonValue` primitive has been removed. See
    `/docs/active/json_value_transition_plan.md` and
-   `/docs/open_design/prelude_root_aliases.md`. The remaining decision is when
-   bootstrap/no-stdlib reflection and `TypePrimitive` can deprecate or remove
-   the legacy primitive tag.
+   `/docs/open_design/prelude_root_aliases.md`. The remaining design decision is
+   how long the root compatibility alias should remain and whether root aliases
+   generalize beyond this bridge.
 8. Keep reflection-specialized generic helpers staged carefully. The typechecker
    now checks ordinary generic function bodies per concrete instantiation, and
    it can specialize the narrow direct-branch form

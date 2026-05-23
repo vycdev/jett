@@ -79,8 +79,9 @@ Future backend work should mirror the existing interpreter/typechecker boundary:
 - Should native codegen call reflected hooks directly, lower through a runtime
   ABI, or specialize common JSON shapes after typechecking?
 - Done for stdlib-loaded code: bare `JsonValue` now reflects through the root
-  alias to `json.JsonTree`. The direct interpreter no longer synthesizes the
-  legacy `TypePrimitive.json_value_type` tag without that alias, and the
-  typechecker now rejects bare `JsonValue` without the root alias.
+  alias to `json.JsonTree`. The direct interpreter no longer synthesizes a
+  legacy primitive tag without that alias, the typechecker now rejects bare
+  `JsonValue` without the root alias, and `TypePrimitive.json_value_type` has
+  been removed.
 - Should the hook table remain JSON-specific, or become a general compiler
   policy-hook registry once other stdlib features need the same treatment?
