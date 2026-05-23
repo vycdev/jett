@@ -284,6 +284,10 @@ run_pass_fixture!(
     "state_machine_local_state_type.jett"
 );
 run_pass_fixture!(
+    run_pass_state_machine_else_narrowing,
+    "state_machine_else_narrowing.jett"
+);
+run_pass_fixture!(
     run_pass_property_generic_lists,
     "property_generic_lists.jett"
 );
@@ -685,6 +689,10 @@ compile_fail_fixture!(
 compile_fail_fixture!(
     compile_fail_state_machine_field_from_other_state,
     "state_machine_field_from_other_state.jett"
+);
+compile_fail_fixture!(
+    compile_fail_state_machine_else_narrowing_multi_state,
+    "state_machine_else_narrowing_multi_state.jett"
 );
 compile_fail_fixture!(
     compile_fail_namespace_machine_transition_missing_edge,

@@ -1,0 +1,14 @@
+machine Session:
+    states:
+        guest(reason: string)
+        logged_in(user_id: string)
+    transitions:
+        guest to logged_in
+function label(session: Session) returns string:
+    if session at logged_in:
+        return session.user_id
+    else:
+        return session.reason
+verify state_machine_else_narrowing:
+    assert label(Session(logged_in, "Ada")) == "Ada"
+    assert label(Session(guest, "anonymous")) == "anonymous"

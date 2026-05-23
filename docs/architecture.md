@@ -534,6 +534,9 @@ For each `machine` type:
   `if value at state:` guard narrows that local variable back to
   `Machine at state` for the guarded branch, exposing state payload fields and
   legal transitions there.
+- If the guarded value is a bare two-state machine and there is no `else if`
+  chain, the `else` branch narrows to the single remaining state. Multi-state
+  negative branches stay bare.
 - Basic reflection distinguishes `Machine` and `Machine at state` through
   `TypeInfo.kind` (`machine` / `machine_state`) and structured `TypeKind`
   tags (`machine_type` / `machine_state_type`). Rich state and transition

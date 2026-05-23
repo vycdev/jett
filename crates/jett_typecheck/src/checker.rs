@@ -6313,7 +6313,12 @@ impl<'a> TypeChecker<'a> {
         }
 
         if let Some(else_block) = &if_stmt.else_block {
-            self.check_block(else_block);
+            let narrowing = if if_stmt.else_ifs.is_empty() {
+                self.machine_state_else_narrowing_from_condition(&if_stmt.condition)
+            } else {
+                None
+            };
+            self.check_block_with_type_override(else_block, narrowing);
         }
     }
 
@@ -6354,6 +6359,38 @@ impl<'a> TypeChecker<'a> {
         let narrowed_ty = self.interner.intern(Type::MachineState {
             machine,
             state: state_id,
+        });
+        Some((def_id, narrowed_ty))
+    }
+
+    fn machine_state_else_narrowing_from_condition(
+        &mut self,
+        condition: &Expr,
+    ) -> Option<(DefId, TypeId)> {
+        let (ident, state) = Self::positive_machine_state_check(condition)?;
+        let def_id = self.ident_def_id(ident)?;
+        let current_ty = *self.type_env.get(&def_id)?;
+        let machine = match self.interner.resolve(current_ty).clone() {
+            Type::Machine(machine) => machine,
+            Type::MachineState { .. } => return None,
+            _ => return None,
+        };
+        let machine_def = self.interner.resolve_machine(machine);
+        if machine_def.states.len() != 2 {
+            return None;
+        }
+        let excluded_state = machine_def.state_id(&state.name)?;
+        let remaining_state = machine_def
+            .states
+            .iter()
+            .enumerate()
+            .find_map(|(index, _)| {
+                let state_id = MachineStateId::new(index as u32);
+                (state_id != excluded_state).then_some(state_id)
+            })?;
+        let narrowed_ty = self.interner.intern(Type::MachineState {
+            machine,
+            state: remaining_state,
         });
         Some((def_id, narrowed_ty))
     }

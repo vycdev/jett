@@ -31,6 +31,9 @@ Implemented:
 - A positive `if value at state:` check narrows a bare or state-qualified
   machine variable to `Machine at state` for that branch, so state payload
   fields and transitions are available only under a visible guard.
+- For bare two-state machines without an `else if` chain, the `else` branch
+  narrows to the single remaining state. Multi-state negative branches remain
+  opaque until another positive guard proves a specific state.
 - State-specific payload field access is checked through ordinary field access
   on `Machine at state` values; bare `Machine` values do not expose payload
   fields.
@@ -156,6 +159,8 @@ to a known machine owner.
 9. Add branch-local state narrowing. Done:
    - `if session at logged_in:` narrows `session` to `Session at logged_in` in
      that branch,
+   - for bare two-state machines, the final `else` branch narrows to the only
+     remaining state,
    - state-qualified values satisfy bare machine expectations,
    - narrowed bare machine values can call checked transitions.
 10. Add basic machine reflection. Done:
@@ -175,8 +180,9 @@ to a known machine owner.
 
 - Which APIs should intentionally erase state to bare `Machine`, and which
   should preserve a precise `Machine at state` type?
-- Should negative branches learn complementary state facts, or should narrowing
-  stay limited to positive guards?
+- Should negative branches for larger machines learn set-of-states facts, or
+  should narrowing stay limited to positive guards plus the two-state
+  complement?
 - Should `expr at state` eventually narrow fields/paths beyond bare local
   variables?
 - What shape should rich machine reflection use for state payloads and
@@ -191,4 +197,4 @@ to a known machine owner.
 Keep new machine features tied to checked machine owners rather than interpreter
 lookup rules. The next high-value design choice is whether branch facts should
 become a general flow-sensitive type mechanism or remain a narrow state-machine
-guard feature.
+guard feature with only exact single-state facts.
