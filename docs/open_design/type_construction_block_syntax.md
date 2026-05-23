@@ -2,8 +2,8 @@
 
 This note sketches the eventual surface syntax that could replace the current
 opaque `TypeConstruction` builder. The builder has proved the semantics for
-structs, bitfields, and enum variants; the remaining question is what syntax
-best fits Jett's language principles.
+structs, bitfields, enum variants, and state-machine snapshots; the remaining
+question is what syntax best fits Jett's language principles.
 
 ## Goals
 
@@ -48,15 +48,30 @@ for field in variant.fields:
 return type.construct_finish[T](builder)
 ```
 
+Machine snapshots use the same builder after selecting a checked state:
+
+```jett
+mutable TypeConstruction builder = type.construct_machine_start[T](view state) handle error:
+    return fail(error)
+for field in state.fields:
+    comptime type Field = field.type_info:
+        Field decoded = decode_payload[Field](payload, field.serialize_name) handle error:
+            return fail(error)
+        builder = type.construct_put[T, Field](builder, view field, decoded) handle error:
+            return fail(error)
+return type.construct_finish[T](builder)
+```
+
 This is verbose but valuable as a semantic baseline. It exposes exactly which
 operations need to be preserved by future syntax.
 
 ## Current Decision
 
-The reflected JSON decoder now uses the builder path in real stdlib code, and
-the old typed Rust `json.parse[T]` fallback has been removed from public JSON
-dispatch. That gives the builder enough production pressure to keep hardening
-it, but it does not yet justify adding new parser syntax.
+The reflected JSON decoder now uses the builder path in real stdlib code for
+records, bitfields, enums, and machines, and the old typed Rust `json.parse[T]`
+fallback has been removed from public JSON dispatch. That gives the builder
+enough production pressure to keep hardening it, but it does not yet justify
+adding new parser syntax.
 
 Keep `TypeConstruction` as the implementation surface until block-expression
 syntax and lowering are mature enough to justify a new construction block:
@@ -85,6 +100,17 @@ result[T, string] built = type.construct_variant[T](view variant):
     for field in variant.fields:
         comptime type Field = field.type_info:
             Field decoded = decode_payload[Field](payload, field.index) handle error:
+                return fail(error)
+            provide field = decoded
+```
+
+For machine snapshots:
+
+```jett
+result[T, string] built = type.construct_machine[T](view state):
+    for field in state.fields:
+        comptime type Field = field.type_info:
+            Field decoded = decode_payload[Field](payload, field.serialize_name) handle error:
                 return fail(error)
             provide field = decoded
 ```
@@ -173,10 +199,12 @@ The block can lower mechanically to today's builder:
    `type.construct_start[T]()`.
 2. `type.construct_variant[T](view variant):` creates a hidden builder with
    `type.construct_variant_start[T](view variant)`.
-3. Each `provide field = value` lowers to
+3. `type.construct_machine[T](view state):` creates a hidden builder with
+   `type.construct_machine_start[T](view state)`.
+4. Each `provide field = value` lowers to
    `type.construct_put[T, Field](builder, view field, value)`.
-4. The block result lowers to `type.construct_finish[T](builder)`.
-5. The result type should be `result[T, string]` even when ordinary
+5. The block result lowers to `type.construct_finish[T](builder)`.
+6. The result type should be `result[T, string]` even when ordinary
    construction could not fail. Reflection-driven construction is primarily for
    decoded data, and explicit error handling is worth the small uniformity cost.
 
@@ -185,8 +213,8 @@ access it or pass it around from the block surface.
 
 ## Static Rules
 
-- `provide` is only valid directly inside a `type.construct[...]` or
-  `type.construct_variant[...]` block.
+- `provide` is only valid directly inside a `type.construct[...]`,
+  `type.construct_variant[...]`, or `type.construct_machine[...]` block.
 - The left side must be trusted compiler-produced `TypeField` metadata.
 - The right side must typecheck as the concrete field type bound by the nearest
   enclosing `comptime type Field = field.type_info:` block, or an equivalent
