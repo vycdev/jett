@@ -143,6 +143,21 @@ pub fn run_verify_blocks_with_metadata(
     verify_results_to_diagnostics(results)
 }
 
+/// Run all verify blocks with checked metadata and expression type facts from
+/// type checking.
+pub fn run_verify_blocks_with_metadata_and_expression_types(
+    module: &Module,
+    metadata: Arc<ReflectionMetadata>,
+    expression_types: Arc<HashMap<Span, String>>,
+) -> Vec<Diagnostic> {
+    let results = run_verify_blocks_detailed_with_metadata_and_expression_types(
+        module,
+        Some(metadata),
+        Some(expression_types),
+    );
+    verify_results_to_diagnostics(results)
+}
+
 fn verify_results_to_diagnostics(results: Vec<VerifyResult>) -> Vec<Diagnostic> {
     results
         .into_iter()
@@ -176,28 +191,46 @@ pub fn run_verify_blocks_detailed_with_metadata(
     module: &Module,
     metadata: Option<Arc<ReflectionMetadata>>,
 ) -> Vec<VerifyResult> {
+    run_verify_blocks_detailed_with_metadata_and_expression_types(module, metadata, None)
+}
+
+pub fn run_verify_blocks_detailed_with_metadata_and_expression_types(
+    module: &Module,
+    metadata: Option<Arc<ReflectionMetadata>>,
+    expression_types: Option<Arc<HashMap<Span, String>>>,
+) -> Vec<VerifyResult> {
     let module_for_thread = module.clone();
     let thread_metadata = metadata.clone();
+    let thread_expression_types = expression_types.clone();
     match std::thread::Builder::new()
         .name("jett-verify".to_string())
         .stack_size(VERIFY_STACK_SIZE)
-        .spawn(move || run_verify_blocks_detailed_inner(&module_for_thread, thread_metadata))
-    {
+        .spawn(move || {
+            run_verify_blocks_detailed_inner(
+                &module_for_thread,
+                thread_metadata,
+                thread_expression_types,
+            )
+        }) {
         Ok(handle) => match handle.join() {
             Ok(results) => results,
             Err(payload) => std::panic::resume_unwind(payload),
         },
-        Err(_) => run_verify_blocks_detailed_inner(module, metadata),
+        Err(_) => run_verify_blocks_detailed_inner(module, metadata, expression_types),
     }
 }
 
 fn run_verify_blocks_detailed_inner(
     module: &Module,
     metadata: Option<Arc<ReflectionMetadata>>,
+    expression_types: Option<Arc<HashMap<Span, String>>>,
 ) -> Vec<VerifyResult> {
     let mut interp = Interpreter::new();
     if let Some(metadata) = metadata {
         interp.set_reflection_metadata(metadata);
+    }
+    if let Some(expression_types) = expression_types {
+        interp.set_checked_expression_types(expression_types);
     }
     let mut results = Vec::new();
 

@@ -6200,6 +6200,12 @@ No special compiler rules for capabilities. They follow the same `view` semantic
 | `nothing` | Unit type with exactly one value, also called `nothing`. Used in `result[nothing, string]` for functions that can fail but return no value on success. `ok(nothing)` is the canonical form for wrapping success in `result[nothing, E]`. |
 | `function(T) returns U` | Function type. Used for callbacks and higher-order functions. |
 
+`uint64` has a distinct runtime carrier for the full unsigned range. When an
+expression is checked in a `uint64` context, including nested contexts such as
+`list[uint64]` elements, the interpreter uses the checked expression type rather
+than guessing from the literal's small numeric value. Expression-only consumers,
+such as primitive interface dispatch, therefore see the checked carrier.
+
 **Function types** describe the signature of a function value — its parameter types and return type. They reuse the existing `function` and `returns` keywords in type position:
 
 ```

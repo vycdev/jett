@@ -391,7 +391,10 @@ This is the most complex phase of the compiler. It enforces the majority of Jett
 
 **Input:** AST + `ResolveResult`.
 
-**Output:** `TypedTree` — an annotated AST with type information on every expression, plus ownership and capability annotations.
+**Output:** checked diagnostics, a `Span -> TypeId` expression type map,
+checked reflection metadata, and ownership/capability diagnostics. Later HIR
+lowering can materialize this as a typed tree, but the current driver already
+uses the expression map for hover/tooling and for interpreter runtime facts.
 
 ### Sub-Phases (executed in order)
 
@@ -441,6 +444,10 @@ Bottom-up type checking of every expression:
 - **Variable references:** look up the type from the variable's declaration.
 - **Function calls:** verify argument types match parameter types, verify generic type parameters, verify return type.
 - **No implicit conversions** — `int64` is not `float64`. Every mismatch is an error with a hint.
+- **Expected-type expression facts:** when context determines a more specific
+  primitive type, such as a small integer literal inside a `uint64` argument or
+  `list[uint64]` element, the expression type map records the checked type
+  rather than the literal's default carrier.
 - **Refinement type assignments:** wrapping a base type in a refinement type is fallible → must have `handle error:`.
 - **Handle blocks:** verify that `handle error:` is used on `result[T, E]` and `handle:` on `optional[T]`. Verify handle blocks end with `return` or `default`. The `default` keyword inside a handle block is part of the `HandleExpr` structure — it provides a fallback value and resumes normal execution.
 - **Coarsen expressions:** `coarsen value` converts a refinement type to an ancestor type. The target type is determined by the variable declaration's type annotation on the left side. The type checker walks the refinement chain to verify the target is a valid ancestor.
@@ -677,6 +684,13 @@ ComptimeValue {
     Nothing,
 }
 ```
+
+The current tree-walking comptime/runtime interpreter also receives checked
+reflection metadata and checked expression type names from the driver. It uses
+those expression facts to keep runtime value carriers aligned with typechecker
+decisions in expression-only sites, for example preserving `uint64` rather than
+falling back to a small `int64` carrier inside `list[uint64]` construction or
+primitive interface dispatch.
 
 ### What Runs at Comptime
 

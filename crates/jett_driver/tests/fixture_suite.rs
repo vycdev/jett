@@ -603,6 +603,10 @@ run_pass_fixture!(run_pass_closures, "closures.jett");
 run_pass_fixture!(run_pass_use_imports, "use_imports.jett");
 run_pass_fixture!(run_pass_loops, "loops.jett");
 run_pass_fixture!(run_pass_conversions, "conversions.jett");
+run_pass_fixture!(
+    run_pass_uint64_checked_expression_runtime_types,
+    "uint64_checked_expression_runtime_types.jett"
+);
 run_pass_fixture!(run_pass_set_operations, "set_operations.jett");
 run_pass_fixture!(run_pass_error_handling, "error_handling.jett");
 

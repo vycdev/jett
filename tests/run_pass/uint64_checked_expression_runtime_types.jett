@@ -1,0 +1,24 @@
+interface Show:
+    function show(view self: Show) returns string
+implement Show for int64:
+    function show(view self: int64) returns string:
+        return "int64"
+implement Show for uint64:
+    function show(view self: uint64) returns string:
+        return "uint64"
+function constructed_list_uint64_dispatch() returns string:
+    list[uint64] values = list(42)
+    uint64 fallback = 0
+    return Show.show(view(list.get[uint64](view values, 0) handle:
+        default fallback
+    ))
+function appended_list_uint64_dispatch() returns string:
+    list[uint64] values = list.new[uint64]()
+    values = list.append[uint64](view values, 7)
+    uint64 fallback = 0
+    return Show.show(view(list.get[uint64](view values, 0) handle:
+        default fallback
+    ))
+verify uint64_checked_expression_runtime_types:
+    assert constructed_list_uint64_dispatch() == "uint64"
+    assert appended_list_uint64_dispatch() == "uint64"

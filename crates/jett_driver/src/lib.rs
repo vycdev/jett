@@ -1,15 +1,17 @@
-use jett_common::{FileId, STDLIB_FILE_ID_START};
+use jett_common::{FileId, STDLIB_FILE_ID_START, Span};
 use jett_comptime::value::Value;
 use jett_comptime::verify::{
-    run_verify_blocks_detailed_with_metadata, run_verify_blocks_with_metadata,
+    run_verify_blocks_detailed_with_metadata_and_expression_types,
+    run_verify_blocks_with_metadata_and_expression_types,
 };
 use jett_diagnostics::Diagnostic;
 use jett_fmt::{FormatResult, format_source};
 use jett_parser::ast::{FunctionDef, Item, Module, Param, TypeExpr};
 use jett_parser::parse;
 use jett_resolve::resolve;
-use jett_typecheck::check;
+use jett_typecheck::{CheckResult, check};
 use jett_types::ReflectionMetadata;
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -39,6 +41,8 @@ pub struct BuildResult {
     pub file_path: String,
     /// Checked reflection metadata for runtime reflection/JSON hooks.
     pub reflection_metadata: Option<Arc<ReflectionMetadata>>,
+    /// Checked expression type names for runtime normalization at expression-only sites.
+    pub checked_expression_types: Option<Arc<HashMap<Span, String>>>,
 }
 
 /// Run the full compilation pipeline on in-memory source text.
@@ -59,6 +63,7 @@ pub fn build_source(source: &str, file_path: &str) -> BuildResult {
             source: source.to_string(),
             file_path: file_path.to_string(),
             reflection_metadata: None,
+            checked_expression_types: None,
         };
     }
 
@@ -72,6 +77,7 @@ pub fn build_source(source: &str, file_path: &str) -> BuildResult {
             source: source.to_string(),
             file_path: file_path.to_string(),
             reflection_metadata: None,
+            checked_expression_types: None,
         };
     }
     prepend_support_modules(&mut parse_result.module, support_modules.modules);
@@ -87,6 +93,7 @@ pub fn build_source(source: &str, file_path: &str) -> BuildResult {
             source: source.to_string(),
             file_path: file_path.to_string(),
             reflection_metadata: None,
+            checked_expression_types: None,
         };
     }
 
@@ -102,13 +109,18 @@ pub fn build_source(source: &str, file_path: &str) -> BuildResult {
             source: source.to_string(),
             file_path: file_path.to_string(),
             reflection_metadata: None,
+            checked_expression_types: None,
         };
     }
 
     // Phase 5: Execute verify blocks at compile time
     let reflection_metadata = check_result.reflection_metadata.clone();
-    let verify_diagnostics =
-        run_verify_blocks_with_metadata(&parse_result.module, check_result.reflection_metadata);
+    let checked_expression_types = Arc::new(expression_type_names(&check_result));
+    let verify_diagnostics = run_verify_blocks_with_metadata_and_expression_types(
+        &parse_result.module,
+        check_result.reflection_metadata,
+        checked_expression_types.clone(),
+    );
     all_diagnostics.extend(verify_diagnostics);
 
     let has_errors = has_error_diagnostics(&all_diagnostics);
@@ -119,6 +131,7 @@ pub fn build_source(source: &str, file_path: &str) -> BuildResult {
         source: source.to_string(),
         file_path: file_path.to_string(),
         reflection_metadata: Some(reflection_metadata),
+        checked_expression_types: Some(checked_expression_types),
     }
 }
 
@@ -366,6 +379,7 @@ fn build_file_inner(path: &Path, include_project: bool) -> BuildResult {
                 source: String::new(),
                 file_path: file_path_str,
                 reflection_metadata: None,
+                checked_expression_types: None,
             };
         }
     };
@@ -386,6 +400,7 @@ fn build_file_inner(path: &Path, include_project: bool) -> BuildResult {
             source,
             file_path: file_path_str,
             reflection_metadata: None,
+            checked_expression_types: None,
         };
     }
 
@@ -404,6 +419,7 @@ fn build_file_inner(path: &Path, include_project: bool) -> BuildResult {
             source,
             file_path: file_path_str,
             reflection_metadata: None,
+            checked_expression_types: None,
         };
     }
     prepend_support_modules(&mut parse_result.module, support_modules.modules);
@@ -420,6 +436,7 @@ fn build_file_inner(path: &Path, include_project: bool) -> BuildResult {
             source,
             file_path: file_path_str,
             reflection_metadata: None,
+            checked_expression_types: None,
         };
     }
 
@@ -435,13 +452,18 @@ fn build_file_inner(path: &Path, include_project: bool) -> BuildResult {
             source,
             file_path: file_path_str,
             reflection_metadata: None,
+            checked_expression_types: None,
         };
     }
 
     // Phase 5: Execute verify blocks at compile time
     let reflection_metadata = check_result.reflection_metadata.clone();
-    let verify_diagnostics =
-        run_verify_blocks_with_metadata(&parse_result.module, check_result.reflection_metadata);
+    let checked_expression_types = Arc::new(expression_type_names(&check_result));
+    let verify_diagnostics = run_verify_blocks_with_metadata_and_expression_types(
+        &parse_result.module,
+        check_result.reflection_metadata,
+        checked_expression_types.clone(),
+    );
     all_diagnostics.extend(verify_diagnostics);
 
     let has_errors = has_error_diagnostics(&all_diagnostics);
@@ -452,6 +474,7 @@ fn build_file_inner(path: &Path, include_project: bool) -> BuildResult {
         source,
         file_path: file_path_str,
         reflection_metadata: Some(reflection_metadata),
+        checked_expression_types: Some(checked_expression_types),
     }
 }
 
@@ -486,6 +509,14 @@ fn has_error_diagnostics(diagnostics: &[Diagnostic]) -> bool {
     diagnostics
         .iter()
         .any(|d| d.severity == jett_diagnostics::Severity::Error)
+}
+
+fn expression_type_names(check_result: &CheckResult) -> HashMap<Span, String> {
+    check_result
+        .type_map
+        .iter()
+        .map(|(span, ty_id)| (*span, check_result.interner.type_name(*ty_id)))
+        .collect()
 }
 
 fn update_current_namespace(
@@ -699,6 +730,9 @@ fn run_file_inner(path: &Path, capture_stdout: bool) -> Result<String, String> {
     if let Some(metadata) = build.reflection_metadata.clone() {
         interp.set_reflection_metadata(metadata);
     }
+    if let Some(expression_types) = build.checked_expression_types.clone() {
+        interp.set_checked_expression_types(expression_types);
+    }
     if capture_stdout {
         interp.enable_stdout_capture();
     }
@@ -894,9 +928,11 @@ pub fn test_file(path: &Path) -> Result<TestResult, String> {
         return Err(format!("type errors:\n{}", type_errors.join("\n")));
     }
 
-    let results = run_verify_blocks_detailed_with_metadata(
+    let checked_expression_types = Arc::new(expression_type_names(&check_result));
+    let results = run_verify_blocks_detailed_with_metadata_and_expression_types(
         &parse_result.module,
         Some(check_result.reflection_metadata),
+        Some(checked_expression_types),
     );
 
     let total = results.len();

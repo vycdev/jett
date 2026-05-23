@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use rand::Rng;
 
-use jett_common::{FileId, is_json_raw_facade, json_public_bridge_spec};
+use jett_common::{FileId, Span, is_json_raw_facade, json_public_bridge_spec};
 use jett_parser::ast::{
     ActorDef, BinOp, BitfieldDef, BitfieldFieldKind, Block, CallArg, EnumDef, Expr, FunctionDef,
     Ident, ImplementBlock, InterfaceDecl, Item, MachineDef, Module, Pattern, PipelineStep, Stmt,
@@ -193,6 +193,9 @@ pub struct Interpreter {
     reflected_variant_scopes: Vec<HashMap<String, ReflectedVariantBinding>>,
     /// Checked reflection metadata snapshot, when supplied by the driver.
     reflection_metadata: Option<Arc<ReflectionMetadata>>,
+    /// Checked expression type names keyed by source span, when supplied by
+    /// the driver after type checking.
+    checked_expression_types: Option<Arc<HashMap<Span, String>>>,
     /// Live actor instances keyed by unique ID.
     actor_instances: HashMap<u64, ActorInstance>,
     /// Next actor instance ID.
@@ -238,6 +241,7 @@ impl Interpreter {
             reflected_type_info_scopes: Vec::new(),
             reflected_variant_scopes: Vec::new(),
             reflection_metadata: None,
+            checked_expression_types: None,
             actor_instances: HashMap::new(),
             next_actor_id: 0,
             debug_output: Vec::new(),
@@ -256,6 +260,11 @@ impl Interpreter {
     /// Attach checked reflection metadata produced by the typechecker.
     pub fn set_reflection_metadata(&mut self, metadata: Arc<ReflectionMetadata>) {
         self.reflection_metadata = Some(metadata);
+    }
+
+    /// Attach checked expression type names produced by the typechecker.
+    pub fn set_checked_expression_types(&mut self, types: Arc<HashMap<Span, String>>) {
+        self.checked_expression_types = Some(types);
     }
 
     /// Drain any debug lines recorded so far.
@@ -834,6 +843,27 @@ impl Interpreter {
     }
 
     fn eval_expr_flow(&mut self, expr: &Expr) -> Result<ExprFlow, String> {
+        let flow = self.eval_expr_flow_inner(expr)?;
+        match flow {
+            ExprFlow::Value(value) => Ok(ExprFlow::Value(
+                self.normalize_value_for_checked_expr(expr, value)?,
+            )),
+            ExprFlow::Signal(signal) => Ok(ExprFlow::Signal(signal)),
+        }
+    }
+
+    fn normalize_value_for_checked_expr(&self, expr: &Expr, value: Value) -> Result<Value, String> {
+        let Some(type_name) = self
+            .checked_expression_types
+            .as_ref()
+            .and_then(|types| types.get(&expr.span()))
+        else {
+            return Ok(value);
+        };
+        self.normalize_value_for_type_name(type_name, value)
+    }
+
+    fn eval_expr_flow_inner(&mut self, expr: &Expr) -> Result<ExprFlow, String> {
         match expr {
             // Literals
             Expr::IntLiteral(n, _) => {
