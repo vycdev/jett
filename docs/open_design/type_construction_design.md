@@ -18,6 +18,8 @@ Deserialization needed the reverse operation: given checked field values, build
 a `T` while preserving the exact same rules as ordinary source constructors.
 That first form now exists as the opaque `TypeConstruction` builder for
 structs, bitfields, and enum variants; the final syntax story is still open.
+The next pressure point is state-machine JSON parsing, which needs the same
+reverse-construction guarantee for a selected machine state and its payload.
 
 The missing operation is not JSON-specific. JSON happens to be the current
 pressure point, but the same primitive should serve:
@@ -59,6 +61,16 @@ Enum construction enforces:
 - duplicate and missing payload-field errors,
 - payload field type checking,
 - refinement boundary validation for payload values.
+
+State-machine construction must enforce:
+
+- selecting a declared state by checked `TypeMachineState` metadata,
+- state-local payload field lookup,
+- duplicate and missing payload-field errors,
+- payload field type checking,
+- refinement boundary validation for payload values,
+- preserving `Machine at state` static precision when the target type is
+  state-qualified.
 
 A reflected constructor must not be a weaker back door around these checks. It
 should reuse the same typechecker and interpreter rules where possible.
@@ -149,9 +161,11 @@ Verdict: preferred direction, pending syntax.
 4. Done for enums: start from checked `TypeVariant` metadata with
    `type.construct_variant_start[T](variant)`, then reuse `construct_put` and
    `construct_finish` for variant-local payload fields.
-5. Done for JSON: public typed parse now routes through the stdlib `JsonTree`
+5. Done for JSON records/enums: public typed parse now routes through the stdlib `JsonTree`
    parser/decoder. Remaining construction work is about hardening syntax and
    reuse for future decoders, not replacing a Rust-backed `json.parse[T]`.
+6. Next for machines: add an explicit machine starter that selects checked
+   `TypeMachineState` metadata, then reuse the existing typed put/finish path.
 
 ## Implementation Notes
 
@@ -180,6 +194,42 @@ their field types. Format modules remain responsible for:
 
 This keeps `type.construct` from becoming `json.construct` in disguise.
 
+## Machine Construction Decision
+
+Machine construction should extend the existing builder with a distinct state
+starter:
+
+```jett
+result[TypeConstruction, string] builder = type.construct_machine_start[T](view state)
+```
+
+`T` may be either a bare machine type or a state-qualified `Machine at state`
+type. The `state` argument must be a compiler-reflected `TypeMachineState` for
+the same machine. After the starter succeeds, callers provide state payload
+fields with the existing typed operation:
+
+```jett
+builder = type.construct_put[T, Field](builder, view field, decoded) handle error:
+    return fail(error)
+```
+
+`type.construct_finish[T](builder)` then produces `result[T, string]`. For a
+bare machine target, any declared state selected by the starter is valid. For a
+state-qualified target, the selected state must exactly match the static state
+in `T`; constructing a different state is an error at the finish boundary.
+
+This keeps state selection separate from enum variant selection. Overloading
+`type.construct_variant_start` for machines would make two different language
+concepts share one spelling, which is especially costly for agents trying to
+repair code from local context. A dedicated `construct_machine_start` also lets
+diagnostics say "state" instead of "variant" and keeps future transition-aware
+construction room to grow without changing enum behavior.
+
+The builder remains format-agnostic. JSON owns the envelope shape, unknown-key
+policy, `serialize_name` matching, and missing optional-field defaults. The
+construction primitive receives only checked machine-state metadata and decoded
+payload values.
+
 ## Open Questions
 
 - Should the eventual block syntax always return `result[T, string]`, matching
@@ -196,6 +246,10 @@ This keeps `type.construct` from becoming `json.construct` in disguise.
 - How should extra input fields be handled? The construction primitive should
   probably ignore that policy and let each format module decide before calling
   construction.
+- Should machine construction eventually validate transition effects when the
+  input represents an event rather than a full machine snapshot? Ordinary
+  `json.parse[Machine]` should not, because JSON snapshots do not carry
+  history.
 
 See `/docs/completed/reflected_construction_staging.md` for the current builder surface and
 `/docs/open_design/type_construction_block_syntax.md` for the recommended long-term block

@@ -61,6 +61,28 @@ for variant in type.variants[T]():
         return type.construct_finish[T](builder)
 ```
 
+State-machine construction should use a separate starter once machine parsing
+is enabled:
+
+```jett
+for state in type.machine_states[T]():
+    if state.name == state_name:
+        mutable TypeConstruction builder = type.construct_machine_start[T](view state) handle error:
+            return fail(error)
+        for field in state.fields:
+            comptime type Field = field.type_info:
+                Field decoded = decode_payload[Field](view raw, view field) handle error:
+                    return fail(error)
+                builder = type.construct_put[T, Field](builder, view field, decoded) handle error:
+                    return fail(error)
+        return type.construct_finish[T](builder)
+```
+
+The dedicated starter matters because machine states are not enum variants:
+state-qualified targets such as `Session at logged_in` carry static precision
+that `construct_finish` must preserve, and transition edges are separate
+metadata rather than construction-time proof obligations.
+
 This is less elegant than the eventual block syntax, but it proves the
 construction semantics without adding new syntax. The builder is opaque: user
 code can add typed values, but cannot read heterogeneous values back out.
@@ -84,6 +106,10 @@ The current implementation is still deliberately narrow:
 - Supports structs, bitfields, and enum variants. Enums require
   `type.construct_variant_start[T](variant)` because a variant must be selected
   before payload fields can be provided.
+- Machine construction should add `type.construct_machine_start[T](state)`
+  rather than reuse the enum starter; a state must be selected before payload
+  fields can be provided, and state-qualified targets must finish in that exact
+  state.
 - Require `construct_put` field metadata to match `T` or the selected enum
   variant by index, name, and reflected type. This is not full provenance, but
   it matches the current `type.field_value` safety model.

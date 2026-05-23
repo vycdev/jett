@@ -6,7 +6,9 @@ Jett now has checked reflection for state-machine kind tags, declared states,
 state payload fields, transition edges, active state values, and active payload
 field reads. JSON serialization now uses that reflection to emit the envelope
 shape below. JSON parsing still remains blocked until reflected construction for
-machine values has an equally explicit checked path.
+machine values has an equally explicit checked path. The selected construction
+path is `type.construct_machine_start[T](view state)`, followed by the existing
+typed `type.construct_put` and `type.construct_finish` builder operations.
 
 ## Current Invariant
 
@@ -70,7 +72,12 @@ For `json.parse_exact`, exactness should apply at two levels:
 
 The lenient `json.parse` path may ignore unknown envelope keys and unknown
 payload keys, matching the existing struct policy, but it must not ignore an
-unknown or missing `state` tag.
+unknown or missing `state` tag. It also requires `payload` to be present as an
+object, including for unit states, so every machine snapshot has one canonical
+envelope shape.
+
+Missing optional payload fields should use the same `none` default as struct
+decoding. Missing required payload fields should fail.
 
 ## Serialize Semantics
 
@@ -101,8 +108,6 @@ message type or generated event shape, not ordinary `json.parse[Machine]`.
 
 - Should the envelope include a machine type name for debugging, or would that
   make refactors too brittle?
-- Should `payload` be required for unit states, or can `{ "state": "guest" }`
-  be accepted by lenient parse?
 - Should machine JSON be opt-in per machine declaration, or enabled for every
   machine whose payload fields are JSON-compatible?
 - How should a future schema migration story rename states or payload fields
