@@ -413,6 +413,9 @@ verify type_info_reflection:
     assert machine_state_field_type_name[TokenLifecycle]("issued", 0) == "secret[string]"
     assert machine_state_has_secret[TokenLifecycle]("issued") == true
     assert machine_state_has_secret[TokenLifecycle]("revoked") == false
+    assert type.has_secret[TokenLifecycle]() == true
+    assert type.has_secret[TokenLifecycle at issued]() == true
+    assert type.has_secret[TokenLifecycle at revoked]() == false
     assert machine_transition_count[Session]() == 1
     assert machine_transition_target[Session]("guest") == "logged_in"
     assert machine_transition_source_index[Session]("guest") == 0

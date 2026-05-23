@@ -3551,8 +3551,41 @@ impl Interpreter {
                     .any(|arg| self.type_expr_has_secret_inner(arg, visited))
             }
             TypeExpr::View(inner, _) => self.type_expr_has_secret_inner(inner, visited),
-            TypeExpr::StateQualified(inner, _, _) => {
-                self.type_expr_has_secret_inner(inner, visited)
+            TypeExpr::StateQualified(inner, state, _) => {
+                let inner = self.substitute_type_expr(inner);
+                if let TypeExpr::Named(ident) = &inner {
+                    let qualified_name = self
+                        .current_namespace
+                        .as_deref()
+                        .map(|namespace| format!("{namespace}.{}", ident.name));
+                    let machine = self.machines.get(&ident.name).or_else(|| {
+                        qualified_name
+                            .as_ref()
+                            .and_then(|name| self.machines.get(name))
+                    });
+                    if let Some(machine) = machine {
+                        if !visited.insert(type_expr_display(ty)) {
+                            return false;
+                        }
+                        let namespace = Self::type_name_namespace(&ident.name)
+                            .or(self.current_namespace.as_deref());
+                        return machine
+                            .states
+                            .iter()
+                            .find(|candidate| candidate.name.name == state.name)
+                            .is_some_and(|state_def| {
+                                state_def.fields.iter().any(|field| {
+                                    self.type_expr_has_secret_inner(
+                                        &self.substitute_type_expr_in_namespace(
+                                            &field.ty, namespace,
+                                        ),
+                                        visited,
+                                    )
+                                })
+                            });
+                    }
+                }
+                self.type_expr_has_secret_inner(&inner, visited)
             }
             TypeExpr::Function(params, return_type, _) => {
                 params
@@ -10125,6 +10158,47 @@ mod tests {
     }
 
     #[test]
+    fn direct_has_secret_fallback_uses_state_qualified_machine_payload() {
+        let mut interp = Interpreter::new();
+        let token_ty = TypeExpr::Generic(ident("secret"), vec![type_named("string")], sp());
+        interp.register_machine(&machine_def(
+            "TokenLifecycle",
+            vec![
+                ("issued", vec![("token", token_ty)]),
+                ("revoked", Vec::new()),
+            ],
+            vec![("issued", "revoked")],
+        ));
+
+        let machine_has_secret = interp
+            .call_builtin_with_type_args("type.has_secret", &[type_named("TokenLifecycle")], &[])
+            .expect("type.has_secret should be a typed builtin")
+            .expect("machine secret reflection should evaluate");
+        let issued_ty = TypeExpr::StateQualified(
+            Box::new(type_named("TokenLifecycle")),
+            ident("issued"),
+            sp(),
+        );
+        let issued_has_secret = interp
+            .call_builtin_with_type_args("type.has_secret", &[issued_ty], &[])
+            .expect("type.has_secret should be a typed builtin")
+            .expect("issued state secret reflection should evaluate");
+        let revoked_ty = TypeExpr::StateQualified(
+            Box::new(type_named("TokenLifecycle")),
+            ident("revoked"),
+            sp(),
+        );
+        let revoked_has_secret = interp
+            .call_builtin_with_type_args("type.has_secret", &[revoked_ty], &[])
+            .expect("type.has_secret should be a typed builtin")
+            .expect("revoked state secret reflection should evaluate");
+
+        assert_eq!(machine_has_secret, Value::Bool(true));
+        assert_eq!(issued_has_secret, Value::Bool(true));
+        assert_eq!(revoked_has_secret, Value::Bool(false));
+    }
+
+    #[test]
     fn direct_reflection_fallback_normalizes_current_namespace_types() {
         let mut interp = Interpreter::new();
         interp.register_struct_in_namespace(
@@ -12346,6 +12420,42 @@ mod tests {
                 .collect(),
             methods,
             exported: false,
+            span: sp(),
+        }
+    }
+
+    fn machine_def(
+        name: &str,
+        states: Vec<(&str, Vec<(&str, TypeExpr)>)>,
+        transitions: Vec<(&str, &str)>,
+    ) -> MachineDef {
+        MachineDef {
+            name: ident(name),
+            exported: false,
+            states: states
+                .into_iter()
+                .map(|(state_name, fields)| jett_parser::ast::MachineState {
+                    name: ident(state_name),
+                    fields: fields
+                        .into_iter()
+                        .map(|(field_name, ty)| FieldDef {
+                            name: ident(field_name),
+                            ty,
+                            serialize_name: None,
+                            span: sp(),
+                        })
+                        .collect(),
+                    span: sp(),
+                })
+                .collect(),
+            transitions: transitions
+                .into_iter()
+                .map(|(from, to)| jett_parser::ast::MachineTransition {
+                    from: ident(from),
+                    to: ident(to),
+                    span: sp(),
+                })
+                .collect(),
             span: sp(),
         }
     }
