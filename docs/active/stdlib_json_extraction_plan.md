@@ -272,7 +272,10 @@ for current JSON hooks; future backends need the same identity boundary.
    the current trusted-wrapper/error paths. Done for typed public
    parse/serialize, raw `JsonTree` / compatibility `JsonValue` execution in
    `jett_comptime`, and runtime `main()` reflection metadata handoff for
-   namespaced generic JSON.
+   namespaced generic JSON. Public policy coverage now also pins unsupported
+   `parse`/`parse_exact` and `serialize`/`serialize_public` targets through
+   direct, secret, wrapper/container, enum-payload, and `TypeConstruction`
+   paths.
 6. Continue hardening the self-hosted `JsonTree` parser. Common malformed-input
    diagnostics are pinned for unterminated strings/arrays/objects, trailing
    characters, mismatched delimiters, bad number forms, bad literals,
@@ -289,7 +292,9 @@ for current JSON hooks; future backends need the same identity boundary.
    `json.json_tree_parse`, `json.parse_raw`, `json.parse[JsonValue]`,
    `json.parse[json.JsonTree]`, `json.parse_exact[JsonValue]`,
    `json.parse_exact[json.JsonValue]`, and
-   `json.parse_exact[json.JsonTree]`. Container parsing now recurses through
+   `json.parse_exact[json.JsonTree]`; success parity covers representative
+   null, bool, number, string, empty-container, and nested compound roots across
+   the same public raw entrypoints. Container parsing now recurses through
    byte spans for nested array/object values instead of converting every segment
    back into a string and reparsing from bytes; string scalar values and object
    keys now parse from byte spans as well, and string unescaping now appends
