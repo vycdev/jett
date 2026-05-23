@@ -1,0 +1,13 @@
+# ERROR: E0309
+namespace test
+machine Session:
+    states:
+        logged_in(user_id: string)
+    transitions:
+        logged_in to logged_in
+function bad_machine_field_value_arity(view session: Session at logged_in) returns string:
+    TypeMachineState state = type.machine_state_value[Session at logged_in](view session)
+    string found = "missing"
+    for field in state.fields:
+        found = type.machine_field_value[Session at logged_in](view session, view field)
+    return found

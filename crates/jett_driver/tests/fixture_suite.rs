@@ -1297,6 +1297,30 @@ compile_fail_fixture!(
     "type_machine_transitions_wrong_arity.jett"
 );
 compile_fail_fixture!(
+    compile_fail_type_machine_state_value_wrong_arity,
+    "type_machine_state_value_wrong_arity.jett"
+);
+compile_fail_fixture!(
+    compile_fail_type_machine_state_value_wrong_value_arg,
+    "type_machine_state_value_wrong_value_arg.jett"
+);
+compile_fail_fixture!(
+    compile_fail_type_machine_state_value_non_machine_owner,
+    "type_machine_state_value_non_machine_owner.jett"
+);
+compile_fail_fixture!(
+    compile_fail_type_machine_field_value_wrong_arity,
+    "type_machine_field_value_wrong_arity.jett"
+);
+compile_fail_fixture!(
+    compile_fail_type_machine_field_value_wrong_field_arg,
+    "type_machine_field_value_wrong_field_arg.jett"
+);
+compile_fail_fixture!(
+    compile_fail_type_machine_field_value_wrong_requested_type,
+    "type_machine_field_value_wrong_requested_type.jett"
+);
+compile_fail_fixture!(
     compile_fail_type_field_value_wrong_arity,
     "type_field_value_wrong_arity.jett"
 );

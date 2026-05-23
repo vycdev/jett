@@ -14,6 +14,11 @@ from local source.
   including nested machine fields inside structs and containers.
 - Machine reflection is available through `type.machine_layout[T]()`,
   `type.machine_states[T]()`, and `type.machine_transitions[T]()`.
+- Value-level machine reflection is available through
+  `type.machine_state_value[T](view value)` and
+  `type.machine_field_value[T, U](view value, view field)`, which is enough for
+  future serializers to discover the active state and payload values without
+  dynamic field-name strings.
 - Reflection metadata uses ordinary field names (`states`, `edges`, `source`,
   `target`) instead of reserved state-machine syntax tokens.
 

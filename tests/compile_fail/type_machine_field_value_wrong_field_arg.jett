@@ -1,0 +1,9 @@
+# ERROR: E0304
+namespace test
+machine Session:
+    states:
+        logged_in(user_id: string)
+    transitions:
+        logged_in to logged_in
+function bad_machine_field_value_field_arg(view session: Session at logged_in) returns string:
+    return type.machine_field_value[Session at logged_in, string](view session, "user_id")

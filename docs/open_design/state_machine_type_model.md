@@ -184,6 +184,9 @@ to a known machine owner.
     - `type.machine_layout`, `type.machine_states`, and
       `type.machine_transitions` expose state payload fields and transition
       edges with reserved-safe field names,
+    - `type.machine_state_value` exposes the active state metadata for a
+      concrete machine value, and `type.machine_field_value` reads active-state
+      payload values through reflected `TypeField` metadata,
     - non-machine top-level types intentionally return empty machine metadata
       from those shape-specific probes, so generic reflection code can inspect
       `type.kind_tag` and then choose a shape without adding effect handling.

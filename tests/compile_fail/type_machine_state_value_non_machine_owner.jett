@@ -1,0 +1,7 @@
+# ERROR: E9000
+namespace test
+function bad_machine_state_value_owner() returns string:
+    TypeMachineState state = type.machine_state_value[int64](42)
+    return state.name
+verify type_machine_state_value_non_machine_owner:
+    assert bad_machine_state_value_owner() == "missing"

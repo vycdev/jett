@@ -1,0 +1,10 @@
+# ERROR: E0304
+namespace test
+machine Session:
+    states:
+        guest
+    transitions:
+        guest to guest
+function bad_machine_state_value_arg() returns string:
+    TypeMachineState state = type.machine_state_value[Session](42)
+    return state.name

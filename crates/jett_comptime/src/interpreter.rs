@@ -2775,9 +2775,11 @@ impl Interpreter {
                 | "type.machine_layout"
                 | "type.machine_states"
                 | "type.machine_transitions"
+                | "type.machine_state_value"
                 | "type.variants"
                 | "type.variant_value"
                 | "type.field_value"
+                | "type.machine_field_value"
                 | "type.variant_field_value"
                 | "type.construct_start"
                 | "type.construct_variant_start"
@@ -2791,14 +2793,16 @@ impl Interpreter {
         if !is_typed_builtin {
             return None;
         }
-        let expected_type_arg_count =
-            if matches!(name, "type.field_value" | "type.variant_field_value") {
-                2
-            } else if matches!(name, "type.construct_put") {
-                2
-            } else {
-                1
-            };
+        let expected_type_arg_count = if matches!(
+            name,
+            "type.field_value" | "type.machine_field_value" | "type.variant_field_value"
+        ) {
+            2
+        } else if matches!(name, "type.construct_put") {
+            2
+        } else {
+            1
+        };
         if type_args.len() != expected_type_arg_count {
             return Some(Err(format!(
                 "{name} expects {expected_type_arg_count} type argument(s), got {}",
@@ -3038,6 +3042,12 @@ impl Interpreter {
                         .collect(),
                 ))
             }
+            "type.machine_state_value" => {
+                if let Some(err) = check_args(name, 1, args) {
+                    return Some(err);
+                }
+                self.reflected_machine_state_value(&args[0], &ty)
+            }
             "type.variants" => {
                 if let Some(err) = check_args(name, 0, args) {
                     return Some(err);
@@ -3071,6 +3081,13 @@ impl Interpreter {
                 }
                 let expected_field_ty = self.substitute_type_expr(&type_args[1]);
                 self.reflected_field_value(&args[0], &ty, &args[1], &expected_field_ty)
+            }
+            "type.machine_field_value" => {
+                if let Some(err) = check_args(name, 2, args) {
+                    return Some(err);
+                }
+                let expected_field_ty = self.substitute_type_expr(&type_args[1]);
+                self.reflected_machine_field_value(&args[0], &ty, &args[1], &expected_field_ty)
             }
             "type.variant_field_value" => {
                 if let Some(err) = check_args(name, 2, args) {
@@ -5062,6 +5079,191 @@ impl Interpreter {
                 type_expr_display(owner_ty)
             )),
         }
+    }
+
+    fn reflected_machine_state_value(
+        &self,
+        value: &Value,
+        owner_ty: &TypeExpr,
+    ) -> Result<Value, String> {
+        let Value::Machine {
+            type_name, state, ..
+        } = value
+        else {
+            return Err(format!(
+                "type.machine_state_value: expected machine value for '{}', got {value}",
+                type_expr_display(owner_ty)
+            ));
+        };
+
+        let expected_type_name = type_expr_name(owner_ty);
+        if type_name != &expected_type_name {
+            return Err(format!(
+                "type.machine_state_value: expected machine '{}', got '{}'",
+                expected_type_name, type_name
+            ));
+        }
+
+        if let Some(expected_state) = type_expr_state_name(owner_ty)
+            && state != expected_state
+        {
+            return Err(format!(
+                "type.machine_state_value: expected machine state '{} at {}', got '{} at {}'",
+                expected_type_name, expected_state, type_name, state
+            ));
+        }
+
+        if let Some(machine) = self.checked_machine(owner_ty) {
+            return machine
+                .states
+                .iter()
+                .find(|candidate| candidate.name == *state)
+                .map(Self::reflection_machine_state_info_value)
+                .ok_or_else(|| {
+                    format!(
+                        "type.machine_state_value: machine '{}' has no state '{}'",
+                        expected_type_name, state
+                    )
+                });
+        }
+
+        if self.checked_metadata_kind_is(owner_ty, &["machine", "machine_state"]) {
+            return Err(self.missing_checked_metadata_error(owner_ty, "machine"));
+        }
+
+        self.type_expr_machine(owner_ty)
+            .states
+            .into_iter()
+            .enumerate()
+            .find(|(_, candidate)| candidate.name == *state)
+            .map(|(index, state)| self.type_machine_state_value(index, state))
+            .ok_or_else(|| {
+                format!(
+                    "type.machine_state_value: machine '{}' has no state '{}'",
+                    expected_type_name, state
+                )
+            })
+    }
+
+    fn reflected_machine_field_value(
+        &self,
+        value: &Value,
+        owner_ty: &TypeExpr,
+        field_metadata: &Value,
+        expected_field_ty: &TypeExpr,
+    ) -> Result<Value, String> {
+        let (field_index, metadata_name, metadata_type_name) =
+            Self::type_field_metadata_for(field_metadata, "type.machine_field_value")?;
+        let Value::Machine {
+            type_name,
+            state,
+            fields,
+        } = value
+        else {
+            return Err(format!(
+                "type.machine_field_value: expected machine value for '{}', got {value}",
+                type_expr_display(owner_ty)
+            ));
+        };
+
+        let expected_type_name = type_expr_name(owner_ty);
+        if type_name != &expected_type_name {
+            return Err(format!(
+                "type.machine_field_value: expected machine '{}', got '{}'",
+                expected_type_name, type_name
+            ));
+        }
+
+        if let Some(expected_state) = type_expr_state_name(owner_ty)
+            && state != expected_state
+        {
+            return Err(format!(
+                "type.machine_field_value: expected machine state '{} at {}', got '{} at {}'",
+                expected_type_name, expected_state, type_name, state
+            ));
+        }
+
+        let (field_name, actual_type_name) = if let Some(machine) = self.checked_machine(owner_ty) {
+            let state_metadata = machine
+                .states
+                .iter()
+                .find(|candidate| candidate.name == *state)
+                .ok_or_else(|| {
+                    format!(
+                        "type.machine_field_value: machine '{}' has no state '{}'",
+                        expected_type_name, state
+                    )
+                })?;
+            let field = state_metadata.fields.get(field_index).ok_or_else(|| {
+                format!(
+                    "type.machine_field_value: state '{}.{}' has no payload field at index {}",
+                    expected_type_name, state, field_index
+                )
+            })?;
+
+            if field.name != metadata_name {
+                return Err(format!(
+                    "type.machine_field_value: field metadata '{}' does not match payload field '{}' on state '{}.{}'",
+                    metadata_name, field.name, expected_type_name, state
+                ));
+            }
+
+            if !self.reflection_type_names_match(&field.type_name, &metadata_type_name) {
+                return Err(format!(
+                    "type.machine_field_value: field metadata for '{}' has type '{}', but state '{}.{}' reports '{}'",
+                    metadata_name, metadata_type_name, expected_type_name, state, field.type_name
+                ));
+            }
+            (field.name.clone(), field.type_name.clone())
+        } else if self.checked_metadata_kind_is(owner_ty, &["machine", "machine_state"]) {
+            return Err(self.missing_checked_metadata_error(owner_ty, "machine"));
+        } else {
+            let machine = self.type_expr_machine(owner_ty);
+            let state_metadata = machine
+                .states
+                .iter()
+                .find(|candidate| candidate.name == *state)
+                .ok_or_else(|| {
+                    format!(
+                        "type.machine_field_value: machine '{}' has no state '{}'",
+                        expected_type_name, state
+                    )
+                })?;
+            let field = state_metadata.fields.get(field_index).ok_or_else(|| {
+                format!(
+                    "type.machine_field_value: state '{}.{}' has no payload field at index {}",
+                    expected_type_name, state, field_index
+                )
+            })?;
+
+            if field.name != metadata_name {
+                return Err(format!(
+                    "type.machine_field_value: field metadata '{}' does not match payload field '{}' on state '{}.{}'",
+                    metadata_name, field.name, expected_type_name, state
+                ));
+            }
+
+            let actual_type_name = type_expr_display(&field.ty);
+            if !self.reflection_type_names_match(&actual_type_name, &metadata_type_name) {
+                return Err(format!(
+                    "type.machine_field_value: field metadata for '{}' has type '{}', but state '{}.{}' reports '{}'",
+                    metadata_name, metadata_type_name, expected_type_name, state, actual_type_name
+                ));
+            }
+            (field.name.clone(), actual_type_name)
+        };
+
+        let expected_type_name = type_expr_display(expected_field_ty);
+        if !self.reflection_type_name_matches_expr(&actual_type_name, expected_field_ty) {
+            return Err(format!(
+                "type.machine_field_value: field '{}' has type '{}', requested '{}'",
+                metadata_name, actual_type_name, expected_type_name
+            ));
+        }
+
+        fields.get(field_index).cloned().ok_or_else(|| {
+            format!("type.machine_field_value: value is missing payload field '{field_name}'")
+        })
     }
 
     fn reflected_variant_value(&self, value: &Value, owner_ty: &TypeExpr) -> Result<Value, String> {
@@ -9561,6 +9763,14 @@ fn type_expr_name(ty: &TypeExpr) -> String {
         TypeExpr::View(inner, _) => type_expr_name(inner),
         TypeExpr::StateQualified(inner, _, _) => type_expr_name(inner),
         TypeExpr::Function(_, _, _) => "function".to_string(),
+    }
+}
+
+fn type_expr_state_name(ty: &TypeExpr) -> Option<&str> {
+    match ty {
+        TypeExpr::View(inner, _) => type_expr_state_name(inner),
+        TypeExpr::StateQualified(_, state, _) => Some(&state.name),
+        _ => None,
     }
 }
 

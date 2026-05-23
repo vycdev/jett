@@ -1,0 +1,10 @@
+# ERROR: E0309
+namespace test
+machine Session:
+    states:
+        guest
+    transitions:
+        guest to guest
+function bad_machine_state_value_arity(view session: Session at guest) returns string:
+    TypeMachineState state = type.machine_state_value[Session, string](view session)
+    return state.name

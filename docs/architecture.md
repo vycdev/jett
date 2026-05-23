@@ -1148,6 +1148,8 @@ The boundary between compiler-generated code and stdlib-implemented code is a cr
 | `type.machine_layout[T]()` | State-machine reflection | `TypeMachine` metadata for declared states and legal transition edges |
 | `type.machine_states[T]()` | State-machine reflection | Ordered `list[TypeMachineState]` metadata for state payload fields and secret-bearing state flags |
 | `type.machine_transitions[T]()` | State-machine reflection | Ordered `list[TypeMachineTransition]` metadata with source/target state names and indexes |
+| `type.machine_state_value[T](view value)` | State-machine reflection | Active `TypeMachineState` metadata for a concrete machine value |
+| `type.machine_field_value[T, U](view value, view field)` | State-machine reflection | Checked active-state payload field read by reflected `TypeField` metadata |
 | `type.variants[T]()` | Enum reflection | Ordered `list[TypeVariant]` metadata for enum variants, discriminants, and payload fields |
 | `type.variant_value[T](view value)` | Enum reflection | Active `TypeVariant` metadata for an enum value |
 | `type.variant_field_value[T, U](view value, view field)` | Enum reflection | Checked payload field read by reflected `TypeField` metadata |
@@ -1166,7 +1168,8 @@ top-level kinds, `type.fields`, `type.variants`, bitfield layout/field APIs,
 and machine layout/state/transition APIs return empty metadata rather than a
 diagnostic. Code that requires a particular shape should first check
 `type.kind_tag`; value-carrying APIs such as `type.field_value`,
-`type.variant_value`, and reflection construction remain checked.
+`type.variant_value`, `type.machine_state_value`, `type.machine_field_value`,
+and reflection construction remain checked.
 
 Format-specific modules such as `json` should live in `.jett` stdlib code once reflection can express their behavior. JSON is now staged this way for normal builds: public compiler-policy entrypoints delegate to trusted stdlib wrappers, raw JSON uses the stdlib `json.JsonTree` representation, and typed parse/serialize bodies consume the same type metadata (`TypeInfo`, `TypeKind`, `TypePrimitive`, `TypeField`, `TypeBitfieldField`, `TypeVariant`, `serialize_name`, field values, layout information, and secret information) that user comptime code can inspect. Remaining Rust-side JSON behavior should stay limited to bootstrap/no-stdlib compatibility paths or compiler-owned policy gates.
 

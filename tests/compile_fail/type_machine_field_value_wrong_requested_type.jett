@@ -1,0 +1,16 @@
+# ERROR: E9000
+namespace test
+machine Session:
+    states:
+        logged_in(user_id: string)
+    transitions:
+        logged_in to logged_in
+function bad_machine_field_value_requested_type() returns int64:
+    Session at logged_in session = Session(logged_in, "user-1")
+    TypeMachineState state = type.machine_state_value[Session at logged_in](view session)
+    int64 found = 0
+    for field in state.fields:
+        found = type.machine_field_value[Session at logged_in, int64](view session, view field)
+    return found
+verify type_machine_field_value_wrong_requested_type:
+    assert bad_machine_field_value_requested_type() == 0

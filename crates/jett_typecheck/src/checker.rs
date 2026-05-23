@@ -2581,6 +2581,23 @@ impl<'a> TypeChecker<'a> {
                     self.interner.intern(Type::List(type_machine_transition_ty)),
                 ))
             }
+            "type.machine_state_value" => {
+                if type_args.len() != 1 {
+                    self.sink.emit(errors::unknown_type(
+                        &format!("{name} (expected 1 type argument, got {})", type_args.len()),
+                        span,
+                    ));
+                    return Some((vec![TypeInterner::ERROR], TypeInterner::ERROR));
+                }
+
+                let value_ty = self.resolve_type_expr(&type_args[0]);
+                let type_machine_state_ty = self
+                    .named_types
+                    .get("TypeMachineState")
+                    .copied()
+                    .unwrap_or(TypeInterner::ERROR);
+                Some((vec![value_ty], type_machine_state_ty))
+            }
             "type.variants" => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
@@ -2615,6 +2632,27 @@ impl<'a> TypeChecker<'a> {
                 Some((vec![value_ty], type_variant_ty))
             }
             "type.field_value" => {
+                if type_args.len() != 2 {
+                    self.sink.emit(errors::unknown_type(
+                        &format!(
+                            "{name} (expected 2 type arguments, got {})",
+                            type_args.len()
+                        ),
+                        span,
+                    ));
+                    return Some((vec![TypeInterner::ERROR], TypeInterner::ERROR));
+                }
+
+                let value_ty = self.resolve_type_expr(&type_args[0]);
+                let return_ty = self.resolve_type_expr(&type_args[1]);
+                let type_field_ty = self
+                    .named_types
+                    .get("TypeField")
+                    .copied()
+                    .unwrap_or(TypeInterner::ERROR);
+                Some((vec![value_ty, type_field_ty], return_ty))
+            }
+            "type.machine_field_value" => {
                 if type_args.len() != 2 {
                     self.sink.emit(errors::unknown_type(
                         &format!(
