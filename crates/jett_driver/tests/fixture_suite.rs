@@ -304,6 +304,7 @@ run_pass_fixture!(
 fn run_file_capture_stdout_captures_capability_writes() {
     assert_run_stdout("hello_print.jett", "Hello, Jett!42");
     assert_run_stdout("string_interpolation.jett", "Hello, World!2 + 3 = 5");
+    assert_run_stdout("uint64_checked_expression_runtime_main.jett", "uint64");
 }
 
 #[test]
