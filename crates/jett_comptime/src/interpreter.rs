@@ -10299,14 +10299,18 @@ fn eval_binary_op(left: &Value, op: BinOp, right: &Value) -> Result<Value, Strin
             if *b == 0 {
                 Err("division by zero".to_string())
             } else {
-                Ok(Value::Int64(a / b))
+                a.checked_div(*b)
+                    .map(Value::Int64)
+                    .ok_or_else(|| format!("integer overflow: {a} / {b}"))
             }
         }
         (Value::Int64(a), BinOp::Modulo, Value::Int64(b)) => {
             if *b == 0 {
                 Err("modulo by zero".to_string())
             } else {
-                Ok(Value::Int64(a % b))
+                a.checked_rem(*b)
+                    .map(Value::Int64)
+                    .ok_or_else(|| format!("integer overflow: {a} % {b}"))
             }
         }
         (
@@ -13550,6 +13554,28 @@ mod tests {
         let mut interp = Interpreter::new();
         let expr = binary(int(10), BinOp::Div, int(0));
         assert!(interp.eval_expr(&expr).is_err());
+    }
+
+    #[test]
+    fn eval_integer_division_overflow_reports_error() {
+        let mut interp = Interpreter::new();
+        let expr = binary(int(i64::MIN), BinOp::Div, int(-1));
+        let err = interp.eval_expr(&expr).unwrap_err();
+        assert_eq!(
+            err,
+            "integer overflow: -9223372036854775808 / -1".to_string()
+        );
+    }
+
+    #[test]
+    fn eval_integer_modulo_overflow_reports_error() {
+        let mut interp = Interpreter::new();
+        let expr = binary(int(i64::MIN), BinOp::Modulo, int(-1));
+        let err = interp.eval_expr(&expr).unwrap_err();
+        assert_eq!(
+            err,
+            "integer overflow: -9223372036854775808 % -1".to_string()
+        );
     }
 
     // -----------------------------------------------------------------------
