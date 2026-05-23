@@ -426,6 +426,8 @@ verify type_info_reflection:
     assert machine_state_count[list[Session]]() == 0
     assert machine_transition_count[list[Session]]() == 0
     assert field_count[Header]() == 1
+    assert field_count[int64]() == 0
+    assert field_count[Direction]() == 0
     assert field_kind[Header]("version") == "primitive"
     assert field_kind_tag_is[Complex]("names", TypeKind.list_type) == true
     assert header_version_by_reflection() == 4
@@ -433,6 +435,9 @@ verify type_info_reflection:
     assert bitfield_metadata_field_count[Packet]() == 4
     assert bitfield_metadata_network_order[Packet]() == false
     assert bitfield_metadata_network_order[NetworkPacket]() == true
+    assert bitfield_field_count[int64]() == 0
+    assert bitfield_metadata_field_count[int64]() == 0
+    assert bitfield_metadata_network_order[int64]() == false
     assert bitfield_field_shape[Packet]("version") == "bits"
     assert bitfield_field_shape_tag_is[Packet]("version", TypeBitfieldFieldShape.bits_field) == true
     assert bitfield_field_width[Packet]("version") == 4
@@ -446,6 +451,8 @@ verify type_info_reflection:
     assert type_info_arg_count[int64]() == 0
     assert type.has_secret[SecretChoice]() == true
     assert variant_count[Direction]() == 2
+    assert variant_count[int64]() == 0
+    assert variant_count[Header]() == 0
     assert variant_discriminant[Direction]("north") == 0
     assert variant_discriminant[Direction]("south") == 1
     assert variant_discriminant[SecretChoice]("token") == 0
