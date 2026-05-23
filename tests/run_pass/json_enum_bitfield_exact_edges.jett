@@ -78,6 +78,10 @@ function parse_exact_bitfield_success() returns string:
         return error
     bool tcp = header.protocol == Protocol.tcp
     return "{header.version}:{tcp}"
+function parse_exact_bitfield_enum_numeric_shape_error() returns string:
+    Header header = json.parse_exact[Header]("{{\"version\":4,\"protocol\":6}}") handle error:
+        return error
+    return "{header.version}"
 function parse_exact_wide_bitfield_success() returns string:
     WideHeader header = json.parse_exact[WideHeader]("{{\"sequence\":18446744073709551615}}") handle error:
         return error
@@ -130,6 +134,7 @@ verify json_enum_bitfield_exact_edges:
     assert parse_exact_enum_payload_nested_extra_error() == "profile.profile: unknown field 'extra' for test.Profile"
     assert parse_exact_enum_raw_payload_keeps_extras() == "kept"
     assert parse_exact_bitfield_success() == "4:true"
+    assert parse_exact_bitfield_enum_numeric_shape_error() == "protocol: expected enum string or object, got number"
     assert parse_exact_wide_bitfield_success() == "18446744073709551615"
     assert parse_exact_wide_bitfield_extra_error() == "unknown field 'extra' for test.WideHeader"
     assert parse_exact_payload_bitfield_success() == "42:1:255:3"

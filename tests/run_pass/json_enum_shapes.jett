@@ -1,53 +1,48 @@
 namespace test
-
 enum Direction:
     north
     south
-
 enum Shape:
     point(x: int64, y: int64)
     empty
-
 function unit_variant_from_string() returns bool:
     Direction direction = json.parse[Direction]("\"north\"") handle error:
         return false
     return direction == Direction.north
-
 function unit_variant_from_empty_payload_object() returns bool:
     Shape shape = json.parse[Shape]("{{\"empty\":[]}}") handle error:
         return false
     return shape == Shape.empty
-
 function payload_variant_as_string_error() returns string:
     Shape shape = json.parse[Shape]("\"point\"") handle error:
         return error
     return "{shape == Shape.empty}"
-
 function enum_object_multiple_keys_error() returns string:
     Shape shape = json.parse[Shape]("{{\"point\":[1,2],\"empty\":[]}}") handle error:
         return error
     return "{shape == Shape.empty}"
-
+function enum_non_object_error() returns string:
+    Shape shape = json.parse[Shape]("true") handle error:
+        return error
+    return "{shape == Shape.empty}"
 function enum_payload_not_array_error() returns string:
     Shape shape = json.parse[Shape]("{{\"point\":1}}") handle error:
         return error
     return "{shape == Shape.empty}"
-
 function enum_unknown_string_error() returns string:
     Direction direction = json.parse[Direction]("\"east\"") handle error:
         return error
     return "{direction == Direction.north}"
-
 function enum_unknown_object_error() returns string:
     Shape shape = json.parse[Shape]("{{\"missing\":[]}}") handle error:
         return error
     return "{shape == Shape.empty}"
-
 verify json_enum_shapes:
     assert unit_variant_from_string() == true
     assert unit_variant_from_empty_payload_object() == true
     assert payload_variant_as_string_error() == "enum variant 'test.Shape.point' expects 2 payload field(s)"
     assert enum_object_multiple_keys_error() == "expected enum object with exactly one variant key"
+    assert enum_non_object_error() == "expected enum string or object, got bool"
     assert enum_payload_not_array_error() == "expected array payload for enum variant 'test.Shape.point', got number"
     assert enum_unknown_string_error() == "unknown enum variant 'test.Direction.east'"
     assert enum_unknown_object_error() == "unknown enum variant 'test.Shape.missing'"
