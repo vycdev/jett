@@ -410,6 +410,7 @@ impl<'a> TypeChecker<'a> {
             name: "TypeVariant".to_string(),
             fields: vec![
                 ("index".to_string(), TypeInterner::INT64),
+                ("owner_type".to_string(), TypeInterner::STRING),
                 ("name".to_string(), TypeInterner::STRING),
                 ("discriminant".to_string(), TypeInterner::INT64),
                 ("has_secret".to_string(), TypeInterner::BOOL),
@@ -426,6 +427,7 @@ impl<'a> TypeChecker<'a> {
             name: "TypeMachineState".to_string(),
             fields: vec![
                 ("index".to_string(), TypeInterner::INT64),
+                ("owner_type".to_string(), TypeInterner::STRING),
                 ("name".to_string(), TypeInterner::STRING),
                 ("has_secret".to_string(), TypeInterner::BOOL),
                 ("fields".to_string(), type_machine_state_fields_ty),

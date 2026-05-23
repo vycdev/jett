@@ -5,6 +5,12 @@ machine Session:
         logged_in(user_id: string, display_name: string)
     transitions:
         guest to logged_in
+machine OtherSession:
+    states:
+        guest
+        logged_in(user_id: string, display_name: string)
+    transitions:
+        guest to logged_in
 function logged_in_state() returns optional[TypeMachineState]:
     list[TypeMachineState] states = type.machine_states[Session]()
     return list.get[TypeMachineState](states, 1)
@@ -68,9 +74,22 @@ function state_field_type_binding() returns string:
                 if field.name == "display_name":
                     summary = type.name[Field]()
     return summary
+function session_state_owner_type() returns string:
+    TypeMachineState state = logged_in_state() handle:
+        return "missing-state"
+    return state.owner_type
+function mismatched_state_owner_message() returns string:
+    list[TypeMachineState] states = type.machine_states[OtherSession]()
+    TypeMachineState state = list.get[TypeMachineState](states, 1) handle:
+        return "missing-state"
+    TypeConstruction builder = type.construct_machine_start[Session](view state) handle error:
+        return error
+    return "unexpected"
 verify type_construction_machine:
     assert construct_logged_in_session() == "logged_in:user-1"
     assert construct_state_qualified_session() == "logged_in:Lin"
     assert string.contains(state_qualified_mismatch_error(), "cannot finish state 'guest'") == true
     assert string.contains(missing_payload_error(), "missing required payload field 'user_id'") == true
     assert state_field_type_binding() == "string"
+    assert session_state_owner_type() == "test.Session"
+    assert string.contains(mismatched_state_owner_message(), "belongs to machine 'test.OtherSession', expected 'test.Session'") == true

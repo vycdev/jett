@@ -8,6 +8,10 @@ enum Shape:
     circle(radius: float64)
     rect(width: float64, height: float64)
 
+enum OtherShape:
+    circle(radius: float64)
+    rect(width: float64, height: float64)
+
 function shape_area(shape: Shape) returns float64:
     match shape:
         circle(radius):
@@ -63,7 +67,21 @@ function missing_payload_message() returns string:
         return "unexpected success"
     return "missing variant"
 
+function shape_variant_owner_type() returns string:
+    TypeVariant variant = list.get[TypeVariant](type.variants[Shape](), 1) handle:
+        return "missing variant"
+    return variant.owner_type
+
+function mismatched_variant_owner_message() returns string:
+    TypeVariant variant = list.get[TypeVariant](type.variants[OtherShape](), 1) handle:
+        return "missing variant"
+    TypeConstruction builder = type.construct_variant_start[Shape](view variant) handle error:
+        return error
+    return "unexpected success"
+
 verify type_construction_enum:
     assert construct_unit_variant() == true
     assert construct_payload_variant_area() == 12.0
     assert string.contains(missing_payload_message(), "missing required payload field 'height'") == true
+    assert shape_variant_owner_type() == "test.Shape"
+    assert string.contains(mismatched_variant_owner_message(), "belongs to 'test.OtherShape', expected 'test.Shape'") == true

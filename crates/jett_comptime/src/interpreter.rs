@@ -123,6 +123,7 @@ struct ReflectedTypeInfoBinding {
 struct ReflectedVariantBinding {
     ty: TypeExpr,
     index: usize,
+    owner_type: String,
     name: String,
     discriminant: i64,
 }
@@ -131,6 +132,7 @@ struct ReflectedVariantBinding {
 struct ReflectedMachineStateBinding {
     ty: TypeExpr,
     index: usize,
+    owner_type: String,
     name: String,
 }
 
@@ -3051,7 +3053,7 @@ impl Interpreter {
                         type_expr_display(&ty)
                     )));
                 }
-                Ok(self.type_machine_value(self.type_expr_machine(&ty)))
+                Ok(self.type_machine_value(&type_expr_name(&ty), self.type_expr_machine(&ty)))
             }
             "type.machine_states" => {
                 if let Some(err) = check_args(name, 0, args) {
@@ -3071,7 +3073,9 @@ impl Interpreter {
                         .states
                         .into_iter()
                         .enumerate()
-                        .map(|(index, state)| self.type_machine_state_value(index, state))
+                        .map(|(index, state)| {
+                            self.type_machine_state_value(index, &type_expr_name(&ty), state)
+                        })
                         .collect(),
                 ))
             }
@@ -3122,7 +3126,9 @@ impl Interpreter {
                     self.type_expr_variants(&ty)
                         .into_iter()
                         .enumerate()
-                        .map(|(index, variant)| self.type_variant_value(index, variant))
+                        .map(|(index, variant)| {
+                            self.type_variant_value(index, &type_expr_display(&ty), variant)
+                        })
                         .collect(),
                 ))
             }
@@ -3896,12 +3902,12 @@ impl Interpreter {
         }
     }
 
-    fn type_machine_value(&self, machine: ReflectionMachine) -> Value {
+    fn type_machine_value(&self, owner_type: &str, machine: ReflectionMachine) -> Value {
         let states = machine
             .states
             .into_iter()
             .enumerate()
-            .map(|(index, state)| self.type_machine_state_value(index, state))
+            .map(|(index, state)| self.type_machine_state_value(index, owner_type, state))
             .collect();
         let edges = machine
             .edges
@@ -3918,7 +3924,12 @@ impl Interpreter {
         }
     }
 
-    fn type_machine_state_value(&self, index: usize, state: ReflectionMachineState) -> Value {
+    fn type_machine_state_value(
+        &self,
+        index: usize,
+        owner_type: &str,
+        state: ReflectionMachineState,
+    ) -> Value {
         let has_secret = state
             .fields
             .iter()
@@ -3933,6 +3944,10 @@ impl Interpreter {
             type_name: "TypeMachineState".to_string(),
             fields: vec![
                 ("index".to_string(), Value::Int64(index as i64)),
+                (
+                    "owner_type".to_string(),
+                    Value::String(owner_type.to_string()),
+                ),
                 ("name".to_string(), Value::String(state.name)),
                 ("has_secret".to_string(), Value::Bool(has_secret)),
                 ("fields".to_string(), Value::List(fields)),
@@ -4105,6 +4120,7 @@ impl Interpreter {
             return Ok(None);
         };
         let owner_ty = self.substitute_type_expr(owner_ty);
+        let owner_type = type_expr_display(&owner_ty);
         if let Some(variants) = self.checked_type_variants(&owner_ty) {
             return Ok(Some(
                 variants
@@ -4112,6 +4128,7 @@ impl Interpreter {
                     .map(|variant| ReflectedVariantBinding {
                         ty: owner_ty.clone(),
                         index: variant.index,
+                        owner_type: owner_type.clone(),
                         name: variant.name.clone(),
                         discriminant: variant.discriminant,
                     })
@@ -4129,6 +4146,7 @@ impl Interpreter {
                 .map(|(index, variant)| ReflectedVariantBinding {
                     ty: owner_ty.clone(),
                     index,
+                    owner_type: owner_type.clone(),
                     name: variant.name,
                     discriminant: variant.discriminant,
                 })
@@ -4144,6 +4162,7 @@ impl Interpreter {
             return Ok(None);
         };
         let owner_ty = self.substitute_type_expr(owner_ty);
+        let owner_type = type_expr_name(&owner_ty);
         if let Some(machine) = self.checked_machine(&owner_ty) {
             return Ok(Some(
                 machine
@@ -4152,6 +4171,7 @@ impl Interpreter {
                     .map(|state| ReflectedMachineStateBinding {
                         ty: owner_ty.clone(),
                         index: state.index,
+                        owner_type: owner_type.clone(),
                         name: state.name.clone(),
                     })
                     .collect(),
@@ -4169,6 +4189,7 @@ impl Interpreter {
                 .map(|(index, state)| ReflectedMachineStateBinding {
                     ty: owner_ty.clone(),
                     index,
+                    owner_type: owner_type.clone(),
                     name: state.name,
                 })
                 .collect(),
@@ -4337,9 +4358,13 @@ impl Interpreter {
         let current_value = self.get_variable(variant_name).ok_or_else(|| {
             format!("`comptime type` reflected variant '{variant_name}' is not in scope")
         })?;
-        let (index, name, discriminant) =
+        let (index, owner_type, name, discriminant) =
             Self::type_variant_metadata(current_value, "`comptime type`")?;
-        if index != binding.index || name != binding.name || discriminant != binding.discriminant {
+        if index != binding.index
+            || owner_type != binding.owner_type
+            || name != binding.name
+            || discriminant != binding.discriminant
+        {
             return Err("`comptime type` reflected variant metadata no longer matches the trusted `type.variants[T]()` loop item".to_string());
         }
         Ok(Some(binding.clone()))
@@ -4360,8 +4385,9 @@ impl Interpreter {
         let current_value = self.get_variable(state_name).ok_or_else(|| {
             format!("`comptime type` reflected machine state '{state_name}' is not in scope")
         })?;
-        let (index, name) = Self::type_machine_state_metadata(current_value, "`comptime type`")?;
-        if index != binding.index || name != binding.name {
+        let (index, owner_type, name) =
+            Self::type_machine_state_metadata(current_value, "`comptime type`")?;
+        if index != binding.index || owner_type != binding.owner_type || name != binding.name {
             return Err("`comptime type` reflected machine state metadata no longer matches the trusted `type.machine_states[T]()` loop item".to_string());
         }
         Ok(Some(binding.clone()))
@@ -4671,7 +4697,12 @@ impl Interpreter {
         }
     }
 
-    fn type_variant_value(&self, index: usize, variant: ReflectionVariant) -> Value {
+    fn type_variant_value(
+        &self,
+        index: usize,
+        owner_type: &str,
+        variant: ReflectionVariant,
+    ) -> Value {
         let has_secret = variant
             .fields
             .iter()
@@ -4687,6 +4718,10 @@ impl Interpreter {
             type_name: "TypeVariant".to_string(),
             fields: vec![
                 ("index".to_string(), Value::Int64(index as i64)),
+                (
+                    "owner_type".to_string(),
+                    Value::String(owner_type.to_string()),
+                ),
                 ("name".to_string(), Value::String(variant.name)),
                 (
                     "discriminant".to_string(),
@@ -4984,16 +5019,17 @@ impl Interpreter {
 
     fn checked_machine_value(&self, ty: &TypeExpr) -> Option<Value> {
         self.checked_machine(ty)
-            .map(Self::reflection_machine_info_value)
+            .map(|machine| Self::reflection_machine_info_value(&type_expr_name(ty), machine))
     }
 
     fn checked_machine_states_value(&self, ty: &TypeExpr) -> Option<Value> {
         let machine = self.checked_machine(ty)?;
+        let owner_type = type_expr_name(ty);
         Some(Value::List(
             machine
                 .states
                 .iter()
-                .map(Self::reflection_machine_state_info_value)
+                .map(|state| Self::reflection_machine_state_info_value(&owner_type, state))
                 .collect(),
         ))
     }
@@ -5009,11 +5045,11 @@ impl Interpreter {
         ))
     }
 
-    fn reflection_machine_info_value(machine: &ReflectionMachineInfo) -> Value {
+    fn reflection_machine_info_value(owner_type: &str, machine: &ReflectionMachineInfo) -> Value {
         let states = machine
             .states
             .iter()
-            .map(Self::reflection_machine_state_info_value)
+            .map(|state| Self::reflection_machine_state_info_value(owner_type, state))
             .collect();
         let edges = machine
             .edges
@@ -5029,7 +5065,10 @@ impl Interpreter {
         }
     }
 
-    fn reflection_machine_state_info_value(state: &ReflectionMachineStateInfo) -> Value {
+    fn reflection_machine_state_info_value(
+        owner_type: &str,
+        state: &ReflectionMachineStateInfo,
+    ) -> Value {
         let fields = state
             .fields
             .iter()
@@ -5039,6 +5078,10 @@ impl Interpreter {
             type_name: "TypeMachineState".to_string(),
             fields: vec![
                 ("index".to_string(), Value::Int64(state.index as i64)),
+                (
+                    "owner_type".to_string(),
+                    Value::String(owner_type.to_string()),
+                ),
                 ("name".to_string(), Value::String(state.name.clone())),
                 ("has_secret".to_string(), Value::Bool(state.has_secret)),
                 ("fields".to_string(), Value::List(fields)),
@@ -5081,15 +5124,16 @@ impl Interpreter {
 
     fn checked_type_variants_value(&self, ty: &TypeExpr) -> Option<Value> {
         let variants = self.checked_type_variants(ty)?;
+        let owner_type = type_expr_display(ty);
         Some(Value::List(
             variants
                 .iter()
-                .map(Self::reflection_variant_info_value)
+                .map(|variant| Self::reflection_variant_info_value(&owner_type, variant))
                 .collect(),
         ))
     }
 
-    fn reflection_variant_info_value(variant: &ReflectionVariantInfo) -> Value {
+    fn reflection_variant_info_value(owner_type: &str, variant: &ReflectionVariantInfo) -> Value {
         let fields = variant
             .fields
             .iter()
@@ -5099,6 +5143,10 @@ impl Interpreter {
             type_name: "TypeVariant".to_string(),
             fields: vec![
                 ("index".to_string(), Value::Int64(variant.index as i64)),
+                (
+                    "owner_type".to_string(),
+                    Value::String(owner_type.to_string()),
+                ),
                 ("name".to_string(), Value::String(variant.name.clone())),
                 (
                     "discriminant".to_string(),
@@ -5321,7 +5369,9 @@ impl Interpreter {
                 .states
                 .iter()
                 .find(|candidate| candidate.name == *state)
-                .map(Self::reflection_machine_state_info_value)
+                .map(|candidate| {
+                    Self::reflection_machine_state_info_value(&expected_type_name, candidate)
+                })
                 .ok_or_else(|| {
                     format!(
                         "type.machine_state_value: machine '{}' has no state '{}'",
@@ -5339,7 +5389,7 @@ impl Interpreter {
             .into_iter()
             .enumerate()
             .find(|(_, candidate)| candidate.name == *state)
-            .map(|(index, state)| self.type_machine_state_value(index, state))
+            .map(|(index, state)| self.type_machine_state_value(index, &expected_type_name, state))
             .ok_or_else(|| {
                 format!(
                     "type.machine_state_value: machine '{}' has no state '{}'",
@@ -5492,7 +5542,9 @@ impl Interpreter {
             return variants
                 .iter()
                 .find(|candidate| candidate.name == *variant)
-                .map(Self::reflection_variant_info_value)
+                .map(|candidate| {
+                    Self::reflection_variant_info_value(&type_expr_display(owner_ty), candidate)
+                })
                 .ok_or_else(|| {
                     format!(
                         "type.variant_value: enum '{}' has no variant '{}'",
@@ -5509,7 +5561,7 @@ impl Interpreter {
             .into_iter()
             .enumerate()
             .find(|(_, candidate)| candidate.name == *variant)
-            .map(|(index, variant)| self.type_variant_value(index, variant))
+            .map(|(index, variant)| self.type_variant_value(index, &expected_type_name, variant))
             .ok_or_else(|| {
                 format!(
                     "type.variant_value: enum '{}' has no variant '{}'",
@@ -5927,11 +5979,17 @@ impl Interpreter {
         }
 
         let expected_owner = type_expr_display(owner_ty);
-        let (variant_index, metadata_name, metadata_discriminant) =
+        let (variant_index, metadata_owner, metadata_name, metadata_discriminant) =
             match Self::type_variant_metadata(variant_metadata, "type.construct_variant_start") {
                 Ok(metadata) => metadata,
                 Err(message) => return Ok(result_fail(message)),
             };
+        if metadata_owner != expected_owner {
+            return Ok(result_fail(format!(
+                "type.construct_variant_start: variant metadata belongs to '{}', expected '{}'",
+                metadata_owner, expected_owner
+            )));
+        }
         let metadata_fields = match Self::type_variant_payload_field_metadata(
             variant_metadata,
             "type.construct_variant_start",
@@ -6058,12 +6116,18 @@ impl Interpreter {
 
         let expected_owner = type_expr_display(owner_ty);
         let expected_machine = type_expr_name(owner_ty);
-        let (state_index, metadata_name) =
+        let (state_index, metadata_owner, metadata_name) =
             match Self::type_machine_state_metadata(state_metadata, "type.construct_machine_start")
             {
                 Ok(metadata) => metadata,
                 Err(message) => return Ok(result_fail(message)),
             };
+        if metadata_owner != expected_machine {
+            return Ok(result_fail(format!(
+                "type.construct_machine_start: state metadata belongs to machine '{}', expected '{}'",
+                metadata_owner, expected_machine
+            )));
+        }
         let metadata_fields = match Self::type_machine_state_payload_field_metadata(
             state_metadata,
             "type.construct_machine_start",
@@ -6687,7 +6751,10 @@ impl Interpreter {
         Self::type_field_metadata_for(value, "type.field_value")
     }
 
-    fn type_variant_metadata(value: &Value, caller: &str) -> Result<(usize, String, i64), String> {
+    fn type_variant_metadata(
+        value: &Value,
+        caller: &str,
+    ) -> Result<(usize, String, String, i64), String> {
         let Value::Struct { type_name, fields } = value else {
             return Err(format!(
                 "{caller}: argument must be TypeVariant, got {value}"
@@ -6715,6 +6782,14 @@ impl Interpreter {
                 ));
             }
         };
+        let owner_type = match field_value("owner_type")? {
+            Value::String(owner_type) => owner_type.clone(),
+            other => {
+                return Err(format!(
+                    "{caller}: TypeVariant.owner_type must be string, got {other}"
+                ));
+            }
+        };
         let name = match field_value("name")? {
             Value::String(name) => name.clone(),
             other => {
@@ -6732,7 +6807,7 @@ impl Interpreter {
             }
         };
 
-        Ok((index, name, discriminant))
+        Ok((index, owner_type, name, discriminant))
     }
 
     fn type_variant_payload_field_metadata(
@@ -6766,7 +6841,10 @@ impl Interpreter {
             .collect()
     }
 
-    fn type_machine_state_metadata(value: &Value, caller: &str) -> Result<(usize, String), String> {
+    fn type_machine_state_metadata(
+        value: &Value,
+        caller: &str,
+    ) -> Result<(usize, String, String), String> {
         let Value::Struct { type_name, fields } = value else {
             return Err(format!(
                 "{caller}: argument must be TypeMachineState, got {value}"
@@ -6794,6 +6872,14 @@ impl Interpreter {
                 ));
             }
         };
+        let owner_type = match field_value("owner_type")? {
+            Value::String(owner_type) => owner_type.clone(),
+            other => {
+                return Err(format!(
+                    "{caller}: TypeMachineState.owner_type must be string, got {other}"
+                ));
+            }
+        };
         let name = match field_value("name")? {
             Value::String(name) => name.clone(),
             other => {
@@ -6803,7 +6889,7 @@ impl Interpreter {
             }
         };
 
-        Ok((index, name))
+        Ok((index, owner_type, name))
     }
 
     fn type_machine_state_payload_field_metadata(
@@ -12857,13 +12943,10 @@ mod tests {
         let mut interp = Interpreter::new();
         interp.set_reflection_metadata(Arc::new(metadata));
 
-        let variant = Interpreter::reflection_variant_info_value(&ReflectionVariantInfo::new(
-            0,
-            "token",
-            7,
-            false,
-            Vec::new(),
-        ));
+        let variant = Interpreter::reflection_variant_info_value(
+            "Choice",
+            &ReflectionVariantInfo::new(0, "token", 7, false, Vec::new()),
+        );
         let builder = interp
             .call_builtin_with_type_args(
                 "type.construct_variant_start",

@@ -161,13 +161,15 @@ Verdict: preferred direction, pending syntax.
 3. Done for bitfields: reuse reflected `TypeField` values and validate bit
    widths on `construct_finish`.
 4. Done for enums: start from checked `TypeVariant` metadata with
-   `type.construct_variant_start[T](variant)`, then reuse `construct_put` and
-   `construct_finish` for variant-local payload fields.
+   `type.construct_variant_start[T](variant)`, require its `owner_type` to
+   match `T`, then reuse `construct_put` and `construct_finish` for
+   variant-local payload fields.
 5. Done for JSON records/enums: public typed parse now routes through the stdlib `JsonTree`
    parser/decoder. Remaining construction work is about hardening syntax and
    reuse for future decoders, not replacing a Rust-backed `json.parse[T]`.
 6. Done for machines: add an explicit machine starter that selects checked
-   `TypeMachineState` metadata, then reuse the existing typed put/finish path.
+   `TypeMachineState` metadata, require its `owner_type` to match the target
+   machine, then reuse the existing typed put/finish path.
 
 ## Implementation Notes
 

@@ -149,8 +149,8 @@ checked `TypeVariant` metadata for active variant lookup, and
 metadata for payload field provenance and type validation. All retain the AST
 fallback for bootstrap/direct interpreter tests. `type.construct_variant_start`
 and `type.construct_put` now prefer checked metadata for construction kind,
-field, and variant payload validation while preserving the existing
-`TypeConstruction` builder layout. `type.construct_finish` now uses checked
+field, variant payload validation, and variant/machine owner matching while
+preserving the existing `TypeConstruction` builder layout. `type.construct_finish` now uses checked
 metadata to materialize structs, enums, and bitfields, including bitfield width
 checks and enum annotation discriminants.
 

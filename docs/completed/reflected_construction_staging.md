@@ -114,6 +114,9 @@ The current implementation is still deliberately narrow:
 - Reject duplicate fields and missing fields in `construct_finish`.
 - Validate `TypeVariant` metadata by index, name, discriminant, and payload
   field metadata before starting enum construction.
+- Validate `TypeVariant.owner_type` and `TypeMachineState.owner_type` before
+  starting enum or state-machine construction so metadata from a different
+  owner cannot be accepted by shape alone.
 - Return `result[TypeConstruction, string]` from `construct_put` and
   `result[T, string]` from `construct_finish`.
 - Do not parse `TypeInfo.type_name` or trust arbitrary user-created `TypeInfo`.
