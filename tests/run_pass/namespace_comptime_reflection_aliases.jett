@@ -33,7 +33,7 @@ function bound_namespaced_generic_field() returns string:
     return found
 function bound_namespaced_machine_layout() returns string:
     use data as d
-    TypeMachine layout = type.machine_layout[d.Session]()
+    TypeMachine layout = type.machine_layout[d.Session at logged_in]()
     string field_type = "missing"
     for state in type.machine_states[d.Session at logged_in]():
         if state.name == "logged_in":

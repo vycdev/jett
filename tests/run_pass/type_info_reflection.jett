@@ -28,6 +28,12 @@ machine Session:
         logged_in(user_id: string)
     transitions:
         guest to logged_in
+machine TokenLifecycle:
+    states:
+        issued(token: secret[string])
+        revoked
+    transitions:
+        issued to revoked
 struct User:
     id: string
 struct Complex:
@@ -396,12 +402,17 @@ verify type_info_reflection:
     assert type_info_kind_tag_is[Session at logged_in](TypeKind.machine_state_type) == true
     assert direct_type_kind_tag_is[Session at logged_in](TypeKind.machine_state_type) == true
     assert machine_layout_state_count[Session]() == 2
+    assert machine_layout_state_count[Session at logged_in]() == 2
     assert machine_state_count[Session]() == 2
     assert machine_state_count[Session at logged_in]() == 2
     assert machine_state_field_count[Session]("guest") == 0
     assert machine_state_field_count[Session]("logged_in") == 1
     assert machine_state_field_type_name[Session]("logged_in", 0) == "string"
     assert machine_state_has_secret[Session]("logged_in") == false
+    assert machine_state_field_count[TokenLifecycle]("issued") == 1
+    assert machine_state_field_type_name[TokenLifecycle]("issued", 0) == "secret[string]"
+    assert machine_state_has_secret[TokenLifecycle]("issued") == true
+    assert machine_state_has_secret[TokenLifecycle]("revoked") == false
     assert machine_transition_count[Session]() == 1
     assert machine_transition_target[Session]("guest") == "logged_in"
     assert machine_transition_source_index[Session]("guest") == 0

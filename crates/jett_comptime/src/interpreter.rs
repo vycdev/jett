@@ -10853,6 +10853,24 @@ mod tests {
             .find_map(|(name, value)| if name == "target" { Some(value) } else { None })
             .expect("TypeMachineTransition.target should exist");
         assert_eq!(target, &Value::String("logged_in".to_string()));
+
+        let state_ty =
+            TypeExpr::StateQualified(Box::new(type_named("Session")), ident("logged_in"), sp());
+        let layout = interp
+            .call_builtin_with_type_args("type.machine_layout", &[state_ty], &[])
+            .expect("type.machine_layout should be a typed builtin")
+            .expect("state-qualified machine layout should evaluate");
+        let Value::Struct { fields, .. } = layout else {
+            panic!("expected state-qualified TypeMachine struct");
+        };
+        let states = fields
+            .iter()
+            .find_map(|(name, value)| if name == "states" { Some(value) } else { None })
+            .expect("TypeMachine.states should exist");
+        let Value::List(states) = states else {
+            panic!("expected TypeMachine.states to be a list");
+        };
+        assert_eq!(states.len(), 2);
     }
 
     #[test]
