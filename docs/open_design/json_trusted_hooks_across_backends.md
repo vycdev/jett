@@ -80,7 +80,7 @@ Future backend work should mirror the existing interpreter/typechecker boundary:
   ABI, or specialize common JSON shapes after typechecking?
 - Done for stdlib-loaded code: bare `JsonValue` now reflects through the root
   alias to `json.JsonTree`. The direct interpreter no longer synthesizes the
-  legacy `TypePrimitive.json_value_type` tag without that alias; the remaining
-  primitive fallback is typechecker/bootstrap-only.
+  legacy `TypePrimitive.json_value_type` tag without that alias, and the
+  typechecker now rejects bare `JsonValue` without the root alias.
 - Should the hook table remain JSON-specific, or become a general compiler
   policy-hook registry once other stdlib features need the same treatment?

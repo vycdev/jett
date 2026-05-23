@@ -24,9 +24,8 @@ primitive tag.
 - The interpreter's direct/no-metadata fallback no longer reports the
   `json_value_type` primitive tag for bare `JsonValue`; direct tests must
   register the stdlib/root alias to get alias metadata for that spelling.
-- The typechecker no longer treats the bare text `JsonValue` as primitive while
-  building `TypeInfo`; the tag is produced only when type resolution reaches the
-  legacy `Type::JsonValue` fallback.
+- The typechecker no longer treats bare `JsonValue` as a primitive fallback.
+  Source must reach the stdlib root alias for the spelling to resolve.
 - The stdlib JSON serializer and decoder route raw targets by reflected type
   name: `json.JsonTree`, `json.JsonValue`, and bare `JsonValue`. They no
   longer depend on `TypePrimitive.json_value_type`.
@@ -119,14 +118,13 @@ Do not do this as the next step.
    the direct interpreter no longer synthesizes a `JsonValue` primitive tag
    when no stdlib/root alias is registered. The enum variant and typechecker
    fallback remain.
-5. Retire `Type::JsonValue` / `TypeInterner::JSON_VALUE` only after bootstrap
-   stdlib loading and root aliases no longer need the fallback built-in.
+5. Retire `Type::JsonValue` / `TypeInterner::JSON_VALUE` after confirming no
+   bootstrap path still needs the internal placeholder.
 
 ## Current Decision Gate
 
-Do not remove the remaining fallback as an incidental JSON cleanup. The normal
-stdlib-loaded path is already source-alias based, so the remaining behavior is
-now the typechecker/bootstrap fallback story:
+Do not remove the remaining internal type variant as an incidental JSON cleanup.
+The normal stdlib-loaded path is already source-alias based:
 
 - `type.info[JsonValue]()` reports alias metadata in ordinary stdlib-loaded
   builds.
@@ -134,8 +132,10 @@ now the typechecker/bootstrap fallback story:
   builds.
 - direct comptime interpreter tests without a registered stdlib alias now treat
   bare `JsonValue` as an unresolved named type with no primitive tag.
+- typechecker tests without the stdlib root alias now report bare `JsonValue`
+  as an unknown type instead of resolving `TypeInterner::JSON_VALUE`.
 
-That split leaves the typechecker fallback as the remaining decision:
+That split leaves the internal placeholder as the remaining decision:
 
 1. Keep direct/no-stdlib `JsonValue` as a deprecated primitive compatibility
    mode. Rejected for the direct interpreter fallback.
@@ -146,14 +146,14 @@ That split leaves the typechecker fallback as the remaining decision:
 
 The first option-2 slice is done: the direct comptime fallback and its pinning
 test no longer treat bare `JsonValue` as a primitive when no alias metadata is
-registered. `Type::JsonValue`, `TypeInterner::JSON_VALUE`, and the
-`TypePrimitive.json_value_type` enum variant remain until the typechecker
-fallback and bootstrap story have their own staged replacement.
+registered. The same source rule now applies in the typechecker. `Type::JsonValue`,
+`TypeInterner::JSON_VALUE`, and the `TypePrimitive.json_value_type` enum variant
+remain until the bootstrap placeholder story has its own staged replacement.
 
 ## Retirement Checklist
 
-The alias-table removal is done. The remaining primitive behavior is the
-bootstrap/no-stdlib typechecker fallback.
+The alias-table removal is done. There is no remaining source-level bare
+`JsonValue` primitive fallback.
 
 Before removing `TypePrimitive.json_value_type`:
 
@@ -162,7 +162,7 @@ Before removing `TypePrimitive.json_value_type`:
    interpreter: it reports an unresolved named type with no primitive tag.
 2. Update the typechecker fallback in unresolved-name type lookup so it no
    longer maps bare `JsonValue` to `TypeInterner::JSON_VALUE`, or keep that path
-   as an explicit deprecated compatibility mode.
+   as an explicit deprecated compatibility mode. Done: the fallback was removed.
 3. Update comptime direct reflection so `type.kind[JsonValue]()` and
    `type.primitive_tag[JsonValue]()` no longer synthesize the legacy primitive
    when the alias is absent. Done.

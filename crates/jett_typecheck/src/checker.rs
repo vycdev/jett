@@ -8995,14 +8995,6 @@ impl<'a> TypeChecker<'a> {
             return ty;
         }
         let lookup_name = self.resolved_or_expanded_name(name, span);
-        if name == "JsonValue" {
-            if self.type_aliases.contains_key(&lookup_name) {
-                return self.resolve_type_alias(&lookup_name, span);
-            }
-            if self.type_aliases.contains_key(name) {
-                return self.resolve_type_alias(name, span);
-            }
-        }
         match name {
             "int8" => TypeInterner::INT8,
             "int16" => TypeInterner::INT16,
@@ -9018,7 +9010,6 @@ impl<'a> TypeChecker<'a> {
             "bool" => TypeInterner::BOOL,
             "bytes" => TypeInterner::BYTES,
             "nothing" => TypeInterner::NOTHING,
-            "JsonValue" => TypeInterner::JSON_VALUE,
             "TypeConstruction" => TypeInterner::TYPE_CONSTRUCTION,
             _ if self.named_types.contains_key(&lookup_name) => self.named_types[&lookup_name],
             _ if self.type_aliases.contains_key(&lookup_name) => {
@@ -12228,6 +12219,23 @@ function main() returns JsonValue:
         assert_eq!(info.args.len(), 1);
         assert_eq!(info.args[0].type_name, "json.JsonTree");
         assert_eq!(info.args[0].kind, "enum");
+    }
+
+    #[test]
+    fn bare_json_value_requires_stdlib_root_alias() {
+        let errors = check_source_errors(
+            "\
+function main() returns JsonValue:
+    return nothing
+",
+        );
+
+        assert!(
+            errors
+                .iter()
+                .any(|diag| diag.code.code() == 309 && diag.message.contains("JsonValue")),
+            "expected JsonValue to be unknown without the stdlib root alias, got {errors:?}"
+        );
     }
 
     #[test]

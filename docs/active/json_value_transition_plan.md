@@ -50,10 +50,10 @@ about: two names, two traversal surfaces, one conceptual data model.
   compiler-owned raw facade fallback dispatcher has been removed.
 - `jett_comptime` no longer has `Value::Json` or a `serde_json` dependency.
 - In stdlib-loaded code, the root `JsonValue` spelling now resolves and
-  reflects through the stdlib alias to `json.JsonTree`. The compiler still keeps
-  a legacy `Type::JsonValue` fallback for bootstrap/no-stdlib typechecker
-  paths, but the direct comptime interpreter no longer synthesizes a
-  `json_value_type` primitive tag when that alias is absent.
+  reflects through the stdlib alias to `json.JsonTree`. Bare `JsonValue`
+  without that alias is now unknown to the typechecker and direct comptime
+  interpreter; the legacy `Type::JsonValue` placeholder remains internal until
+  a later removal.
 - The stdlib JSON module exports `json.JsonValue` as a source alias to
   `json.JsonTree`, and exports a narrow root alias
   `JsonValue = json.JsonTree` for source visibility.
@@ -144,7 +144,7 @@ export function as_bool(view value: JsonTree) returns result[bool, string]
 `JsonValue` is now expressible as a narrow stdlib root alias. In normal
 stdlib-loaded builds it reflects as an alias to `json.JsonTree`; direct
 interpreter reflection also requires that alias path now. The remaining legacy
-primitive fallback is typechecker/bootstrap-only. See
+legacy primitive placeholder is internal/bootstrap-only. See
 `docs/open_design/prelude_root_aliases.md` for the recommended staged design.
 
 `field` and `index` are probing helpers: wrong shape and absence both produce
@@ -162,9 +162,9 @@ module system is supposed to remove.
 
 The staged direction is:
 
-1. Keep the legacy `JsonValue` primitive fallback only for bootstrap/no-stdlib
-   typechecker paths; direct interpreter reflection now requires the alias path
-   for bare `JsonValue`.
+1. Done: remove source-level `JsonValue` primitive fallback behavior. The
+   typechecker and direct interpreter now require the alias path for bare
+   `JsonValue`.
 2. Done: normal stdlib-loaded source now uses the root alias
    `JsonValue = json.JsonTree`, without a separate compiler-owned compatibility
    table.
@@ -177,7 +177,7 @@ The staged direction is:
 6. Done for direct interpreter reflection: bare `JsonValue` without a
    registered alias is now just an unresolved named type with no primitive tag.
    A later cleanup can decide whether to deprecate or remove
-   `TypePrimitive.json_value_type` after the typechecker fallback has a staged
+   `TypePrimitive.json_value_type` after the internal placeholder has a staged
    replacement.
 
 This keeps canonical identity clear: `json.JsonTree` is the real type;
@@ -256,13 +256,12 @@ Once the runtime representation is native:
   calls, or make `JsonValue` an alias to `JsonTree`.
 - Update `type.info[JsonValue]()` to follow the stdlib root alias when the
   bundled stdlib is loaded.
-- Decide whether `TypePrimitive.json_value_type` should remain in the
-  typechecker/bootstrap fallback or become a deprecated enum variant with no
-  normal reflection path.
+- Decide whether `TypePrimitive.json_value_type` should remain as an inert
+  deprecated enum variant or disappear with the internal placeholder.
 
-Recommendation: keep `TypePrimitive.json_value_type` only while the
-typechecker/bootstrap fallback still needs it, and document it as legacy now
-that `JsonTree` is the preferred spelling.
+Recommendation: keep `TypePrimitive.json_value_type` only while staged cleanup
+needs it for compatibility, and document it as legacy now that `JsonTree` is
+the preferred spelling.
 
 Status: implemented through a narrow source-level root alias. Normal
 stdlib-loaded code resolves `JsonValue` through that alias, so it shares the
@@ -274,9 +273,9 @@ trusted-origin rule instead of trusting qualified name text alone.
 Reflection metadata now follows source aliases in stdlib-loaded code:
 `type.info[JsonValue]()` and `type.info[json.JsonValue]()` report aliases to
 `json.JsonTree`, while `type.info[json.JsonTree]()` reports enum metadata. The
-direct interpreter no longer exposes a legacy primitive when the alias is
-absent; the remaining primitive path is typechecker/bootstrap-only. Ownership
-follows the same source model: `JsonValue` is no longer treated as an
+direct interpreter and typechecker no longer expose a legacy primitive when the
+alias is absent. Ownership follows the same source model: `JsonValue` is no
+longer treated as an
 implicitly copyable primitive, and raw read facades keep their ergonomics by
 borrowing the raw tree argument implicitly.
 
@@ -405,5 +404,8 @@ Continue the legacy primitive-tag retirement:
 3. Done: direct/no-stdlib interpreter reflection rejects the legacy primitive
    shortcut by treating bare `JsonValue` without a registered alias as an
    unresolved named type with no primitive tag.
-4. Next: decide whether the typechecker fallback should remain as a deprecated
-   compatibility mode or move behind explicit bootstrap stdlib metadata.
+4. Done: remove the typechecker fallback for bare `JsonValue` without the
+   stdlib root alias.
+5. Next: remove `Type::JsonValue`, `TypeInterner::JSON_VALUE`, and
+   `TypePrimitive.json_value_type` once no bootstrap/internal path needs the
+   placeholder.

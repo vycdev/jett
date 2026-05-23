@@ -134,8 +134,9 @@ Staging rules:
 
 `JsonValue` has moved to a source-owned stdlib root alias in normal
 stdlib-loaded code. The direct interpreter no longer synthesizes
-`TypePrimitive.json_value_type` when that alias is absent; the remaining legacy
-primitive behavior is typechecker/bootstrap-only during the transition.
+`TypePrimitive.json_value_type` when that alias is absent, and the typechecker
+now reports bare `JsonValue` as unknown without the root alias. The remaining
+legacy primitive pieces are internal placeholders during the transition.
 
 ## Implementation Staging Notes
 
