@@ -1,0 +1,7 @@
+# ERROR: E0309
+machine Session:
+    states:
+        guest
+
+function only_known(session: Session at logged_in) returns nothing:
+    return

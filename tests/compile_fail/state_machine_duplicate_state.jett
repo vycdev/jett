@@ -1,0 +1,5 @@
+# ERROR: E0349
+machine Session:
+    states:
+        guest
+        guest

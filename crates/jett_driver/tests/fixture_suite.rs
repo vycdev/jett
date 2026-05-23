@@ -220,6 +220,10 @@ compile_pass_fixture!(
     compile_pass_generic_reflection_runtime_guard_deferral,
     "generic_reflection_runtime_guard_deferral.jett"
 );
+compile_pass_fixture!(
+    compile_pass_state_machine_type_declaration,
+    "state_machine_type_declaration.jett"
+);
 
 compile_fail_fixture!(compile_fail_type_mismatch, "type_mismatch.jett");
 compile_fail_fixture!(compile_fail_secret_stdout, "secret_stdout.jett");
@@ -582,6 +586,18 @@ compile_fail_fixture!(
 compile_fail_fixture!(compile_fail_unhandled_optional, "unhandled_optional.jett");
 compile_fail_fixture!(compile_fail_trace_unknown, "trace_unknown.jett");
 compile_fail_fixture!(compile_fail_unknown_type, "unknown_type.jett");
+compile_fail_fixture!(
+    compile_fail_state_machine_duplicate_state,
+    "state_machine_duplicate_state.jett"
+);
+compile_fail_fixture!(
+    compile_fail_state_machine_invalid_transition,
+    "state_machine_invalid_transition.jett"
+);
+compile_fail_fixture!(
+    compile_fail_state_machine_unknown_state_type,
+    "state_machine_unknown_state_type.jett"
+);
 compile_fail_fixture!(
     compile_fail_pipeline_builtin_input_mismatch,
     "pipeline_builtin_input_mismatch.jett"

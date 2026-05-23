@@ -162,6 +162,10 @@ impl MachineId {
 pub struct MachineStateId(pub(crate) u32);
 
 impl MachineStateId {
+    pub fn new(index: u32) -> Self {
+        Self(index)
+    }
+
     pub fn index(self) -> u32 {
         self.0
     }

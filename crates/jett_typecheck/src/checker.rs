@@ -13,9 +13,11 @@ use jett_types::{
     ActorDef as TypeActorDef, ActorMessageDef, BitfieldDef as TypeBitfieldDef,
     BitfieldFieldDef as TypeBitfieldFieldDef, BitfieldFieldKind as TypeBitfieldFieldKind,
     BitfieldId, EnumDef as TypeEnumDef, FunctionSig, InterfaceDef as TypeInterfaceDef,
-    ReflectionBitfieldFieldInfo, ReflectionBitfieldInfo, ReflectionFieldInfo, ReflectionMetadata,
-    ReflectionTypeInfo, ReflectionVariantInfo, StructDef as TypeStructDef, StructId, Type, TypeId,
-    TypeInterner, VariantDef,
+    MachineDef as TypeMachineDef, MachineStateDef as TypeMachineStateDef,
+    MachineTransitionDef as TypeMachineTransitionDef, ReflectionBitfieldFieldInfo,
+    ReflectionBitfieldInfo, ReflectionFieldInfo, ReflectionMetadata, ReflectionTypeInfo,
+    ReflectionVariantInfo, StructDef as TypeStructDef, StructId, Type, TypeId, TypeInterner,
+    VariantDef,
 };
 
 use crate::capability;
@@ -3145,6 +3147,7 @@ impl<'a> TypeChecker<'a> {
                 Item::Struct(def) => self.predeclare_struct(def, current_namespace.as_deref()),
                 Item::Bitfield(def) => self.predeclare_bitfield(def, current_namespace.as_deref()),
                 Item::Enum(def) => self.predeclare_enum(def, current_namespace.as_deref()),
+                Item::Machine(def) => self.predeclare_machine(def, current_namespace.as_deref()),
                 Item::Actor(def) => self.predeclare_actor(def, current_namespace.as_deref()),
                 _ => {}
             }
@@ -3160,6 +3163,7 @@ impl<'a> TypeChecker<'a> {
                 Item::Struct(def) => self.finish_struct(def, current_namespace.as_deref()),
                 Item::Bitfield(def) => self.finish_bitfield(def, current_namespace.as_deref()),
                 Item::Enum(def) => self.finish_enum(def, current_namespace.as_deref()),
+                Item::Machine(def) => self.finish_machine(def, current_namespace.as_deref()),
                 Item::Actor(def) => self.finish_actor(def, current_namespace.as_deref()),
                 _ => {}
             }
@@ -3385,6 +3389,99 @@ impl<'a> TypeChecker<'a> {
         if let Some(def_id) = self.declaration_def_id(def.name.span) {
             self.type_env.insert(def_id, ty);
         }
+    }
+
+    fn predeclare_machine(&mut self, def: &ast::MachineDef, namespace: Option<&str>) {
+        let canonical_name = Self::canonical_name(namespace, &def.name.name);
+        let trusted_name = canonical_name.clone();
+        let mid = self.interner.add_machine(TypeMachineDef {
+            name: canonical_name,
+            states: Vec::new(),
+            transitions: Vec::new(),
+        });
+        let ty = self.interner.intern(Type::Machine(mid));
+        self.register_named_type(namespace, &def.name.name, ty);
+        self.register_trusted_stdlib_named_type(&trusted_name, ty, def.name.span);
+
+        if let Some(def_id) = self.declaration_def_id(def.name.span) {
+            self.type_env.insert(def_id, ty);
+        }
+    }
+
+    fn finish_machine(&mut self, def: &ast::MachineDef, namespace: Option<&str>) {
+        let canonical_name = Self::canonical_name(namespace, &def.name.name);
+        let Some(&ty) = self.named_types.get(&canonical_name) else {
+            return;
+        };
+        let Type::Machine(mid) = *self.interner.resolve(ty) else {
+            return;
+        };
+
+        let mut state_ids = HashMap::new();
+        let mut states = Vec::new();
+        for state in &def.states {
+            if let Some(previous_span) = state_ids.get(&state.name.name).map(|(_, span)| *span) {
+                self.sink.emit(errors::duplicate_machine_state(
+                    &canonical_name,
+                    &state.name.name,
+                    state.name.span,
+                    previous_span,
+                ));
+                continue;
+            }
+
+            let state_id = jett_types::MachineStateId::new(states.len() as u32);
+            state_ids.insert(state.name.name.clone(), (state_id, state.name.span));
+            states.push(TypeMachineStateDef {
+                name: state.name.name.clone(),
+                fields: state
+                    .fields
+                    .iter()
+                    .map(|field| (field.name.name.clone(), self.resolve_type_expr(&field.ty)))
+                    .collect(),
+            });
+        }
+
+        let transitions = def
+            .transitions
+            .iter()
+            .filter_map(|transition| {
+                let transition_name = format!("{} to {}", transition.from.name, transition.to.name);
+                let from = state_ids.get(&transition.from.name).map(|(id, _)| *id);
+                let to = state_ids.get(&transition.to.name).map(|(id, _)| *id);
+
+                match (from, to) {
+                    (Some(from), Some(to)) => Some(TypeMachineTransitionDef { from, to }),
+                    (None, _) => {
+                        self.sink.emit(errors::invalid_machine_transition(
+                            &canonical_name,
+                            &transition_name,
+                            &format!("unknown source state `{}`", transition.from.name),
+                            transition.from.span,
+                        ));
+                        None
+                    }
+                    (_, None) => {
+                        self.sink.emit(errors::invalid_machine_transition(
+                            &canonical_name,
+                            &transition_name,
+                            &format!("unknown target state `{}`", transition.to.name),
+                            transition.to.span,
+                        ));
+                        None
+                    }
+                }
+            })
+            .collect();
+
+        self.interner.update_machine(
+            mid,
+            TypeMachineDef {
+                name: canonical_name,
+                states,
+                transitions,
+            },
+        );
     }
 
     fn finish_actor(&mut self, def: &ast::ActorDef, namespace: Option<&str>) {

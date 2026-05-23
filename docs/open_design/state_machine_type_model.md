@@ -1,8 +1,8 @@
 # State Machine Type Model
 
 Jett's design treats state machines as a core language feature, but the current
-implementation is still a parser/interpreter prototype rather than a checked
-type-system feature.
+implementation is still mid-extraction from a parser/interpreter prototype into
+a fully checked type-system feature.
 
 This note records the gap so namespace work does not accidentally paper over it
 with one-off lookup rules.
@@ -13,9 +13,14 @@ Implemented:
 
 - The parser accepts `machine Name:` declarations with `states:` and
   `transitions:` blocks.
+- The parser has a distinct `TypeExpr::StateQualified(base, state, span)` form
+  for type-position `Machine at state`.
 - The resolver declares machine names, including namespaced machine names.
 - `jett_types` has checked-machine metadata handles and explicit
   `Type::Machine` / `Type::MachineState` variants.
+- The typechecker predeclares and finishes machine declarations as named types,
+  including duplicate-state checks, transition endpoint checks, and state
+  payload field type resolution.
 - The comptime interpreter can register machines, construct values with
   `MachineName(state, ...)`, check `value at state`, and run
   `MachineName.transition(value, target, ...)`.
@@ -24,12 +29,11 @@ Implemented:
 
 Not implemented:
 
-- `TypeExpr` has no state-qualified form for `Machine at state`.
-- The typechecker does not predeclare, finish, or check machine declarations as
-  named types.
 - Construction and transition calls are not checked against machine state
   field types or declared transition edges.
 - State-specific field access is not modeled.
+- Machine declarations currently remain private because the parser AST has no
+  `export machine` flag yet.
 - Namespace-qualified machine fixtures do not yet run through the same checked
   surface as structs, enums, actors, interfaces, and JSON-facing types.
 
@@ -72,23 +76,23 @@ lands:
 - reflection hooks later, if state machines become serializable or inspectable.
 
 The base metadata now lives beside struct/enum/actor definitions in
-`jett_types`, not only inside the interpreter. The checker still needs to
-populate it from source declarations.
+`jett_types`, not only inside the interpreter, and the checker populates it from
+source declarations.
 
 ## Parser Syntax Gap
 
 Expression syntax already has `expr at state` as a runtime state check.
 
-Type syntax still needs a distinct representation for signatures such as:
+Type syntax now has a distinct representation for signatures such as:
 
 ```jett
 function capture(payment: Payment at authorized) returns Payment at captured:
     ...
 ```
 
-The parser may need a `TypeExpr::StateQualified(base, state, span)` variant.
-That keeps type-level `at` separate from expression-level `at` and lets the
-typechecker attach the state identifier to a known machine owner.
+`TypeExpr::StateQualified(base, state, span)` keeps type-level `at` separate
+from expression-level `at` and lets the typechecker attach the state identifier
+to a known machine owner.
 
 ## Staging Plan
 
@@ -98,11 +102,12 @@ typechecker attach the state identifier to a known machine owner.
 2. Add a state-qualified `TypeExpr` form for `Machine at state`. Done:
    `TypeExpr::StateQualified(base, state, span)` is parsed in type positions
    and remains distinct from expression-level `expr at state`.
-3. Typecheck machine declarations:
+3. Typecheck machine declarations. Done for the current machine surface:
    - duplicate states,
    - transition endpoints exist,
    - per-state field types resolve,
-   - namespace/export visibility matches other top-level types.
+   - namespace ownership matches other top-level types. `export machine` still
+     needs a parser/AST visibility flag.
 4. Typecheck machine construction:
    - first argument is a declared state,
    - payload fields match that state's declared fields,

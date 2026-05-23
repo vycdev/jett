@@ -611,6 +611,38 @@ pub fn json_unsupported_parse_type(
     )
 }
 
+/// E0349: A machine declares the same state more than once.
+pub fn duplicate_machine_state(
+    machine_name: &str,
+    state_name: &str,
+    span: Span,
+    previous_span: Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        349,
+        format!("machine `{machine_name}` declares state `{state_name}` more than once"),
+        span,
+    )
+    .with_label(
+        previous_span,
+        format!("state `{state_name}` was first declared here"),
+    )
+}
+
+/// E0350: A machine transition references a missing state endpoint.
+pub fn invalid_machine_transition(
+    machine_name: &str,
+    transition: &str,
+    reason: &str,
+    span: Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        350,
+        format!("machine `{machine_name}` transition `{transition}` is invalid: {reason}"),
+        span,
+    )
+}
+
 // Diagnostic codes E0800-E0899 are reserved for function complexity limits.
 
 /// E0800: Function body exceeds the statement count limit.

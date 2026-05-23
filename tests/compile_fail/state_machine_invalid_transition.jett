@@ -1,0 +1,7 @@
+# ERROR: E0350
+machine Session:
+    states:
+        guest
+
+    transitions:
+        guest to logged_in
