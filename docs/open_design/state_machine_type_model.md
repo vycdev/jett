@@ -21,6 +21,8 @@ Implemented:
 - The typechecker predeclares and finishes machine declarations as named types,
   including duplicate-state checks, transition endpoint checks, and state
   payload field type resolution.
+- Machine construction calls are checked for an initial state label and payload
+  arity/types, and return the corresponding `Machine at state` type.
 - The comptime interpreter can register machines, construct values with
   `MachineName(state, ...)`, check `value at state`, and run
   `MachineName.transition(value, target, ...)`.
@@ -29,8 +31,8 @@ Implemented:
 
 Not implemented:
 
-- Construction and transition calls are not checked against machine state
-  field types or declared transition edges.
+- Transition calls are not checked against machine state field types or
+  declared transition edges.
 - State-specific field access is not modeled.
 - Machine declarations currently remain private because the parser AST has no
   `export machine` flag yet.
@@ -108,7 +110,7 @@ to a known machine owner.
    - per-state field types resolve,
    - namespace ownership matches other top-level types. `export machine` still
      needs a parser/AST visibility flag.
-4. Typecheck machine construction:
+4. Typecheck machine construction. Done:
    - first argument is a declared state,
    - payload fields match that state's declared fields,
    - return type is `Machine at state`.

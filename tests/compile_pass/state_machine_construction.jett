@@ -1,0 +1,13 @@
+machine Session:
+    states:
+        guest
+        logged_in(user_id: string)
+
+    transitions:
+        guest to logged_in
+
+function make_guest() returns Session at guest:
+    return Session(guest)
+
+function make_logged_in() returns Session at logged_in:
+    return Session(logged_in, "user-1")

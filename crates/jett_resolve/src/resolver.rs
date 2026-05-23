@@ -1001,7 +1001,12 @@ impl Resolver {
             }
             Expr::Call(callee, args, _) => {
                 self.resolve_expr(callee, item_index);
-                for arg in args {
+                let first_arg_is_machine_state =
+                    self.expr_resolves_to_kind(callee, DefKind::Machine) && !args.is_empty();
+                for (index, arg) in args.iter().enumerate() {
+                    if first_arg_is_machine_state && index == 0 {
+                        continue;
+                    }
                     self.resolve_call_arg(arg, item_index);
                 }
             }
@@ -1119,6 +1124,12 @@ impl Resolver {
         // Named argument labels are not resolved — they match parameter names
         // during type checking, not name resolution.
         self.resolve_expr(&arg.value, item_index);
+    }
+
+    fn expr_resolves_to_kind(&self, expr: &Expr, kind: DefKind) -> bool {
+        self.resolutions
+            .get(&expr.span())
+            .is_some_and(|def_id| self.scope_table.def(*def_id).kind == kind)
     }
 
     // ------------------------------------------------------------------

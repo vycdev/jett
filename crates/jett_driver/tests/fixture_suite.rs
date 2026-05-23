@@ -224,6 +224,10 @@ compile_pass_fixture!(
     compile_pass_state_machine_type_declaration,
     "state_machine_type_declaration.jett"
 );
+compile_pass_fixture!(
+    compile_pass_state_machine_construction,
+    "state_machine_construction.jett"
+);
 
 compile_fail_fixture!(compile_fail_type_mismatch, "type_mismatch.jett");
 compile_fail_fixture!(compile_fail_secret_stdout, "secret_stdout.jett");
@@ -597,6 +601,18 @@ compile_fail_fixture!(
 compile_fail_fixture!(
     compile_fail_state_machine_unknown_state_type,
     "state_machine_unknown_state_type.jett"
+);
+compile_fail_fixture!(
+    compile_fail_state_machine_construct_unknown_state,
+    "state_machine_construct_unknown_state.jett"
+);
+compile_fail_fixture!(
+    compile_fail_state_machine_construct_payload_count,
+    "state_machine_construct_payload_count.jett"
+);
+compile_fail_fixture!(
+    compile_fail_state_machine_construct_payload_type,
+    "state_machine_construct_payload_type.jett"
 );
 compile_fail_fixture!(
     compile_fail_pipeline_builtin_input_mismatch,

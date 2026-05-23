@@ -7591,6 +7591,9 @@ impl<'a> TypeChecker<'a> {
                         Type::Bitfield(bid) => {
                             return self.check_bitfield_constructor(bid, args, span);
                         }
+                        Type::Machine(mid) => {
+                            return self.check_machine_constructor(mid, args, span);
+                        }
                         _ => {}
                     }
                 }
@@ -7635,6 +7638,9 @@ impl<'a> TypeChecker<'a> {
                 }
                 Type::Bitfield(bid) if self.is_bitfield_type_name_expr(callee) => {
                     return self.check_bitfield_constructor(bid, args, span);
+                }
+                Type::Machine(mid) => {
+                    return self.check_machine_constructor(mid, args, span);
                 }
                 _ => {
                     self.sink
@@ -8323,6 +8329,87 @@ impl<'a> TypeChecker<'a> {
         } else {
             bitfield_ty
         }
+    }
+
+    fn check_machine_constructor(
+        &mut self,
+        mid: jett_types::MachineId,
+        args: &[ast::CallArg],
+        span: Span,
+    ) -> TypeId {
+        let machine_def = self.interner.resolve_machine(mid).clone();
+        if args.is_empty() {
+            self.sink.emit(errors::invalid_machine_construction(
+                &machine_def.name,
+                "expected an initial state argument",
+                span,
+            ));
+            return TypeInterner::ERROR;
+        }
+
+        let state_ident = match &args[0].value {
+            Expr::Ident(ident) if args[0].name.is_none() => ident,
+            _ => {
+                self.sink.emit(errors::invalid_machine_construction(
+                    &machine_def.name,
+                    "first argument must be a bare state name",
+                    args[0].span,
+                ));
+                for arg in &args[1..] {
+                    self.check_expr(&arg.value);
+                }
+                return TypeInterner::ERROR;
+            }
+        };
+
+        let Some(state_id) = machine_def.state_id(&state_ident.name) else {
+            self.sink.emit(errors::invalid_machine_construction(
+                &machine_def.name,
+                &format!("unknown state `{}`", state_ident.name),
+                state_ident.span,
+            ));
+            for arg in &args[1..] {
+                self.check_expr(&arg.value);
+            }
+            return TypeInterner::ERROR;
+        };
+
+        let state_def = machine_def
+            .state(state_id)
+            .expect("state_id came from the same machine definition");
+        let payload_args = &args[1..];
+        if payload_args.len() != state_def.fields.len() {
+            self.sink.emit(errors::invalid_machine_construction(
+                &machine_def.name,
+                &format!(
+                    "state `{}` expects {} payload field(s), got {}",
+                    state_def.name,
+                    state_def.fields.len(),
+                    payload_args.len()
+                ),
+                span,
+            ));
+        }
+
+        for (arg, (field_name, expected_ty)) in payload_args.iter().zip(state_def.fields.iter()) {
+            let arg_ty = self.check_expr_for_expected(&arg.value, *expected_ty, false);
+            if !self.types_compatible(*expected_ty, arg_ty) {
+                self.sink.emit(errors::argument_type_mismatch(
+                    field_name,
+                    &self.type_name(*expected_ty),
+                    &self.type_name(arg_ty),
+                    arg.value.span(),
+                ));
+            }
+        }
+        for arg in payload_args.iter().skip(state_def.fields.len()) {
+            self.check_expr(&arg.value);
+        }
+
+        self.interner.intern(Type::MachineState {
+            machine: mid,
+            state: state_id,
+        })
     }
 
     fn check_list_construct(&mut self, elems: &[Expr]) -> TypeId {

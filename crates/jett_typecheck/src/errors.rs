@@ -643,6 +643,15 @@ pub fn invalid_machine_transition(
     )
 }
 
+/// E0351: A machine construction call has an invalid state or payload.
+pub fn invalid_machine_construction(machine_name: &str, reason: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        351,
+        format!("machine `{machine_name}` construction is invalid: {reason}"),
+        span,
+    )
+}
+
 // Diagnostic codes E0800-E0899 are reserved for function complexity limits.
 
 /// E0800: Function body exceeds the statement count limit.

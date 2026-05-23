@@ -1,0 +1,7 @@
+# ERROR: E0351
+machine Session:
+    states:
+        guest
+
+function make_session() returns Session:
+    return Session(logged_in)
