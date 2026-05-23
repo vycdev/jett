@@ -1589,7 +1589,8 @@ The payload field `session.user_id` is only available inside the guarded branch;
 outside it, `session` is still a bare `UserAuth`.
 For a two-state machine, the `else` branch has a single remaining state, so it
 narrows too. For machines with three or more states, negative branches stay
-opaque unless another positive `at` guard proves the state.
+opaque unless an `if` / `else if` chain positively checks all but one state; in
+that exact case, the final `else` branch narrows to the only remaining state.
 
 Reflection exposes the same high-level distinction: `type.info[UserAuth]()`
 reports kind `machine`, while `type.info[UserAuth at logged_in]()` reports

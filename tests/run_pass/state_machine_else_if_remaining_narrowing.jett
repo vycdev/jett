@@ -1,0 +1,19 @@
+machine Session:
+    states:
+        guest(reason: string)
+        logged_in(user_id: string)
+        banned(ban_reason: string)
+    transitions:
+        guest to logged_in
+        logged_in to banned
+function label(session: Session) returns string:
+    if session at logged_in:
+        return session.user_id
+    else if session at guest:
+        return session.reason
+    else:
+        return session.ban_reason
+verify state_machine_else_if_remaining_narrowing:
+    assert label(Session(logged_in, "Ada")) == "Ada"
+    assert label(Session(guest, "anonymous")) == "anonymous"
+    assert label(Session(banned, "policy")) == "policy"

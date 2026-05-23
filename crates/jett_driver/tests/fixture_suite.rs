@@ -288,6 +288,10 @@ run_pass_fixture!(
     "state_machine_else_narrowing.jett"
 );
 run_pass_fixture!(
+    run_pass_state_machine_else_if_remaining_narrowing,
+    "state_machine_else_if_remaining_narrowing.jett"
+);
+run_pass_fixture!(
     run_pass_property_generic_lists,
     "property_generic_lists.jett"
 );
