@@ -108,9 +108,9 @@ The current implementation is still deliberately narrow:
 - Machine construction uses `type.construct_machine_start[T](state)` rather
   than the enum starter; a state must be selected before payload fields can be
   provided, and state-qualified targets must finish in that exact state.
-- Require `construct_put` field metadata to match `T` or the selected enum
-  variant by index, name, and reflected type. This is not full provenance, but
-  it matches the current `type.field_value` safety model.
+- Require `construct_put` field metadata to match `T`, the selected enum
+  variant, or the selected machine state by owner, index, name, and reflected
+  type.
 - Reject duplicate fields and missing fields in `construct_finish`.
 - Validate `TypeVariant` metadata by index, name, discriminant, and payload
   field metadata before starting enum construction.

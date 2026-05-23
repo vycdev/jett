@@ -356,10 +356,13 @@ impl<'a> TypeChecker<'a> {
         self.named_types
             .insert("TypeInfo".to_string(), type_info_ty);
 
+        let optional_string_ty = self.interner.intern(Type::Optional(TypeInterner::STRING));
         let type_field_sid = self.interner.add_struct(TypeStructDef {
             name: "TypeField".to_string(),
             fields: vec![
                 ("index".to_string(), TypeInterner::INT64),
+                ("owner_type".to_string(), TypeInterner::STRING),
+                ("owner_member".to_string(), optional_string_ty),
                 ("name".to_string(), TypeInterner::STRING),
                 ("type_name".to_string(), TypeInterner::STRING),
                 ("kind".to_string(), TypeInterner::STRING),

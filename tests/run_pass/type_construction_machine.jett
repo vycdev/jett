@@ -3,8 +3,10 @@ machine Session:
     states:
         guest
         logged_in(user_id: string, display_name: string)
+        pending(user_id: string, display_name: string)
     transitions:
         guest to logged_in
+        guest to pending
 machine OtherSession:
     states:
         guest
@@ -85,6 +87,32 @@ function mismatched_state_owner_message() returns string:
     TypeConstruction builder = type.construct_machine_start[Session](view state) handle error:
         return error
     return "unexpected"
+function mismatched_state_field_owner_message() returns string:
+    TypeMachineState state = logged_in_state() handle:
+        return "missing-state"
+    mutable TypeConstruction builder = type.construct_machine_start[Session](view state) handle error:
+        return error
+    list[TypeMachineState] other_states = type.machine_states[OtherSession]()
+    TypeMachineState other_state = list.get[TypeMachineState](other_states, 1) handle:
+        return "missing-other-state"
+    TypeField field = list.get[TypeField](other_state.fields, 0) handle:
+        return "missing-other-field"
+    builder = type.construct_put[Session, string](builder, view field, "user-1") handle error:
+        return error
+    return "unexpected"
+function mismatched_state_field_member_message() returns string:
+    TypeMachineState state = logged_in_state() handle:
+        return "missing-state"
+    mutable TypeConstruction builder = type.construct_machine_start[Session](view state) handle error:
+        return error
+    list[TypeMachineState] states = type.machine_states[Session]()
+    TypeMachineState other_state = list.get[TypeMachineState](states, 2) handle:
+        return "missing-other-state"
+    TypeField field = list.get[TypeField](other_state.fields, 0) handle:
+        return "missing-other-field"
+    builder = type.construct_put[Session, string](builder, view field, "user-1") handle error:
+        return error
+    return "unexpected"
 verify type_construction_machine:
     assert construct_logged_in_session() == "logged_in:user-1"
     assert construct_state_qualified_session() == "logged_in:Lin"
@@ -93,3 +121,5 @@ verify type_construction_machine:
     assert state_field_type_binding() == "string"
     assert session_state_owner_type() == "test.Session"
     assert string.contains(mismatched_state_owner_message(), "belongs to machine 'test.OtherSession', expected 'test.Session'") == true
+    assert string.contains(mismatched_state_field_owner_message(), "belongs to 'test.OtherSession.logged_in', expected 'test.Session.logged_in'") == true
+    assert string.contains(mismatched_state_field_member_message(), "belongs to 'test.Session.pending', expected 'test.Session.logged_in'") == true

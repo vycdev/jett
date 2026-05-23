@@ -14,7 +14,7 @@ struct RefinedUser:
     name: NonEmpty
 
 struct Other:
-    account_id: string
+    id: string
     age: int64
 
 function clone_user_by_reflection() returns bool:
@@ -93,7 +93,7 @@ function mismatched_metadata_message() returns string:
                 return error
     Other built = type.construct_finish[Other](builder) handle error:
         return error
-    return built.account_id
+    return built.id
 
 verify type_construction_builder:
     assert clone_user_by_reflection() == true
@@ -101,4 +101,4 @@ verify type_construction_builder:
     assert clone_refined_user_by_reflection() == "Ada"
     assert string.contains(missing_field_message(), "missing required field 'age'") == true
     assert string.contains(duplicate_field_message(), "provided more than once") == true
-    assert string.contains(mismatched_metadata_message(), "does not match field 'account_id'") == true
+    assert string.contains(mismatched_metadata_message(), "belongs to 'test.User', expected 'test.Other'") == true

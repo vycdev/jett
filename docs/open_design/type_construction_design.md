@@ -158,18 +158,21 @@ Verdict: preferred direction, pending syntax.
    `/docs/completed/reflected_construction_staging.md`, with `construct_put` returning
    `result[TypeConstruction, string]` and `construct_finish` returning
    `result[T, string]`.
-3. Done for bitfields: reuse reflected `TypeField` values and validate bit
-   widths on `construct_finish`.
+3. Done for bitfields: reuse reflected `TypeField` values, require their
+   owner metadata to match the construction target, and validate bit widths on
+   `construct_finish`.
 4. Done for enums: start from checked `TypeVariant` metadata with
    `type.construct_variant_start[T](variant)`, require its `owner_type` to
    match `T`, then reuse `construct_put` and `construct_finish` for
-   variant-local payload fields.
+   variant-local payload fields whose `TypeField.owner_member` matches the
+   selected variant.
 5. Done for JSON records/enums: public typed parse now routes through the stdlib `JsonTree`
    parser/decoder. Remaining construction work is about hardening syntax and
    reuse for future decoders, not replacing a Rust-backed `json.parse[T]`.
 6. Done for machines: add an explicit machine starter that selects checked
    `TypeMachineState` metadata, require its `owner_type` to match the target
-   machine, then reuse the existing typed put/finish path.
+   machine, then reuse the existing typed put/finish path for fields whose
+   `TypeField.owner_member` matches the selected state.
 
 ## Implementation Notes
 

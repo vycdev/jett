@@ -1144,18 +1144,18 @@ The boundary between compiler-generated code and stdlib-implemented code is a cr
 | `type.has_secret[T]()` | Comptime reflection | Whether `T` contains secret data |
 | `type.info[T]()` | Comptime reflection | Recursive `TypeInfo` metadata for `T`, including nested type arguments, structured kind tags, and optional primitive tags |
 | `type.arg[T](index)` | Comptime reflection | Indexed `TypeInfo` argument for generic wrappers; direct literal indexes can bind scoped comptime types |
-| `type.fields[T]()` | Struct/bitfield reflection | Ordered `list[TypeField]` metadata for struct and bitfield fields, including `serialize` names for structs |
+| `type.fields[T]()` | Struct/bitfield reflection | Ordered `list[TypeField]` metadata for struct and bitfield fields, including owning type, optional owner member, and `serialize` names for structs |
 | `type.bitfield_layout[T]()` | Bitfield reflection | `TypeBitfield` metadata for byte order and field-level layout |
 | `type.bitfield_fields[T]()` | Bitfield reflection | Ordered `list[TypeBitfieldField]` metadata for bit widths, payload shape, and enum annotations |
 | `type.machine_layout[T]()` | State-machine reflection | `TypeMachine` metadata for declared states and legal transition edges |
 | `type.machine_states[T]()` | State-machine reflection | Ordered `list[TypeMachineState]` metadata for state payload fields, secret-bearing state flags, and owning machine identity |
 | `type.machine_transitions[T]()` | State-machine reflection | Ordered `list[TypeMachineTransition]` metadata with source/target state names and indexes |
 | `type.machine_state_value[T](view value)` | State-machine reflection | Active `TypeMachineState` metadata for a concrete machine value |
-| `type.machine_field_value[T, U](view value, view field)` | State-machine reflection | Checked active-state payload field read by reflected `TypeField` metadata |
+| `type.machine_field_value[T, U](view value, view field)` | State-machine reflection | Checked active-state payload field read by reflected `TypeField` metadata from the same machine state |
 | `type.variants[T]()` | Enum reflection | Ordered `list[TypeVariant]` metadata for enum variants, owning enum identity, discriminants, and payload fields |
 | `type.variant_value[T](view value)` | Enum reflection | Active `TypeVariant` metadata for an enum value |
-| `type.variant_field_value[T, U](view value, view field)` | Enum reflection | Checked payload field read by reflected `TypeField` metadata |
-| `type.field_value[T, U](view value, view field)` | Struct/bitfield reflection | Checked field read by reflected `TypeField` metadata |
+| `type.variant_field_value[T, U](view value, view field)` | Enum reflection | Checked payload field read by reflected `TypeField` metadata from the same enum variant |
+| `type.field_value[T, U](view value, view field)` | Struct/bitfield reflection | Checked field read by reflected `TypeField` metadata from the same owner type |
 | `type.construct_start[T]()` | Struct/bitfield reflection | Start an opaque `TypeConstruction` builder for constructible `T` |
 | `type.construct_variant_start[T](variant)` | Enum reflection | Start an opaque `TypeConstruction` builder for a checked enum variant |
 | `type.construct_machine_start[T](state)` | State-machine reflection | Start an opaque `TypeConstruction` builder for a checked machine state |

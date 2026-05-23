@@ -8,7 +8,8 @@ checked, canonical type metadata.
 The reflected JSON stdlib now depends on rich metadata:
 
 - `TypeInfo` and structured `TypeKind` / `TypePrimitive`,
-- `TypeField` with `serialize_name`, `type_info`, and `has_secret`,
+- `TypeField` with `owner_type`, optional `owner_member`, `serialize_name`,
+  `type_info`, and `has_secret`,
 - bitfield layout metadata,
 - enum variants and payload fields,
 - state-machine states, payload fields, and transition edges,
@@ -143,13 +144,13 @@ Value-sensitive APIs need both canonical metadata and runtime value layout to
 agree, so they should move after metadata-only APIs are stable.
 
 Status: `type.field_value[T, Field]` now prefers checked `TypeField` metadata
-for field provenance and type validation, `type.variant_value[T]` now prefers
+for owner provenance and type validation, `type.variant_value[T]` now prefers
 checked `TypeVariant` metadata for active variant lookup, and
 `type.variant_field_value[T, Field]` now prefers checked variant payload
-metadata for payload field provenance and type validation. All retain the AST
+metadata for payload field owner provenance and type validation. All retain the AST
 fallback for bootstrap/direct interpreter tests. `type.construct_variant_start`
 and `type.construct_put` now prefer checked metadata for construction kind,
-field, variant payload validation, and variant/machine owner matching while
+field owner, variant payload validation, and variant/machine owner matching while
 preserving the existing `TypeConstruction` builder layout. `type.construct_finish` now uses checked
 metadata to materialize structs, enums, and bitfields, including bitfield width
 checks and enum annotation discriminants.

@@ -110,8 +110,19 @@ struct ReflectionField {
 #[derive(Debug, Clone)]
 struct ReflectedFieldBinding {
     index: usize,
+    owner_type: String,
+    owner_member: Option<String>,
     name: String,
     ty: TypeExpr,
+}
+
+#[derive(Debug, Clone)]
+struct TypeFieldMetadata {
+    index: usize,
+    owner_type: String,
+    owner_member: Option<String>,
+    name: String,
+    type_name: String,
 }
 
 #[derive(Debug, Clone)]
@@ -3000,7 +3011,9 @@ impl Interpreter {
                     self.type_expr_fields(&ty)
                         .into_iter()
                         .enumerate()
-                        .map(|(index, field)| self.type_field_value(index, field))
+                        .map(|(index, field)| {
+                            self.type_field_value(index, &type_expr_display(&ty), None, field)
+                        })
                         .collect(),
                 ))
             }
@@ -3519,6 +3532,12 @@ impl Interpreter {
             .unwrap_or(Value::OptionalNone)
     }
 
+    fn optional_string_value(value: Option<&str>) -> Value {
+        value
+            .map(|value| Value::OptionalSome(Box::new(Value::String(value.to_string()))))
+            .unwrap_or(Value::OptionalNone)
+    }
+
     fn bitfield_shape_tag_value(shape: &str) -> Value {
         let variant = match shape {
             "payload" => "payload_field",
@@ -3934,11 +3953,14 @@ impl Interpreter {
             .fields
             .iter()
             .any(|field| self.type_expr_has_secret(&field.ty));
+        let owner_member = state.name.clone();
         let fields = state
             .fields
             .into_iter()
             .enumerate()
-            .map(|(index, field)| self.type_field_value(index, field))
+            .map(|(index, field)| {
+                self.type_field_value(index, owner_type, Some(&owner_member), field)
+            })
             .collect();
         Value::Struct {
             type_name: "TypeMachineState".to_string(),
@@ -4049,7 +4071,13 @@ impl Interpreter {
         name.rsplit_once('.').map(|(namespace, _)| namespace)
     }
 
-    fn type_field_value(&self, index: usize, field: ReflectionField) -> Value {
+    fn type_field_value(
+        &self,
+        index: usize,
+        owner_type: &str,
+        owner_member: Option<&str>,
+        field: ReflectionField,
+    ) -> Value {
         let kind = self.type_expr_kind(&field.ty).to_string();
         let kind_tag = Self::type_kind_tag_value(&kind);
         let has_secret = self.type_expr_has_secret(&field.ty);
@@ -4058,6 +4086,14 @@ impl Interpreter {
             type_name: "TypeField".to_string(),
             fields: vec![
                 ("index".to_string(), Value::Int64(index as i64)),
+                (
+                    "owner_type".to_string(),
+                    Value::String(owner_type.to_string()),
+                ),
+                (
+                    "owner_member".to_string(),
+                    Self::optional_string_value(owner_member),
+                ),
                 ("name".to_string(), Value::String(field.name)),
                 (
                     "type_name".to_string(),
@@ -4083,12 +4119,15 @@ impl Interpreter {
             return Ok(None);
         };
         let owner_ty = self.substitute_type_expr(owner_ty);
+        let owner_type = type_expr_display(&owner_ty);
         if let Some(fields) = self.checked_type_fields(&owner_ty) {
             return Ok(Some(
                 fields
                     .iter()
                     .map(|field| ReflectedFieldBinding {
                         index: field.index,
+                        owner_type: owner_type.clone(),
+                        owner_member: None,
                         name: field.name.clone(),
                         ty: Self::reflection_type_info_type_expr(&field.type_info),
                     })
@@ -4105,6 +4144,8 @@ impl Interpreter {
                 .enumerate()
                 .map(|(index, field)| ReflectedFieldBinding {
                     index,
+                    owner_type: owner_type.clone(),
+                    owner_member: None,
                     name: field.name,
                     ty: field.ty,
                 })
@@ -4244,19 +4285,41 @@ impl Interpreter {
         selected_variant: Option<&str>,
         field_metadata: &Value,
     ) -> Result<ReflectedFieldBinding, String> {
-        let (field_index, metadata_name, metadata_type_name) =
-            Self::type_field_metadata_for(field_metadata, "type.field_value")?;
+        let metadata = Self::type_field_metadata_for(field_metadata, "type.field_value")?;
+        let expected_owner = type_expr_display(owner_ty);
+        if metadata.owner_type != expected_owner
+            || selected_variant
+                .is_some_and(|selected| metadata.owner_member.as_deref() != Some(selected))
+        {
+            return Err(format!(
+                "`comptime type`: field metadata belongs to '{}', expected '{}'",
+                Self::field_metadata_owner_label(&metadata),
+                Self::field_owner_label(&expected_owner, selected_variant)
+            ));
+        }
+        let Some(metadata_owner_member) = metadata.owner_member.as_deref() else {
+            return Err(format!(
+                "`comptime type`: field metadata belongs to '{}', expected payload field metadata for '{}'",
+                Self::field_metadata_owner_label(&metadata),
+                expected_owner
+            ));
+        };
         if let Some(variants) = self.checked_type_variants(owner_ty) {
             for variant in variants {
                 if matches!(selected_variant, Some(selected) if selected != variant.name) {
                     continue;
                 }
-                let Some(field) = variant.fields.get(field_index) else {
+                if metadata_owner_member != variant.name {
+                    continue;
+                }
+                let Some(field) = variant.fields.get(metadata.index) else {
                     continue;
                 };
-                if field.name == metadata_name && field.type_name == metadata_type_name {
+                if field.name == metadata.name && field.type_name == metadata.type_name {
                     return Ok(ReflectedFieldBinding {
-                        index: field_index,
+                        index: metadata.index,
+                        owner_type: expected_owner.clone(),
+                        owner_member: metadata.owner_member.clone(),
                         name: field.name.clone(),
                         ty: Self::reflection_type_info_type_expr(&field.type_info),
                     });
@@ -4264,7 +4327,7 @@ impl Interpreter {
             }
             return Err(format!(
                 "`comptime type` reflected enum field metadata '{}' does not match any payload field on type '{}'",
-                metadata_name,
+                metadata.name,
                 type_expr_display(owner_ty)
             ));
         }
@@ -4276,12 +4339,17 @@ impl Interpreter {
             if matches!(selected_variant, Some(selected) if selected != variant.name) {
                 continue;
             }
-            let Some(field) = variant.fields.get(field_index) else {
+            if metadata_owner_member != variant.name {
+                continue;
+            }
+            let Some(field) = variant.fields.get(metadata.index) else {
                 continue;
             };
-            if field.name == metadata_name && type_expr_display(&field.ty) == metadata_type_name {
+            if field.name == metadata.name && type_expr_display(&field.ty) == metadata.type_name {
                 return Ok(ReflectedFieldBinding {
-                    index: field_index,
+                    index: metadata.index,
+                    owner_type: expected_owner.clone(),
+                    owner_member: metadata.owner_member.clone(),
                     name: field.name.clone(),
                     ty: field.ty.clone(),
                 });
@@ -4289,7 +4357,7 @@ impl Interpreter {
         }
         Err(format!(
             "`comptime type` reflected enum field metadata '{}' does not match any payload field on type '{}'",
-            metadata_name,
+            metadata.name,
             type_expr_display(owner_ty)
         ))
     }
@@ -4299,16 +4367,35 @@ impl Interpreter {
         owner_ty: &TypeExpr,
         field_metadata: &Value,
     ) -> Result<ReflectedFieldBinding, String> {
-        let (field_index, metadata_name, metadata_type_name) =
-            Self::type_field_metadata_for(field_metadata, "type.machine_field_value")?;
+        let metadata = Self::type_field_metadata_for(field_metadata, "type.machine_field_value")?;
+        let expected_owner = type_expr_name(owner_ty);
+        if metadata.owner_type != expected_owner {
+            return Err(format!(
+                "`comptime type`: field metadata belongs to '{}', expected '{}'",
+                Self::field_metadata_owner_label(&metadata),
+                expected_owner
+            ));
+        }
+        let Some(metadata_owner_member) = metadata.owner_member.as_deref() else {
+            return Err(format!(
+                "`comptime type`: field metadata belongs to '{}', expected state payload field metadata for '{}'",
+                Self::field_metadata_owner_label(&metadata),
+                expected_owner
+            ));
+        };
         if let Some(machine) = self.checked_machine(owner_ty) {
             for state in &machine.states {
-                let Some(field) = state.fields.get(field_index) else {
+                if metadata_owner_member != state.name {
+                    continue;
+                }
+                let Some(field) = state.fields.get(metadata.index) else {
                     continue;
                 };
-                if field.name == metadata_name && field.type_name == metadata_type_name {
+                if field.name == metadata.name && field.type_name == metadata.type_name {
                     return Ok(ReflectedFieldBinding {
-                        index: field_index,
+                        index: metadata.index,
+                        owner_type: expected_owner.clone(),
+                        owner_member: metadata.owner_member.clone(),
                         name: field.name.clone(),
                         ty: Self::reflection_type_info_type_expr(&field.type_info),
                     });
@@ -4316,7 +4403,7 @@ impl Interpreter {
             }
             return Err(format!(
                 "`comptime type` reflected machine field metadata '{}' does not match any payload field on type '{}'",
-                metadata_name,
+                metadata.name,
                 type_expr_display(owner_ty)
             ));
         }
@@ -4325,12 +4412,17 @@ impl Interpreter {
         }
 
         for state in self.type_expr_machine(owner_ty).states {
-            let Some(field) = state.fields.get(field_index) else {
+            if metadata_owner_member != state.name {
+                continue;
+            }
+            let Some(field) = state.fields.get(metadata.index) else {
                 continue;
             };
-            if field.name == metadata_name && type_expr_display(&field.ty) == metadata_type_name {
+            if field.name == metadata.name && type_expr_display(&field.ty) == metadata.type_name {
                 return Ok(ReflectedFieldBinding {
-                    index: field_index,
+                    index: metadata.index,
+                    owner_type: expected_owner.clone(),
+                    owner_member: metadata.owner_member.clone(),
                     name: field.name.clone(),
                     ty: field.ty.clone(),
                 });
@@ -4338,7 +4430,7 @@ impl Interpreter {
         }
         Err(format!(
             "`comptime type` reflected machine field metadata '{}' does not match any payload field on type '{}'",
-            metadata_name,
+            metadata.name,
             type_expr_display(owner_ty)
         ))
     }
@@ -4447,15 +4539,25 @@ impl Interpreter {
         let current_value = self.get_variable(field_name).ok_or_else(|| {
             format!("`comptime type` reflected field '{field_name}' is not in scope")
         })?;
-        let (index, name, type_name) = Self::type_field_metadata(current_value).map_err(|_| {
+        let metadata = Self::type_field_metadata(current_value).map_err(|_| {
             "`comptime type` reflected field binding requires the current TypeField value"
                 .to_string()
         })?;
         let expected_type_name = type_expr_display(&binding.ty);
-        if index != binding.index || name != binding.name || type_name != expected_type_name {
+        if metadata.index != binding.index
+            || metadata.owner_type != binding.owner_type
+            || metadata.owner_member != binding.owner_member
+            || metadata.name != binding.name
+            || metadata.type_name != expected_type_name
+        {
             return Err(format!(
                 "`comptime type` reflected field metadata no longer matches the trusted `type.fields[T]()` loop item (expected #{} {}: {}, got #{} {}: {})",
-                binding.index, binding.name, expected_type_name, index, name, type_name
+                binding.index,
+                binding.name,
+                expected_type_name,
+                metadata.index,
+                metadata.name,
+                metadata.type_name
             ));
         }
         Ok(Some(self.substitute_type_expr(&binding.ty)))
@@ -4707,11 +4809,14 @@ impl Interpreter {
             .fields
             .iter()
             .any(|field| self.type_expr_has_secret(&field.ty));
+        let owner_member = variant.name.clone();
         let fields = variant
             .fields
             .into_iter()
             .enumerate()
-            .map(|(index, field)| self.type_field_value(index, field))
+            .map(|(index, field)| {
+                self.type_field_value(index, owner_type, Some(&owner_member), field)
+            })
             .collect::<Vec<_>>();
 
         Value::Struct {
@@ -4884,19 +4989,32 @@ impl Interpreter {
 
     fn checked_type_fields_value(&self, ty: &TypeExpr) -> Option<Value> {
         let fields = self.checked_type_fields(ty)?;
+        let owner_type = type_expr_display(ty);
         Some(Value::List(
             fields
                 .iter()
-                .map(Self::reflection_field_info_value)
+                .map(|field| Self::reflection_field_info_value(&owner_type, None, field))
                 .collect(),
         ))
     }
 
-    fn reflection_field_info_value(field: &ReflectionFieldInfo) -> Value {
+    fn reflection_field_info_value(
+        owner_type: &str,
+        owner_member: Option<&str>,
+        field: &ReflectionFieldInfo,
+    ) -> Value {
         Value::Struct {
             type_name: "TypeField".to_string(),
             fields: vec![
                 ("index".to_string(), Value::Int64(field.index as i64)),
+                (
+                    "owner_type".to_string(),
+                    Value::String(owner_type.to_string()),
+                ),
+                (
+                    "owner_member".to_string(),
+                    Self::optional_string_value(owner_member),
+                ),
                 ("name".to_string(), Value::String(field.name.clone())),
                 (
                     "type_name".to_string(),
@@ -5069,10 +5187,11 @@ impl Interpreter {
         owner_type: &str,
         state: &ReflectionMachineStateInfo,
     ) -> Value {
+        let owner_member = state.name.as_str();
         let fields = state
             .fields
             .iter()
-            .map(Self::reflection_field_info_value)
+            .map(|field| Self::reflection_field_info_value(owner_type, Some(owner_member), field))
             .collect();
         Value::Struct {
             type_name: "TypeMachineState".to_string(),
@@ -5134,10 +5253,11 @@ impl Interpreter {
     }
 
     fn reflection_variant_info_value(owner_type: &str, variant: &ReflectionVariantInfo) -> Value {
+        let owner_member = variant.name.as_str();
         let fields = variant
             .fields
             .iter()
-            .map(Self::reflection_field_info_value)
+            .map(|field| Self::reflection_field_info_value(owner_type, Some(owner_member), field))
             .collect();
         Value::Struct {
             type_name: "TypeVariant".to_string(),
@@ -5245,33 +5365,34 @@ impl Interpreter {
         field_metadata: &Value,
         expected_field_ty: &TypeExpr,
     ) -> Result<Value, String> {
-        let (field_index, metadata_name, metadata_type_name) =
-            Self::type_field_metadata_for(field_metadata, "type.field_value")?;
+        let metadata = Self::type_field_metadata_for(field_metadata, "type.field_value")?;
+        let expected_owner = type_expr_display(owner_ty);
+        Self::validate_field_metadata_owner(&metadata, &expected_owner, None, "type.field_value")?;
         let (field_name, actual_type_name) = if let Some(fields) =
             self.checked_type_fields(owner_ty)
         {
-            let field = fields.get(field_index).ok_or_else(|| {
+            let field = fields.get(metadata.index).ok_or_else(|| {
                 format!(
                     "type.field_value: type '{}' has no field at index {}",
                     type_expr_display(owner_ty),
-                    field_index
+                    metadata.index
                 )
             })?;
 
-            if field.name != metadata_name {
+            if field.name != metadata.name {
                 return Err(format!(
                     "type.field_value: field metadata '{}' does not match field '{}' on type '{}'",
-                    metadata_name,
+                    metadata.name,
                     field.name,
                     type_expr_display(owner_ty)
                 ));
             }
 
-            if !self.reflection_type_names_match(&field.type_name, &metadata_type_name) {
+            if !self.reflection_type_names_match(&field.type_name, &metadata.type_name) {
                 return Err(format!(
                     "type.field_value: field metadata for '{}' has type '{}', but type '{}' reports '{}'",
-                    metadata_name,
-                    metadata_type_name,
+                    metadata.name,
+                    metadata.type_name,
                     type_expr_display(owner_ty),
                     field.type_name
                 ));
@@ -5281,29 +5402,29 @@ impl Interpreter {
             return Err(self.missing_checked_metadata_error(owner_ty, "field"));
         } else {
             let owner_fields = self.type_expr_fields(owner_ty);
-            let field = owner_fields.get(field_index).ok_or_else(|| {
+            let field = owner_fields.get(metadata.index).ok_or_else(|| {
                 format!(
                     "type.field_value: type '{}' has no field at index {}",
                     type_expr_display(owner_ty),
-                    field_index
+                    metadata.index
                 )
             })?;
 
-            if field.name != metadata_name {
+            if field.name != metadata.name {
                 return Err(format!(
                     "type.field_value: field metadata '{}' does not match field '{}' on type '{}'",
-                    metadata_name,
+                    metadata.name,
                     field.name,
                     type_expr_display(owner_ty)
                 ));
             }
 
             let actual_type_name = type_expr_display(&field.ty);
-            if !self.reflection_type_names_match(&actual_type_name, &metadata_type_name) {
+            if !self.reflection_type_names_match(&actual_type_name, &metadata.type_name) {
                 return Err(format!(
                     "type.field_value: field metadata for '{}' has type '{}', but type '{}' reports '{}'",
-                    metadata_name,
-                    metadata_type_name,
+                    metadata.name,
+                    metadata.type_name,
                     type_expr_display(owner_ty),
                     actual_type_name
                 ));
@@ -5315,7 +5436,7 @@ impl Interpreter {
         if !self.reflection_type_name_matches_expr(&actual_type_name, expected_field_ty) {
             return Err(format!(
                 "type.field_value: field '{}' has type '{}', requested '{}'",
-                metadata_name, actual_type_name, expected_type_name
+                metadata.name, actual_type_name, expected_type_name
             ));
         }
 
@@ -5405,8 +5526,7 @@ impl Interpreter {
         field_metadata: &Value,
         expected_field_ty: &TypeExpr,
     ) -> Result<Value, String> {
-        let (field_index, metadata_name, metadata_type_name) =
-            Self::type_field_metadata_for(field_metadata, "type.machine_field_value")?;
+        let metadata = Self::type_field_metadata_for(field_metadata, "type.machine_field_value")?;
         let Value::Machine {
             type_name,
             state,
@@ -5420,6 +5540,12 @@ impl Interpreter {
         };
 
         let expected_type_name = type_expr_name(owner_ty);
+        Self::validate_field_metadata_owner(
+            &metadata,
+            &expected_type_name,
+            Some(state),
+            "type.machine_field_value",
+        )?;
         if type_name != &expected_type_name {
             return Err(format!(
                 "type.machine_field_value: expected machine '{}', got '{}'",
@@ -5447,24 +5573,24 @@ impl Interpreter {
                         expected_type_name, state
                     )
                 })?;
-            let field = state_metadata.fields.get(field_index).ok_or_else(|| {
+            let field = state_metadata.fields.get(metadata.index).ok_or_else(|| {
                 format!(
                     "type.machine_field_value: state '{}.{}' has no payload field at index {}",
-                    expected_type_name, state, field_index
+                    expected_type_name, state, metadata.index
                 )
             })?;
 
-            if field.name != metadata_name {
+            if field.name != metadata.name {
                 return Err(format!(
                     "type.machine_field_value: field metadata '{}' does not match payload field '{}' on state '{}.{}'",
-                    metadata_name, field.name, expected_type_name, state
+                    metadata.name, field.name, expected_type_name, state
                 ));
             }
 
-            if !self.reflection_type_names_match(&field.type_name, &metadata_type_name) {
+            if !self.reflection_type_names_match(&field.type_name, &metadata.type_name) {
                 return Err(format!(
                     "type.machine_field_value: field metadata for '{}' has type '{}', but state '{}.{}' reports '{}'",
-                    metadata_name, metadata_type_name, expected_type_name, state, field.type_name
+                    metadata.name, metadata.type_name, expected_type_name, state, field.type_name
                 ));
             }
             (field.name.clone(), field.type_name.clone())
@@ -5482,25 +5608,25 @@ impl Interpreter {
                         expected_type_name, state
                     )
                 })?;
-            let field = state_metadata.fields.get(field_index).ok_or_else(|| {
+            let field = state_metadata.fields.get(metadata.index).ok_or_else(|| {
                 format!(
                     "type.machine_field_value: state '{}.{}' has no payload field at index {}",
-                    expected_type_name, state, field_index
+                    expected_type_name, state, metadata.index
                 )
             })?;
 
-            if field.name != metadata_name {
+            if field.name != metadata.name {
                 return Err(format!(
                     "type.machine_field_value: field metadata '{}' does not match payload field '{}' on state '{}.{}'",
-                    metadata_name, field.name, expected_type_name, state
+                    metadata.name, field.name, expected_type_name, state
                 ));
             }
 
             let actual_type_name = type_expr_display(&field.ty);
-            if !self.reflection_type_names_match(&actual_type_name, &metadata_type_name) {
+            if !self.reflection_type_names_match(&actual_type_name, &metadata.type_name) {
                 return Err(format!(
                     "type.machine_field_value: field metadata for '{}' has type '{}', but state '{}.{}' reports '{}'",
-                    metadata_name, metadata_type_name, expected_type_name, state, actual_type_name
+                    metadata.name, metadata.type_name, expected_type_name, state, actual_type_name
                 ));
             }
             (field.name.clone(), actual_type_name)
@@ -5510,11 +5636,11 @@ impl Interpreter {
         if !self.reflection_type_name_matches_expr(&actual_type_name, expected_field_ty) {
             return Err(format!(
                 "type.machine_field_value: field '{}' has type '{}', requested '{}'",
-                metadata_name, actual_type_name, expected_type_name
+                metadata.name, actual_type_name, expected_type_name
             ));
         }
 
-        fields.get(field_index).cloned().ok_or_else(|| {
+        fields.get(metadata.index).cloned().ok_or_else(|| {
             format!("type.machine_field_value: value is missing payload field '{field_name}'")
         })
     }
@@ -5577,8 +5703,7 @@ impl Interpreter {
         field_metadata: &Value,
         expected_field_ty: &TypeExpr,
     ) -> Result<Value, String> {
-        let (field_index, metadata_name, metadata_type_name) =
-            Self::type_field_metadata_for(field_metadata, "type.variant_field_value")?;
+        let metadata = Self::type_field_metadata_for(field_metadata, "type.variant_field_value")?;
         let Value::Enum {
             type_name,
             variant,
@@ -5592,6 +5717,13 @@ impl Interpreter {
         };
 
         let expected_type_name = type_expr_name(owner_ty);
+        let expected_owner = type_expr_display(owner_ty);
+        Self::validate_field_metadata_owner(
+            &metadata,
+            &expected_owner,
+            Some(variant),
+            "type.variant_field_value",
+        )?;
         if type_name != &expected_type_name {
             return Err(format!(
                 "type.variant_field_value: expected enum '{}', got '{}'",
@@ -5609,24 +5741,24 @@ impl Interpreter {
                         expected_type_name, variant
                     )
                 })?;
-            let field = variant_metadata.fields.get(field_index).ok_or_else(|| {
+            let field = variant_metadata.fields.get(metadata.index).ok_or_else(|| {
                 format!(
                     "type.variant_field_value: variant '{}.{}' has no payload field at index {}",
-                    expected_type_name, variant, field_index
+                    expected_type_name, variant, metadata.index
                 )
             })?;
 
-            if field.name != metadata_name {
+            if field.name != metadata.name {
                 return Err(format!(
                     "type.variant_field_value: field metadata '{}' does not match payload field '{}' on variant '{}.{}'",
-                    metadata_name, field.name, expected_type_name, variant
+                    metadata.name, field.name, expected_type_name, variant
                 ));
             }
 
-            if !self.reflection_type_names_match(&field.type_name, &metadata_type_name) {
+            if !self.reflection_type_names_match(&field.type_name, &metadata.type_name) {
                 return Err(format!(
                     "type.variant_field_value: field metadata for '{}' has type '{}', but variant '{}.{}' reports '{}'",
-                    metadata_name, metadata_type_name, expected_type_name, variant, field.type_name
+                    metadata.name, metadata.type_name, expected_type_name, variant, field.type_name
                 ));
             }
 
@@ -5634,11 +5766,11 @@ impl Interpreter {
             if !self.reflection_type_name_matches_expr(&field.type_name, expected_field_ty) {
                 return Err(format!(
                     "type.variant_field_value: field '{}' has type '{}', requested '{}'",
-                    metadata_name, field.type_name, expected_field_type_name
+                    metadata.name, field.type_name, expected_field_type_name
                 ));
             }
 
-            return fields.get(field_index).cloned().ok_or_else(|| {
+            return fields.get(metadata.index).cloned().ok_or_else(|| {
                 format!(
                     "type.variant_field_value: value is missing payload field '{}'",
                     field.name
@@ -5660,25 +5792,25 @@ impl Interpreter {
                     expected_type_name, variant
                 )
             })?;
-        let field = variant_metadata.fields.get(field_index).ok_or_else(|| {
+        let field = variant_metadata.fields.get(metadata.index).ok_or_else(|| {
             format!(
                 "type.variant_field_value: variant '{}.{}' has no payload field at index {}",
-                expected_type_name, variant, field_index
+                expected_type_name, variant, metadata.index
             )
         })?;
 
-        if field.name != metadata_name {
+        if field.name != metadata.name {
             return Err(format!(
                 "type.variant_field_value: field metadata '{}' does not match payload field '{}' on variant '{}.{}'",
-                metadata_name, field.name, expected_type_name, variant
+                metadata.name, field.name, expected_type_name, variant
             ));
         }
 
         let actual_type_name = type_expr_display(&field.ty);
-        if !self.reflection_type_names_match(&actual_type_name, &metadata_type_name) {
+        if !self.reflection_type_names_match(&actual_type_name, &metadata.type_name) {
             return Err(format!(
                 "type.variant_field_value: field metadata for '{}' has type '{}', but variant '{}.{}' reports '{}'",
-                metadata_name, metadata_type_name, expected_type_name, variant, actual_type_name
+                metadata.name, metadata.type_name, expected_type_name, variant, actual_type_name
             ));
         }
 
@@ -5686,11 +5818,11 @@ impl Interpreter {
         if !self.reflection_type_name_matches_expr(&actual_type_name, expected_field_ty) {
             return Err(format!(
                 "type.variant_field_value: field '{}' has type '{}', requested '{}'",
-                metadata_name, actual_type_name, expected_field_type_name
+                metadata.name, actual_type_name, expected_field_type_name
             ));
         }
 
-        fields.get(field_index).cloned().ok_or_else(|| {
+        fields.get(metadata.index).cloned().ok_or_else(|| {
             format!(
                 "type.variant_field_value: value is missing payload field '{}'",
                 field.name
@@ -5738,11 +5870,10 @@ impl Interpreter {
             )));
         }
 
-        let (field_index, metadata_name, metadata_type_name) =
-            match Self::type_field_metadata_for(field_metadata, "type.construct_put") {
-                Ok(metadata) => metadata,
-                Err(message) => return Ok(result_fail(message)),
-            };
+        let metadata = match Self::type_field_metadata_for(field_metadata, "type.construct_put") {
+            Ok(metadata) => metadata,
+            Err(message) => return Ok(result_fail(message)),
+        };
 
         let (field_name, actual_type_name) = if owner_kind == "enum" {
             if state.is_some() {
@@ -5757,6 +5888,14 @@ impl Interpreter {
                         .to_string(),
                 ));
             };
+            if let Err(message) = Self::validate_field_metadata_owner(
+                &metadata,
+                &expected_owner,
+                Some(variant_name),
+                "type.construct_put",
+            ) {
+                return Ok(result_fail(message));
+            }
 
             if let Some(variants) = self.checked_type_variants(owner_ty) {
                 let Some(variant) = variants
@@ -5768,10 +5907,10 @@ impl Interpreter {
                         expected_owner, variant_name
                     )));
                 };
-                let Some(field) = variant.fields.get(field_index) else {
+                let Some(field) = variant.fields.get(metadata.index) else {
                     return Ok(result_fail(format!(
                         "type.construct_put: variant '{}.{}' has no payload field at index {}",
-                        expected_owner, variant_name, field_index
+                        expected_owner, variant_name, metadata.index
                     )));
                 };
                 (field.name.clone(), field.type_name.clone())
@@ -5791,10 +5930,10 @@ impl Interpreter {
                         expected_owner, variant_name
                     )));
                 };
-                let Some(field) = variant.fields.get(field_index) else {
+                let Some(field) = variant.fields.get(metadata.index) else {
                     return Ok(result_fail(format!(
                         "type.construct_put: variant '{}.{}' has no payload field at index {}",
-                        expected_owner, variant_name, field_index
+                        expected_owner, variant_name, metadata.index
                     )));
                 };
                 (field.name.clone(), type_expr_display(&field.ty))
@@ -5812,6 +5951,15 @@ impl Interpreter {
                         .to_string(),
                 ));
             };
+            let expected_machine = type_expr_name(owner_ty);
+            if let Err(message) = Self::validate_field_metadata_owner(
+                &metadata,
+                &expected_machine,
+                Some(state_name),
+                "type.construct_put",
+            ) {
+                return Ok(result_fail(message));
+            }
 
             if let Some(machine) = self.checked_machine(owner_ty) {
                 let Some(state_metadata) = machine
@@ -5821,16 +5969,13 @@ impl Interpreter {
                 else {
                     return Ok(result_fail(format!(
                         "type.construct_put: machine '{}' has no state '{}'",
-                        type_expr_name(owner_ty),
-                        state_name
+                        expected_machine, state_name
                     )));
                 };
-                let Some(field) = state_metadata.fields.get(field_index) else {
+                let Some(field) = state_metadata.fields.get(metadata.index) else {
                     return Ok(result_fail(format!(
                         "type.construct_put: state '{}.{}' has no payload field at index {}",
-                        type_expr_name(owner_ty),
-                        state_name,
-                        field_index
+                        expected_machine, state_name, metadata.index
                     )));
                 };
                 (field.name.clone(), field.type_name.clone())
@@ -5848,16 +5993,13 @@ impl Interpreter {
                 else {
                     return Ok(result_fail(format!(
                         "type.construct_put: machine '{}' has no state '{}'",
-                        type_expr_name(owner_ty),
-                        state_name
+                        expected_machine, state_name
                     )));
                 };
-                let Some(field) = state_metadata.fields.get(field_index) else {
+                let Some(field) = state_metadata.fields.get(metadata.index) else {
                     return Ok(result_fail(format!(
                         "type.construct_put: state '{}.{}' has no payload field at index {}",
-                        type_expr_name(owner_ty),
-                        state_name,
-                        field_index
+                        expected_machine, state_name, metadata.index
                     )));
                 };
                 (field.name.clone(), type_expr_display(&field.ty))
@@ -5875,12 +6017,20 @@ impl Interpreter {
                     expected_owner
                 )));
             }
+            if let Err(message) = Self::validate_field_metadata_owner(
+                &metadata,
+                &expected_owner,
+                None,
+                "type.construct_put",
+            ) {
+                return Ok(result_fail(message));
+            }
 
             if let Some(fields) = self.checked_type_fields(owner_ty) {
-                let Some(field) = fields.get(field_index) else {
+                let Some(field) = fields.get(metadata.index) else {
                     return Ok(result_fail(format!(
                         "type.construct_put: type '{}' has no field at index {}",
-                        expected_owner, field_index
+                        expected_owner, metadata.index
                     )));
                 };
                 (field.name.clone(), field.type_name.clone())
@@ -5891,26 +6041,26 @@ impl Interpreter {
                     ));
                 }
                 let fields = self.type_expr_fields(owner_ty);
-                let Some(field) = fields.get(field_index) else {
+                let Some(field) = fields.get(metadata.index) else {
                     return Ok(result_fail(format!(
                         "type.construct_put: type '{}' has no field at index {}",
-                        expected_owner, field_index
+                        expected_owner, metadata.index
                     )));
                 };
                 (field.name.clone(), type_expr_display(&field.ty))
             }
         };
 
-        if field_name != metadata_name {
+        if field_name != metadata.name {
             if let Some(variant_name) = variant.as_ref() {
                 return Ok(result_fail(format!(
                     "type.construct_put: field metadata '{}' does not match payload field '{}' on variant '{}.{}'",
-                    metadata_name, field_name, expected_owner, variant_name
+                    metadata.name, field_name, expected_owner, variant_name
                 )));
             } else if let Some(state_name) = state.as_ref() {
                 return Ok(result_fail(format!(
                     "type.construct_put: field metadata '{}' does not match payload field '{}' on state '{}.{}'",
-                    metadata_name,
+                    metadata.name,
                     field_name,
                     type_expr_name(owner_ty),
                     state_name
@@ -5918,15 +6068,15 @@ impl Interpreter {
             } else {
                 return Ok(result_fail(format!(
                     "type.construct_put: field metadata '{}' does not match field '{}' on '{}'",
-                    metadata_name, field_name, expected_owner
+                    metadata.name, field_name, expected_owner
                 )));
             }
         }
 
-        if !self.reflection_type_names_match(&actual_type_name, &metadata_type_name) {
+        if !self.reflection_type_names_match(&actual_type_name, &metadata.type_name) {
             return Ok(result_fail(format!(
                 "type.construct_put: field metadata for '{}' has type '{}', but '{}' reports '{}'",
-                metadata_name, metadata_type_name, expected_owner, actual_type_name
+                metadata.name, metadata.type_name, expected_owner, actual_type_name
             )));
         }
 
@@ -5934,17 +6084,17 @@ impl Interpreter {
         if !self.reflection_type_name_matches_expr(&actual_type_name, expected_field_ty) {
             return Ok(result_fail(format!(
                 "type.construct_put: field '{}' has type '{}', provided as '{}'",
-                metadata_name, actual_type_name, expected_field_type_name
+                metadata.name, actual_type_name, expected_field_type_name
             )));
         }
 
         if existing_fields
             .iter()
-            .any(|(index, _, _, _)| *index == field_index)
+            .any(|(index, _, _, _)| *index == metadata.index)
         {
             return Ok(result_fail(format!(
                 "type.construct_put: field '{}' was provided more than once",
-                metadata_name
+                metadata.name
             )));
         }
 
@@ -5954,7 +6104,7 @@ impl Interpreter {
         };
 
         let mut fields = existing_fields.clone();
-        fields.push((field_index, metadata_name, actual_type_name, value));
+        fields.push((metadata.index, metadata.name, actual_type_name, value));
         Ok(result_ok(Value::TypeConstruction {
             type_name: type_name.clone(),
             variant: variant.clone(),
@@ -6027,11 +6177,18 @@ impl Interpreter {
                 )));
             }
             for (index, field) in variant.fields.iter().enumerate() {
-                let (metadata_index, metadata_field_name, metadata_type_name) =
-                    &metadata_fields[index];
-                if *metadata_index != index
-                    || metadata_field_name != &field.name
-                    || metadata_type_name != &field.type_name
+                let metadata_field = &metadata_fields[index];
+                if let Err(message) = Self::validate_field_metadata_owner(
+                    metadata_field,
+                    &expected_owner,
+                    Some(&variant.name),
+                    "type.construct_variant_start",
+                ) {
+                    return Ok(result_fail(message));
+                }
+                if metadata_field.index != index
+                    || metadata_field.name != field.name
+                    || metadata_field.type_name != field.type_name
                 {
                     return Ok(result_fail(format!(
                         "type.construct_variant_start: payload field metadata at index {} does not match variant '{}.{}'",
@@ -6075,12 +6232,19 @@ impl Interpreter {
                 )));
             }
             for (index, field) in variant.fields.iter().enumerate() {
-                let (metadata_index, metadata_field_name, metadata_type_name) =
-                    &metadata_fields[index];
+                let metadata_field = &metadata_fields[index];
+                if let Err(message) = Self::validate_field_metadata_owner(
+                    metadata_field,
+                    &expected_owner,
+                    Some(&variant.name),
+                    "type.construct_variant_start",
+                ) {
+                    return Ok(result_fail(message));
+                }
                 let actual_type_name = type_expr_display(&field.ty);
-                if *metadata_index != index
-                    || metadata_field_name != &field.name
-                    || metadata_type_name != &actual_type_name
+                if metadata_field.index != index
+                    || metadata_field.name != field.name
+                    || metadata_field.type_name != actual_type_name
                 {
                     return Ok(result_fail(format!(
                         "type.construct_variant_start: payload field metadata at index {} does not match variant '{}.{}'",
@@ -6159,11 +6323,18 @@ impl Interpreter {
                 )));
             }
             for (index, field) in state.fields.iter().enumerate() {
-                let (metadata_index, metadata_field_name, metadata_type_name) =
-                    &metadata_fields[index];
-                if *metadata_index != index
-                    || metadata_field_name != &field.name
-                    || metadata_type_name != &field.type_name
+                let metadata_field = &metadata_fields[index];
+                if let Err(message) = Self::validate_field_metadata_owner(
+                    metadata_field,
+                    &expected_machine,
+                    Some(&state.name),
+                    "type.construct_machine_start",
+                ) {
+                    return Ok(result_fail(message));
+                }
+                if metadata_field.index != index
+                    || metadata_field.name != field.name
+                    || metadata_field.type_name != field.type_name
                 {
                     return Ok(result_fail(format!(
                         "type.construct_machine_start: payload field metadata at index {} does not match state '{}.{}'",
@@ -6201,12 +6372,19 @@ impl Interpreter {
                 )));
             }
             for (index, field) in state.fields.iter().enumerate() {
-                let (metadata_index, metadata_field_name, metadata_type_name) =
-                    &metadata_fields[index];
+                let metadata_field = &metadata_fields[index];
+                if let Err(message) = Self::validate_field_metadata_owner(
+                    metadata_field,
+                    &expected_machine,
+                    Some(&state.name),
+                    "type.construct_machine_start",
+                ) {
+                    return Ok(result_fail(message));
+                }
                 let actual_type_name = type_expr_display(&field.ty);
-                if *metadata_index != index
-                    || metadata_field_name != &field.name
-                    || metadata_type_name != &actual_type_name
+                if metadata_field.index != index
+                    || metadata_field.name != field.name
+                    || metadata_field.type_name != actual_type_name
                 {
                     return Ok(result_fail(format!(
                         "type.construct_machine_start: payload field metadata at index {} does not match state '{}.{}'",
@@ -6747,7 +6925,7 @@ impl Interpreter {
         }))
     }
 
-    fn type_field_metadata(value: &Value) -> Result<(usize, String, String), String> {
+    fn type_field_metadata(value: &Value) -> Result<TypeFieldMetadata, String> {
         Self::type_field_metadata_for(value, "type.field_value")
     }
 
@@ -6813,7 +6991,7 @@ impl Interpreter {
     fn type_variant_payload_field_metadata(
         value: &Value,
         caller: &str,
-    ) -> Result<Vec<(usize, String, String)>, String> {
+    ) -> Result<Vec<TypeFieldMetadata>, String> {
         let Value::Struct { type_name, fields } = value else {
             return Err(format!(
                 "{caller}: argument must be TypeVariant, got {value}"
@@ -6895,7 +7073,7 @@ impl Interpreter {
     fn type_machine_state_payload_field_metadata(
         value: &Value,
         caller: &str,
-    ) -> Result<Vec<(usize, String, String)>, String> {
+    ) -> Result<Vec<TypeFieldMetadata>, String> {
         let Value::Struct { type_name, fields } = value else {
             return Err(format!(
                 "{caller}: argument must be TypeMachineState, got {value}"
@@ -6923,10 +7101,7 @@ impl Interpreter {
             .collect()
     }
 
-    fn type_field_metadata_for(
-        value: &Value,
-        caller: &str,
-    ) -> Result<(usize, String, String), String> {
+    fn type_field_metadata_for(value: &Value, caller: &str) -> Result<TypeFieldMetadata, String> {
         let Value::Struct { type_name, fields } = value else {
             return Err(format!(
                 "{caller}: second argument must be TypeField, got {value}"
@@ -6954,6 +7129,30 @@ impl Interpreter {
                 ));
             }
         };
+        let owner_type = match field_value("owner_type")? {
+            Value::String(owner_type) => owner_type.clone(),
+            other => {
+                return Err(format!(
+                    "{caller}: TypeField.owner_type must be string, got {other}"
+                ));
+            }
+        };
+        let owner_member = match field_value("owner_member")? {
+            Value::OptionalNone => None,
+            Value::OptionalSome(value) => match value.as_ref() {
+                Value::String(owner_member) => Some(owner_member.clone()),
+                other => {
+                    return Err(format!(
+                        "{caller}: TypeField.owner_member must be optional[string], got some({other})"
+                    ));
+                }
+            },
+            other => {
+                return Err(format!(
+                    "{caller}: TypeField.owner_member must be optional[string], got {other}"
+                ));
+            }
+        };
         let name = match field_value("name")? {
             Value::String(name) => name.clone(),
             other => {
@@ -6971,7 +7170,42 @@ impl Interpreter {
             }
         };
 
-        Ok((index, name, type_name))
+        Ok(TypeFieldMetadata {
+            index,
+            owner_type,
+            owner_member,
+            name,
+            type_name,
+        })
+    }
+
+    fn field_owner_label(owner_type: &str, owner_member: Option<&str>) -> String {
+        owner_member
+            .map(|member| format!("{owner_type}.{member}"))
+            .unwrap_or_else(|| owner_type.to_string())
+    }
+
+    fn field_metadata_owner_label(metadata: &TypeFieldMetadata) -> String {
+        Self::field_owner_label(&metadata.owner_type, metadata.owner_member.as_deref())
+    }
+
+    fn validate_field_metadata_owner(
+        metadata: &TypeFieldMetadata,
+        expected_owner_type: &str,
+        expected_owner_member: Option<&str>,
+        caller: &str,
+    ) -> Result<(), String> {
+        if metadata.owner_type == expected_owner_type
+            && metadata.owner_member.as_deref() == expected_owner_member
+        {
+            return Ok(());
+        }
+
+        Err(format!(
+            "{caller}: field metadata belongs to '{}', expected '{}'",
+            Self::field_metadata_owner_label(metadata),
+            Self::field_owner_label(expected_owner_type, expected_owner_member)
+        ))
     }
 
     fn type_info_metadata(value: &Value) -> Result<String, String> {
@@ -11639,7 +11873,8 @@ mod tests {
         let mut interp = Interpreter::new();
         interp.set_reflection_metadata(Arc::new(metadata));
 
-        let field = Interpreter::reflection_field_info_value(&string_field_info(0, "value"));
+        let field =
+            Interpreter::reflection_field_info_value("Box", None, &string_field_info(0, "value"));
         let value = Value::Struct {
             type_name: "Box".to_string(),
             fields: vec![("value".to_string(), Value::String("ok".to_string()))],
@@ -11955,6 +12190,37 @@ mod tests {
     }
 
     #[test]
+    fn reflected_machine_field_binding_requires_state_owner_member() {
+        let mut metadata = ReflectionMetadata::new();
+        metadata.insert_machine(
+            "Session",
+            ReflectionMachineInfo::new(
+                vec![ReflectionMachineStateInfo::new(
+                    0,
+                    "logged_in",
+                    false,
+                    vec![string_field_info(0, "user_id")],
+                )],
+                Vec::new(),
+            ),
+        );
+
+        let mut interp = Interpreter::new();
+        interp.set_reflection_metadata(Arc::new(metadata));
+
+        let field = Interpreter::reflection_field_info_value(
+            "Session",
+            None,
+            &string_field_info(0, "user_id"),
+        );
+        let err = interp
+            .reflected_machine_field_binding_for_value(&type_named("Session"), &field)
+            .expect_err("machine payload field metadata should include a state owner member");
+
+        assert!(err.contains("expected state payload field metadata"));
+    }
+
+    #[test]
     fn type_machine_reports_missing_checked_machine_metadata() {
         let mut metadata = ReflectionMetadata::new();
         metadata.insert_type_info(ReflectionTypeInfo::new(
@@ -12183,6 +12449,35 @@ mod tests {
     }
 
     #[test]
+    fn reflected_variant_field_binding_requires_variant_owner_member() {
+        let mut metadata = ReflectionMetadata::new();
+        metadata.insert_type_variants(
+            "Choice",
+            vec![ReflectionVariantInfo::new(
+                0,
+                "token",
+                7,
+                false,
+                vec![string_field_info(0, "value")],
+            )],
+        );
+
+        let mut interp = Interpreter::new();
+        interp.set_reflection_metadata(Arc::new(metadata));
+
+        let field = Interpreter::reflection_field_info_value(
+            "Choice",
+            None,
+            &string_field_info(0, "value"),
+        );
+        let err = interp
+            .reflected_variant_field_binding_for_value(&type_named("Choice"), None, &field)
+            .expect_err("enum payload field metadata should include a variant owner member");
+
+        assert!(err.contains("expected payload field metadata"));
+    }
+
+    #[test]
     fn reflected_variant_loop_reports_missing_checked_variant_metadata() {
         let mut metadata = ReflectionMetadata::new();
         metadata.insert_type_info(ReflectionTypeInfo::new(
@@ -12223,7 +12518,11 @@ mod tests {
         let mut interp = Interpreter::new();
         interp.set_reflection_metadata(Arc::new(metadata));
 
-        let field = Interpreter::reflection_field_info_value(&string_field_info(0, "value"));
+        let field = Interpreter::reflection_field_info_value(
+            "Choice",
+            Some("token"),
+            &string_field_info(0, "value"),
+        );
         let err = interp
             .reflected_variant_field_binding_for_value(&type_named("Choice"), Some("token"), &field)
             .expect_err("missing checked variants should be an error");
@@ -12805,7 +13104,8 @@ mod tests {
             .call_builtin_with_type_args("type.construct_start", &[type_named("Box")], &[])
             .expect("type.construct_start should be a typed builtin")
             .expect("type.construct_start should evaluate");
-        let field = Interpreter::reflection_field_info_value(&string_field_info(0, "value"));
+        let field =
+            Interpreter::reflection_field_info_value("Box", None, &string_field_info(0, "value"));
         let updated = interp
             .call_builtin_with_type_args(
                 "type.construct_put",

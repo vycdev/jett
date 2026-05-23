@@ -79,9 +79,37 @@ function mismatched_variant_owner_message() returns string:
         return error
     return "unexpected success"
 
+function mismatched_variant_field_owner_message() returns string:
+    TypeVariant variant = list.get[TypeVariant](type.variants[Shape](), 1) handle:
+        return "missing variant"
+    mutable TypeConstruction builder = type.construct_variant_start[Shape](view variant) handle error:
+        return error
+    TypeVariant other_variant = list.get[TypeVariant](type.variants[OtherShape](), 1) handle:
+        return "missing other variant"
+    TypeField field = list.get[TypeField](other_variant.fields, 0) handle:
+        return "missing other field"
+    builder = type.construct_put[Shape, float64](builder, view field, 3.0) handle error:
+        return error
+    return "unexpected success"
+
+function mismatched_variant_field_member_message() returns string:
+    TypeVariant variant = list.get[TypeVariant](type.variants[Shape](), 1) handle:
+        return "missing variant"
+    mutable TypeConstruction builder = type.construct_variant_start[Shape](view variant) handle error:
+        return error
+    TypeVariant other_variant = list.get[TypeVariant](type.variants[Shape](), 0) handle:
+        return "missing other variant"
+    TypeField field = list.get[TypeField](other_variant.fields, 0) handle:
+        return "missing other field"
+    builder = type.construct_put[Shape, float64](builder, view field, 3.0) handle error:
+        return error
+    return "unexpected success"
+
 verify type_construction_enum:
     assert construct_unit_variant() == true
     assert construct_payload_variant_area() == 12.0
     assert string.contains(missing_payload_message(), "missing required payload field 'height'") == true
     assert shape_variant_owner_type() == "test.Shape"
     assert string.contains(mismatched_variant_owner_message(), "belongs to 'test.OtherShape', expected 'test.Shape'") == true
+    assert string.contains(mismatched_variant_field_owner_message(), "belongs to 'test.OtherShape.rect', expected 'test.Shape.rect'") == true
+    assert string.contains(mismatched_variant_field_member_message(), "belongs to 'test.Shape.circle', expected 'test.Shape.rect'") == true
