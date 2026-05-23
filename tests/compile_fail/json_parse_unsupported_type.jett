@@ -53,10 +53,58 @@ function bad_exact_secret_function_field(raw: string) returns string:
         return error
     return "secret handler"
 function bad_list_function_target(raw: string) returns string:
+    list[Callback] callbacks = json.parse[list[Callback]](raw) handle error:
+        return error
+    return "callbacks"
+function bad_exact_list_function_target(raw: string) returns string:
     list[Callback] callbacks = json.parse_exact[list[Callback]](raw) handle error:
         return error
     return "callbacks"
+function bad_set_function_target(raw: string) returns string:
+    set[Callback] callbacks = json.parse[set[Callback]](raw) handle error:
+        return error
+    return "callbacks"
+function bad_exact_set_function_target(raw: string) returns string:
+    set[Callback] callbacks = json.parse_exact[set[Callback]](raw) handle error:
+        return error
+    return "callbacks"
+function bad_map_function_value(raw: string) returns string:
+    map[string, Callback] callbacks = json.parse[map[string, Callback]](raw) handle error:
+        return error
+    return "callbacks"
+function bad_exact_map_function_value(raw: string) returns string:
+    map[string, Callback] callbacks = json.parse_exact[map[string, Callback]](raw) handle error:
+        return error
+    return "callbacks"
+function bad_optional_function_target(raw: string) returns string:
+    optional[Callback] callback = json.parse[optional[Callback]](raw) handle error:
+        return error
+    return "callback"
+function bad_exact_optional_function_target(raw: string) returns string:
+    optional[Callback] callback = json.parse_exact[optional[Callback]](raw) handle error:
+        return error
+    return "callback"
+function bad_result_function_ok(raw: string) returns string:
+    result[Callback, string] callback = json.parse[result[Callback, string]](raw) handle error:
+        return error
+    return "callback"
+function bad_exact_result_function_ok(raw: string) returns string:
+    result[Callback, string] callback = json.parse_exact[result[Callback, string]](raw) handle error:
+        return error
+    return "callback"
+function bad_result_function_error(raw: string) returns string:
+    result[string, Callback] callback = json.parse[result[string, Callback]](raw) handle error:
+        return error
+    return "callback"
+function bad_exact_result_function_error(raw: string) returns string:
+    result[string, Callback] callback = json.parse_exact[result[string, Callback]](raw) handle error:
+        return error
+    return "callback"
 function bad_enum_function_payload(raw: string) returns string:
+    Event event = json.parse[Event](raw) handle error:
+        return error
+    return "event"
+function bad_exact_enum_function_payload(raw: string) returns string:
     Event event = json.parse_exact[Event](raw) handle error:
         return error
     return "event"
