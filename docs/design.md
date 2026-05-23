@@ -3339,7 +3339,14 @@ Calling `json.serialize` on a struct with secret fields is a compile error. The 
 
 #### Serialization with State Machines
 
-State machines (Rule Set 9) also get auto-generated serialization, with the state tag included:
+State-machine JSON is a target design, not a current compiler guarantee. The
+current compiler deliberately rejects `json.serialize`, `json.serialize_public`,
+`json.parse`, and `json.parse_exact` for both bare `Machine` and
+`Machine at state` targets because rich machine reflection has not stabilized
+the state/transition metadata contract yet.
+
+The intended future shape is auto-generated serialization with the state tag
+included:
 
 ```
 machine OrderProcess:
@@ -3358,7 +3365,11 @@ OrderProcess restored = json.parse[OrderProcess](json_string) handle error:
 # restored is in the "draft" state with the same items
 ```
 
-The serialized form includes the state name. Deserialization restores the correct state with the correct state-specific data. The LLM never writes state-aware parsing logic.
+When this lands, the serialized form will include the state name and
+deserialization will restore the correct state with the correct state-specific
+data. Until then, code that needs JSON at a state-machine boundary should expose
+an explicit data-transfer struct or enum so the JSON shape remains visible in
+source.
 
 #### Serialization with Refinement Types
 

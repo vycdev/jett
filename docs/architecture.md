@@ -419,9 +419,12 @@ Types are interned for O(1) comparison: each unique type gets a `TypeId`. The ty
 | `Orderable` | `int64`, `float64`, `string` | `<`, `>`, `<=`, `>=` |
 | `Displayable` | `int64`, `float64`, `string`, `bool` | String interpolation `{expr}` (compiler-stdlib coupling) |
 | `Hashable` | `int64`, `string`, `bool` | `map` keys, `set` elements |
-| `Serializable` | JSON-data structs and primitives | `json.serialize[T]()`, `json.parse[T]()`, `json.parse_exact[T]()` |
+| `Serializable` | JSON-data primitives, structs, enums, bitfields, and raw JSON tree aliases | `json.serialize[T]()`, `json.parse[T]()`, `json.parse_exact[T]()` |
 
 These are ordinary `implement` blocks in the standard library, but the compiler has hardcoded knowledge of `Displayable` for string interpolation and JSON policy gates for parse/serialization. The JSON bodies are stdlib-reflected in normal builds; the compiler-owned part is the policy boundary, not format-specific field walking.
+Functions, actors, interfaces, `TypeConstruction`, bare machines, and
+state-qualified machine values are explicitly outside the current JSON data
+surface.
 
 #### 6b. Interface Verification
 
@@ -532,6 +535,9 @@ For each `machine` type:
   `TypeInfo.kind` (`machine` / `machine_state`) and structured `TypeKind`
   tags (`machine_type` / `machine_state_type`). Rich state and transition
   metadata is deferred.
+- JSON policy gates reject `Machine` and `Machine at state` targets until that
+  richer metadata contract exists; callers should serialize explicit DTO
+  structs/enums at machine boundaries for now.
 
 #### 6h. Complexity Limits Enforcement
 

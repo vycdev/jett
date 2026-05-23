@@ -197,8 +197,9 @@ Some JSON rules are typechecker policy, not only implementation:
 - `map[K, V]` JSON encoding and decoding for `serialize`, `serialize_public`,
   `parse`, and `parse_exact` is restricted to `K == string`.
 - serialization and parsing reject non-data values that have no JSON encoding
-  or decoding, including functions, actors, interfaces, and the internal
-  `TypeConstruction` builder. Parse checks descend through `secret[...]`
+  or decoding, including functions, actors, interfaces, machines,
+  state-qualified machine values, and the internal `TypeConstruction` builder.
+  Parse checks descend through `secret[...]`
   wrappers because secret data still has to be constructed from JSON.
 - `json.parse[T]` and `json.parse_exact[T]` return `result[T, string]`, so
   callers must handle errors.
@@ -274,8 +275,8 @@ for current JSON hooks; future backends need the same identity boundary.
    `jett_comptime`, and runtime `main()` reflection metadata handoff for
    namespaced generic JSON. Public policy coverage now also pins unsupported
    `parse`/`parse_exact` and `serialize`/`serialize_public` targets through
-   direct, secret, wrapper/container, enum-payload, and `TypeConstruction`
-   paths.
+   direct, secret, wrapper/container, enum-payload, machine/state-machine, and
+   `TypeConstruction` paths.
 6. Continue hardening the self-hosted `JsonTree` parser. Common malformed-input
    diagnostics are pinned for unterminated strings/arrays/objects, trailing
    characters, mismatched delimiters, bad number forms, bad literals,

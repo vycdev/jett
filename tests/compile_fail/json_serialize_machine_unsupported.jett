@@ -1,0 +1,27 @@
+# ERROR: E0347
+namespace test
+machine Session:
+    states:
+        guest
+        logged_in(user_id: string)
+    transitions:
+        guest to logged_in
+struct SessionBox:
+    session: Session
+    current: Session at logged_in
+function bad_machine_value(view session: Session) returns string:
+    return json.serialize[Session](view session)
+function bad_public_machine_value(view session: Session) returns string:
+    return json.serialize_public[Session](view session)
+function bad_machine_state_value(view session: Session at logged_in) returns string:
+    return json.serialize[Session at logged_in](view session)
+function bad_public_machine_state_value(view session: Session at logged_in) returns string:
+    return json.serialize_public[Session at logged_in](view session)
+function bad_struct_machine_field(view box: SessionBox) returns string:
+    return json.serialize[SessionBox](view box)
+function bad_public_struct_machine_field(view box: SessionBox) returns string:
+    return json.serialize_public[SessionBox](view box)
+function bad_list_machine_value(view sessions: list[Session]) returns string:
+    return json.serialize[list[Session]](view sessions)
+function bad_public_optional_machine_state(view session: optional[Session at logged_in]) returns string:
+    return json.serialize_public[optional[Session at logged_in]](view session)

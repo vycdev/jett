@@ -1,0 +1,35 @@
+# ERROR: E0348
+namespace test
+machine Session:
+    states:
+        guest
+        logged_in(user_id: string)
+    transitions:
+        guest to logged_in
+struct SessionBox:
+    session: Session
+    current: Session at logged_in
+function bad_machine_target(raw: string) returns Session:
+    return json.parse[Session](raw) handle error:
+        return Session(guest)
+function bad_exact_machine_target(raw: string) returns Session:
+    return json.parse_exact[Session](raw) handle error:
+        return Session(guest)
+function bad_machine_state_target(raw: string) returns Session at logged_in:
+    return json.parse[Session at logged_in](raw) handle error:
+        return Session(logged_in, error)
+function bad_exact_machine_state_target(raw: string) returns Session at logged_in:
+    return json.parse_exact[Session at logged_in](raw) handle error:
+        return Session(logged_in, error)
+function bad_struct_machine_field(raw: string) returns SessionBox:
+    return json.parse[SessionBox](raw) handle error:
+        return SessionBox(session: Session(guest), current: Session(logged_in, error))
+function bad_exact_struct_machine_field(raw: string) returns SessionBox:
+    return json.parse_exact[SessionBox](raw) handle error:
+        return SessionBox(session: Session(guest), current: Session(logged_in, error))
+function bad_list_machine_target(raw: string) returns list[Session]:
+    return json.parse[list[Session]](raw) handle error:
+        return list(Session(guest))
+function bad_exact_optional_machine_state(raw: string) returns optional[Session at logged_in]:
+    return json.parse_exact[optional[Session at logged_in]](raw) handle error:
+        return none

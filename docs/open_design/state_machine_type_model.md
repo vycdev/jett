@@ -46,6 +46,10 @@ Implemented:
 - Reflection reports machines with `TypeInfo.kind == "machine"` and
   `TypeKind.machine_type`, and state-qualified machine values with
   `TypeInfo.kind == "machine_state"` and `TypeKind.machine_state_type`.
+- JSON compiler policy rejects `Machine` and `Machine at state` targets for
+  `json.parse`, `json.parse_exact`, `json.serialize`, and
+  `json.serialize_public`; this keeps state-machine JSON a deliberate future
+  design choice instead of an accidental reflection fallback.
 - Interpreter unit tests cover construction, valid transitions, rejected
   invalid transitions, and `at` checks through hand-built AST modules.
 
@@ -157,6 +161,13 @@ to a known machine owner.
     - `type.info[Machine at state]()` reports kind `machine_state`,
     - `type.kind_tag` exposes structured `machine_type` and
       `machine_state_type` tags.
+11. Keep machine JSON unsupported until rich reflection lands. Done:
+    - `json.parse` / `json.parse_exact` reject bare and state-qualified
+      machines,
+    - `json.serialize` / `json.serialize_public` reject bare and
+      state-qualified machines,
+    - wrapper and container traversal reports the underlying machine type
+      instead of silently treating it as a record.
 
 ## Open Questions
 
