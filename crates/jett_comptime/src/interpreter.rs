@@ -749,6 +749,17 @@ impl Interpreter {
         }
     }
 
+    fn normalize_value_for_type(&self, ty: &TypeExpr, value: Value) -> Result<Value, String> {
+        match type_expr_name(ty).as_str() {
+            "uint64" => match value {
+                Value::Int64(n) if n >= 0 => Ok(Value::Uint64(n as u64)),
+                Value::Int64(n) => Err(format!("uint64 value cannot be negative: {n}")),
+                other => Ok(other),
+            },
+            _ => Ok(value),
+        }
+    }
+
     fn type_name_has_refinement(&self, type_name: &str) -> bool {
         let type_name = self
             .registry_name(&self.type_aliases, type_name)
@@ -1432,7 +1443,8 @@ impl Interpreter {
     fn exec_stmt_inner(&mut self, stmt: &Stmt) -> Result<Option<Signal>, String> {
         match stmt {
             Stmt::VarDecl(decl) => {
-                let type_name = type_expr_name(&self.substitute_type_expr(&decl.ty));
+                let declared_ty = self.substitute_type_expr(&decl.ty);
+                let type_name = type_expr_name(&declared_ty);
                 let val = if self.type_aliases.contains_key(&type_name) {
                     match &decl.value {
                         Expr::Handle(target, bind_name, body, _) => {
@@ -1479,6 +1491,7 @@ impl Interpreter {
                         ExprFlow::Signal(signal) => return Ok(Some(signal)),
                     }
                 };
+                let val = self.normalize_value_for_type(&declared_ty, val)?;
                 self.set_variable(&decl.name.name, val);
                 Ok(None)
             }
@@ -7895,13 +7908,15 @@ impl Interpreter {
         self.push_scope();
         let call_result = (|| {
             for (param, arg) in func.params.iter().zip(args) {
-                let type_name = type_expr_name(&self.substitute_type_expr(&param.ty));
+                let param_ty = self.substitute_type_expr(&param.ty);
+                let type_name = type_expr_name(&param_ty);
+                let arg = self.normalize_value_for_type(&param_ty, arg)?;
                 self.check_refinement(&type_name, &arg)?;
                 self.set_variable(&param.name.name, arg);
             }
 
             let result = self.exec_block_inner(&func.body)?;
-            let value = match result {
+            let mut value = match result {
                 Some(Signal::Return(v)) => v,
                 Some(Signal::Default(_)) => {
                     return Err("`default` can only be used inside a `handle` block".to_string());
@@ -7910,7 +7925,9 @@ impl Interpreter {
             };
 
             if let Some(return_type) = &func.return_type {
-                let type_name = type_expr_name(&self.substitute_type_expr(return_type));
+                let return_type = self.substitute_type_expr(return_type);
+                let type_name = type_expr_name(&return_type);
+                value = self.normalize_value_for_type(&return_type, value)?;
                 self.check_refinement(&type_name, &value)?;
             }
 
@@ -9291,6 +9308,16 @@ mod tests {
         Stmt::VarDecl(VarDecl {
             mutable: true,
             ty: type_named("int64"),
+            name: ident(name),
+            value,
+            span: sp(),
+        })
+    }
+
+    fn typed_var_decl(type_name: &str, name: &str, value: Expr) -> Stmt {
+        Stmt::VarDecl(VarDecl {
+            mutable: true,
+            ty: type_named(type_name),
             name: ident(name),
             value,
             span: sp(),
@@ -12332,6 +12359,43 @@ mod tests {
         interp.exec_stmt(&decl).unwrap();
         let result = interp.eval_expr(&var("x")).unwrap();
         assert_eq!(result, Value::Int64(42));
+    }
+
+    #[test]
+    fn uint64_variable_declaration_normalizes_small_literal_carrier() {
+        let mut interp = Interpreter::new();
+        interp
+            .exec_stmt(&typed_var_decl("uint64", "x", int(42)))
+            .unwrap();
+
+        assert_eq!(interp.eval_expr(&var("x")).unwrap(), Value::Uint64(42));
+    }
+
+    #[test]
+    fn uint64_function_boundaries_normalize_small_literal_carrier() {
+        let mut interp = Interpreter::new();
+        let mut echo = func_def(
+            "echo_u64",
+            vec![("value", "uint64")],
+            block(vec![return_stmt(var("value"))]),
+        );
+        echo.return_type = Some(type_named("uint64"));
+        interp.register_function(&echo);
+
+        let mut make = func_def("make_u64", vec![], block(vec![return_stmt(int(7))]));
+        make.return_type = Some(type_named("uint64"));
+        interp.register_function(&make);
+
+        assert_eq!(
+            interp
+                .call_function("echo_u64", vec![Value::Int64(42)])
+                .unwrap(),
+            Value::Uint64(42)
+        );
+        assert_eq!(
+            interp.call_function("make_u64", Vec::new()).unwrap(),
+            Value::Uint64(7)
+        );
     }
 
     #[test]
