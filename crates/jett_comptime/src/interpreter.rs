@@ -8451,6 +8451,33 @@ impl Interpreter {
                 .find(|(name, _)| name == field_name)
                 .map(|(_, value)| ExprFlow::Value(value))
                 .ok_or_else(|| format!("struct '{type_name}' has no field '{field_name}'")),
+            Value::Machine {
+                type_name,
+                state,
+                fields,
+            } => {
+                let machine = self
+                    .machines
+                    .get(&type_name)
+                    .ok_or_else(|| format!("unknown machine '{type_name}'"))?;
+                let state_def = machine
+                    .states
+                    .iter()
+                    .find(|candidate| candidate.name.name == state)
+                    .ok_or_else(|| format!("machine '{type_name}' has no state '{state}'"))?;
+                let field_index = state_def
+                    .fields
+                    .iter()
+                    .position(|candidate| candidate.name.name == field_name)
+                    .ok_or_else(|| {
+                        format!("machine '{type_name}' state '{state}' has no field '{field_name}'")
+                    })?;
+                fields.get(field_index).cloned().map(ExprFlow::Value).ok_or_else(|| {
+                    format!(
+                        "machine '{type_name}' state '{state}' field '{field_name}' has no runtime value"
+                    )
+                })
+            }
             other => Err(format!("field access is not supported on {other}")),
         }
     }

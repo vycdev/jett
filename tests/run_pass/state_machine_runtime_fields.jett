@@ -1,0 +1,18 @@
+machine Session:
+    states:
+        guest
+        logged_in(user_id: string)
+
+    transitions:
+        guest to logged_in
+
+function constructed_user_id() returns string:
+    return Session(logged_in, "user-1").user_id
+
+function transitioned_user_id() returns string:
+    return Session.transition(Session(guest), logged_in, "user-2").user_id
+
+verify state_machine_runtime_fields:
+    assert constructed_user_id() == "user-1"
+    assert transitioned_user_id() == "user-2"
+    assert Session(guest) at guest

@@ -264,6 +264,10 @@ run_pass_fixture!(run_pass_stdlib_loading, "stdlib_loading.jett");
 run_pass_fixture!(run_pass_verify_test, "verify_test.jett");
 run_pass_fixture!(run_pass_multi_verify, "multi_verify.jett");
 run_pass_fixture!(
+    run_pass_state_machine_runtime_fields,
+    "state_machine_runtime_fields.jett"
+);
+run_pass_fixture!(
     run_pass_property_generic_lists,
     "property_generic_lists.jett"
 );

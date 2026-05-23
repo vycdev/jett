@@ -36,6 +36,8 @@ Implemented:
 - The comptime interpreter can register machines, construct values with
   `MachineName(state, ...)`, check `value at state`, and run
   `MachineName.transition(value, target, ...)`.
+- The comptime interpreter can read state payload fields from machine values,
+  so `verify` execution matches the checked `Machine at state` field model.
 - Interpreter unit tests cover construction, valid transitions, rejected
   invalid transitions, and `at` checks through hand-built AST modules.
 
