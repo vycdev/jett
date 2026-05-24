@@ -33,6 +33,9 @@ Implemented:
   fields and transitions are available only under a visible guard. The current
   narrowing target is a bare local variable only; guards over field paths such
   as `holder.current at logged_in` do not narrow the later field access.
+  Reassigning that narrowed local to another state inside the branch is rejected
+  rather than widening the local in place; `state_machine_narrowed_assignment_to_other_state.jett`
+  pins this conservative fact lifetime.
 - For bare machines, an `if` / `else if` chain that excludes all but one
   declared state narrows later branches, including `else if` branches guarded
   by unrelated conditions, and the final `else` branch to that single remaining
@@ -191,6 +194,8 @@ to a known machine owner.
    - bare machine values require an explicit `at` guard before they satisfy a
      state-qualified parameter,
    - narrowed bare machine values can call checked transitions.
+   - assigning a narrowed local to a different state is rejected rather than
+     silently widening the branch fact.
 10. Add machine reflection. Done:
     - `type.info[Machine]()` reports kind `machine`,
     - `type.info[Machine at state]()` reports kind `machine_state`,

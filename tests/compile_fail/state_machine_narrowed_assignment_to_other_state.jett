@@ -1,0 +1,12 @@
+# ERROR: E0312
+machine Session:
+    states:
+        guest
+        logged_in(user_id: string)
+    transitions:
+        guest to logged_in
+        logged_in to guest
+function reset_inside_guard(session: Session) returns Session:
+    if session at logged_in:
+        session = Session.transition(session, guest)
+    return session
