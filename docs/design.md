@@ -2686,7 +2686,7 @@ This is not a hypothetical — it is one of the most common security vulnerabili
 
 #### The Solution: Security Sensitivity at the Type Level
 
-Jett introduces a `secret` type wrapper that **taints** data at the type level. Once a value is marked as secret, the compiler tracks it through every operation and **structurally prevents** it from being passed to any output function — `Stdout.write`, `log`, `http.respond`, `Filesystem.write_file`, or any function that is not explicitly authorized to handle secrets.
+Jett introduces a `secret` type wrapper that **taints** data at the type level. Once a value is marked as secret, the compiler tracks it through every operation and **structurally prevents** it from being passed to any output function — `Stdout.write`, `print`, `println`, `log`, `http.respond`, `Filesystem.write_file`, or any function that is not explicitly authorized to handle secrets.
 
 **Declaring secret data:**
 

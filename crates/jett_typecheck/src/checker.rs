@@ -932,6 +932,8 @@ impl<'a> TypeChecker<'a> {
         matches!(
             name,
             "Stdout.write"
+                | "print"
+                | "println"
                 | "json.serialize"
                 | "json.serialize_public"
                 | "json.serialize_raw"

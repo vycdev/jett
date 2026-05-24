@@ -519,7 +519,7 @@ Track which capabilities flow through the program:
 Track `secret[T]` values through the program:
 
 - **Taint propagation:** Any operation on a `secret[T]` produces a `secret[T]`. When a `secret[string]` is passed to a function expecting `string`, the type checker automatically lifts the function through `secret` — the call is valid but the return type becomes `secret[ReturnType]`. This is a special type-checking rule for secret types only.
-- `secret[T]` cannot be passed to `Stdout.write`, `json.serialize`, string interpolation, or any output function.
+- `secret[T]` cannot be passed to `Stdout.write`, `print`, `println`, `json.serialize`, string interpolation, or any output function.
 - `declassify` is the only way to extract the inner value.
 - `secret.redact()` and `secret.compare()` are safe operations that don't declassify.
 - `json.serialize` on a struct with secret fields is a compile error -> use `json.serialize_public`. Public JSON serialization omits secret-bearing record fields; it may descend through containers to project nested records, but rejects secret wrappers and secret-bearing enums when their secret data cannot be projected away through record fields. A future explicit full-serialization path can require a declassification token.

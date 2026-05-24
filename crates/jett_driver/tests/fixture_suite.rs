@@ -259,6 +259,7 @@ compile_pass_fixture!(
 
 compile_fail_fixture!(compile_fail_type_mismatch, "type_mismatch.jett");
 compile_fail_fixture!(compile_fail_secret_stdout, "secret_stdout.jett");
+compile_fail_fixture!(compile_fail_secret_print, "secret_print.jett");
 compile_fail_fixture!(
     compile_fail_refinement_requires_handle,
     "refinement_requires_handle.jett"
@@ -983,6 +984,11 @@ compile_fail_fixture!(
 #[test]
 fn compile_fail_variable_arity_builtin_return_types_count() {
     assert_compile_fail_error_count("variable_arity_builtin_return_types.jett", 311, 4);
+}
+
+#[test]
+fn compile_fail_secret_print_count() {
+    assert_compile_fail_error_count("secret_print.jett", 600, 2);
 }
 
 compile_fail_fixture!(
