@@ -22,12 +22,14 @@ const RUNTIME_STACK_SIZE: usize = 8 * 1024 * 1024;
 struct DiscoveredModules {
     modules: Vec<Module>,
     diagnostics: Vec<Diagnostic>,
+    files: HashMap<FileId, PathBuf>,
 }
 
 impl DiscoveredModules {
     fn extend(&mut self, other: DiscoveredModules) {
         self.modules.extend(other.modules);
         self.diagnostics.extend(other.diagnostics);
+        self.files.extend(other.files);
     }
 }
 
@@ -50,6 +52,22 @@ pub struct BuildResult {
 pub struct RunOutput {
     pub stdout: String,
     pub debug_output: Vec<String>,
+}
+
+/// A single definition visible through the namespace query surface.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QueryDefinition {
+    pub name: String,
+    pub kind: jett_resolve::scope::DefKind,
+    pub namespace: Option<String>,
+    pub visibility: jett_resolve::scope::DefVisibility,
+    pub file_path: String,
+}
+
+/// Result of `jett query --agent --namespaces`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NamespaceQueryResult {
+    pub definitions: Vec<QueryDefinition>,
 }
 
 #[derive(Clone, Copy)]
@@ -255,6 +273,296 @@ fn completions_for_namespace_with_support(
         })
         .map(|def| (def.name.clone(), def.kind))
         .collect()
+}
+
+/// Return the public namespace and definition registry available from `start_dir`.
+///
+/// If `start_dir` is inside a project, project `.jett` files are included with
+/// compiler-shipped stdlib modules. Without a `jett.proj`, the query still
+/// returns stdlib and language built-ins so agents can discover the base surface.
+pub fn query_namespaces(start_dir: &Path) -> Result<NamespaceQueryResult, String> {
+    let mut support_modules = discover_stdlib_modules_with_diagnostics();
+    support_modules.extend(discover_query_project_modules_with_diagnostics(start_dir));
+
+    let support_errors = error_messages_from_diagnostics(&support_modules.diagnostics);
+    if !support_errors.is_empty() {
+        return Err(format!(
+            "query support parse errors:\n{}",
+            support_errors.join("\n")
+        ));
+    }
+
+    let mut definitions = query_builtin_definitions();
+    for module in &support_modules.modules {
+        append_module_query_definitions(&mut definitions, module, &support_modules.files);
+    }
+
+    definitions.sort_by(|left, right| {
+        left.namespace
+            .cmp(&right.namespace)
+            .then_with(|| left.name.cmp(&right.name))
+            .then_with(|| query_kind_name(left.kind).cmp(query_kind_name(right.kind)))
+    });
+    definitions.dedup_by(|left, right| {
+        left.name == right.name
+            && left.kind == right.kind
+            && left.namespace == right.namespace
+            && left.visibility == right.visibility
+    });
+
+    Ok(NamespaceQueryResult { definitions })
+}
+
+fn query_builtin_definitions() -> Vec<QueryDefinition> {
+    use jett_resolve::scope::DefVisibility;
+
+    let module = Module {
+        items: Vec::new(),
+        span: Span::new(FileId::new(0), 0, 0),
+    };
+    let resolve_result = resolve(&module);
+    resolve_result
+        .scope_table
+        .definitions
+        .iter()
+        .filter(|def| def.visibility == DefVisibility::Public && query_surface_kind(def.kind))
+        .map(|def| QueryDefinition {
+            name: def.name.clone(),
+            kind: def.kind,
+            namespace: def.namespace.clone(),
+            visibility: def.visibility,
+            file_path: "builtin".to_string(),
+        })
+        .collect()
+}
+
+fn append_module_query_definitions(
+    definitions: &mut Vec<QueryDefinition>,
+    module: &Module,
+    file_paths: &HashMap<FileId, PathBuf>,
+) {
+    use jett_resolve::scope::DefKind;
+
+    let mut current_namespace: Option<String> = None;
+    for item in &module.items {
+        match item {
+            Item::Namespace(ns) => {
+                current_namespace = Some(ns.name.name.clone());
+                push_query_definition(
+                    definitions,
+                    ns.name.name.clone(),
+                    DefKind::Namespace,
+                    None,
+                    ns.span.file,
+                    file_paths,
+                );
+            }
+            Item::Function(func) => push_exported_query_definition(
+                definitions,
+                &func.name.name,
+                DefKind::Function,
+                current_namespace.as_deref(),
+                func.exported,
+                func.span.file,
+                file_paths,
+            ),
+            Item::Mutual(block) => {
+                for decl in &block.declarations {
+                    push_exported_query_definition(
+                        definitions,
+                        &decl.name.name,
+                        DefKind::Function,
+                        current_namespace.as_deref(),
+                        decl.exported,
+                        decl.span.file,
+                        file_paths,
+                    );
+                }
+            }
+            Item::Interface(interface) => push_exported_query_definition(
+                definitions,
+                &interface.name.name,
+                DefKind::Interface,
+                current_namespace.as_deref(),
+                interface.exported,
+                interface.span.file,
+                file_paths,
+            ),
+            Item::Struct(strukt) => push_exported_query_definition(
+                definitions,
+                &strukt.name.name,
+                DefKind::Struct,
+                current_namespace.as_deref(),
+                strukt.exported,
+                strukt.span.file,
+                file_paths,
+            ),
+            Item::Bitfield(bitfield) => push_exported_query_definition(
+                definitions,
+                &bitfield.name.name,
+                DefKind::Bitfield,
+                current_namespace.as_deref(),
+                bitfield.exported,
+                bitfield.span.file,
+                file_paths,
+            ),
+            Item::Enum(enm) => push_exported_query_definition(
+                definitions,
+                &enm.name.name,
+                DefKind::Enum,
+                current_namespace.as_deref(),
+                enm.exported,
+                enm.span.file,
+                file_paths,
+            ),
+            Item::Machine(machine) => push_exported_query_definition(
+                definitions,
+                &machine.name.name,
+                DefKind::Machine,
+                current_namespace.as_deref(),
+                machine.exported,
+                machine.span.file,
+                file_paths,
+            ),
+            Item::Actor(actor) => push_exported_query_definition(
+                definitions,
+                &actor.name.name,
+                DefKind::Actor,
+                current_namespace.as_deref(),
+                actor.exported,
+                actor.span.file,
+                file_paths,
+            ),
+            Item::TypeAlias(alias) => {
+                if alias.root_exported {
+                    push_query_definition(
+                        definitions,
+                        alias.name.name.clone(),
+                        DefKind::Type,
+                        None,
+                        alias.span.file,
+                        file_paths,
+                    );
+                }
+                push_exported_query_definition(
+                    definitions,
+                    &alias.name.name,
+                    DefKind::Type,
+                    current_namespace.as_deref(),
+                    alias.exported,
+                    alias.span.file,
+                    file_paths,
+                );
+            }
+            Item::Implement(_) | Item::VarDecl(_) | Item::Verify(_) | Item::Property(_) => {}
+        }
+    }
+}
+
+fn push_exported_query_definition(
+    definitions: &mut Vec<QueryDefinition>,
+    leaf_name: &str,
+    kind: jett_resolve::scope::DefKind,
+    namespace: Option<&str>,
+    exported: bool,
+    file: FileId,
+    file_paths: &HashMap<FileId, PathBuf>,
+) {
+    if namespace.is_some() && !exported {
+        return;
+    }
+
+    let name = namespace
+        .map(|namespace| format!("{namespace}.{leaf_name}"))
+        .unwrap_or_else(|| leaf_name.to_string());
+    push_query_definition(
+        definitions,
+        name,
+        kind,
+        namespace.map(str::to_string),
+        file,
+        file_paths,
+    );
+}
+
+fn push_query_definition(
+    definitions: &mut Vec<QueryDefinition>,
+    name: String,
+    kind: jett_resolve::scope::DefKind,
+    namespace: Option<String>,
+    file: FileId,
+    file_paths: &HashMap<FileId, PathBuf>,
+) {
+    definitions.push(QueryDefinition {
+        name,
+        kind,
+        namespace,
+        visibility: jett_resolve::scope::DefVisibility::Public,
+        file_path: query_file_path(file, file_paths),
+    });
+}
+
+fn query_surface_kind(kind: jett_resolve::scope::DefKind) -> bool {
+    use jett_resolve::scope::DefKind;
+
+    matches!(
+        kind,
+        DefKind::Function
+            | DefKind::Interface
+            | DefKind::Struct
+            | DefKind::Bitfield
+            | DefKind::Enum
+            | DefKind::Machine
+            | DefKind::Actor
+            | DefKind::Type
+            | DefKind::Constant
+            | DefKind::Namespace
+    )
+}
+
+fn query_file_path(file: FileId, file_paths: &HashMap<FileId, PathBuf>) -> String {
+    file_paths
+        .get(&file)
+        .map(|path| display_query_path(path))
+        .unwrap_or_else(|| "builtin".to_string())
+}
+
+fn display_query_path(path: &Path) -> String {
+    let displayed = path.display().to_string();
+    displayed
+        .strip_prefix(r"\\?\")
+        .unwrap_or(&displayed)
+        .to_string()
+}
+
+/// Stable text label for a resolved definition kind.
+pub fn query_kind_name(kind: jett_resolve::scope::DefKind) -> &'static str {
+    use jett_resolve::scope::DefKind;
+
+    match kind {
+        DefKind::Function => "function",
+        DefKind::Interface => "interface",
+        DefKind::Struct => "struct",
+        DefKind::Bitfield => "bitfield",
+        DefKind::Enum => "enum",
+        DefKind::Machine => "machine",
+        DefKind::Actor => "actor",
+        DefKind::Variable => "variable",
+        DefKind::Param => "param",
+        DefKind::Type => "type",
+        DefKind::Constant => "constant",
+        DefKind::Namespace => "namespace",
+    }
+}
+
+/// Stable text label for a resolved definition visibility.
+pub fn query_visibility_name(visibility: jett_resolve::scope::DefVisibility) -> &'static str {
+    use jett_resolve::scope::DefVisibility;
+
+    match visibility {
+        DefVisibility::Public => "public",
+        DefVisibility::Private => "private",
+    }
 }
 
 fn support_modules_declare_namespace(modules: &[Module], namespace: &str) -> bool {
@@ -606,9 +914,21 @@ fn discover_project_modules_with_diagnostics(entry_path: &Path) -> DiscoveredMod
         return DiscoveredModules {
             modules: Vec::new(),
             diagnostics: Vec::new(),
+            files: HashMap::new(),
         };
     };
     discover_modules_in_dir(&root, canon.as_deref(), 1, "project")
+}
+
+fn discover_query_project_modules_with_diagnostics(start_dir: &Path) -> DiscoveredModules {
+    let Ok(root) = find_project_root(start_dir) else {
+        return DiscoveredModules {
+            modules: Vec::new(),
+            diagnostics: Vec::new(),
+            files: HashMap::new(),
+        };
+    };
+    discover_modules_in_dir(&root, None, 1, "project")
 }
 
 fn discover_modules_in_dir(
@@ -629,12 +949,14 @@ fn discover_modules_in_dir(
                 ),
                 jett_common::Span::new(FileId::new(start_file_id), 0, 0),
             )],
+            files: HashMap::new(),
         };
     }
     files.sort();
 
     let mut modules = Vec::new();
     let mut diagnostics = Vec::new();
+    let mut module_files = HashMap::new();
     for (idx, file_path) in files.iter().enumerate() {
         // Skip the entry file when parsing project siblings.
         let should_skip = skip_canon
@@ -671,12 +993,17 @@ fn discover_modules_in_dir(
                 }
             }
         } else {
+            let display_path = file_path
+                .canonicalize()
+                .unwrap_or_else(|_| file_path.clone());
+            module_files.insert(file_id, display_path);
             modules.push(parsed.module);
         }
     }
     DiscoveredModules {
         modules,
         diagnostics,
+        files: module_files,
     }
 }
 
@@ -1097,6 +1424,54 @@ mod tests {
         assert!(
             errors.iter().all(|error| !error.contains("undefined name")),
             "support parse errors should surface before resolver fallout, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn query_namespaces_lists_public_project_definitions() {
+        let root = temp_test_dir("jett_driver_query_namespaces");
+        fs::create_dir_all(&root).expect("temp project dir should be created");
+        fs::write(root.join("jett.proj"), "name: query_fixture\n")
+            .expect("project marker should be written");
+        fs::write(
+            root.join("api.jett"),
+            "namespace api\n\nexport function login() returns int64:\n    return 1\n\nfunction hidden() returns int64:\n    return 2\n\nexport struct User:\n    id: int64\n",
+        )
+        .expect("query fixture should be written");
+
+        let result = query_namespaces(&root).expect("query should succeed");
+
+        fs::remove_dir_all(&root).expect("temp project dir should be removed");
+
+        assert!(
+            result
+                .definitions
+                .iter()
+                .any(|def| def.name == "api" && query_kind_name(def.kind) == "namespace"),
+            "expected namespace row in query result"
+        );
+        assert!(
+            result.definitions.iter().any(|def| {
+                def.name == "api.login"
+                    && query_kind_name(def.kind) == "function"
+                    && def.namespace.as_deref() == Some("api")
+            }),
+            "expected exported function row in query result"
+        );
+        assert!(
+            result.definitions.iter().any(|def| {
+                def.name == "api.User"
+                    && query_kind_name(def.kind) == "struct"
+                    && def.namespace.as_deref() == Some("api")
+            }),
+            "expected exported struct row in query result"
+        );
+        assert!(
+            result
+                .definitions
+                .iter()
+                .all(|def| def.name != "api.hidden"),
+            "private namespaced definitions should not appear in global query results"
         );
     }
 }

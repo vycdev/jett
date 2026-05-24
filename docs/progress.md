@@ -120,13 +120,13 @@
 
 | Component | Status |
 |---|---|
-| TOON output (`--agent` flag) | Partial (build diagnostics, run stdout/debug output, and verify/property test summaries are structured; query agent payloads remain open) |
+| TOON output (`--agent` flag) | Partial (build diagnostics, run stdout/debug output, verify/property test summaries, and namespace query results are structured; remaining query payloads remain open) |
 | LSP server (diagnostics on save) | Done |
 | LSP hover (type at cursor) | Done |
 | LSP go-to-definition | Done |
 | LSP completions | Done |
 | MCP server | Not started |
-| ASP query system (type-at, signature, completions) | Not started |
+| ASP query system (type-at, signature, completions) | Partial (`jett query --agent --namespaces` is implemented; type-at/signature/completions remain open) |
 
 ### Phase I: Testing and Profiling — PARTIAL
 
@@ -199,4 +199,4 @@
 | `jett bind header.h` | Not started |
 | `jett bundle` | Not started |
 | `jett mcp` | Not started |
-| `jett query --agent` | Not started |
+| `jett query --agent --namespaces` | Working (public namespace/definition registry) |

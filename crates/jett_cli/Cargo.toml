@@ -13,5 +13,6 @@ path = "src/main.rs"
 jett_driver.workspace = true
 jett_diagnostics.workspace = true
 jett_lsp.workspace = true
+jett_resolve.workspace = true
 clap.workspace = true
 tokio = { workspace = true, features = ["full"] }

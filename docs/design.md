@@ -4593,10 +4593,16 @@ jett query --agent --namespaces
 ```
 
 ```toon
-namespaces[3]{name,file,public_functions,public_types}:
-    auth,     auth.jett,     "login,logout,validate_token",
-    models,   models.jett,   ,                              "User,Order,Product"
-    database, database.jett, "query,insert,update",
+status: ok
+total: 7
+definitions[7]{name,kind,namespace,visibility,file}:
+    auth,namespace,,public,src/auth.jett
+    auth.login,function,auth,public,src/auth.jett
+    auth.logout,function,auth,public,src/auth.jett
+    auth.validate_token,function,auth,public,src/auth.jett
+    models,namespace,,public,src/models.jett
+    models.User,struct,models,public,src/models.jett
+    database.query,function,database,public,src/database.jett
 ```
 
 The LLM receives a flat, structured list of every module in the project. No tree parsing, no directory traversal, no path construction. Just names and what they contain.

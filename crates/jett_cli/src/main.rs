@@ -60,6 +60,17 @@ enum Command {
         agent: bool,
     },
 
+    /// Query compiler facts for agent tooling
+    Query {
+        /// Emit TOON agent output
+        #[arg(long)]
+        agent: bool,
+
+        /// List public namespaces and discoverable definitions
+        #[arg(long)]
+        namespaces: bool,
+    },
+
     /// Start the Language Server Protocol server (for editor integration)
     Lsp,
 }
@@ -173,6 +184,38 @@ fn main() {
         Command::Lsp => {
             let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
             rt.block_on(jett_lsp::run_server());
+        }
+        Command::Query { agent, namespaces } => {
+            if !namespaces {
+                if agent {
+                    print!(
+                        "{}",
+                        render_query_agent_error("query requires --namespaces")
+                    );
+                } else {
+                    eprintln!("error: query requires --namespaces");
+                }
+                process::exit(1);
+            }
+
+            let cwd = std::env::current_dir().unwrap_or_default();
+            match jett_driver::query_namespaces(&cwd) {
+                Ok(result) => {
+                    if agent {
+                        print!("{}", render_query_namespaces_agent_output(&result));
+                    } else {
+                        print_query_namespaces_human(&result);
+                    }
+                }
+                Err(e) => {
+                    if agent {
+                        print!("{}", render_query_agent_error(&e));
+                    } else {
+                        eprintln!("error: {e}");
+                    }
+                    process::exit(1);
+                }
+            }
         }
         Command::Test { file, agent } => {
             if let Some(f) = file {
@@ -304,6 +347,45 @@ fn render_test_agent_error(file: Option<&str>, error: &str) -> String {
     }
     out.push_str(&format!("error: {}\n", escape_toon_scalar(error)));
     out
+}
+
+fn render_query_namespaces_agent_output(result: &jett_driver::NamespaceQueryResult) -> String {
+    let mut out = String::new();
+    out.push_str("status: ok\n");
+    out.push_str(&format!("total: {}\n", result.definitions.len()));
+    out.push_str("definitions");
+    out.push_str(&format!(
+        "[{}]{{name,kind,namespace,visibility,file}}:\n",
+        result.definitions.len()
+    ));
+    for definition in &result.definitions {
+        out.push_str(&format!(
+            "  {},{},{},{},{}\n",
+            escape_toon_scalar(&definition.name),
+            jett_driver::query_kind_name(definition.kind),
+            escape_toon_scalar(definition.namespace.as_deref().unwrap_or("")),
+            jett_driver::query_visibility_name(definition.visibility),
+            escape_toon_scalar(&definition.file_path)
+        ));
+    }
+    out
+}
+
+fn render_query_agent_error(error: &str) -> String {
+    format!("status: error\nerror: {}\n", escape_toon_scalar(error))
+}
+
+fn print_query_namespaces_human(result: &jett_driver::NamespaceQueryResult) {
+    for definition in &result.definitions {
+        let namespace = definition.namespace.as_deref().unwrap_or("-");
+        println!(
+            "{}\t{}\t{}\t{}",
+            jett_driver::query_kind_name(definition.kind),
+            definition.name,
+            namespace,
+            definition.file_path
+        );
+    }
 }
 
 fn append_test_agent_blocks(out: &mut String, file_results: &[jett_driver::TestResult]) {
@@ -473,5 +555,32 @@ mod tests {
             rendered,
             "status: error\nfile: bad\\,path.jett\nerror: parse\\nfailed\n"
         );
+    }
+
+    #[test]
+    fn query_namespaces_agent_output_lists_definition_rows() {
+        let result = jett_driver::NamespaceQueryResult {
+            definitions: vec![jett_driver::QueryDefinition {
+                name: "api.login".to_string(),
+                kind: jett_resolve::scope::DefKind::Function,
+                namespace: Some("api".to_string()),
+                visibility: jett_resolve::scope::DefVisibility::Public,
+                file_path: "src/api.jett".to_string(),
+            }],
+        };
+
+        let rendered = render_query_namespaces_agent_output(&result);
+
+        assert_eq!(
+            rendered,
+            "status: ok\ntotal: 1\ndefinitions[1]{name,kind,namespace,visibility,file}:\n  api.login,function,api,public,src/api.jett\n"
+        );
+    }
+
+    #[test]
+    fn query_agent_error_escapes_message() {
+        let rendered = render_query_agent_error("query\nfailed");
+
+        assert_eq!(rendered, "status: error\nerror: query\\nfailed\n");
     }
 }
