@@ -63,7 +63,12 @@ function pipeline_math_min_int_test() returns int64:
 function pipeline_math_max_float_test() returns float64:
     return 3.0 into math.max(7.0)
 
+function pipeline_generic_builtin_type_arg_test() returns int64:
+    list[int64] values = list(1, 2, 3)
+    return values into list.length[int64]()
+
 verify pipeline_math_numeric_intrinsic_test:
     assert pipeline_math_abs_int_test() == 5
     assert pipeline_math_min_int_test() == 3
     assert pipeline_math_max_float_test() == 7.0
+    assert pipeline_generic_builtin_type_arg_test() == 3

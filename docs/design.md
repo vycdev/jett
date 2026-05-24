@@ -6276,7 +6276,7 @@ string result = add[string]("hello", " world")
 list[int64] items = list.new[int64]()
 
 # In pipes — types stay visible without needing variable declarations
-data into json.parse[list[User]] into process_users
+data into json.parse[list[User]]() into process_users
 ```
 
 **Basic generic function:**

@@ -1518,19 +1518,27 @@ impl Interpreter {
         step: &PipelineStep,
         piped_value: Value,
     ) -> Result<ExprFlow, String> {
+        let (function, type_args, extra_args): (&Expr, &[TypeExpr], &[CallArg]) =
+            match &step.function {
+                Expr::GenericCall(callee, type_args, args, _) => (callee, type_args, args),
+                _ => (&step.function, &[], &step.extra_args),
+            };
+
         // Build argument list: piped value first, then extra args.
         let mut arg_values = vec![piped_value];
-        for arg in &step.extra_args {
+        for arg in extra_args {
             arg_values.push(value_or_signal!(self, &arg.value));
         }
 
         // Resolve the function name from the expression.
-        match &step.function {
+        match function {
             Expr::Ident(ident) => {
                 let name = self
                     .registry_name(&self.functions, &ident.name)
                     .unwrap_or_else(|| ident.name.clone());
-                Ok(ExprFlow::Value(self.call_function(&name, arg_values)?))
+                Ok(ExprFlow::Value(self.call_function_with_type_args(
+                    &name, type_args, arg_values,
+                )?))
             }
             Expr::FieldAccess(obj, field, _) => {
                 let dotted = Self::extract_dotted_name(obj, &field.name);
@@ -1543,25 +1551,34 @@ impl Interpreter {
                     if self.is_trusted_stdlib_first_function(&runtime_name) {
                         return Ok(ExprFlow::Value(self.call_user_function_with_type_args(
                             &runtime_name,
-                            &[],
+                            type_args,
                             arg_values,
                         )?));
+                    }
+                    if let Some(result) =
+                        self.call_builtin_with_type_args(name, type_args, &arg_values)
+                    {
+                        return Ok(ExprFlow::Value(result?));
                     }
                     if let Some(result) = self.call_builtin(name, &arg_values) {
                         return Ok(ExprFlow::Value(result?));
                     }
                     if self.functions.contains_key(runtime_name.as_str()) {
-                        return Ok(ExprFlow::Value(
-                            self.call_function(&runtime_name, arg_values)?,
-                        ));
+                        return Ok(ExprFlow::Value(self.call_function_with_type_args(
+                            &runtime_name,
+                            type_args,
+                            arg_values,
+                        )?));
                     }
                 }
                 match dotted {
                     Some(name) => {
                         let runtime_name = self.runtime_name(&name);
-                        Ok(ExprFlow::Value(
-                            self.call_function(&runtime_name, arg_values)?,
-                        ))
+                        Ok(ExprFlow::Value(self.call_function_with_type_args(
+                            &runtime_name,
+                            type_args,
+                            arg_values,
+                        )?))
                     }
                     None => {
                         Err("only named function calls are supported in pipeline steps".to_string())

@@ -7724,8 +7724,18 @@ impl<'a> TypeChecker<'a> {
         current_ty
     }
 
+    fn pipeline_step_call_parts<'b>(
+        step: &'b ast::PipelineStep,
+    ) -> (&'b Expr, &'b [TypeExpr], &'b [ast::CallArg]) {
+        match &step.function {
+            Expr::GenericCall(callee, type_args, args, _) => (callee, type_args, args),
+            _ => (&step.function, &[], &step.extra_args),
+        }
+    }
+
     fn check_pipeline_step(&mut self, current_ty: TypeId, step: &ast::PipelineStep) -> TypeId {
-        let callee_name = self.resolved_expr_name(&step.function);
+        let (function, type_args, extra_args) = Self::pipeline_step_call_parts(step);
+        let callee_name = self.resolved_expr_name(function);
         let callee_is_pure = callee_name
             .as_deref()
             .map(|name| {
@@ -7763,16 +7773,28 @@ impl<'a> TypeChecker<'a> {
         if let Some(builtin_name) = callee_name.as_deref() {
             match builtin_name {
                 "math.abs" => {
-                    return self.check_math_abs_pipeline_step(builtin_name, current_ty, step);
+                    return self.check_math_abs_pipeline_step(
+                        builtin_name,
+                        current_ty,
+                        type_args,
+                        extra_args,
+                        step.span,
+                    );
                 }
                 "math.min" | "math.max" => {
-                    return self.check_math_min_max_pipeline_step(builtin_name, current_ty, step);
+                    return self.check_math_min_max_pipeline_step(
+                        builtin_name,
+                        current_ty,
+                        type_args,
+                        extra_args,
+                        step.span,
+                    );
                 }
                 _ => {}
             }
         }
 
-        let builtin_signature = self.builtin_signature(&step.function, &[], step.span);
+        let builtin_signature = self.builtin_signature(function, type_args, step.span);
         let user_function_signature = if builtin_signature.is_none() {
             callee_name
                 .as_deref()
@@ -7786,8 +7808,8 @@ impl<'a> TypeChecker<'a> {
         } else if let Some(signature) = user_function_signature {
             signature
         } else {
-            self.check_expr(&step.function);
-            for arg in &step.extra_args {
+            self.check_expr(function);
+            for arg in extra_args {
                 self.check_expr(&arg.value);
             }
             self.sink.emit(errors::not_callable(
@@ -7797,7 +7819,7 @@ impl<'a> TypeChecker<'a> {
             return TypeInterner::ERROR;
         };
 
-        let arg_count = step.extra_args.len() + 1;
+        let arg_count = extra_args.len() + 1;
         if arg_count != param_types.len() {
             let func_name = callee_name
                 .clone()
@@ -7808,7 +7830,7 @@ impl<'a> TypeChecker<'a> {
                 arg_count,
                 step.span,
             ));
-            for arg in &step.extra_args {
+            for arg in extra_args {
                 self.check_expr(&arg.value);
             }
             return return_type;
@@ -7826,7 +7848,7 @@ impl<'a> TypeChecker<'a> {
             step.span,
         );
 
-        for (index, arg) in step.extra_args.iter().enumerate() {
+        for (index, arg) in extra_args.iter().enumerate() {
             let param_ty = param_types[index + 1];
             let arg_ty = self.check_expr_for_expected(&arg.value, param_ty, false);
             checked_arg_types.push(arg_ty);
@@ -8391,16 +8413,19 @@ impl<'a> TypeChecker<'a> {
         &mut self,
         name: &str,
         current_ty: TypeId,
-        step: &ast::PipelineStep,
+        type_args: &[TypeExpr],
+        extra_args: &[ast::CallArg],
+        span: Span,
     ) -> TypeId {
-        if !step.extra_args.is_empty() {
+        self.expect_no_type_args(name, type_args, span);
+        if !extra_args.is_empty() {
             self.sink.emit(errors::argument_count_mismatch(
                 name,
                 1,
-                step.extra_args.len() + 1,
-                step.span,
+                extra_args.len() + 1,
+                span,
             ));
-            for arg in &step.extra_args {
+            for arg in extra_args {
                 self.check_expr(&arg.value);
             }
             return TypeInterner::ERROR;
@@ -8417,7 +8442,7 @@ impl<'a> TypeChecker<'a> {
                     "#1",
                     "int64 or float64",
                     &self.type_name(current_ty),
-                    step.span,
+                    span,
                 ));
                 TypeInterner::ERROR
             }
@@ -8428,23 +8453,26 @@ impl<'a> TypeChecker<'a> {
         &mut self,
         name: &str,
         current_ty: TypeId,
-        step: &ast::PipelineStep,
+        type_args: &[TypeExpr],
+        extra_args: &[ast::CallArg],
+        span: Span,
     ) -> TypeId {
-        if step.extra_args.len() != 1 {
+        self.expect_no_type_args(name, type_args, span);
+        if extra_args.len() != 1 {
             self.sink.emit(errors::argument_count_mismatch(
                 name,
                 2,
-                step.extra_args.len() + 1,
-                step.span,
+                extra_args.len() + 1,
+                span,
             ));
-            for arg in &step.extra_args {
+            for arg in extra_args {
                 self.check_expr(&arg.value);
             }
             return TypeInterner::ERROR;
         }
 
         if current_ty == TypeInterner::ERROR {
-            self.check_expr(&step.extra_args[0].value);
+            self.check_expr(&extra_args[0].value);
             return TypeInterner::ERROR;
         }
 
@@ -8453,13 +8481,13 @@ impl<'a> TypeChecker<'a> {
                 "#1",
                 "int64 or float64",
                 &self.type_name(current_ty),
-                step.span,
+                span,
             ));
-            self.check_expr(&step.extra_args[0].value);
+            self.check_expr(&extra_args[0].value);
             return TypeInterner::ERROR;
         };
 
-        let right_arg = &step.extra_args[0];
+        let right_arg = &extra_args[0];
         let right_ty = self.check_expr_for_expected(&right_arg.value, base, false);
         if right_ty == TypeInterner::ERROR {
             return TypeInterner::ERROR;

@@ -1,0 +1,5 @@
+# ERROR: E0309
+namespace app
+function bad_pipeline_generic_builtin_type_arg_count() returns int64:
+    list[int64] values = list(1, 2, 3)
+    return values into list.length[int64, string]()

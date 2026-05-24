@@ -799,6 +799,15 @@ fn compile_fail_pipeline_math_numeric_intrinsic_shape_counts() {
     assert_compile_fail_error_count("pipeline_math_numeric_intrinsic_shapes.jett", 304, 3);
 }
 compile_fail_fixture!(
+    compile_fail_pipeline_generic_builtin_type_args,
+    "pipeline_generic_builtin_type_args.jett"
+);
+
+#[test]
+fn compile_fail_pipeline_generic_builtin_type_args_count() {
+    assert_compile_fail_error_count("pipeline_generic_builtin_type_args.jett", 309, 1);
+}
+compile_fail_fixture!(
     compile_fail_function_statement_limit,
     "function_statement_limit.jett"
 );
