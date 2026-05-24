@@ -8314,6 +8314,58 @@ impl<'a> TypeChecker<'a> {
         facts
     }
 
+    fn check_range_builtin_call(
+        &mut self,
+        name: &str,
+        type_args: &[TypeExpr],
+        args: &[ast::CallArg],
+        span: Span,
+    ) -> TypeId {
+        self.expect_no_type_args(name, type_args, span);
+        let list_int = self.interner.intern(Type::List(TypeInterner::INT64));
+        if !(1..=3).contains(&args.len()) {
+            self.sink
+                .emit(errors::argument_count_mismatch(name, 3, args.len(), span));
+            for arg in args {
+                self.check_expr(&arg.value);
+            }
+            return list_int;
+        }
+
+        for arg in args {
+            let got = self.check_expr_for_expected(&arg.value, TypeInterner::INT64, false);
+            if !self.types_compatible(TypeInterner::INT64, got) {
+                self.sink.emit(errors::type_mismatch(
+                    &self.type_name(TypeInterner::INT64),
+                    &self.type_name(got),
+                    arg.value.span(),
+                ));
+            }
+        }
+        list_int
+    }
+
+    fn check_print_builtin_call(
+        &mut self,
+        name: &str,
+        type_args: &[TypeExpr],
+        args: &[ast::CallArg],
+        span: Span,
+    ) -> TypeId {
+        self.expect_no_type_args(name, type_args, span);
+        for arg in args {
+            let arg_ty = self.check_expr(&arg.value);
+            if self.is_secret_type(arg_ty) {
+                self.sink.emit(errors::secret_exposure(
+                    name,
+                    &self.type_name(arg_ty),
+                    arg.value.span(),
+                ));
+            }
+        }
+        TypeInterner::NOTHING
+    }
+
     fn check_call(
         &mut self,
         callee: &Expr,
@@ -8355,6 +8407,18 @@ impl<'a> TypeChecker<'a> {
                         ));
                     }
                 }
+            }
+        }
+
+        if let Some(builtin_name) = callee_name.as_deref() {
+            match builtin_name {
+                "range" | "list.range" => {
+                    return self.check_range_builtin_call(builtin_name, type_args, args, span);
+                }
+                "print" | "println" => {
+                    return self.check_print_builtin_call(builtin_name, type_args, args, span);
+                }
+                _ => {}
             }
         }
 

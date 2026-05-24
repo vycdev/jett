@@ -1,0 +1,14 @@
+# ERROR: E0311
+namespace test
+function bad_range() returns bool:
+    bool value = range(3)
+    return value
+function bad_list_range() returns bool:
+    bool value = list.range(3)
+    return value
+function bad_print() returns int64:
+    int64 value = print("x")
+    return value
+function bad_println() returns int64:
+    int64 value = println("x")
+    return value
