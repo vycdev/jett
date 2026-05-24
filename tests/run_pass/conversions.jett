@@ -37,6 +37,30 @@ function uint64_mutable_reassignment_test() returns string:
     mutable uint64 val = 0
     val = 18446744073709551615
     return string.from_uint64(val)
+function uint64_arithmetic_max_edges_test() returns string:
+    uint64 max = 18446744073709551615
+    uint64 one = 1
+    uint64 two = 2
+    uint64 below_max = max - one
+    uint64 half = max / two
+    uint64 remainder = max modulo two
+    uint64 rebuilt = half * two + one
+    string below_text = string.from_uint64(below_max)
+    string half_text = string.from_uint64(half)
+    string remainder_text = string.from_uint64(remainder)
+    string rebuilt_text = string.from_uint64(rebuilt)
+    return "{below_text}:{half_text}:{remainder_text}:{rebuilt_text}"
+function uint64_comparison_edges_test() returns string:
+    uint64 max = 18446744073709551615
+    uint64 above_int64 = 9223372036854775808
+    uint64 int64_max = 9223372036854775807
+    bool ordered = max > above_int64
+    bool adjacent = above_int64 > int64_max
+    bool equal = max == 18446744073709551615
+    string ordered_text = string.from_bool(ordered)
+    string adjacent_text = string.from_bool(adjacent)
+    string equal_text = string.from_bool(equal)
+    return "{ordered_text}:{adjacent_text}:{equal_text}"
 function parse_uint64_negative_error_test() returns string:
     uint64 val = uint64.from_string("-1") handle error:
         return error
@@ -49,6 +73,8 @@ verify parse_uint64_max_test:
     assert parse_uint64_max_test() == "18446744073709551615"
     assert uint64_literal_max_test() == "18446744073709551615"
     assert uint64_mutable_reassignment_test() == "18446744073709551615"
+    assert uint64_arithmetic_max_edges_test() == "18446744073709551614:9223372036854775807:1:18446744073709551615"
+    assert uint64_comparison_edges_test() == "true:true:true"
     assert parse_uint64_negative_error_test() == "uint64.from_string: cannot parse '-1' as uint64"
     assert parse_uint64_overflow_error_test() == "uint64.from_string: cannot parse '18446744073709551616' as uint64"
 # --- float64 from string (result type) ---

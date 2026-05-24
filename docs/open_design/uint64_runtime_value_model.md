@@ -17,6 +17,8 @@ ordinary source and JSON decode/serialize the full unsigned range:
 - `uint64 value = 18446744073709551615` succeeds.
 - `mutable uint64 value = 0; value = 18446744073709551615` keeps the
   reassigned value in the unsigned carrier.
+- Source arithmetic and comparisons over values above `i64::MAX` stay on the
+  `uint64` carrier and are pinned in `tests/run_pass/conversions.jett`.
 - `int64 value = 9223372036854775808` is rejected.
 - `json.parse[uint64]("18446744073709551615")` succeeds.
 - `json.parse[uint64]("18446744073709551616")` reports a range error.
