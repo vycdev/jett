@@ -922,6 +922,16 @@ fn compile_fail_collection_builtin_type_arg_arity_count() {
 }
 
 compile_fail_fixture!(
+    compile_fail_builtin_type_arg_arity,
+    "builtin_type_arg_arity.jett"
+);
+
+#[test]
+fn compile_fail_builtin_type_arg_arity_count() {
+    assert_compile_fail_error_count("builtin_type_arg_arity.jett", 309, 4);
+}
+
+compile_fail_fixture!(
     compile_fail_uint8_literal_out_of_range,
     "uint8_literal_out_of_range.jett"
 );

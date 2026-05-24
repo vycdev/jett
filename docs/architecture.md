@@ -443,7 +443,7 @@ Bottom-up type checking of every expression:
 
 - **Literal inference:** `42` → `int64`, `3.14` → `float64`, `"hello"` → `string`, `true`/`false` → `bool`.
 - **Variable references:** look up the type from the variable's declaration.
-- **Function calls:** verify argument types match parameter types, verify generic type parameters, verify return type.
+- **Function calls:** verify argument types match parameter types, verify generic type-argument arity exactly for user functions and builtins, verify generic constraints, verify return type.
 - **No implicit conversions** — `int64` is not `float64`. Every mismatch is an error with a hint.
 - **Expected-type expression facts:** when context determines a more specific
   primitive type, such as a small integer literal inside a `uint64` argument or

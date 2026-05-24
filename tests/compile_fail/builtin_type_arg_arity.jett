@@ -1,0 +1,10 @@
+# ERROR: E0309
+namespace test
+function bad_string_length(value: string) returns int64:
+    return string.length[int64](value)
+function bad_math_sqrt(value: float64) returns float64:
+    return math.sqrt[float64](value)
+function bad_hex_encode(value: string) returns string:
+    return encoding.hex_encode[string](value)
+function bad_int64_from_string(value: string) returns result[int64, string]:
+    return int64.from_string[string](value)

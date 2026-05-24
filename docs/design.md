@@ -6263,7 +6263,7 @@ string name = "jett"
 
 Generics use `[T]` (square brackets) rather than `<T>` — avoids ambiguity with comparison operators and is more reliably tokenized. Square brackets **only** mean generics in Jett — there is no `[]` indexing operator. List access uses `list.get[T](items, index)` (which returns `optional[T]`, forcing bounds checking), and string indexing does not exist (see Rule Set 12). This makes `[]` completely unambiguous: it always means a type parameter.
 
-**Generic type parameters are always explicit at call sites.** The compiler does not infer type parameters — the caller must specify them. This keeps types visible everywhere, especially in pipes and nested calls where there is no variable declaration to show the type:
+**Generic type parameters on user functions are explicit at call sites.** The compiler does not infer user-function type parameters — the caller must specify them. This keeps types visible everywhere, especially in pipes and nested calls where there is no variable declaration to show the type. Compiler-owned collection helpers may omit type arguments only when the value argument already carries the local element/key/value type, such as `list.length(items)`. When type arguments are written on any function or builtin call, their count must exactly match that callable's generic arity.
 
 ```
 # Always explicit — no inference
