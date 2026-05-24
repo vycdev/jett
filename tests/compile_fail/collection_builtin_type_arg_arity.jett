@@ -1,0 +1,8 @@
+# ERROR: E0309
+namespace test
+function bad_list_length(items: list[int64]) returns int64:
+    return list.length[int64, string](items)
+function bad_map_length(values: map[string, int64]) returns int64:
+    return map.length[string, int64, bool](values)
+function bad_set_length(values: set[int64]) returns int64:
+    return set.length[int64, string](values)
