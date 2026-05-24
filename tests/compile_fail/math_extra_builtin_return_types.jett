@@ -1,0 +1,47 @@
+# ERROR: E0311
+namespace test
+function bad_pi() returns bool:
+    bool value = math.pi()
+    return value
+function bad_e() returns bool:
+    bool value = math.e()
+    return value
+function bad_sin() returns string:
+    string value = math.sin(0.0)
+    return value
+function bad_cos() returns string:
+    string value = math.cos(0.0)
+    return value
+function bad_tan() returns string:
+    string value = math.tan(0.0)
+    return value
+function bad_mod() returns string:
+    string value = math.mod(17, 5)
+    return value
+function bad_is_even() returns string:
+    string value = math.is_even(4)
+    return value
+function bad_is_odd() returns string:
+    string value = math.is_odd(5)
+    return value
+function bad_sum() returns string:
+    string value = math.sum(list(1, 2, 3))
+    return value
+function bad_gcd() returns bool:
+    bool value = math.gcd(12, 8)
+    return value
+function bad_lcm() returns bool:
+    bool value = math.lcm(4, 6)
+    return value
+function bad_factorial() returns bool:
+    bool value = math.factorial(5)
+    return value
+function bad_sign() returns bool:
+    bool value = math.sign(-7)
+    return value
+function bad_to_radians() returns string:
+    string value = math.to_radians(180.0)
+    return value
+function bad_to_degrees() returns string:
+    string value = math.to_degrees(3.14)
+    return value

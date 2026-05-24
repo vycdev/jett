@@ -3205,6 +3205,43 @@ impl<'a> TypeChecker<'a> {
                 let list_ty = self.interner.intern(Type::List(inner));
                 Some((vec![list_ty], TypeInterner::FLOAT64))
             }
+            "math.pi" | "math.e" => {
+                self.no_type_args_signature(&name, type_args, span, vec![], TypeInterner::FLOAT64)
+            }
+            "math.sin" | "math.cos" | "math.tan" | "math.to_radians" | "math.to_degrees" => self
+                .no_type_args_signature(
+                    &name,
+                    type_args,
+                    span,
+                    vec![TypeInterner::FLOAT64],
+                    TypeInterner::FLOAT64,
+                ),
+            "math.mod" | "math.gcd" | "math.lcm" => self.no_type_args_signature(
+                &name,
+                type_args,
+                span,
+                vec![TypeInterner::INT64, TypeInterner::INT64],
+                TypeInterner::INT64,
+            ),
+            "math.is_even" | "math.is_odd" => self.no_type_args_signature(
+                &name,
+                type_args,
+                span,
+                vec![TypeInterner::INT64],
+                TypeInterner::BOOL,
+            ),
+            "math.factorial" | "math.sign" => self.no_type_args_signature(
+                &name,
+                type_args,
+                span,
+                vec![TypeInterner::INT64],
+                TypeInterner::INT64,
+            ),
+            "math.sum" => {
+                self.expect_no_type_args(&name, type_args, span);
+                let list_int = self.interner.intern(Type::List(TypeInterner::INT64));
+                Some((vec![list_int], TypeInterner::INT64))
+            }
             // string extras
             "string.reverse" | "string.trim_start" | "string.trim_end" => self
                 .no_type_args_signature(
