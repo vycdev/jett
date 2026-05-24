@@ -1,5 +1,8 @@
 namespace app
 
+struct PipelineUser:
+    name: string
+
 function plus_one(value: int64) returns int64:
     return value + 1
 
@@ -67,8 +70,13 @@ function pipeline_generic_builtin_type_arg_test() returns int64:
     list[int64] values = list(1, 2, 3)
     return values into list.length[int64]()
 
+function pipeline_view_json_serialize_test() returns string:
+    PipelineUser user = PipelineUser(name: "Ada")
+    return user into view json.serialize[PipelineUser]()
+
 verify pipeline_math_numeric_intrinsic_test:
     assert pipeline_math_abs_int_test() == 5
     assert pipeline_math_min_int_test() == 3
     assert pipeline_math_max_float_test() == 7.0
     assert pipeline_generic_builtin_type_arg_test() == 3
+    assert pipeline_view_json_serialize_test() == "{{\"name\":\"Ada\"}}"

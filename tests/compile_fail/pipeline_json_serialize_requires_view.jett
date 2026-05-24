@@ -1,0 +1,7 @@
+# ERROR: E0344
+namespace app
+struct PipelineUser:
+    name: string
+function bad_pipeline_json_serialize_without_view() returns string:
+    PipelineUser user = PipelineUser(name: "Ada")
+    return user into json.serialize[PipelineUser]()

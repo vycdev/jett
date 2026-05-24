@@ -7726,15 +7726,21 @@ impl<'a> TypeChecker<'a> {
 
     fn pipeline_step_call_parts<'b>(
         step: &'b ast::PipelineStep,
-    ) -> (&'b Expr, &'b [TypeExpr], &'b [ast::CallArg]) {
-        match &step.function {
-            Expr::GenericCall(callee, type_args, args, _) => (callee, type_args, args),
-            _ => (&step.function, &[], &step.extra_args),
+    ) -> (&'b Expr, &'b [TypeExpr], &'b [ast::CallArg], bool) {
+        let (function, piped_as_view) = match &step.function {
+            Expr::View(inner, _) => (inner.as_ref(), true),
+            _ => (&step.function, false),
+        };
+        match function {
+            Expr::GenericCall(callee, type_args, args, _) => {
+                (callee, type_args, args, piped_as_view)
+            }
+            _ => (function, &[], &step.extra_args, piped_as_view),
         }
     }
 
     fn check_pipeline_step(&mut self, current_ty: TypeId, step: &ast::PipelineStep) -> TypeId {
-        let (function, type_args, extra_args) = Self::pipeline_step_call_parts(step);
+        let (function, type_args, extra_args, piped_as_view) = Self::pipeline_step_call_parts(step);
         let callee_name = self.resolved_expr_name(function);
         let callee_is_pure = callee_name
             .as_deref()
@@ -7881,6 +7887,14 @@ impl<'a> TypeChecker<'a> {
             }
         }
 
+        self.check_json_pipeline_public_call_policy(
+            callee_name.as_deref(),
+            current_ty,
+            piped_as_view,
+            step.span,
+            return_type,
+        );
+
         if let Some(callee_name) = callee_name.as_deref()
             && tainted_return
             && Self::is_secret_liftable_call(callee_name, callee_is_pure)
@@ -7889,6 +7903,102 @@ impl<'a> TypeChecker<'a> {
         }
 
         return_type
+    }
+
+    fn check_json_pipeline_public_call_policy(
+        &mut self,
+        callee_name: Option<&str>,
+        value_ty: TypeId,
+        piped_as_view: bool,
+        span: Span,
+        return_type: TypeId,
+    ) {
+        let Some(callee_name) = callee_name else {
+            return;
+        };
+
+        match callee_name {
+            "json.serialize" => {
+                if self.type_contains_secret_data(value_ty) {
+                    self.sink.emit(errors::type_contains_secret_data(
+                        "json.serialize",
+                        &self.type_name(value_ty),
+                        &self.secret_field_names(value_ty),
+                        span,
+                    ));
+                }
+                self.check_json_pipeline_serialize_policy(
+                    callee_name,
+                    value_ty,
+                    piped_as_view,
+                    span,
+                );
+            }
+            "json.serialize_public" => {
+                if !self.is_secret_type(value_ty)
+                    && self.type_contains_secret_data(value_ty)
+                    && !self.json_public_projection_allows_secret_data(value_ty)
+                {
+                    self.sink.emit(errors::type_contains_secret_data(
+                        "json.serialize_public",
+                        &self.type_name(value_ty),
+                        &self.secret_field_names(value_ty),
+                        span,
+                    ));
+                }
+                self.check_json_pipeline_serialize_policy(
+                    callee_name,
+                    value_ty,
+                    piped_as_view,
+                    span,
+                );
+            }
+            "json.parse" | "json.parse_exact" => {
+                if let Type::Result(parsed_ty, _) = self.interner.resolve(return_type) {
+                    for key_type in self.json_non_string_map_key_types(*parsed_ty) {
+                        self.sink
+                            .emit(errors::json_map_key_must_be_string(&key_type, span));
+                    }
+                    for unsupported_type in self.json_unsupported_parse_types(*parsed_ty) {
+                        self.sink.emit(errors::json_unsupported_parse_type(
+                            callee_name,
+                            &unsupported_type,
+                            span,
+                        ));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn check_json_pipeline_serialize_policy(
+        &mut self,
+        function_name: &str,
+        value_ty: TypeId,
+        piped_as_view: bool,
+        span: Span,
+    ) {
+        if !piped_as_view && self.json_read_requires_view(value_ty) {
+            self.sink.emit(errors::json_serialize_requires_view(
+                function_name,
+                &self.type_name(value_ty),
+                span,
+            ));
+        }
+
+        for key_type in self.json_non_string_map_key_types(value_ty) {
+            self.sink
+                .emit(errors::json_map_key_must_be_string(&key_type, span));
+        }
+
+        for unsupported_type in self.json_unsupported_serialize_types(value_ty) {
+            self.sink.emit(errors::json_unsupported_serialize_type(
+                function_name,
+                &unsupported_type,
+                span,
+            ));
+        }
     }
 
     fn check_argument_against_param_type(

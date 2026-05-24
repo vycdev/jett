@@ -1518,11 +1518,14 @@ impl Interpreter {
         step: &PipelineStep,
         piped_value: Value,
     ) -> Result<ExprFlow, String> {
-        let (function, type_args, extra_args): (&Expr, &[TypeExpr], &[CallArg]) =
-            match &step.function {
-                Expr::GenericCall(callee, type_args, args, _) => (callee, type_args, args),
-                _ => (&step.function, &[], &step.extra_args),
-            };
+        let function = match &step.function {
+            Expr::View(inner, _) => inner.as_ref(),
+            _ => &step.function,
+        };
+        let (function, type_args, extra_args): (&Expr, &[TypeExpr], &[CallArg]) = match function {
+            Expr::GenericCall(callee, type_args, args, _) => (callee, type_args, args),
+            _ => (function, &[], &step.extra_args),
+        };
 
         // Build argument list: piped value first, then extra args.
         let mut arg_values = vec![piped_value];

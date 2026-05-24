@@ -3553,7 +3553,7 @@ string response = request
     into validate_auth
     into extract_user_id
     into load_user_profile
-    into view json.serialize[User]
+    into view json.serialize[User]()
 ```
 
 ```
@@ -3599,7 +3599,7 @@ string user_data = request
         return fail("no user id")
     into load_user_profile handle error:
         return fail("user not found")
-    into view json.serialize_public[User]
+    into view json.serialize_public[User]()
 ```
 
 Each `handle` block applies to the pipeline step immediately before it. The error handling is co-located with the operation that can fail — no distant `catch` blocks, no forgotten error paths.
@@ -3627,7 +3627,7 @@ function process_request(view fs: Filesystem, view net: Network, view stdout: St
         into fetch_data(view fs) handle error:
             return fail("data fetch failed")
         into transform_response
-        into view json.serialize[Response]
+        into view json.serialize[Response]()
 
     Stdout.write(view stdout, "processed request")
     return ok(output)
@@ -5048,7 +5048,7 @@ Views work naturally with pipelines (Rule Set 19). The `view` keyword is used in
 string report = large_dataset
     into filter_active_records
     into calculate_summary
-    into view json.serialize[Summary]
+    into view json.serialize[Summary]()
 ```
 
 Transform functions like `filter_active_records` consume their input and produce a new value. Read-only functions like `json.serialize` take a `view` parameter — and the pipeline step must use the `view` keyword to match. The types are checked at each `into` boundary as usual.
@@ -5872,7 +5872,7 @@ Jett keeps its symbol set **as small as possible**. Symbols are only used where 
 | `:` | Type annotations, block starts |
 | `"` | Strings |
 
-The `view` keyword is explicit at both call sites and declarations. When passing a value to a function that declares a `view` parameter, the caller must write `view`: `process(view data)`. In pipelines: `data into view json.serialize[Type]`.
+The `view` keyword is explicit at both call sites and declarations. When passing a value to a function that declares a `view` parameter, the caller must write `view`: `process(view data)`. In pipelines: `data into view json.serialize[Type]()`.
 
 **Replaced by keywords:**
 
