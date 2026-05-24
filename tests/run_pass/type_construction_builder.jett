@@ -1,22 +1,16 @@
 namespace test
-
 type NonEmpty = string where string.char_count(value) > 0
-
 struct User:
     id: string
     age: int64
-
 struct Box[T]:
     value: T
     label: string
-
 struct RefinedUser:
     name: NonEmpty
-
 struct Other:
     id: string
     age: int64
-
 function clone_user_by_reflection() returns bool:
     User source = User(id: "u1", age: 42)
     mutable TypeConstruction builder = type.construct_start[User]()
@@ -28,7 +22,6 @@ function clone_user_by_reflection() returns bool:
     User built = type.construct_finish[User](builder) handle error:
         return false
     return built.id == "u1" and built.age == 42
-
 function clone_generic_box_by_reflection() returns bool:
     Box[string] source = Box[string](value: "payload", label: "name")
     mutable TypeConstruction builder = type.construct_start[Box[string]]()
@@ -40,7 +33,6 @@ function clone_generic_box_by_reflection() returns bool:
     Box[string] built = type.construct_finish[Box[string]](builder) handle error:
         return false
     return built.value == "payload" and built.label == "name"
-
 function clone_refined_user_by_reflection() returns string:
     NonEmpty name = "Ada" handle error:
         return error
@@ -55,7 +47,6 @@ function clone_refined_user_by_reflection() returns string:
     RefinedUser built = type.construct_finish[RefinedUser](builder) handle error:
         return error
     return coarsen built.name
-
 function missing_field_message() returns string:
     User source = User(id: "u1", age: 42)
     mutable TypeConstruction builder = type.construct_start[User]()
@@ -68,7 +59,6 @@ function missing_field_message() returns string:
     User built = type.construct_finish[User](builder) handle error:
         return error
     return built.id
-
 function duplicate_field_message() returns string:
     User source = User(id: "u1", age: 42)
     mutable TypeConstruction builder = type.construct_start[User]()
@@ -82,7 +72,6 @@ function duplicate_field_message() returns string:
                 builder = type.construct_put[User, Field](builder, view field, duplicate_value) handle error:
                     return error
     return "no duplicate"
-
 function mismatched_metadata_message() returns string:
     User source = User(id: "u1", age: 42)
     mutable TypeConstruction builder = type.construct_start[Other]()
@@ -94,7 +83,11 @@ function mismatched_metadata_message() returns string:
     Other built = type.construct_finish[Other](builder) handle error:
         return error
     return built.id
-
+function mismatched_finish_target_message() returns string:
+    TypeConstruction builder = type.construct_start[User]()
+    Other built = type.construct_finish[Other](builder) handle error:
+        return error
+    return built.id
 verify type_construction_builder:
     assert clone_user_by_reflection() == true
     assert clone_generic_box_by_reflection() == true
@@ -102,3 +95,4 @@ verify type_construction_builder:
     assert string.contains(missing_field_message(), "missing required field 'age'") == true
     assert string.contains(duplicate_field_message(), "provided more than once") == true
     assert string.contains(mismatched_metadata_message(), "belongs to 'test.User', expected 'test.Other'") == true
+    assert string.contains(mismatched_finish_target_message(), "builder for 'test.User' cannot construct 'test.Other'") == true
