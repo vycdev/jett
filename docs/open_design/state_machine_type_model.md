@@ -209,11 +209,12 @@ to a known machine owner.
   narrowing stay limited to positive guards plus exact single-state complements?
 - Should `expr at state` eventually narrow fields/paths beyond bare local
   variables?
-- Should machine JSON remain enabled for every machine with JSON-compatible
-  payload fields, or should declarations eventually opt in to the envelope
-  contract?
-- Should machine transitions be ordinary static methods, compiler intrinsics, or
-  stdlib-like generated functions?
+- Should machine declarations eventually support explicit JSON policy
+  annotations or state-rename migration metadata? The default envelope is now
+  enabled for every machine whose payload fields are JSON-compatible.
+- Should transition effects eventually become generated stdlib-like functions,
+  or should the current compiler-checked static method surface remain the
+  canonical spelling?
 
 ## Recommendation
 
