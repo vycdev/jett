@@ -1,0 +1,13 @@
+# ERROR: E0311
+function is_int64_primitive(primitive: TypePrimitive) returns bool:
+    return primitive == TypePrimitive.int64_type
+function predicate_guarded_int64_or_zero[T](value: T, primitive: TypePrimitive) returns int64:
+    if is_int64_primitive(primitive):
+        int64 item = value
+        return item
+    return 0
+function main() returns nothing:
+    TypePrimitive primitive = type.primitive_tag[string]() handle:
+        default TypePrimitive.unknown_type
+    int64 value = predicate_guarded_int64_or_zero[string]("Ada", primitive)
+    return nothing

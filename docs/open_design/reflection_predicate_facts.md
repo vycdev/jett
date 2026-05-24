@@ -47,7 +47,9 @@ For now, keep direct `TypePrimitive` matches in JSON helpers that choose a
 different runtime carrier, such as the separate `uint64` path. Small classifier
 helpers are acceptable only when all selected primitives share one safe cast
 target. Avoid broader predicates that mix carriers or imply facts the checker
-cannot see.
+cannot see. The compile-fail fixture
+`generic_reflection_predicate_fact_boundary.jett` pins this boundary: a boolean
+helper over `TypePrimitive` is not a generic cast guard yet.
 
 ## Possible Directions
 
