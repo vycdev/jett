@@ -120,7 +120,7 @@
 
 | Component | Status |
 |---|---|
-| TOON output (`--agent` flag) | Partial (build diagnostics and run stdout/debug output are structured; test/query agent payloads remain open) |
+| TOON output (`--agent` flag) | Partial (build diagnostics, run stdout/debug output, and verify/property test summaries are structured; query agent payloads remain open) |
 | LSP server (diagnostics on save) | Done |
 | LSP hover (type at cursor) | Done |
 | LSP go-to-definition | Done |
@@ -194,7 +194,7 @@
 | `jett format [--check] file.jett` | Working |
 | `jett build [--agent] [--release] [--target T] file.jett` | Working (validates, no binary output) |
 | `jett run [--agent] file.jett` | Working (tree-walking interpreter; `--agent` captures stdout plus trace/breakpoint debug rows) |
-| `jett test [file.jett]` | Working (verify + property blocks) |
+| `jett test [--agent] [file.jett]` | Working (verify + property blocks; `--agent` emits compact block tables) |
 | `jett lsp` | Working (diagnostics on save) |
 | `jett bind header.h` | Not started |
 | `jett bundle` | Not started |

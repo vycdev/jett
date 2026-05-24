@@ -54,6 +54,10 @@ enum Command {
     Test {
         /// Path to a .jett file (if omitted, finds jett.proj and tests all files)
         file: Option<String>,
+
+        /// Emit TOON agent output
+        #[arg(long)]
+        agent: bool,
     },
 
     /// Start the Language Server Protocol server (for editor integration)
@@ -170,23 +174,31 @@ fn main() {
             let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
             rt.block_on(jett_lsp::run_server());
         }
-        Command::Test { file } => {
+        Command::Test { file, agent } => {
             if let Some(f) = file {
                 // Test a single file
                 let path = Path::new(&f);
                 match jett_driver::test_file(path) {
                     Ok(result) => {
-                        print_file_results(&result);
-                        println!(
-                            "\n{} block(s), {} passed, {} failed",
-                            result.total, result.passed, result.failed
-                        );
+                        if agent {
+                            print!("{}", render_test_agent_file_output(&result));
+                        } else {
+                            print_file_results(&result);
+                            println!(
+                                "\n{} block(s), {} passed, {} failed",
+                                result.total, result.passed, result.failed
+                            );
+                        }
                         if result.failed > 0 {
                             process::exit(1);
                         }
                     }
                     Err(e) => {
-                        eprintln!("error testing {f}: {e}");
+                        if agent {
+                            print!("{}", render_test_agent_error(Some(&f), &e));
+                        } else {
+                            eprintln!("error testing {f}: {e}");
+                        }
                         process::exit(1);
                     }
                 }
@@ -195,24 +207,32 @@ fn main() {
                 let cwd = std::env::current_dir().unwrap_or_default();
                 match jett_driver::test_project(&cwd) {
                     Ok(result) => {
-                        for file_result in &result.file_results {
-                            println!("--- {} ---", file_result.file_path);
-                            print_file_results(file_result);
-                            println!();
+                        if agent {
+                            print!("{}", render_test_agent_project_output(&result));
+                        } else {
+                            for file_result in &result.file_results {
+                                println!("--- {} ---", file_result.file_path);
+                                print_file_results(file_result);
+                                println!();
+                            }
+                            println!(
+                                "{} file(s), {} block(s), {} passed, {} failed",
+                                result.total_files,
+                                result.total_blocks,
+                                result.total_passed,
+                                result.total_failed
+                            );
                         }
-                        println!(
-                            "{} file(s), {} block(s), {} passed, {} failed",
-                            result.total_files,
-                            result.total_blocks,
-                            result.total_passed,
-                            result.total_failed
-                        );
                         if result.total_failed > 0 {
                             process::exit(1);
                         }
                     }
                     Err(e) => {
-                        eprintln!("error: {e}");
+                        if agent {
+                            print!("{}", render_test_agent_error(None, &e));
+                        } else {
+                            eprintln!("error: {e}");
+                        }
                         process::exit(1);
                     }
                 }
@@ -242,6 +262,78 @@ fn render_run_agent_error(file: &str, error: &str) -> String {
         escape_toon_scalar(file),
         escape_toon_scalar(error)
     )
+}
+
+fn render_test_agent_file_output(result: &jett_driver::TestResult) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "status: {}\n",
+        if result.failed == 0 { "ok" } else { "error" }
+    ));
+    out.push_str("files: 1\n");
+    out.push_str(&format!("total: {}\n", result.total));
+    out.push_str(&format!("passed: {}\n", result.passed));
+    out.push_str(&format!("failed: {}\n", result.failed));
+    append_test_agent_blocks(&mut out, std::slice::from_ref(result));
+    out
+}
+
+fn render_test_agent_project_output(result: &jett_driver::ProjectTestResult) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "status: {}\n",
+        if result.total_failed == 0 {
+            "ok"
+        } else {
+            "error"
+        }
+    ));
+    out.push_str(&format!("files: {}\n", result.total_files));
+    out.push_str(&format!("total: {}\n", result.total_blocks));
+    out.push_str(&format!("passed: {}\n", result.total_passed));
+    out.push_str(&format!("failed: {}\n", result.total_failed));
+    append_test_agent_blocks(&mut out, &result.file_results);
+    out
+}
+
+fn render_test_agent_error(file: Option<&str>, error: &str) -> String {
+    let mut out = String::new();
+    out.push_str("status: error\n");
+    if let Some(file) = file {
+        out.push_str(&format!("file: {}\n", escape_toon_scalar(file)));
+    }
+    out.push_str(&format!("error: {}\n", escape_toon_scalar(error)));
+    out
+}
+
+fn append_test_agent_blocks(out: &mut String, file_results: &[jett_driver::TestResult]) {
+    let block_count: usize = file_results.iter().map(|result| result.blocks.len()).sum();
+    out.push_str(&format!(
+        "blocks[{}]{{file,name,kind,status,iterations,error}}:\n",
+        block_count
+    ));
+
+    for file_result in file_results {
+        for block in &file_result.blocks {
+            let kind = if block.is_property {
+                "property"
+            } else {
+                "verify"
+            };
+            let status = if block.passed { "passed" } else { "failed" };
+            let iterations = block.iterations.map(|value| value.to_string());
+            let error = block.error.as_deref().unwrap_or("");
+            out.push_str(&format!(
+                "  {},{},{},{},{},{}\n",
+                escape_toon_scalar(&file_result.file_path),
+                escape_toon_scalar(&block.name),
+                kind,
+                status,
+                iterations.as_deref().unwrap_or(""),
+                escape_toon_scalar(error)
+            ));
+        }
+    }
 }
 
 fn escape_toon_scalar(value: &str) -> String {
@@ -298,6 +390,88 @@ mod tests {
         assert_eq!(
             rendered,
             "status: error\nfile: app.jett\nerror: runtime error: bad\\nline\n"
+        );
+    }
+
+    #[test]
+    fn test_agent_file_output_lists_verify_and_property_blocks() {
+        let result = jett_driver::TestResult {
+            total: 2,
+            passed: 1,
+            failed: 1,
+            file_path: "tests/sample.jett".to_string(),
+            blocks: vec![
+                jett_driver::TestBlockResult {
+                    name: "adds".to_string(),
+                    passed: true,
+                    error: None,
+                    is_property: false,
+                    iterations: None,
+                },
+                jett_driver::TestBlockResult {
+                    name: "roundtrip".to_string(),
+                    passed: false,
+                    error: Some("expected ok, got bad\ncase".to_string()),
+                    is_property: true,
+                    iterations: Some(42),
+                },
+            ],
+        };
+
+        let rendered = render_test_agent_file_output(&result);
+
+        assert_eq!(
+            rendered,
+            "status: error\nfiles: 1\ntotal: 2\npassed: 1\nfailed: 1\nblocks[2]{file,name,kind,status,iterations,error}:\n  tests/sample.jett,adds,verify,passed,,\n  tests/sample.jett,roundtrip,property,failed,42,expected ok\\, got bad\\ncase\n"
+        );
+    }
+
+    #[test]
+    fn test_agent_project_output_summarizes_all_files() {
+        let result = jett_driver::ProjectTestResult {
+            total_files: 2,
+            total_blocks: 1,
+            total_passed: 1,
+            total_failed: 0,
+            file_results: vec![
+                jett_driver::TestResult {
+                    total: 0,
+                    passed: 0,
+                    failed: 0,
+                    file_path: "tests/empty.jett".to_string(),
+                    blocks: Vec::new(),
+                },
+                jett_driver::TestResult {
+                    total: 1,
+                    passed: 1,
+                    failed: 0,
+                    file_path: "tests/checks.jett".to_string(),
+                    blocks: vec![jett_driver::TestBlockResult {
+                        name: "ok".to_string(),
+                        passed: true,
+                        error: None,
+                        is_property: false,
+                        iterations: None,
+                    }],
+                },
+            ],
+        };
+
+        let rendered = render_test_agent_project_output(&result);
+
+        assert_eq!(
+            rendered,
+            "status: ok\nfiles: 2\ntotal: 1\npassed: 1\nfailed: 0\nblocks[1]{file,name,kind,status,iterations,error}:\n  tests/checks.jett,ok,verify,passed,,\n"
+        );
+    }
+
+    #[test]
+    fn test_agent_error_escapes_file_and_message() {
+        let rendered = render_test_agent_error(Some("bad,path.jett"), "parse\nfailed");
+
+        assert_eq!(
+            rendered,
+            "status: error\nfile: bad\\,path.jett\nerror: parse\\nfailed\n"
         );
     }
 }
