@@ -19,6 +19,9 @@ builder path followed by `type.construct_put` and `type.construct_finish`.
 - The wire envelope has exactly two canonical keys, `state` and `payload`.
   Serializers do not emit a machine type tag, and exact parsing rejects extra
   envelope keys such as `type`.
+- Both parse modes require the envelope to be an object with a string `state`
+  tag and an object `payload`; even lenient parsing rejects missing state tags,
+  unknown state tags, missing payloads, and non-object payloads.
 - Machine reflection is available through `type.machine_layout[T]()`,
   `type.machine_states[T]()`, and `type.machine_transitions[T]()`.
 - Value-level machine reflection is available through
@@ -75,7 +78,8 @@ The lenient `json.parse` path may ignore unknown envelope keys and unknown
 payload keys, matching the existing struct policy, but it must not ignore an
 unknown or missing `state` tag. It also requires `payload` to be present as an
 object, including for unit states, so every machine snapshot has one canonical
-envelope shape.
+envelope shape. The malformed-envelope cases are pinned in
+`tests/run_pass/json_parse_machine_envelope.jett`.
 
 Missing optional payload fields should use the same `none` default as struct
 decoding. Missing required payload fields should fail.

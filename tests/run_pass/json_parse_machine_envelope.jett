@@ -37,6 +37,26 @@ function parse_state_mismatch_error() returns string:
     Session at logged_in session = json.parse[Session at logged_in](raw) handle error:
         return error
     return "unexpected"
+function parse_missing_state_error() returns string:
+    string raw = "{{\"payload\":{{}}}}"
+    Session session = json.parse[Session](raw) handle error:
+        return error
+    return "unexpected"
+function parse_unknown_state_error() returns string:
+    string raw = "{{\"state\":\"deleted\",\"payload\":{{}}}}"
+    Session session = json.parse[Session](raw) handle error:
+        return error
+    return "unexpected"
+function parse_missing_payload_error() returns string:
+    string raw = "{{\"state\":\"guest\"}}"
+    Session session = json.parse[Session](raw) handle error:
+        return error
+    return "unexpected"
+function parse_non_object_payload_error() returns string:
+    string raw = "{{\"state\":\"guest\",\"payload\":[1]}}"
+    Session session = json.parse[Session](raw) handle error:
+        return error
+    return "unexpected"
 function parse_guest_session() returns string:
     Session session = json.parse[Session]("{{\"state\":\"guest\",\"payload\":{{}}}}") handle error:
         return error
@@ -83,6 +103,10 @@ verify json_parse_machine_envelope:
     assert parse_logged_in_session() == "logged_in:user-1"
     assert parse_state_qualified_session() == "user-2:Lin:l"
     assert string.contains(parse_state_mismatch_error(), "cannot finish state 'guest'") == true
+    assert string.contains(parse_missing_state_error(), "missing object field 'state'") == true
+    assert string.contains(parse_unknown_state_error(), "unknown machine state 'test.Session.deleted'") == true
+    assert string.contains(parse_missing_payload_error(), "missing object field 'payload'") == true
+    assert string.contains(parse_non_object_payload_error(), "expected machine payload object, got array") == true
     assert parse_guest_session() == "guest"
     assert parse_nested_session_box() == "user-3:2"
     assert parse_lenient_unknown_machine_fields() == "user-4:Cal"
