@@ -85,9 +85,10 @@ cannot be finished as a lookalike owner with the same field shape.
 - **Trusted metadata matters.** Compiler-produced `TypeField`, `TypeVariant`,
   and `TypeInfo` can drive construction. User-created structs that merely look
   like metadata must not be trusted. The current typechecker rejects direct
-  source constructors for compiler-owned reflection metadata records; runtime
-  construction still validates the supplied metadata contents against the
-  selected target.
+  source constructors for compiler-owned reflection metadata records, with
+  `reflection_field_metadata_constructor.jett` pinning the field-metadata case
+  used by construction. Runtime construction still validates the supplied
+  metadata contents against the selected target.
 - **Errors are explicit.** Construction from parsed or decoded data should
   surface as `result[T, string]`, forcing a `handle error:` boundary.
 - **Format policy stays outside construction.** JSON `serialize_name`, missing

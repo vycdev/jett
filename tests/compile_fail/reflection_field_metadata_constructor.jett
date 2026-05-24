@@ -1,0 +1,7 @@
+# ERROR: E0354
+namespace test
+struct User:
+    id: string
+function forged_field_metadata() returns TypeField:
+    TypeInfo info = type.info[string]()
+    return TypeField(index: 0, owner_type: "test.User", owner_member: none, name: "id", type_name: "string", kind: "primitive", kind_tag: TypeKind.primitive_type, serialize_name: "id", has_secret: false, type_info: info)

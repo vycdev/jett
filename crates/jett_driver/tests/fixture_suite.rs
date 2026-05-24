@@ -1429,6 +1429,10 @@ compile_fail_fixture!(
     "reflection_metadata_constructor.jett"
 );
 compile_fail_fixture!(
+    compile_fail_reflection_field_metadata_constructor,
+    "reflection_field_metadata_constructor.jett"
+);
+compile_fail_fixture!(
     compile_fail_type_construct_variant_start_non_enum_owner,
     "type_construct_variant_start_non_enum_owner.jett"
 );
