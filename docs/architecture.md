@@ -1660,22 +1660,19 @@ Core stdlib (string, list, math, json) is implemented in Phase D. This phase com
 
 ## Appendix: Error Code Registry
 
-Error codes are organized by phase and category:
+Error codes are organized by phase and category. The current implemented
+registry is intentionally compact; constructs such as pipelines reuse ordinary
+call, type, and handle diagnostics instead of getting a parallel error family.
 
 | Range | Category |
 |---|---|
-| E0001–E0099 | Lexer errors (bad indentation, invalid tokens) |
-| E0100–E0199 | Parser errors (unexpected token, malformed construct) |
-| E0200–E0299 | Name resolution errors (undefined, shadowing, unused) |
-| E0300–E0399 | Type errors (mismatch, missing conversion, failed constraint) |
-| E0400–E0499 | Ownership errors (use-after-move, view escape, missing clone) |
-| E0500–E0599 | Capability errors (missing capability, impure in pure context) |
-| E0600–E0699 | Secret errors (secret exposure, missing declassify) |
-| E0700–E0799 | State machine errors (invalid transition, wrong state) |
-| E0800–E0899 | Complexity limit errors (too many statements, too deep) |
-| E0900–E0999 | Concurrency errors (orphaned task, view sent to actor) |
-| E1000–E1099 | Verify/property errors (assertion failed, impure verify) |
-| E1100–E1199 | Bitfield errors (invalid bit width, out-of-range value, missing `network` modifier) |
-| E1200–E1299 | Serialization errors (secret field in `json.serialize`, missing field mapping) |
-| E1300–E1399 | Pipeline errors (type mismatch at `into` boundary) |
-| E1400–E1499 | Import errors (circular import, file-level `use`, `use` after code in function) |
+| E0000 | Driver and file/project discovery errors |
+| E0200–E0209 | Name resolution errors and warnings (undefined, duplicate, namespace visibility, `export root`) |
+| E0300–E0354 | Type and language policy errors: calls, generic arity, handles, interfaces, refinements, bitfields, JSON policy, state machines, reflection metadata, and pipeline boundaries |
+| E0400–E0401 | Ownership errors (use-after-move, consuming a view) |
+| E0500–E0501 | Capability and purity errors (pure or verify code calling impure code) |
+| E0600–E0603 | Secret errors (secret exposure, invalid declassification/helper use, secret-containing output) |
+| E0700 | Actor response errors (`respond` outside a handler with `responds`) |
+| E0800–E0802 | Complexity limit errors (too many statements, too much nesting, too much cyclomatic complexity) |
+| E0999–E1000 | Lexer/parser diagnostics surfaced by the parser |
+| E9000 | Comptime verify failures |
