@@ -1,0 +1,17 @@
+namespace app
+function bad_filter_return() returns list[int64]:
+    return list.filter[int64](list(1), function(item: int64) returns int64: return item)
+function bad_map_return() returns list[string]:
+    return list.map[int64, string](list(1), function(item: int64) returns int64: return item)
+function bad_sort_key() returns list[int64]:
+    return list.sort_by[int64](list(1), function(item: int64) returns string: return "x")
+function bad_group_key() returns map[string, list[int64]]:
+    return list.group_by[int64](list(1), function(item: int64) returns int64: return item)
+function bad_reduce_callback() returns int64:
+    return list.reduce[int64, int64](list(1), 0, function(acc: int64, item: int64) returns string: return "x")
+function bad_flat_map_return() returns list[int64]:
+    return list.flat_map[int64, int64](list(1), function(item: int64) returns int64: return item)
+function bad_map_filter_return(values: map[string, int64]) returns map[string, int64]:
+    return map.filter[string, int64](values, function(key: string, value: int64) returns int64: return value)
+function bad_map_values_return(values: map[string, int64]) returns map[string, string]:
+    return map.map_values[string, int64, string](values, function(value: int64) returns int64: return value)

@@ -1,116 +1,94 @@
 namespace test
-
 function filter_positive_count() returns int64:
     map[string, int64] scores = map("alice": 10, "bob": -5, "carol": 30, "dave": -2)
     map[string, int64] positive = map.filter(scores, function(k: string, v: int64) returns bool: return v > 0)
     return map.length(positive)
-
 verify filter_positive_count:
     assert filter_positive_count() == 2
-
 function filter_has_included() returns bool:
     map[string, int64] scores = map("alice": 10, "bob": -5, "carol": 30)
     map[string, int64] positive = map.filter(scores, function(k: string, v: int64) returns bool: return v > 0)
     return map.has(positive, "alice")
-
 verify filter_has_included:
     assert filter_has_included() == true
-
 function filter_excludes_negative() returns bool:
     map[string, int64] scores = map("alice": 10, "bob": -5, "carol": 30)
     map[string, int64] positive = map.filter(scores, function(k: string, v: int64) returns bool: return v > 0)
     return map.has(positive, "bob")
-
 verify filter_excludes_negative:
     assert filter_excludes_negative() == false
-
 function filter_empty_result() returns int64:
     map[string, int64] scores = map("alice": 10, "bob": 20)
     map[string, int64] empty_map = map.filter(scores, function(k: string, v: int64) returns bool: return v > 100)
     return map.length(empty_map)
-
 verify filter_empty_result:
     assert filter_empty_result() == 0
-
 function map_values_count() returns int64:
     map[string, int64] scores = map("alice": 10, "bob": 20, "carol": 30)
     map[string, int64] doubled = map.map_values(scores, function(v: int64) returns int64: return v * 2)
     return map.length(doubled)
-
 verify map_values_count:
     assert map_values_count() == 3
-
 function map_values_alice() returns int64:
     map[string, int64] scores = map("alice": 10, "bob": 20, "carol": 30)
     map[string, int64] doubled = map.map_values(scores, function(v: int64) returns int64: return v * 2)
     return map.get_or(doubled, "alice", 0)
-
 verify map_values_alice:
     assert map_values_alice() == 20
-
 function map_values_bob() returns int64:
     map[string, int64] scores = map("alice": 10, "bob": 20, "carol": 30)
     map[string, int64] doubled = map.map_values(scores, function(v: int64) returns int64: return v * 2)
     return map.get_or(doubled, "bob", 0)
-
 verify map_values_bob:
     assert map_values_bob() == 40
-
 function map_values_carol() returns int64:
     map[string, int64] scores = map("alice": 10, "bob": 20, "carol": 30)
     map[string, int64] doubled = map.map_values(scores, function(v: int64) returns int64: return v * 2)
     return map.get_or(doubled, "carol", 0)
-
 verify map_values_carol:
     assert map_values_carol() == 60
-
+function map_values_transform_type() returns string:
+    map[string, int64] scores = map("alice": 10, "bob": 20)
+    map[string, string] labels = map.map_values[string, int64, string](scores, function(v: int64) returns string: return "score-{string.from_int64(v)}")
+    return map.get_or(labels, "alice", "missing")
+verify map_values_transform_type:
+    assert map_values_transform_type() == "score-10"
 function for_each_runs() returns int64:
     map[string, int64] scores = map("alice": 10, "bob": 20)
     map.for_each(scores, function(k: string, v: int64) returns int64: return 0)
     return 42
-
 verify for_each_runs:
     assert for_each_runs() == 42
-
 function from_lists_count() returns int64:
     list[string] keys = list("a", "b", "c")
     list[int64] vals = list(1, 2, 3)
     map[string, int64] m = map.from_lists(keys, vals)
     return map.length(m)
-
 verify from_lists_count:
     assert from_lists_count() == 3
-
 function from_lists_value_a() returns int64:
     list[string] keys = list("a", "b", "c")
     list[int64] vals = list(1, 2, 3)
     map[string, int64] m = map.from_lists(keys, vals)
     return map.get_or(m, "a", 0)
-
 verify from_lists_value_a:
     assert from_lists_value_a() == 1
-
 function from_lists_value_b() returns int64:
     list[string] keys = list("a", "b", "c")
     list[int64] vals = list(1, 2, 3)
     map[string, int64] m = map.from_lists(keys, vals)
     return map.get_or(m, "b", 0)
-
 verify from_lists_value_b:
     assert from_lists_value_b() == 2
-
 function from_lists_uneven() returns int64:
     list[string] keys = list("x", "y")
     list[int64] vals = list(10, 20, 30)
     map[string, int64] m = map.from_lists(keys, vals)
     return map.length(m)
-
 verify from_lists_uneven:
     assert from_lists_uneven() == 2
-
 function entries_count() returns int64:
     map[string, int64] scores = map("alice": 10, "bob": 20, "carol": 30)
     return list.length(map.entries(scores))
-
 verify entries_count:
     assert entries_count() == 3
