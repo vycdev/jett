@@ -1,24 +1,19 @@
 namespace test
-
 enum Direction:
     north
     south
-
 enum Shape:
     circle(radius: float64)
     rect(width: float64, height: float64)
-
 enum OtherShape:
     circle(radius: float64)
     rect(width: float64, height: float64)
-
 function shape_area(shape: Shape) returns float64:
     match shape:
         circle(radius):
             return radius
         rect(width, height):
             return width * height
-
 function construct_unit_variant() returns bool:
     for variant in type.variants[Direction]():
         if variant.name == "south":
@@ -28,7 +23,6 @@ function construct_unit_variant() returns bool:
                 return false
             return built == Direction.south
     return false
-
 function construct_payload_variant_area() returns float64:
     for variant in type.variants[Shape]():
         if variant.name != "rect":
@@ -48,7 +42,6 @@ function construct_payload_variant_area() returns float64:
             return -3.0
         return shape_area(built)
     return -4.0
-
 function missing_payload_message() returns string:
     for variant in type.variants[Shape]():
         if variant.name != "rect":
@@ -66,19 +59,16 @@ function missing_payload_message() returns string:
             return error
         return "unexpected success"
     return "missing variant"
-
 function shape_variant_owner_type() returns string:
     TypeVariant variant = list.get[TypeVariant](type.variants[Shape](), 1) handle:
         return "missing variant"
     return variant.owner_type
-
 function mismatched_variant_owner_message() returns string:
     TypeVariant variant = list.get[TypeVariant](type.variants[OtherShape](), 1) handle:
         return "missing variant"
     TypeConstruction builder = type.construct_variant_start[Shape](view variant) handle error:
         return error
     return "unexpected success"
-
 function mismatched_variant_field_owner_message() returns string:
     TypeVariant variant = list.get[TypeVariant](type.variants[Shape](), 1) handle:
         return "missing variant"
@@ -91,7 +81,6 @@ function mismatched_variant_field_owner_message() returns string:
     builder = type.construct_put[Shape, float64](builder, view field, 3.0) handle error:
         return error
     return "unexpected success"
-
 function mismatched_variant_field_member_message() returns string:
     TypeVariant variant = list.get[TypeVariant](type.variants[Shape](), 1) handle:
         return "missing variant"
@@ -104,7 +93,14 @@ function mismatched_variant_field_member_message() returns string:
     builder = type.construct_put[Shape, float64](builder, view field, 3.0) handle error:
         return error
     return "unexpected success"
-
+function mismatched_variant_finish_target_message() returns string:
+    TypeVariant variant = list.get[TypeVariant](type.variants[Shape](), 1) handle:
+        return "missing variant"
+    TypeConstruction builder = type.construct_variant_start[Shape](view variant) handle error:
+        return error
+    OtherShape built = type.construct_finish[OtherShape](builder) handle error:
+        return error
+    return "unexpected success"
 verify type_construction_enum:
     assert construct_unit_variant() == true
     assert construct_payload_variant_area() == 12.0
@@ -113,3 +109,4 @@ verify type_construction_enum:
     assert string.contains(mismatched_variant_owner_message(), "belongs to 'test.OtherShape', expected 'test.Shape'") == true
     assert string.contains(mismatched_variant_field_owner_message(), "belongs to 'test.OtherShape.rect', expected 'test.Shape.rect'") == true
     assert string.contains(mismatched_variant_field_member_message(), "belongs to 'test.Shape.circle', expected 'test.Shape.rect'") == true
+    assert string.contains(mismatched_variant_finish_target_message(), "builder for 'test.Shape' cannot construct 'test.OtherShape'") == true

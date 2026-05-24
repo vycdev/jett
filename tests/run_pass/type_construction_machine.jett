@@ -113,6 +113,14 @@ function mismatched_state_field_member_message() returns string:
     builder = type.construct_put[Session, string](builder, view field, "user-1") handle error:
         return error
     return "unexpected"
+function mismatched_machine_finish_target_message() returns string:
+    TypeMachineState state = logged_in_state() handle:
+        return "missing-state"
+    TypeConstruction builder = type.construct_machine_start[Session](view state) handle error:
+        return error
+    OtherSession built = type.construct_finish[OtherSession](builder) handle error:
+        return error
+    return "unexpected"
 verify type_construction_machine:
     assert construct_logged_in_session() == "logged_in:user-1"
     assert construct_state_qualified_session() == "logged_in:Lin"
@@ -123,3 +131,4 @@ verify type_construction_machine:
     assert string.contains(mismatched_state_owner_message(), "belongs to machine 'test.OtherSession', expected 'test.Session'") == true
     assert string.contains(mismatched_state_field_owner_message(), "belongs to 'test.OtherSession.logged_in', expected 'test.Session.logged_in'") == true
     assert string.contains(mismatched_state_field_member_message(), "belongs to 'test.Session.pending', expected 'test.Session.logged_in'") == true
+    assert string.contains(mismatched_machine_finish_target_message(), "builder for 'test.Session' cannot construct 'test.OtherSession'") == true
