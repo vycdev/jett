@@ -3709,6 +3709,39 @@ impl<'a> TypeChecker<'a> {
                 vec![TypeInterner::STRING],
                 TypeInterner::STRING,
             ),
+            "time.now_ms" | "time.now_s" => {
+                self.no_type_args_signature(&name, type_args, span, vec![], TypeInterner::INT64)
+            }
+            "os.args" => {
+                self.expect_no_type_args(&name, type_args, span);
+                let list_string = self.interner.intern(Type::List(TypeInterner::STRING));
+                Some((vec![], list_string))
+            }
+            "os.env" => {
+                self.expect_no_type_args(&name, type_args, span);
+                let opt_string = self.interner.intern(Type::Optional(TypeInterner::STRING));
+                Some((vec![TypeInterner::STRING], opt_string))
+            }
+            "csv.parse" => {
+                self.expect_no_type_args(&name, type_args, span);
+                let list_string = self.interner.intern(Type::List(TypeInterner::STRING));
+                let rows_ty = self.interner.intern(Type::List(list_string));
+                Some((vec![TypeInterner::STRING], rows_ty))
+            }
+            "csv.stringify" => {
+                self.expect_no_type_args(&name, type_args, span);
+                let list_string = self.interner.intern(Type::List(TypeInterner::STRING));
+                let rows_ty = self.interner.intern(Type::List(list_string));
+                Some((vec![rows_ty], TypeInterner::STRING))
+            }
+            "csv.parse_with_header" => {
+                self.expect_no_type_args(&name, type_args, span);
+                let row_ty = self
+                    .interner
+                    .intern(Type::Map(TypeInterner::STRING, TypeInterner::STRING));
+                let rows_ty = self.interner.intern(Type::List(row_ty));
+                Some((vec![TypeInterner::STRING], rows_ty))
+            }
             _ => None,
         }
     }
