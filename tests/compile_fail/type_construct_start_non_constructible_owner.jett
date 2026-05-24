@@ -1,0 +1,3 @@
+# ERROR: E0309
+function bad_construct_start_owner() returns TypeConstruction:
+    return type.construct_start[int64]()
