@@ -69,6 +69,10 @@ enum Command {
         /// List public namespaces and discoverable definitions
         #[arg(long)]
         namespaces: bool,
+
+        /// Return the type at file:line:column
+        #[arg(long = "type-at")]
+        type_at: Option<String>,
     },
 
     /// Start the Language Server Protocol server (for editor integration)
@@ -185,35 +189,77 @@ fn main() {
             let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
             rt.block_on(jett_lsp::run_server());
         }
-        Command::Query { agent, namespaces } => {
-            if !namespaces {
+        Command::Query {
+            agent,
+            namespaces,
+            type_at,
+        } => {
+            let query_count = usize::from(namespaces) + usize::from(type_at.is_some());
+            if query_count != 1 {
                 if agent {
                     print!(
                         "{}",
-                        render_query_agent_error("query requires --namespaces")
+                        render_query_agent_error("query requires exactly one query flag")
                     );
                 } else {
-                    eprintln!("error: query requires --namespaces");
+                    eprintln!("error: query requires exactly one query flag");
                 }
                 process::exit(1);
             }
 
-            let cwd = std::env::current_dir().unwrap_or_default();
-            match jett_driver::query_namespaces(&cwd) {
-                Ok(result) => {
-                    if agent {
-                        print!("{}", render_query_namespaces_agent_output(&result));
-                    } else {
-                        print_query_namespaces_human(&result);
+            if namespaces {
+                let cwd = std::env::current_dir().unwrap_or_default();
+                match jett_driver::query_namespaces(&cwd) {
+                    Ok(result) => {
+                        if agent {
+                            print!("{}", render_query_namespaces_agent_output(&result));
+                        } else {
+                            print_query_namespaces_human(&result);
+                        }
+                    }
+                    Err(e) => {
+                        if agent {
+                            print!("{}", render_query_agent_error(&e));
+                        } else {
+                            eprintln!("error: {e}");
+                        }
+                        process::exit(1);
                     }
                 }
-                Err(e) => {
-                    if agent {
-                        print!("{}", render_query_agent_error(&e));
-                    } else {
-                        eprintln!("error: {e}");
+            }
+
+            if let Some(position) = type_at {
+                let position = match parse_source_position(&position) {
+                    Ok(position) => position,
+                    Err(e) => {
+                        if agent {
+                            print!("{}", render_query_agent_error(&e));
+                        } else {
+                            eprintln!("error: {e}");
+                        }
+                        process::exit(1);
                     }
-                    process::exit(1);
+                };
+                match jett_driver::query_type_at(
+                    Path::new(&position.file),
+                    position.line,
+                    position.column,
+                ) {
+                    Ok(result) => {
+                        if agent {
+                            print!("{}", render_query_type_at_agent_output(&result));
+                        } else {
+                            print_query_type_at_human(&result);
+                        }
+                    }
+                    Err(e) => {
+                        if agent {
+                            print!("{}", render_query_agent_error(&e));
+                        } else {
+                            eprintln!("error: {e}");
+                        }
+                        process::exit(1);
+                    }
                 }
             }
         }
@@ -375,6 +421,30 @@ fn render_query_agent_error(error: &str) -> String {
     format!("status: error\nerror: {}\n", escape_toon_scalar(error))
 }
 
+fn render_query_type_at_agent_output(result: &jett_driver::TypeAtQueryResult) -> String {
+    let mut out = String::new();
+    out.push_str("status: ok\n");
+    out.push_str(&format!(
+        "file: {}\n",
+        escape_toon_scalar(&result.file_path)
+    ));
+    out.push_str(&format!("line: {}\n", result.line));
+    out.push_str(&format!("column: {}\n", result.column));
+    out.push_str(&format!(
+        "found: {}\n",
+        if result.type_name.is_some() {
+            "true"
+        } else {
+            "false"
+        }
+    ));
+    out.push_str(&format!(
+        "type: {}\n",
+        escape_toon_scalar(result.type_name.as_deref().unwrap_or(""))
+    ));
+    out
+}
+
 fn print_query_namespaces_human(result: &jett_driver::NamespaceQueryResult) {
     for definition in &result.definitions {
         let namespace = definition.namespace.as_deref().unwrap_or("-");
@@ -386,6 +456,56 @@ fn print_query_namespaces_human(result: &jett_driver::NamespaceQueryResult) {
             definition.file_path
         );
     }
+}
+
+fn print_query_type_at_human(result: &jett_driver::TypeAtQueryResult) {
+    match result.type_name.as_deref() {
+        Some(type_name) => println!("{type_name}"),
+        None => println!(
+            "no type found at {}:{}:{}",
+            result.file_path, result.line, result.column
+        ),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SourcePosition {
+    file: String,
+    line: u32,
+    column: u32,
+}
+
+fn parse_source_position(raw: &str) -> Result<SourcePosition, String> {
+    let mut parts = raw.rsplitn(3, ':');
+    let column = parts
+        .next()
+        .ok_or_else(|| "position must be file:line:column".to_string())?;
+    let line = parts
+        .next()
+        .ok_or_else(|| "position must be file:line:column".to_string())?;
+    let file = parts
+        .next()
+        .ok_or_else(|| "position must be file:line:column".to_string())?;
+
+    if file.is_empty() {
+        return Err("position file must not be empty".to_string());
+    }
+
+    let line = line
+        .parse::<u32>()
+        .map_err(|_| "position line must be a positive integer".to_string())?;
+    let column = column
+        .parse::<u32>()
+        .map_err(|_| "position column must be a positive integer".to_string())?;
+    if line == 0 || column == 0 {
+        return Err("position line and column are 1-based".to_string());
+    }
+
+    Ok(SourcePosition {
+        file: file.to_string(),
+        line,
+        column,
+    })
 }
 
 fn append_test_agent_blocks(out: &mut String, file_results: &[jett_driver::TestResult]) {
@@ -582,5 +702,34 @@ mod tests {
         let rendered = render_query_agent_error("query\nfailed");
 
         assert_eq!(rendered, "status: error\nerror: query\\nfailed\n");
+    }
+
+    #[test]
+    fn query_type_at_agent_output_reports_found_type() {
+        let result = jett_driver::TypeAtQueryResult {
+            file_path: "src/main.jett".to_string(),
+            line: 4,
+            column: 19,
+            type_name: Some("int64".to_string()),
+        };
+
+        let rendered = render_query_type_at_agent_output(&result);
+
+        assert_eq!(
+            rendered,
+            "status: ok\nfile: src/main.jett\nline: 4\ncolumn: 19\nfound: true\ntype: int64\n"
+        );
+    }
+
+    #[test]
+    fn parse_source_position_splits_from_the_right() {
+        assert_eq!(
+            parse_source_position(r"C:\project\main.jett:12:34"),
+            Ok(SourcePosition {
+                file: r"C:\project\main.jett".to_string(),
+                line: 12,
+                column: 34,
+            })
+        );
     }
 }

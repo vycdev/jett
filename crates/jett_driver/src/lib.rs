@@ -70,6 +70,15 @@ pub struct NamespaceQueryResult {
     pub definitions: Vec<QueryDefinition>,
 }
 
+/// Result of `jett query --agent --type-at file:line:column`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypeAtQueryResult {
+    pub file_path: String,
+    pub line: u32,
+    pub column: u32,
+    pub type_name: Option<String>,
+}
+
 #[derive(Clone, Copy)]
 struct RunOptions {
     capture_stdout: bool,
@@ -209,6 +218,69 @@ pub fn hover_type(source: &str, line: u32, col: u32) -> Option<String> {
     }
 
     best.map(|(_, ty_id)| check_result.interner.type_name(ty_id))
+}
+
+/// Return the inferred type name at a source position in a file.
+///
+/// This query parses, resolves, and typechecks with stdlib plus sibling project
+/// modules, but it does not execute verify/property blocks.
+pub fn query_type_at(path: &Path, line: u32, column: u32) -> Result<TypeAtQueryResult, String> {
+    let source = fs::read_to_string(path)
+        .map_err(|e| format!("failed to read {}: {}", path.display(), e))?;
+    let file_path = path.display().to_string();
+    let file_id = FileId::new(0);
+    let Some(offset) = line_col_to_offset(&source, line, column) else {
+        return Err(format!(
+            "position {line}:{column} is outside {}",
+            path.display()
+        ));
+    };
+
+    let mut parse_result = parse(&source, file_id);
+    let parse_errors = error_messages_from_diagnostics(&parse_result.errors);
+    if !parse_errors.is_empty() {
+        return Err(format!("parse errors:\n{}", parse_errors.join("\n")));
+    }
+
+    let mut support_modules = discover_stdlib_modules_with_diagnostics();
+    support_modules.extend(discover_project_modules_with_diagnostics(path));
+    let support_errors = error_messages_from_diagnostics(&support_modules.diagnostics);
+    if !support_errors.is_empty() {
+        return Err(format!(
+            "support parse errors:\n{}",
+            support_errors.join("\n")
+        ));
+    }
+    prepend_support_modules(&mut parse_result.module, support_modules.modules);
+
+    let resolve_result = resolve(&parse_result.module);
+    let resolve_errors = error_messages_from_diagnostics(&resolve_result.diagnostics);
+    if !resolve_errors.is_empty() {
+        return Err(format!("resolution errors:\n{}", resolve_errors.join("\n")));
+    }
+
+    let check_result = check(&parse_result.module, &resolve_result);
+    let type_errors = error_messages_from_diagnostics(&check_result.diagnostics);
+    if !type_errors.is_empty() {
+        return Err(format!("type errors:\n{}", type_errors.join("\n")));
+    }
+
+    let mut best: Option<(u32, jett_types::TypeId)> = None;
+    for (span, ty_id) in &check_result.type_map {
+        if span.file == file_id && span.start <= offset && offset <= span.end {
+            let len = span.end - span.start;
+            if best.is_none() || len < best.unwrap().0 {
+                best = Some((len, *ty_id));
+            }
+        }
+    }
+
+    Ok(TypeAtQueryResult {
+        file_path,
+        line,
+        column,
+        type_name: best.map(|(_, ty_id)| check_result.interner.type_name(ty_id)),
+    })
 }
 
 /// Return a list of (name, kind) completion candidates visible in `source`.
@@ -1473,6 +1545,24 @@ mod tests {
                 .all(|def| def.name != "api.hidden"),
             "private namespaced definitions should not appear in global query results"
         );
+    }
+
+    #[test]
+    fn query_type_at_returns_type_for_file_position() {
+        let root = temp_test_dir("jett_driver_query_type_at");
+        fs::create_dir_all(&root).expect("temp query dir should be created");
+        let file = root.join("main.jett");
+        fs::write(
+            &file,
+            "namespace app\n\nfunction main() returns nothing:\n    int64 total = 1 + 2\n    return nothing\n",
+        )
+        .expect("query type fixture should be written");
+
+        let result = query_type_at(&file, 4, 19).expect("type query should succeed");
+
+        fs::remove_dir_all(&root).expect("temp query dir should be removed");
+
+        assert_eq!(result.type_name, Some("int64".to_string()));
     }
 }
 

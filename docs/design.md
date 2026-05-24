@@ -3954,16 +3954,13 @@ The Agent Server Protocol extends to every compiler interaction, not just build 
 jett query --agent --type-at src/server.jett:45:12
 ```
 
-```
-query: type_at
+```toon
+status: ok
 file: src/server.jett
 line: 45
 column: 12
-result:
-  expression: user.email
-  type: string
-  refinements[1]: string.contains(value, "@")
-  defined_in: src/models.jett:12
+found: true
+type: string
 ```
 
 **Function signature lookup:**
