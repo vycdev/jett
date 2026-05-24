@@ -47,6 +47,13 @@ function parse_nested_session_box() returns string:
     SessionBox box = json.parse[SessionBox](raw) handle error:
         return error
     return "{box.current.user_id}:{list.length[Session](box.history)}"
+function parse_lenient_unknown_machine_fields() returns string:
+    string raw = "{{\"state\":\"logged_in\",\"payload\":{{\"user_id\":\"user-4\",\"displayName\":\"Cal\",\"extra\":true}},\"version\":1}}"
+    Session session = json.parse[Session](raw) handle error:
+        return error
+    if session at logged_in:
+        return "{session.user_id}:{session.display_name}"
+    return "wrong-state"
 function parse_exact_unknown_envelope_error() returns string:
     string raw = "{{\"state\":\"guest\",\"payload\":{{}},\"version\":1}}"
     Session session = json.parse_exact[Session](raw) handle error:
@@ -78,6 +85,7 @@ verify json_parse_machine_envelope:
     assert string.contains(parse_state_mismatch_error(), "cannot finish state 'guest'") == true
     assert parse_guest_session() == "guest"
     assert parse_nested_session_box() == "user-3:2"
+    assert parse_lenient_unknown_machine_fields() == "user-4:Cal"
     assert string.contains(parse_exact_unknown_envelope_error(), "unknown field 'version'") == true
     assert string.contains(parse_exact_machine_type_tag_error(), "unknown field 'type'") == true
     assert string.contains(parse_exact_unknown_payload_error(), "unknown field 'extra'") == true
