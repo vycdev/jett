@@ -1,0 +1,11 @@
+# ERROR: E0319
+machine Session:
+    states:
+        guest
+        logged_in(user_id: string)
+struct Holder:
+    current: Session
+function user_id_from_field(holder: Holder) returns string:
+    if holder.current at logged_in:
+        return holder.current.user_id
+    return "guest"

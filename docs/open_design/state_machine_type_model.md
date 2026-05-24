@@ -30,7 +30,9 @@ Implemented:
   diagnostics for non-machine values and states not declared on the machine.
 - A positive `if value at state:` check narrows a bare or state-qualified
   machine variable to `Machine at state` for that branch, so state payload
-  fields and transitions are available only under a visible guard.
+  fields and transitions are available only under a visible guard. The current
+  narrowing target is a bare local variable only; guards over field paths such
+  as `holder.current at logged_in` do not narrow the later field access.
 - For bare machines, an `if` / `else if` chain that excludes all but one
   declared state narrows later branches, including `else if` branches guarded
   by unrelated conditions, and the final `else` branch to that single remaining
@@ -162,7 +164,9 @@ to a known machine owner.
    - return type is `Machine at target`.
 6. Typecheck `expr at state` as a bool check on machine values. Done. It does
    not narrow arbitrary expressions, but a positive `if name at state:` guard
-   narrows that variable in the guarded branch.
+   narrows that variable in the guarded branch. The compile-fail fixture
+   `state_machine_field_path_guard_no_narrowing.jett` pins the current
+   field-path boundary.
 7. Typecheck state-specific payload field access. Done:
    - `Machine at state` values expose only that state's payload fields,
    - bare `Machine` values remain opaque,
