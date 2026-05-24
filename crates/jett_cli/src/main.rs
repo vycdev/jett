@@ -627,14 +627,15 @@ fn render_query_completions_agent_output(result: &jett_driver::CompletionsQueryR
     out.push_str(&format!("column: {}\n", result.column));
     out.push_str(&format!("total: {}\n", result.candidates.len()));
     out.push_str(&format!(
-        "completions[{}]{{name,kind}}:\n",
+        "completions[{}]{{name,kind,signature}}:\n",
         result.candidates.len()
     ));
     for candidate in &result.candidates {
         out.push_str(&format!(
-            "  {},{}\n",
+            "  {},{},{}\n",
             escape_toon_scalar(&candidate.name),
-            jett_driver::query_kind_name(candidate.kind)
+            jett_driver::query_kind_name(candidate.kind),
+            escape_toon_scalar(candidate.signature.as_deref().unwrap_or(""))
         ));
     }
     out
@@ -740,9 +741,10 @@ fn print_query_signature_human(
 fn print_query_completions_human(result: &jett_driver::CompletionsQueryResult) {
     for candidate in &result.candidates {
         println!(
-            "{}\t{}",
+            "{}\t{}\t{}",
             jett_driver::query_kind_name(candidate.kind),
-            candidate.name
+            candidate.name,
+            candidate.signature.as_deref().unwrap_or("")
         );
     }
 }
@@ -1052,6 +1054,7 @@ mod tests {
             candidates: vec![jett_driver::CompletionQueryEntry {
                 name: "json.parse".to_string(),
                 kind: jett_resolve::scope::DefKind::Function,
+                signature: Some("json.parse[T](raw: string) returns result[T, string]".to_string()),
             }],
         };
 
@@ -1059,7 +1062,7 @@ mod tests {
 
         assert_eq!(
             rendered,
-            "status: ok\nfile: src/main.jett\nline: 4\ncolumn: 5\ntotal: 1\ncompletions[1]{name,kind}:\n  json.parse,function\n"
+            "status: ok\nfile: src/main.jett\nline: 4\ncolumn: 5\ntotal: 1\ncompletions[1]{name,kind,signature}:\n  json.parse,function,json.parse[T](raw: string) returns result[T\\, string]\n"
         );
     }
 

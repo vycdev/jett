@@ -84,6 +84,7 @@ pub struct TypeAtQueryResult {
 pub struct CompletionQueryEntry {
     pub name: String,
     pub kind: jett_resolve::scope::DefKind,
+    pub signature: Option<String>,
 }
 
 /// Result of `jett query --agent --complete-at file:line:column`.
@@ -386,9 +387,16 @@ pub fn query_completions_at(
     }
     append_module_query_definitions(&mut definitions, &parsed.module, &file_paths);
 
+    let mut signatures = HashMap::new();
+    for module in &support_modules.modules {
+        append_module_signature_displays(&mut signatures, module, &file_paths);
+    }
+    append_module_signature_displays(&mut signatures, &parsed.module, &file_paths);
+
     let mut candidates: Vec<CompletionQueryEntry> = definitions
         .into_iter()
         .map(|definition| CompletionQueryEntry {
+            signature: signatures.get(&definition.name).cloned(),
             name: definition.name,
             kind: definition.kind,
         })
@@ -480,6 +488,52 @@ fn module_signature_query_result(
     None
 }
 
+fn append_module_signature_displays(
+    signatures: &mut HashMap<String, String>,
+    module: &Module,
+    file_paths: &HashMap<FileId, PathBuf>,
+) {
+    let mut current_namespace: Option<String> = None;
+    for item in &module.items {
+        match item {
+            Item::Namespace(ns) => current_namespace = Some(ns.name.name.clone()),
+            Item::Function(func) => {
+                if let Some(signature) =
+                    function_signature_query_result(func, current_namespace.as_deref(), file_paths)
+                {
+                    signatures
+                        .entry(signature.name.clone())
+                        .or_insert_with(|| signature_display(&signature));
+                }
+            }
+            Item::Mutual(block) => {
+                for decl in &block.declarations {
+                    if let Some(signature) = function_decl_signature_query_result(
+                        decl,
+                        current_namespace.as_deref(),
+                        file_paths,
+                    ) {
+                        signatures
+                            .entry(signature.name.clone())
+                            .or_insert_with(|| signature_display(&signature));
+                    }
+                }
+            }
+            Item::Interface(_)
+            | Item::Implement(_)
+            | Item::Struct(_)
+            | Item::Bitfield(_)
+            | Item::Enum(_)
+            | Item::Machine(_)
+            | Item::Actor(_)
+            | Item::VarDecl(_)
+            | Item::Verify(_)
+            | Item::Property(_)
+            | Item::TypeAlias(_) => {}
+        }
+    }
+}
+
 fn function_signature_query_result(
     func: &FunctionDef,
     namespace: Option<&str>,
@@ -520,6 +574,35 @@ fn function_decl_signature_query_result(
     ))
 }
 
+fn signature_display(signature: &SignatureQueryResult) -> String {
+    let type_params = if signature.type_params.is_empty() {
+        String::new()
+    } else {
+        format!("[{}]", signature.type_params.join(", "))
+    };
+    let params: Vec<String> = signature
+        .params
+        .iter()
+        .map(|param| {
+            let mut prefix = String::new();
+            if param.view {
+                prefix.push_str("view ");
+            }
+            if param.mutable {
+                prefix.push_str("mutable ");
+            }
+            format!("{prefix}{}: {}", param.name, param.type_name)
+        })
+        .collect();
+    format!(
+        "{}{}({}) returns {}",
+        signature.name,
+        type_params,
+        params.join(", "),
+        signature.return_type
+    )
+}
+
 fn signature_query_result(
     leaf_name: &str,
     type_params: &[jett_parser::ast::Ident],
@@ -532,18 +615,18 @@ fn signature_query_result(
     let name = namespace
         .map(|namespace| format!("{namespace}.{leaf_name}"))
         .unwrap_or_else(|| leaf_name.to_string());
-    let type_params = type_params.iter().map(|param| param.name.clone()).collect();
+    let type_params: Vec<String> = type_params.iter().map(|param| param.name.clone()).collect();
     let params = params
         .iter()
         .map(|param| SignatureParam {
             name: param.name.name.clone(),
-            type_name: type_expr_name(&param.ty),
+            type_name: signature_type_expr_name(&param.ty, namespace, &type_params),
             view: param.view,
             mutable: param.mutable,
         })
         .collect();
     let return_type = return_type
-        .map(type_expr_name)
+        .map(|ty| signature_type_expr_name(ty, namespace, &type_params))
         .unwrap_or_else(|| "nothing".to_string());
 
     SignatureQueryResult {
@@ -553,6 +636,123 @@ fn signature_query_result(
         return_type,
         file_path: query_file_path(file, file_paths),
     }
+}
+
+fn signature_type_expr_name(
+    ty: &TypeExpr,
+    namespace: Option<&str>,
+    type_params: &[String],
+) -> String {
+    match ty {
+        TypeExpr::Named(ident) => signature_named_type_name(&ident.name, namespace, type_params),
+        TypeExpr::Generic(name, args, _) => {
+            let name = signature_generic_type_name(&name.name, namespace);
+            let args: Vec<String> = args
+                .iter()
+                .map(|arg| signature_type_expr_name(arg, namespace, type_params))
+                .collect();
+            format!("{}[{}]", name, args.join(", "))
+        }
+        TypeExpr::View(inner, _) => {
+            format!(
+                "view {}",
+                signature_type_expr_name(inner, namespace, type_params)
+            )
+        }
+        TypeExpr::StateQualified(inner, state, _) => {
+            format!(
+                "{} at {}",
+                signature_type_expr_name(inner, namespace, type_params),
+                state.name
+            )
+        }
+        TypeExpr::Function(params, ret, _) => {
+            let params: Vec<String> = params
+                .iter()
+                .map(|param| signature_type_expr_name(param, namespace, type_params))
+                .collect();
+            format!(
+                "function({}) returns {}",
+                params.join(", "),
+                signature_type_expr_name(ret, namespace, type_params)
+            )
+        }
+    }
+}
+
+fn signature_named_type_name(
+    name: &str,
+    namespace: Option<&str>,
+    type_params: &[String],
+) -> String {
+    if name.contains('.')
+        || type_params.iter().any(|type_param| type_param == name)
+        || signature_builtin_type_name(name)
+    {
+        return name.to_string();
+    }
+
+    namespace
+        .map(|namespace| format!("{namespace}.{name}"))
+        .unwrap_or_else(|| name.to_string())
+}
+
+fn signature_generic_type_name(name: &str, namespace: Option<&str>) -> String {
+    if name.contains('.') || signature_builtin_generic_type_name(name) {
+        return name.to_string();
+    }
+
+    namespace
+        .map(|namespace| format!("{namespace}.{name}"))
+        .unwrap_or_else(|| name.to_string())
+}
+
+fn signature_builtin_type_name(name: &str) -> bool {
+    matches!(
+        name,
+        "int8"
+            | "int16"
+            | "int32"
+            | "int64"
+            | "uint8"
+            | "uint16"
+            | "uint32"
+            | "uint64"
+            | "float32"
+            | "float64"
+            | "string"
+            | "bool"
+            | "bytes"
+            | "nothing"
+            | "TypeConstruction"
+            | "TypeInfo"
+            | "TypeKind"
+            | "TypePrimitive"
+            | "TypeField"
+            | "TypeBitfield"
+            | "TypeBitfieldField"
+            | "TypeBitfieldFieldShape"
+            | "TypeMachine"
+            | "TypeMachineState"
+            | "TypeMachineTransition"
+            | "TypeVariant"
+            | "Stdout"
+            | "Stderr"
+            | "Stdin"
+            | "Filesystem"
+            | "Network"
+            | "Clock"
+            | "Random"
+            | "Process"
+            | "Environment"
+    )
+}
+
+fn signature_builtin_generic_type_name(name: &str) -> bool {
+    matches!(
+        name,
+        "list" | "map" | "set" | "optional" | "result" | "secret"
+    )
 }
 
 fn completions_for_namespace(
@@ -1856,6 +2056,11 @@ mod tests {
         assert_eq!(result.params[0].name, "raw");
         assert_eq!(result.params[0].type_name, "string");
         assert_eq!(result.return_type, "result[T, string]");
+
+        let raw_result = query_signature(Path::new("."), "json.parse_raw")
+            .expect("signature query should succeed")
+            .expect("json.parse_raw signature should be found");
+        assert_eq!(raw_result.return_type, "result[json.JsonTree, string]");
     }
 }
 

@@ -3993,10 +3993,10 @@ file: src/server.jett
 line: 30
 column: 15
 total: 3
-completions[3]{name,kind}:
-  json.serialize_public,function
-  json.serialize,function
-  validate_user,function
+completions[3]{name,kind,signature}:
+  json.serialize_public,function,json.serialize_public[T](view value: T) returns string
+  json.serialize,function,json.serialize[T](view value: T) returns string
+  validate_user,function,validate_user(user: User) returns result[User\, string]
 ```
 
 **Verify/test results** (`jett test` runs all `verify` and `property` blocks):
