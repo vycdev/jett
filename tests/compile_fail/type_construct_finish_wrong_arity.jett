@@ -1,0 +1,9 @@
+# ERROR: E0309
+namespace test
+struct User:
+    id: string
+function bad_construct_finish_arity() returns nothing:
+    TypeConstruction builder = type.construct_start[User]()
+    User value = type.construct_finish[User, string](builder) handle error:
+        return nothing
+    return nothing

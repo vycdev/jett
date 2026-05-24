@@ -1,0 +1,8 @@
+# ERROR: E0304
+namespace test
+struct User:
+    id: string
+function bad_construct_finish_builder_arg() returns nothing:
+    User value = type.construct_finish[User]("not a builder") handle error:
+        return nothing
+    return nothing

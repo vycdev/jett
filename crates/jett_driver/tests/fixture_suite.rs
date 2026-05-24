@@ -1460,6 +1460,14 @@ compile_fail_fixture!(
     compile_fail_type_construct_finish_non_struct_owner,
     "type_construct_finish_non_struct_owner.jett"
 );
+compile_fail_fixture!(
+    compile_fail_type_construct_finish_wrong_arity,
+    "type_construct_finish_wrong_arity.jett"
+);
+compile_fail_fixture!(
+    compile_fail_type_construct_finish_wrong_builder_arg,
+    "type_construct_finish_wrong_builder_arg.jett"
+);
 
 #[test]
 fn multifile_cross_file_calls() {

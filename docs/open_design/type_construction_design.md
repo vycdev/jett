@@ -203,7 +203,10 @@ requires exactly the construction target and field-value type parameters, and a
 compiler-produced `TypeField` value at the call site. The compile-fail fixtures
 `type_construct_put_wrong_arity.jett` and
 `type_construct_put_wrong_field_arg.jett` pin that callers cannot replace
-trusted metadata with strings or omit the concrete field type.
+trusted metadata with strings or omit the concrete field type. The finish side
+is similarly pinned by `type_construct_finish_wrong_arity.jett` and
+`type_construct_finish_wrong_builder_arg.jett`: callers must name exactly one
+construction target and pass an actual `TypeConstruction` builder.
 
 The construction primitive should receive values that are already decoded into
 their field types. Format modules remain responsible for:
