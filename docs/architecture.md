@@ -541,7 +541,12 @@ For each `machine` type:
   when an API intentionally erases precise state. A positive
   `if value at state:` guard narrows that local variable back to
   `Machine at state` for the guarded branch, exposing state payload fields and
-  legal transitions there.
+  legal transitions there. A bare `Machine` value cannot satisfy a
+  `Machine at state` parameter without such a visible guard, even when its
+  construction site was precise.
+- State narrowing is intentionally local-variable scoped in the current checker.
+  Guards over field paths or other arbitrary expressions are still boolean
+  state tests, but they do not narrow subsequent path accesses.
 - If the guarded value is a bare machine and an `if` / `else if` chain excludes
   all but one declared state, the final `else` branch narrows to that single
   remaining state. For `if not (value at state):`, the immediate `else` branch

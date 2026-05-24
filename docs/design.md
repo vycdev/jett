@@ -1576,7 +1576,7 @@ result[Comment, string] result = post_comment(view clock, session, "hello")
 
 APIs may also intentionally accept a bare `UserAuth` when they need to inspect
 more than one possible state. In that shape, a positive state check narrows the
-local variable for the guarded branch:
+bare local variable for the guarded branch:
 
 ```
 function display_name(session: UserAuth) returns string:
@@ -1586,7 +1586,11 @@ function display_name(session: UserAuth) returns string:
 ```
 
 The payload field `session.user_id` is only available inside the guarded branch;
-outside it, `session` is still a bare `UserAuth`.
+outside it, `session` is still a bare `UserAuth`. If an API erases state by
+accepting or returning bare `UserAuth`, the value must be guarded again before
+it can flow back into a `UserAuth at logged_in` parameter. Guards over arbitrary
+paths such as `holder.session at logged_in` are state tests only for now; they
+do not narrow later field accesses.
 For a two-state machine, the `else` branch has a single remaining state, so it
 narrows too. For `if not (session at state):`, reaching the `else` branch proves
 the checked state for any machine. On a two-state bare machine, the guarded
