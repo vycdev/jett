@@ -1,65 +1,56 @@
 namespace app
-
 # --- string from int64 ---
-
 function int_to_str_test() returns string:
     return string.from_int64(42)
-
 verify int_to_str_test:
     assert int_to_str_test() == "42"
-
 # --- string from float64 ---
-
 function float_to_str_test() returns string:
     return string.from_float64(3.14)
-
 verify float_to_str_test:
     assert float_to_str_test() == "3.14"
-
 # --- string from bool ---
-
 function bool_to_str_test() returns string:
     string t = string.from_bool(true)
     string f = string.from_bool(false)
     return "{t},{f}"
-
 verify bool_to_str_test:
     assert bool_to_str_test() == "true,false"
-
 # --- int64 from string (result type) ---
-
 function parse_int_test() returns int64:
     result[int64, string] r = int64.from_string("123")
     int64 val = r handle error:
         default 0
     return val
-
 verify parse_int_test:
     assert parse_int_test() == 123
-
 # --- uint64 from string (result type) ---
-
 function parse_uint64_max_test() returns string:
     result[uint64, string] r = uint64.from_string("18446744073709551615")
     uint64 val = r handle error:
         return error
     return string.from_uint64(val)
-
 function uint64_literal_max_test() returns string:
     uint64 val = 18446744073709551615
     return string.from_uint64(val)
-
+function parse_uint64_negative_error_test() returns string:
+    uint64 val = uint64.from_string("-1") handle error:
+        return error
+    return string.from_uint64(val)
+function parse_uint64_overflow_error_test() returns string:
+    uint64 val = uint64.from_string("18446744073709551616") handle error:
+        return error
+    return string.from_uint64(val)
 verify parse_uint64_max_test:
     assert parse_uint64_max_test() == "18446744073709551615"
     assert uint64_literal_max_test() == "18446744073709551615"
-
+    assert parse_uint64_negative_error_test() == "uint64.from_string: cannot parse '-1' as uint64"
+    assert parse_uint64_overflow_error_test() == "uint64.from_string: cannot parse '18446744073709551616' as uint64"
 # --- float64 from string (result type) ---
-
 function parse_float_test() returns float64:
     result[float64, string] r = float64.from_string("2.5")
     float64 val = r handle error:
         default 0.0
     return val
-
 verify parse_float_test:
     assert parse_float_test() == 2.5
