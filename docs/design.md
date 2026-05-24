@@ -3963,6 +3963,27 @@ found: true
 type: string
 ```
 
+**Definition lookup:**
+
+```
+jett query --agent --definition-at src/server.jett:45:12
+```
+
+```toon
+status: ok
+file: src/server.jett
+line: 45
+column: 12
+found: true
+target: auth.User
+kind: struct
+namespace: auth
+visibility: public
+target_file: src/auth.jett
+target_line: 8
+target_column: 15
+```
+
 **Function signature lookup:**
 
 ```

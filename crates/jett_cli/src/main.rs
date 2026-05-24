@@ -78,6 +78,10 @@ enum Command {
         #[arg(long = "type-at")]
         type_at: Option<String>,
 
+        /// Return the definition target at file:line:column
+        #[arg(long = "definition-at")]
+        definition_at: Option<String>,
+
         /// Return completions at file:line:column
         #[arg(long = "complete-at")]
         complete_at: Option<String>,
@@ -268,11 +272,13 @@ fn main() {
             agent,
             namespaces,
             type_at,
+            definition_at,
             complete_at,
             signature,
         } => {
             let query_count = usize::from(namespaces)
                 + usize::from(type_at.is_some())
+                + usize::from(definition_at.is_some())
                 + usize::from(complete_at.is_some())
                 + usize::from(signature.is_some());
             if query_count != 1 {
@@ -330,6 +336,41 @@ fn main() {
                             print!("{}", render_query_type_at_agent_output(&result));
                         } else {
                             print_query_type_at_human(&result);
+                        }
+                    }
+                    Err(e) => {
+                        if agent {
+                            print!("{}", render_query_agent_error(&e));
+                        } else {
+                            eprintln!("error: {e}");
+                        }
+                        process::exit(1);
+                    }
+                }
+            }
+
+            if let Some(position) = definition_at {
+                let position = match parse_source_position(&position) {
+                    Ok(position) => position,
+                    Err(e) => {
+                        if agent {
+                            print!("{}", render_query_agent_error(&e));
+                        } else {
+                            eprintln!("error: {e}");
+                        }
+                        process::exit(1);
+                    }
+                };
+                match jett_driver::query_definition_at(
+                    Path::new(&position.file),
+                    position.line,
+                    position.column,
+                ) {
+                    Ok(result) => {
+                        if agent {
+                            print!("{}", render_query_definition_at_agent_output(&result));
+                        } else {
+                            print_query_definition_at_human(&result);
                         }
                     }
                     Err(e) => {
@@ -616,6 +657,52 @@ fn render_query_type_at_agent_output(result: &jett_driver::TypeAtQueryResult) ->
     out
 }
 
+fn render_query_definition_at_agent_output(
+    result: &jett_driver::DefinitionAtQueryResult,
+) -> String {
+    let mut out = String::new();
+    out.push_str("status: ok\n");
+    out.push_str(&format!(
+        "file: {}\n",
+        escape_toon_scalar(&result.file_path)
+    ));
+    out.push_str(&format!("line: {}\n", result.line));
+    out.push_str(&format!("column: {}\n", result.column));
+    out.push_str(&format!(
+        "found: {}\n",
+        if result.target.is_some() {
+            "true"
+        } else {
+            "false"
+        }
+    ));
+
+    let Some(target) = &result.target else {
+        return out;
+    };
+
+    out.push_str(&format!("target: {}\n", escape_toon_scalar(&target.name)));
+    out.push_str(&format!(
+        "kind: {}\n",
+        jett_driver::query_kind_name(target.kind)
+    ));
+    out.push_str(&format!(
+        "namespace: {}\n",
+        escape_toon_scalar(target.namespace.as_deref().unwrap_or(""))
+    ));
+    out.push_str(&format!(
+        "visibility: {}\n",
+        jett_driver::query_visibility_name(target.visibility)
+    ));
+    out.push_str(&format!(
+        "target_file: {}\n",
+        escape_toon_scalar(&target.file_path)
+    ));
+    out.push_str(&format!("target_line: {}\n", target.line));
+    out.push_str(&format!("target_column: {}\n", target.column));
+    out
+}
+
 fn render_query_completions_agent_output(result: &jett_driver::CompletionsQueryResult) -> String {
     let mut out = String::new();
     out.push_str("status: ok\n");
@@ -754,6 +841,23 @@ fn print_query_type_at_human(result: &jett_driver::TypeAtQueryResult) {
         Some(type_name) => println!("{type_name}"),
         None => println!(
             "no type found at {}:{}:{}",
+            result.file_path, result.line, result.column
+        ),
+    }
+}
+
+fn print_query_definition_at_human(result: &jett_driver::DefinitionAtQueryResult) {
+    match &result.target {
+        Some(target) => println!(
+            "{}\t{}\t{}:{}:{}",
+            jett_driver::query_kind_name(target.kind),
+            target.name,
+            target.file_path,
+            target.line,
+            target.column
+        ),
+        None => println!(
+            "no definition found at {}:{}:{}",
             result.file_path, result.line, result.column
         ),
     }
@@ -1042,6 +1146,31 @@ mod tests {
                 line: 12,
                 column: 34,
             })
+        );
+    }
+
+    #[test]
+    fn query_definition_at_agent_output_reports_target() {
+        let result = jett_driver::DefinitionAtQueryResult {
+            file_path: "src/main.jett".to_string(),
+            line: 6,
+            column: 12,
+            target: Some(jett_driver::DefinitionQueryTarget {
+                name: "models.User".to_string(),
+                kind: jett_resolve::scope::DefKind::Struct,
+                namespace: Some("models".to_string()),
+                visibility: jett_resolve::scope::DefVisibility::Public,
+                file_path: "src/models.jett".to_string(),
+                line: 3,
+                column: 15,
+            }),
+        };
+
+        let rendered = render_query_definition_at_agent_output(&result);
+
+        assert_eq!(
+            rendered,
+            "status: ok\nfile: src/main.jett\nline: 6\ncolumn: 12\nfound: true\ntarget: models.User\nkind: struct\nnamespace: models\nvisibility: public\ntarget_file: src/models.jett\ntarget_line: 3\ntarget_column: 15\n"
         );
     }
 

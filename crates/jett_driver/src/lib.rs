@@ -11,6 +11,7 @@ use jett_parser::parse;
 use jett_resolve::resolve;
 use jett_typecheck::{CheckResult, check};
 use jett_types::ReflectionMetadata;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -77,6 +78,27 @@ pub struct TypeAtQueryResult {
     pub line: u32,
     pub column: u32,
     pub type_name: Option<String>,
+}
+
+/// The resolved declaration target for a definition-at query.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DefinitionQueryTarget {
+    pub name: String,
+    pub kind: jett_resolve::scope::DefKind,
+    pub namespace: Option<String>,
+    pub visibility: jett_resolve::scope::DefVisibility,
+    pub file_path: String,
+    pub line: u32,
+    pub column: u32,
+}
+
+/// Result of `jett query --agent --definition-at file:line:column`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DefinitionAtQueryResult {
+    pub file_path: String,
+    pub line: u32,
+    pub column: u32,
+    pub target: Option<DefinitionQueryTarget>,
 }
 
 /// A single completion candidate visible at a source position.
@@ -316,6 +338,86 @@ pub fn query_type_at(path: &Path, line: u32, column: u32) -> Result<TypeAtQueryR
         line,
         column,
         type_name: best.map(|(_, ty_id)| check_result.interner.type_name(ty_id)),
+    })
+}
+
+/// Return the resolved definition target at a source position in a file.
+///
+/// This query parses and resolves with stdlib plus sibling project modules, but
+/// it does not typecheck or execute verify/property blocks.
+pub fn query_definition_at(
+    path: &Path,
+    line: u32,
+    column: u32,
+) -> Result<DefinitionAtQueryResult, String> {
+    let source = fs::read_to_string(path)
+        .map_err(|e| format!("failed to read {}: {}", path.display(), e))?;
+    let file_path = path.display().to_string();
+    let file_id = FileId::new(0);
+    let Some(offset) = line_col_to_offset(&source, line, column) else {
+        return Err(format!(
+            "position {line}:{column} is outside {}",
+            path.display()
+        ));
+    };
+
+    let mut parse_result = parse(&source, file_id);
+    let parse_errors = error_messages_from_diagnostics(&parse_result.errors);
+    if !parse_errors.is_empty() {
+        return Err(format!("parse errors:\n{}", parse_errors.join("\n")));
+    }
+
+    let mut support_modules = discover_stdlib_modules_with_diagnostics();
+    support_modules.extend(discover_project_modules_with_diagnostics(path));
+    let support_errors = error_messages_from_diagnostics(&support_modules.diagnostics);
+    if !support_errors.is_empty() {
+        return Err(format!(
+            "support parse errors:\n{}",
+            support_errors.join("\n")
+        ));
+    }
+
+    let mut file_paths = support_modules.files.clone();
+    let display_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    file_paths.insert(file_id, display_path);
+
+    prepend_support_modules(&mut parse_result.module, support_modules.modules);
+
+    let resolve_result = resolve(&parse_result.module);
+    let resolve_errors = error_messages_from_diagnostics(&resolve_result.diagnostics);
+    if !resolve_errors.is_empty() {
+        return Err(format!("resolution errors:\n{}", resolve_errors.join("\n")));
+    }
+
+    let mut best_def: Option<(u32, jett_resolve::scope::DefId)> = None;
+    for (span, def_id) in &resolve_result.resolutions {
+        if span.file == file_id && span.start <= offset && offset <= span.end {
+            let len = span.end - span.start;
+            if best_def.is_none() || len < best_def.unwrap().0 {
+                best_def = Some((len, *def_id));
+            }
+        }
+    }
+
+    let target = best_def.and_then(|(_, def_id)| {
+        let def = resolve_result.scope_table.def(def_id);
+        let (file_path, line, column) = definition_location(&source, def.span, &file_paths)?;
+        Some(DefinitionQueryTarget {
+            name: def.name.clone(),
+            kind: def.kind,
+            namespace: def.namespace.clone(),
+            visibility: def.visibility,
+            file_path,
+            line,
+            column,
+        })
+    });
+
+    Ok(DefinitionAtQueryResult {
+        file_path,
+        line,
+        column,
+        target,
     })
 }
 
@@ -1052,6 +1154,28 @@ fn display_query_path(path: &Path) -> String {
         .strip_prefix(r"\\?\")
         .unwrap_or(&displayed)
         .to_string()
+}
+
+fn definition_location(
+    current_source: &str,
+    span: Span,
+    file_paths: &HashMap<FileId, PathBuf>,
+) -> Option<(String, u32, u32)> {
+    if span.start == 0 && span.end == 0 {
+        return Some(("builtin".to_string(), 0, 0));
+    }
+
+    let source = if span.file == FileId::new(0) {
+        Cow::Borrowed(current_source)
+    } else {
+        Cow::Owned(fs::read_to_string(file_paths.get(&span.file)?).ok()?)
+    };
+    let (line, column) = jett_diagnostics::render::line_col(&source, span.start);
+    Some((
+        query_file_path(span.file, file_paths),
+        line as u32,
+        column as u32,
+    ))
 }
 
 /// Stable text label for a resolved definition kind.
@@ -2010,6 +2134,41 @@ mod tests {
         fs::remove_dir_all(&root).expect("temp query dir should be removed");
 
         assert_eq!(result.type_name, Some("int64".to_string()));
+    }
+
+    #[test]
+    fn query_definition_at_returns_cross_file_definition() {
+        let root = temp_test_dir("jett_driver_query_definition_at");
+        fs::create_dir_all(&root).expect("temp query dir should be created");
+        fs::write(root.join("jett.proj"), "name: query_fixture\n")
+            .expect("project marker should be written");
+        let models = root.join("models.jett");
+        fs::write(
+            &models,
+            "namespace models\n\nexport struct User:\n    id: int64\n",
+        )
+        .expect("models fixture should be written");
+        let file = root.join("main.jett");
+        fs::write(
+            &file,
+            "namespace app\n\nfunction make() returns models.User:\n    models.User user = models.User(id: 1)\n    return user\n",
+        )
+        .expect("main fixture should be written");
+
+        let result = query_definition_at(&file, 4, 12).expect("definition query should succeed");
+
+        fs::remove_dir_all(&root).expect("temp query dir should be removed");
+
+        let target = result.target.expect("definition target should be found");
+        assert_eq!(target.name, "models.User");
+        assert_eq!(query_kind_name(target.kind), "struct");
+        assert_eq!(target.namespace.as_deref(), Some("models"));
+        assert!(
+            target.file_path.ends_with("models.jett"),
+            "expected target file to be models.jett, got {}",
+            target.file_path
+        );
+        assert_eq!(target.line, 3);
     }
 
     #[test]

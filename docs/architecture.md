@@ -1261,7 +1261,7 @@ The query engine powers both LSP and ASP interactive queries. It provides:
 | `signature(function_name)` | Full function signature | ASP |
 | `complete_at(file, line, col)` | Completion candidates | LSP, ASP |
 | `namespaces()` | All namespaces with their public functions/types | ASP |
-| `definition(name)` | Go-to-definition | LSP |
+| `definition_at(file, line, col)` | Go-to-definition target | LSP, ASP |
 | `references(name)` | Find all references | LSP |
 | `diagnostics(file)` | All errors/warnings for a file | LSP |
 
@@ -1298,6 +1298,7 @@ The Agent Server Protocol is not a persistent server — it's the `--agent` flag
 | `jett build --agent` | Build errors or success |
 | `jett test --agent` | Verify + property test results |
 | `jett query --agent --type-at ...` | Type information |
+| `jett query --agent --definition-at ...` | Definition target |
 | `jett query --agent --signature ...` | Function signature |
 | `jett query --agent --complete-at ...` | Completions |
 | `jett query --agent --namespaces` | Namespace registry |
