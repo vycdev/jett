@@ -1,0 +1,25 @@
+namespace auth
+export machine Session:
+    states:
+        guest
+        logged_in(user_id: string)
+    transitions:
+        guest to logged_in
+namespace app
+function qualified_user_id_or_guest(session: auth.Session) returns string:
+    if session at logged_in:
+        return session.user_id
+    return "guest"
+function alias_construct_and_read() returns string:
+    use auth as a
+    a.Session at guest guest = a.Session(guest)
+    a.Session session = a.Session.transition(guest, logged_in, "Ada")
+    if session at logged_in:
+        return session.user_id
+    return "guest"
+verify namespace_machine_branch_narrowing:
+    auth.Session at guest guest = auth.Session(guest)
+    assert qualified_user_id_or_guest(guest) == "guest"
+    auth.Session logged = auth.Session.transition(guest, logged_in, "Lin")
+    assert qualified_user_id_or_guest(logged) == "Lin"
+    assert alias_construct_and_read() == "Ada"

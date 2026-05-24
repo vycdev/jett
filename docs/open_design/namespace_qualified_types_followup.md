@@ -37,6 +37,9 @@ toward canonical qualified declarations:
 - Exported state machines can now be constructed and transitioned through
   qualified names and function-local namespace aliases, including duplicate
   leaf names across namespaces.
+- Branch-local state narrowing also works on qualified machine owners and
+  values constructed through function-local namespace aliases; the narrowed fact
+  still attaches to the local value, not to the alias spelling.
 
 That was the right first bite because it unblocks stdlib-style reflection and
 JSON code without changing the language's broader namespace semantics.
@@ -142,7 +145,8 @@ decide how much root shorthand should exist.
 - State machines: qualified construction/transition, duplicate-leaf machines,
   branch-local state facts, `TypeKind` reflection, checked state/transition
   metadata, and JSON state/payload envelopes for duplicate-leaf machine owners
-  are covered.
+  are covered. Qualified and alias-qualified branch facts are pinned in
+  `tests/run_pass/namespace_machine_branch_narrowing.jett`.
 - Interfaces: the direct qualified, `use`-alias, and duplicate-leaf interface
   paths are now covered by run-pass fixtures.
 - Structs, enums, generic structs, bitfields, same-leaf functions, type names,

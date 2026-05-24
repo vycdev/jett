@@ -361,6 +361,10 @@ run_pass_fixture!(
     "namespace_duplicate_leaf_actors.jett"
 );
 run_pass_fixture!(
+    run_pass_namespace_machine_branch_narrowing,
+    "namespace_machine_branch_narrowing.jett"
+);
+run_pass_fixture!(
     run_pass_namespace_runtime_verify_context,
     "namespace_runtime_verify_context.jett"
 );
