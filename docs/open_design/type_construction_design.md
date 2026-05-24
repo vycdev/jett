@@ -73,6 +73,10 @@ State-machine construction must enforce:
 
 A reflected constructor must not be a weaker back door around these checks. It
 should reuse the same typechecker and interpreter rules where possible.
+The opaque builder also remembers the aggregate target it was started for:
+`type.construct_finish[T](builder)` must use that same target `T`. A builder
+started for one struct, bitfield, enum, machine, or state-qualified machine
+cannot be finished as a lookalike owner with the same field shape.
 
 ## Design Constraints
 
@@ -236,7 +240,8 @@ This path is implemented for the current opaque builder. The builder remains
 format-agnostic. JSON owns the envelope shape, unknown-key policy,
 `serialize_name` matching, and missing optional-field defaults. The construction
 primitive receives only checked machine-state metadata and decoded payload
-values.
+values. Like struct and enum builders, a machine builder records its selected
+target owner; finishing it as another machine owner is a construction error.
 
 ## Open Questions
 

@@ -64,6 +64,11 @@ return type.construct_finish[T](builder)
 
 This is verbose but valuable as a semantic baseline. It exposes exactly which
 operations need to be preserved by future syntax.
+Each starter records the target owner used to create the builder, and
+`type.construct_finish[T](builder)` rejects attempts to finish that builder as a
+different owner. Future block syntax must preserve that hidden target identity;
+it should not lower to a reusable field bag that can be retargeted by choosing a
+different `T` at the finish site.
 
 ## Current Decision
 
@@ -209,7 +214,8 @@ The block can lower mechanically to today's builder:
    decoded data, and explicit error handling is worth the small uniformity cost.
 
 The hidden builder must stay compiler-generated. User code should not be able to
-access it or pass it around from the block surface.
+access it or pass it around from the block surface, and the compiler-generated
+finish target must be the same `T` that selected the construction block.
 
 ## Static Rules
 
