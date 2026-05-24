@@ -930,6 +930,11 @@ Having `process(string)` and `process(int64)` in the same codebase splits the LL
 
 Jett bans function overloading entirely. **Every function has a unique name.**
 
+Compiler-owned numeric intrinsics such as `math.abs`, `math.min`, and
+`math.max` may dispatch on the checked primitive argument type, but user code
+cannot define overload sets. These intrinsics are a closed compiler table, not a
+general name-resolution rule.
+
 **What the compiler rejects:**
 
 ```

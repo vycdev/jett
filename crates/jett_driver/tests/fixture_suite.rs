@@ -256,6 +256,10 @@ compile_pass_fixture!(
     compile_pass_ownership_branch_return_consumes,
     "ownership_branch_return_consumes.jett"
 );
+compile_pass_fixture!(
+    compile_pass_math_numeric_builtin_secret_lifting,
+    "math_numeric_builtin_secret_lifting.jett"
+);
 
 compile_fail_fixture!(compile_fail_type_mismatch, "type_mismatch.jett");
 compile_fail_fixture!(compile_fail_secret_stdout, "secret_stdout.jett");
@@ -964,6 +968,28 @@ compile_fail_fixture!(
 #[test]
 fn compile_fail_math_extra_builtin_return_types_count() {
     assert_compile_fail_error_count("math_extra_builtin_return_types.jett", 311, 15);
+}
+
+compile_fail_fixture!(
+    compile_fail_math_numeric_builtin_return_types,
+    "math_numeric_builtin_return_types.jett"
+);
+
+#[test]
+fn compile_fail_math_numeric_builtin_return_types_count() {
+    assert_compile_fail_error_count("math_numeric_builtin_return_types.jett", 311, 6);
+}
+
+compile_fail_fixture!(
+    compile_fail_math_numeric_builtin_argument_shapes,
+    "math_numeric_builtin_argument_shapes.jett"
+);
+
+#[test]
+fn compile_fail_math_numeric_builtin_argument_shape_counts() {
+    assert_compile_fail_error_count("math_numeric_builtin_argument_shapes.jett", 303, 6);
+    assert_compile_fail_error_count("math_numeric_builtin_argument_shapes.jett", 304, 4);
+    assert_compile_fail_error_count("math_numeric_builtin_argument_shapes.jett", 309, 3);
 }
 
 compile_fail_fixture!(

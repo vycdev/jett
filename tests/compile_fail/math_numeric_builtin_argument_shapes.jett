@@ -1,0 +1,30 @@
+# ERROR: E0303
+# ERROR: E0304
+# ERROR: E0309
+namespace test
+function bad_abs_no_args() returns int64:
+    return math.abs()
+function bad_abs_too_many() returns int64:
+    return math.abs(1, 2)
+function bad_min_too_few() returns int64:
+    return math.min(1)
+function bad_min_too_many() returns int64:
+    return math.min(1, 2, 3)
+function bad_max_too_few() returns int64:
+    return math.max(1)
+function bad_max_too_many() returns int64:
+    return math.max(1, 2, 3)
+function bad_abs_arg_type() returns int64:
+    return math.abs("x")
+function bad_min_left_arg_type() returns int64:
+    return math.min("x", 1)
+function bad_min_right_arg_type() returns int64:
+    return math.min(1, "x")
+function bad_max_mixed_numeric_type() returns int64:
+    return math.max(1, 2.0)
+function bad_abs_type_arg() returns int64:
+    return math.abs[int64](-1)
+function bad_min_type_arg() returns int64:
+    return math.min[int64](1, 2)
+function bad_max_type_arg() returns int64:
+    return math.max[int64](1, 2)

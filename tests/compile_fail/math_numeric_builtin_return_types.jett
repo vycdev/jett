@@ -1,0 +1,20 @@
+# ERROR: E0311
+namespace test
+function bad_abs_int_return() returns bool:
+    bool value = math.abs(-5)
+    return value
+function bad_abs_float_return() returns bool:
+    bool value = math.abs(-5.0)
+    return value
+function bad_min_int_return() returns bool:
+    bool value = math.min(3, 7)
+    return value
+function bad_min_float_return() returns bool:
+    bool value = math.min(3.0, 7.0)
+    return value
+function bad_max_int_return() returns bool:
+    bool value = math.max(3, 7)
+    return value
+function bad_max_float_return() returns bool:
+    bool value = math.max(3.0, 7.0)
+    return value

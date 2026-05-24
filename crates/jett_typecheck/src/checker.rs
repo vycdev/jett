@@ -8375,6 +8375,115 @@ impl<'a> TypeChecker<'a> {
         TypeInterner::NOTHING
     }
 
+    fn math_numeric_builtin_base(&self, ty: TypeId) -> Option<(TypeId, bool)> {
+        let (base, tainted) = self.strip_secret_type(ty);
+        if self.types_compatible(TypeInterner::INT64, base) {
+            Some((TypeInterner::INT64, tainted))
+        } else if self.types_compatible(TypeInterner::FLOAT64, base) {
+            Some((TypeInterner::FLOAT64, tainted))
+        } else {
+            None
+        }
+    }
+
+    fn check_math_abs_builtin_call(
+        &mut self,
+        name: &str,
+        type_args: &[TypeExpr],
+        args: &[ast::CallArg],
+        span: Span,
+    ) -> TypeId {
+        self.expect_no_type_args(name, type_args, span);
+        if args.len() != 1 {
+            self.sink
+                .emit(errors::argument_count_mismatch(name, 1, args.len(), span));
+            for arg in args {
+                self.check_expr(&arg.value);
+            }
+            return TypeInterner::ERROR;
+        }
+
+        let arg_ty = self.check_expr(&args[0].value);
+        if arg_ty == TypeInterner::ERROR {
+            return TypeInterner::ERROR;
+        }
+
+        match self.math_numeric_builtin_base(arg_ty) {
+            Some((base, tainted)) => self.maybe_wrap_secret(base, tainted),
+            None => {
+                self.sink.emit(errors::argument_type_mismatch(
+                    "value",
+                    "int64 or float64",
+                    &self.type_name(arg_ty),
+                    args[0].value.span(),
+                ));
+                TypeInterner::ERROR
+            }
+        }
+    }
+
+    fn check_math_min_max_builtin_call(
+        &mut self,
+        name: &str,
+        type_args: &[TypeExpr],
+        args: &[ast::CallArg],
+        span: Span,
+    ) -> TypeId {
+        self.expect_no_type_args(name, type_args, span);
+        if args.len() != 2 {
+            self.sink
+                .emit(errors::argument_count_mismatch(name, 2, args.len(), span));
+            for arg in args {
+                self.check_expr(&arg.value);
+            }
+            return TypeInterner::ERROR;
+        }
+
+        let left_ty = self.check_expr(&args[0].value);
+        if left_ty == TypeInterner::ERROR {
+            self.check_expr(&args[1].value);
+            return TypeInterner::ERROR;
+        }
+
+        let Some((base, left_tainted)) = self.math_numeric_builtin_base(left_ty) else {
+            self.sink.emit(errors::argument_type_mismatch(
+                "left",
+                "int64 or float64",
+                &self.type_name(left_ty),
+                args[0].value.span(),
+            ));
+            self.check_expr(&args[1].value);
+            return TypeInterner::ERROR;
+        };
+
+        let right_ty = self.check_expr_for_expected(&args[1].value, base, false);
+        if right_ty == TypeInterner::ERROR {
+            return TypeInterner::ERROR;
+        }
+
+        let Some((right_base, right_tainted)) = self.math_numeric_builtin_base(right_ty) else {
+            self.sink.emit(errors::argument_type_mismatch(
+                "right",
+                &self.type_name(base),
+                &self.type_name(right_ty),
+                args[1].value.span(),
+            ));
+            return TypeInterner::ERROR;
+        };
+
+        if !self.types_compatible(base, right_base) || !self.types_compatible(right_base, base) {
+            self.sink.emit(errors::argument_type_mismatch(
+                "right",
+                &self.type_name(base),
+                &self.type_name(right_ty),
+                args[1].value.span(),
+            ));
+            return TypeInterner::ERROR;
+        }
+
+        self.maybe_wrap_secret(base, left_tainted || right_tainted)
+    }
+
     fn check_call(
         &mut self,
         callee: &Expr,
@@ -8426,6 +8535,17 @@ impl<'a> TypeChecker<'a> {
                 }
                 "print" | "println" => {
                     return self.check_print_builtin_call(builtin_name, type_args, args, span);
+                }
+                "math.abs" => {
+                    return self.check_math_abs_builtin_call(builtin_name, type_args, args, span);
+                }
+                "math.min" | "math.max" => {
+                    return self.check_math_min_max_builtin_call(
+                        builtin_name,
+                        type_args,
+                        args,
+                        span,
+                    );
                 }
                 _ => {}
             }
