@@ -1046,7 +1046,7 @@ The runtime sits between Rust (~2K lines, no scheduler) and Pony (~15-20K lines,
 | Component | Size estimate | Purpose |
 |---|---|---|
 | **Allocator** | ~200 lines | Thin wrapper around the system allocator (`malloc`/`free`). The compiler emits `alloc`/`dealloc` calls at the exact points where linear values are created/dropped — no GC or reference counting. |
-| **String representation** | ~500 lines + Unicode tables | UTF-8 byte buffer with **small string optimization** (SSO): strings up to ~23 bytes are stored inline in the String struct, avoiding heap allocation. Larger strings use `{ length: i64, capacity: i64, data: *u8 }`. Unicode grapheme cluster segmentation tables (~50-100KB of static data) are bundled for `string.chars()` and `string.char_count()` (required by Rule Set 12). |
+| **String representation** | ~500 lines + Unicode support | UTF-8 byte buffer with **small string optimization** (SSO): strings up to ~23 bytes are stored inline in the String struct, avoiding heap allocation. Larger strings use `{ length: i64, capacity: i64, data: *u8 }`. The interpreter uses a compact grapheme splitter for combining marks, variation selectors, emoji modifiers, ZWJ sequences, CRLF, and regional-indicator flag pairs; a native runtime can replace it with full Unicode segmentation tables if needed. |
 | **Actor scheduler** | ~3K-5K lines | Thread pool (one thread per CPU core) + per-actor bounded MPSC message queues + work-stealing. See Actor Runtime section below. |
 | **Async I/O event loop** | ~1K-3K lines | Integrates with the actor scheduler to avoid blocking thread pool threads on I/O. Uses `epoll` (Linux), `kqueue` (macOS), `IOCP` (Windows). When a capability method performs I/O, it submits the operation to the event loop and yields the actor, freeing the thread for other work. |
 | **Task scheduler** | ~500 lines | For `run`/`join`/`cancel` structured concurrency. Built on top of the actor scheduler — a spawned task is a lightweight actor. |
@@ -1653,7 +1653,7 @@ Core stdlib (string, list, math, json) is implemented in Phase D. This phase com
 | `clap` | CLI argument parsing |
 | `serde` | Serialization (for caching) |
 | `toon` | TOON format parsing/serialization (for `jett.proj`, ASP output). Custom crate or integrated into `jett_common` if no existing crate is available. |
-| `unicode-segmentation` | UAX #29 grapheme cluster segmentation for string operations |
+| `unicode-segmentation` | Optional future dependency for full UAX #29 grapheme cluster segmentation in the native runtime |
 | `mimalloc` | High-performance allocator (or system allocator as default) |
 
 ---

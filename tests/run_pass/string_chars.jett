@@ -1,5 +1,11 @@
 namespace app
 
+function utf8_from_hex(hex: string) returns string:
+    bytes raw = bytes.from_hex(hex) handle error:
+        default bytes.new()
+    return bytes.to_string(raw) handle error:
+        default ""
+
 function take_chars_test() returns string:
     return string.take_chars("hello world", 5)
 
@@ -40,3 +46,41 @@ function uuid_length_test() returns int64:
 
 verify uuid_length_test:
     assert uuid_length_test() == 36
+
+function combining_grapheme_text() returns string:
+    return utf8_from_hex("65cc81")
+
+function family_emoji_text() returns string:
+    return utf8_from_hex("f09f91a8e2808df09f91a9e2808df09f91a7e2808df09f91a6")
+
+function flag_emoji_text() returns string:
+    return utf8_from_hex("f09f87baf09f87b8")
+
+function grapheme_char_count_test() returns string:
+    int64 combining = string.char_count(combining_grapheme_text())
+    int64 family = string.char_count(family_emoji_text())
+    int64 flag = string.char_count(flag_emoji_text())
+    return "{combining}:{family}:{flag}"
+
+function grapheme_take_chars_hex_test() returns string:
+    string cluster = combining_grapheme_text()
+    string taken = string.take_chars("{cluster}b", 1)
+    return bytes.to_hex(bytes.from_string(taken))
+
+function grapheme_char_at_hex_test() returns string:
+    string source = combining_grapheme_text()
+    optional[string] maybe_cluster = string.char_at("{source}b", 0)
+    string cluster = maybe_cluster handle:
+        default ""
+    return bytes.to_hex(bytes.from_string(cluster))
+
+function grapheme_reverse_family_test() returns string:
+    string family = family_emoji_text()
+    string reversed = string.reverse("{family}x")
+    return bytes.to_hex(bytes.from_string(reversed))
+
+verify grapheme_string_operations:
+    assert grapheme_char_count_test() == "1:1:1"
+    assert grapheme_take_chars_hex_test() == "65cc81"
+    assert grapheme_char_at_hex_test() == "65cc81"
+    assert grapheme_reverse_family_test() == "78f09f91a8e2808df09f91a9e2808df09f91a7e2808df09f91a6"

@@ -7418,7 +7418,7 @@ impl Interpreter {
             "string.length" | "string.char_count" => {
                 require_args!(name, 1, args);
                 match &args[0] {
-                    Value::String(s) => Some(Ok(Value::Int64(s.chars().count() as i64))),
+                    Value::String(s) => Some(Ok(Value::Int64(string_grapheme_count(s) as i64))),
                     _ => Some(Err(format!("{name} expects a string argument"))),
                 }
             }
@@ -7533,11 +7533,11 @@ impl Interpreter {
                 require_args!(name, 3, args);
                 match (&args[0], &args[1], &args[2]) {
                     (Value::String(s), Value::Int64(start), Value::Int64(end)) => {
-                        let chars: Vec<char> = s.chars().collect();
-                        let len = chars.len() as i64;
+                        let graphemes = string_graphemes(s);
+                        let len = graphemes.len() as i64;
                         let start = (*start).clamp(0, len) as usize;
                         let end = (*end).clamp(0, len) as usize;
-                        let result: String = chars[start.min(end)..end].iter().collect();
+                        let result = graphemes[start.min(end)..end].concat();
                         Some(Ok(Value::String(result)))
                     }
                     _ => Some(Err(format!(
@@ -7564,15 +7564,13 @@ impl Interpreter {
                 require_args!(name, 3, args);
                 match (&args[0], &args[1], &args[2]) {
                     (Value::String(s), Value::Int64(width), Value::String(pad)) => {
-                        let pad_char = pad.chars().next().unwrap_or(' ');
-                        let current_len = s.chars().count();
+                        let pad_unit = first_grapheme_or_space(pad);
+                        let current_len = string_grapheme_count(s);
                         let width = (*width).max(0) as usize;
                         if current_len >= width {
                             Some(Ok(Value::String(s.clone())))
                         } else {
-                            let padding: String = std::iter::repeat(pad_char)
-                                .take(width - current_len)
-                                .collect();
+                            let padding = pad_unit.repeat(width - current_len);
                             Some(Ok(Value::String(format!("{s}{padding}"))))
                         }
                     }
@@ -7633,12 +7631,12 @@ impl Interpreter {
                 match (&args[0], &args[1], &args[2]) {
                     (Value::String(s), Value::Int64(max_len), Value::String(suffix)) => {
                         let max = (*max_len).max(0) as usize;
-                        let chars: Vec<char> = s.chars().collect();
-                        let result = if chars.len() <= max {
+                        let graphemes = string_graphemes(s);
+                        let result = if graphemes.len() <= max {
                             s.clone()
                         } else {
-                            // Keep first `max` characters, then append suffix
-                            let kept: String = chars[..max].iter().collect();
+                            // Keep first `max` graphemes, then append suffix.
+                            let kept = graphemes[..max].concat();
                             format!("{kept}{suffix}")
                         };
                         Some(Ok(Value::String(result)))
@@ -7676,15 +7674,13 @@ impl Interpreter {
                 require_args!(name, 3, args);
                 match (&args[0], &args[1], &args[2]) {
                     (Value::String(s), Value::Int64(width), Value::String(pad)) => {
-                        let pad_char = pad.chars().next().unwrap_or(' ');
-                        let current_len = s.chars().count();
+                        let pad_unit = first_grapheme_or_space(pad);
+                        let current_len = string_grapheme_count(s);
                         let width = (*width).max(0) as usize;
                         if current_len >= width {
                             Some(Ok(Value::String(s.clone())))
                         } else {
-                            let padding: String = std::iter::repeat(pad_char)
-                                .take(width - current_len)
-                                .collect();
+                            let padding = pad_unit.repeat(width - current_len);
                             Some(Ok(Value::String(format!("{padding}{s}"))))
                         }
                     }
@@ -8771,7 +8767,7 @@ impl Interpreter {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => {
-                        let reversed: String = s.chars().rev().collect();
+                        let reversed = string_graphemes(s).into_iter().rev().collect();
                         Some(Ok(Value::String(reversed)))
                     }
                     _ => Some(Err(format!("{name} expects a string argument"))),
@@ -8829,9 +8825,10 @@ impl Interpreter {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => {
-                        // Yields grapheme clusters; approximate with chars for now
-                        let chars: Vec<Value> =
-                            s.chars().map(|c| Value::String(c.to_string())).collect();
+                        let chars: Vec<Value> = string_graphemes(s)
+                            .into_iter()
+                            .map(|cluster| Value::String(cluster.to_string()))
+                            .collect();
                         Some(Ok(Value::List(chars)))
                     }
                     _ => Some(Err(format!("{name} expects a string argument"))),
@@ -8905,7 +8902,7 @@ impl Interpreter {
                 match (&args[0], &args[1]) {
                     (Value::String(s), Value::Int64(n)) => {
                         let n = (*n).max(0) as usize;
-                        let result: String = s.chars().take(n).collect();
+                        let result = string_graphemes(s).into_iter().take(n).collect();
                         Some(Ok(Value::String(result)))
                     }
                     _ => Some(Err(format!("{name} expects a string and an int64"))),
@@ -8917,9 +8914,9 @@ impl Interpreter {
                 match (&args[0], &args[1]) {
                     (Value::String(s), Value::Int64(n)) => {
                         let n = (*n).max(0) as usize;
-                        let chars: Vec<char> = s.chars().collect();
-                        let start = chars.len().saturating_sub(n);
-                        let result: String = chars[start..].iter().collect();
+                        let graphemes = string_graphemes(s);
+                        let start = graphemes.len().saturating_sub(n);
+                        let result = graphemes[start..].concat();
                         Some(Ok(Value::String(result)))
                     }
                     _ => Some(Err(format!("{name} expects a string and an int64"))),
@@ -8931,7 +8928,7 @@ impl Interpreter {
                 match (&args[0], &args[1]) {
                     (Value::String(s), Value::Int64(n)) => {
                         let n = (*n).max(0) as usize;
-                        let result: String = s.chars().skip(n).collect();
+                        let result = string_graphemes(s).into_iter().skip(n).collect();
                         Some(Ok(Value::String(result)))
                     }
                     _ => Some(Err(format!("{name} expects a string and an int64"))),
@@ -8945,10 +8942,10 @@ impl Interpreter {
                         let result = if *i < 0 {
                             Value::OptionalNone
                         } else {
-                            match s.chars().nth(*i as usize) {
-                                Some(c) => {
-                                    Value::OptionalSome(Box::new(Value::String(c.to_string())))
-                                }
+                            match string_graphemes(s).get(*i as usize) {
+                                Some(cluster) => Value::OptionalSome(Box::new(Value::String(
+                                    (*cluster).to_string(),
+                                ))),
                                 None => Value::OptionalNone,
                             }
                         };
@@ -8964,9 +8961,9 @@ impl Interpreter {
                     (Value::String(haystack), Value::String(needle)) => {
                         let result = match haystack.find(needle.as_str()) {
                             Some(pos) => {
-                                // Convert byte offset to char index.
-                                let char_idx = haystack[..pos].chars().count() as i64;
-                                Value::OptionalSome(Box::new(Value::Int64(char_idx)))
+                                // Convert byte offset to grapheme index.
+                                let index = string_grapheme_count(&haystack[..pos]) as i64;
+                                Value::OptionalSome(Box::new(Value::Int64(index)))
                             }
                             None => Value::OptionalNone,
                         };
@@ -8993,11 +8990,15 @@ impl Interpreter {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => {
-                        let mut chars = s.chars();
-                        let result = match chars.next() {
-                            Some(c) => {
-                                let upper: String = c.to_uppercase().collect();
-                                format!("{upper}{}", chars.as_str())
+                        let graphemes = string_graphemes(s);
+                        let result = match graphemes.split_first() {
+                            Some((first, rest)) => {
+                                let mut chars = first.chars();
+                                let upper = chars
+                                    .next()
+                                    .map(|c| c.to_uppercase().collect::<String>())
+                                    .unwrap_or_default();
+                                format!("{upper}{}{}", chars.as_str(), rest.concat())
                             }
                             None => String::new(),
                         };
@@ -9010,11 +9011,15 @@ impl Interpreter {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => {
-                        let mut chars = s.chars();
-                        let result = match chars.next() {
-                            Some(c) => {
-                                let lower: String = c.to_lowercase().collect();
-                                format!("{lower}{}", chars.as_str())
+                        let graphemes = string_graphemes(s);
+                        let result = match graphemes.split_first() {
+                            Some((first, rest)) => {
+                                let mut chars = first.chars();
+                                let lower = chars
+                                    .next()
+                                    .map(|c| c.to_lowercase().collect::<String>())
+                                    .unwrap_or_default();
+                                format!("{lower}{}{}", chars.as_str(), rest.concat())
                             }
                             None => String::new(),
                         };
@@ -9030,11 +9035,11 @@ impl Interpreter {
                 match (&args[0], &args[1]) {
                     (Value::String(s), Value::Int64(width)) => {
                         let width = (*width).max(0) as usize;
-                        let char_len = s.chars().count();
-                        if char_len >= width {
+                        let grapheme_len = string_grapheme_count(s);
+                        if grapheme_len >= width {
                             Some(Ok(Value::String(s.clone())))
                         } else {
-                            let total_pad = width - char_len;
+                            let total_pad = width - grapheme_len;
                             let left_pad = total_pad / 2;
                             let right_pad = total_pad - left_pad;
                             let left: String = std::iter::repeat(' ').take(left_pad).collect();
@@ -9051,12 +9056,12 @@ impl Interpreter {
                 match (&args[0], &args[1]) {
                     (Value::String(s), Value::Int64(width)) => {
                         let width = (*width).max(0) as usize;
-                        let char_len = s.chars().count();
-                        if char_len >= width {
+                        let grapheme_len = string_grapheme_count(s);
+                        if grapheme_len >= width {
                             Some(Ok(Value::String(s.clone())))
                         } else {
                             let padding: String =
-                                std::iter::repeat(' ').take(width - char_len).collect();
+                                std::iter::repeat(' ').take(width - grapheme_len).collect();
                             Some(Ok(Value::String(format!("{s}{padding}"))))
                         }
                     }
@@ -9069,12 +9074,12 @@ impl Interpreter {
                 match (&args[0], &args[1]) {
                     (Value::String(s), Value::Int64(width)) => {
                         let width = (*width).max(0) as usize;
-                        let char_len = s.chars().count();
-                        if char_len >= width {
+                        let grapheme_len = string_grapheme_count(s);
+                        if grapheme_len >= width {
                             Some(Ok(Value::String(s.clone())))
                         } else {
                             let padding: String =
-                                std::iter::repeat(' ').take(width - char_len).collect();
+                                std::iter::repeat(' ').take(width - grapheme_len).collect();
                             Some(Ok(Value::String(format!("{padding}{s}"))))
                         }
                     }
@@ -9087,8 +9092,8 @@ impl Interpreter {
                 match (&args[0], &args[1]) {
                     (Value::String(s), Value::Int64(width)) => {
                         let width = (*width).max(0) as usize;
-                        let char_len = s.chars().count();
-                        if char_len >= width {
+                        let grapheme_len = string_grapheme_count(s);
+                        if grapheme_len >= width {
                             Some(Ok(Value::String(s.clone())))
                         } else {
                             // Handle optional leading sign
@@ -9098,7 +9103,7 @@ impl Interpreter {
                                 ("", s.as_str())
                             };
                             let zeros: String =
-                                std::iter::repeat('0').take(width - char_len).collect();
+                                std::iter::repeat('0').take(width - grapheme_len).collect();
                             Some(Ok(Value::String(format!("{sign}{zeros}{digits}"))))
                         }
                     }
@@ -10565,6 +10570,76 @@ fn is_truthy(val: &Value) -> Result<bool, String> {
         Value::Bool(b) => Ok(*b),
         _ => Err(format!("expected boolean, got {val}")),
     }
+}
+
+fn string_grapheme_count(s: &str) -> usize {
+    string_graphemes(s).len()
+}
+
+fn first_grapheme_or_space(s: &str) -> String {
+    string_graphemes(s)
+        .first()
+        .map(|cluster| (*cluster).to_string())
+        .unwrap_or_else(|| " ".to_string())
+}
+
+fn string_graphemes(s: &str) -> Vec<&str> {
+    if s.is_empty() {
+        return Vec::new();
+    }
+
+    let mut clusters = Vec::new();
+    let mut cluster_start = 0;
+    let mut previous = None;
+    let mut regional_indicator_count = 0usize;
+
+    for (index, ch) in s.char_indices() {
+        if index == 0 {
+            regional_indicator_count = if is_regional_indicator(ch) { 1 } else { 0 };
+            previous = Some(ch);
+            continue;
+        }
+
+        let joins_previous = is_grapheme_extend(ch)
+            || ch == '\u{200D}'
+            || previous == Some('\u{200D}')
+            || previous == Some('\r') && ch == '\n'
+            || is_regional_indicator(ch) && regional_indicator_count % 2 == 1;
+
+        if !joins_previous {
+            clusters.push(&s[cluster_start..index]);
+            cluster_start = index;
+            regional_indicator_count = 0;
+        }
+
+        if is_regional_indicator(ch) {
+            regional_indicator_count += 1;
+        } else if !is_grapheme_extend(ch) && ch != '\u{200D}' {
+            regional_indicator_count = 0;
+        }
+        previous = Some(ch);
+    }
+
+    clusters.push(&s[cluster_start..]);
+    clusters
+}
+
+fn is_grapheme_extend(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x0300..=0x036F
+            | 0x1AB0..=0x1AFF
+            | 0x1DC0..=0x1DFF
+            | 0x20D0..=0x20FF
+            | 0xFE00..=0xFE0F
+            | 0xFE20..=0xFE2F
+            | 0xE0100..=0xE01EF
+            | 0x1F3FB..=0x1F3FF
+    )
+}
+
+fn is_regional_indicator(ch: char) -> bool {
+    matches!(ch as u32, 0x1F1E6..=0x1F1FF)
 }
 
 fn uint64_arithmetic_operand(value: i64) -> Result<u64, String> {
