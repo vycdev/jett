@@ -37,6 +37,7 @@ enough pressure from real code:
 - [JsonValue primitive tag retirement](open_design/json_value_primitive_tag_retirement.md)
 - [Prelude and root aliases](open_design/prelude_root_aliases.md)
 - [Reflection predicate facts](open_design/reflection_predicate_facts.md)
+- [Print debug builtin policy](open_design/print_debug_builtin_policy.md)
 - [uint64 runtime value model](open_design/uint64_runtime_value_model.md)
 
 ## Completed Records

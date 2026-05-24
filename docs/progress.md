@@ -110,7 +110,7 @@
 | `and`/`or` keyword operators for logical expressions | Done |
 | Unhandled result/optional detection (E0341, E0342) | Done |
 | Set value type and 12 set builtins (`new`, `add`, `remove`, `contains`, `union`, `intersection`, `difference`) | Done |
-| `print`/`println` builtins | Done |
+| `print`/`println` builtins | Done (current secret-blocked debug helpers; stable capability policy remains open) |
 | Type conversions: `float64.from_string`, `string.from_float64`, `string.from_bool` | Done |
 | `time.now_ms`, `time.now_s` | Done |
 | `os.env`, `os.args` | Done |
