@@ -1,0 +1,10 @@
+# ERROR: E0304
+machine Session:
+    states:
+        guest
+        logged_in(user_id: string)
+function user_id(session: Session at logged_in) returns string:
+    return session.user_id
+function caller() returns string:
+    Session session = Session(logged_in, "Ada")
+    return user_id(session)

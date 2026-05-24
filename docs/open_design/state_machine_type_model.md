@@ -46,6 +46,9 @@ Implemented:
   fields.
 - State-qualified values can flow into bare `Machine` expectations, which
   allows APIs to erase state and regain precision through explicit `at` guards.
+  Bare `Machine` values do not flow back into `Machine at state` parameters
+  without a visible guard, even when their construction site was precise; this
+  keeps erasure explicit at API boundaries.
 - `export machine` is parsed and feeds namespace visibility, so exported
   namespaced machines can be used through qualified names and function-local
   namespace aliases.
@@ -179,6 +182,8 @@ to a known machine owner.
      back to `logged_in`, and two-state bare machines also narrow the guarded
      branch to the only other state,
    - state-qualified values satisfy bare machine expectations,
+   - bare machine values require an explicit `at` guard before they satisfy a
+     state-qualified parameter,
    - narrowed bare machine values can call checked transitions.
 10. Add machine reflection. Done:
     - `type.info[Machine]()` reports kind `machine`,
@@ -204,8 +209,11 @@ to a known machine owner.
 
 ## Open Questions
 
-- Which APIs should intentionally erase state to bare `Machine`, and which
-  should preserve a precise `Machine at state` type?
+- Which future standard APIs should intentionally erase state to bare
+  `Machine`, and which should preserve a precise `Machine at state` type? The
+  current source-level rule is explicit: signatures that mention bare `Machine`
+  erase state, and callers must use an `at` guard to pass the value back into an
+  exact-state parameter.
 - Should negative branches eventually expose multi-state set facts, or should
   narrowing stay limited to positive guards plus exact single-state complements?
 - Should `expr at state` eventually narrow fields/paths beyond bare local

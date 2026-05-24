@@ -1,0 +1,17 @@
+machine Session:
+    states:
+        guest
+        logged_in(user_id: string)
+    transitions:
+        guest to logged_in
+function user_id(session: Session at logged_in) returns string:
+    return session.user_id
+function guarded_user_id(session: Session) returns string:
+    if session at logged_in:
+        return user_id(session)
+    return "guest"
+verify state_machine_guarded_state_parameter:
+    Session at guest guest = Session(guest)
+    assert guarded_user_id(guest) == "guest"
+    Session logged = Session.transition(guest, logged_in, "Ada")
+    assert guarded_user_id(logged) == "Ada"

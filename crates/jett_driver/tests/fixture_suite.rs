@@ -280,6 +280,10 @@ run_pass_fixture!(
     "state_machine_branch_narrowing.jett"
 );
 run_pass_fixture!(
+    run_pass_state_machine_guarded_state_parameter,
+    "state_machine_guarded_state_parameter.jett"
+);
+run_pass_fixture!(
     run_pass_state_machine_local_state_type,
     "state_machine_local_state_type.jett"
 );
@@ -702,6 +706,10 @@ compile_fail_fixture!(
 compile_fail_fixture!(
     compile_fail_state_machine_transition_bare_source,
     "state_machine_transition_bare_source.jett"
+);
+compile_fail_fixture!(
+    compile_fail_state_machine_bare_to_state_parameter,
+    "state_machine_bare_to_state_parameter.jett"
 );
 compile_fail_fixture!(
     compile_fail_state_machine_at_non_machine,
