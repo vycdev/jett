@@ -166,7 +166,7 @@
 | `os` | Partial (os.env, os.args) |
 | `net.http` | Not started |
 | `net.socket` | Not started |
-| `csv` | Not started |
+| `csv` | Partial (interpreter builtins for `csv.parse`, `csv.stringify`, and `csv.parse_with_header`; quoted commas, quotes, and multiline fields are covered) |
 | `regex` | Not started |
 | `log` | Not started |
 | `test.mock` | Not started |

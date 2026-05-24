@@ -9349,16 +9349,9 @@ impl Interpreter {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => {
-                        let rows: Vec<Value> = s
-                            .lines()
-                            .filter(|line| !line.is_empty())
-                            .map(|line| {
-                                let cols: Vec<Value> = parse_csv_line(line)
-                                    .into_iter()
-                                    .map(Value::String)
-                                    .collect();
-                                Value::List(cols)
-                            })
+                        let rows: Vec<Value> = parse_csv_records(s)
+                            .into_iter()
+                            .map(|row| Value::List(row.into_iter().map(Value::String).collect()))
                             .collect();
                         Some(Ok(Value::List(rows)))
                     }
@@ -9398,14 +9391,13 @@ impl Interpreter {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => {
-                        let mut line_iter = s.lines().filter(|line| !line.is_empty());
-                        let headers: Vec<String> = match line_iter.next() {
-                            Some(header_line) => parse_csv_line(header_line),
+                        let mut records = parse_csv_records(s).into_iter();
+                        let headers: Vec<String> = match records.next() {
+                            Some(header_row) => header_row,
                             None => return Some(Ok(Value::List(Vec::new()))),
                         };
-                        let rows: Vec<Value> = line_iter
-                            .map(|line| {
-                                let cols = parse_csv_line(line);
+                        let rows: Vec<Value> = records
+                            .map(|cols| {
                                 let entries: Vec<(Value, Value)> = headers
                                     .iter()
                                     .zip(cols.into_iter())
@@ -16705,48 +16697,71 @@ fn base64_decode(s: &str) -> Result<Vec<u8>, String> {
 // CSV helpers
 // ---------------------------------------------------------------------------
 
-/// Parse a single CSV line, handling quoted fields with embedded commas,
-/// quotes (escaped as `""`), and newlines.
-fn parse_csv_line(line: &str) -> Vec<String> {
-    let mut fields = Vec::new();
+/// Parse CSV records, handling quoted fields with embedded commas, quotes
+/// (escaped as `""`), and newlines.
+fn parse_csv_records(input: &str) -> Vec<Vec<String>> {
+    let mut records = Vec::new();
+    let mut row = Vec::new();
     let mut current = String::new();
     let mut in_quotes = false;
-    let chars: Vec<char> = line.chars().collect();
-    let mut i = 0;
-    while i < chars.len() {
-        let ch = chars[i];
+    let mut has_record_data = false;
+    let mut chars = input.chars().peekable();
+
+    while let Some(ch) = chars.next() {
         if in_quotes {
             if ch == '"' {
                 // Check for escaped quote ""
-                if i + 1 < chars.len() && chars[i + 1] == '"' {
+                if chars.peek() == Some(&'"') {
                     current.push('"');
-                    i += 2;
-                    continue;
+                    chars.next();
                 } else {
                     in_quotes = false;
-                    i += 1;
-                    continue;
                 }
             } else {
                 current.push(ch);
             }
         } else if ch == '"' {
+            has_record_data = true;
             in_quotes = true;
         } else if ch == ',' {
-            fields.push(current.clone());
-            current.clear();
+            has_record_data = true;
+            row.push(std::mem::take(&mut current));
+        } else if ch == '\n' {
+            push_csv_record(&mut records, &mut row, &mut current, &mut has_record_data);
+        } else if ch == '\r' {
+            if chars.peek() == Some(&'\n') {
+                chars.next();
+            }
+            push_csv_record(&mut records, &mut row, &mut current, &mut has_record_data);
         } else {
+            has_record_data = true;
             current.push(ch);
         }
-        i += 1;
     }
-    fields.push(current);
-    fields
+
+    push_csv_record(&mut records, &mut row, &mut current, &mut has_record_data);
+    records
+}
+
+fn push_csv_record(
+    records: &mut Vec<Vec<String>>,
+    row: &mut Vec<String>,
+    current: &mut String,
+    has_record_data: &mut bool,
+) {
+    if *has_record_data || !current.is_empty() || !row.is_empty() {
+        row.push(std::mem::take(current));
+        records.push(std::mem::take(row));
+    } else {
+        row.clear();
+        current.clear();
+    }
+    *has_record_data = false;
 }
 
 /// Quote a CSV field if it contains commas, quotes, or newlines.
 fn csv_quote_field(s: &str) -> String {
-    if s.contains(',') || s.contains('"') || s.contains('\n') {
+    if s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r') {
         let escaped = s.replace('"', "\"\"");
         format!("\"{escaped}\"")
     } else {
