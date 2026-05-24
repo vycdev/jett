@@ -194,6 +194,12 @@ The current code already has most of the semantic checks in one place:
 A reflected construction implementation should route through these same paths
 or share their core helpers. Duplicating the checks risks subtle drift, especially
 around refinement result types and bitfield range validation.
+The public `type.construct_put[T, Field]` surface is intentionally narrow: it
+requires exactly the construction target and field-value type parameters, and a
+compiler-produced `TypeField` value at the call site. The compile-fail fixtures
+`type_construct_put_wrong_arity.jett` and
+`type_construct_put_wrong_field_arg.jett` pin that callers cannot replace
+trusted metadata with strings or omit the concrete field type.
 
 The construction primitive should receive values that are already decoded into
 their field types. Format modules remain responsible for:

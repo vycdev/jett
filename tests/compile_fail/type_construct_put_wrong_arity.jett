@@ -1,0 +1,11 @@
+# ERROR: E0309
+namespace test
+struct User:
+    id: string
+function bad_construct_put_arity() returns nothing:
+    TypeConstruction builder = type.construct_start[User]()
+    TypeField field = list.get[TypeField](type.fields[User](), 0) handle:
+        return nothing
+    builder = type.construct_put[User](builder, view field, "u1") handle error:
+        return nothing
+    return nothing

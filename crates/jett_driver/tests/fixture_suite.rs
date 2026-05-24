@@ -1409,6 +1409,14 @@ compile_fail_fixture!(
     "type_construct_put_wrong_value_type.jett"
 );
 compile_fail_fixture!(
+    compile_fail_type_construct_put_wrong_field_arg,
+    "type_construct_put_wrong_field_arg.jett"
+);
+compile_fail_fixture!(
+    compile_fail_type_construct_put_wrong_arity,
+    "type_construct_put_wrong_arity.jett"
+);
+compile_fail_fixture!(
     compile_fail_type_construct_start_wrong_arity,
     "type_construct_start_wrong_arity.jett"
 );

@@ -1,0 +1,9 @@
+# ERROR: E0304
+namespace test
+struct User:
+    id: string
+function bad_construct_put_field_arg() returns nothing:
+    TypeConstruction builder = type.construct_start[User]()
+    builder = type.construct_put[User, string](builder, "id", "u1") handle error:
+        return nothing
+    return nothing
