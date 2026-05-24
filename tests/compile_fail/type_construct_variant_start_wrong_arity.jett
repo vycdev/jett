@@ -1,0 +1,12 @@
+# ERROR: E0309
+namespace test
+enum Shape:
+    point(x: float64, y: float64)
+struct Placeholder:
+    value: string
+function bad_construct_variant_start_arity() returns TypeConstruction:
+    list[TypeVariant] variants = type.variants[Shape]()
+    TypeVariant variant = list.get[TypeVariant](variants, 0) handle:
+        return type.construct_start[Placeholder]()
+    return type.construct_variant_start[Shape, string](view variant) handle error:
+        return type.construct_start[Placeholder]()

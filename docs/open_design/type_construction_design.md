@@ -207,6 +207,11 @@ trusted metadata with strings or omit the concrete field type. The finish side
 is similarly pinned by `type_construct_finish_wrong_arity.jett` and
 `type_construct_finish_wrong_builder_arg.jett`: callers must name exactly one
 construction target and pass an actual `TypeConstruction` builder.
+Enum construction has the same starter boundary:
+`type_construct_variant_start_wrong_arity.jett` and
+`type_construct_variant_start_wrong_variant_arg.jett` pin that callers must
+name exactly one enum target and pass trusted `TypeVariant` metadata, not a
+string variant name.
 
 The construction primitive should receive values that are already decoded into
 their field types. Format modules remain responsible for:
