@@ -14210,6 +14210,94 @@ mod tests {
     }
 
     #[test]
+    fn json_public_bridges_all_require_trusted_public_wrapper() {
+        let cases = [
+            ("json.parse", "json_parse_reflected", "\"value\""),
+            (
+                "json.parse_exact",
+                "json_parse_exact_reflected",
+                "\"value\"",
+            ),
+            ("json.serialize", "json_serialize_reflected", "value"),
+            (
+                "json.serialize_public",
+                "json_serialize_public_reflected",
+                "value",
+            ),
+        ];
+
+        for (public_name, hook_name, arg) in cases {
+            let mut interp = Interpreter::new();
+            let mut trusted_hook =
+                generic_json_hook(hook_name, block(vec![return_stmt(string("private hook"))]));
+            trusted_hook.span = stdlib_sp();
+            interp.register_function_in_namespace(Some("json"), &trusted_hook);
+
+            let err = interp
+                .call_function_with_type_args(
+                    public_name,
+                    &[type_named("string")],
+                    vec![Value::String(arg.to_string())],
+                )
+                .unwrap_err();
+
+            assert_eq!(
+                err,
+                format!("{public_name} requires trusted stdlib wrapper '{public_name}'")
+            );
+        }
+    }
+
+    #[test]
+    fn json_public_bridges_all_reject_untrusted_public_wrapper() {
+        let cases = [
+            ("json.parse", "json_parse_reflected", "parse", "\"value\""),
+            (
+                "json.parse_exact",
+                "json_parse_exact_reflected",
+                "parse_exact",
+                "\"value\"",
+            ),
+            (
+                "json.serialize",
+                "json_serialize_reflected",
+                "serialize",
+                "value",
+            ),
+            (
+                "json.serialize_public",
+                "json_serialize_public_reflected",
+                "serialize_public",
+                "value",
+            ),
+        ];
+
+        for (public_name, hook_name, wrapper_name, arg) in cases {
+            let mut interp = Interpreter::new();
+            let mut trusted_hook =
+                generic_json_hook(hook_name, block(vec![return_stmt(string("private hook"))]));
+            trusted_hook.span = stdlib_sp();
+            interp.register_function_in_namespace(Some("json"), &trusted_hook);
+            let fake_wrapper =
+                generic_json_hook(wrapper_name, block(vec![return_stmt(string("fake"))]));
+            interp.register_function_named(public_name, &fake_wrapper, false);
+
+            let err = interp
+                .call_function_with_type_args(
+                    public_name,
+                    &[type_named("string")],
+                    vec![Value::String(arg.to_string())],
+                )
+                .unwrap_err();
+
+            assert_eq!(
+                err,
+                format!("{public_name} requires trusted stdlib wrapper '{public_name}'")
+            );
+        }
+    }
+
+    #[test]
     fn json_parse_bridge_uses_trusted_public_wrapper() {
         let mut interp = Interpreter::new();
         let mut trusted_hook = generic_json_hook(
