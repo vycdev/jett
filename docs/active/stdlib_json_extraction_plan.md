@@ -377,11 +377,11 @@ functions should probably use `result` while format policy is still evolving.
 - Should unknown object fields be ignored, rejected, or configurable? See
   `docs/open_design/json_unknown_field_policy.md` for the staged
   `parse_exact` path, now implemented while keeping `json.parse[T]` lenient.
-- Should `json.field` and `json.index` keep returning `optional[JsonTree]`, or
-  should wrong-shape access be distinguishable from absence? See
-  `docs/open_design/json_raw_access_semantics.md` for the current options and
-  recommendation. Strict additive helpers now exist for shape-sensitive lookup;
-  the remaining question is long-term naming/default guidance.
+- `json.field` and `json.index` remain lenient probing helpers returning
+  `optional[JsonTree]`, while `json.object_field`, `json.array_index`,
+  `json.require_field`, and `json.require_index` distinguish wrong shape from
+  absence. See `docs/open_design/json_raw_access_semantics.md`; the remaining
+  question is long-term naming/default guidance, not the helper surface.
 - Representative shape is pinned for bytes, `float32`/`float64`, sets, maps,
   optionals/results, unit and payload enums, bitfields, aliases/refinements,
   serialize names, and nested matrix combinations. The remaining shape

@@ -1,6 +1,9 @@
 # Raw JSON Access Semantics
 
-This note records the open policy question around `json.field` and
+Status: implemented for the helper split; long-term naming/default guidance
+remains open.
+
+This note records the staged policy decision around `json.field` and
 `json.index`.
 
 ## Current Behavior
@@ -113,9 +116,9 @@ Cons:
 - adds more names to the JSON surface,
 - requires clear documentation so LLMs pick the strict helper for validation.
 
-## Recommendation
+## Decision
 
-Prefer Option C.
+Option C is implemented.
 
 It fits Jett's "one obvious pattern per intent" principle better than changing
 `field` into a nested result/optional:
@@ -126,7 +129,9 @@ It fits Jett's "one obvious pattern per intent" principle better than changing
   absence is meaningful.
 
 The implemented path keeps the existing lenient helpers unchanged and adds the
-strict helpers for code that needs shape validation.
+strict helpers for code that needs shape validation. Treat the future question
+as documentation and compatibility guidance, not as an unresolved type or
+stdlib surface gap.
 
 Status: implemented. The strict helper surface is pinned in
 `tests/run_pass/json_raw_strict_accessors.jett`, while lenient probing edge
