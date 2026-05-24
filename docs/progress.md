@@ -71,7 +71,7 @@
 | Refinement types (`type X = T where ...`, `coarsen`) | Done |
 | User-defined structs (constructors, field access, methods) | Done |
 | Match statements with enum destructuring | Done |
-| Pipeline operator (`into`, single-line and multi-line indented form) | Done |
+| Pipeline operator (`into`, single-line and multi-line indented form) | Done (qualified/generic steps, `view` steps, and step-local `handle error:` / `handle:` are covered) |
 | String interpolation | Done |
 | Verify blocks (parsing + execution) | Done |
 | Property-based testing (`property` blocks) | Done |
