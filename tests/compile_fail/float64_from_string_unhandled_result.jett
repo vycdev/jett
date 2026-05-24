@@ -1,0 +1,4 @@
+# ERROR: E0341
+namespace test
+function bad_ignore_float_parse() returns nothing:
+    float64.from_string("2.5")

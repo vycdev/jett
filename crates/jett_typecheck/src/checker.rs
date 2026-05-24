@@ -2353,6 +2353,14 @@ impl<'a> TypeChecker<'a> {
                         .intern(Type::Result(TypeInterner::UINT64, TypeInterner::STRING)),
                 ))
             }
+            "float64.from_string" => {
+                self.expect_no_type_args(&name, type_args, span);
+                Some((
+                    vec![TypeInterner::STRING],
+                    self.interner
+                        .intern(Type::Result(TypeInterner::FLOAT64, TypeInterner::STRING)),
+                ))
+            }
             "string.from_int64" => self.no_type_args_signature(
                 &name,
                 type_args,

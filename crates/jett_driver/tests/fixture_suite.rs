@@ -636,6 +636,10 @@ run_pass_fixture!(run_pass_set_operations, "set_operations.jett");
 run_pass_fixture!(run_pass_error_handling, "error_handling.jett");
 
 compile_fail_fixture!(compile_fail_unhandled_result, "unhandled_result.jett");
+compile_fail_fixture!(
+    compile_fail_float64_from_string_unhandled_result,
+    "float64_from_string_unhandled_result.jett"
+);
 
 run_pass_fixture!(run_pass_string_search, "string_search.jett");
 run_pass_fixture!(run_pass_time_and_os, "time_and_os.jett");
@@ -928,7 +932,7 @@ compile_fail_fixture!(
 
 #[test]
 fn compile_fail_builtin_type_arg_arity_count() {
-    assert_compile_fail_error_count("builtin_type_arg_arity.jett", 309, 4);
+    assert_compile_fail_error_count("builtin_type_arg_arity.jett", 309, 5);
 }
 
 compile_fail_fixture!(

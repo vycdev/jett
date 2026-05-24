@@ -8,3 +8,5 @@ function bad_hex_encode(value: string) returns string:
     return encoding.hex_encode[string](value)
 function bad_int64_from_string(value: string) returns result[int64, string]:
     return int64.from_string[string](value)
+function bad_float64_from_string(value: string) returns result[float64, string]:
+    return float64.from_string[string](value)
