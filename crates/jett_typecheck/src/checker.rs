@@ -3536,6 +3536,47 @@ impl<'a> TypeChecker<'a> {
                 let opt_str = self.interner.intern(Type::Optional(TypeInterner::STRING));
                 Some((vec![TypeInterner::STRING, TypeInterner::INT64], opt_str))
             }
+            "string.index_of" => {
+                self.expect_no_type_args(&name, type_args, span);
+                let opt_int = self.interner.intern(Type::Optional(TypeInterner::INT64));
+                Some((vec![TypeInterner::STRING, TypeInterner::STRING], opt_int))
+            }
+            "string.count" => self.no_type_args_signature(
+                &name,
+                type_args,
+                span,
+                vec![TypeInterner::STRING, TypeInterner::STRING],
+                TypeInterner::INT64,
+            ),
+            "string.to_upper_first" | "string.to_lower_first" => self.no_type_args_signature(
+                &name,
+                type_args,
+                span,
+                vec![TypeInterner::STRING],
+                TypeInterner::STRING,
+            ),
+            "string.center" | "string.ljust" | "string.rjust" | "string.zfill" => self
+                .no_type_args_signature(
+                    &name,
+                    type_args,
+                    span,
+                    vec![TypeInterner::STRING, TypeInterner::INT64],
+                    TypeInterner::STRING,
+                ),
+            "string.remove_prefix" | "string.remove_suffix" => self.no_type_args_signature(
+                &name,
+                type_args,
+                span,
+                vec![TypeInterner::STRING, TypeInterner::STRING],
+                TypeInterner::STRING,
+            ),
+            "string.is_numeric" | "string.is_alpha" => self.no_type_args_signature(
+                &name,
+                type_args,
+                span,
+                vec![TypeInterner::STRING],
+                TypeInterner::BOOL,
+            ),
             // encoding module (all string → string)
             "encoding.base64_encode"
             | "encoding.base64_decode"

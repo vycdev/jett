@@ -1,0 +1,38 @@
+# ERROR: E0311
+namespace test
+function bad_index_of() returns bool:
+    bool value = string.index_of("hello", "e")
+    return value
+function bad_count() returns string:
+    string value = string.count("banana", "an")
+    return value
+function bad_to_upper_first() returns bool:
+    bool value = string.to_upper_first("hello")
+    return value
+function bad_to_lower_first() returns bool:
+    bool value = string.to_lower_first("Hello")
+    return value
+function bad_center() returns bool:
+    bool value = string.center("hi", 4)
+    return value
+function bad_ljust() returns bool:
+    bool value = string.ljust("hi", 4)
+    return value
+function bad_rjust() returns bool:
+    bool value = string.rjust("hi", 4)
+    return value
+function bad_zfill() returns bool:
+    bool value = string.zfill("42", 4)
+    return value
+function bad_remove_prefix() returns bool:
+    bool value = string.remove_prefix("hello", "he")
+    return value
+function bad_remove_suffix() returns bool:
+    bool value = string.remove_suffix("hello", "lo")
+    return value
+function bad_is_numeric() returns string:
+    string value = string.is_numeric("123")
+    return value
+function bad_is_alpha() returns string:
+    string value = string.is_alpha("abc")
+    return value
