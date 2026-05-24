@@ -45,6 +45,19 @@ pub struct BuildResult {
     pub checked_expression_types: Option<Arc<HashMap<Span, String>>>,
 }
 
+/// Captured output from running a Jett program.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunOutput {
+    pub stdout: String,
+    pub debug_output: Vec<String>,
+}
+
+#[derive(Clone, Copy)]
+struct RunOptions {
+    capture_stdout: bool,
+    emit_runtime_debug: bool,
+}
+
 /// Run the full compilation pipeline on in-memory source text.
 /// Used by the LSP server to validate documents without touching the filesystem.
 pub fn build_source(source: &str, file_path: &str) -> BuildResult {
@@ -671,32 +684,57 @@ fn discover_modules_in_dir(
 /// First validates (lex → parse → resolve → typecheck → verify), then executes main().
 /// If a jett.proj exists, also loads sibling .jett files so cross-file calls work.
 pub fn run_file(path: &Path) -> Result<(), String> {
-    run_file_with_stdout(path, false).map(|_| ())
+    run_file_with_options(
+        path,
+        RunOptions {
+            capture_stdout: false,
+            emit_runtime_debug: true,
+        },
+    )
+    .map(|_| ())
 }
 
 /// Run a .jett file and capture runtime stdout produced by `Stdout.write`,
 /// `print`, and `println`.
 pub fn run_file_capture_stdout(path: &Path) -> Result<String, String> {
-    run_file_with_stdout(path, true)
+    run_file_with_options(
+        path,
+        RunOptions {
+            capture_stdout: true,
+            emit_runtime_debug: false,
+        },
+    )
+    .map(|output| output.stdout)
 }
 
-fn run_file_with_stdout(path: &Path, capture_stdout: bool) -> Result<String, String> {
+/// Run a .jett file and capture stdout plus trace/breakpoint debug lines.
+pub fn run_file_capture_output(path: &Path) -> Result<RunOutput, String> {
+    run_file_with_options(
+        path,
+        RunOptions {
+            capture_stdout: true,
+            emit_runtime_debug: false,
+        },
+    )
+}
+
+fn run_file_with_options(path: &Path, options: RunOptions) -> Result<RunOutput, String> {
     let thread_path = path.to_path_buf();
     let fallback_path = thread_path.clone();
     match thread::Builder::new()
         .name("jett-runtime".to_string())
         .stack_size(RUNTIME_STACK_SIZE)
-        .spawn(move || run_file_inner(&thread_path, capture_stdout))
+        .spawn(move || run_file_inner(&thread_path, options))
     {
         Ok(handle) => match handle.join() {
             Ok(result) => result,
             Err(payload) => std::panic::resume_unwind(payload),
         },
-        Err(_) => run_file_inner(&fallback_path, capture_stdout),
+        Err(_) => run_file_inner(&fallback_path, options),
     }
 }
 
-fn run_file_inner(path: &Path, capture_stdout: bool) -> Result<String, String> {
+fn run_file_inner(path: &Path, options: RunOptions) -> Result<RunOutput, String> {
     let build = build_file(path);
 
     if build.has_errors {
@@ -726,14 +764,18 @@ fn run_file_inner(path: &Path, capture_stdout: bool) -> Result<String, String> {
     let main_args = default_runtime_args_for_main(main_func)?;
 
     use jett_comptime::interpreter::Interpreter;
-    let mut interp = Interpreter::new_runtime();
+    let mut interp = if options.emit_runtime_debug {
+        Interpreter::new_runtime()
+    } else {
+        Interpreter::new()
+    };
     if let Some(metadata) = build.reflection_metadata.clone() {
         interp.set_reflection_metadata(metadata);
     }
     if let Some(expression_types) = build.checked_expression_types.clone() {
         interp.set_checked_expression_types(expression_types);
     }
-    if capture_stdout {
+    if options.capture_stdout {
         interp.enable_stdout_capture();
     }
 
@@ -753,7 +795,10 @@ fn run_file_inner(path: &Path, capture_stdout: bool) -> Result<String, String> {
 
     // Call main()
     match interp.call_function_in_namespace(main_namespace.as_deref(), "main", main_args) {
-        Ok(_) => Ok(interp.take_stdout_output()),
+        Ok(_) => Ok(RunOutput {
+            stdout: interp.take_stdout_output(),
+            debug_output: interp.take_debug_output(),
+        }),
         Err(e) => Err(format!("runtime error: {}", e)),
     }
 }

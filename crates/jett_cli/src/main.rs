@@ -44,6 +44,10 @@ enum Command {
     Run {
         /// Path to the .jett file
         file: String,
+
+        /// Emit TOON agent output
+        #[arg(long)]
+        agent: bool,
     },
 
     /// Run all verify and property blocks
@@ -140,13 +144,25 @@ fn main() {
                 }
             }
         }
-        Command::Run { file } => {
+        Command::Run { file, agent } => {
             let path = Path::new(&file);
-            match jett_driver::run_file(path) {
-                Ok(()) => {}
-                Err(e) => {
-                    eprintln!("error: {e}");
-                    process::exit(1);
+            if agent {
+                match jett_driver::run_file_capture_output(path) {
+                    Ok(output) => {
+                        print!("{}", render_run_agent_output(&file, &output));
+                    }
+                    Err(e) => {
+                        print!("{}", render_run_agent_error(&file, &e));
+                        process::exit(1);
+                    }
+                }
+            } else {
+                match jett_driver::run_file(path) {
+                    Ok(()) => {}
+                    Err(e) => {
+                        eprintln!("error: {e}");
+                        process::exit(1);
+                    }
                 }
             }
         }
@@ -205,6 +221,37 @@ fn main() {
     }
 }
 
+fn render_run_agent_output(file: &str, output: &jett_driver::RunOutput) -> String {
+    let mut out = String::new();
+    out.push_str("status: ok\n");
+    out.push_str(&format!("file: {}\n", escape_toon_scalar(file)));
+    out.push_str(&format!("stdout: {}\n", escape_toon_scalar(&output.stdout)));
+    out.push_str(&format!(
+        "debug[{}]{{message}}:\n",
+        output.debug_output.len()
+    ));
+    for line in &output.debug_output {
+        out.push_str(&format!("  {}\n", escape_toon_scalar(line)));
+    }
+    out
+}
+
+fn render_run_agent_error(file: &str, error: &str) -> String {
+    format!(
+        "status: error\nfile: {}\nerror: {}\n",
+        escape_toon_scalar(file),
+        escape_toon_scalar(error)
+    )
+}
+
+fn escape_toon_scalar(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\r', "\\r")
+        .replace('\n', "\\n")
+        .replace(',', "\\,")
+}
+
 fn print_file_results(result: &jett_driver::TestResult) {
     for block in &result.blocks {
         let name = &block.name;
@@ -222,5 +269,35 @@ fn print_file_results(result: &jett_driver::TestResult) {
             let msg = block.error.as_deref().unwrap_or("unknown error");
             println!("  verify {name}: FAILED ({msg})");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn run_agent_output_includes_stdout_and_debug_rows() {
+        let output = jett_driver::RunOutput {
+            stdout: "hello\n".to_string(),
+            debug_output: vec!["trace total: int64 = 42".to_string()],
+        };
+
+        let rendered = render_run_agent_output("app.jett", &output);
+
+        assert_eq!(
+            rendered,
+            "status: ok\nfile: app.jett\nstdout: hello\\n\ndebug[1]{message}:\n  trace total: int64 = 42\n"
+        );
+    }
+
+    #[test]
+    fn run_agent_error_escapes_multiline_message() {
+        let rendered = render_run_agent_error("app.jett", "runtime error: bad\nline");
+
+        assert_eq!(
+            rendered,
+            "status: error\nfile: app.jett\nerror: runtime error: bad\\nline\n"
+        );
     }
 }
