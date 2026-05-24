@@ -1,6 +1,7 @@
 # Reflection Predicate Facts
 
-Status: open.
+Status: current conservative boundary implemented and pinned; broader
+predicate semantics remain open.
 
 Jett now propagates several reflection facts through generic functions:
 
