@@ -7760,6 +7760,18 @@ impl<'a> TypeChecker<'a> {
             }
         }
 
+        if let Some(builtin_name) = callee_name.as_deref() {
+            match builtin_name {
+                "math.abs" => {
+                    return self.check_math_abs_pipeline_step(builtin_name, current_ty, step);
+                }
+                "math.min" | "math.max" => {
+                    return self.check_math_min_max_pipeline_step(builtin_name, current_ty, step);
+                }
+                _ => {}
+            }
+        }
+
         let builtin_signature = self.builtin_signature(&step.function, &[], step.span);
         let user_function_signature = if builtin_signature.is_none() {
             callee_name
@@ -8373,6 +8385,107 @@ impl<'a> TypeChecker<'a> {
             }
         }
         TypeInterner::NOTHING
+    }
+
+    fn check_math_abs_pipeline_step(
+        &mut self,
+        name: &str,
+        current_ty: TypeId,
+        step: &ast::PipelineStep,
+    ) -> TypeId {
+        if !step.extra_args.is_empty() {
+            self.sink.emit(errors::argument_count_mismatch(
+                name,
+                1,
+                step.extra_args.len() + 1,
+                step.span,
+            ));
+            for arg in &step.extra_args {
+                self.check_expr(&arg.value);
+            }
+            return TypeInterner::ERROR;
+        }
+
+        if current_ty == TypeInterner::ERROR {
+            return TypeInterner::ERROR;
+        }
+
+        match self.math_numeric_builtin_base(current_ty) {
+            Some((base, tainted)) => self.maybe_wrap_secret(base, tainted),
+            None => {
+                self.sink.emit(errors::argument_type_mismatch(
+                    "#1",
+                    "int64 or float64",
+                    &self.type_name(current_ty),
+                    step.span,
+                ));
+                TypeInterner::ERROR
+            }
+        }
+    }
+
+    fn check_math_min_max_pipeline_step(
+        &mut self,
+        name: &str,
+        current_ty: TypeId,
+        step: &ast::PipelineStep,
+    ) -> TypeId {
+        if step.extra_args.len() != 1 {
+            self.sink.emit(errors::argument_count_mismatch(
+                name,
+                2,
+                step.extra_args.len() + 1,
+                step.span,
+            ));
+            for arg in &step.extra_args {
+                self.check_expr(&arg.value);
+            }
+            return TypeInterner::ERROR;
+        }
+
+        if current_ty == TypeInterner::ERROR {
+            self.check_expr(&step.extra_args[0].value);
+            return TypeInterner::ERROR;
+        }
+
+        let Some((base, left_tainted)) = self.math_numeric_builtin_base(current_ty) else {
+            self.sink.emit(errors::argument_type_mismatch(
+                "#1",
+                "int64 or float64",
+                &self.type_name(current_ty),
+                step.span,
+            ));
+            self.check_expr(&step.extra_args[0].value);
+            return TypeInterner::ERROR;
+        };
+
+        let right_arg = &step.extra_args[0];
+        let right_ty = self.check_expr_for_expected(&right_arg.value, base, false);
+        if right_ty == TypeInterner::ERROR {
+            return TypeInterner::ERROR;
+        }
+
+        let Some((right_base, right_tainted)) = self.math_numeric_builtin_base(right_ty) else {
+            self.sink.emit(errors::argument_type_mismatch(
+                "#2",
+                &self.type_name(base),
+                &self.type_name(right_ty),
+                right_arg.value.span(),
+            ));
+            return TypeInterner::ERROR;
+        };
+
+        if !self.types_compatible(base, right_base) || !self.types_compatible(right_base, base) {
+            self.sink.emit(errors::argument_type_mismatch(
+                "#2",
+                &self.type_name(base),
+                &self.type_name(right_ty),
+                right_arg.value.span(),
+            ));
+            return TypeInterner::ERROR;
+        }
+
+        self.maybe_wrap_secret(base, left_tainted || right_tainted)
     }
 
     fn math_numeric_builtin_base(&self, ty: TypeId) -> Option<(TypeId, bool)> {

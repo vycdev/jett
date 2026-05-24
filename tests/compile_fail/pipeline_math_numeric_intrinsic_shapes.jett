@@ -1,0 +1,13 @@
+# ERROR: E0303
+# ERROR: E0304
+namespace app
+function bad_pipeline_math_abs_arg_count() returns int64:
+    return 1 into math.abs(2)
+function bad_pipeline_math_min_arg_count() returns int64:
+    return 1 into math.min
+function bad_pipeline_math_abs_input() returns int64:
+    return "x" into math.abs
+function bad_pipeline_math_min_extra() returns int64:
+    return 1 into math.min("x")
+function bad_pipeline_math_max_mixed() returns int64:
+    return 1 into math.max(2.0)

@@ -53,3 +53,17 @@ function pipeline_user_function_extra_arg_test() returns int64:
 
 verify pipeline_user_function_extra_arg_test:
     assert pipeline_user_function_extra_arg_test() == 42
+
+function pipeline_math_abs_int_test() returns int64:
+    return -5 into math.abs
+
+function pipeline_math_min_int_test() returns int64:
+    return 7 into math.min(3)
+
+function pipeline_math_max_float_test() returns float64:
+    return 3.0 into math.max(7.0)
+
+verify pipeline_math_numeric_intrinsic_test:
+    assert pipeline_math_abs_int_test() == 5
+    assert pipeline_math_min_int_test() == 3
+    assert pipeline_math_max_float_test() == 7.0
