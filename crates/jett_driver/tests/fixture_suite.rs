@@ -926,6 +926,16 @@ fn compile_fail_collection_builtin_type_arg_arity_count() {
 }
 
 compile_fail_fixture!(
+    compile_fail_collection_extra_builtin_return_types,
+    "collection_extra_builtin_return_types.jett"
+);
+
+#[test]
+fn compile_fail_collection_extra_builtin_return_types_count() {
+    assert_compile_fail_error_count("collection_extra_builtin_return_types.jett", 311, 12);
+}
+
+compile_fail_fixture!(
     compile_fail_builtin_type_arg_arity,
     "builtin_type_arg_arity.jett"
 );
