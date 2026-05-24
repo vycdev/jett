@@ -50,6 +50,11 @@ target. Avoid broader predicates that mix carriers or imply facts the checker
 cannot see. The compile-fail fixture
 `generic_reflection_predicate_fact_boundary.jett` pins this boundary: a boolean
 helper over `TypePrimitive` is not a generic cast guard yet.
+`generic_reflection_boolean_fact_boundary.jett` also pins that assigning a
+reflection comparison to a `bool` local does not preserve the fact. A future
+flow-sensitive boolean fact model can change that, but it should do so
+deliberately because arbitrary booleans are easier for agents to detach from
+the carrier they were meant to prove.
 
 ## Possible Directions
 

@@ -956,6 +956,10 @@ compile_fail_fixture!(
     "generic_reflection_helper_primitive_fact_cache.jett"
 );
 compile_fail_fixture!(
+    compile_fail_generic_reflection_boolean_fact_boundary,
+    "generic_reflection_boolean_fact_boundary.jett"
+);
+compile_fail_fixture!(
     compile_fail_generic_reflection_predicate_fact_boundary,
     "generic_reflection_predicate_fact_boundary.jett"
 );
