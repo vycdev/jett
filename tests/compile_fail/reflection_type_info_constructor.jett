@@ -1,0 +1,3 @@
+# ERROR: E0354
+function forged_type_info() returns TypeInfo:
+    return TypeInfo(type_name: "string", kind: "primitive", kind_tag: TypeKind.primitive_type, primitive_tag: some(TypePrimitive.string_type), has_secret: false, args: list.new[TypeInfo]())

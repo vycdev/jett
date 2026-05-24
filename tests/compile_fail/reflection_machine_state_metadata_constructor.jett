@@ -1,0 +1,4 @@
+# ERROR: E0354
+namespace test
+function forged_machine_state_metadata() returns TypeMachineState:
+    return TypeMachineState(index: 0, owner_type: "test.Session", name: "guest", has_secret: false, fields: list.new[TypeField]())
