@@ -33,6 +33,10 @@ function parse_uint64_max_test() returns string:
 function uint64_literal_max_test() returns string:
     uint64 val = 18446744073709551615
     return string.from_uint64(val)
+function uint64_mutable_reassignment_test() returns string:
+    mutable uint64 val = 0
+    val = 18446744073709551615
+    return string.from_uint64(val)
 function parse_uint64_negative_error_test() returns string:
     uint64 val = uint64.from_string("-1") handle error:
         return error
@@ -44,6 +48,7 @@ function parse_uint64_overflow_error_test() returns string:
 verify parse_uint64_max_test:
     assert parse_uint64_max_test() == "18446744073709551615"
     assert uint64_literal_max_test() == "18446744073709551615"
+    assert uint64_mutable_reassignment_test() == "18446744073709551615"
     assert parse_uint64_negative_error_test() == "uint64.from_string: cannot parse '-1' as uint64"
     assert parse_uint64_overflow_error_test() == "uint64.from_string: cannot parse '18446744073709551616' as uint64"
 # --- float64 from string (result type) ---
