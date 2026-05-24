@@ -3966,19 +3966,19 @@ type: string
 **Function signature lookup:**
 
 ```
-jett query --agent --signature "string.split"
+jett query --agent --signature json.parse
 ```
 
-```
-query: signature
-function: string.split
-params[2]{name,type}:
-  input,string
-  delimiter,string
-returns: list[string]
-capabilities[0]:
-module: string
-doc: Splits the input string at each occurrence of the delimiter
+```toon
+status: ok
+function: json.parse
+found: true
+file: stdlib/json/90_public_api.jett
+returns: result[T\, string]
+type_params[1]{name}:
+  T
+params[1]{name,type,view,mutable}:
+  raw,string,false,false
 ```
 
 **Available completions at a position:**

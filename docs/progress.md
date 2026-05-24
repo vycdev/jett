@@ -120,13 +120,13 @@
 
 | Component | Status |
 |---|---|
-| TOON output (`--agent` flag) | Partial (build diagnostics, run stdout/debug output, verify/property test summaries, namespace/type-at/completion query results are structured; remaining query payloads remain open) |
+| TOON output (`--agent` flag) | Partial (build diagnostics, run stdout/debug output, verify/property test summaries, and namespace/type-at/completion/signature query results are structured) |
 | LSP server (diagnostics on save) | Done |
 | LSP hover (type at cursor) | Done |
 | LSP go-to-definition | Done |
 | LSP completions | Done |
 | MCP server | Not started |
-| ASP query system (type-at, signature, completions) | Partial (`jett query --agent --namespaces`, `--type-at`, and `--complete-at` are implemented; signature remains open) |
+| ASP query system (type-at, signature, completions) | Partial (`jett query --agent --namespaces`, `--type-at`, `--complete-at`, and `--signature` are implemented; richer signature/completion metadata remains open) |
 
 ### Phase I: Testing and Profiling — PARTIAL
 
@@ -199,4 +199,4 @@
 | `jett bind header.h` | Not started |
 | `jett bundle` | Not started |
 | `jett mcp` | Not started |
-| `jett query --agent --namespaces` / `--type-at file:line:column` / `--complete-at file:line:column` | Partial (namespace registry, type lookup, and completion candidates) |
+| `jett query --agent --namespaces` / `--type-at file:line:column` / `--complete-at file:line:column` / `--signature name` | Partial (namespace registry, type lookup, completion candidates, and source-level function signatures) |

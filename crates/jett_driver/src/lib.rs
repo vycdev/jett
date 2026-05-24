@@ -6,7 +6,7 @@ use jett_comptime::verify::{
 };
 use jett_diagnostics::Diagnostic;
 use jett_fmt::{FormatResult, format_source};
-use jett_parser::ast::{FunctionDef, Item, Module, Param, TypeExpr};
+use jett_parser::ast::{FunctionDecl, FunctionDef, Item, Module, Param, TypeExpr};
 use jett_parser::parse;
 use jett_resolve::resolve;
 use jett_typecheck::{CheckResult, check};
@@ -93,6 +93,25 @@ pub struct CompletionsQueryResult {
     pub line: u32,
     pub column: u32,
     pub candidates: Vec<CompletionQueryEntry>,
+}
+
+/// A single parameter in a queried function signature.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignatureParam {
+    pub name: String,
+    pub type_name: String,
+    pub view: bool,
+    pub mutable: bool,
+}
+
+/// Result of `jett query --agent --signature function.name`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignatureQueryResult {
+    pub name: String,
+    pub type_params: Vec<String>,
+    pub params: Vec<SignatureParam>,
+    pub return_type: String,
+    pub file_path: String,
 }
 
 #[derive(Clone, Copy)]
@@ -387,6 +406,153 @@ pub fn query_completions_at(
         column,
         candidates,
     })
+}
+
+/// Return the source-level signature for a public function.
+pub fn query_signature(
+    start_dir: &Path,
+    function_name: &str,
+) -> Result<Option<SignatureQueryResult>, String> {
+    let mut support_modules = discover_stdlib_modules_with_diagnostics();
+    support_modules.extend(discover_query_project_modules_with_diagnostics(start_dir));
+
+    let support_errors = error_messages_from_diagnostics(&support_modules.diagnostics);
+    if !support_errors.is_empty() {
+        return Err(format!(
+            "query support parse errors:\n{}",
+            support_errors.join("\n")
+        ));
+    }
+
+    for module in &support_modules.modules {
+        if let Some(signature) =
+            module_signature_query_result(module, &support_modules.files, function_name)
+        {
+            return Ok(Some(signature));
+        }
+    }
+
+    Ok(None)
+}
+
+fn module_signature_query_result(
+    module: &Module,
+    file_paths: &HashMap<FileId, PathBuf>,
+    function_name: &str,
+) -> Option<SignatureQueryResult> {
+    let mut current_namespace: Option<String> = None;
+    for item in &module.items {
+        match item {
+            Item::Namespace(ns) => current_namespace = Some(ns.name.name.clone()),
+            Item::Function(func) => {
+                if let Some(signature) =
+                    function_signature_query_result(func, current_namespace.as_deref(), file_paths)
+                    && signature.name == function_name
+                {
+                    return Some(signature);
+                }
+            }
+            Item::Mutual(block) => {
+                for decl in &block.declarations {
+                    if let Some(signature) = function_decl_signature_query_result(
+                        decl,
+                        current_namespace.as_deref(),
+                        file_paths,
+                    ) && signature.name == function_name
+                    {
+                        return Some(signature);
+                    }
+                }
+            }
+            Item::Interface(_)
+            | Item::Implement(_)
+            | Item::Struct(_)
+            | Item::Bitfield(_)
+            | Item::Enum(_)
+            | Item::Machine(_)
+            | Item::Actor(_)
+            | Item::VarDecl(_)
+            | Item::Verify(_)
+            | Item::Property(_)
+            | Item::TypeAlias(_) => {}
+        }
+    }
+    None
+}
+
+fn function_signature_query_result(
+    func: &FunctionDef,
+    namespace: Option<&str>,
+    file_paths: &HashMap<FileId, PathBuf>,
+) -> Option<SignatureQueryResult> {
+    if namespace.is_some() && !func.exported {
+        return None;
+    }
+
+    Some(signature_query_result(
+        &func.name.name,
+        &func.type_params,
+        &func.params,
+        func.return_type.as_ref(),
+        namespace,
+        func.span.file,
+        file_paths,
+    ))
+}
+
+fn function_decl_signature_query_result(
+    decl: &FunctionDecl,
+    namespace: Option<&str>,
+    file_paths: &HashMap<FileId, PathBuf>,
+) -> Option<SignatureQueryResult> {
+    if namespace.is_some() && !decl.exported {
+        return None;
+    }
+
+    Some(signature_query_result(
+        &decl.name.name,
+        &decl.type_params,
+        &decl.params,
+        decl.return_type.as_ref(),
+        namespace,
+        decl.span.file,
+        file_paths,
+    ))
+}
+
+fn signature_query_result(
+    leaf_name: &str,
+    type_params: &[jett_parser::ast::Ident],
+    params: &[Param],
+    return_type: Option<&TypeExpr>,
+    namespace: Option<&str>,
+    file: FileId,
+    file_paths: &HashMap<FileId, PathBuf>,
+) -> SignatureQueryResult {
+    let name = namespace
+        .map(|namespace| format!("{namespace}.{leaf_name}"))
+        .unwrap_or_else(|| leaf_name.to_string());
+    let type_params = type_params.iter().map(|param| param.name.clone()).collect();
+    let params = params
+        .iter()
+        .map(|param| SignatureParam {
+            name: param.name.name.clone(),
+            type_name: type_expr_name(&param.ty),
+            view: param.view,
+            mutable: param.mutable,
+        })
+        .collect();
+    let return_type = return_type
+        .map(type_expr_name)
+        .unwrap_or_else(|| "nothing".to_string());
+
+    SignatureQueryResult {
+        name,
+        type_params,
+        params,
+        return_type,
+        file_path: query_file_path(file, file_paths),
+    }
 }
 
 fn completions_for_namespace(
@@ -1676,6 +1842,20 @@ mod tests {
                     && query_kind_name(candidate.kind) == "function"),
             "expected completion query to include exported project helper"
         );
+    }
+
+    #[test]
+    fn query_signature_reports_stdlib_function_signature() {
+        let result = query_signature(Path::new("."), "json.parse")
+            .expect("signature query should succeed")
+            .expect("json.parse signature should be found");
+
+        assert_eq!(result.name, "json.parse");
+        assert_eq!(result.type_params, vec!["T".to_string()]);
+        assert_eq!(result.params.len(), 1);
+        assert_eq!(result.params[0].name, "raw");
+        assert_eq!(result.params[0].type_name, "string");
+        assert_eq!(result.return_type, "result[T, string]");
     }
 }
 

@@ -77,6 +77,10 @@ enum Command {
         /// Return completions at file:line:column
         #[arg(long = "complete-at")]
         complete_at: Option<String>,
+
+        /// Return a public function signature
+        #[arg(long)]
+        signature: Option<String>,
     },
 
     /// Start the Language Server Protocol server (for editor integration)
@@ -198,10 +202,12 @@ fn main() {
             namespaces,
             type_at,
             complete_at,
+            signature,
         } => {
             let query_count = usize::from(namespaces)
                 + usize::from(type_at.is_some())
-                + usize::from(complete_at.is_some());
+                + usize::from(complete_at.is_some())
+                + usize::from(signature.is_some());
             if query_count != 1 {
                 if agent {
                     print!(
@@ -292,6 +298,33 @@ fn main() {
                             print!("{}", render_query_completions_agent_output(&result));
                         } else {
                             print_query_completions_human(&result);
+                        }
+                    }
+                    Err(e) => {
+                        if agent {
+                            print!("{}", render_query_agent_error(&e));
+                        } else {
+                            eprintln!("error: {e}");
+                        }
+                        process::exit(1);
+                    }
+                }
+            }
+
+            if let Some(function_name) = signature {
+                let cwd = std::env::current_dir().unwrap_or_default();
+                match jett_driver::query_signature(&cwd, &function_name) {
+                    Ok(result) => {
+                        if agent {
+                            print!(
+                                "{}",
+                                render_query_signature_agent_output(
+                                    &function_name,
+                                    result.as_ref()
+                                )
+                            );
+                        } else {
+                            print_query_signature_human(&function_name, result.as_ref());
                         }
                     }
                     Err(e) => {
@@ -511,6 +544,53 @@ fn render_query_completions_agent_output(result: &jett_driver::CompletionsQueryR
     out
 }
 
+fn render_query_signature_agent_output(
+    function_name: &str,
+    result: Option<&jett_driver::SignatureQueryResult>,
+) -> String {
+    let mut out = String::new();
+    out.push_str("status: ok\n");
+    out.push_str(&format!(
+        "function: {}\n",
+        escape_toon_scalar(function_name)
+    ));
+    let Some(result) = result else {
+        out.push_str("found: false\n");
+        return out;
+    };
+
+    out.push_str("found: true\n");
+    out.push_str(&format!(
+        "file: {}\n",
+        escape_toon_scalar(&result.file_path)
+    ));
+    out.push_str(&format!(
+        "returns: {}\n",
+        escape_toon_scalar(&result.return_type)
+    ));
+    out.push_str(&format!(
+        "type_params[{}]{{name}}:\n",
+        result.type_params.len()
+    ));
+    for type_param in &result.type_params {
+        out.push_str(&format!("  {}\n", escape_toon_scalar(type_param)));
+    }
+    out.push_str(&format!(
+        "params[{}]{{name,type,view,mutable}}:\n",
+        result.params.len()
+    ));
+    for param in &result.params {
+        out.push_str(&format!(
+            "  {},{},{},{}\n",
+            escape_toon_scalar(&param.name),
+            escape_toon_scalar(&param.type_name),
+            if param.view { "true" } else { "false" },
+            if param.mutable { "true" } else { "false" }
+        ));
+    }
+    out
+}
+
 fn print_query_namespaces_human(result: &jett_driver::NamespaceQueryResult) {
     for definition in &result.definitions {
         let namespace = definition.namespace.as_deref().unwrap_or("-");
@@ -522,6 +602,43 @@ fn print_query_namespaces_human(result: &jett_driver::NamespaceQueryResult) {
             definition.file_path
         );
     }
+}
+
+fn print_query_signature_human(
+    function_name: &str,
+    result: Option<&jett_driver::SignatureQueryResult>,
+) {
+    let Some(result) = result else {
+        println!("no signature found for {function_name}");
+        return;
+    };
+
+    let type_params = if result.type_params.is_empty() {
+        String::new()
+    } else {
+        format!("[{}]", result.type_params.join(", "))
+    };
+    let params: Vec<String> = result
+        .params
+        .iter()
+        .map(|param| {
+            let mut prefix = String::new();
+            if param.view {
+                prefix.push_str("view ");
+            }
+            if param.mutable {
+                prefix.push_str("mutable ");
+            }
+            format!("{prefix}{}: {}", param.name, param.type_name)
+        })
+        .collect();
+    println!(
+        "{}{}({}) returns {}",
+        result.name,
+        type_params,
+        params.join(", "),
+        result.return_type
+    );
 }
 
 fn print_query_completions_human(result: &jett_driver::CompletionsQueryResult) {
@@ -826,6 +943,29 @@ mod tests {
         assert_eq!(
             rendered,
             "status: ok\nfile: src/main.jett\nline: 4\ncolumn: 5\ntotal: 1\ncompletions[1]{name,kind}:\n  json.parse,function\n"
+        );
+    }
+
+    #[test]
+    fn query_signature_agent_output_lists_params() {
+        let result = jett_driver::SignatureQueryResult {
+            name: "json.parse".to_string(),
+            type_params: vec!["T".to_string()],
+            params: vec![jett_driver::SignatureParam {
+                name: "raw".to_string(),
+                type_name: "string".to_string(),
+                view: false,
+                mutable: false,
+            }],
+            return_type: "result[T, string]".to_string(),
+            file_path: "stdlib/json/90_public_api.jett".to_string(),
+        };
+
+        let rendered = render_query_signature_agent_output("json.parse", Some(&result));
+
+        assert_eq!(
+            rendered,
+            "status: ok\nfunction: json.parse\nfound: true\nfile: stdlib/json/90_public_api.jett\nreturns: result[T\\, string]\ntype_params[1]{name}:\n  T\nparams[1]{name,type,view,mutable}:\n  raw,string,false,false\n"
         );
     }
 }
