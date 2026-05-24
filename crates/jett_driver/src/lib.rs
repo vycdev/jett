@@ -79,6 +79,22 @@ pub struct TypeAtQueryResult {
     pub type_name: Option<String>,
 }
 
+/// A single completion candidate visible at a source position.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompletionQueryEntry {
+    pub name: String,
+    pub kind: jett_resolve::scope::DefKind,
+}
+
+/// Result of `jett query --agent --complete-at file:line:column`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompletionsQueryResult {
+    pub file_path: String,
+    pub line: u32,
+    pub column: u32,
+    pub candidates: Vec<CompletionQueryEntry>,
+}
+
 #[derive(Clone, Copy)]
 struct RunOptions {
     capture_stdout: bool,
@@ -306,6 +322,71 @@ pub fn completions_at(
     let current_namespace = current_namespace
         .filter(|namespace| !support_modules_declare_namespace(&support_modules, namespace));
     completions_for_namespace_with_support(source, current_namespace.as_deref(), support_modules)
+}
+
+/// Return completion candidates visible at a source position in a file.
+pub fn query_completions_at(
+    path: &Path,
+    line: u32,
+    column: u32,
+) -> Result<CompletionsQueryResult, String> {
+    let source = fs::read_to_string(path)
+        .map_err(|e| format!("failed to read {}: {}", path.display(), e))?;
+    let file_path = path.display().to_string();
+    let file_id = FileId::new(0);
+    if line_col_to_offset(&source, line, column).is_none() {
+        return Err(format!(
+            "position {line}:{column} is outside {}",
+            path.display()
+        ));
+    }
+
+    let parsed = parse(&source, file_id);
+    let parse_errors = error_messages_from_diagnostics(&parsed.errors);
+    if !parse_errors.is_empty() {
+        return Err(format!("parse errors:\n{}", parse_errors.join("\n")));
+    }
+
+    let mut support_modules = discover_stdlib_modules_with_diagnostics();
+    support_modules.extend(discover_project_modules_with_diagnostics(path));
+    let support_errors = error_messages_from_diagnostics(&support_modules.diagnostics);
+    if !support_errors.is_empty() {
+        return Err(format!(
+            "support parse errors:\n{}",
+            support_errors.join("\n")
+        ));
+    }
+
+    let mut file_paths = support_modules.files.clone();
+    let display_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    file_paths.insert(file_id, display_path);
+
+    let mut definitions = query_builtin_definitions();
+    for module in &support_modules.modules {
+        append_module_query_definitions(&mut definitions, module, &file_paths);
+    }
+    append_module_query_definitions(&mut definitions, &parsed.module, &file_paths);
+
+    let mut candidates: Vec<CompletionQueryEntry> = definitions
+        .into_iter()
+        .map(|definition| CompletionQueryEntry {
+            name: definition.name,
+            kind: definition.kind,
+        })
+        .collect();
+    candidates.sort_by(|left, right| {
+        left.name
+            .cmp(&right.name)
+            .then_with(|| query_kind_name(left.kind).cmp(query_kind_name(right.kind)))
+    });
+    candidates.dedup_by(|left, right| left.name == right.name && left.kind == right.kind);
+
+    Ok(CompletionsQueryResult {
+        file_path,
+        line,
+        column,
+        candidates,
+    })
 }
 
 fn completions_for_namespace(
@@ -1563,6 +1644,38 @@ mod tests {
         fs::remove_dir_all(&root).expect("temp query dir should be removed");
 
         assert_eq!(result.type_name, Some("int64".to_string()));
+    }
+
+    #[test]
+    fn query_completions_at_includes_project_definitions() {
+        let root = temp_test_dir("jett_driver_query_completions_at");
+        fs::create_dir_all(&root).expect("temp query dir should be created");
+        fs::write(root.join("jett.proj"), "name: query_fixture\n")
+            .expect("project marker should be written");
+        fs::write(
+            root.join("util.jett"),
+            "namespace util\n\nexport function helper() returns int64:\n    return 1\n",
+        )
+        .expect("support fixture should be written");
+        let file = root.join("main.jett");
+        fs::write(
+            &file,
+            "namespace app\n\nfunction main() returns nothing:\n    return nothing\n",
+        )
+        .expect("main fixture should be written");
+
+        let result = query_completions_at(&file, 4, 5).expect("completion query should succeed");
+
+        fs::remove_dir_all(&root).expect("temp query dir should be removed");
+
+        assert!(
+            result
+                .candidates
+                .iter()
+                .any(|candidate| candidate.name == "util.helper"
+                    && query_kind_name(candidate.kind) == "function"),
+            "expected completion query to include exported project helper"
+        );
     }
 }
 

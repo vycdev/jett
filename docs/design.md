@@ -3987,19 +3987,16 @@ doc: Splits the input string at each occurrence of the delimiter
 jett query --agent --complete-at src/server.jett:30:15
 ```
 
-```
-query: complete_at
+```toon
+status: ok
 file: src/server.jett
 line: 30
 column: 15
-context:
-  in_function: handle_request
-  pipe_input_type: User
-  expecting: function taking User as first argument
-completions[3]{name,signature}:
-  json.serialize_public,(view value: User) returns string
-  json.serialize,BLOCKED — User contains secret fields
-  validate_user,(user: User) returns result[User, string]
+total: 3
+completions[3]{name,kind}:
+  json.serialize_public,function
+  json.serialize,function
+  validate_user,function
 ```
 
 **Verify/test results** (`jett test` runs all `verify` and `property` blocks):

@@ -73,6 +73,10 @@ enum Command {
         /// Return the type at file:line:column
         #[arg(long = "type-at")]
         type_at: Option<String>,
+
+        /// Return completions at file:line:column
+        #[arg(long = "complete-at")]
+        complete_at: Option<String>,
     },
 
     /// Start the Language Server Protocol server (for editor integration)
@@ -193,8 +197,11 @@ fn main() {
             agent,
             namespaces,
             type_at,
+            complete_at,
         } => {
-            let query_count = usize::from(namespaces) + usize::from(type_at.is_some());
+            let query_count = usize::from(namespaces)
+                + usize::from(type_at.is_some())
+                + usize::from(complete_at.is_some());
             if query_count != 1 {
                 if agent {
                     print!(
@@ -250,6 +257,41 @@ fn main() {
                             print!("{}", render_query_type_at_agent_output(&result));
                         } else {
                             print_query_type_at_human(&result);
+                        }
+                    }
+                    Err(e) => {
+                        if agent {
+                            print!("{}", render_query_agent_error(&e));
+                        } else {
+                            eprintln!("error: {e}");
+                        }
+                        process::exit(1);
+                    }
+                }
+            }
+
+            if let Some(position) = complete_at {
+                let position = match parse_source_position(&position) {
+                    Ok(position) => position,
+                    Err(e) => {
+                        if agent {
+                            print!("{}", render_query_agent_error(&e));
+                        } else {
+                            eprintln!("error: {e}");
+                        }
+                        process::exit(1);
+                    }
+                };
+                match jett_driver::query_completions_at(
+                    Path::new(&position.file),
+                    position.line,
+                    position.column,
+                ) {
+                    Ok(result) => {
+                        if agent {
+                            print!("{}", render_query_completions_agent_output(&result));
+                        } else {
+                            print_query_completions_human(&result);
                         }
                     }
                     Err(e) => {
@@ -445,6 +487,30 @@ fn render_query_type_at_agent_output(result: &jett_driver::TypeAtQueryResult) ->
     out
 }
 
+fn render_query_completions_agent_output(result: &jett_driver::CompletionsQueryResult) -> String {
+    let mut out = String::new();
+    out.push_str("status: ok\n");
+    out.push_str(&format!(
+        "file: {}\n",
+        escape_toon_scalar(&result.file_path)
+    ));
+    out.push_str(&format!("line: {}\n", result.line));
+    out.push_str(&format!("column: {}\n", result.column));
+    out.push_str(&format!("total: {}\n", result.candidates.len()));
+    out.push_str(&format!(
+        "completions[{}]{{name,kind}}:\n",
+        result.candidates.len()
+    ));
+    for candidate in &result.candidates {
+        out.push_str(&format!(
+            "  {},{}\n",
+            escape_toon_scalar(&candidate.name),
+            jett_driver::query_kind_name(candidate.kind)
+        ));
+    }
+    out
+}
+
 fn print_query_namespaces_human(result: &jett_driver::NamespaceQueryResult) {
     for definition in &result.definitions {
         let namespace = definition.namespace.as_deref().unwrap_or("-");
@@ -454,6 +520,16 @@ fn print_query_namespaces_human(result: &jett_driver::NamespaceQueryResult) {
             definition.name,
             namespace,
             definition.file_path
+        );
+    }
+}
+
+fn print_query_completions_human(result: &jett_driver::CompletionsQueryResult) {
+    for candidate in &result.candidates {
+        println!(
+            "{}\t{}",
+            jett_driver::query_kind_name(candidate.kind),
+            candidate.name
         );
     }
 }
@@ -730,6 +806,26 @@ mod tests {
                 line: 12,
                 column: 34,
             })
+        );
+    }
+
+    #[test]
+    fn query_completions_agent_output_lists_candidates() {
+        let result = jett_driver::CompletionsQueryResult {
+            file_path: "src/main.jett".to_string(),
+            line: 4,
+            column: 5,
+            candidates: vec![jett_driver::CompletionQueryEntry {
+                name: "json.parse".to_string(),
+                kind: jett_resolve::scope::DefKind::Function,
+            }],
+        };
+
+        let rendered = render_query_completions_agent_output(&result);
+
+        assert_eq!(
+            rendered,
+            "status: ok\nfile: src/main.jett\nline: 4\ncolumn: 5\ntotal: 1\ncompletions[1]{name,kind}:\n  json.parse,function\n"
         );
     }
 }
