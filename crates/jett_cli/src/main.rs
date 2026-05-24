@@ -20,6 +20,10 @@ enum Command {
         /// Check formatting without modifying the file
         #[arg(long)]
         check: bool,
+
+        /// Emit TOON agent output
+        #[arg(long)]
+        agent: bool,
     },
 
     /// Compile a .jett source file
@@ -91,7 +95,7 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Format { file, check } => {
+        Command::Format { file, check, agent } => {
             let path = Path::new(&file);
 
             if check {
@@ -99,28 +103,91 @@ fn main() {
                 match jett_driver::format_file(path) {
                     Ok(result) => {
                         if !result.errors.is_empty() {
-                            eprintln!("error: {}", result.errors.join("\n"));
+                            if agent {
+                                print!(
+                                    "{}",
+                                    render_format_agent_output(
+                                        &file,
+                                        "check",
+                                        false,
+                                        &result.errors
+                                    )
+                                );
+                            } else {
+                                eprintln!("error: {}", result.errors.join("\n"));
+                            }
                             process::exit(1);
                         }
                         let original = std::fs::read_to_string(path).unwrap_or_default();
                         if result.output != original {
-                            eprintln!("{file} needs formatting");
+                            if agent {
+                                print!("{}", render_format_agent_output(&file, "check", true, &[]));
+                            } else {
+                                eprintln!("{file} needs formatting");
+                            }
                             process::exit(1);
+                        } else if agent {
+                            print!("{}", render_format_agent_output(&file, "check", false, &[]));
                         }
                     }
                     Err(e) => {
-                        eprintln!("error: {e}");
+                        if agent {
+                            print!("{}", render_format_agent_error(&file, &e));
+                        } else {
+                            eprintln!("error: {e}");
+                        }
                         process::exit(1);
                     }
                 }
             } else {
                 // Format in place
-                match jett_driver::format_file_in_place(path) {
-                    Ok(()) => {
-                        println!("formatted {file}");
+                match jett_driver::format_file(path) {
+                    Ok(result) => {
+                        if !result.errors.is_empty() {
+                            if agent {
+                                print!(
+                                    "{}",
+                                    render_format_agent_output(
+                                        &file,
+                                        "write",
+                                        false,
+                                        &result.errors
+                                    )
+                                );
+                            } else {
+                                eprintln!("error: {}", result.errors.join("\n"));
+                            }
+                            process::exit(1);
+                        }
+                        let original = std::fs::read_to_string(path).unwrap_or_default();
+                        let changed = result.output != original;
+                        match jett_driver::format_file_in_place(path) {
+                            Ok(()) => {
+                                if agent {
+                                    print!(
+                                        "{}",
+                                        render_format_agent_output(&file, "write", changed, &[])
+                                    );
+                                } else {
+                                    println!("formatted {file}");
+                                }
+                            }
+                            Err(e) => {
+                                if agent {
+                                    print!("{}", render_format_agent_error(&file, &e));
+                                } else {
+                                    eprintln!("error: {e}");
+                                }
+                                process::exit(1);
+                            }
+                        }
                     }
                     Err(e) => {
-                        eprintln!("error: {e}");
+                        if agent {
+                            print!("{}", render_format_agent_error(&file, &e));
+                        } else {
+                            eprintln!("error: {e}");
+                        }
                         process::exit(1);
                     }
                 }
@@ -418,6 +485,35 @@ fn render_run_agent_output(file: &str, output: &jett_driver::RunOutput) -> Strin
         out.push_str(&format!("  {}\n", escape_toon_scalar(line)));
     }
     out
+}
+
+fn render_format_agent_output(file: &str, mode: &str, changed: bool, errors: &[String]) -> String {
+    let status = if !errors.is_empty() || (mode == "check" && changed) {
+        "error"
+    } else {
+        "ok"
+    };
+    let mut out = String::new();
+    out.push_str(&format!("status: {status}\n"));
+    out.push_str(&format!("file: {}\n", escape_toon_scalar(file)));
+    out.push_str(&format!("mode: {}\n", escape_toon_scalar(mode)));
+    out.push_str(&format!(
+        "changed: {}\n",
+        if changed { "true" } else { "false" }
+    ));
+    out.push_str(&format!("errors[{}]{{message}}:\n", errors.len()));
+    for error in errors {
+        out.push_str(&format!("  {}\n", escape_toon_scalar(error)));
+    }
+    out
+}
+
+fn render_format_agent_error(file: &str, error: &str) -> String {
+    format!(
+        "status: error\nfile: {}\nerror: {}\n",
+        escape_toon_scalar(file),
+        escape_toon_scalar(error)
+    )
 }
 
 fn render_run_agent_error(file: &str, error: &str) -> String {
@@ -785,6 +881,27 @@ mod tests {
         assert_eq!(
             rendered,
             "status: error\nfile: app.jett\nerror: runtime error: bad\\nline\n"
+        );
+    }
+
+    #[test]
+    fn format_agent_check_reports_needed_change() {
+        let rendered = render_format_agent_output("app.jett", "check", true, &[]);
+
+        assert_eq!(
+            rendered,
+            "status: error\nfile: app.jett\nmode: check\nchanged: true\nerrors[0]{message}:\n"
+        );
+    }
+
+    #[test]
+    fn format_agent_output_lists_errors() {
+        let errors = vec!["bad token\nline".to_string()];
+        let rendered = render_format_agent_output("app.jett", "write", false, &errors);
+
+        assert_eq!(
+            rendered,
+            "status: error\nfile: app.jett\nmode: write\nchanged: false\nerrors[1]{message}:\n  bad token\\nline\n"
         );
     }
 
