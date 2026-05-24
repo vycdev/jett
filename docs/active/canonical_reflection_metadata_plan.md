@@ -20,6 +20,10 @@ Most of that now flows through checked `ReflectionMetadata` when a checked
 snapshot is available. The comptime interpreter still keeps AST reconstruction
 fallbacks for bootstrap and direct no-metadata tests, but those fallbacks are
 not the intended production source of truth.
+Direct source constructors for all compiler-owned reflection metadata records
+are rejected; `tests/compile_fail/reflection_aggregate_metadata_constructors.jett`
+extends the existing forgery fixtures to the aggregate bitfield and machine
+metadata records.
 
 Reflection should eventually describe exactly the type the checker accepted,
 after namespace qualification, alias/refinement resolution, generic

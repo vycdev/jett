@@ -1,0 +1,11 @@
+# ERROR: E0354
+namespace test
+function forged_bitfield_field_metadata() returns TypeBitfieldField:
+    TypeInfo field_type = type.info[int64]()
+    return TypeBitfieldField(index: 0, name: "version", shape: "bits", shape_tag: TypeBitfieldFieldShape.bits_field, width: 4, type_info: field_type, enum_type: none)
+function forged_bitfield_metadata() returns TypeBitfield:
+    return TypeBitfield(network_order: false, fields: list.new[TypeBitfieldField]())
+function forged_machine_transition_metadata() returns TypeMachineTransition:
+    return TypeMachineTransition(index: 0, source_index: 0, source: "guest", target_index: 1, target: "logged_in")
+function forged_machine_metadata() returns TypeMachine:
+    return TypeMachine(states: list.new[TypeMachineState](), edges: list.new[TypeMachineTransition]())

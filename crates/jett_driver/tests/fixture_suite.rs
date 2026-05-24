@@ -1437,6 +1437,14 @@ compile_fail_fixture!(
     "reflection_metadata_constructor.jett"
 );
 compile_fail_fixture!(
+    compile_fail_reflection_aggregate_metadata_constructors,
+    "reflection_aggregate_metadata_constructors.jett"
+);
+#[test]
+fn compile_fail_reflection_aggregate_metadata_constructors_count() {
+    assert_compile_fail_error_count("reflection_aggregate_metadata_constructors.jett", 354, 4);
+}
+compile_fail_fixture!(
     compile_fail_reflection_field_metadata_constructor,
     "reflection_field_metadata_constructor.jett"
 );
