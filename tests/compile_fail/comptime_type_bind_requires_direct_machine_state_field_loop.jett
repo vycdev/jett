@@ -1,0 +1,15 @@
+# ERROR: E0345
+namespace test
+machine Session:
+    states:
+        guest
+        logged_in(user_id: string)
+    transitions:
+        guest to logged_in
+function bad(view session: Session at logged_in) returns string:
+    TypeMachineState state = type.machine_state_value[Session at logged_in](view session)
+    string found = "missing"
+    for field in state.fields:
+        comptime type Field = field.type_info:
+            found = type.name[Field]()
+    return found

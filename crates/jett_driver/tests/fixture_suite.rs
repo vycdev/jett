@@ -1293,6 +1293,10 @@ compile_fail_fixture!(
     "comptime_type_bind_requires_direct_variant_field_loop.jett"
 );
 compile_fail_fixture!(
+    compile_fail_comptime_type_bind_requires_direct_machine_state_field_loop,
+    "comptime_type_bind_requires_direct_machine_state_field_loop.jett"
+);
+compile_fail_fixture!(
     compile_fail_comptime_type_bind_scope,
     "comptime_type_bind_scope.jett"
 );

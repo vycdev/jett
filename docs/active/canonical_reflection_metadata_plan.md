@@ -124,8 +124,9 @@ Status: `type.name[T]()`, `type.kind[T]()`, `type.kind_tag[T]()`,
 requested type name is present, and fall back to the previous AST path during
 bootstrap and direct interpreter tests. Trusted
 `comptime type` bindings over direct `type.arg[T](index)`, `TypeInfo.args`,
-`type.fields[T]()` loops, and `type.variants[T]()` / variant payload loops also
-prefer checked metadata when constructing the compile-time type binding scope.
+`type.fields[T]()` loops, `type.variants[T]()` / variant payload loops, and
+direct `type.machine_state_value[T](...).fields` loops also prefer checked
+metadata when constructing the compile-time type binding scope.
 When checked `TypeInfo` identifies an owner as field- or variant-bearing, those
 loop-scope bindings now surface missing checked owner metadata instead of
 silently reconstructing trusted scopes from AST.
