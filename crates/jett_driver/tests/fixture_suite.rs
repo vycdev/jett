@@ -808,6 +808,16 @@ fn compile_fail_pipeline_generic_builtin_type_args_count() {
     assert_compile_fail_error_count("pipeline_generic_builtin_type_args.jett", 309, 1);
 }
 compile_fail_fixture!(
+    compile_fail_pipeline_generic_user_function,
+    "pipeline_generic_user_function.jett"
+);
+
+#[test]
+fn compile_fail_pipeline_generic_user_function_counts() {
+    assert_compile_fail_error_count("pipeline_generic_user_function.jett", 300, 1);
+    assert_compile_fail_error_count("pipeline_generic_user_function.jett", 309, 1);
+}
+compile_fail_fixture!(
     compile_fail_pipeline_json_serialize_requires_view,
     "pipeline_json_serialize_requires_view.jett"
 );

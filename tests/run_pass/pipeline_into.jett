@@ -9,6 +9,9 @@ function plus_one(value: int64) returns int64:
 function add(value: int64, amount: int64) returns int64:
     return value + amount
 
+function passthrough[T](value: T) returns T:
+    return value
+
 function pipeline_single_line_test() returns string:
     return "  Hello  " into string.trim into string.lower
 
@@ -74,9 +77,13 @@ function pipeline_view_json_serialize_test() returns string:
     PipelineUser user = PipelineUser(name: "Ada")
     return user into view json.serialize[PipelineUser]()
 
+function pipeline_generic_user_function_test() returns string:
+    return "agent" into passthrough[string]()
+
 verify pipeline_math_numeric_intrinsic_test:
     assert pipeline_math_abs_int_test() == 5
     assert pipeline_math_min_int_test() == 3
     assert pipeline_math_max_float_test() == 7.0
     assert pipeline_generic_builtin_type_arg_test() == 3
     assert pipeline_view_json_serialize_test() == "{{\"name\":\"Ada\"}}"
+    assert pipeline_generic_user_function_test() == "agent"

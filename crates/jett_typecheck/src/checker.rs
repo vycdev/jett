@@ -7801,6 +7801,18 @@ impl<'a> TypeChecker<'a> {
         }
 
         let builtin_signature = self.builtin_signature(function, type_args, step.span);
+        if builtin_signature.is_none() && !type_args.is_empty() {
+            if let Some(return_type) = self.check_generic_function_pipeline_step(
+                callee_name.as_deref(),
+                type_args,
+                current_ty,
+                extra_args,
+                step.span,
+            ) {
+                return return_type;
+            }
+        }
+
         let user_function_signature = if builtin_signature.is_none() {
             callee_name
                 .as_deref()
@@ -7903,6 +7915,136 @@ impl<'a> TypeChecker<'a> {
         }
 
         return_type
+    }
+
+    fn check_generic_function_pipeline_step(
+        &mut self,
+        callee_name: Option<&str>,
+        type_args: &[TypeExpr],
+        current_ty: TypeId,
+        extra_args: &[ast::CallArg],
+        span: Span,
+    ) -> Option<TypeId> {
+        let function_name = callee_name?;
+        let Some(template) = self.generic_function_templates.get(function_name).cloned() else {
+            if self.function_signatures.contains_key(function_name) {
+                self.sink.emit(errors::unknown_type(
+                    &format!(
+                        "{function_name} (expected 0 type argument(s), got {})",
+                        type_args.len()
+                    ),
+                    span,
+                ));
+                for arg in extra_args {
+                    self.check_expr(&arg.value);
+                }
+                return Some(TypeInterner::ERROR);
+            }
+            return None;
+        };
+
+        let concrete_args: Vec<TypeId> = type_args
+            .iter()
+            .map(|arg| self.resolve_type_expr(arg))
+            .collect();
+
+        if template.type_params.len() != concrete_args.len() {
+            self.sink.emit(errors::unknown_type(
+                &format!(
+                    "{} (expected {} type argument(s), got {})",
+                    function_name,
+                    template.type_params.len(),
+                    concrete_args.len()
+                ),
+                span,
+            ));
+            for arg in extra_args {
+                self.check_expr(&arg.value);
+            }
+            return Some(TypeInterner::ERROR);
+        }
+
+        let subst: HashMap<String, TypeId> = template
+            .type_params
+            .iter()
+            .zip(concrete_args.iter())
+            .map(|(param, &ty)| (param.name.clone(), ty))
+            .collect();
+        let kind_subst: HashMap<String, String> = template
+            .type_params
+            .iter()
+            .zip(type_args.iter().zip(concrete_args.iter()))
+            .map(|(param, (type_arg, &resolved_ty))| {
+                (
+                    param.name.clone(),
+                    self.reflection_kind_tag_for_type_expr(type_arg, resolved_ty),
+                )
+            })
+            .collect();
+
+        let old_subst = std::mem::replace(&mut self.type_var_subst, subst.clone());
+        let param_types: Vec<TypeId> = template
+            .params
+            .iter()
+            .map(|param| self.resolve_type_expr(&param.ty))
+            .collect();
+        let return_type = template
+            .return_type
+            .as_ref()
+            .map(|ty| self.resolve_type_expr(ty))
+            .unwrap_or(TypeInterner::NOTHING);
+        self.type_var_subst = old_subst;
+
+        let arg_count = extra_args.len() + 1;
+        if arg_count != param_types.len() {
+            self.sink.emit(errors::argument_count_mismatch(
+                function_name,
+                param_types.len(),
+                arg_count,
+                span,
+            ));
+            for arg in extra_args {
+                self.check_expr(&arg.value);
+            }
+            return Some(TypeInterner::ERROR);
+        }
+
+        let mut arguments_match = true;
+        if let Some(&expected) = param_types.first()
+            && !self.types_compatible(expected, current_ty)
+        {
+            arguments_match = false;
+            self.sink.emit(errors::type_mismatch(
+                &self.type_name(expected),
+                &self.type_name(current_ty),
+                span,
+            ));
+        }
+
+        for (arg, &expected) in extra_args.iter().zip(param_types.iter().skip(1)) {
+            let got = self.check_expr_for_expected(&arg.value, expected, false);
+            if !self.types_compatible(expected, got) {
+                arguments_match = false;
+                self.sink.emit(errors::type_mismatch(
+                    &self.type_name(expected),
+                    &self.type_name(got),
+                    arg.value.span(),
+                ));
+            }
+        }
+
+        if arguments_match {
+            self.check_generic_function_instantiation(
+                function_name,
+                &template,
+                &concrete_args,
+                subst,
+                kind_subst,
+                ReflectionParamFacts::default(),
+            );
+        }
+
+        Some(return_type)
     }
 
     fn check_json_pipeline_public_call_policy(

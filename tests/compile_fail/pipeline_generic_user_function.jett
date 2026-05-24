@@ -1,0 +1,9 @@
+# ERROR: E0300
+# ERROR: E0309
+namespace app
+function passthrough[T](value: T) returns T:
+    return value
+function bad_pipeline_generic_user_type_arg_count() returns int64:
+    return 1 into passthrough[int64, string]()
+function bad_pipeline_generic_user_input_type() returns string:
+    return 1 into passthrough[string]()

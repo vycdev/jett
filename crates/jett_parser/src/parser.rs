@@ -1864,6 +1864,11 @@ impl<'src> Parser<'src> {
     /// Parse postfix field-access chain (`.field`) without call args.
     /// Used by pipeline parsing to build dotted names like `string.trim`.
     fn parse_postfix_chain(&mut self, mut expr: Expr) -> Expr {
+        if self.peek() == TokenKind::LBracket && self.looks_like_generic_args() {
+            expr = self.parse_generic_call(expr);
+            return expr;
+        }
+
         while self.peek() == TokenKind::Dot {
             self.advance(); // consume `.`
             let field = self.parse_ident();
