@@ -136,8 +136,8 @@
 | Input shrinking on failure | Done (shrinking for int64, float64, string, bytes, list, set, map, optional, result, struct fields, enum payloads) |
 | CPU profiler (`--profile`) | Not started |
 | Memory profiler (`--profile-memory`) | Not started |
-| `trace` keyword | Partial (parses, typechecks, runtime current-value output in `jett run`) |
-| `breakpoint` keyword | Partial (parses, typechecks, conditional runtime debug output in `jett run`) |
+| `trace` keyword | Partial (parses, typechecks, runtime type-tagged current-value output in `jett run`) |
+| `breakpoint` keyword | Partial (parses, typechecks, conditional runtime debug output with visible binding types in `jett run`) |
 
 ### Phase J: Cross-Platform and Interop — NOT STARTED
 

@@ -370,6 +370,15 @@ impl Interpreter {
         None
     }
 
+    fn get_variable_type(&self, name: &str) -> Option<&TypeExpr> {
+        for scope in self.variable_type_scopes.iter().rev() {
+            if let Some(ty) = scope.get(name) {
+                return Some(ty);
+            }
+        }
+        None
+    }
+
     /// Reassign an existing variable in the nearest enclosing scope that
     /// contains it.  Returns `Err` if the variable was never declared.
     fn assign_variable(&mut self, name: &str, value: Value) -> Result<(), String> {
@@ -417,8 +426,15 @@ impl Interpreter {
             .get_variable(name)
             .cloned()
             .ok_or_else(|| format!("undefined variable '{name}'"))?;
-        self.emit_debug_line(format!("trace {name} = {value}"));
+        let label = self.debug_binding_label(name, &value);
+        self.emit_debug_line(format!("trace {label}"));
         Ok(())
+    }
+
+    fn debug_binding_label(&self, name: &str, value: &Value) -> String {
+        self.get_variable_type(name)
+            .map(|ty| format!("{name}: {} = {value}", type_expr_display(ty)))
+            .unwrap_or_else(|| format!("{name} = {value}"))
     }
 
     fn function_namespace(name: &str) -> Option<String> {
@@ -487,9 +503,9 @@ impl Interpreter {
 
     fn hit_breakpoint(&mut self) {
         let mut bindings = BTreeMap::new();
-        for scope in &self.scopes {
+        for (scope, type_scope) in self.scopes.iter().zip(self.variable_type_scopes.iter()) {
             for (name, value) in scope {
-                bindings.insert(name.clone(), value.clone());
+                bindings.insert(name.clone(), (value.clone(), type_scope.get(name).cloned()));
             }
         }
 
@@ -500,7 +516,10 @@ impl Interpreter {
 
         let fields: Vec<String> = bindings
             .into_iter()
-            .map(|(name, value)| format!("{name} = {value}"))
+            .map(|(name, (value, ty))| {
+                ty.map(|ty| format!("{name}: {} = {value}", type_expr_display(&ty)))
+                    .unwrap_or_else(|| format!("{name} = {value}"))
+            })
             .collect();
         self.emit_debug_line(format!("breakpoint hit: {}", fields.join(", ")));
     }
@@ -15211,7 +15230,7 @@ mod tests {
             }))
             .unwrap();
 
-        assert_eq!(interp.take_debug_output(), vec!["trace total = 42"]);
+        assert_eq!(interp.take_debug_output(), vec!["trace total: int64 = 42"]);
     }
 
     #[test]
@@ -15228,7 +15247,7 @@ mod tests {
 
         assert_eq!(
             interp.take_debug_output(),
-            vec!["breakpoint hit: total = 42"]
+            vec!["breakpoint hit: total: int64 = 42"]
         );
     }
 
