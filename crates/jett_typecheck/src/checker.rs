@@ -2284,6 +2284,7 @@ impl<'a> TypeChecker<'a> {
             "string.from_int64" => Some((vec![TypeInterner::INT64], TypeInterner::STRING)),
             "string.from_uint64" => Some((vec![TypeInterner::UINT64], TypeInterner::STRING)),
             "string.from_float64" => Some((vec![TypeInterner::FLOAT64], TypeInterner::STRING)),
+            "string.from_bool" => Some((vec![TypeInterner::BOOL], TypeInterner::STRING)),
             "float64.from_int64" => Some((vec![TypeInterner::INT64], TypeInterner::FLOAT64)),
             "string.length" | "string.char_count" => {
                 Some((vec![TypeInterner::STRING], TypeInterner::INT64))
