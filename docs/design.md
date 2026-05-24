@@ -1591,6 +1591,9 @@ accepting or returning bare `UserAuth`, the value must be guarded again before
 it can flow back into a `UserAuth at logged_in` parameter. Guards over arbitrary
 paths such as `holder.session at logged_in` are state tests only for now; they
 do not narrow later field accesses.
+A narrowed local keeps the exact state type for that branch; assigning a
+different state to the same local is rejected instead of silently widening the
+fact.
 For a two-state machine, the `else` branch has a single remaining state, so it
 narrows too. For `if not (session at state):`, reaching the `else` branch proves
 the checked state for any machine. On a two-state bare machine, the guarded

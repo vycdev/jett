@@ -547,6 +547,9 @@ For each `machine` type:
 - State narrowing is intentionally local-variable scoped in the current checker.
   Guards over field paths or other arbitrary expressions are still boolean
   state tests, but they do not narrow subsequent path accesses.
+- A narrowed local keeps the exact state type for the guarded branch. Assigning
+  a different state to that same local is rejected rather than silently widening
+  the branch fact in place.
 - If the guarded value is a bare machine and an `if` / `else if` chain excludes
   all but one declared state, the final `else` branch narrows to that single
   remaining state. For `if not (value at state):`, the immediate `else` branch
