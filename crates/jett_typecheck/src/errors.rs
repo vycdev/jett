@@ -40,6 +40,22 @@ pub fn argument_count_mismatch(
     )
 }
 
+pub fn argument_count_range_mismatch(
+    func_name: &str,
+    min_expected: usize,
+    max_expected: usize,
+    got: usize,
+    span: Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        303,
+        format!(
+            "function `{func_name}` expects between {min_expected} and {max_expected} arguments, but {got} were provided"
+        ),
+        span,
+    )
+}
+
 /// E0304: Argument type does not match parameter type.
 pub fn argument_type_mismatch(
     param_name: &str,

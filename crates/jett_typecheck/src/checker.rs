@@ -8326,18 +8326,25 @@ impl<'a> TypeChecker<'a> {
         self.expect_no_type_args(name, type_args, span);
         let list_int = self.interner.intern(Type::List(TypeInterner::INT64));
         if !(1..=3).contains(&args.len()) {
-            self.sink
-                .emit(errors::argument_count_mismatch(name, 3, args.len(), span));
+            self.sink.emit(errors::argument_count_range_mismatch(
+                name,
+                1,
+                3,
+                args.len(),
+                span,
+            ));
             for arg in args {
                 self.check_expr(&arg.value);
             }
             return list_int;
         }
 
+        let param_name = format!("{name} argument");
         for arg in args {
             let got = self.check_expr_for_expected(&arg.value, TypeInterner::INT64, false);
             if !self.types_compatible(TypeInterner::INT64, got) {
-                self.sink.emit(errors::type_mismatch(
+                self.sink.emit(errors::argument_type_mismatch(
+                    &param_name,
                     &self.type_name(TypeInterner::INT64),
                     &self.type_name(got),
                     arg.value.span(),

@@ -1,0 +1,24 @@
+# ERROR: E0303
+# ERROR: E0304
+# ERROR: E0309
+namespace test
+function bad_range_no_args() returns list[int64]:
+    return range()
+function bad_range_too_many() returns list[int64]:
+    return range(1, 2, 3, 4)
+function bad_list_range_no_args() returns list[int64]:
+    return list.range()
+function bad_list_range_too_many() returns list[int64]:
+    return list.range(1, 2, 3, 4)
+function bad_range_arg_type() returns list[int64]:
+    return range("x")
+function bad_list_range_arg_type() returns list[int64]:
+    return list.range(1, "x")
+function bad_range_type_arg() returns list[int64]:
+    return range[int64](1)
+function bad_list_range_type_arg() returns list[int64]:
+    return list.range[int64](1)
+function bad_print_type_arg() returns nothing:
+    print[string]("x")
+function bad_println_type_arg() returns nothing:
+    println[string]("x")

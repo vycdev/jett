@@ -986,6 +986,18 @@ fn compile_fail_variable_arity_builtin_return_types_count() {
     assert_compile_fail_error_count("variable_arity_builtin_return_types.jett", 311, 4);
 }
 
+compile_fail_fixture!(
+    compile_fail_variable_arity_builtin_argument_shapes,
+    "variable_arity_builtin_argument_shapes.jett"
+);
+
+#[test]
+fn compile_fail_variable_arity_builtin_argument_shape_counts() {
+    assert_compile_fail_error_count("variable_arity_builtin_argument_shapes.jett", 303, 4);
+    assert_compile_fail_error_count("variable_arity_builtin_argument_shapes.jett", 304, 2);
+    assert_compile_fail_error_count("variable_arity_builtin_argument_shapes.jett", 309, 4);
+}
+
 #[test]
 fn compile_fail_secret_print_count() {
     assert_compile_fail_error_count("secret_print.jett", 600, 2);
