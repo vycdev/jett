@@ -1,11 +1,12 @@
 # State Machine Type Model
 
-Jett's design treats state machines as a core language feature, but the current
-implementation is still mid-extraction from a parser/interpreter prototype into
-a fully checked type-system feature.
+Status: implemented for the checked type model, interpreter execution,
+reflection metadata, namespace-qualified use, branch narrowing, and JSON
+parse/serialize. Future policy questions remain open.
 
-This note records the gap so namespace work does not accidentally paper over it
-with one-off lookup rules.
+Jett's design treats state machines as a core language feature. This note now
+records the implemented model and the remaining policy boundaries so future
+work does not accidentally reintroduce one-off interpreter lookup rules.
 
 ## Current State
 
@@ -78,19 +79,21 @@ Implemented:
 - Interpreter unit tests cover construction, valid transitions, rejected
   invalid transitions, and `at` checks through hand-built AST modules.
 
-Remaining work:
+Future policy work:
 
 - Design any future machine JSON policy annotations and schema migration
   support, especially state renames, without weakening the
-  one-canonical-spelling rule.
+  one-canonical-spelling rule. The current JSON envelope contract is recorded
+  in `state_machine_json_contract.md`.
 
-## Why This Should Not Be A Namespace Patch
+## Why This Was Not A Namespace Patch
 
 The namespace question and the machine type question are coupled, but the type
-question is more fundamental.
+question was more fundamental.
 
-A small namespace-only patch could make `billing.Payment.transition(...)` work
-in the interpreter while still leaving the checker unable to prove that:
+A small namespace-only patch could have made
+`billing.Payment.transition(...)` work in the interpreter while still leaving
+the checker unable to prove that:
 
 - `Payment at pending` is a real type,
 - `Payment.transition(pay, authorized, ...)` is legal from the current state,
@@ -98,32 +101,30 @@ in the interpreter while still leaving the checker unable to prove that:
 - a function requiring `Payment at captured` cannot receive `Payment at pending`,
 - fields only available in one state cannot be read from another state.
 
-That would make the surface look stronger than it is, which is exactly the kind
-of mismatch Jett is trying to avoid for agent-written code.
+That would have made the surface look stronger than it was, which is exactly
+the kind of mismatch Jett is trying to avoid for agent-written code.
 
-## Target Shape
+## Implemented Shape
 
-The type layer likely needs explicit machine records, not a stringly side table.
+The type layer uses explicit machine records, not a stringly side table.
 
-Possible representation:
+Representation:
 
 ```text
 Type::Machine(MachineId)
 Type::MachineState { machine: MachineId, state: MachineStateId }
 ```
 
-The checked machine metadata includes, or should include as checker integration
-lands:
+The checked machine metadata includes:
 
 - canonical qualified machine name,
 - ordered states,
 - per-state payload fields,
 - declared transition edges keyed by per-machine state ids,
 - namespace/export visibility through the existing resolver policy,
-- reflection hooks for serialization policy, if state machines become
-  serializable. The current reflection slice exposes the high-level `machine`
-  and `machine_state` kind tags plus checked state payload and transition edge
-  metadata.
+- reflection metadata for serialization policy. The current reflection slice
+  exposes the high-level `machine` and `machine_state` kind tags plus checked
+  state payload and transition edge metadata.
 
 The base metadata now lives beside struct/enum/actor definitions in
 `jett_types`, not only inside the interpreter, and the checker populates it from
