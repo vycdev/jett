@@ -1756,10 +1756,7 @@ impl<'src> Parser<'src> {
     // Handle blocks
     // =======================================================================
 
-    fn maybe_parse_handle(&mut self, expr: Expr) -> Expr {
-        if self.peek() != TokenKind::Handle {
-            return expr;
-        }
+    fn parse_handle_suffix(&mut self, target_span: Span) -> (Option<Ident>, Block, Span) {
         self.advance(); // consume `handle`
 
         // `handle error:` or `handle:`
@@ -1775,7 +1772,15 @@ impl<'src> Parser<'src> {
 
         self.expect(TokenKind::Colon);
         let block = self.parse_block_or_single_stmt();
-        let span = expr.span().merge(block.span);
+        let span = target_span.merge(block.span);
+        (error_name, block, span)
+    }
+
+    fn maybe_parse_handle(&mut self, expr: Expr) -> Expr {
+        if self.peek() != TokenKind::Handle {
+            return expr;
+        }
+        let (error_name, block, span) = self.parse_handle_suffix(expr.span());
         Expr::Handle(Box::new(expr), error_name, block, span)
     }
 
@@ -1839,10 +1844,23 @@ impl<'src> Parser<'src> {
                 (Vec::new(), func.span())
             };
 
-            let span = step_start.merge(step_end);
+            let mut span = step_start.merge(step_end);
+            let handle = if self.peek() == TokenKind::Handle {
+                let (error_name, body, handle_span) = self.parse_handle_suffix(span);
+                span = handle_span;
+                Some(PipelineStepHandle {
+                    error_name,
+                    body,
+                    span: handle_span,
+                })
+            } else {
+                None
+            };
+
             steps.push(PipelineStep {
                 function: func,
                 extra_args,
+                handle,
                 span,
             });
 
@@ -3930,6 +3948,31 @@ function transform(x: string) returns string:
                     matches!(&steps[0].function, Expr::FieldAccess(_, field, _) if field.name == "replace")
                 );
                 assert_eq!(steps[0].extra_args.len(), 2);
+            }
+            other => panic!("expected Pipeline, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_pipeline_step_handle() {
+        let src = "\
+function transform(x: string, fallback: int64) returns int64:
+    return x
+        into int64.from_string() handle error:
+            default fallback
+        into plus_one
+";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        let expr = extract_expr_from_return(&result);
+        match expr {
+            Expr::Pipeline(initial, steps, _) => {
+                assert!(matches!(initial.as_ref(), Expr::Ident(i) if i.name == "x"));
+                assert_eq!(steps.len(), 2);
+                let handle = steps[0].handle.as_ref().expect("first step handle");
+                assert!(matches!(&handle.error_name, Some(i) if i.name == "error"));
+                assert_eq!(handle.body.stmts.len(), 1);
+                assert!(steps[1].handle.is_none());
             }
             other => panic!("expected Pipeline, got {:?}", other),
         }

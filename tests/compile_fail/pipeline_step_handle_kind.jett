@@ -1,0 +1,12 @@
+namespace app
+
+function bad_pipeline_result_bare_handle() returns int64:
+    return "oops"
+        into int64.from_string() handle:
+            default 0
+
+function bad_pipeline_optional_error_handle() returns int64:
+    list[int64] values = list()
+    return values
+        into list.first[int64]() handle error:
+            default 0

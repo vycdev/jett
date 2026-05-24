@@ -308,7 +308,7 @@ Expression      → Literal | Ident | BinaryExpr | UnaryExpr |
 
 ### Desugaring Performed
 
-1. **Pipeline desugaring:** `x into f(y)` → `f(x, y)`. Generic steps keep ordinary call spelling: `x into f[T](y)` → `f[T](x, y)`. Multi-step pipelines become sequential let-bindings. Pipeline steps with `handle error:` / `handle:` are desugared to handle blocks on the intermediate call. Pipeline steps with `view` (e.g., `into view json.serialize[T]()`) are desugared to pass the piped value as a view argument.
+1. **Pipeline desugaring:** `x into f(y)` → `f(x, y)`. Generic steps keep ordinary call spelling: `x into f[T](y)` → `f[T](x, y)`. Multi-step pipelines become sequential let-bindings. Pipeline steps with `handle error:` / `handle:` are represented as step-local handle blocks on the intermediate call, so the unwrapped success or `default` value flows to the next `into` step while `return` exits the enclosing function. Pipeline steps with `view` (e.g., `into view json.serialize[T]()`) are desugared to pass the piped value as a view argument.
 2. **String interpolation:** `"hello {name}"` → series of `Displayable.display()` calls joined together. This is a compiler-stdlib coupling — the compiler has hardcoded knowledge of the `Displayable` interface.
 3. **`else if` chains:** Lowered to nested `if/else` in the AST.
 4. **`for item in view items:`** → loop with explicit view semantics annotated.

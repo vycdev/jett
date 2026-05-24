@@ -6,8 +6,8 @@ use rand::Rng;
 use jett_common::{FileId, Span, is_json_raw_facade, json_public_bridge_spec};
 use jett_parser::ast::{
     ActorDef, BinOp, BitfieldDef, BitfieldFieldKind, Block, CallArg, EnumDef, Expr, FunctionDef,
-    Ident, ImplementBlock, InterfaceDecl, Item, MachineDef, Module, Pattern, PipelineStep, Stmt,
-    StringPart, StructDef, TypeAlias, TypeExpr, UnaryOp,
+    Ident, ImplementBlock, InterfaceDecl, Item, MachineDef, Module, Pattern, PipelineStep,
+    PipelineStepHandle, Stmt, StringPart, StructDef, TypeAlias, TypeExpr, UnaryOp,
 };
 use jett_types::{
     ReflectionBitfieldFieldInfo, ReflectionBitfieldInfo, ReflectionFieldInfo,
@@ -1514,6 +1514,40 @@ impl Interpreter {
     }
 
     fn eval_pipeline_step(
+        &mut self,
+        step: &PipelineStep,
+        piped_value: Value,
+    ) -> Result<ExprFlow, String> {
+        let flow = self.eval_pipeline_step_call(step, piped_value)?;
+        let Some(handle) = &step.handle else {
+            return Ok(flow);
+        };
+        let value = match flow {
+            ExprFlow::Value(value) => value,
+            ExprFlow::Signal(signal) => return Ok(ExprFlow::Signal(signal)),
+        };
+        self.eval_pipeline_step_handle(value, handle)
+    }
+
+    fn eval_pipeline_step_handle(
+        &mut self,
+        step_value: Value,
+        handle: &PipelineStepHandle,
+    ) -> Result<ExprFlow, String> {
+        match step_value {
+            Value::ResultOk(value) => Ok(ExprFlow::Value(*value)),
+            Value::ResultFail(error) => {
+                self.exec_handle_block(handle.error_name.as_ref(), Some(*error), &handle.body)
+            }
+            Value::OptionalSome(value) => Ok(ExprFlow::Value(*value)),
+            Value::OptionalNone => self.exec_handle_block(None, None, &handle.body),
+            other => Err(format!(
+                "handle block requires a result or optional value, got {other}"
+            )),
+        }
+    }
+
+    fn eval_pipeline_step_call(
         &mut self,
         step: &PipelineStep,
         piped_value: Value,
@@ -14676,6 +14710,7 @@ mod tests {
                 vec![PipelineStep {
                     function: field_access(var("json"), "kind"),
                     extra_args: Vec::new(),
+                    handle: None,
                     span: sp(),
                 }],
                 sp(),
@@ -17106,11 +17141,13 @@ mod builtin_tests {
             PipelineStep {
                 function: Expr::FieldAccess(Box::new(var("string")), ident("trim"), sp()),
                 extra_args: vec![],
+                handle: None,
                 span: sp(),
             },
             PipelineStep {
                 function: Expr::FieldAccess(Box::new(var("string")), ident("upper"), sp()),
                 extra_args: vec![],
+                handle: None,
                 span: sp(),
             },
         ];
@@ -17138,6 +17175,7 @@ mod builtin_tests {
                     span: sp(),
                 },
             ],
+            handle: None,
             span: sp(),
         }];
         let expr = Expr::Pipeline(Box::new(initial), steps, sp());

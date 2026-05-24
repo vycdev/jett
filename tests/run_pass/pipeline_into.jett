@@ -80,6 +80,35 @@ function pipeline_view_json_serialize_test() returns string:
 function pipeline_generic_user_function_test() returns string:
     return "agent" into passthrough[string]()
 
+function pipeline_handle_result_default_test() returns int64:
+    return "oops"
+        into int64.from_string() handle error:
+            default 41
+        into plus_one
+
+function pipeline_handle_optional_default_test() returns string:
+    list[string] values = list()
+    return values
+        into list.first[string]() handle:
+            default "empty"
+        into string.upper
+
+function pipeline_handle_result_return_test(raw: string) returns result[int64, string]:
+    int64 value = raw
+        into int64.from_string() handle error:
+            return fail("bad parse")
+        into plus_one
+    return ok(value)
+
+function pipeline_handle_result_return_summary() returns string:
+    result[int64, string] failed = pipeline_handle_result_return_test("not an int")
+    int64 fallback = failed handle error:
+        default -1
+    result[int64, string] parsed = pipeline_handle_result_return_test("41")
+    int64 value = parsed handle error:
+        default -1
+    return "{fallback}:{value}"
+
 verify pipeline_math_numeric_intrinsic_test:
     assert pipeline_math_abs_int_test() == 5
     assert pipeline_math_min_int_test() == 3
@@ -87,3 +116,6 @@ verify pipeline_math_numeric_intrinsic_test:
     assert pipeline_generic_builtin_type_arg_test() == 3
     assert pipeline_view_json_serialize_test() == "{{\"name\":\"Ada\"}}"
     assert pipeline_generic_user_function_test() == "agent"
+    assert pipeline_handle_result_default_test() == 42
+    assert pipeline_handle_optional_default_test() == "EMPTY"
+    assert pipeline_handle_result_return_summary() == "-1:42"

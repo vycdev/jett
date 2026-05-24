@@ -827,6 +827,16 @@ fn compile_fail_pipeline_json_serialize_requires_view_count() {
     assert_compile_fail_error_count("pipeline_json_serialize_requires_view.jett", 344, 1);
 }
 compile_fail_fixture!(
+    compile_fail_pipeline_step_handle_kind,
+    "pipeline_step_handle_kind.jett"
+);
+
+#[test]
+fn compile_fail_pipeline_step_handle_kind_counts() {
+    assert_compile_fail_error_count("pipeline_step_handle_kind.jett", 316, 1);
+    assert_compile_fail_error_count("pipeline_step_handle_kind.jett", 317, 1);
+}
+compile_fail_fixture!(
     compile_fail_function_statement_limit,
     "function_statement_limit.jett"
 );

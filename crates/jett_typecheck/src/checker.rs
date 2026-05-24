@@ -7740,6 +7740,19 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn check_pipeline_step(&mut self, current_ty: TypeId, step: &ast::PipelineStep) -> TypeId {
+        let step_ty = self.check_pipeline_step_call(current_ty, step);
+        if let Some(handle) = &step.handle {
+            return self.check_handle_with_target_type(
+                step_ty,
+                handle.error_name.as_ref(),
+                &handle.body,
+                handle.span,
+            );
+        }
+        step_ty
+    }
+
+    fn check_pipeline_step_call(&mut self, current_ty: TypeId, step: &ast::PipelineStep) -> TypeId {
         let (function, type_args, extra_args, piped_as_view) = Self::pipeline_step_call_parts(step);
         let callee_name = self.resolved_expr_name(function);
         let callee_is_pure = callee_name

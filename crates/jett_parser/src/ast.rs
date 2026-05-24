@@ -593,13 +593,23 @@ pub struct CallArg {
     pub span: Span,
 }
 
-/// A single step in a pipeline: `into function` or `into function(extra_args)`.
+/// A single step in a pipeline: `into function`, `into function(extra_args)`,
+/// or a handled step such as `into fallible handle error:`.
 #[derive(Debug, Clone)]
 pub struct PipelineStep {
     /// The function being called in this step.
     pub function: Expr,
     /// Extra arguments beyond the piped value (empty for `into f`, non-empty for `into f(a, b)`).
     pub extra_args: Vec<CallArg>,
+    /// Optional handle block attached to this step's call result.
+    pub handle: Option<PipelineStepHandle>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct PipelineStepHandle {
+    pub error_name: Option<Ident>,
+    pub body: Block,
     pub span: Span,
 }
 
