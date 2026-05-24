@@ -35,7 +35,8 @@ Implemented:
   declared state narrows later branches, including `else if` branches guarded
   by unrelated conditions, and the final `else` branch to that single remaining
   state. Other negative branches remain opaque until the branch facts prove a
-  specific state.
+  specific state. Facts from different machine variables do not combine into a
+  narrowed owner.
 - For `if not (value at state):`, the immediate `else` branch narrows to the
   checked state. For bare two-state machines, the guarded branch also narrows
   to the other declared state. Multi-state negative guarded branches remain
@@ -173,7 +174,7 @@ to a known machine owner.
      that branch,
    - for bare machines, later `else if` branches and a final `else` branch
      narrow when the preceding `if` / `else if` chain has excluded every other
-     declared state,
+     declared state for the same local variable,
    - for `if not (session at logged_in):`, the immediate `else` branch narrows
      back to `logged_in`, and two-state bare machines also narrow the guarded
      branch to the only other state,

@@ -724,6 +724,10 @@ compile_fail_fixture!(
     "state_machine_else_narrowing_multi_state.jett"
 );
 compile_fail_fixture!(
+    compile_fail_state_machine_else_if_mixed_owner_narrowing,
+    "state_machine_else_if_mixed_owner_narrowing.jett"
+);
+compile_fail_fixture!(
     compile_fail_state_machine_negative_narrowing_multi_state,
     "state_machine_negative_narrowing_multi_state.jett"
 );

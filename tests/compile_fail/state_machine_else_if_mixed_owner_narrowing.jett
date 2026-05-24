@@ -1,0 +1,15 @@
+# ERROR: E0319
+machine Session:
+    states:
+        guest(reason: string)
+        logged_in(user_id: string)
+        banned(reason: string)
+    transitions:
+        guest to logged_in
+        logged_in to banned
+function label(primary: Session, fallback: Session) returns string:
+    if primary at logged_in:
+        return primary.user_id
+    else if fallback at guest:
+        return primary.reason
+    return "done"
