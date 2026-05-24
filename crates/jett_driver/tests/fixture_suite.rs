@@ -736,6 +736,10 @@ compile_fail_fixture!(
     "state_machine_field_path_guard_no_narrowing.jett"
 );
 compile_fail_fixture!(
+    compile_fail_state_machine_cross_variable_guard_no_narrowing,
+    "state_machine_cross_variable_guard_no_narrowing.jett"
+);
+compile_fail_fixture!(
     compile_fail_state_machine_else_narrowing_multi_state,
     "state_machine_else_narrowing_multi_state.jett"
 );

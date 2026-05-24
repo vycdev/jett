@@ -38,7 +38,9 @@ Implemented:
   by unrelated conditions, and the final `else` branch to that single remaining
   state. Other negative branches remain opaque until the branch facts prove a
   specific state. Facts from different machine variables do not combine into a
-  narrowed owner.
+  narrowed owner; `state_machine_cross_variable_guard_no_narrowing.jett` pins
+  that a guard on one local does not expose payload fields on another local of
+  the same machine type.
 - For `if not (value at state):`, the immediate `else` branch narrows to the
   checked state. For bare two-state machines, the guarded branch also narrows
   to the other declared state. Multi-state negative guarded branches remain

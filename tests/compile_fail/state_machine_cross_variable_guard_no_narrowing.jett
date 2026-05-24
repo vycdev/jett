@@ -1,0 +1,11 @@
+# ERROR: E0319
+machine Session:
+    states:
+        guest(reason: string)
+        logged_in(user_id: string)
+    transitions:
+        guest to logged_in
+function label(primary: Session, fallback: Session) returns string:
+    if primary at logged_in:
+        return fallback.user_id
+    return "guest"
