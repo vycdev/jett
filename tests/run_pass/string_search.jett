@@ -1,53 +1,76 @@
 namespace app
-
+function utf8_from_hex(hex: string) returns string:
+    bytes raw = bytes.from_hex(hex) handle error:
+        default bytes.new()
+    return bytes.to_string(raw) handle error:
+        default ""
+function combining_grapheme_text() returns string:
+    return utf8_from_hex("65cc81")
 # --- string.index_of ---
-
 function find_pos_test() returns int64:
     optional[int64] idx = string.index_of("hello world", "world")
     return idx handle:
         default -1
-
 verify find_pos_test:
     assert find_pos_test() == 6
-
 function find_not_found_test() returns int64:
     optional[int64] idx = string.index_of("hello", "xyz")
     return idx handle:
         default -1
-
 verify find_not_found_test:
     assert find_not_found_test() == -1
-
+function grapheme_index_search_test() returns string:
+    string cluster = combining_grapheme_text()
+    string accent = utf8_from_hex("cc81")
+    optional[int64] whole_idx = string.index_of("x{cluster}y", cluster)
+    optional[int64] partial_idx = string.index_of(cluster, accent)
+    int64 whole = whole_idx handle:
+        default -1
+    int64 partial = partial_idx handle:
+        default -1
+    return "{whole}:{partial}"
+verify grapheme_index_search_test:
+    assert grapheme_index_search_test() == "1:-1"
 # --- string.count ---
-
 function count_test() returns int64:
     return string.count("banana", "an")
-
 verify count_test:
     assert count_test() == 2
-
 function count_none_test() returns int64:
     return string.count("hello", "xyz")
-
 verify count_none_test:
     assert count_none_test() == 0
-
+function grapheme_contains_count_test() returns string:
+    string cluster = combining_grapheme_text()
+    string accent = utf8_from_hex("cc81")
+    bool contains_whole = string.contains(cluster, cluster)
+    bool contains_partial = string.contains(cluster, accent)
+    int64 whole_count = string.count("{cluster}{cluster}", cluster)
+    int64 partial_count = string.count("{cluster}{cluster}", accent)
+    return "{contains_whole}:{contains_partial}:{whole_count}:{partial_count}"
+verify grapheme_contains_count_test:
+    assert grapheme_contains_count_test() == "true:false:2:0"
+function grapheme_boundary_search_test() returns string:
+    string cluster = combining_grapheme_text()
+    string accent = utf8_from_hex("cc81")
+    bool starts_partial = string.starts_with(cluster, "e")
+    bool ends_partial = string.ends_with(cluster, accent)
+    string after_whole = string.after("{cluster}:ok", cluster)
+    string before_partial = string.before(cluster, accent)
+    string removed_prefix = string.remove_prefix(cluster, "e")
+    return "{starts_partial}:{ends_partial}:{after_whole}:{bytes.to_hex(bytes.from_string(before_partial))}:{bytes.to_hex(bytes.from_string(removed_prefix))}"
+verify grapheme_boundary_search_test:
+    assert grapheme_boundary_search_test() == "false:false::ok:65cc81:65cc81"
 # --- string.to_upper_first / string.to_lower_first ---
-
 function capitalize_test() returns string:
     return string.to_upper_first("hello world")
-
 verify capitalize_test:
     assert capitalize_test() == "Hello world"
-
 function decapitalize_test() returns string:
     return string.to_lower_first("Hello World")
-
 verify decapitalize_test:
     assert decapitalize_test() == "hello World"
-
 function empty_capitalize_test() returns string:
     return string.to_upper_first("")
-
 verify empty_capitalize_test:
     assert empty_capitalize_test() == ""

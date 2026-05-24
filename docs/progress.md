@@ -93,7 +93,7 @@
 | `string.reverse`, `string.after`, `string.before`, `string.trim_start`, `string.trim_end` | Done |
 | `string.slugify`, `string.truncate`, `string.between`, `string.pad_left`, `string.is_not_empty` | Done |
 | `string.chars`, `string.words`, `string.lines` (iterator builtins → `list[string]`) | Done |
-| `string.index_of`, `string.count`, `string.to_upper_first`, `string.to_lower_first` | Done |
+| `string.index_of`, `string.count`, `string.to_upper_first`, `string.to_lower_first` | Done (search/count results are grapheme-boundary aware) |
 | `list.reduce`, `list.chunk`, `list.sort_by_index`, `list.is_sorted`, `list.all_elements_in` | Done |
 | `list.enumerate` | Done |
 | `map.get_or`, `map.merge`, `map.set`, `map.contains_key` | Done |
@@ -151,7 +151,7 @@
 
 | Module | Status |
 |---|---|
-| `string` | Partial (30+ builtins: length, contains, trim, upper, lower, replace, split, join, starts_with, ends_with, is_empty, slice, repeat, pad_left, pad_end, from_int64, from_float64, from_bool, slugify, truncate, between, reverse, after, before, chars, words, lines, index_of, count, to_upper_first, to_lower_first) |
+| `string` | Partial (30+ builtins: length/char_count, contains, trim, upper, lower, replace, split, join, starts_with, ends_with, is_empty, slice, repeat, pad_left, pad_end, from_int64, from_float64, from_bool, slugify, truncate, between, reverse, after, before, chars, words, lines, index_of, count, to_upper_first, to_lower_first; count/index/search/extraction helpers avoid partial grapheme matches) |
 | `list` | Partial (35+ builtins: new, length, append, get, first, last, is_empty, skip, take, reverse, sort, contains, index_of, remove, concat, flatten, unique, zip, chunk, sort_by_index, is_sorted, all_elements_in, enumerate, from_set + higher-order: filter, map, find, sort_by, all, any, count, sum, group_by, reduce) |
 | `set` | Partial (12 builtins: new, add, remove, contains, length, is_empty, to_list, union, intersection, difference) |
 | `map` | Partial (12 builtins: new, length, has/contains_key, get, get_or, insert/set, remove, keys, values, is_empty, merge) |

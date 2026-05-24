@@ -2273,7 +2273,7 @@ string name = "hello world"
 string char = name[5]
 # COMPILE ERROR: string does not support integer indexing
 # hint: use string.char_at(name, 5) to get the 5th character,
-# or use string.split(), string.take_chars(), string.find() for common operations
+# or use string.split(), string.take_chars(), string.index_of() for common operations
 ```
 
 All string manipulation happens through **standard library functions** that operate on characters (Unicode grapheme clusters), never on raw bytes. The LLM never needs to know how many bytes a character occupies.
@@ -2314,11 +2314,15 @@ int64 len = string.char_count("こんにちは")
 use string
 
 # Find a substring:
-optional[StringPosition] position = string.find("hello world", "world")
-# Result: optional containing a string iterator position (not a byte offset)
+optional[int64] position = string.index_of("hello world", "world")
+# Result: optional containing a grapheme index (not a byte offset)
 
 # Check containment:
 bool has_at = string.contains(email, "@")
+
+# Search helpers match only at grapheme-cluster boundaries; they cannot match
+# the combining mark inside a composed user-visible character as a separate
+# character.
 
 # Split into parts:
 list[string] words = string.split("hello world foo", " ")
@@ -2396,7 +2400,7 @@ Both humans and LLMs think about text in terms of "words", "lines", "the part be
 | Task | C / Rust (byte-level) | Jett (character-level) |
 |------|----------------------|-------------------|
 | Get first 5 characters | Manual byte counting, UTF-8 boundary checking | `string.take_chars(s, 5)` |
-| Find a substring | Returns byte offset, manual boundary handling | `string.find(s, "target")` returns iterator position |
+| Find a substring | Returns byte offset, manual boundary handling | `string.index_of(s, "target")` returns a grapheme index |
 | Split by delimiter | Returns byte slices, must handle empty cases | `string.split(s, ",")` returns `list[string]` |
 | Reverse a string | Must reverse by grapheme clusters, not bytes | `string.reverse(s)` |
 | Get string length | `.len()` returns bytes, `.chars().count()` returns code points, neither returns graphemes | `string.char_count(s)` returns grapheme count |

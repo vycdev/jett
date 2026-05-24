@@ -7427,7 +7427,7 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::String(s), Value::String(substr)) => {
-                        Some(Ok(Value::Bool(s.contains(substr.as_str()))))
+                        Some(Ok(Value::Bool(string_contains_grapheme(s, substr))))
                     }
                     _ => Some(Err(format!("{name} expects two string arguments"))),
                 }
@@ -7505,7 +7505,7 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::String(s), Value::String(prefix)) => {
-                        Some(Ok(Value::Bool(s.starts_with(prefix.as_str()))))
+                        Some(Ok(Value::Bool(string_starts_with_grapheme(s, prefix))))
                     }
                     _ => Some(Err(format!("{name} expects two string arguments"))),
                 }
@@ -7515,7 +7515,7 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::String(s), Value::String(suffix)) => {
-                        Some(Ok(Value::Bool(s.ends_with(suffix.as_str()))))
+                        Some(Ok(Value::Bool(string_ends_with_grapheme(s, suffix))))
                     }
                     _ => Some(Err(format!("{name} expects two string arguments"))),
                 }
@@ -7652,17 +7652,19 @@ impl Interpreter {
                 match (&args[0], &args[1], &args[2]) {
                     (Value::String(s), Value::String(start), Value::String(end)) => {
                         // Returns "" when the markers are not found (design doc shows plain string)
-                        let result = if let Some(after_start) =
-                            s.find(start.as_str()).map(|i| &s[i + start.len()..])
-                        {
-                            if let Some(end_pos) = after_start.find(end.as_str()) {
-                                after_start[..end_pos].to_string()
+                        let result =
+                            if let Some((_, start_end, _)) = string_find_grapheme_match(s, start) {
+                                let after_start = &s[start_end..];
+                                if let Some((end_pos, _, _)) =
+                                    string_find_grapheme_match(after_start, end)
+                                {
+                                    after_start[..end_pos].to_string()
+                                } else {
+                                    String::new()
+                                }
                             } else {
                                 String::new()
-                            }
-                        } else {
-                            String::new()
-                        };
+                            };
                         Some(Ok(Value::String(result)))
                     }
                     _ => Some(Err(format!("{name} expects (string, string, string)"))),
@@ -8778,11 +8780,12 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::String(s), Value::String(marker)) => {
-                        let result = if let Some(pos) = s.find(marker.as_str()) {
-                            s[pos + marker.len()..].to_string()
-                        } else {
-                            String::new()
-                        };
+                        let result =
+                            if let Some((_, end, _)) = string_find_grapheme_match(s, marker) {
+                                s[end..].to_string()
+                            } else {
+                                String::new()
+                            };
                         Some(Ok(Value::String(result)))
                     }
                     _ => Some(Err(format!("{name} expects two string arguments"))),
@@ -8793,11 +8796,12 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::String(s), Value::String(marker)) => {
-                        let result = if let Some(pos) = s.find(marker.as_str()) {
-                            s[..pos].to_string()
-                        } else {
-                            s.clone()
-                        };
+                        let result =
+                            if let Some((start, _, _)) = string_find_grapheme_match(s, marker) {
+                                s[..start].to_string()
+                            } else {
+                                s.clone()
+                            };
                         Some(Ok(Value::String(result)))
                     }
                     _ => Some(Err(format!("{name} expects two string arguments"))),
@@ -8959,11 +8963,9 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::String(haystack), Value::String(needle)) => {
-                        let result = match haystack.find(needle.as_str()) {
-                            Some(pos) => {
-                                // Convert byte offset to grapheme index.
-                                let index = string_grapheme_count(&haystack[..pos]) as i64;
-                                Value::OptionalSome(Box::new(Value::Int64(index)))
+                        let result = match string_find_grapheme_match(haystack, needle) {
+                            Some((_, _, index)) => {
+                                Value::OptionalSome(Box::new(Value::Int64(index as i64)))
                             }
                             None => Value::OptionalNone,
                         };
@@ -8976,11 +8978,7 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::String(haystack), Value::String(needle)) => {
-                        let count = if needle.is_empty() {
-                            0
-                        } else {
-                            haystack.matches(needle.as_str()).count() as i64
-                        };
+                        let count = string_count_grapheme_matches(haystack, needle) as i64;
                         Some(Ok(Value::Int64(count)))
                     }
                     _ => Some(Err(format!("{name} expects two string arguments"))),
@@ -9115,7 +9113,11 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::String(s), Value::String(prefix)) => {
-                        let result = s.strip_prefix(prefix.as_str()).unwrap_or(s).to_string();
+                        let result = if string_starts_with_grapheme(s, prefix) {
+                            s[prefix.len()..].to_string()
+                        } else {
+                            s.clone()
+                        };
                         Some(Ok(Value::String(result)))
                     }
                     _ => Some(Err(format!("{name} expects two string arguments"))),
@@ -9126,7 +9128,11 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::String(s), Value::String(suffix)) => {
-                        let result = s.strip_suffix(suffix.as_str()).unwrap_or(s).to_string();
+                        let result = if string_ends_with_grapheme(s, suffix) {
+                            s[..s.len() - suffix.len()].to_string()
+                        } else {
+                            s.clone()
+                        };
                         Some(Ok(Value::String(result)))
                     }
                     _ => Some(Err(format!("{name} expects two string arguments"))),
@@ -10581,6 +10587,84 @@ fn first_grapheme_or_space(s: &str) -> String {
         .first()
         .map(|cluster| (*cluster).to_string())
         .unwrap_or_else(|| " ".to_string())
+}
+
+fn string_contains_grapheme(haystack: &str, needle: &str) -> bool {
+    string_find_grapheme_match(haystack, needle).is_some()
+}
+
+fn string_starts_with_grapheme(haystack: &str, prefix: &str) -> bool {
+    prefix.is_empty()
+        || (haystack.starts_with(prefix) && string_is_grapheme_boundary(haystack, prefix.len()))
+}
+
+fn string_ends_with_grapheme(haystack: &str, suffix: &str) -> bool {
+    if suffix.is_empty() {
+        return true;
+    }
+    haystack.ends_with(suffix)
+        && string_is_grapheme_boundary(haystack, haystack.len() - suffix.len())
+}
+
+fn string_find_grapheme_match(haystack: &str, needle: &str) -> Option<(usize, usize, usize)> {
+    if needle.is_empty() {
+        return Some((0, 0, 0));
+    }
+
+    let boundaries = string_grapheme_boundaries(haystack);
+    for (grapheme_index, start) in boundaries
+        .iter()
+        .take(boundaries.len().saturating_sub(1))
+        .enumerate()
+    {
+        let start = *start;
+        if haystack[start..].starts_with(needle) {
+            let end = start + needle.len();
+            if boundaries.binary_search(&end).is_ok() {
+                return Some((start, end, grapheme_index));
+            }
+        }
+    }
+    None
+}
+
+fn string_count_grapheme_matches(haystack: &str, needle: &str) -> usize {
+    if needle.is_empty() {
+        return 0;
+    }
+
+    let boundaries = string_grapheme_boundaries(haystack);
+    let mut count = 0;
+    let mut boundary_index = 0;
+    while boundary_index + 1 < boundaries.len() {
+        let start = boundaries[boundary_index];
+        if haystack[start..].starts_with(needle) {
+            let end = start + needle.len();
+            if let Ok(end_boundary_index) = boundaries.binary_search(&end) {
+                count += 1;
+                boundary_index = end_boundary_index;
+                continue;
+            }
+        }
+        boundary_index += 1;
+    }
+    count
+}
+
+fn string_is_grapheme_boundary(s: &str, byte_index: usize) -> bool {
+    string_grapheme_boundaries(s)
+        .binary_search(&byte_index)
+        .is_ok()
+}
+
+fn string_grapheme_boundaries(s: &str) -> Vec<usize> {
+    let mut boundaries = vec![0];
+    let mut offset = 0;
+    for cluster in string_graphemes(s) {
+        offset += cluster.len();
+        boundaries.push(offset);
+    }
+    boundaries
 }
 
 fn string_graphemes(s: &str) -> Vec<&str> {
