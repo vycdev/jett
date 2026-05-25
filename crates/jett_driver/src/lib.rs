@@ -81,6 +81,8 @@ pub struct FileSymbolQueryEntry {
     pub signature: Option<String>,
     pub line: u32,
     pub column: u32,
+    pub end_line: u32,
+    pub end_column: u32,
 }
 
 /// Result of `jett query --agent --symbols file.jett`.
@@ -1370,6 +1372,7 @@ fn push_file_symbol_query_entry(
     source: &str,
 ) {
     let (line, column) = jett_diagnostics::render::line_col(source, span.start);
+    let (end_line, end_column) = jett_diagnostics::render::line_col(source, span.end);
     symbols.push(FileSymbolQueryEntry {
         name,
         kind: kind.to_string(),
@@ -1378,6 +1381,8 @@ fn push_file_symbol_query_entry(
         signature,
         line: line as u32,
         column: column as u32,
+        end_line: end_line as u32,
+        end_column: end_column as u32,
     });
 }
 
@@ -2645,24 +2650,40 @@ mod tests {
 
         fs::remove_dir_all(&root).expect("temp query dir should be removed");
 
-        assert!(
-            result.symbols.iter().any(|symbol| {
-                symbol.name == "api.login"
-                    && symbol.kind == "function"
-                    && symbol.visibility == jett_resolve::scope::DefVisibility::Public
-            }),
-            "expected exported function in file symbols, got {:?}",
-            result.symbols
+        let login = result
+            .symbols
+            .iter()
+            .find(|symbol| symbol.name == "api.login")
+            .expect("expected exported function in file symbols");
+        assert_eq!(login.kind, "function");
+        assert_eq!(login.visibility, jett_resolve::scope::DefVisibility::Public);
+        assert_eq!(
+            (login.line, login.column, login.end_line, login.end_column),
+            (3, 17, 3, 22)
         );
-        assert!(
-            result.symbols.iter().any(|symbol| {
-                symbol.name == "api.hidden"
-                    && symbol.kind == "function"
-                    && symbol.visibility == jett_resolve::scope::DefVisibility::Private
-                    && symbol.signature.as_deref() == Some("api.hidden() returns int64")
-            }),
-            "expected private function in file symbols, got {:?}",
-            result.symbols
+
+        let hidden = result
+            .symbols
+            .iter()
+            .find(|symbol| symbol.name == "api.hidden")
+            .expect("expected private function in file symbols");
+        assert_eq!(hidden.kind, "function");
+        assert_eq!(
+            hidden.visibility,
+            jett_resolve::scope::DefVisibility::Private
+        );
+        assert_eq!(
+            hidden.signature.as_deref(),
+            Some("api.hidden() returns int64")
+        );
+        assert_eq!(
+            (
+                hidden.line,
+                hidden.column,
+                hidden.end_line,
+                hidden.end_column
+            ),
+            (6, 10, 6, 16)
         );
         assert!(
             result

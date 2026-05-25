@@ -705,19 +705,21 @@ fn render_query_file_symbols_agent_output(result: &jett_driver::FileSymbolsQuery
     ));
     out.push_str(&format!("total: {}\n", result.symbols.len()));
     out.push_str(&format!(
-        "symbols[{}]{{name,kind,namespace,visibility,signature,line,column}}:\n",
+        "symbols[{}]{{name,kind,namespace,visibility,signature,line,column,end_line,end_column}}:\n",
         result.symbols.len()
     ));
     for symbol in &result.symbols {
         out.push_str(&format!(
-            "  {},{},{},{},{},{},{}\n",
+            "  {},{},{},{},{},{},{},{},{}\n",
             escape_toon_scalar(&symbol.name),
             escape_toon_scalar(&symbol.kind),
             escape_toon_scalar(symbol.namespace.as_deref().unwrap_or("")),
             jett_driver::query_visibility_name(symbol.visibility),
             escape_toon_scalar(symbol.signature.as_deref().unwrap_or("")),
             symbol.line,
-            symbol.column
+            symbol.column,
+            symbol.end_line,
+            symbol.end_column
         ));
     }
     out
@@ -1308,6 +1310,8 @@ mod tests {
                 signature: Some("api.login(raw: string) returns int64".to_string()),
                 line: 3,
                 column: 17,
+                end_line: 3,
+                end_column: 22,
             }],
         };
 
@@ -1315,7 +1319,7 @@ mod tests {
 
         assert_eq!(
             rendered,
-            "status: ok\nfile: src/api.jett\ntotal: 1\nsymbols[1]{name,kind,namespace,visibility,signature,line,column}:\n  api.login,function,api,public,api.login(raw: string) returns int64,3,17\n"
+            "status: ok\nfile: src/api.jett\ntotal: 1\nsymbols[1]{name,kind,namespace,visibility,signature,line,column,end_line,end_column}:\n  api.login,function,api,public,api.login(raw: string) returns int64,3,17,3,22\n"
         );
     }
 

@@ -3960,10 +3960,10 @@ jett query --agent --symbols src/server.jett
 status: ok
 file: src/server.jett
 total: 3
-symbols[3]{name,kind,namespace,visibility,signature,line,column}:
-  auth,namespace,,public,,1,11
-  auth.User,struct,auth,public,,8,15
-  auth.validate_user,function,auth,private,auth.validate_user(user: auth.User) returns result[auth.User\, string],21,10
+symbols[3]{name,kind,namespace,visibility,signature,line,column,end_line,end_column}:
+  auth,namespace,,public,,1,11,1,15
+  auth.User,struct,auth,public,,8,15,8,19
+  auth.validate_user,function,auth,private,auth.validate_user(user: auth.User) returns result[auth.User\, string],21,10,21,23
 ```
 
 **Type information queries:**
