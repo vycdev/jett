@@ -10,6 +10,7 @@ use crate::{Diagnostic, Severity};
 /// total: N
 /// errors: N
 /// warnings: N
+/// infos: N
 /// diagnostics[N]{code,severity,message,file,line,column}:
 ///   E0012,error,message here,src/file.jett,23,41
 /// ```
@@ -21,6 +22,7 @@ use crate::{Diagnostic, Severity};
 /// total: 0
 /// errors: 0
 /// warnings: 0
+/// infos: 0
 /// diagnostics[0]{code,severity,message,file,line,column}:
 /// ```
 pub fn render_toon(diagnostics: &[Diagnostic], source: &str, file_path: &str) -> String {
@@ -31,6 +33,10 @@ pub fn render_toon(diagnostics: &[Diagnostic], source: &str, file_path: &str) ->
     let warning_count = diagnostics
         .iter()
         .filter(|d| d.severity == Severity::Warning)
+        .count();
+    let info_count = diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Info)
         .count();
 
     let mut out = String::new();
@@ -45,6 +51,7 @@ pub fn render_toon(diagnostics: &[Diagnostic], source: &str, file_path: &str) ->
     out.push_str(&format!("total: {}\n", count));
     out.push_str(&format!("errors: {}\n", error_count));
     out.push_str(&format!("warnings: {}\n", warning_count));
+    out.push_str(&format!("infos: {}\n", info_count));
     out.push_str(&format!(
         "diagnostics[{}]{{code,severity,message,file,line,column}}:\n",
         count
@@ -134,7 +141,7 @@ mod tests {
         let result = render_toon(&[], "", "test.jett");
         assert_eq!(
             result,
-            "status: ok\nfile: test.jett\ntotal: 0\nerrors: 0\nwarnings: 0\ndiagnostics[0]{code,severity,message,file,line,column}:\nlabels[0]{code,message,file,line,column}:\nsuggested_fixes[0]{code,line,column,old_text,new_text,explanation}:\n"
+            "status: ok\nfile: test.jett\ntotal: 0\nerrors: 0\nwarnings: 0\ninfos: 0\ndiagnostics[0]{code,severity,message,file,line,column}:\nlabels[0]{code,message,file,line,column}:\nsuggested_fixes[0]{code,line,column,old_text,new_text,explanation}:\n"
         );
     }
 
@@ -150,7 +157,7 @@ mod tests {
         let result = render_toon(&diags, source, "test.jett");
         assert_eq!(
             result,
-            "status: ok\nfile: test.jett\ntotal: 1\nerrors: 0\nwarnings: 1\ndiagnostics[1]{code,severity,message,file,line,column}:\n  E0100,warning,unused variable,test.jett,2,10\nlabels[0]{code,message,file,line,column}:\nsuggested_fixes[0]{code,line,column,old_text,new_text,explanation}:\n"
+            "status: ok\nfile: test.jett\ntotal: 1\nerrors: 0\nwarnings: 1\ninfos: 0\ndiagnostics[1]{code,severity,message,file,line,column}:\n  E0100,warning,unused variable,test.jett,2,10\nlabels[0]{code,message,file,line,column}:\nsuggested_fixes[0]{code,line,column,old_text,new_text,explanation}:\n"
         );
     }
 
@@ -171,6 +178,7 @@ mod tests {
         assert!(result.contains("total: 1\n"));
         assert!(result.contains("errors: 1\n"));
         assert!(result.contains("warnings: 0\n"));
+        assert!(result.contains("infos: 0\n"));
         assert!(result.contains("diagnostics[1]{code,severity,message,file,line,column}:"));
         assert!(
             result.contains("E0300,error,type mismatch: expected int64 got string,test.jett,2,")
