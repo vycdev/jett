@@ -4066,9 +4066,9 @@ line: 30
 column: 15
 prefix: json.ser
 total: 2
-completions[2]{rank,match,name,kind,namespace,visibility,file,signature}:
-  10,qualified_prefix,json.serialize,function,json,public,stdlib/json/90_public_api.jett,json.serialize[T](view value: T) returns string
-  10,qualified_prefix,json.serialize_public,function,json,public,stdlib/json/90_public_api.jett,json.serialize_public[T](view value: T) returns string
+completions[2]{rank,match,name,kind,namespace,visibility,file,line,column,end_line,end_column,signature}:
+  10,qualified_prefix,json.serialize,function,json,public,stdlib/json/90_public_api.jett,62,17,62,26,json.serialize[T](view value: T) returns string
+  10,qualified_prefix,json.serialize_public,function,json,public,stdlib/json/90_public_api.jett,64,17,64,33,json.serialize_public[T](view value: T) returns string
 ```
 
 **Verify/test results** (`jett test` runs all `verify` and `property` blocks):
@@ -4661,14 +4661,14 @@ jett query --agent --namespaces
 ```toon
 status: ok
 total: 7
-definitions[7]{name,kind,namespace,visibility,file}:
-    auth,namespace,,public,src/auth.jett
-    auth.login,function,auth,public,src/auth.jett
-    auth.logout,function,auth,public,src/auth.jett
-    auth.validate_token,function,auth,public,src/auth.jett
-    models,namespace,,public,src/models.jett
-    models.User,struct,models,public,src/models.jett
-    database.query,function,database,public,src/database.jett
+definitions[7]{name,kind,namespace,visibility,file,line,column,end_line,end_column}:
+    auth,namespace,,public,src/auth.jett,1,11,1,15
+    auth.login,function,auth,public,src/auth.jett,3,17,3,22
+    auth.logout,function,auth,public,src/auth.jett,7,17,7,23
+    auth.validate_token,function,auth,public,src/auth.jett,11,17,11,31
+    models,namespace,,public,src/models.jett,1,11,1,17
+    models.User,struct,models,public,src/models.jett,3,15,3,19
+    database.query,function,database,public,src/database.jett,3,17,3,22
 ```
 
 The LLM receives a flat, structured list of every module in the project. No tree parsing, no directory traversal, no path construction. Just names and what they contain.

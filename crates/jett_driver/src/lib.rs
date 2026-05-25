@@ -63,6 +63,10 @@ pub struct QueryDefinition {
     pub namespace: Option<String>,
     pub visibility: jett_resolve::scope::DefVisibility,
     pub file_path: String,
+    pub line: u32,
+    pub column: u32,
+    pub end_line: u32,
+    pub end_column: u32,
 }
 
 /// Result of `jett query --agent --namespaces`.
@@ -156,6 +160,10 @@ pub struct CompletionQueryEntry {
     pub namespace: Option<String>,
     pub visibility: jett_resolve::scope::DefVisibility,
     pub file_path: String,
+    pub line: u32,
+    pub column: u32,
+    pub end_line: u32,
+    pub end_column: u32,
     pub match_kind: CompletionMatchKind,
     pub rank: u32,
     pub signature: Option<String>,
@@ -483,7 +491,7 @@ pub fn query_definition_at(
     let target = best_def.and_then(|(_, def_id)| {
         let def = resolve_result.scope_table.def(def_id);
         let (file_path, line, column, end_line, end_column) =
-            span_location(&source, def.span, &file_paths)?;
+            span_location(Some(&source), def.span, &file_paths)?;
         Some(DefinitionQueryTarget {
             name: def.name.clone(),
             kind: def.kind,
@@ -565,7 +573,7 @@ pub fn query_references_at(
     };
 
     let def = resolve_result.scope_table.def(target_def_id);
-    let target = span_location(&source, def.span, &file_paths).map(
+    let target = span_location(Some(&source), def.span, &file_paths).map(
         |(file_path, line, column, end_line, end_column)| DefinitionQueryTarget {
             name: def.name.clone(),
             kind: def.kind,
@@ -583,7 +591,7 @@ pub fn query_references_at(
     for (span, def_id) in &resolve_result.resolutions {
         if *def_id == target_def_id
             && let Some((file_path, line, column, end_line, end_column)) =
-                span_location(&source, *span, &file_paths)
+                span_location(Some(&source), *span, &file_paths)
         {
             references.push(ReferenceQueryEntry {
                 file_path,
@@ -675,9 +683,9 @@ pub fn query_completions_at(
 
     let mut definitions = query_builtin_definitions();
     for module in &support_modules.modules {
-        append_module_query_definitions(&mut definitions, module, &file_paths);
+        append_module_query_definitions(&mut definitions, module, None, &file_paths);
     }
-    append_module_query_definitions(&mut definitions, &parsed.module, &file_paths);
+    append_module_query_definitions(&mut definitions, &parsed.module, Some(&source), &file_paths);
 
     let mut signatures = HashMap::new();
     for module in &support_modules.modules {
@@ -696,6 +704,10 @@ pub fn query_completions_at(
                 namespace: definition.namespace,
                 visibility: definition.visibility,
                 file_path: definition.file_path,
+                line: definition.line,
+                column: definition.column,
+                end_line: definition.end_line,
+                end_column: definition.end_column,
                 match_kind,
                 rank: completion_rank(match_kind),
             })
@@ -1168,7 +1180,7 @@ pub fn query_namespaces(start_dir: &Path) -> Result<NamespaceQueryResult, String
 
     let mut definitions = query_builtin_definitions();
     for module in &support_modules.modules {
-        append_module_query_definitions(&mut definitions, module, &support_modules.files);
+        append_module_query_definitions(&mut definitions, module, None, &support_modules.files);
     }
 
     definitions.sort_by(|left, right| {
@@ -1478,6 +1490,10 @@ fn query_builtin_definitions() -> Vec<QueryDefinition> {
             namespace: def.namespace.clone(),
             visibility: def.visibility,
             file_path: "builtin".to_string(),
+            line: 0,
+            column: 0,
+            end_line: 0,
+            end_column: 0,
         })
         .collect()
 }
@@ -1485,6 +1501,7 @@ fn query_builtin_definitions() -> Vec<QueryDefinition> {
 fn append_module_query_definitions(
     definitions: &mut Vec<QueryDefinition>,
     module: &Module,
+    current_source: Option<&str>,
     file_paths: &HashMap<FileId, PathBuf>,
 ) {
     use jett_resolve::scope::DefKind;
@@ -1499,7 +1516,8 @@ fn append_module_query_definitions(
                     ns.name.name.clone(),
                     DefKind::Namespace,
                     None,
-                    ns.span.file,
+                    ns.name.span,
+                    current_source,
                     file_paths,
                 );
             }
@@ -1509,7 +1527,8 @@ fn append_module_query_definitions(
                 DefKind::Function,
                 current_namespace.as_deref(),
                 func.exported,
-                func.span.file,
+                func.name.span,
+                current_source,
                 file_paths,
             ),
             Item::Mutual(block) => {
@@ -1520,7 +1539,8 @@ fn append_module_query_definitions(
                         DefKind::Function,
                         current_namespace.as_deref(),
                         decl.exported,
-                        decl.span.file,
+                        decl.name.span,
+                        current_source,
                         file_paths,
                     );
                 }
@@ -1531,7 +1551,8 @@ fn append_module_query_definitions(
                 DefKind::Interface,
                 current_namespace.as_deref(),
                 interface.exported,
-                interface.span.file,
+                interface.name.span,
+                current_source,
                 file_paths,
             ),
             Item::Struct(strukt) => push_exported_query_definition(
@@ -1540,7 +1561,8 @@ fn append_module_query_definitions(
                 DefKind::Struct,
                 current_namespace.as_deref(),
                 strukt.exported,
-                strukt.span.file,
+                strukt.name.span,
+                current_source,
                 file_paths,
             ),
             Item::Bitfield(bitfield) => push_exported_query_definition(
@@ -1549,7 +1571,8 @@ fn append_module_query_definitions(
                 DefKind::Bitfield,
                 current_namespace.as_deref(),
                 bitfield.exported,
-                bitfield.span.file,
+                bitfield.name.span,
+                current_source,
                 file_paths,
             ),
             Item::Enum(enm) => push_exported_query_definition(
@@ -1558,7 +1581,8 @@ fn append_module_query_definitions(
                 DefKind::Enum,
                 current_namespace.as_deref(),
                 enm.exported,
-                enm.span.file,
+                enm.name.span,
+                current_source,
                 file_paths,
             ),
             Item::Machine(machine) => push_exported_query_definition(
@@ -1567,7 +1591,8 @@ fn append_module_query_definitions(
                 DefKind::Machine,
                 current_namespace.as_deref(),
                 machine.exported,
-                machine.span.file,
+                machine.name.span,
+                current_source,
                 file_paths,
             ),
             Item::Actor(actor) => push_exported_query_definition(
@@ -1576,7 +1601,8 @@ fn append_module_query_definitions(
                 DefKind::Actor,
                 current_namespace.as_deref(),
                 actor.exported,
-                actor.span.file,
+                actor.name.span,
+                current_source,
                 file_paths,
             ),
             Item::TypeAlias(alias) => {
@@ -1586,7 +1612,8 @@ fn append_module_query_definitions(
                         alias.name.name.clone(),
                         DefKind::Type,
                         None,
-                        alias.span.file,
+                        alias.name.span,
+                        current_source,
                         file_paths,
                     );
                 }
@@ -1596,7 +1623,8 @@ fn append_module_query_definitions(
                     DefKind::Type,
                     current_namespace.as_deref(),
                     alias.exported,
-                    alias.span.file,
+                    alias.name.span,
+                    current_source,
                     file_paths,
                 );
             }
@@ -1611,7 +1639,8 @@ fn push_exported_query_definition(
     kind: jett_resolve::scope::DefKind,
     namespace: Option<&str>,
     exported: bool,
-    file: FileId,
+    span: Span,
+    current_source: Option<&str>,
     file_paths: &HashMap<FileId, PathBuf>,
 ) {
     if namespace.is_some() && !exported {
@@ -1626,7 +1655,8 @@ fn push_exported_query_definition(
         name,
         kind,
         namespace.map(str::to_string),
-        file,
+        span,
+        current_source,
         file_paths,
     );
 }
@@ -1636,15 +1666,23 @@ fn push_query_definition(
     name: String,
     kind: jett_resolve::scope::DefKind,
     namespace: Option<String>,
-    file: FileId,
+    span: Span,
+    current_source: Option<&str>,
     file_paths: &HashMap<FileId, PathBuf>,
 ) {
+    let (file_path, line, column, end_line, end_column) =
+        span_location(current_source, span, file_paths)
+            .unwrap_or_else(|| (query_file_path(span.file, file_paths), 0, 0, 0, 0));
     definitions.push(QueryDefinition {
         name,
         kind,
         namespace,
         visibility: jett_resolve::scope::DefVisibility::Public,
-        file_path: query_file_path(file, file_paths),
+        file_path,
+        line,
+        column,
+        end_line,
+        end_column,
     });
 }
 
@@ -1699,7 +1737,7 @@ fn best_resolved_definition_at(
 }
 
 fn span_location(
-    current_source: &str,
+    current_source: Option<&str>,
     span: Span,
     file_paths: &HashMap<FileId, PathBuf>,
 ) -> Option<(String, u32, u32, u32, u32)> {
@@ -1708,7 +1746,7 @@ fn span_location(
     }
 
     let source = if span.file == FileId::new(0) {
-        Cow::Borrowed(current_source)
+        Cow::Borrowed(current_source?)
     } else {
         Cow::Owned(fs::read_to_string(file_paths.get(&span.file)?).ok()?)
     };
@@ -2648,21 +2686,28 @@ mod tests {
                 .any(|def| def.name == "api" && query_kind_name(def.kind) == "namespace"),
             "expected namespace row in query result"
         );
-        assert!(
-            result.definitions.iter().any(|def| {
-                def.name == "api.login"
-                    && query_kind_name(def.kind) == "function"
-                    && def.namespace.as_deref() == Some("api")
-            }),
-            "expected exported function row in query result"
+        let login = result
+            .definitions
+            .iter()
+            .find(|def| def.name == "api.login")
+            .expect("expected exported function row in query result");
+        assert_eq!(query_kind_name(login.kind), "function");
+        assert_eq!(login.namespace.as_deref(), Some("api"));
+        assert_eq!(
+            (login.line, login.column, login.end_line, login.end_column),
+            (3, 17, 3, 22)
         );
-        assert!(
-            result.definitions.iter().any(|def| {
-                def.name == "api.User"
-                    && query_kind_name(def.kind) == "struct"
-                    && def.namespace.as_deref() == Some("api")
-            }),
-            "expected exported struct row in query result"
+
+        let user = result
+            .definitions
+            .iter()
+            .find(|def| def.name == "api.User")
+            .expect("expected exported struct row in query result");
+        assert_eq!(query_kind_name(user.kind), "struct");
+        assert_eq!(user.namespace.as_deref(), Some("api"));
+        assert_eq!(
+            (user.line, user.column, user.end_line, user.end_column),
+            (9, 15, 9, 19)
         );
         assert!(
             result
@@ -2891,6 +2936,15 @@ mod tests {
             "expected helper source file, got {}",
             helper.file_path
         );
+        assert_eq!(
+            (
+                helper.line,
+                helper.column,
+                helper.end_line,
+                helper.end_column
+            ),
+            (3, 17, 3, 23)
+        );
         assert_eq!(helper.match_kind, CompletionMatchKind::EmptyPrefix);
         assert_eq!(helper.rank, 100);
     }
@@ -2936,6 +2990,15 @@ mod tests {
             .iter()
             .find(|candidate| candidate.name == "util.helper")
             .expect("expected util.helper candidate");
+        assert_eq!(
+            (
+                util_helper.line,
+                util_helper.column,
+                util_helper.end_line,
+                util_helper.end_column
+            ),
+            (3, 17, 3, 23)
+        );
         assert_eq!(util_helper.match_kind, CompletionMatchKind::QualifiedPrefix);
         assert_eq!(util_helper.rank, 10);
         assert!(
@@ -2980,6 +3043,15 @@ mod tests {
             .iter()
             .find(|candidate| candidate.name == "util.helper")
             .expect("expected util.helper candidate");
+        assert_eq!(
+            (
+                helper.line,
+                helper.column,
+                helper.end_line,
+                helper.end_column
+            ),
+            (3, 17, 3, 23)
+        );
         assert_eq!(helper.match_kind, CompletionMatchKind::LeafPrefix);
         assert_eq!(helper.rank, 20);
     }

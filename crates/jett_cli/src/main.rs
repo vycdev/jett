@@ -680,17 +680,21 @@ fn render_query_namespaces_agent_output(result: &jett_driver::NamespaceQueryResu
     out.push_str(&format!("total: {}\n", result.definitions.len()));
     out.push_str("definitions");
     out.push_str(&format!(
-        "[{}]{{name,kind,namespace,visibility,file}}:\n",
+        "[{}]{{name,kind,namespace,visibility,file,line,column,end_line,end_column}}:\n",
         result.definitions.len()
     ));
     for definition in &result.definitions {
         out.push_str(&format!(
-            "  {},{},{},{},{}\n",
+            "  {},{},{},{},{},{},{},{},{}\n",
             escape_toon_scalar(&definition.name),
             jett_driver::query_kind_name(definition.kind),
             escape_toon_scalar(definition.namespace.as_deref().unwrap_or("")),
             jett_driver::query_visibility_name(definition.visibility),
-            escape_toon_scalar(&definition.file_path)
+            escape_toon_scalar(&definition.file_path),
+            definition.line,
+            definition.column,
+            definition.end_line,
+            definition.end_column
         ));
     }
     out
@@ -871,12 +875,12 @@ fn render_query_completions_agent_output(result: &jett_driver::CompletionsQueryR
     out.push_str(&format!("prefix: {}\n", escape_toon_scalar(&result.prefix)));
     out.push_str(&format!("total: {}\n", result.candidates.len()));
     out.push_str(&format!(
-        "completions[{}]{{rank,match,name,kind,namespace,visibility,file,signature}}:\n",
+        "completions[{}]{{rank,match,name,kind,namespace,visibility,file,line,column,end_line,end_column,signature}}:\n",
         result.candidates.len()
     ));
     for candidate in &result.candidates {
         out.push_str(&format!(
-            "  {},{},{},{},{},{},{},{}\n",
+            "  {},{},{},{},{},{},{},{},{},{},{},{}\n",
             candidate.rank,
             jett_driver::completion_match_kind_name(candidate.match_kind),
             escape_toon_scalar(&candidate.name),
@@ -884,6 +888,10 @@ fn render_query_completions_agent_output(result: &jett_driver::CompletionsQueryR
             escape_toon_scalar(candidate.namespace.as_deref().unwrap_or("")),
             jett_driver::query_visibility_name(candidate.visibility),
             escape_toon_scalar(&candidate.file_path),
+            candidate.line,
+            candidate.column,
+            candidate.end_line,
+            candidate.end_column,
             escape_toon_scalar(candidate.signature.as_deref().unwrap_or(""))
         ));
     }
@@ -1302,6 +1310,10 @@ mod tests {
                 namespace: Some("api".to_string()),
                 visibility: jett_resolve::scope::DefVisibility::Public,
                 file_path: "src/api.jett".to_string(),
+                line: 3,
+                column: 17,
+                end_line: 3,
+                end_column: 22,
             }],
         };
 
@@ -1309,7 +1321,7 @@ mod tests {
 
         assert_eq!(
             rendered,
-            "status: ok\ntotal: 1\ndefinitions[1]{name,kind,namespace,visibility,file}:\n  api.login,function,api,public,src/api.jett\n"
+            "status: ok\ntotal: 1\ndefinitions[1]{name,kind,namespace,visibility,file,line,column,end_line,end_column}:\n  api.login,function,api,public,src/api.jett,3,17,3,22\n"
         );
     }
 
@@ -1461,6 +1473,10 @@ mod tests {
                 namespace: Some("json".to_string()),
                 visibility: jett_resolve::scope::DefVisibility::Public,
                 file_path: "stdlib/json/90_public_api.jett".to_string(),
+                line: 12,
+                column: 17,
+                end_line: 12,
+                end_column: 22,
                 match_kind: jett_driver::CompletionMatchKind::QualifiedPrefix,
                 rank: 10,
                 signature: Some("json.parse[T](raw: string) returns result[T, string]".to_string()),
@@ -1471,7 +1487,7 @@ mod tests {
 
         assert_eq!(
             rendered,
-            "status: ok\nfile: src/main.jett\nline: 4\ncolumn: 5\nprefix: json.pa\ntotal: 1\ncompletions[1]{rank,match,name,kind,namespace,visibility,file,signature}:\n  10,qualified_prefix,json.parse,function,json,public,stdlib/json/90_public_api.jett,json.parse[T](raw: string) returns result[T\\, string]\n"
+            "status: ok\nfile: src/main.jett\nline: 4\ncolumn: 5\nprefix: json.pa\ntotal: 1\ncompletions[1]{rank,match,name,kind,namespace,visibility,file,line,column,end_line,end_column,signature}:\n  10,qualified_prefix,json.parse,function,json,public,stdlib/json/90_public_api.jett,12,17,12,22,json.parse[T](raw: string) returns result[T\\, string]\n"
         );
     }
 
