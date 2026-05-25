@@ -64,6 +64,20 @@ enum Command {
         agent: bool,
     },
 
+    /// Bundle a project into one validated .jett file
+    Bundle {
+        /// Project file or directory to bundle (defaults to current directory)
+        start: Option<String>,
+
+        /// Output .jett file
+        #[arg(long)]
+        output: String,
+
+        /// Emit TOON agent output
+        #[arg(long)]
+        agent: bool,
+    },
+
     /// Query compiler facts for agent tooling
     Query {
         /// Emit TOON agent output
@@ -269,6 +283,34 @@ fn main() {
                         eprintln!("error: {e}");
                         process::exit(1);
                     }
+                }
+            }
+        }
+        Command::Bundle {
+            start,
+            output,
+            agent,
+        } => {
+            let start_path = start.unwrap_or_else(|| ".".to_string());
+            match jett_driver::bundle_project(Path::new(&start_path), Path::new(&output)) {
+                Ok(result) => {
+                    if agent {
+                        print!("{}", render_bundle_agent_output(&result));
+                    } else {
+                        println!(
+                            "bundled {} files into {}",
+                            result.files.len(),
+                            result.output_path
+                        );
+                    }
+                }
+                Err(e) => {
+                    if agent {
+                        print!("{}", render_bundle_agent_error(&start_path, &output, &e));
+                    } else {
+                        eprintln!("bundle error: {e}");
+                    }
+                    process::exit(1);
                 }
             }
         }
@@ -686,6 +728,42 @@ fn render_test_agent_error(file: Option<&str>, error: &str) -> String {
     }
     out.push_str(&format!("error: {}\n", escape_toon_scalar(error)));
     out
+}
+
+fn render_bundle_agent_output(result: &jett_driver::BundleResult) -> String {
+    let mut out = String::new();
+    out.push_str("status: ok\n");
+    out.push_str(&format!(
+        "project_root: {}\n",
+        escape_toon_scalar(&result.project_root)
+    ));
+    out.push_str(&format!(
+        "output: {}\n",
+        escape_toon_scalar(&result.output_path)
+    ));
+    out.push_str(&format!("files: {}\n", result.files.len()));
+    out.push_str(&format!(
+        "bundled_files[{}]{{path,start_line,end_line}}:\n",
+        result.files.len()
+    ));
+    for file in &result.files {
+        out.push_str(&format!(
+            "  {},{},{}\n",
+            escape_toon_scalar(&file.path),
+            file.start_line,
+            file.end_line
+        ));
+    }
+    out
+}
+
+fn render_bundle_agent_error(start: &str, output: &str, error: &str) -> String {
+    format!(
+        "status: error\nstart: {}\noutput: {}\nerror: {}\n",
+        escape_toon_scalar(start),
+        escape_toon_scalar(output),
+        escape_toon_scalar(error)
+    )
 }
 
 fn render_query_namespaces_agent_output(result: &jett_driver::NamespaceQueryResult) -> String {
@@ -1328,6 +1406,26 @@ mod tests {
         assert_eq!(
             rendered,
             "status: error\nfile: bad\\,path.jett\nerror: parse\\nfailed\n"
+        );
+    }
+
+    #[test]
+    fn bundle_agent_output_lists_bundled_files() {
+        let result = jett_driver::BundleResult {
+            project_root: "project".to_string(),
+            output_path: "dist/lib.jett".to_string(),
+            files: vec![jett_driver::BundleFileResult {
+                path: "src/core.jett".to_string(),
+                start_line: 4,
+                end_line: 12,
+            }],
+        };
+
+        let rendered = render_bundle_agent_output(&result);
+
+        assert_eq!(
+            rendered,
+            "status: ok\nproject_root: project\noutput: dist/lib.jett\nfiles: 1\nbundled_files[1]{path,start_line,end_line}:\n  src/core.jett,4,12\n"
         );
     }
 

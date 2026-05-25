@@ -4483,7 +4483,7 @@ function main(net: Network, stdout: Stdout) returns nothing:
 jett bundle --output my_library.jett
 ```
 
-This will produce a single distributable file after validating that the generated output still satisfies Jett's ordinary top-to-bottom declaration rules. The result is a self-contained `.jett` file that can be hosted at any URL and imported by other projects. Library authors develop with whatever file organization they prefer, then bundle for distribution. The exact ordering contract is tracked in `docs/open_design/bundle_ordering_contract.md`.
+This produces a single distributable file after validating that the generated output still satisfies Jett's ordinary top-to-bottom declaration rules. The result is a self-contained `.jett` file that can be hosted at any URL and imported by other projects. Library authors develop with whatever file organization they prefer, then bundle for distribution. Dependency-aware reordering remains tracked in `docs/open_design/bundle_ordering_contract.md`.
 
 #### Sub-Namespaces for Large Projects
 

@@ -1306,7 +1306,7 @@ The Agent Server Protocol is not a persistent server — it's the `--agent` flag
 | `jett query --agent --complete-at ...` | Ranked completions |
 | `jett query --agent --namespaces` | Namespace registry |
 | `jett run --agent --profile` | Profiling bottleneck summary |
-| `jett bundle --output lib.jett` | Bundle all project files into a single distributable `.jett` file |
+| `jett bundle --output lib.jett` | Validated single-file bundle with source manifest |
 
 The ASP module formats `Diagnostic` structs and query results into TOON. It shares all data with the human-mode output — only the rendering differs.
 
@@ -1610,7 +1610,7 @@ The compiler should be built incrementally, with each phase producing a usable (
 1. Platform-specific capability lowering in codegen (Linux, Windows, macOS, WASM).
 2. Cross-compilation support in the CLI (`--target` flag).
 3. `jett_bind` — C header binding generator.
-4. `jett_bundle` — Produce a validated single-file distributable `.jett` bundle; ordering semantics are tracked in `docs/open_design/bundle_ordering_contract.md`.
+4. `jett_bundle` — Validation-first single-file distributable `.jett` bundles; dependency-aware reordering is tracked in `docs/open_design/bundle_ordering_contract.md`.
 5. `jett_cli` — `jett bind` and `jett bundle` commands.
 
 **Milestone:** Cross-compile for all supported platforms, call C libraries from Jett, distribute libraries as single files.

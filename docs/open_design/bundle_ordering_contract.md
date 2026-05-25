@@ -1,7 +1,7 @@
 # Bundle Ordering Contract
 
-Status: open. `jett bundle` is documented as a future distribution command, but
-the exact ordering contract needs to be pinned before implementation.
+Status: partially implemented. The first `jett bundle` implementation uses the
+validation-first contract below. Dependency-aware reordering remains open.
 
 ## Problem
 
