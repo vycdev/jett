@@ -70,26 +70,26 @@ pub fn render_toon(diagnostics: &[Diagnostic], source: &str, file_path: &str) ->
         ));
     }
 
-    // Include suggested fixes if any diagnostic has one
+    let fix_count = diagnostics
+        .iter()
+        .filter(|diag| diag.suggested_fix.is_some())
+        .count();
+    out.push_str(&format!(
+        "suggested_fixes[{}]{{code,line,column,old_text,new_text,explanation}}:\n",
+        fix_count
+    ));
     for diag in diagnostics {
         if let Some(ref fix) = diag.suggested_fix {
-            let (fix_line, _) = line_col(source, fix.span.start);
-            out.push_str("suggested_fix:\n");
-            out.push_str("  action: replace\n");
-            out.push_str(&format!("  line: {}\n", fix_line));
+            let (fix_line, fix_col) = line_col(source, fix.span.start);
             out.push_str(&format!(
-                "  old_text: {}\n",
-                escape_toon_scalar(&fix.old_text)
-            ));
-            out.push_str(&format!(
-                "  new_text: {}\n",
-                escape_toon_scalar(&fix.new_text)
-            ));
-            out.push_str(&format!(
-                "  explanation: {}\n",
+                "  {},{},{},{},{},{}\n",
+                diag.code,
+                fix_line,
+                fix_col,
+                escape_toon_scalar(&fix.old_text),
+                escape_toon_scalar(&fix.new_text),
                 escape_toon_scalar(&fix.explanation)
             ));
-            break; // Only include the first suggested fix at the top level
         }
     }
 
@@ -115,7 +115,7 @@ mod tests {
         let result = render_toon(&[], "", "test.jett");
         assert_eq!(
             result,
-            "status: ok\nfile: test.jett\ntotal: 0\nerrors: 0\nwarnings: 0\ndiagnostics[0]{code,severity,message,file,line,column}:\n"
+            "status: ok\nfile: test.jett\ntotal: 0\nerrors: 0\nwarnings: 0\ndiagnostics[0]{code,severity,message,file,line,column}:\nsuggested_fixes[0]{code,line,column,old_text,new_text,explanation}:\n"
         );
     }
 
@@ -131,7 +131,7 @@ mod tests {
         let result = render_toon(&diags, source, "test.jett");
         assert_eq!(
             result,
-            "status: ok\nfile: test.jett\ntotal: 1\nerrors: 0\nwarnings: 1\ndiagnostics[1]{code,severity,message,file,line,column}:\n  E0100,warning,unused variable,test.jett,2,10\n"
+            "status: ok\nfile: test.jett\ntotal: 1\nerrors: 0\nwarnings: 1\ndiagnostics[1]{code,severity,message,file,line,column}:\n  E0100,warning,unused variable,test.jett,2,10\nsuggested_fixes[0]{code,line,column,old_text,new_text,explanation}:\n"
         );
     }
 
@@ -173,11 +173,12 @@ mod tests {
 
         let result = render_toon(&diags, source, "test.jett");
 
-        assert!(result.contains("suggested_fix:"));
-        assert!(result.contains("action: replace"));
-        assert!(result.contains("old_text: a + b"));
-        assert!(result.contains("new_text: a + int64.from_string(b)"));
-        assert!(result.contains("explanation: use explicit conversion"));
+        assert!(
+            result.contains("suggested_fixes[1]{code,line,column,old_text,new_text,explanation}:")
+        );
+        assert!(
+            result.contains("E0300,2,11,a + b,a + int64.from_string(b),use explicit conversion")
+        );
     }
 
     #[test]

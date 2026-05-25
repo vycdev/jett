@@ -3899,12 +3899,8 @@ constraint_violated:
   expected: string
   got: secret[string]
   explanation: secret[string] cannot be passed to functions that expose data (string interpolation, Stdout.write, log, http.respond)
-suggested_fix:
-  action: replace
-  line: 23
-  old_text: "user: {user.password_hash}"
-  new_text: "user: {secret.redact(user.password_hash)}"
-  explanation: use secret.redact() to get a masked representation of the secret value
+suggested_fixes[1]{code,line,column,old_text,new_text,explanation}:
+  E0012,23,41,"user: {user.password_hash}","user: {secret.redact(user.password_hash)}",use secret.redact() to get a masked representation of the secret value
 ```
 
 **What this payload contains:**
