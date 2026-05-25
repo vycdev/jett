@@ -6,27 +6,44 @@ use crate::{Diagnostic, Severity};
 /// Output format (matching the ASP spec from the design doc):
 /// ```text
 /// status: error
-/// errors[N]{code,severity,message,file,line,column}:
+/// total: N
+/// errors: N
+/// warnings: N
+/// diagnostics[N]{code,severity,message,file,line,column}:
 ///   E0012,error,message here,src/file.jett,23,41
 /// ```
 ///
 /// When there are no errors, outputs:
 /// ```text
 /// status: ok
+/// total: 0
+/// errors: 0
+/// warnings: 0
+/// diagnostics[0]{code,severity,message,file,line,column}:
 /// ```
 pub fn render_toon(diagnostics: &[Diagnostic], source: &str, file_path: &str) -> String {
-    let has_errors = diagnostics.iter().any(|d| d.severity == Severity::Error);
-
-    if diagnostics.is_empty() || !has_errors {
-        return "status: ok\n".to_string();
-    }
+    let error_count = diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Error)
+        .count();
+    let warning_count = diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Warning)
+        .count();
 
     let mut out = String::new();
-    out.push_str("status: error\n");
+    if error_count > 0 {
+        out.push_str("status: error\n");
+    } else {
+        out.push_str("status: ok\n");
+    }
 
     let count = diagnostics.len();
+    out.push_str(&format!("total: {}\n", count));
+    out.push_str(&format!("errors: {}\n", error_count));
+    out.push_str(&format!("warnings: {}\n", warning_count));
     out.push_str(&format!(
-        "errors[{}]{{code,severity,message,file,line,column}}:\n",
+        "diagnostics[{}]{{code,severity,message,file,line,column}}:\n",
         count
     ));
 
@@ -39,12 +56,14 @@ pub fn render_toon(diagnostics: &[Diagnostic], source: &str, file_path: &str) ->
 
         let (line, col) = line_col(source, diag.span.start);
 
-        // Escape commas in message for CSV-style TOON rows
-        let message = diag.message.replace(',', "\\,");
-
         out.push_str(&format!(
             "  {},{},{},{},{},{}\n",
-            diag.code, severity_str, message, file_path, line, col
+            diag.code,
+            severity_str,
+            escape_toon_scalar(&diag.message),
+            escape_toon_scalar(file_path),
+            line,
+            col
         ));
     }
 
@@ -55,14 +74,31 @@ pub fn render_toon(diagnostics: &[Diagnostic], source: &str, file_path: &str) ->
             out.push_str("suggested_fix:\n");
             out.push_str("  action: replace\n");
             out.push_str(&format!("  line: {}\n", fix_line));
-            out.push_str(&format!("  old_text: {}\n", fix.old_text));
-            out.push_str(&format!("  new_text: {}\n", fix.new_text));
-            out.push_str(&format!("  explanation: {}\n", fix.explanation));
+            out.push_str(&format!(
+                "  old_text: {}\n",
+                escape_toon_scalar(&fix.old_text)
+            ));
+            out.push_str(&format!(
+                "  new_text: {}\n",
+                escape_toon_scalar(&fix.new_text)
+            ));
+            out.push_str(&format!(
+                "  explanation: {}\n",
+                escape_toon_scalar(&fix.explanation)
+            ));
             break; // Only include the first suggested fix at the top level
         }
     }
 
     out
+}
+
+fn escape_toon_scalar(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\r', "\\r")
+        .replace('\n', "\\n")
+        .replace(',', "\\,")
 }
 
 #[cfg(test)]
@@ -74,7 +110,10 @@ mod tests {
     #[test]
     fn toon_ok_when_no_diagnostics() {
         let result = render_toon(&[], "", "test.jett");
-        assert_eq!(result, "status: ok\n");
+        assert_eq!(
+            result,
+            "status: ok\ntotal: 0\nerrors: 0\nwarnings: 0\ndiagnostics[0]{code,severity,message,file,line,column}:\n"
+        );
     }
 
     #[test]
@@ -87,7 +126,10 @@ mod tests {
             Span::new(file_id, 41, 42),
         )];
         let result = render_toon(&diags, source, "test.jett");
-        assert_eq!(result, "status: ok\n");
+        assert_eq!(
+            result,
+            "status: ok\ntotal: 1\nerrors: 0\nwarnings: 1\ndiagnostics[1]{code,severity,message,file,line,column}:\n  E0100,warning,unused variable,test.jett,2,10\n"
+        );
     }
 
     #[test]
@@ -103,7 +145,10 @@ mod tests {
         let result = render_toon(&diags, source, "test.jett");
 
         assert!(result.starts_with("status: error\n"));
-        assert!(result.contains("errors[1]{code,severity,message,file,line,column}:"));
+        assert!(result.contains("total: 1\n"));
+        assert!(result.contains("errors: 1\n"));
+        assert!(result.contains("warnings: 0\n"));
+        assert!(result.contains("diagnostics[1]{code,severity,message,file,line,column}:"));
         assert!(
             result.contains("E0300,error,type mismatch: expected int64 got string,test.jett,2,")
         );
@@ -142,7 +187,7 @@ mod tests {
 
         let result = render_toon(&diags, source, "test.jett");
 
-        assert!(result.contains("errors[2]{code,severity,message,file,line,column}:"));
+        assert!(result.contains("diagnostics[2]{code,severity,message,file,line,column}:"));
         assert!(result.contains("E0001,error,first error,test.jett,1,1"));
         assert!(result.contains("E0002,error,second error,test.jett,2,1"));
     }

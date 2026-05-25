@@ -3879,7 +3879,10 @@ When `--agent` is passed, the compiler outputs **zero formatting, zero spatial a
 
 ```
 status: error
-errors[1]{code,severity,message,file,line,column}:
+total: 1
+errors: 1
+warnings: 0
+diagnostics[1]{code,severity,message,file,line,column}:
   E0012,error,secret[string] does not implement Displayable,src/handlers.jett,23,41
 ast_node:
   type: string_interpolation
