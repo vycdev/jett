@@ -3884,9 +3884,9 @@ total: 1
 errors: 1
 warnings: 0
 infos: 0
-diagnostics[1]{code,severity,message,file,line,column}:
-  E0012,error,secret[string] does not implement Displayable,src/handlers.jett,23,41
-labels[0]{code,message,file,line,column}:
+diagnostics[1]{code,severity,message,file,line,column,end_line,end_column}:
+  E0012,error,secret[string] does not implement Displayable,src/handlers.jett,23,41,23,54
+labels[0]{code,message,file,line,column,end_line,end_column}:
 ast_node:
   type: string_interpolation
   parts[2]{type,value,object,field,field_type}:

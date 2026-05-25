@@ -11,8 +11,8 @@ use crate::{Diagnostic, Severity};
 /// errors: N
 /// warnings: N
 /// infos: N
-/// diagnostics[N]{code,severity,message,file,line,column}:
-///   E0012,error,message here,src/file.jett,23,41
+/// diagnostics[N]{code,severity,message,file,line,column,end_line,end_column}:
+///   E0012,error,message here,src/file.jett,23,41,23,50
 /// ```
 ///
 /// When there are no errors, outputs:
@@ -23,7 +23,7 @@ use crate::{Diagnostic, Severity};
 /// errors: 0
 /// warnings: 0
 /// infos: 0
-/// diagnostics[0]{code,severity,message,file,line,column}:
+/// diagnostics[0]{code,severity,message,file,line,column,end_line,end_column}:
 /// ```
 pub fn render_toon(diagnostics: &[Diagnostic], source: &str, file_path: &str) -> String {
     let error_count = diagnostics
@@ -53,7 +53,7 @@ pub fn render_toon(diagnostics: &[Diagnostic], source: &str, file_path: &str) ->
     out.push_str(&format!("warnings: {}\n", warning_count));
     out.push_str(&format!("infos: {}\n", info_count));
     out.push_str(&format!(
-        "diagnostics[{}]{{code,severity,message,file,line,column}}:\n",
+        "diagnostics[{}]{{code,severity,message,file,line,column,end_line,end_column}}:\n",
         count
     ));
 
@@ -65,33 +65,39 @@ pub fn render_toon(diagnostics: &[Diagnostic], source: &str, file_path: &str) ->
         };
 
         let (line, col) = line_col(source, diag.span.start);
+        let (end_line, end_col) = line_col(source, diag.span.end);
 
         out.push_str(&format!(
-            "  {},{},{},{},{},{}\n",
+            "  {},{},{},{},{},{},{},{}\n",
             diag.code,
             severity_str,
             escape_toon_scalar(&diag.message),
             escape_toon_scalar(file_path),
             line,
-            col
+            col,
+            end_line,
+            end_col
         ));
     }
 
     let label_count: usize = diagnostics.iter().map(|diag| diag.labels.len()).sum();
     out.push_str(&format!(
-        "labels[{}]{{code,message,file,line,column}}:\n",
+        "labels[{}]{{code,message,file,line,column,end_line,end_column}}:\n",
         label_count
     ));
     for diag in diagnostics {
         for label in &diag.labels {
             let (line, col) = line_col(source, label.span.start);
+            let (end_line, end_col) = line_col(source, label.span.end);
             out.push_str(&format!(
-                "  {},{},{},{},{}\n",
+                "  {},{},{},{},{},{},{}\n",
                 diag.code,
                 escape_toon_scalar(&label.message),
                 escape_toon_scalar(file_path),
                 line,
-                col
+                col,
+                end_line,
+                end_col
             ));
         }
     }
@@ -141,7 +147,7 @@ mod tests {
         let result = render_toon(&[], "", "test.jett");
         assert_eq!(
             result,
-            "status: ok\nfile: test.jett\ntotal: 0\nerrors: 0\nwarnings: 0\ninfos: 0\ndiagnostics[0]{code,severity,message,file,line,column}:\nlabels[0]{code,message,file,line,column}:\nsuggested_fixes[0]{code,line,column,old_text,new_text,explanation}:\n"
+            "status: ok\nfile: test.jett\ntotal: 0\nerrors: 0\nwarnings: 0\ninfos: 0\ndiagnostics[0]{code,severity,message,file,line,column,end_line,end_column}:\nlabels[0]{code,message,file,line,column,end_line,end_column}:\nsuggested_fixes[0]{code,line,column,old_text,new_text,explanation}:\n"
         );
     }
 
@@ -157,7 +163,7 @@ mod tests {
         let result = render_toon(&diags, source, "test.jett");
         assert_eq!(
             result,
-            "status: ok\nfile: test.jett\ntotal: 1\nerrors: 0\nwarnings: 1\ninfos: 0\ndiagnostics[1]{code,severity,message,file,line,column}:\n  E0100,warning,unused variable,test.jett,2,10\nlabels[0]{code,message,file,line,column}:\nsuggested_fixes[0]{code,line,column,old_text,new_text,explanation}:\n"
+            "status: ok\nfile: test.jett\ntotal: 1\nerrors: 0\nwarnings: 1\ninfos: 0\ndiagnostics[1]{code,severity,message,file,line,column,end_line,end_column}:\n  E0100,warning,unused variable,test.jett,2,10,2,11\nlabels[0]{code,message,file,line,column,end_line,end_column}:\nsuggested_fixes[0]{code,line,column,old_text,new_text,explanation}:\n"
         );
     }
 
@@ -179,7 +185,9 @@ mod tests {
         assert!(result.contains("errors: 1\n"));
         assert!(result.contains("warnings: 0\n"));
         assert!(result.contains("infos: 0\n"));
-        assert!(result.contains("diagnostics[1]{code,severity,message,file,line,column}:"));
+        assert!(result.contains(
+            "diagnostics[1]{code,severity,message,file,line,column,end_line,end_column}:"
+        ));
         assert!(
             result.contains("E0300,error,type mismatch: expected int64 got string,test.jett,2,")
         );
@@ -219,8 +227,8 @@ mod tests {
 
         let result = render_toon(&diags, source, "test.jett");
 
-        assert!(result.contains("labels[1]{code,message,file,line,column}:"));
-        assert!(result.contains("E0201,original definition,test.jett,1,1"));
+        assert!(result.contains("labels[1]{code,message,file,line,column,end_line,end_column}:"));
+        assert!(result.contains("E0201,original definition,test.jett,1,1,1,6"));
     }
 
     #[test]
@@ -234,8 +242,10 @@ mod tests {
 
         let result = render_toon(&diags, source, "test.jett");
 
-        assert!(result.contains("diagnostics[2]{code,severity,message,file,line,column}:"));
-        assert!(result.contains("E0001,error,first error,test.jett,1,1"));
-        assert!(result.contains("E0002,error,second error,test.jett,2,1"));
+        assert!(result.contains(
+            "diagnostics[2]{code,severity,message,file,line,column,end_line,end_column}:"
+        ));
+        assert!(result.contains("E0001,error,first error,test.jett,1,1,1,4"));
+        assert!(result.contains("E0002,error,second error,test.jett,2,1,2,4"));
     }
 }
