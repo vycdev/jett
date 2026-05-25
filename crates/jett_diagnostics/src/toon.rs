@@ -6,6 +6,7 @@ use crate::{Diagnostic, Severity};
 /// Output format (matching the ASP spec from the design doc):
 /// ```text
 /// status: error
+/// file: src/file.jett
 /// total: N
 /// errors: N
 /// warnings: N
@@ -16,6 +17,7 @@ use crate::{Diagnostic, Severity};
 /// When there are no errors, outputs:
 /// ```text
 /// status: ok
+/// file: src/file.jett
 /// total: 0
 /// errors: 0
 /// warnings: 0
@@ -37,6 +39,7 @@ pub fn render_toon(diagnostics: &[Diagnostic], source: &str, file_path: &str) ->
     } else {
         out.push_str("status: ok\n");
     }
+    out.push_str(&format!("file: {}\n", escape_toon_scalar(file_path)));
 
     let count = diagnostics.len();
     out.push_str(&format!("total: {}\n", count));
@@ -112,7 +115,7 @@ mod tests {
         let result = render_toon(&[], "", "test.jett");
         assert_eq!(
             result,
-            "status: ok\ntotal: 0\nerrors: 0\nwarnings: 0\ndiagnostics[0]{code,severity,message,file,line,column}:\n"
+            "status: ok\nfile: test.jett\ntotal: 0\nerrors: 0\nwarnings: 0\ndiagnostics[0]{code,severity,message,file,line,column}:\n"
         );
     }
 
@@ -128,7 +131,7 @@ mod tests {
         let result = render_toon(&diags, source, "test.jett");
         assert_eq!(
             result,
-            "status: ok\ntotal: 1\nerrors: 0\nwarnings: 1\ndiagnostics[1]{code,severity,message,file,line,column}:\n  E0100,warning,unused variable,test.jett,2,10\n"
+            "status: ok\nfile: test.jett\ntotal: 1\nerrors: 0\nwarnings: 1\ndiagnostics[1]{code,severity,message,file,line,column}:\n  E0100,warning,unused variable,test.jett,2,10\n"
         );
     }
 
@@ -145,6 +148,7 @@ mod tests {
         let result = render_toon(&diags, source, "test.jett");
 
         assert!(result.starts_with("status: error\n"));
+        assert!(result.contains("file: test.jett\n"));
         assert!(result.contains("total: 1\n"));
         assert!(result.contains("errors: 1\n"));
         assert!(result.contains("warnings: 0\n"));

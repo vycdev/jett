@@ -3879,6 +3879,7 @@ When `--agent` is passed, the compiler outputs **zero formatting, zero spatial a
 
 ```
 status: error
+file: src/handlers.jett
 total: 1
 errors: 1
 warnings: 0

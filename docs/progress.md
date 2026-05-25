@@ -120,7 +120,7 @@
 
 | Component | Status |
 |---|---|
-| TOON output (`--agent` flag) | Partial (build diagnostics include ok/error status plus diagnostic/error/warning counts, format status, run stdout/debug output, verify/property test summaries, and namespace/symbol/type-at/definition-at/references-at/completion/signature query results are structured) |
+| TOON output (`--agent` flag) | Partial (build diagnostics include file, ok/error status, and diagnostic/error/warning counts; format status, run stdout/debug output, verify/property test summaries, and namespace/symbol/type-at/definition-at/references-at/completion/signature query results are structured) |
 | LSP server (diagnostics on save) | Done |
 | LSP hover (type at cursor) | Done |
 | LSP go-to-definition | Done |
