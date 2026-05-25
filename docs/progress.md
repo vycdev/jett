@@ -120,7 +120,7 @@
 
 | Component | Status |
 |---|---|
-| TOON output (`--agent` flag) | Partial (build diagnostics include file, ok/error status, severity counts, ranged diagnostics/labels, and tabular suggested fixes; format status, run stdout/debug output, ranged verify/property test summaries, and namespace/symbol/type-at/definition-at/references-at/completion/signature query results are structured) |
+| TOON output (`--agent` flag) | Partial (build diagnostics include file, ok/error status, severity counts, ranged diagnostics/labels, and tabular suggested fixes; format status, run stdout/typed debug output, ranged verify/property test summaries, and namespace/symbol/type-at/definition-at/references-at/completion/signature query results are structured) |
 | LSP server (diagnostics on save) | Done |
 | LSP hover (type at cursor) | Done |
 | LSP go-to-definition | Done |
@@ -193,7 +193,7 @@
 |---|---|
 | `jett format [--agent] [--check] file.jett` | Working |
 | `jett build [--agent] [--release] [--target T] file.jett` | Working (validates, no binary output) |
-| `jett run [--agent] file.jett` | Working (tree-walking interpreter; `--agent` captures stdout plus trace/breakpoint debug rows) |
+| `jett run [--agent] file.jett` | Working (tree-walking interpreter; `--agent` captures stdout plus typed trace/breakpoint debug rows) |
 | `jett test [--agent] [file.jett]` | Working (verify + property blocks; `--agent` emits compact block tables) |
 | `jett lsp` | Working (diagnostics on save) |
 | `jett bind header.h` | Not started |

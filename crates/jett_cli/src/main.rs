@@ -586,13 +586,27 @@ fn render_run_agent_output(file: &str, output: &jett_driver::RunOutput) -> Strin
     out.push_str(&format!("file: {}\n", escape_toon_scalar(file)));
     out.push_str(&format!("stdout: {}\n", escape_toon_scalar(&output.stdout)));
     out.push_str(&format!(
-        "debug[{}]{{message}}:\n",
+        "debug[{}]{{kind,message}}:\n",
         output.debug_output.len()
     ));
     for line in &output.debug_output {
-        out.push_str(&format!("  {}\n", escape_toon_scalar(line)));
+        out.push_str(&format!(
+            "  {},{}\n",
+            debug_line_kind(line),
+            escape_toon_scalar(line)
+        ));
     }
     out
+}
+
+fn debug_line_kind(line: &str) -> &'static str {
+    if line.starts_with("trace ") {
+        "trace"
+    } else if line.starts_with("breakpoint hit") {
+        "breakpoint"
+    } else {
+        "debug"
+    }
 }
 
 fn render_format_agent_output(file: &str, mode: &str, changed: bool, errors: &[String]) -> String {
@@ -1188,7 +1202,7 @@ mod tests {
 
         assert_eq!(
             rendered,
-            "status: ok\nfile: app.jett\nstdout: hello\\n\ndebug[1]{message}:\n  trace total: int64 = 42\n"
+            "status: ok\nfile: app.jett\nstdout: hello\\n\ndebug[1]{kind,message}:\n  trace,trace total: int64 = 42\n"
         );
     }
 

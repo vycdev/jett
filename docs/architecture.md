@@ -1296,6 +1296,7 @@ The Agent Server Protocol is not a persistent server — it's the `--agent` flag
 | Command | TOON Output |
 |---|---|
 | `jett build --agent` | Build errors or success |
+| `jett run --agent` | Captured stdout and typed trace/breakpoint debug rows |
 | `jett test --agent` | Verify + property test results with block ranges |
 | `jett query --agent --symbols ...` | File-local symbol outline |
 | `jett query --agent --type-at ...` | Type information |
