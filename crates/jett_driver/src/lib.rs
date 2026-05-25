@@ -71,6 +71,24 @@ pub struct NamespaceQueryResult {
     pub definitions: Vec<QueryDefinition>,
 }
 
+/// A top-level symbol declared in a single source file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileSymbolQueryEntry {
+    pub name: String,
+    pub kind: String,
+    pub namespace: Option<String>,
+    pub visibility: jett_resolve::scope::DefVisibility,
+    pub line: u32,
+    pub column: u32,
+}
+
+/// Result of `jett query --agent --symbols file.jett`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileSymbolsQueryResult {
+    pub file_path: String,
+    pub symbols: Vec<FileSymbolQueryEntry>,
+}
+
 /// Result of `jett query --agent --type-at file:line:column`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeAtQueryResult {
@@ -1093,6 +1111,214 @@ pub fn query_namespaces(start_dir: &Path) -> Result<NamespaceQueryResult, String
     });
 
     Ok(NamespaceQueryResult { definitions })
+}
+
+/// Return a file-local outline of top-level declarations, including private
+/// symbols that are intentionally omitted from the global namespace query.
+pub fn query_file_symbols(path: &Path) -> Result<FileSymbolsQueryResult, String> {
+    let source = fs::read_to_string(path)
+        .map_err(|e| format!("failed to read {}: {}", path.display(), e))?;
+    let parsed = parse(&source, FileId::new(0));
+    let parse_errors = error_messages_from_diagnostics(&parsed.errors);
+    if !parse_errors.is_empty() {
+        return Err(format!("parse errors:\n{}", parse_errors.join("\n")));
+    }
+
+    let mut symbols = Vec::new();
+    append_file_symbol_query_entries(&mut symbols, &parsed.module, &source);
+    Ok(FileSymbolsQueryResult {
+        file_path: path.display().to_string(),
+        symbols,
+    })
+}
+
+fn append_file_symbol_query_entries(
+    symbols: &mut Vec<FileSymbolQueryEntry>,
+    module: &Module,
+    source: &str,
+) {
+    let mut current_namespace: Option<String> = None;
+    for item in &module.items {
+        match item {
+            Item::Namespace(ns) => {
+                current_namespace = Some(ns.name.name.clone());
+                push_file_symbol_query_entry(
+                    symbols,
+                    ns.name.name.clone(),
+                    "namespace",
+                    None,
+                    jett_resolve::scope::DefVisibility::Public,
+                    ns.name.span,
+                    source,
+                );
+            }
+            Item::Function(func) => push_file_symbol_query_entry(
+                symbols,
+                file_symbol_name(&func.name.name, current_namespace.as_deref()),
+                "function",
+                current_namespace.clone(),
+                file_symbol_visibility(current_namespace.as_deref(), func.exported),
+                func.name.span,
+                source,
+            ),
+            Item::Mutual(block) => {
+                for decl in &block.declarations {
+                    push_file_symbol_query_entry(
+                        symbols,
+                        file_symbol_name(&decl.name.name, current_namespace.as_deref()),
+                        "function",
+                        current_namespace.clone(),
+                        file_symbol_visibility(current_namespace.as_deref(), decl.exported),
+                        decl.name.span,
+                        source,
+                    );
+                }
+            }
+            Item::Interface(interface) => push_file_symbol_query_entry(
+                symbols,
+                file_symbol_name(&interface.name.name, current_namespace.as_deref()),
+                "interface",
+                current_namespace.clone(),
+                file_symbol_visibility(current_namespace.as_deref(), interface.exported),
+                interface.name.span,
+                source,
+            ),
+            Item::Implement(block) => push_file_symbol_query_entry(
+                symbols,
+                format!(
+                    "implement {} for {}",
+                    block.interface_name.name,
+                    type_expr_name(&block.for_type)
+                ),
+                "implement",
+                current_namespace.clone(),
+                jett_resolve::scope::DefVisibility::Private,
+                block.interface_name.span,
+                source,
+            ),
+            Item::Struct(strukt) => push_file_symbol_query_entry(
+                symbols,
+                file_symbol_name(&strukt.name.name, current_namespace.as_deref()),
+                "struct",
+                current_namespace.clone(),
+                file_symbol_visibility(current_namespace.as_deref(), strukt.exported),
+                strukt.name.span,
+                source,
+            ),
+            Item::Bitfield(bitfield) => push_file_symbol_query_entry(
+                symbols,
+                file_symbol_name(&bitfield.name.name, current_namespace.as_deref()),
+                "bitfield",
+                current_namespace.clone(),
+                file_symbol_visibility(current_namespace.as_deref(), bitfield.exported),
+                bitfield.name.span,
+                source,
+            ),
+            Item::Enum(enm) => push_file_symbol_query_entry(
+                symbols,
+                file_symbol_name(&enm.name.name, current_namespace.as_deref()),
+                "enum",
+                current_namespace.clone(),
+                file_symbol_visibility(current_namespace.as_deref(), enm.exported),
+                enm.name.span,
+                source,
+            ),
+            Item::Machine(machine) => push_file_symbol_query_entry(
+                symbols,
+                file_symbol_name(&machine.name.name, current_namespace.as_deref()),
+                "machine",
+                current_namespace.clone(),
+                file_symbol_visibility(current_namespace.as_deref(), machine.exported),
+                machine.name.span,
+                source,
+            ),
+            Item::Actor(actor) => push_file_symbol_query_entry(
+                symbols,
+                file_symbol_name(&actor.name.name, current_namespace.as_deref()),
+                "actor",
+                current_namespace.clone(),
+                file_symbol_visibility(current_namespace.as_deref(), actor.exported),
+                actor.name.span,
+                source,
+            ),
+            Item::VarDecl(decl) => push_file_symbol_query_entry(
+                symbols,
+                file_symbol_name(&decl.name.name, current_namespace.as_deref()),
+                "variable",
+                current_namespace.clone(),
+                jett_resolve::scope::DefVisibility::Private,
+                decl.name.span,
+                source,
+            ),
+            Item::Verify(verify) => push_file_symbol_query_entry(
+                symbols,
+                file_symbol_name(&verify.name.name, current_namespace.as_deref()),
+                "verify",
+                current_namespace.clone(),
+                jett_resolve::scope::DefVisibility::Private,
+                verify.name.span,
+                source,
+            ),
+            Item::Property(prop) => push_file_symbol_query_entry(
+                symbols,
+                file_symbol_name(&prop.name.name, current_namespace.as_deref()),
+                "property",
+                current_namespace.clone(),
+                jett_resolve::scope::DefVisibility::Private,
+                prop.name.span,
+                source,
+            ),
+            Item::TypeAlias(alias) => push_file_symbol_query_entry(
+                symbols,
+                file_symbol_name(&alias.name.name, current_namespace.as_deref()),
+                "type",
+                current_namespace.clone(),
+                file_symbol_visibility(
+                    current_namespace.as_deref(),
+                    alias.exported || alias.root_exported,
+                ),
+                alias.name.span,
+                source,
+            ),
+        }
+    }
+}
+
+fn push_file_symbol_query_entry(
+    symbols: &mut Vec<FileSymbolQueryEntry>,
+    name: String,
+    kind: &str,
+    namespace: Option<String>,
+    visibility: jett_resolve::scope::DefVisibility,
+    span: Span,
+    source: &str,
+) {
+    let (line, column) = jett_diagnostics::render::line_col(source, span.start);
+    symbols.push(FileSymbolQueryEntry {
+        name,
+        kind: kind.to_string(),
+        namespace,
+        visibility,
+        line: line as u32,
+        column: column as u32,
+    });
+}
+
+fn file_symbol_name(leaf_name: &str, namespace: Option<&str>) -> String {
+    namespace
+        .map(|namespace| format!("{namespace}.{leaf_name}"))
+        .unwrap_or_else(|| leaf_name.to_string())
+}
+
+fn file_symbol_visibility(
+    namespace: Option<&str>,
+    exported: bool,
+) -> jett_resolve::scope::DefVisibility {
+    if namespace.is_none() || exported {
+        jett_resolve::scope::DefVisibility::Public
+    } else {
+        jett_resolve::scope::DefVisibility::Private
+    }
 }
 
 fn query_builtin_definitions() -> Vec<QueryDefinition> {
@@ -2293,6 +2519,49 @@ mod tests {
                 .iter()
                 .all(|def| def.name != "api.hidden"),
             "private namespaced definitions should not appear in global query results"
+        );
+    }
+
+    #[test]
+    fn query_file_symbols_lists_private_and_public_declarations() {
+        let root = temp_test_dir("jett_driver_query_file_symbols");
+        fs::create_dir_all(&root).expect("temp query dir should be created");
+        let file = root.join("api.jett");
+        fs::write(
+            &file,
+            "namespace api\n\nexport function login() returns int64:\n    return 1\n\nfunction hidden() returns int64:\n    return 2\n\nverify api_checks:\n    assert login() == 1\n",
+        )
+        .expect("symbols fixture should be written");
+
+        let result = query_file_symbols(&file).expect("symbols query should succeed");
+
+        fs::remove_dir_all(&root).expect("temp query dir should be removed");
+
+        assert!(
+            result.symbols.iter().any(|symbol| {
+                symbol.name == "api.login"
+                    && symbol.kind == "function"
+                    && symbol.visibility == jett_resolve::scope::DefVisibility::Public
+            }),
+            "expected exported function in file symbols, got {:?}",
+            result.symbols
+        );
+        assert!(
+            result.symbols.iter().any(|symbol| {
+                symbol.name == "api.hidden"
+                    && symbol.kind == "function"
+                    && symbol.visibility == jett_resolve::scope::DefVisibility::Private
+            }),
+            "expected private function in file symbols, got {:?}",
+            result.symbols
+        );
+        assert!(
+            result
+                .symbols
+                .iter()
+                .any(|symbol| symbol.name == "api.api_checks" && symbol.kind == "verify"),
+            "expected verify block in file symbols, got {:?}",
+            result.symbols
         );
     }
 

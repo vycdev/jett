@@ -3948,6 +3948,22 @@ This is not a theoretical workflow — it is the **intended primary development 
 
 The Agent Server Protocol extends to every compiler interaction, not just build errors:
 
+**File-local symbol outline:**
+
+```
+jett query --agent --symbols src/server.jett
+```
+
+```toon
+status: ok
+file: src/server.jett
+total: 3
+symbols[3]{name,kind,namespace,visibility,line,column}:
+  auth,namespace,,public,1,11
+  auth.User,struct,auth,public,8,15
+  auth.validate_user,function,auth,private,21,10
+```
+
 **Type information queries:**
 
 ```

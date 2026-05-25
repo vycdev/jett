@@ -74,6 +74,10 @@ enum Command {
         #[arg(long)]
         namespaces: bool,
 
+        /// List top-level symbols in a single file
+        #[arg(long)]
+        symbols: Option<String>,
+
         /// Return the type at file:line:column
         #[arg(long = "type-at")]
         type_at: Option<String>,
@@ -275,6 +279,7 @@ fn main() {
         Command::Query {
             agent,
             namespaces,
+            symbols,
             type_at,
             definition_at,
             references_at,
@@ -282,6 +287,7 @@ fn main() {
             signature,
         } => {
             let query_count = usize::from(namespaces)
+                + usize::from(symbols.is_some())
                 + usize::from(type_at.is_some())
                 + usize::from(definition_at.is_some())
                 + usize::from(references_at.is_some())
@@ -307,6 +313,26 @@ fn main() {
                             print!("{}", render_query_namespaces_agent_output(&result));
                         } else {
                             print_query_namespaces_human(&result);
+                        }
+                    }
+                    Err(e) => {
+                        if agent {
+                            print!("{}", render_query_agent_error(&e));
+                        } else {
+                            eprintln!("error: {e}");
+                        }
+                        process::exit(1);
+                    }
+                }
+            }
+
+            if let Some(file) = symbols {
+                match jett_driver::query_file_symbols(Path::new(&file)) {
+                    Ok(result) => {
+                        if agent {
+                            print!("{}", render_query_file_symbols_agent_output(&result));
+                        } else {
+                            print_query_file_symbols_human(&result);
                         }
                     }
                     Err(e) => {
@@ -670,6 +696,32 @@ fn render_query_namespaces_agent_output(result: &jett_driver::NamespaceQueryResu
     out
 }
 
+fn render_query_file_symbols_agent_output(result: &jett_driver::FileSymbolsQueryResult) -> String {
+    let mut out = String::new();
+    out.push_str("status: ok\n");
+    out.push_str(&format!(
+        "file: {}\n",
+        escape_toon_scalar(&result.file_path)
+    ));
+    out.push_str(&format!("total: {}\n", result.symbols.len()));
+    out.push_str(&format!(
+        "symbols[{}]{{name,kind,namespace,visibility,line,column}}:\n",
+        result.symbols.len()
+    ));
+    for symbol in &result.symbols {
+        out.push_str(&format!(
+            "  {},{},{},{},{},{}\n",
+            escape_toon_scalar(&symbol.name),
+            escape_toon_scalar(&symbol.kind),
+            escape_toon_scalar(symbol.namespace.as_deref().unwrap_or("")),
+            jett_driver::query_visibility_name(symbol.visibility),
+            symbol.line,
+            symbol.column
+        ));
+    }
+    out
+}
+
 fn render_query_agent_error(error: &str) -> String {
     format!("status: error\nerror: {}\n", escape_toon_scalar(error))
 }
@@ -871,6 +923,21 @@ fn print_query_namespaces_human(result: &jett_driver::NamespaceQueryResult) {
             definition.name,
             namespace,
             definition.file_path
+        );
+    }
+}
+
+fn print_query_file_symbols_human(result: &jett_driver::FileSymbolsQueryResult) {
+    for symbol in &result.symbols {
+        let namespace = symbol.namespace.as_deref().unwrap_or("-");
+        println!(
+            "{}\t{}\t{}\t{}\t{}:{}",
+            symbol.kind,
+            symbol.name,
+            namespace,
+            jett_driver::query_visibility_name(symbol.visibility),
+            symbol.line,
+            symbol.column
         );
     }
 }
@@ -1220,6 +1287,28 @@ mod tests {
         assert_eq!(
             rendered,
             "status: ok\ntotal: 1\ndefinitions[1]{name,kind,namespace,visibility,file}:\n  api.login,function,api,public,src/api.jett\n"
+        );
+    }
+
+    #[test]
+    fn query_file_symbols_agent_output_lists_symbol_rows() {
+        let result = jett_driver::FileSymbolsQueryResult {
+            file_path: "src/api.jett".to_string(),
+            symbols: vec![jett_driver::FileSymbolQueryEntry {
+                name: "api.login".to_string(),
+                kind: "function".to_string(),
+                namespace: Some("api".to_string()),
+                visibility: jett_resolve::scope::DefVisibility::Public,
+                line: 3,
+                column: 17,
+            }],
+        };
+
+        let rendered = render_query_file_symbols_agent_output(&result);
+
+        assert_eq!(
+            rendered,
+            "status: ok\nfile: src/api.jett\ntotal: 1\nsymbols[1]{name,kind,namespace,visibility,line,column}:\n  api.login,function,api,public,3,17\n"
         );
     }
 
