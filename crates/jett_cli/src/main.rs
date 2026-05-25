@@ -1114,7 +1114,7 @@ fn parse_source_position(raw: &str) -> Result<SourcePosition, String> {
 fn append_test_agent_blocks(out: &mut String, file_results: &[jett_driver::TestResult]) {
     let block_count: usize = file_results.iter().map(|result| result.blocks.len()).sum();
     out.push_str(&format!(
-        "blocks[{}]{{file,name,kind,status,iterations,error}}:\n",
+        "blocks[{}]{{file,name,kind,status,iterations,line,column,end_line,end_column,error}}:\n",
         block_count
     ));
 
@@ -1129,12 +1129,16 @@ fn append_test_agent_blocks(out: &mut String, file_results: &[jett_driver::TestR
             let iterations = block.iterations.map(|value| value.to_string());
             let error = block.error.as_deref().unwrap_or("");
             out.push_str(&format!(
-                "  {},{},{},{},{},{}\n",
+                "  {},{},{},{},{},{},{},{},{},{}\n",
                 escape_toon_scalar(&file_result.file_path),
                 escape_toon_scalar(&block.name),
                 kind,
                 status,
                 iterations.as_deref().unwrap_or(""),
+                block.line,
+                block.column,
+                block.end_line,
+                block.end_column,
                 escape_toon_scalar(error)
             ));
         }
@@ -1233,6 +1237,10 @@ mod tests {
                     error: None,
                     is_property: false,
                     iterations: None,
+                    line: 3,
+                    column: 8,
+                    end_line: 3,
+                    end_column: 12,
                 },
                 jett_driver::TestBlockResult {
                     name: "roundtrip".to_string(),
@@ -1240,6 +1248,10 @@ mod tests {
                     error: Some("expected ok, got bad\ncase".to_string()),
                     is_property: true,
                     iterations: Some(42),
+                    line: 8,
+                    column: 10,
+                    end_line: 8,
+                    end_column: 19,
                 },
             ],
         };
@@ -1248,7 +1260,7 @@ mod tests {
 
         assert_eq!(
             rendered,
-            "status: error\nfiles: 1\ntotal: 2\npassed: 1\nfailed: 1\nblocks[2]{file,name,kind,status,iterations,error}:\n  tests/sample.jett,adds,verify,passed,,\n  tests/sample.jett,roundtrip,property,failed,42,expected ok\\, got bad\\ncase\n"
+            "status: error\nfiles: 1\ntotal: 2\npassed: 1\nfailed: 1\nblocks[2]{file,name,kind,status,iterations,line,column,end_line,end_column,error}:\n  tests/sample.jett,adds,verify,passed,,3,8,3,12,\n  tests/sample.jett,roundtrip,property,failed,42,8,10,8,19,expected ok\\, got bad\\ncase\n"
         );
     }
 
@@ -1278,6 +1290,10 @@ mod tests {
                         error: None,
                         is_property: false,
                         iterations: None,
+                        line: 4,
+                        column: 8,
+                        end_line: 4,
+                        end_column: 10,
                     }],
                 },
             ],
@@ -1287,7 +1303,7 @@ mod tests {
 
         assert_eq!(
             rendered,
-            "status: ok\nfiles: 2\ntotal: 1\npassed: 1\nfailed: 0\nblocks[1]{file,name,kind,status,iterations,error}:\n  tests/checks.jett,ok,verify,passed,,\n"
+            "status: ok\nfiles: 2\ntotal: 1\npassed: 1\nfailed: 0\nblocks[1]{file,name,kind,status,iterations,line,column,end_line,end_column,error}:\n  tests/checks.jett,ok,verify,passed,,4,8,4,10,\n"
         );
     }
 

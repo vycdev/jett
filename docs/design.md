@@ -4078,12 +4078,13 @@ jett test --agent
 ```
 
 ```
-status: fail
+status: error
+files: 1
 total: 12
 passed: 11
 failed: 1
-results[1]{name,status,assertion,expected,actual,file,line}:
-  verify calculate_discount,fail,calculate_discount(100.0, "gold") is 80.0,80.0,75.0,src/pricing.jett,15
+blocks[1]{file,name,kind,status,iterations,line,column,end_line,end_column,error}:
+  src/pricing.jett,calculate_discount,verify,failed,,15,8,15,26,expected 80.0\, got 75.0
 ```
 
 Every tool in the Jett toolchain — build, test, format, query — speaks TOON when asked. The LLM never has to parse human-formatted output.

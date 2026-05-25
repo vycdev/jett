@@ -110,6 +110,7 @@ impl ComptimeError {
 #[derive(Debug, Clone)]
 pub struct VerifyResult {
     pub name: String,
+    pub span: Span,
     pub passed: bool,
     pub error: Option<String>,
     /// If this was a property block, how many iterations were run.
@@ -172,9 +173,7 @@ fn verify_results_to_diagnostics(results: Vec<VerifyResult>) -> Vec<Diagnostic> 
                         r.name,
                         r.error.unwrap_or_default()
                     ),
-                    // We don't have the span here; use a dummy.  The
-                    // caller (build_file) already has the module.
-                    Span::new(jett_common::FileId::new(0), 0, 0),
+                    r.span,
                 ))
             }
         })
@@ -314,6 +313,7 @@ fn run_verify_blocks_detailed_inner(
             Ok(_) => {
                 results.push(VerifyResult {
                     name: vb.name.name.clone(),
+                    span: vb.name.span,
                     passed: true,
                     error: None,
                     iterations: None,
@@ -323,6 +323,7 @@ fn run_verify_blocks_detailed_inner(
             Err(msg) => {
                 results.push(VerifyResult {
                     name: vb.name.name.clone(),
+                    span: vb.name.span,
                     passed: false,
                     error: Some(msg),
                     iterations: None,
@@ -338,6 +339,7 @@ fn run_verify_blocks_detailed_inner(
             Ok(_) => {
                 results.push(VerifyResult {
                     name: func.name.name.clone(),
+                    span: func.name.span,
                     passed: true,
                     error: None,
                     iterations: None,
@@ -347,6 +349,7 @@ fn run_verify_blocks_detailed_inner(
             Err(msg) => {
                 results.push(VerifyResult {
                     name: func.name.name.clone(),
+                    span: func.name.span,
                     passed: false,
                     error: Some(msg),
                     iterations: None,
@@ -684,6 +687,7 @@ fn run_property_block(
         if pool.is_empty() {
             return VerifyResult {
                 name: pb.name.name.clone(),
+                span: pb.name.span,
                 passed: false,
                 error: Some(format!(
                     "unsupported type for property given '{}': cannot generate values",
@@ -729,6 +733,7 @@ fn run_property_block(
                 .collect();
             return VerifyResult {
                 name: pb.name.name.clone(),
+                span: pb.name.span,
                 passed: false,
                 error: Some(format!(
                     "{} (counterexample: {})",
@@ -743,6 +748,7 @@ fn run_property_block(
 
     VerifyResult {
         name: pb.name.name.clone(),
+        span: pb.name.span,
         passed: true,
         error: None,
         iterations: Some(iterations),

@@ -2466,6 +2466,10 @@ pub struct TestBlockResult {
     pub error: Option<String>,
     pub is_property: bool,
     pub iterations: Option<usize>,
+    pub line: u32,
+    pub column: u32,
+    pub end_line: u32,
+    pub end_column: u32,
 }
 
 /// Result of running `jett test` on a single file.
@@ -2549,12 +2553,20 @@ pub fn test_file(path: &Path) -> Result<TestResult, String> {
 
     let blocks = results
         .into_iter()
-        .map(|r| TestBlockResult {
-            name: r.name,
-            passed: r.passed,
-            error: r.error,
-            is_property: r.is_property,
-            iterations: r.iterations,
+        .map(|r| {
+            let (line, column) = jett_diagnostics::render::line_col(&source, r.span.start);
+            let (end_line, end_column) = jett_diagnostics::render::line_col(&source, r.span.end);
+            TestBlockResult {
+                name: r.name,
+                passed: r.passed,
+                error: r.error,
+                is_property: r.is_property,
+                iterations: r.iterations,
+                line: line as u32,
+                column: column as u32,
+                end_line: end_line as u32,
+                end_column: end_column as u32,
+            }
         })
         .collect();
 
