@@ -4057,11 +4057,10 @@ file: src/server.jett
 line: 30
 column: 15
 prefix: json.ser
-total: 3
-completions[3]{name,kind,signature}:
-  json.serialize_public,function,json.serialize_public[T](view value: T) returns string
-  json.serialize,function,json.serialize[T](view value: T) returns string
-  validate_user,function,validate_user(user: User) returns result[User\, string]
+total: 2
+completions[2]{rank,match,name,kind,namespace,visibility,file,signature}:
+  10,qualified_prefix,json.serialize,function,json,public,stdlib/json/90_public_api.jett,json.serialize[T](view value: T) returns string
+  10,qualified_prefix,json.serialize_public,function,json,public,stdlib/json/90_public_api.jett,json.serialize_public[T](view value: T) returns string
 ```
 
 **Verify/test results** (`jett test` runs all `verify` and `property` blocks):

@@ -1260,7 +1260,7 @@ The query engine powers both LSP and ASP interactive queries. It provides:
 | `file_symbols(file)` | File-local top-level declaration outline, including private symbols and function signatures | ASP |
 | `type_at(file, line, col)` | Type of the expression at a position | LSP hover, ASP |
 | `signature(function_name)` | Full function signature | ASP |
-| `complete_at(file, line, col)` | Prefix-filtered completion candidates | LSP, ASP |
+| `complete_at(file, line, col)` | Prefix-filtered completion candidates with deterministic rank, match kind, namespace, file, and signature metadata | LSP, ASP |
 | `namespaces()` | All namespaces with their public functions/types | ASP |
 | `definition_at(file, line, col)` | Go-to-definition target | LSP, ASP |
 | `references_at(file, line, col)` | Find all references to the selected symbol | ASP |
@@ -1302,7 +1302,7 @@ The Agent Server Protocol is not a persistent server — it's the `--agent` flag
 | `jett query --agent --definition-at ...` | Definition target |
 | `jett query --agent --references-at ...` | Reference locations |
 | `jett query --agent --signature ...` | Function signature |
-| `jett query --agent --complete-at ...` | Completions |
+| `jett query --agent --complete-at ...` | Ranked completions |
 | `jett query --agent --namespaces` | Namespace registry |
 | `jett run --agent --profile` | Profiling bottleneck summary |
 | `jett bundle --output lib.jett` | Bundle all project files into a single distributable `.jett` file |

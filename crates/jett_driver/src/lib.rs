@@ -143,7 +143,21 @@ pub struct ReferencesAtQueryResult {
 pub struct CompletionQueryEntry {
     pub name: String,
     pub kind: jett_resolve::scope::DefKind,
+    pub namespace: Option<String>,
+    pub visibility: jett_resolve::scope::DefVisibility,
+    pub file_path: String,
+    pub match_kind: CompletionMatchKind,
+    pub rank: u32,
     pub signature: Option<String>,
+}
+
+/// How a completion candidate matched the cursor prefix.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum CompletionMatchKind {
+    EmptyPrefix,
+    Exact,
+    QualifiedPrefix,
+    LeafPrefix,
 }
 
 /// Result of `jett query --agent --complete-at file:line:column`.
@@ -636,16 +650,24 @@ pub fn query_completions_at(
 
     let mut candidates: Vec<CompletionQueryEntry> = definitions
         .into_iter()
-        .filter(|definition| completion_matches_prefix(&definition.name, &prefix))
-        .map(|definition| CompletionQueryEntry {
-            signature: signatures.get(&definition.name).cloned(),
-            name: definition.name,
-            kind: definition.kind,
+        .filter_map(|definition| {
+            let match_kind = completion_match_kind(&definition.name, &prefix)?;
+            Some(CompletionQueryEntry {
+                signature: signatures.get(&definition.name).cloned(),
+                name: definition.name,
+                kind: definition.kind,
+                namespace: definition.namespace,
+                visibility: definition.visibility,
+                file_path: definition.file_path,
+                match_kind,
+                rank: completion_rank(match_kind),
+            })
         })
         .collect();
     candidates.sort_by(|left, right| {
-        left.name
-            .cmp(&right.name)
+        left.rank
+            .cmp(&right.rank)
+            .then_with(|| left.name.cmp(&right.name))
             .then_with(|| query_kind_name(left.kind).cmp(query_kind_name(right.kind)))
     });
     candidates.dedup_by(|left, right| left.name == right.name && left.kind == right.kind);
@@ -1061,19 +1083,33 @@ fn completion_prefix_at(source: &str, offset: u32) -> String {
     source[start..end].to_string()
 }
 
-fn completion_matches_prefix(name: &str, prefix: &str) -> bool {
+fn completion_match_kind(name: &str, prefix: &str) -> Option<CompletionMatchKind> {
     if prefix.is_empty() {
-        return true;
-    }
-    if name.starts_with(prefix) {
-        return true;
-    }
-    if prefix.contains('.') {
-        return false;
+        return Some(CompletionMatchKind::EmptyPrefix);
     }
 
     let leaf = name.rsplit_once('.').map_or(name, |(_, leaf)| leaf);
+    if name == prefix || leaf == prefix {
+        return Some(CompletionMatchKind::Exact);
+    }
+    if name.starts_with(prefix) {
+        return Some(CompletionMatchKind::QualifiedPrefix);
+    }
+    if prefix.contains('.') {
+        return None;
+    }
+
     leaf.starts_with(prefix)
+        .then_some(CompletionMatchKind::LeafPrefix)
+}
+
+fn completion_rank(match_kind: CompletionMatchKind) -> u32 {
+    match match_kind {
+        CompletionMatchKind::Exact => 0,
+        CompletionMatchKind::QualifiedPrefix => 10,
+        CompletionMatchKind::LeafPrefix => 20,
+        CompletionMatchKind::EmptyPrefix => 100,
+    }
 }
 
 /// Return the public namespace and definition registry available from `start_dir`.
@@ -1671,6 +1707,16 @@ pub fn query_visibility_name(visibility: jett_resolve::scope::DefVisibility) -> 
     match visibility {
         DefVisibility::Public => "public",
         DefVisibility::Private => "private",
+    }
+}
+
+/// Stable text label for a completion prefix match kind.
+pub fn completion_match_kind_name(match_kind: CompletionMatchKind) -> &'static str {
+    match match_kind {
+        CompletionMatchKind::EmptyPrefix => "empty_prefix",
+        CompletionMatchKind::Exact => "exact",
+        CompletionMatchKind::QualifiedPrefix => "qualified_prefix",
+        CompletionMatchKind::LeafPrefix => "leaf_prefix",
     }
 }
 
@@ -2748,14 +2794,25 @@ mod tests {
         fs::remove_dir_all(&root).expect("temp query dir should be removed");
 
         assert_eq!(result.prefix, "");
-        assert!(
-            result
-                .candidates
-                .iter()
-                .any(|candidate| candidate.name == "util.helper"
-                    && query_kind_name(candidate.kind) == "function"),
-            "expected completion query to include exported project helper"
+        let helper = result
+            .candidates
+            .iter()
+            .find(|candidate| {
+                candidate.name == "util.helper" && query_kind_name(candidate.kind) == "function"
+            })
+            .expect("expected completion query to include exported project helper");
+        assert_eq!(helper.namespace.as_deref(), Some("util"));
+        assert_eq!(
+            helper.visibility,
+            jett_resolve::scope::DefVisibility::Public
         );
+        assert!(
+            helper.file_path.ends_with("util.jett"),
+            "expected helper source file, got {}",
+            helper.file_path
+        );
+        assert_eq!(helper.match_kind, CompletionMatchKind::EmptyPrefix);
+        assert_eq!(helper.rank, 100);
     }
 
     #[test]
@@ -2794,6 +2851,13 @@ mod tests {
             "expected util.helper for prefix `ut`, got {:?}",
             result.candidates
         );
+        let util_helper = result
+            .candidates
+            .iter()
+            .find(|candidate| candidate.name == "util.helper")
+            .expect("expected util.helper candidate");
+        assert_eq!(util_helper.match_kind, CompletionMatchKind::QualifiedPrefix);
+        assert_eq!(util_helper.rank, 10);
         assert!(
             result
                 .candidates
@@ -2806,6 +2870,38 @@ mod tests {
             "expected all candidates to match prefix `ut`, got {:?}",
             result.candidates
         );
+    }
+
+    #[test]
+    fn query_completions_at_ranks_leaf_prefix_matches() {
+        let root = temp_test_dir("jett_driver_query_completions_leaf_prefix");
+        fs::create_dir_all(&root).expect("temp query dir should be created");
+        fs::write(root.join("jett.proj"), "name: query_fixture\n")
+            .expect("project marker should be written");
+        fs::write(
+            root.join("util.jett"),
+            "namespace util\n\nexport function helper(n: int64) returns int64:\n    return n\n",
+        )
+        .expect("support fixture should be written");
+        let file = root.join("main.jett");
+        fs::write(
+            &file,
+            "namespace app\n\nfunction main() returns int64:\n    int64 value = hel\n    return value\n",
+        )
+        .expect("main fixture should be written");
+
+        let result = query_completions_at(&file, 4, 22).expect("completion query should succeed");
+
+        fs::remove_dir_all(&root).expect("temp query dir should be removed");
+
+        assert_eq!(result.prefix, "hel");
+        let helper = result
+            .candidates
+            .iter()
+            .find(|candidate| candidate.name == "util.helper")
+            .expect("expected util.helper candidate");
+        assert_eq!(helper.match_kind, CompletionMatchKind::LeafPrefix);
+        assert_eq!(helper.rank, 20);
     }
 
     #[test]

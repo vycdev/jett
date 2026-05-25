@@ -854,14 +854,19 @@ fn render_query_completions_agent_output(result: &jett_driver::CompletionsQueryR
     out.push_str(&format!("prefix: {}\n", escape_toon_scalar(&result.prefix)));
     out.push_str(&format!("total: {}\n", result.candidates.len()));
     out.push_str(&format!(
-        "completions[{}]{{name,kind,signature}}:\n",
+        "completions[{}]{{rank,match,name,kind,namespace,visibility,file,signature}}:\n",
         result.candidates.len()
     ));
     for candidate in &result.candidates {
         out.push_str(&format!(
-            "  {},{},{}\n",
+            "  {},{},{},{},{},{},{},{}\n",
+            candidate.rank,
+            jett_driver::completion_match_kind_name(candidate.match_kind),
             escape_toon_scalar(&candidate.name),
             jett_driver::query_kind_name(candidate.kind),
+            escape_toon_scalar(candidate.namespace.as_deref().unwrap_or("")),
+            jett_driver::query_visibility_name(candidate.visibility),
+            escape_toon_scalar(&candidate.file_path),
             escape_toon_scalar(candidate.signature.as_deref().unwrap_or(""))
         ));
     }
@@ -1422,6 +1427,11 @@ mod tests {
             candidates: vec![jett_driver::CompletionQueryEntry {
                 name: "json.parse".to_string(),
                 kind: jett_resolve::scope::DefKind::Function,
+                namespace: Some("json".to_string()),
+                visibility: jett_resolve::scope::DefVisibility::Public,
+                file_path: "stdlib/json/90_public_api.jett".to_string(),
+                match_kind: jett_driver::CompletionMatchKind::QualifiedPrefix,
+                rank: 10,
                 signature: Some("json.parse[T](raw: string) returns result[T, string]".to_string()),
             }],
         };
@@ -1430,7 +1440,7 @@ mod tests {
 
         assert_eq!(
             rendered,
-            "status: ok\nfile: src/main.jett\nline: 4\ncolumn: 5\nprefix: json.pa\ntotal: 1\ncompletions[1]{name,kind,signature}:\n  json.parse,function,json.parse[T](raw: string) returns result[T\\, string]\n"
+            "status: ok\nfile: src/main.jett\nline: 4\ncolumn: 5\nprefix: json.pa\ntotal: 1\ncompletions[1]{rank,match,name,kind,namespace,visibility,file,signature}:\n  10,qualified_prefix,json.parse,function,json,public,stdlib/json/90_public_api.jett,json.parse[T](raw: string) returns result[T\\, string]\n"
         );
     }
 
