@@ -126,7 +126,7 @@
 | LSP go-to-definition | Done |
 | LSP completions | Done |
 | MCP server | Not started |
-| ASP query system | Partial (`jett query --agent --namespaces`, `--symbols`, `--type-at`, `--definition-at`, `--references-at`, prefix-filtered `--complete-at`, and `--signature` are implemented; symbol, definition, and reference rows include source ranges, and completion rows include deterministic rank, match kind, namespace, source file, visibility, and source-level signatures where available) |
+| ASP query system | Partial (`jett query --agent --namespaces`, `--symbols`, `--type-at`, `--definition-at`, `--references-at`, prefix-filtered `--complete-at`, and `--signature` are implemented; type, symbol, definition, and reference rows include source ranges, and completion rows include deterministic rank, match kind, namespace, source file, visibility, and source-level signatures where available) |
 
 ### Phase I: Testing and Profiling — PARTIAL
 
@@ -199,4 +199,4 @@
 | `jett bind header.h` | Not started |
 | `jett bundle` | Not started |
 | `jett mcp` | Not started |
-| `jett query --agent --namespaces` / `--symbols file.jett` / `--type-at file:line:column` / `--definition-at file:line:column` / `--references-at file:line:column` / `--complete-at file:line:column` / `--signature name` | Partial (namespace registry, file-local symbols with declaration ranges and function signatures, type lookup, ranged definition lookup, ranged reference lookup, ranked prefix-filtered completion candidates with context metadata, and source-level function signatures) |
+| `jett query --agent --namespaces` / `--symbols file.jett` / `--type-at file:line:column` / `--definition-at file:line:column` / `--references-at file:line:column` / `--complete-at file:line:column` / `--signature name` | Partial (namespace registry, file-local symbols with declaration ranges and function signatures, ranged type lookup, ranged definition lookup, ranged reference lookup, ranked prefix-filtered completion candidates with context metadata, and source-level function signatures) |

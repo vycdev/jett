@@ -99,6 +99,10 @@ pub struct TypeAtQueryResult {
     pub line: u32,
     pub column: u32,
     pub type_name: Option<String>,
+    pub span_line: Option<u32>,
+    pub span_column: Option<u32>,
+    pub span_end_line: Option<u32>,
+    pub span_end_column: Option<u32>,
 }
 
 /// The resolved declaration target for a definition-at query.
@@ -381,21 +385,40 @@ pub fn query_type_at(path: &Path, line: u32, column: u32) -> Result<TypeAtQueryR
         return Err(format!("type errors:\n{}", type_errors.join("\n")));
     }
 
-    let mut best: Option<(u32, jett_types::TypeId)> = None;
+    let mut best: Option<(u32, Span, jett_types::TypeId)> = None;
     for (span, ty_id) in &check_result.type_map {
         if span.file == file_id && span.start <= offset && offset <= span.end {
             let len = span.end - span.start;
             if best.is_none() || len < best.unwrap().0 {
-                best = Some((len, *ty_id));
+                best = Some((len, *span, *ty_id));
             }
         }
     }
+    let (type_name, span_line, span_column, span_end_line, span_end_column) =
+        if let Some((_, span, ty_id)) = best {
+            let (span_line, span_column) = jett_diagnostics::render::line_col(&source, span.start);
+            let (span_end_line, span_end_column) =
+                jett_diagnostics::render::line_col(&source, span.end);
+            (
+                Some(check_result.interner.type_name(ty_id)),
+                Some(span_line as u32),
+                Some(span_column as u32),
+                Some(span_end_line as u32),
+                Some(span_end_column as u32),
+            )
+        } else {
+            (None, None, None, None, None)
+        };
 
     Ok(TypeAtQueryResult {
         file_path,
         line,
         column,
-        type_name: best.map(|(_, ty_id)| check_result.interner.type_name(ty_id)),
+        type_name,
+        span_line,
+        span_column,
+        span_end_line,
+        span_end_column,
     })
 }
 
@@ -2726,6 +2749,15 @@ mod tests {
         fs::remove_dir_all(&root).expect("temp query dir should be removed");
 
         assert_eq!(result.type_name, Some("int64".to_string()));
+        assert_eq!(
+            (
+                result.span_line,
+                result.span_column,
+                result.span_end_line,
+                result.span_end_column
+            ),
+            (Some(4), Some(19), Some(4), Some(20))
+        );
     }
 
     #[test]

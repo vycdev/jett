@@ -3979,6 +3979,10 @@ line: 45
 column: 12
 found: true
 type: string
+span_line: 45
+span_column: 12
+span_end_line: 45
+span_end_column: 21
 ```
 
 **Definition lookup:**

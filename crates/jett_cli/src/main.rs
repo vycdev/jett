@@ -750,6 +750,17 @@ fn render_query_type_at_agent_output(result: &jett_driver::TypeAtQueryResult) ->
         "type: {}\n",
         escape_toon_scalar(result.type_name.as_deref().unwrap_or(""))
     ));
+    if let (Some(line), Some(column), Some(end_line), Some(end_column)) = (
+        result.span_line,
+        result.span_column,
+        result.span_end_line,
+        result.span_end_column,
+    ) {
+        out.push_str(&format!("span_line: {}\n", line));
+        out.push_str(&format!("span_column: {}\n", column));
+        out.push_str(&format!("span_end_line: {}\n", end_line));
+        out.push_str(&format!("span_end_column: {}\n", end_column));
+    }
     out
 }
 
@@ -1341,13 +1352,17 @@ mod tests {
             line: 4,
             column: 19,
             type_name: Some("int64".to_string()),
+            span_line: Some(4),
+            span_column: Some(19),
+            span_end_line: Some(4),
+            span_end_column: Some(24),
         };
 
         let rendered = render_query_type_at_agent_output(&result);
 
         assert_eq!(
             rendered,
-            "status: ok\nfile: src/main.jett\nline: 4\ncolumn: 19\nfound: true\ntype: int64\n"
+            "status: ok\nfile: src/main.jett\nline: 4\ncolumn: 19\nfound: true\ntype: int64\nspan_line: 4\nspan_column: 19\nspan_end_line: 4\nspan_end_column: 24\n"
         );
     }
 
