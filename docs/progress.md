@@ -199,4 +199,4 @@
 | `jett bind header.h` | Not started |
 | `jett bundle` | Not started |
 | `jett mcp` | Not started |
-| `jett query --agent --namespaces` / `--symbols file.jett` / `--type-at file:line:column` / `--definition-at file:line:column` / `--references-at file:line:column` / `--complete-at file:line:column` / `--signature name` | Partial (namespace registry, file-local symbols, type lookup, definition lookup, reference lookup, prefix-filtered completion candidates with source signatures, and source-level function signatures) |
+| `jett query --agent --namespaces` / `--symbols file.jett` / `--type-at file:line:column` / `--definition-at file:line:column` / `--references-at file:line:column` / `--complete-at file:line:column` / `--signature name` | Partial (namespace registry, file-local symbols with function signatures, type lookup, definition lookup, reference lookup, prefix-filtered completion candidates with source signatures, and source-level function signatures) |

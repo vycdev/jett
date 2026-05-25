@@ -1257,7 +1257,7 @@ The query engine powers both LSP and ASP interactive queries. It provides:
 
 | Query | Description | Used by |
 |---|---|---|
-| `file_symbols(file)` | File-local top-level declaration outline, including private symbols | ASP |
+| `file_symbols(file)` | File-local top-level declaration outline, including private symbols and function signatures | ASP |
 | `type_at(file, line, col)` | Type of the expression at a position | LSP hover, ASP |
 | `signature(function_name)` | Full function signature | ASP |
 | `complete_at(file, line, col)` | Prefix-filtered completion candidates | LSP, ASP |

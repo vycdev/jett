@@ -78,6 +78,7 @@ pub struct FileSymbolQueryEntry {
     pub kind: String,
     pub namespace: Option<String>,
     pub visibility: jett_resolve::scope::DefVisibility,
+    pub signature: Option<String>,
     pub line: u32,
     pub column: u32,
 }
@@ -1125,7 +1126,10 @@ pub fn query_file_symbols(path: &Path) -> Result<FileSymbolsQueryResult, String>
     }
 
     let mut symbols = Vec::new();
-    append_file_symbol_query_entries(&mut symbols, &parsed.module, &source);
+    let mut file_paths = HashMap::new();
+    let display_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    file_paths.insert(FileId::new(0), display_path);
+    append_file_symbol_query_entries(&mut symbols, &parsed.module, &source, &file_paths);
     Ok(FileSymbolsQueryResult {
         file_path: path.display().to_string(),
         symbols,
@@ -1136,6 +1140,7 @@ fn append_file_symbol_query_entries(
     symbols: &mut Vec<FileSymbolQueryEntry>,
     module: &Module,
     source: &str,
+    file_paths: &HashMap<FileId, PathBuf>,
 ) {
     let mut current_namespace: Option<String> = None;
     for item in &module.items {
@@ -1148,27 +1153,50 @@ fn append_file_symbol_query_entries(
                     "namespace",
                     None,
                     jett_resolve::scope::DefVisibility::Public,
+                    None,
                     ns.name.span,
                     source,
                 );
             }
-            Item::Function(func) => push_file_symbol_query_entry(
-                symbols,
-                file_symbol_name(&func.name.name, current_namespace.as_deref()),
-                "function",
-                current_namespace.clone(),
-                file_symbol_visibility(current_namespace.as_deref(), func.exported),
-                func.name.span,
-                source,
-            ),
+            Item::Function(func) => {
+                let signature = file_symbol_function_signature(
+                    &func.name.name,
+                    &func.type_params,
+                    &func.params,
+                    func.return_type.as_ref(),
+                    current_namespace.as_deref(),
+                    func.span.file,
+                    file_paths,
+                );
+                push_file_symbol_query_entry(
+                    symbols,
+                    file_symbol_name(&func.name.name, current_namespace.as_deref()),
+                    "function",
+                    current_namespace.clone(),
+                    file_symbol_visibility(current_namespace.as_deref(), func.exported),
+                    Some(signature),
+                    func.name.span,
+                    source,
+                );
+            }
             Item::Mutual(block) => {
                 for decl in &block.declarations {
+                    let signature = file_symbol_function_signature(
+                        &decl.name.name,
+                        &decl.type_params,
+                        &decl.params,
+                        decl.return_type.as_ref(),
+                        current_namespace.as_deref(),
+                        decl.span.file,
+                        file_paths,
+                    );
                     push_file_symbol_query_entry(
                         symbols,
                         file_symbol_name(&decl.name.name, current_namespace.as_deref()),
                         "function",
                         current_namespace.clone(),
                         file_symbol_visibility(current_namespace.as_deref(), decl.exported),
+                        Some(signature),
                         decl.name.span,
                         source,
                     );
@@ -1180,6 +1208,7 @@ fn append_file_symbol_query_entries(
                 "interface",
                 current_namespace.clone(),
                 file_symbol_visibility(current_namespace.as_deref(), interface.exported),
+                None,
                 interface.name.span,
                 source,
             ),
@@ -1193,6 +1222,7 @@ fn append_file_symbol_query_entries(
                 "implement",
                 current_namespace.clone(),
                 jett_resolve::scope::DefVisibility::Private,
+                None,
                 block.interface_name.span,
                 source,
             ),
@@ -1202,6 +1232,7 @@ fn append_file_symbol_query_entries(
                 "struct",
                 current_namespace.clone(),
                 file_symbol_visibility(current_namespace.as_deref(), strukt.exported),
+                None,
                 strukt.name.span,
                 source,
             ),
@@ -1211,6 +1242,7 @@ fn append_file_symbol_query_entries(
                 "bitfield",
                 current_namespace.clone(),
                 file_symbol_visibility(current_namespace.as_deref(), bitfield.exported),
+                None,
                 bitfield.name.span,
                 source,
             ),
@@ -1220,6 +1252,7 @@ fn append_file_symbol_query_entries(
                 "enum",
                 current_namespace.clone(),
                 file_symbol_visibility(current_namespace.as_deref(), enm.exported),
+                None,
                 enm.name.span,
                 source,
             ),
@@ -1229,6 +1262,7 @@ fn append_file_symbol_query_entries(
                 "machine",
                 current_namespace.clone(),
                 file_symbol_visibility(current_namespace.as_deref(), machine.exported),
+                None,
                 machine.name.span,
                 source,
             ),
@@ -1238,6 +1272,7 @@ fn append_file_symbol_query_entries(
                 "actor",
                 current_namespace.clone(),
                 file_symbol_visibility(current_namespace.as_deref(), actor.exported),
+                None,
                 actor.name.span,
                 source,
             ),
@@ -1247,6 +1282,7 @@ fn append_file_symbol_query_entries(
                 "variable",
                 current_namespace.clone(),
                 jett_resolve::scope::DefVisibility::Private,
+                None,
                 decl.name.span,
                 source,
             ),
@@ -1256,6 +1292,7 @@ fn append_file_symbol_query_entries(
                 "verify",
                 current_namespace.clone(),
                 jett_resolve::scope::DefVisibility::Private,
+                None,
                 verify.name.span,
                 source,
             ),
@@ -1265,6 +1302,7 @@ fn append_file_symbol_query_entries(
                 "property",
                 current_namespace.clone(),
                 jett_resolve::scope::DefVisibility::Private,
+                None,
                 prop.name.span,
                 source,
             ),
@@ -1277,6 +1315,7 @@ fn append_file_symbol_query_entries(
                     current_namespace.as_deref(),
                     alias.exported || alias.root_exported,
                 ),
+                None,
                 alias.name.span,
                 source,
             ),
@@ -1290,6 +1329,7 @@ fn push_file_symbol_query_entry(
     kind: &str,
     namespace: Option<String>,
     visibility: jett_resolve::scope::DefVisibility,
+    signature: Option<String>,
     span: Span,
     source: &str,
 ) {
@@ -1299,6 +1339,7 @@ fn push_file_symbol_query_entry(
         kind: kind.to_string(),
         namespace,
         visibility,
+        signature,
         line: line as u32,
         column: column as u32,
     });
@@ -1319,6 +1360,27 @@ fn file_symbol_visibility(
     } else {
         jett_resolve::scope::DefVisibility::Private
     }
+}
+
+fn file_symbol_function_signature(
+    leaf_name: &str,
+    type_params: &[jett_parser::ast::Ident],
+    params: &[Param],
+    return_type: Option<&TypeExpr>,
+    namespace: Option<&str>,
+    file: FileId,
+    file_paths: &HashMap<FileId, PathBuf>,
+) -> String {
+    let signature = signature_query_result(
+        leaf_name,
+        type_params,
+        params,
+        return_type,
+        namespace,
+        file,
+        file_paths,
+    );
+    signature_display(&signature)
 }
 
 fn query_builtin_definitions() -> Vec<QueryDefinition> {
@@ -2551,6 +2613,7 @@ mod tests {
                 symbol.name == "api.hidden"
                     && symbol.kind == "function"
                     && symbol.visibility == jett_resolve::scope::DefVisibility::Private
+                    && symbol.signature.as_deref() == Some("api.hidden() returns int64")
             }),
             "expected private function in file symbols, got {:?}",
             result.symbols
