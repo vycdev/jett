@@ -1262,7 +1262,7 @@ The query engine powers both LSP and ASP interactive queries. It provides:
 | `complete_at(file, line, col)` | Completion candidates | LSP, ASP |
 | `namespaces()` | All namespaces with their public functions/types | ASP |
 | `definition_at(file, line, col)` | Go-to-definition target | LSP, ASP |
-| `references(name)` | Find all references | LSP |
+| `references_at(file, line, col)` | Find all references to the selected symbol | ASP |
 | `diagnostics(file)` | All errors/warnings for a file | LSP |
 
 ### Demand-Driven Computation
@@ -1280,10 +1280,9 @@ Standard LSP implementation using the `tower-lsp` crate. Provides:
 - Real-time diagnostics (errors/warnings as you type).
 - Hover information (type at cursor).
 - Go-to-definition.
-- Find all references.
 - Code completion.
-- Rename symbol.
-- Code formatting (via `jett_fmt`).
+- Planned follow-ups: find all references, rename symbol, and code formatting
+  (via `jett_fmt`).
 
 The LSP server wraps the query engine and reacts to `textDocument/didChange` events by incrementally recomputing affected queries.
 
@@ -1299,6 +1298,7 @@ The Agent Server Protocol is not a persistent server — it's the `--agent` flag
 | `jett test --agent` | Verify + property test results |
 | `jett query --agent --type-at ...` | Type information |
 | `jett query --agent --definition-at ...` | Definition target |
+| `jett query --agent --references-at ...` | Reference locations |
 | `jett query --agent --signature ...` | Function signature |
 | `jett query --agent --complete-at ...` | Completions |
 | `jett query --agent --namespaces` | Namespace registry |

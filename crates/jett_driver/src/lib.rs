@@ -101,6 +101,24 @@ pub struct DefinitionAtQueryResult {
     pub target: Option<DefinitionQueryTarget>,
 }
 
+/// A single use site returned by a references-at query.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReferenceQueryEntry {
+    pub file_path: String,
+    pub line: u32,
+    pub column: u32,
+}
+
+/// Result of `jett query --agent --references-at file:line:column`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReferencesAtQueryResult {
+    pub file_path: String,
+    pub line: u32,
+    pub column: u32,
+    pub target: Option<DefinitionQueryTarget>,
+    pub references: Vec<ReferenceQueryEntry>,
+}
+
 /// A single completion candidate visible at a source position.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompletionQueryEntry {
@@ -401,7 +419,7 @@ pub fn query_definition_at(
 
     let target = best_def.and_then(|(_, def_id)| {
         let def = resolve_result.scope_table.def(def_id);
-        let (file_path, line, column) = definition_location(&source, def.span, &file_paths)?;
+        let (file_path, line, column) = span_location(&source, def.span, &file_paths)?;
         Some(DefinitionQueryTarget {
             name: def.name.clone(),
             kind: def.kind,
@@ -418,6 +436,106 @@ pub fn query_definition_at(
         line,
         column,
         target,
+    })
+}
+
+/// Return all resolver-visible references to the symbol at a source position.
+///
+/// This uses the same resolver map as definition-at and returns use sites only;
+/// the declaration itself is reported separately as `target`.
+pub fn query_references_at(
+    path: &Path,
+    line: u32,
+    column: u32,
+) -> Result<ReferencesAtQueryResult, String> {
+    let source = fs::read_to_string(path)
+        .map_err(|e| format!("failed to read {}: {}", path.display(), e))?;
+    let file_path = path.display().to_string();
+    let file_id = FileId::new(0);
+    let Some(offset) = line_col_to_offset(&source, line, column) else {
+        return Err(format!(
+            "position {line}:{column} is outside {}",
+            path.display()
+        ));
+    };
+
+    let mut parse_result = parse(&source, file_id);
+    let parse_errors = error_messages_from_diagnostics(&parse_result.errors);
+    if !parse_errors.is_empty() {
+        return Err(format!("parse errors:\n{}", parse_errors.join("\n")));
+    }
+
+    let mut support_modules = discover_stdlib_modules_with_diagnostics();
+    support_modules.extend(discover_project_modules_with_diagnostics(path));
+    let support_errors = error_messages_from_diagnostics(&support_modules.diagnostics);
+    if !support_errors.is_empty() {
+        return Err(format!(
+            "support parse errors:\n{}",
+            support_errors.join("\n")
+        ));
+    }
+
+    let mut file_paths = support_modules.files.clone();
+    let display_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    file_paths.insert(file_id, display_path);
+
+    prepend_support_modules(&mut parse_result.module, support_modules.modules);
+
+    let resolve_result = resolve(&parse_result.module);
+    let resolve_errors = error_messages_from_diagnostics(&resolve_result.diagnostics);
+    if !resolve_errors.is_empty() {
+        return Err(format!("resolution errors:\n{}", resolve_errors.join("\n")));
+    }
+
+    let Some((_, target_def_id)) = best_resolved_definition_at(&resolve_result, file_id, offset)
+    else {
+        return Ok(ReferencesAtQueryResult {
+            file_path,
+            line,
+            column,
+            target: None,
+            references: Vec::new(),
+        });
+    };
+
+    let def = resolve_result.scope_table.def(target_def_id);
+    let target = span_location(&source, def.span, &file_paths).map(|(file_path, line, column)| {
+        DefinitionQueryTarget {
+            name: def.name.clone(),
+            kind: def.kind,
+            namespace: def.namespace.clone(),
+            visibility: def.visibility,
+            file_path,
+            line,
+            column,
+        }
+    });
+
+    let mut references = Vec::new();
+    for (span, def_id) in &resolve_result.resolutions {
+        if *def_id == target_def_id
+            && let Some((file_path, line, column)) = span_location(&source, *span, &file_paths)
+        {
+            references.push(ReferenceQueryEntry {
+                file_path,
+                line,
+                column,
+            });
+        }
+    }
+    references.sort_by(|left, right| {
+        left.file_path
+            .cmp(&right.file_path)
+            .then_with(|| left.line.cmp(&right.line))
+            .then_with(|| left.column.cmp(&right.column))
+    });
+
+    Ok(ReferencesAtQueryResult {
+        file_path,
+        line,
+        column,
+        target,
+        references,
     })
 }
 
@@ -1156,7 +1274,24 @@ fn display_query_path(path: &Path) -> String {
         .to_string()
 }
 
-fn definition_location(
+fn best_resolved_definition_at(
+    resolve_result: &jett_resolve::ResolveResult,
+    file_id: FileId,
+    offset: u32,
+) -> Option<(u32, jett_resolve::scope::DefId)> {
+    let mut best_def: Option<(u32, jett_resolve::scope::DefId)> = None;
+    for (span, def_id) in &resolve_result.resolutions {
+        if span.file == file_id && span.start <= offset && offset <= span.end {
+            let len = span.end - span.start;
+            if best_def.is_none() || len < best_def.unwrap().0 {
+                best_def = Some((len, *def_id));
+            }
+        }
+    }
+    best_def
+}
+
+fn span_location(
     current_source: &str,
     span: Span,
     file_paths: &HashMap<FileId, PathBuf>,
@@ -2169,6 +2304,50 @@ mod tests {
             target.file_path
         );
         assert_eq!(target.line, 3);
+    }
+
+    #[test]
+    fn query_references_at_returns_cross_file_use_sites() {
+        let root = temp_test_dir("jett_driver_query_references_at");
+        fs::create_dir_all(&root).expect("temp query dir should be created");
+        fs::write(root.join("jett.proj"), "name: query_fixture\n")
+            .expect("project marker should be written");
+        fs::write(
+            root.join("util.jett"),
+            "namespace util\n\nexport function helper(n: int64) returns int64:\n    return n\n",
+        )
+        .expect("support fixture should be written");
+        let file = root.join("main.jett");
+        fs::write(
+            &file,
+            "namespace app\n\nfunction main() returns int64:\n    int64 a = util.helper(1)\n    int64 b = util.helper(2)\n    return a + b\n",
+        )
+        .expect("main fixture should be written");
+
+        let result = query_references_at(&file, 4, 15).expect("references query should succeed");
+
+        fs::remove_dir_all(&root).expect("temp query dir should be removed");
+
+        let target = result.target.expect("reference target should be found");
+        assert_eq!(target.name, "util.helper");
+        assert_eq!(query_kind_name(target.kind), "function");
+        assert_eq!(result.references.len(), 2);
+        assert!(
+            result
+                .references
+                .iter()
+                .any(|reference| reference.line == 4 && reference.column == 15),
+            "expected first call site in references, got {:?}",
+            result.references
+        );
+        assert!(
+            result
+                .references
+                .iter()
+                .any(|reference| reference.line == 5 && reference.column == 15),
+            "expected second call site in references, got {:?}",
+            result.references
+        );
     }
 
     #[test]

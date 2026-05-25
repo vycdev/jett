@@ -82,6 +82,10 @@ enum Command {
         #[arg(long = "definition-at")]
         definition_at: Option<String>,
 
+        /// Return references to the symbol at file:line:column
+        #[arg(long = "references-at")]
+        references_at: Option<String>,
+
         /// Return completions at file:line:column
         #[arg(long = "complete-at")]
         complete_at: Option<String>,
@@ -273,12 +277,14 @@ fn main() {
             namespaces,
             type_at,
             definition_at,
+            references_at,
             complete_at,
             signature,
         } => {
             let query_count = usize::from(namespaces)
                 + usize::from(type_at.is_some())
                 + usize::from(definition_at.is_some())
+                + usize::from(references_at.is_some())
                 + usize::from(complete_at.is_some())
                 + usize::from(signature.is_some());
             if query_count != 1 {
@@ -371,6 +377,41 @@ fn main() {
                             print!("{}", render_query_definition_at_agent_output(&result));
                         } else {
                             print_query_definition_at_human(&result);
+                        }
+                    }
+                    Err(e) => {
+                        if agent {
+                            print!("{}", render_query_agent_error(&e));
+                        } else {
+                            eprintln!("error: {e}");
+                        }
+                        process::exit(1);
+                    }
+                }
+            }
+
+            if let Some(position) = references_at {
+                let position = match parse_source_position(&position) {
+                    Ok(position) => position,
+                    Err(e) => {
+                        if agent {
+                            print!("{}", render_query_agent_error(&e));
+                        } else {
+                            eprintln!("error: {e}");
+                        }
+                        process::exit(1);
+                    }
+                };
+                match jett_driver::query_references_at(
+                    Path::new(&position.file),
+                    position.line,
+                    position.column,
+                ) {
+                    Ok(result) => {
+                        if agent {
+                            print!("{}", render_query_references_at_agent_output(&result));
+                        } else {
+                            print_query_references_at_human(&result);
                         }
                     }
                     Err(e) => {
@@ -681,6 +722,52 @@ fn render_query_definition_at_agent_output(
         return out;
     };
 
+    append_query_definition_target_agent_output(&mut out, target);
+    out
+}
+
+fn render_query_references_at_agent_output(
+    result: &jett_driver::ReferencesAtQueryResult,
+) -> String {
+    let mut out = String::new();
+    out.push_str("status: ok\n");
+    out.push_str(&format!(
+        "file: {}\n",
+        escape_toon_scalar(&result.file_path)
+    ));
+    out.push_str(&format!("line: {}\n", result.line));
+    out.push_str(&format!("column: {}\n", result.column));
+    out.push_str(&format!(
+        "found: {}\n",
+        if result.target.is_some() {
+            "true"
+        } else {
+            "false"
+        }
+    ));
+    if let Some(target) = &result.target {
+        append_query_definition_target_agent_output(&mut out, target);
+    }
+    out.push_str(&format!("total: {}\n", result.references.len()));
+    out.push_str(&format!(
+        "references[{}]{{file,line,column}}:\n",
+        result.references.len()
+    ));
+    for reference in &result.references {
+        out.push_str(&format!(
+            "  {},{},{}\n",
+            escape_toon_scalar(&reference.file_path),
+            reference.line,
+            reference.column
+        ));
+    }
+    out
+}
+
+fn append_query_definition_target_agent_output(
+    out: &mut String,
+    target: &jett_driver::DefinitionQueryTarget,
+) {
     out.push_str(&format!("target: {}\n", escape_toon_scalar(&target.name)));
     out.push_str(&format!(
         "kind: {}\n",
@@ -700,7 +787,6 @@ fn render_query_definition_at_agent_output(
     ));
     out.push_str(&format!("target_line: {}\n", target.line));
     out.push_str(&format!("target_column: {}\n", target.column));
-    out
 }
 
 fn render_query_completions_agent_output(result: &jett_driver::CompletionsQueryResult) -> String {
@@ -860,6 +946,29 @@ fn print_query_definition_at_human(result: &jett_driver::DefinitionAtQueryResult
             "no definition found at {}:{}:{}",
             result.file_path, result.line, result.column
         ),
+    }
+}
+
+fn print_query_references_at_human(result: &jett_driver::ReferencesAtQueryResult) {
+    let Some(target) = &result.target else {
+        println!(
+            "no references found at {}:{}:{}",
+            result.file_path, result.line, result.column
+        );
+        return;
+    };
+
+    println!(
+        "{}\t{}\t{} reference(s)",
+        jett_driver::query_kind_name(target.kind),
+        target.name,
+        result.references.len()
+    );
+    for reference in &result.references {
+        println!(
+            "{}:{}:{}",
+            reference.file_path, reference.line, reference.column
+        );
     }
 }
 
@@ -1171,6 +1280,43 @@ mod tests {
         assert_eq!(
             rendered,
             "status: ok\nfile: src/main.jett\nline: 6\ncolumn: 12\nfound: true\ntarget: models.User\nkind: struct\nnamespace: models\nvisibility: public\ntarget_file: src/models.jett\ntarget_line: 3\ntarget_column: 15\n"
+        );
+    }
+
+    #[test]
+    fn query_references_at_agent_output_lists_references() {
+        let result = jett_driver::ReferencesAtQueryResult {
+            file_path: "src/main.jett".to_string(),
+            line: 6,
+            column: 12,
+            target: Some(jett_driver::DefinitionQueryTarget {
+                name: "mathlib.double".to_string(),
+                kind: jett_resolve::scope::DefKind::Function,
+                namespace: Some("mathlib".to_string()),
+                visibility: jett_resolve::scope::DefVisibility::Public,
+                file_path: "src/mathlib.jett".to_string(),
+                line: 3,
+                column: 17,
+            }),
+            references: vec![
+                jett_driver::ReferenceQueryEntry {
+                    file_path: "src/main.jett".to_string(),
+                    line: 6,
+                    column: 12,
+                },
+                jett_driver::ReferenceQueryEntry {
+                    file_path: "src/other.jett".to_string(),
+                    line: 9,
+                    column: 20,
+                },
+            ],
+        };
+
+        let rendered = render_query_references_at_agent_output(&result);
+
+        assert_eq!(
+            rendered,
+            "status: ok\nfile: src/main.jett\nline: 6\ncolumn: 12\nfound: true\ntarget: mathlib.double\nkind: function\nnamespace: mathlib\nvisibility: public\ntarget_file: src/mathlib.jett\ntarget_line: 3\ntarget_column: 17\ntotal: 2\nreferences[2]{file,line,column}:\n  src/main.jett,6,12\n  src/other.jett,9,20\n"
         );
     }
 

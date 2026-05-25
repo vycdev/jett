@@ -120,13 +120,13 @@
 
 | Component | Status |
 |---|---|
-| TOON output (`--agent` flag) | Partial (build diagnostics, format status, run stdout/debug output, verify/property test summaries, and namespace/type-at/definition-at/completion/signature query results are structured) |
+| TOON output (`--agent` flag) | Partial (build diagnostics, format status, run stdout/debug output, verify/property test summaries, and namespace/type-at/definition-at/references-at/completion/signature query results are structured) |
 | LSP server (diagnostics on save) | Done |
 | LSP hover (type at cursor) | Done |
 | LSP go-to-definition | Done |
 | LSP completions | Done |
 | MCP server | Not started |
-| ASP query system (type-at, signature, completions) | Partial (`jett query --agent --namespaces`, `--type-at`, `--definition-at`, `--complete-at`, and `--signature` are implemented; function completion rows include source-level signatures where available, while richer context/ranking metadata remains open) |
+| ASP query system | Partial (`jett query --agent --namespaces`, `--type-at`, `--definition-at`, `--references-at`, `--complete-at`, and `--signature` are implemented; function completion rows include source-level signatures where available, while richer context/ranking metadata remains open) |
 
 ### Phase I: Testing and Profiling — PARTIAL
 
@@ -199,4 +199,4 @@
 | `jett bind header.h` | Not started |
 | `jett bundle` | Not started |
 | `jett mcp` | Not started |
-| `jett query --agent --namespaces` / `--type-at file:line:column` / `--definition-at file:line:column` / `--complete-at file:line:column` / `--signature name` | Partial (namespace registry, type lookup, definition lookup, completion candidates with source signatures, and source-level function signatures) |
+| `jett query --agent --namespaces` / `--type-at file:line:column` / `--definition-at file:line:column` / `--references-at file:line:column` / `--complete-at file:line:column` / `--signature name` | Partial (namespace registry, type lookup, definition lookup, reference lookup, completion candidates with source signatures, and source-level function signatures) |
