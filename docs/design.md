@@ -4038,6 +4038,7 @@ status: ok
 file: src/server.jett
 line: 30
 column: 15
+prefix: json.ser
 total: 3
 completions[3]{name,kind,signature}:
   json.serialize_public,function,json.serialize_public[T](view value: T) returns string

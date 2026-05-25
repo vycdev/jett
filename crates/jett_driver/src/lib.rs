@@ -133,6 +133,7 @@ pub struct CompletionsQueryResult {
     pub file_path: String,
     pub line: u32,
     pub column: u32,
+    pub prefix: String,
     pub candidates: Vec<CompletionQueryEntry>,
 }
 
@@ -574,12 +575,13 @@ pub fn query_completions_at(
         .map_err(|e| format!("failed to read {}: {}", path.display(), e))?;
     let file_path = path.display().to_string();
     let file_id = FileId::new(0);
-    if line_col_to_offset(&source, line, column).is_none() {
+    let Some(offset) = line_col_to_offset(&source, line, column) else {
         return Err(format!(
             "position {line}:{column} is outside {}",
             path.display()
         ));
-    }
+    };
+    let prefix = completion_prefix_at(&source, offset);
 
     let parsed = parse(&source, file_id);
     let parse_errors = error_messages_from_diagnostics(&parsed.errors);
@@ -615,6 +617,7 @@ pub fn query_completions_at(
 
     let mut candidates: Vec<CompletionQueryEntry> = definitions
         .into_iter()
+        .filter(|definition| completion_matches_prefix(&definition.name, &prefix))
         .map(|definition| CompletionQueryEntry {
             signature: signatures.get(&definition.name).cloned(),
             name: definition.name,
@@ -632,6 +635,7 @@ pub fn query_completions_at(
         file_path,
         line,
         column,
+        prefix,
         candidates,
     })
 }
@@ -1012,6 +1016,45 @@ fn completions_for_namespace_with_support(
         })
         .map(|def| (def.name.clone(), def.kind))
         .collect()
+}
+
+fn completion_prefix_at(source: &str, offset: u32) -> String {
+    let mut end = offset as usize;
+    if end > source.len() {
+        end = source.len();
+    }
+    while end > 0 && !source.is_char_boundary(end) {
+        end -= 1;
+    }
+
+    let mut start = end;
+    while start > 0 {
+        let Some(ch) = source[..start].chars().next_back() else {
+            break;
+        };
+        if ch.is_ascii_alphanumeric() || ch == '_' || ch == '.' {
+            start -= ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+
+    source[start..end].to_string()
+}
+
+fn completion_matches_prefix(name: &str, prefix: &str) -> bool {
+    if prefix.is_empty() {
+        return true;
+    }
+    if name.starts_with(prefix) {
+        return true;
+    }
+    if prefix.contains('.') {
+        return false;
+    }
+
+    let leaf = name.rsplit_once('.').map_or(name, |(_, leaf)| leaf);
+    leaf.starts_with(prefix)
 }
 
 /// Return the public namespace and definition registry available from `start_dir`.
@@ -2372,6 +2415,7 @@ mod tests {
 
         fs::remove_dir_all(&root).expect("temp query dir should be removed");
 
+        assert_eq!(result.prefix, "");
         assert!(
             result
                 .candidates
@@ -2379,6 +2423,56 @@ mod tests {
                 .any(|candidate| candidate.name == "util.helper"
                     && query_kind_name(candidate.kind) == "function"),
             "expected completion query to include exported project helper"
+        );
+    }
+
+    #[test]
+    fn query_completions_at_filters_by_cursor_prefix() {
+        let root = temp_test_dir("jett_driver_query_completions_prefix");
+        fs::create_dir_all(&root).expect("temp query dir should be created");
+        fs::write(root.join("jett.proj"), "name: query_fixture\n")
+            .expect("project marker should be written");
+        fs::write(
+            root.join("util.jett"),
+            "namespace util\n\nexport function helper(n: int64) returns int64:\n    return n\n",
+        )
+        .expect("support fixture should be written");
+        fs::write(
+            root.join("other.jett"),
+            "namespace other\n\nexport function helper(n: int64) returns int64:\n    return n\n",
+        )
+        .expect("other fixture should be written");
+        let file = root.join("main.jett");
+        fs::write(
+            &file,
+            "namespace app\n\nfunction main() returns int64:\n    int64 value = util.helper(1)\n    return value\n",
+        )
+        .expect("main fixture should be written");
+
+        let result = query_completions_at(&file, 4, 21).expect("completion query should succeed");
+
+        fs::remove_dir_all(&root).expect("temp query dir should be removed");
+
+        assert_eq!(result.prefix, "ut");
+        assert!(
+            result
+                .candidates
+                .iter()
+                .any(|candidate| candidate.name == "util.helper"),
+            "expected util.helper for prefix `ut`, got {:?}",
+            result.candidates
+        );
+        assert!(
+            result
+                .candidates
+                .iter()
+                .all(|candidate| candidate.name.starts_with("ut")
+                    || candidate
+                        .name
+                        .rsplit_once('.')
+                        .is_some_and(|(_, leaf)| leaf.starts_with("ut"))),
+            "expected all candidates to match prefix `ut`, got {:?}",
+            result.candidates
         );
     }
 

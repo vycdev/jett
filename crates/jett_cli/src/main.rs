@@ -798,6 +798,7 @@ fn render_query_completions_agent_output(result: &jett_driver::CompletionsQueryR
     ));
     out.push_str(&format!("line: {}\n", result.line));
     out.push_str(&format!("column: {}\n", result.column));
+    out.push_str(&format!("prefix: {}\n", escape_toon_scalar(&result.prefix)));
     out.push_str(&format!("total: {}\n", result.candidates.len()));
     out.push_str(&format!(
         "completions[{}]{{name,kind,signature}}:\n",
@@ -1326,6 +1327,7 @@ mod tests {
             file_path: "src/main.jett".to_string(),
             line: 4,
             column: 5,
+            prefix: "json.pa".to_string(),
             candidates: vec![jett_driver::CompletionQueryEntry {
                 name: "json.parse".to_string(),
                 kind: jett_resolve::scope::DefKind::Function,
@@ -1337,7 +1339,7 @@ mod tests {
 
         assert_eq!(
             rendered,
-            "status: ok\nfile: src/main.jett\nline: 4\ncolumn: 5\ntotal: 1\ncompletions[1]{name,kind,signature}:\n  json.parse,function,json.parse[T](raw: string) returns result[T\\, string]\n"
+            "status: ok\nfile: src/main.jett\nline: 4\ncolumn: 5\nprefix: json.pa\ntotal: 1\ncompletions[1]{name,kind,signature}:\n  json.parse,function,json.parse[T](raw: string) returns result[T\\, string]\n"
         );
     }
 
