@@ -70,6 +70,25 @@ pub fn render_toon(diagnostics: &[Diagnostic], source: &str, file_path: &str) ->
         ));
     }
 
+    let label_count: usize = diagnostics.iter().map(|diag| diag.labels.len()).sum();
+    out.push_str(&format!(
+        "labels[{}]{{code,message,file,line,column}}:\n",
+        label_count
+    ));
+    for diag in diagnostics {
+        for label in &diag.labels {
+            let (line, col) = line_col(source, label.span.start);
+            out.push_str(&format!(
+                "  {},{},{},{},{}\n",
+                diag.code,
+                escape_toon_scalar(&label.message),
+                escape_toon_scalar(file_path),
+                line,
+                col
+            ));
+        }
+    }
+
     let fix_count = diagnostics
         .iter()
         .filter(|diag| diag.suggested_fix.is_some())
@@ -115,7 +134,7 @@ mod tests {
         let result = render_toon(&[], "", "test.jett");
         assert_eq!(
             result,
-            "status: ok\nfile: test.jett\ntotal: 0\nerrors: 0\nwarnings: 0\ndiagnostics[0]{code,severity,message,file,line,column}:\nsuggested_fixes[0]{code,line,column,old_text,new_text,explanation}:\n"
+            "status: ok\nfile: test.jett\ntotal: 0\nerrors: 0\nwarnings: 0\ndiagnostics[0]{code,severity,message,file,line,column}:\nlabels[0]{code,message,file,line,column}:\nsuggested_fixes[0]{code,line,column,old_text,new_text,explanation}:\n"
         );
     }
 
@@ -131,7 +150,7 @@ mod tests {
         let result = render_toon(&diags, source, "test.jett");
         assert_eq!(
             result,
-            "status: ok\nfile: test.jett\ntotal: 1\nerrors: 0\nwarnings: 1\ndiagnostics[1]{code,severity,message,file,line,column}:\n  E0100,warning,unused variable,test.jett,2,10\nsuggested_fixes[0]{code,line,column,old_text,new_text,explanation}:\n"
+            "status: ok\nfile: test.jett\ntotal: 1\nerrors: 0\nwarnings: 1\ndiagnostics[1]{code,severity,message,file,line,column}:\n  E0100,warning,unused variable,test.jett,2,10\nlabels[0]{code,message,file,line,column}:\nsuggested_fixes[0]{code,line,column,old_text,new_text,explanation}:\n"
         );
     }
 
@@ -179,6 +198,21 @@ mod tests {
         assert!(
             result.contains("E0300,2,11,a + b,a + int64.from_string(b),use explicit conversion")
         );
+    }
+
+    #[test]
+    fn toon_error_with_label() {
+        let source = "first\nsecond\n";
+        let file_id = FileId::new(0);
+        let diags = vec![
+            Diagnostic::error(201, "duplicate definition", Span::new(file_id, 6, 12))
+                .with_label(Span::new(file_id, 0, 5), "original definition"),
+        ];
+
+        let result = render_toon(&diags, source, "test.jett");
+
+        assert!(result.contains("labels[1]{code,message,file,line,column}:"));
+        assert!(result.contains("E0201,original definition,test.jett,1,1"));
     }
 
     #[test]
