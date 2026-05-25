@@ -805,15 +805,17 @@ fn render_query_references_at_agent_output(
     }
     out.push_str(&format!("total: {}\n", result.references.len()));
     out.push_str(&format!(
-        "references[{}]{{file,line,column}}:\n",
+        "references[{}]{{file,line,column,end_line,end_column}}:\n",
         result.references.len()
     ));
     for reference in &result.references {
         out.push_str(&format!(
-            "  {},{},{}\n",
+            "  {},{},{},{},{}\n",
             escape_toon_scalar(&reference.file_path),
             reference.line,
-            reference.column
+            reference.column,
+            reference.end_line,
+            reference.end_column
         ));
     }
     out
@@ -842,6 +844,8 @@ fn append_query_definition_target_agent_output(
     ));
     out.push_str(&format!("target_line: {}\n", target.line));
     out.push_str(&format!("target_column: {}\n", target.column));
+    out.push_str(&format!("target_end_line: {}\n", target.end_line));
+    out.push_str(&format!("target_end_column: {}\n", target.end_column));
 }
 
 fn render_query_completions_agent_output(result: &jett_driver::CompletionsQueryResult) -> String {
@@ -1373,6 +1377,8 @@ mod tests {
                 file_path: "src/models.jett".to_string(),
                 line: 3,
                 column: 15,
+                end_line: 3,
+                end_column: 19,
             }),
         };
 
@@ -1380,7 +1386,7 @@ mod tests {
 
         assert_eq!(
             rendered,
-            "status: ok\nfile: src/main.jett\nline: 6\ncolumn: 12\nfound: true\ntarget: models.User\nkind: struct\nnamespace: models\nvisibility: public\ntarget_file: src/models.jett\ntarget_line: 3\ntarget_column: 15\n"
+            "status: ok\nfile: src/main.jett\nline: 6\ncolumn: 12\nfound: true\ntarget: models.User\nkind: struct\nnamespace: models\nvisibility: public\ntarget_file: src/models.jett\ntarget_line: 3\ntarget_column: 15\ntarget_end_line: 3\ntarget_end_column: 19\n"
         );
     }
 
@@ -1398,17 +1404,23 @@ mod tests {
                 file_path: "src/mathlib.jett".to_string(),
                 line: 3,
                 column: 17,
+                end_line: 3,
+                end_column: 23,
             }),
             references: vec![
                 jett_driver::ReferenceQueryEntry {
                     file_path: "src/main.jett".to_string(),
                     line: 6,
                     column: 12,
+                    end_line: 6,
+                    end_column: 18,
                 },
                 jett_driver::ReferenceQueryEntry {
                     file_path: "src/other.jett".to_string(),
                     line: 9,
                     column: 20,
+                    end_line: 9,
+                    end_column: 26,
                 },
             ],
         };
@@ -1417,7 +1429,7 @@ mod tests {
 
         assert_eq!(
             rendered,
-            "status: ok\nfile: src/main.jett\nline: 6\ncolumn: 12\nfound: true\ntarget: mathlib.double\nkind: function\nnamespace: mathlib\nvisibility: public\ntarget_file: src/mathlib.jett\ntarget_line: 3\ntarget_column: 17\ntotal: 2\nreferences[2]{file,line,column}:\n  src/main.jett,6,12\n  src/other.jett,9,20\n"
+            "status: ok\nfile: src/main.jett\nline: 6\ncolumn: 12\nfound: true\ntarget: mathlib.double\nkind: function\nnamespace: mathlib\nvisibility: public\ntarget_file: src/mathlib.jett\ntarget_line: 3\ntarget_column: 17\ntarget_end_line: 3\ntarget_end_column: 23\ntotal: 2\nreferences[2]{file,line,column,end_line,end_column}:\n  src/main.jett,6,12,6,18\n  src/other.jett,9,20,9,26\n"
         );
     }
 

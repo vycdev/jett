@@ -4000,6 +4000,8 @@ visibility: public
 target_file: src/auth.jett
 target_line: 8
 target_column: 15
+target_end_line: 8
+target_end_column: 19
 ```
 
 **Reference lookup:**
@@ -4021,10 +4023,12 @@ visibility: public
 target_file: src/auth.jett
 target_line: 8
 target_column: 15
+target_end_line: 8
+target_end_column: 19
 total: 2
-references[2]{file,line,column}:
-  src/server.jett,45,12
-  src/routes.jett,19,23
+references[2]{file,line,column,end_line,end_column}:
+  src/server.jett,45,12,45,16
+  src/routes.jett,19,23,19,27
 ```
 
 **Function signature lookup:**

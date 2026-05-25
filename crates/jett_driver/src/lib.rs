@@ -111,6 +111,8 @@ pub struct DefinitionQueryTarget {
     pub file_path: String,
     pub line: u32,
     pub column: u32,
+    pub end_line: u32,
+    pub end_column: u32,
 }
 
 /// Result of `jett query --agent --definition-at file:line:column`.
@@ -128,6 +130,8 @@ pub struct ReferenceQueryEntry {
     pub file_path: String,
     pub line: u32,
     pub column: u32,
+    pub end_line: u32,
+    pub end_column: u32,
 }
 
 /// Result of `jett query --agent --references-at file:line:column`.
@@ -455,7 +459,8 @@ pub fn query_definition_at(
 
     let target = best_def.and_then(|(_, def_id)| {
         let def = resolve_result.scope_table.def(def_id);
-        let (file_path, line, column) = span_location(&source, def.span, &file_paths)?;
+        let (file_path, line, column, end_line, end_column) =
+            span_location(&source, def.span, &file_paths)?;
         Some(DefinitionQueryTarget {
             name: def.name.clone(),
             kind: def.kind,
@@ -464,6 +469,8 @@ pub fn query_definition_at(
             file_path,
             line,
             column,
+            end_line,
+            end_column,
         })
     });
 
@@ -535,8 +542,8 @@ pub fn query_references_at(
     };
 
     let def = resolve_result.scope_table.def(target_def_id);
-    let target = span_location(&source, def.span, &file_paths).map(|(file_path, line, column)| {
-        DefinitionQueryTarget {
+    let target = span_location(&source, def.span, &file_paths).map(
+        |(file_path, line, column, end_line, end_column)| DefinitionQueryTarget {
             name: def.name.clone(),
             kind: def.kind,
             namespace: def.namespace.clone(),
@@ -544,18 +551,23 @@ pub fn query_references_at(
             file_path,
             line,
             column,
-        }
-    });
+            end_line,
+            end_column,
+        },
+    );
 
     let mut references = Vec::new();
     for (span, def_id) in &resolve_result.resolutions {
         if *def_id == target_def_id
-            && let Some((file_path, line, column)) = span_location(&source, *span, &file_paths)
+            && let Some((file_path, line, column, end_line, end_column)) =
+                span_location(&source, *span, &file_paths)
         {
             references.push(ReferenceQueryEntry {
                 file_path,
                 line,
                 column,
+                end_line,
+                end_column,
             });
         }
     }
@@ -1667,9 +1679,9 @@ fn span_location(
     current_source: &str,
     span: Span,
     file_paths: &HashMap<FileId, PathBuf>,
-) -> Option<(String, u32, u32)> {
+) -> Option<(String, u32, u32, u32, u32)> {
     if span.start == 0 && span.end == 0 {
-        return Some(("builtin".to_string(), 0, 0));
+        return Some(("builtin".to_string(), 0, 0, 0, 0));
     }
 
     let source = if span.file == FileId::new(0) {
@@ -1678,10 +1690,13 @@ fn span_location(
         Cow::Owned(fs::read_to_string(file_paths.get(&span.file)?).ok()?)
     };
     let (line, column) = jett_diagnostics::render::line_col(&source, span.start);
+    let (end_line, end_column) = jett_diagnostics::render::line_col(&source, span.end);
     Some((
         query_file_path(span.file, file_paths),
         line as u32,
         column as u32,
+        end_line as u32,
+        end_column as u32,
     ))
 }
 
@@ -2745,7 +2760,15 @@ mod tests {
             "expected target file to be models.jett, got {}",
             target.file_path
         );
-        assert_eq!(target.line, 3);
+        assert_eq!(
+            (
+                target.line,
+                target.column,
+                target.end_line,
+                target.end_column
+            ),
+            (3, 15, 3, 19)
+        );
     }
 
     #[test]
@@ -2775,18 +2798,22 @@ mod tests {
         assert_eq!(query_kind_name(target.kind), "function");
         assert_eq!(result.references.len(), 2);
         assert!(
-            result
-                .references
-                .iter()
-                .any(|reference| reference.line == 4 && reference.column == 15),
+            result.references.iter().any(|reference| (
+                reference.line,
+                reference.column,
+                reference.end_line,
+                reference.end_column
+            ) == (4, 15, 4, 26)),
             "expected first call site in references, got {:?}",
             result.references
         );
         assert!(
-            result
-                .references
-                .iter()
-                .any(|reference| reference.line == 5 && reference.column == 15),
+            result.references.iter().any(|reference| (
+                reference.line,
+                reference.column,
+                reference.end_line,
+                reference.end_column
+            ) == (5, 15, 5, 26)),
             "expected second call site in references, got {:?}",
             result.references
         );

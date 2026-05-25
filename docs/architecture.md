@@ -1262,8 +1262,8 @@ The query engine powers both LSP and ASP interactive queries. It provides:
 | `signature(function_name)` | Full function signature | ASP |
 | `complete_at(file, line, col)` | Prefix-filtered completion candidates with deterministic rank, match kind, namespace, file, and signature metadata | LSP, ASP |
 | `namespaces()` | All namespaces with their public functions/types | ASP |
-| `definition_at(file, line, col)` | Go-to-definition target | LSP, ASP |
-| `references_at(file, line, col)` | Find all references to the selected symbol | ASP |
+| `definition_at(file, line, col)` | Go-to-definition target with declaration-name range | LSP, ASP |
+| `references_at(file, line, col)` | Find all references to the selected symbol with use-site ranges | ASP |
 | `diagnostics(file)` | All errors/warnings for a file | LSP |
 
 ### Demand-Driven Computation
