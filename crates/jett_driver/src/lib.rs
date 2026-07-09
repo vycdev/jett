@@ -3212,6 +3212,37 @@ mod tests {
                 .ends_with("dist/lib.jett")
         );
     }
+
+    #[test]
+    fn bundle_project_leaves_output_untouched_when_validation_fails() {
+        let root = temp_test_dir("jett_driver_bundle_validation_failure");
+        fs::create_dir_all(root.join("dist")).expect("temp bundle dist dir should be created");
+        fs::create_dir_all(root.join("src")).expect("temp bundle src dir should be created");
+        fs::write(root.join("jett.proj"), "name: bundle_fixture\n")
+            .expect("project marker should be written");
+        fs::write(
+            root.join("src").join("broken.jett"),
+            "namespace broken\n\nfunction bad() returns int64:\n    return missing\n",
+        )
+        .expect("broken bundle source should be written");
+        let output = root.join("dist").join("lib.jett");
+        fs::write(&output, "existing bundle\n").expect("existing bundle output should be written");
+
+        let error = match bundle_project(&root, &output) {
+            Ok(_) => panic!("bundle validation should fail"),
+            Err(error) => error,
+        };
+
+        let preserved =
+            fs::read_to_string(&output).expect("existing bundle output should remain readable");
+        fs::remove_dir_all(&root).expect("temp bundle dir should be removed");
+
+        assert!(
+            error.contains("candidate bundle failed validation"),
+            "expected validation failure, got {error}"
+        );
+        assert_eq!(preserved, "existing bundle\n");
+    }
 }
 
 // ---------------------------------------------------------------------------
