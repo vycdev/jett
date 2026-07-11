@@ -114,6 +114,8 @@ An untrusted registration of the same name clears that trust.
 
 ## Recommendation
 
+Tracked by [#3](https://github.com/vycdev/jett/issues/3) for the module/import/prelude design and backend-neutral trusted-origin model.
+
 Use two stages, with source visibility and compiler trust kept orthogonal:
 
 1. Keep the trusted stdlib identity for compiler-owned bridge hooks. Done for

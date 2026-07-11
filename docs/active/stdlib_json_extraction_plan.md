@@ -162,6 +162,8 @@ less lexical dependency model, not JSON-specific stdlib loading.
 
 ### 2. Public `json.*` Handoff
 
+Tracked by [#3](https://github.com/vycdev/jett/issues/3) for the module/import/prelude design and backend-neutral trusted-origin model.
+
 Generic and non-generic user functions can now be called through a qualified
 namespace name such as `helpers.wrap[T](value)` or
 `json.json_parse_reflected[T](raw)`.
