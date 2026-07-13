@@ -374,6 +374,9 @@ functions should probably use `result` while format policy is still evolving.
 
 ## Open Questions
 
+Raw JSON lookup naming and default usage guidance are tracked by
+[#5](https://github.com/vycdev/jett/issues/5).
+
 - Should `json.serialize[T]` stay a compiler-checked secret exposure boundary
   even after its implementation body moves to stdlib code?
 - Should unknown object fields be ignored, rejected, or configurable? See
