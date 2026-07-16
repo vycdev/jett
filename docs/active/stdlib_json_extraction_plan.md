@@ -162,6 +162,8 @@ less lexical dependency model, not JSON-specific stdlib loading.
 
 ### 2. Public `json.*` Handoff
 
+Tracked by [#3](https://github.com/vycdev/jett/issues/3) for the module/import/prelude design and backend-neutral trusted-origin model.
+
 Generic and non-generic user functions can now be called through a qualified
 namespace name such as `helpers.wrap[T](value)` or
 `json.json_parse_reflected[T](raw)`.
@@ -371,6 +373,9 @@ continues to prove that the chosen policy cannot fail. The internal reflected
 functions should probably use `result` while format policy is still evolving.
 
 ## Open Questions
+
+Raw JSON lookup naming and default usage guidance are tracked by
+[#5](https://github.com/vycdev/jett/issues/5).
 
 - Should `json.serialize[T]` stay a compiler-checked secret exposure boundary
   even after its implementation body moves to stdlib code?

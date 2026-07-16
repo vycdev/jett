@@ -198,3 +198,6 @@ reflection-staging coverage are in place for `JsonValue`, and the legacy
 primitive tag is retired. The remaining design work is broader prelude policy:
 whether more root aliases should ever exist and how they are documented in
 generated API references.
+
+The broader module/import/prelude policy and its trusted-stdlib boundary are
+tracked by [#3](https://github.com/vycdev/jett/issues/3).

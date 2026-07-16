@@ -118,6 +118,9 @@ Cons:
 
 ## Decision
 
+Tracked by [#5](https://github.com/vycdev/jett/issues/5) for the remaining
+long-term naming and usage-guidance decision.
+
 Option C is implemented.
 
 It fits Jett's "one obvious pattern per intent" principle better than changing
