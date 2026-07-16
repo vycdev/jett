@@ -140,6 +140,9 @@ implementation step is to keep ordinary type/function paths on canonical
 qualified symbols while future import/prelude and bootstrap compatibility work
 decide how much root shorthand should exist.
 
+The broader import/prelude and bootstrap compatibility design is tracked by
+[#3](https://github.com/vycdev/jett/issues/3).
+
 ## Suggested Next Tests
 
 - State machines: qualified construction/transition, duplicate-leaf machines,
