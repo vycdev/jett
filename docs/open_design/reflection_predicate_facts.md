@@ -59,6 +59,9 @@ the carrier they were meant to prove.
 
 ## Possible Directions
 
+Tracked by [#6](https://github.com/vycdev/jett/issues/6) for the unresolved
+predicate-fact policy and narrow static-folding candidate.
+
 1. Keep the current rule and accept some repeated primitive match arms.
 2. Add a small language-level predicate mechanism for reflection facts, for
    example a trusted stdlib predicate annotation.
