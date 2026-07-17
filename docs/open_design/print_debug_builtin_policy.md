@@ -56,6 +56,9 @@ That split should be intentional if it remains.
 
 ## Recommendation
 
+Tracked by [#8](https://github.com/vycdev/jett/issues/8) for the stable
+capability, mode, and compatibility policy.
+
 Keep the implementation conservative until the debug/release mode boundary is
 real. Do not silently make global `println` the blessed logging API.
 
