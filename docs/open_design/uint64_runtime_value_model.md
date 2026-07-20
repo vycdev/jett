@@ -29,6 +29,11 @@ enum discriminants remain signed `i64` in this stage. Unannotated 64-bit
 bitfield fields now use `uint64` values, while 1..63-bit fields keep the
 existing `int64` surface.
 
+The tree-walking interpreter also enforces the declared runtime ranges of
+`int8`, `int16`, `int32`, `uint8`, `uint16`, and `uint32`. These primitives
+continue to share `Value::Int64`, but checked expression facts and typed runtime
+boundaries reject values outside the checked primitive range.
+
 ## Why Not Fix In JSON Alone
 
 The self-hosted JSON decoder needs a runtime value of type `uint64`. The first

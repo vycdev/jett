@@ -707,7 +707,10 @@ reflection metadata and checked expression type names from the driver. It uses
 those expression facts to keep runtime value carriers aligned with typechecker
 decisions in expression-only sites, for example preserving `uint64` rather than
 falling back to a small `int64` carrier inside `list[uint64]` construction or
-primitive interface dispatch.
+primitive interface dispatch. The same normalization enforces the declared
+`int8`/`int16`/`int32` and `uint8`/`uint16`/`uint32` ranges after expressions
+and at typed assignment, parameter, and return boundaries; values outside the
+checked primitive range stop interpretation with a deterministic diagnostic.
 
 ### What Runs at Comptime
 

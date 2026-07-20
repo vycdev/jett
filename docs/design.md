@@ -6300,6 +6300,11 @@ expression is checked in a `uint64` context, including nested contexts such as
 `list[uint64]` elements, the interpreter uses the checked expression type rather
 than guessing from the literal's small numeric value. Expression-only consumers,
 such as primitive interface dispatch, therefore see the checked carrier.
+The smaller fixed-width integer primitives use the `int64` runtime carrier, but
+the interpreter validates their declared ranges after checked expressions and
+at typed assignment, parameter, and return boundaries. Arithmetic that leaves
+the range of its checked primitive type is a deterministic runtime error rather
+than a widened value.
 
 **Function types** describe the signature of a function value — its parameter types and return type. They reuse the existing `function` and `returns` keywords in type position:
 

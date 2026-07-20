@@ -849,13 +849,82 @@ impl Interpreter {
         type_name: &str,
         value: Value,
     ) -> Result<Value, String> {
-        match type_name {
+        let primitive_type_name = self.primitive_base_type_name(type_name);
+        match primitive_type_name.as_str() {
+            "int8" => Self::normalize_sized_integer(
+                &primitive_type_name,
+                value,
+                i8::MIN.into(),
+                i8::MAX.into(),
+            ),
+            "int16" => Self::normalize_sized_integer(
+                &primitive_type_name,
+                value,
+                i16::MIN.into(),
+                i16::MAX.into(),
+            ),
+            "int32" => Self::normalize_sized_integer(
+                &primitive_type_name,
+                value,
+                i32::MIN.into(),
+                i32::MAX.into(),
+            ),
+            "uint8" => {
+                Self::normalize_sized_integer(&primitive_type_name, value, 0, u8::MAX.into())
+            }
+            "uint16" => {
+                Self::normalize_sized_integer(&primitive_type_name, value, 0, u16::MAX.into())
+            }
+            "uint32" => {
+                Self::normalize_sized_integer(&primitive_type_name, value, 0, u32::MAX.into())
+            }
             "uint64" => match value {
                 Value::Int64(n) if n >= 0 => Ok(Value::Uint64(n as u64)),
                 Value::Int64(n) => Err(format!("uint64 value cannot be negative: {n}")),
                 other => Ok(other),
             },
             _ => Ok(value),
+        }
+    }
+
+    fn primitive_base_type_name(&self, type_name: &str) -> String {
+        let mut current = type_name.to_string();
+        let mut seen = HashSet::new();
+
+        while seen.insert(current.clone()) {
+            let Some(alias_name) = self.registry_name(&self.type_alias_bases, &current) else {
+                break;
+            };
+            let Some(base_ty) = self.type_alias_bases.get(&alias_name) else {
+                break;
+            };
+            let namespace =
+                Self::type_name_namespace(&alias_name).or(self.current_namespace.as_deref());
+            current = type_expr_name(&self.substitute_type_expr_in_namespace(base_ty, namespace));
+        }
+
+        current
+    }
+
+    fn normalize_sized_integer(
+        type_name: &str,
+        value: Value,
+        min: i64,
+        max: i64,
+    ) -> Result<Value, String> {
+        let value = match value {
+            Value::Int64(value) => value,
+            Value::Uint64(value) => i64::try_from(value)
+                .map_err(|_| format!("{type_name} value {value} is outside range {min}..{max}"))?,
+            other => return Ok(other),
+        };
+
+        if (min..=max).contains(&value) {
+            Ok(Value::Int64(value))
+        } else {
+            Err(format!(
+                "{type_name} value {value} is outside range {min}..{max}"
+            ))
         }
     }
 
@@ -14182,6 +14251,104 @@ mod tests {
         assert_eq!(
             err,
             "integer overflow: -9223372036854775808 % -1".to_string()
+        );
+    }
+
+    #[test]
+    fn normalize_sized_integers_accepts_declared_boundaries() {
+        let interp = Interpreter::new();
+        let cases = [
+            ("int8", i8::MIN.into(), i8::MAX.into()),
+            ("int16", i16::MIN.into(), i16::MAX.into()),
+            ("int32", i32::MIN.into(), i32::MAX.into()),
+            ("uint8", 0, u8::MAX.into()),
+            ("uint16", 0, u16::MAX.into()),
+            ("uint32", 0, u32::MAX.into()),
+        ];
+
+        for (type_name, min, max) in cases {
+            assert_eq!(
+                interp.normalize_value_for_type_name(type_name, Value::Int64(min)),
+                Ok(Value::Int64(min))
+            );
+            assert_eq!(
+                interp.normalize_value_for_type_name(type_name, Value::Int64(max)),
+                Ok(Value::Int64(max))
+            );
+        }
+    }
+
+    #[test]
+    fn normalize_sized_integers_rejects_values_outside_declared_boundaries() {
+        let interp = Interpreter::new();
+        let cases = [
+            ("int8", -129, "int8 value -129 is outside range -128..127"),
+            ("int8", 128, "int8 value 128 is outside range -128..127"),
+            (
+                "int16",
+                -32769,
+                "int16 value -32769 is outside range -32768..32767",
+            ),
+            (
+                "int16",
+                32768,
+                "int16 value 32768 is outside range -32768..32767",
+            ),
+            (
+                "int32",
+                -2147483649,
+                "int32 value -2147483649 is outside range -2147483648..2147483647",
+            ),
+            (
+                "int32",
+                2147483648,
+                "int32 value 2147483648 is outside range -2147483648..2147483647",
+            ),
+            ("uint8", -1, "uint8 value -1 is outside range 0..255"),
+            ("uint8", 256, "uint8 value 256 is outside range 0..255"),
+            ("uint16", -1, "uint16 value -1 is outside range 0..65535"),
+            (
+                "uint16",
+                65536,
+                "uint16 value 65536 is outside range 0..65535",
+            ),
+            (
+                "uint32",
+                -1,
+                "uint32 value -1 is outside range 0..4294967295",
+            ),
+            (
+                "uint32",
+                4294967296,
+                "uint32 value 4294967296 is outside range 0..4294967295",
+            ),
+        ];
+
+        for (type_name, value, expected) in cases {
+            assert_eq!(
+                interp
+                    .normalize_value_for_type_name(type_name, Value::Int64(value))
+                    .unwrap_err(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn normalize_sized_integer_aliases_uses_primitive_boundary() {
+        let mut interp = Interpreter::new();
+        interp.register_type_alias(&type_alias("Byte", "uint8", None));
+        interp.register_type_alias(&type_alias("Count", "Byte", None));
+
+        assert_eq!(
+            interp.normalize_value_for_type_name("Count", Value::Int64(255)),
+            Ok(Value::Int64(255))
+        );
+        assert_eq!(
+            interp
+                .normalize_value_for_type_name("Count", Value::Int64(256))
+                .unwrap_err(),
+            "uint8 value 256 is outside range 0..255"
         );
     }
 

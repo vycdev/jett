@@ -1,0 +1,6 @@
+function main() returns nothing:
+    int8 minimum = -128
+    int8 one = 1
+    int8 value = minimum - one
+    println(value)
+    return nothing

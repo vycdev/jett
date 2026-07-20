@@ -1,0 +1,6 @@
+function overflow(maximum: int16, one: int16) returns int16:
+    return maximum + one
+function main() returns nothing:
+    int16 value = overflow(32767, 1)
+    println(value)
+    return nothing
