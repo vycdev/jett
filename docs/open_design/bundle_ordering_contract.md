@@ -33,6 +33,9 @@ layout cannot be represented as a single file yet.
 
 ## Future Direction
 
+Tracked by [#13](https://github.com/vycdev/jett/issues/13) for dependency-aware
+whole-file ordering and structured failure diagnostics.
+
 A later bundler can perform dependency-aware ordering, but only if it preserves
 Jett's local readability constraints:
 
