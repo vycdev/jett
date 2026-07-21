@@ -3,6 +3,9 @@
 Status: implemented for interpreter/typechecker dispatch; future backend
 lowering remains open.
 
+Tracked by [#3](https://github.com/vycdev/jett/issues/3) for the
+module/import/prelude design and backend-neutral trusted-origin model.
+
 The interpreter and typechecker now treat compiler-shipped JSON stdlib hooks as
 trusted implementation details. Future native or bytecode backends need the same
 boundary, but it should not become a source-level trust feature.
