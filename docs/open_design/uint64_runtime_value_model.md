@@ -82,4 +82,6 @@ not more JSON work; it is finishing the remaining numeric surfaces:
 - extend checked expression type facts beyond the current direct interpreter
   plumbing when future bytecode/native backends need the same primitive carrier
   boundary,
-- keep overflow diagnostics precise for each fixed-width primitive.
+- keep overflow diagnostics precise for each fixed-width primitive; current
+  interpreter range enforcement is tracked by
+  [#10](https://github.com/vycdev/jett/issues/10).
