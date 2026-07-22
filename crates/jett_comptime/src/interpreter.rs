@@ -892,6 +892,14 @@ impl Interpreter {
         let mut seen = HashSet::new();
 
         while seen.insert(current.clone()) {
+            if let Some(inner) = current
+                .strip_prefix("secret[")
+                .and_then(|name| name.strip_suffix(']'))
+            {
+                current = inner.trim().to_string();
+                continue;
+            }
+
             let Some(alias_name) = self.registry_name(&self.type_alias_bases, &current) else {
                 break;
             };
@@ -900,10 +908,41 @@ impl Interpreter {
             };
             let namespace =
                 Self::type_name_namespace(&alias_name).or(self.current_namespace.as_deref());
-            current = type_expr_name(&self.substitute_type_expr_in_namespace(base_ty, namespace));
+            let base_ty = self.substitute_type_expr_in_namespace(base_ty, namespace);
+            current = Self::unwrapped_secret_type_expr_name(&base_ty);
         }
 
         current
+    }
+
+    fn unwrapped_secret_type_expr_name(ty: &TypeExpr) -> String {
+        match ty {
+            TypeExpr::Generic(name, args, _) if name.name == "secret" && args.len() == 1 => {
+                Self::unwrapped_secret_type_expr_name(&args[0])
+            }
+            TypeExpr::View(inner, _) | TypeExpr::StateQualified(inner, _, _) => {
+                Self::unwrapped_secret_type_expr_name(inner)
+            }
+            _ => type_expr_name(ty),
+        }
+    }
+
+    fn checked_sized_integer_overflow(&self, expr: &Expr, error: &str) -> Option<String> {
+        let operation = error.strip_prefix("integer overflow: ")?;
+        let type_name = self.checked_expression_types.as_ref()?.get(&expr.span())?;
+        let primitive_type_name = self.primitive_base_type_name(type_name);
+        let (min, max) = match primitive_type_name.as_str() {
+            "int8" => (i64::from(i8::MIN), i64::from(i8::MAX)),
+            "int16" => (i64::from(i16::MIN), i64::from(i16::MAX)),
+            "int32" => (i64::from(i32::MIN), i64::from(i32::MAX)),
+            "uint8" => (0, i64::from(u8::MAX)),
+            "uint16" => (0, i64::from(u16::MAX)),
+            "uint32" => (0, i64::from(u32::MAX)),
+            _ => return None,
+        };
+        Some(format!(
+            "{primitive_type_name} operation {operation} is outside range {min}..{max}"
+        ))
     }
 
     fn normalize_sized_integer(
@@ -1095,7 +1134,11 @@ impl Interpreter {
                     _ => {}
                 }
                 let right = value_or_signal!(self, rhs);
-                Ok(ExprFlow::Value(eval_binary_op(&left, *op, &right)?))
+                let value = eval_binary_op(&left, *op, &right).map_err(|error| {
+                    self.checked_sized_integer_overflow(expr, &error)
+                        .unwrap_or(error)
+                })?;
+                Ok(ExprFlow::Value(value))
             }
 
             // Unary operations
@@ -14347,6 +14390,33 @@ mod tests {
         assert_eq!(
             interp
                 .normalize_value_for_type_name("Count", Value::Int64(256))
+                .unwrap_err(),
+            "uint8 value 256 is outside range 0..255"
+        );
+    }
+
+    #[test]
+    fn normalize_secret_sized_integer_alias_uses_primitive_boundary() {
+        let mut interp = Interpreter::new();
+        let alias = TypeAlias {
+            name: ident("SecretByte"),
+            base_type: TypeExpr::Generic(ident("secret"), vec![type_named("uint8")], sp()),
+            constraint: None,
+            exported: false,
+            root_exported: false,
+            span: sp(),
+        };
+        interp.register_type_alias(&alias);
+
+        assert_eq!(
+            interp
+                .normalize_value_for_type_name("secret[uint8]", Value::Int64(256))
+                .unwrap_err(),
+            "uint8 value 256 is outside range 0..255"
+        );
+        assert_eq!(
+            interp
+                .normalize_value_for_type_name("SecretByte", Value::Int64(256))
                 .unwrap_err(),
             "uint8 value 256 is outside range 0..255"
         );

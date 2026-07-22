@@ -342,12 +342,24 @@ fn sized_integer_runtime_bounds_reject_variable_arithmetic() {
             "runtime error: uint8 value 256 is outside range 0..255",
         ),
         (
+            "secret_uint8_expression_overflow.jett",
+            "runtime error: uint8 value 256 is outside range 0..255",
+        ),
+        (
+            "secret_uint8_alias_expression_overflow.jett",
+            "runtime error: uint8 value 256 is outside range 0..255",
+        ),
+        (
             "uint16_parameter_overflow.jett",
             "runtime error: uint16 value 65536 is outside range 0..65535",
         ),
         (
             "uint32_nested_expression_overflow.jett",
             "runtime error: uint32 value 4294967296 is outside range 0..4294967295",
+        ),
+        (
+            "uint32_multiplication_overflow.jett",
+            "runtime error: uint32 operation 4294967295 * 4294967295 is outside range 0..4294967295",
         ),
     ];
 
