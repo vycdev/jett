@@ -196,11 +196,15 @@ fn prescan_namespaces(content: &str, interner: &mut SymbolInterner) -> Vec<Names
 
 /// Iterate over lines with their byte offsets.
 fn line_offsets(content: &str) -> impl Iterator<Item = (usize, &str)> {
-    let mut offset = 0;
-    content.lines().map(move |line| {
-        let start = offset;
-        offset += line.len() + 1; // +1 for newline
-        (start, line)
+    content.split_inclusive('\n').scan(0, |offset, line| {
+        let start = *offset;
+        *offset += line.len();
+        let line = if let Some(line) = line.strip_suffix('\n') {
+            line.strip_suffix('\r').unwrap_or(line)
+        } else {
+            line
+        };
+        Some((start, line))
     })
 }
 
@@ -250,6 +254,20 @@ mod tests {
         assert_eq!(ns.len(), 2);
         assert_eq!(interner.resolve(ns[0].name), "models");
         assert_eq!(interner.resolve(ns[1].name), "auth");
+    }
+
+    #[test]
+    fn prescan_namespaces_tracks_crlf_byte_offsets() {
+        let mut interner = SymbolInterner::new();
+        let content =
+            "namespace models\r\n\r\nstruct User:\r\n    name: string\r\n\r\nnamespace auth\r\n";
+        let ns = prescan_namespaces(content, &mut interner);
+        assert_eq!(ns.len(), 2);
+        assert_eq!(ns[0].byte_offset, 0);
+        assert_eq!(
+            ns[1].byte_offset as usize,
+            content.find("namespace auth").unwrap()
+        );
     }
 
     #[test]
