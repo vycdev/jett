@@ -1,0 +1,8 @@
+function accept(value: uint16) returns uint16:
+    return value
+function main() returns nothing:
+    uint16 maximum = 65535
+    uint16 one = 1
+    uint16 value = accept(maximum + one)
+    println(value)
+    return nothing

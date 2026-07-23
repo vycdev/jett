@@ -1,0 +1,4 @@
+function main() returns nothing:
+    uint32 maximum = 4294967295
+    uint32 overflow = maximum * maximum
+    return nothing

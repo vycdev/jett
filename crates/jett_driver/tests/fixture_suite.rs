@@ -165,6 +165,12 @@ fn assert_run_stdout(name: &str, expected: &str) {
     assert_eq!(output, expected, "unexpected stdout for {}", path.display());
 }
 
+fn assert_runtime_fail(name: &str, expected: &str) {
+    let path = fixture_path("runtime_fail", name);
+    let error = run_file(&path).unwrap_err();
+    assert_eq!(error, expected, "unexpected error for {}", path.display());
+}
+
 macro_rules! compile_pass_fixture {
     ($test_name:ident, $file_name:literal) => {
         #[test]
@@ -314,6 +320,52 @@ fn run_file_capture_stdout_captures_capability_writes() {
     assert_run_stdout("hello_print.jett", "Hello, Jett!42");
     assert_run_stdout("string_interpolation.jett", "Hello, World!2 + 3 = 5");
     assert_run_stdout("uint64_checked_expression_runtime_main.jett", "uint64");
+}
+
+#[test]
+fn sized_integer_runtime_bounds_reject_variable_arithmetic() {
+    let cases = [
+        (
+            "int8_expression_underflow.jett",
+            "runtime error: int8 value -129 is outside range -128..127",
+        ),
+        (
+            "int16_return_overflow.jett",
+            "runtime error: int16 value 32768 is outside range -32768..32767",
+        ),
+        (
+            "int32_assignment_underflow.jett",
+            "runtime error: int32 value -2147483649 is outside range -2147483648..2147483647",
+        ),
+        (
+            "uint8_expression_overflow.jett",
+            "runtime error: uint8 value 256 is outside range 0..255",
+        ),
+        (
+            "secret_uint8_expression_overflow.jett",
+            "runtime error: uint8 value 256 is outside range 0..255",
+        ),
+        (
+            "secret_uint8_alias_expression_overflow.jett",
+            "runtime error: uint8 value 256 is outside range 0..255",
+        ),
+        (
+            "uint16_parameter_overflow.jett",
+            "runtime error: uint16 value 65536 is outside range 0..65535",
+        ),
+        (
+            "uint32_nested_expression_overflow.jett",
+            "runtime error: uint32 value 4294967296 is outside range 0..4294967295",
+        ),
+        (
+            "uint32_multiplication_overflow.jett",
+            "runtime error: uint32 operation 4294967295 * 4294967295 is outside range 0..4294967295",
+        ),
+    ];
+
+    for (name, expected) in cases {
+        assert_runtime_fail(name, expected);
+    }
 }
 
 #[test]

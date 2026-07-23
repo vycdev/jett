@@ -1,0 +1,6 @@
+function main() returns nothing:
+    uint8 maximum = 255
+    uint8 one = 1
+    uint8 value = maximum + one
+    println(value)
+    return nothing
