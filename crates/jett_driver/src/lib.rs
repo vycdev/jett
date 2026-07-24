@@ -14,7 +14,7 @@ use jett_types::ReflectionMetadata;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
 
@@ -2609,6 +2609,63 @@ fn error_messages_from_diagnostics(diagnostics: &[Diagnostic]) -> Vec<String> {
         .collect()
 }
 
+fn normalize_path_lexically(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => match normalized.components().next_back() {
+                Some(Component::Normal(_)) => {
+                    normalized.pop();
+                }
+                Some(Component::RootDir | Component::Prefix(_)) => {}
+                _ => normalized.push(component.as_os_str()),
+            },
+            Component::Normal(_) => normalized.push(component.as_os_str()),
+        }
+    }
+    normalized
+}
+
+/// Resolve the existing portion of a path before normalizing missing suffixes.
+/// This preserves symlink identity while allowing aliases such as
+/// `missing/../output.jett` to identify an existing output.
+fn output_path_identity(path: &Path) -> PathBuf {
+    if let Ok(canonical) = path.canonicalize() {
+        return canonical;
+    }
+
+    let mut ancestor = path.to_path_buf();
+    let mut suffix = Vec::new();
+    while let Some(component) = ancestor.components().next_back() {
+        if matches!(component, Component::Prefix(_) | Component::RootDir) {
+            break;
+        }
+        suffix.push(component.as_os_str().to_os_string());
+        if !ancestor.pop() {
+            break;
+        }
+
+        let canonical_ancestor = if ancestor.as_os_str().is_empty() {
+            Path::new(".").canonicalize()
+        } else {
+            ancestor.canonicalize()
+        };
+        if let Ok(mut identity) = canonical_ancestor {
+            for component in suffix.iter().rev() {
+                identity.push(component);
+            }
+            let normalized = normalize_path_lexically(&identity);
+            return normalized.canonicalize().unwrap_or(normalized);
+        }
+    }
+
+    let normalized = normalize_path_lexically(path);
+    normalized.canonicalize().unwrap_or(normalized)
+}
+
 /// Discover all `.jett` files under a project root (walks up from `start_dir`
 /// to find `jett.proj`, then collects all `.jett` files in the project) and
 /// run verify blocks in each one.
@@ -2655,9 +2712,7 @@ pub fn bundle_project(start_dir: &Path, output: &Path) -> Result<BundleResult, S
     } else {
         project_dir.join(output)
     };
-    let output_identity = output_abs
-        .canonicalize()
-        .unwrap_or_else(|_| output_abs.clone());
+    let output_identity = output_path_identity(&output_abs);
 
     let mut files = Vec::new();
     collect_jett_files(&project_dir, &mut files)
@@ -3250,8 +3305,7 @@ mod tests {
     #[test]
     fn bundle_project_excludes_aliased_existing_output() {
         let root = temp_test_dir("jett_driver_bundle_output_alias");
-        fs::create_dir_all(root.join("dist").join("nested"))
-            .expect("temp bundle dist dir should be created");
+        fs::create_dir_all(root.join("dist")).expect("temp bundle dist dir should be created");
         fs::create_dir_all(root.join("src")).expect("temp bundle src dir should be created");
         fs::write(root.join("jett.proj"), "name: bundle_fixture\n")
             .expect("project marker should be written");
@@ -3267,6 +3321,41 @@ mod tests {
         )
         .expect("existing bundle output should be written");
         let output_alias = root.join("dist").join("nested").join("..").join("lib.jett");
+
+        let result = bundle_project(&root, &output_alias).expect("bundle should succeed");
+
+        let bundled = fs::read_to_string(&output).expect("bundle output should be readable");
+        fs::remove_dir_all(&root).expect("temp bundle dir should be removed");
+
+        assert_eq!(result.files.len(), 1);
+        assert_eq!(result.files[0].path.replace('\\', "/"), "src/core.jett");
+        assert!(bundled.contains("namespace core"));
+        assert!(!bundled.contains("namespace stale"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bundle_project_preserves_symlink_identity_with_missing_output_parent() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_test_dir("jett_driver_bundle_output_symlink_alias");
+        fs::create_dir_all(root.join("src")).expect("temp bundle src dir should be created");
+        fs::write(root.join("jett.proj"), "name: bundle_fixture\n")
+            .expect("project marker should be written");
+        fs::write(
+            root.join("src").join("core.jett"),
+            "namespace core\n\nexport function answer() returns int64:\n    return 42\n",
+        )
+        .expect("bundle source should be written");
+        let output = root.join("actual.jett");
+        fs::write(
+            &output,
+            "# Generated by jett bundle.\n\nnamespace stale\n\nfunction old() returns int64:\n    return 0\n",
+        )
+        .expect("existing bundle output should be written");
+        let linked_output = root.join("linked.jett");
+        symlink(&output, &linked_output).expect("output symlink should be created");
+        let output_alias = root.join("missing").join("..").join("linked.jett");
 
         let result = bundle_project(&root, &output_alias).expect("bundle should succeed");
 
