@@ -42,7 +42,7 @@
 
 | Component | Crate | Tests | Status |
 |---|---|---|---|
-| HIR (monomorphization) | `jett_hir` | — | Not started |
+| HIR (monomorphization) | `jett_hir` | — | Not started ([Tracked by #20](https://github.com/vycdev/jett/issues/20)) |
 | MIR (control flow graph) | `jett_mir` | — | Not started |
 | LLVM native codegen | `jett_codegen_llvm` | — | Not started |
 | Runtime library | `jett_runtime` | — | Not started |
