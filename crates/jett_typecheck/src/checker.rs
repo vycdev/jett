@@ -824,7 +824,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn is_secret_type(&self, id: TypeId) -> bool {
-        matches!(self.interner.resolve(id), Type::Secret(_))
+        self.secret_inner_type(id).is_some()
     }
 
     fn is_refinement_type(&self, id: TypeId) -> bool {
@@ -907,6 +907,7 @@ impl<'a> TypeChecker<'a> {
     fn secret_inner_type(&self, id: TypeId) -> Option<TypeId> {
         match self.interner.resolve(id) {
             Type::Secret(inner) => Some(*inner),
+            Type::Refinement { base, .. } => self.secret_inner_type(*base),
             _ => None,
         }
     }
@@ -7710,7 +7711,13 @@ impl<'a> TypeChecker<'a> {
                 for part in parts {
                     if let StringPart::Expr(expr) = part {
                         let expr_ty = self.check_expr(expr);
-                        if !self.is_displayable_type(expr_ty) {
+                        if self.is_secret_type(expr_ty) {
+                            self.sink.emit(errors::secret_exposure(
+                                "string interpolation",
+                                &self.type_name(expr_ty),
+                                expr.span(),
+                            ));
+                        } else if !self.is_displayable_type(expr_ty) {
                             self.sink.emit(errors::type_does_not_implement_interface(
                                 &self.type_name(expr_ty),
                                 "Displayable",
@@ -13432,7 +13439,7 @@ function main(view stdout: Stdout) returns nothing:
     }
 
     #[test]
-    fn secret_values_are_not_displayable() {
+    fn string_interpolation_rejects_secret_values() {
         let errors = check_source_errors(
             "\
 function main() returns string:
@@ -13442,8 +13449,8 @@ function main() returns string:
         );
 
         assert!(
-            errors.iter().any(|d| d.code.code() == 332),
-            "expected E0332, got: {:?}",
+            errors.iter().any(|d| d.code.code() == 600),
+            "expected E0600, got: {:?}",
             errors
         );
     }

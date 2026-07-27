@@ -266,10 +266,18 @@ compile_pass_fixture!(
     compile_pass_math_numeric_builtin_secret_lifting,
     "math_numeric_builtin_secret_lifting.jett"
 );
+compile_pass_fixture!(
+    compile_pass_refined_secret_operations,
+    "refined_secret_operations.jett"
+);
 
 compile_fail_fixture!(compile_fail_type_mismatch, "type_mismatch.jett");
 compile_fail_fixture!(compile_fail_secret_stdout, "secret_stdout.jett");
 compile_fail_fixture!(compile_fail_secret_print, "secret_print.jett");
+compile_fail_fixture!(
+    compile_fail_refined_secret_exposure,
+    "refined_secret_exposure.jett"
+);
 compile_fail_fixture!(
     compile_fail_refinement_requires_handle,
     "refinement_requires_handle.jett"
@@ -1150,6 +1158,12 @@ fn compile_fail_variable_arity_builtin_argument_shape_counts() {
 #[test]
 fn compile_fail_secret_print_count() {
     assert_compile_fail_error_count("secret_print.jett", 600, 2);
+}
+
+#[test]
+fn compile_fail_refined_secret_exposure_counts() {
+    assert_compile_fail_error_count("refined_secret_exposure.jett", 600, 6);
+    assert_compile_fail_error_count("refined_secret_exposure.jett", 603, 1);
 }
 
 compile_fail_fixture!(
