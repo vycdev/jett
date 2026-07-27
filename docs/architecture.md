@@ -608,6 +608,8 @@ The HIR is the first representation where generic functions are fully expanded. 
 
 ## Phase 8: Mid-Level IR (`jett_mir`)
 
+> Tracked by [#22](https://github.com/vycdev/jett/issues/22).
+
 **Input:** HIR.
 
 **Output:** MIR — a control-flow-graph-based representation.
