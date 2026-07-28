@@ -774,12 +774,16 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn int_literal_matches_expected_type(&self, value: i128, expected_ty: TypeId) -> bool {
-        let expected_inner = self.secret_inner_type(expected_ty).unwrap_or(expected_ty);
+        let expected_inner = self
+            .direct_secret_inner_type(expected_ty)
+            .unwrap_or(expected_ty);
         self.int_literal_fits_type(value, expected_inner)
     }
 
     fn float_literal_matches_expected_type(&self, expected_ty: TypeId) -> bool {
-        let id = self.secret_inner_type(expected_ty).unwrap_or(expected_ty);
+        let id = self
+            .direct_secret_inner_type(expected_ty)
+            .unwrap_or(expected_ty);
         matches!(self.interner.resolve(id), Type::Float32 | Type::Float64)
     }
 
@@ -794,7 +798,9 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn expected_numeric_type(&self, expected_ty: TypeId) -> Option<TypeId> {
-        let id = self.secret_inner_type(expected_ty).unwrap_or(expected_ty);
+        let id = self
+            .direct_secret_inner_type(expected_ty)
+            .unwrap_or(expected_ty);
         self.is_numeric(id).then_some(id)
     }
 
@@ -824,7 +830,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn is_secret_type(&self, id: TypeId) -> bool {
-        matches!(self.interner.resolve(id), Type::Secret(_))
+        self.secret_inner_type(id).is_some()
     }
 
     fn is_refinement_type(&self, id: TypeId) -> bool {
@@ -904,9 +910,17 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn direct_secret_inner_type(&self, id: TypeId) -> Option<TypeId> {
+        match self.interner.resolve(id) {
+            Type::Secret(inner) => Some(*inner),
+            _ => None,
+        }
+    }
+
     fn secret_inner_type(&self, id: TypeId) -> Option<TypeId> {
         match self.interner.resolve(id) {
             Type::Secret(inner) => Some(*inner),
+            Type::Refinement { base, .. } => self.secret_inner_type(*base),
             _ => None,
         }
     }
@@ -6764,7 +6778,9 @@ impl<'a> TypeChecker<'a> {
                 self.check_binary_for_expected_numeric(lhs, *op, rhs, *span, operand_ty)
             }
             Expr::ListConstruct(elems, _span) => {
-                let expected_inner = self.secret_inner_type(expected_ty).unwrap_or(expected_ty);
+                let expected_inner = self
+                    .direct_secret_inner_type(expected_ty)
+                    .unwrap_or(expected_ty);
                 match self.interner.resolve(expected_inner).clone() {
                     Type::List(expected_element) => self.check_list_construct_for_expected(
                         elems,
@@ -6776,7 +6792,9 @@ impl<'a> TypeChecker<'a> {
                 }
             }
             Expr::MapConstruct(entries, _span) => {
-                let expected_inner = self.secret_inner_type(expected_ty).unwrap_or(expected_ty);
+                let expected_inner = self
+                    .direct_secret_inner_type(expected_ty)
+                    .unwrap_or(expected_ty);
                 match self.interner.resolve(expected_inner).clone() {
                     Type::Map(expected_key, expected_value) => self
                         .check_map_construct_for_expected(
@@ -6790,7 +6808,9 @@ impl<'a> TypeChecker<'a> {
                 }
             }
             Expr::Some(inner, _span) => {
-                let expected_inner = self.secret_inner_type(expected_ty).unwrap_or(expected_ty);
+                let expected_inner = self
+                    .direct_secret_inner_type(expected_ty)
+                    .unwrap_or(expected_ty);
                 match self.interner.resolve(expected_inner).clone() {
                     Type::Optional(expected_payload) => self.check_wrapper_payload_for_expected(
                         inner,
@@ -6802,7 +6822,9 @@ impl<'a> TypeChecker<'a> {
                 }
             }
             Expr::Ok(inner, _span) => {
-                let expected_inner = self.secret_inner_type(expected_ty).unwrap_or(expected_ty);
+                let expected_inner = self
+                    .direct_secret_inner_type(expected_ty)
+                    .unwrap_or(expected_ty);
                 match self.interner.resolve(expected_inner).clone() {
                     Type::Result(expected_payload, _) => self.check_wrapper_payload_for_expected(
                         inner,
@@ -6814,7 +6836,9 @@ impl<'a> TypeChecker<'a> {
                 }
             }
             Expr::Fail(inner, _span) => {
-                let expected_inner = self.secret_inner_type(expected_ty).unwrap_or(expected_ty);
+                let expected_inner = self
+                    .direct_secret_inner_type(expected_ty)
+                    .unwrap_or(expected_ty);
                 match self.interner.resolve(expected_inner).clone() {
                     Type::Result(_, expected_payload) => self.check_wrapper_payload_for_expected(
                         inner,
@@ -6826,7 +6850,9 @@ impl<'a> TypeChecker<'a> {
                 }
             }
             Expr::None(_) => {
-                let expected_inner = self.secret_inner_type(expected_ty).unwrap_or(expected_ty);
+                let expected_inner = self
+                    .direct_secret_inner_type(expected_ty)
+                    .unwrap_or(expected_ty);
                 match self.interner.resolve(expected_inner) {
                     Type::Optional(_) => expected_ty,
                     _ => self.check_expr(expr),
@@ -7710,7 +7736,13 @@ impl<'a> TypeChecker<'a> {
                 for part in parts {
                     if let StringPart::Expr(expr) = part {
                         let expr_ty = self.check_expr(expr);
-                        if !self.is_displayable_type(expr_ty) {
+                        if self.is_secret_type(expr_ty) {
+                            self.sink.emit(errors::secret_exposure(
+                                "string interpolation",
+                                &self.type_name(expr_ty),
+                                expr.span(),
+                            ));
+                        } else if !self.is_displayable_type(expr_ty) {
                             self.sink.emit(errors::type_does_not_implement_interface(
                                 &self.type_name(expr_ty),
                                 "Displayable",
@@ -13432,7 +13464,7 @@ function main(view stdout: Stdout) returns nothing:
     }
 
     #[test]
-    fn secret_values_are_not_displayable() {
+    fn string_interpolation_rejects_secret_values() {
         let errors = check_source_errors(
             "\
 function main() returns string:
@@ -13442,8 +13474,8 @@ function main() returns string:
         );
 
         assert!(
-            errors.iter().any(|d| d.code.code() == 332),
-            "expected E0332, got: {:?}",
+            errors.iter().any(|d| d.code.code() == 600),
+            "expected E0600, got: {:?}",
             errors
         );
     }
