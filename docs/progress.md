@@ -36,7 +36,7 @@
 |---|---|---|---|
 | Ownership analysis (move/view/consume) | `jett_typecheck/ownership` | 9 | Done |
 | Capability purity enforcement | `jett_typecheck/capability` | 7 | Done |
-| Secret taint analysis | — | — | Partial |
+| Secret taint analysis | — | — | Partial ([Tracked by #18](https://github.com/vycdev/jett/issues/18)) |
 
 ### Phase D: Code Generation — NOT STARTED
 
@@ -80,7 +80,7 @@
 | Structured concurrency (`run`, `join`, `cancel`) | Done |
 | Interface/implement blocks | Done |
 | `mutual` blocks | Done |
-| Secret types (`secret[T]`, `declassify`) | Partial |
+| Secret types (`secret[T]`, `declassify`) | Partial ([Tracked by #18](https://github.com/vycdev/jett/issues/18)) |
 | Handle blocks (`handle error:`, `handle:`, `default`) | Done |
 | Generic structs | Done |
 | Generic functions | Done |
