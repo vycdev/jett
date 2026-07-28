@@ -292,7 +292,7 @@ fn main() {
             agent,
         } => {
             let start_path = start.unwrap_or_else(|| ".".to_string());
-            match jett_driver::bundle_project(Path::new(&start_path), Path::new(&output)) {
+            match jett_driver::bundle_project_detailed(Path::new(&start_path), Path::new(&output)) {
                 Ok(result) => {
                     if agent {
                         print!("{}", render_bundle_agent_output(&result));
@@ -757,13 +757,35 @@ fn render_bundle_agent_output(result: &jett_driver::BundleResult) -> String {
     out
 }
 
-fn render_bundle_agent_error(start: &str, output: &str, error: &str) -> String {
-    format!(
-        "status: error\nstart: {}\noutput: {}\nerror: {}\n",
+fn render_bundle_agent_error(
+    start: &str,
+    output: &str,
+    error: &jett_driver::BundleError,
+) -> String {
+    let mut out = format!(
+        "status: error\nstart: {}\noutput: {}\n",
         escape_toon_scalar(start),
-        escape_toon_scalar(output),
-        escape_toon_scalar(error)
-    )
+        escape_toon_scalar(output)
+    );
+    if let Some(validation) = error.validation_result() {
+        out.push_str("kind: validation\n");
+        let diagnostics = jett_diagnostics::toon::render_toon(
+            &validation.diagnostics,
+            &validation.source,
+            &validation.file_path,
+        );
+        out.push_str(
+            diagnostics
+                .strip_prefix("status: error\n")
+                .unwrap_or(&diagnostics),
+        );
+    } else {
+        out.push_str(&format!(
+            "error: {}\n",
+            escape_toon_scalar(&error.to_string())
+        ));
+    }
+    out
 }
 
 fn render_query_namespaces_agent_output(result: &jett_driver::NamespaceQueryResult) -> String {
@@ -1427,6 +1449,40 @@ mod tests {
             rendered,
             "status: ok\nproject_root: project\noutput: dist/lib.jett\nfiles: 1\nbundled_files[1]{path,start_line,end_line}:\n  src/core.jett,4,12\n"
         );
+    }
+
+    #[test]
+    fn bundle_agent_validation_error_lists_structured_diagnostics() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after the Unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("jett_cli_bundle_agent_error_{nanos}"));
+        std::fs::create_dir_all(root.join("src"))
+            .expect("temporary bundle project should be created");
+        std::fs::write(root.join("jett.proj"), "name: bundle_error\n")
+            .expect("project marker should be written");
+        std::fs::write(
+            root.join("src/broken.jett"),
+            "function broken() returns int64:\n    return missing\n",
+        )
+        .expect("invalid source should be written");
+        let error = match jett_driver::bundle_project_detailed(&root, Path::new("dist/lib.jett")) {
+            Ok(_) => panic!("invalid bundle should fail validation"),
+            Err(error) => error,
+        };
+
+        let rendered = render_bundle_agent_error(".", "dist/lib.jett", &error);
+        std::fs::remove_dir_all(&root).expect("temporary bundle project should be removed");
+
+        assert!(rendered.starts_with(
+            "status: error\nstart: .\noutput: dist/lib.jett\nkind: validation\nfile: "
+        ));
+        assert!(rendered.contains(
+            "diagnostics[1]{code,severity,message,file,line,column,end_line,end_column}:"
+        ));
+        assert!(rendered.contains("E0200,error,undefined name: `missing`,"));
+        assert!(!rendered.contains("error: candidate bundle failed validation"));
     }
 
     #[test]
