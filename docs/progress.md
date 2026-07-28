@@ -43,7 +43,7 @@
 | Component | Crate | Tests | Status |
 |---|---|---|---|
 | HIR (monomorphization) | `jett_hir` | — | Not started ([Tracked by #20](https://github.com/vycdev/jett/issues/20)) |
-| MIR (control flow graph) | `jett_mir` | — | Not started |
+| MIR (control flow graph) | `jett_mir` | — | Not started ([Tracked by #22](https://github.com/vycdev/jett/issues/22)) |
 | LLVM native codegen | `jett_codegen_llvm` | — | Not started |
 | Runtime library | `jett_runtime` | — | Not started |
 | Core stdlib (.jett files) | `stdlib/` | — | Partial (bootstrap loader plus marker module and draft `json` module; many modules still Rust-backed) |
