@@ -2507,6 +2507,53 @@ pub struct BundleResult {
     pub files: Vec<BundleFileResult>,
 }
 
+/// A bundle failure, optionally retaining candidate-validation diagnostics for
+/// structured agent output.
+pub struct BundleError {
+    message: String,
+    validation: Option<BuildResult>,
+}
+
+impl BundleError {
+    fn from_validation(validation: BuildResult) -> Option<Self> {
+        if !validation.has_errors {
+            return None;
+        }
+        let errors = error_messages_from_diagnostics(&validation.diagnostics);
+        Some(Self {
+            message: format!("candidate bundle failed validation:\n{}", errors.join("\n")),
+            validation: Some(validation),
+        })
+    }
+
+    pub fn validation_result(&self) -> Option<&BuildResult> {
+        self.validation.as_ref()
+    }
+}
+
+impl From<String> for BundleError {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            validation: None,
+        }
+    }
+}
+
+impl std::fmt::Display for BundleError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::fmt::Debug for BundleError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
+}
+
+impl std::error::Error for BundleError {}
+
 /// Parse a .jett file and run all verify blocks, reporting per-block results.
 pub fn test_file(path: &Path) -> Result<TestResult, String> {
     let source = fs::read_to_string(path)
@@ -2706,6 +2753,14 @@ pub fn test_project(start_dir: &Path) -> Result<ProjectTestResult, String> {
 /// Bundle all project `.jett` files into a single file, then validate it before
 /// writing the output path.
 pub fn bundle_project(start_dir: &Path, output: &Path) -> Result<BundleResult, String> {
+    bundle_project_detailed(start_dir, output).map_err(|error| error.to_string())
+}
+
+/// Bundle a project while retaining candidate-validation diagnostics on error.
+pub fn bundle_project_detailed(
+    start_dir: &Path,
+    output: &Path,
+) -> Result<BundleResult, BundleError> {
     let project_dir = find_project_root(start_dir)?;
     let output_abs = if output.is_absolute() {
         output.to_path_buf()
@@ -2724,7 +2779,8 @@ pub fn bundle_project(start_dir: &Path, output: &Path) -> Result<BundleResult, S
         return Err(format!(
             "no .jett files found in project at {}",
             project_dir.display()
-        ));
+        )
+        .into());
     }
 
     let mut bundled = String::new();
@@ -2761,11 +2817,9 @@ pub fn bundle_project(start_dir: &Path, output: &Path) -> Result<BundleResult, S
 
     let validation = build_source(&bundled, &output_abs.display().to_string());
     if validation.has_errors {
-        let errors = error_messages_from_diagnostics(&validation.diagnostics);
-        return Err(format!(
-            "candidate bundle failed validation:\n{}",
-            errors.join("\n")
-        ));
+        return Err(
+            BundleError::from_validation(validation).expect("candidate validation reported errors")
+        );
     }
 
     if let Some(parent) = output_abs.parent()
@@ -3272,6 +3326,16 @@ mod tests {
     }
 
     #[test]
+    fn bundle_validation_error_rejects_successful_build() {
+        let validation = build_source(
+            "function answer() returns int64:\n    return 42\n",
+            "dist/lib.jett",
+        );
+
+        assert!(BundleError::from_validation(validation).is_none());
+    }
+
+    #[test]
     fn bundle_project_leaves_output_untouched_when_validation_fails() {
         let root = temp_test_dir("jett_driver_bundle_validation_failure");
         fs::create_dir_all(root.join("dist")).expect("temp bundle dist dir should be created");
@@ -3286,7 +3350,7 @@ mod tests {
         let output = root.join("dist").join("lib.jett");
         fs::write(&output, "existing bundle\n").expect("existing bundle output should be written");
 
-        let error = match bundle_project(&root, &output) {
+        let error = match bundle_project_detailed(&root, &output) {
             Ok(_) => panic!("bundle validation should fail"),
             Err(error) => error,
         };
@@ -3296,8 +3360,14 @@ mod tests {
         fs::remove_dir_all(&root).expect("temp bundle dir should be removed");
 
         assert!(
-            error.contains("candidate bundle failed validation"),
+            error
+                .to_string()
+                .contains("candidate bundle failed validation"),
             "expected validation failure, got {error}"
+        );
+        assert!(
+            error.validation_result().is_some(),
+            "expected structured candidate diagnostics"
         );
         assert_eq!(preserved, "existing bundle\n");
     }
