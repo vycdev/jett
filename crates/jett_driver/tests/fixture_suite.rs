@@ -279,6 +279,10 @@ compile_fail_fixture!(
     "refined_secret_exposure.jett"
 );
 compile_fail_fixture!(
+    compile_fail_refined_secret_requires_handle,
+    "refined_secret_requires_handle.jett"
+);
+compile_fail_fixture!(
     compile_fail_refinement_requires_handle,
     "refinement_requires_handle.jett"
 );

@@ -774,12 +774,16 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn int_literal_matches_expected_type(&self, value: i128, expected_ty: TypeId) -> bool {
-        let expected_inner = self.secret_inner_type(expected_ty).unwrap_or(expected_ty);
+        let expected_inner = self
+            .direct_secret_inner_type(expected_ty)
+            .unwrap_or(expected_ty);
         self.int_literal_fits_type(value, expected_inner)
     }
 
     fn float_literal_matches_expected_type(&self, expected_ty: TypeId) -> bool {
-        let id = self.secret_inner_type(expected_ty).unwrap_or(expected_ty);
+        let id = self
+            .direct_secret_inner_type(expected_ty)
+            .unwrap_or(expected_ty);
         matches!(self.interner.resolve(id), Type::Float32 | Type::Float64)
     }
 
@@ -794,7 +798,9 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn expected_numeric_type(&self, expected_ty: TypeId) -> Option<TypeId> {
-        let id = self.secret_inner_type(expected_ty).unwrap_or(expected_ty);
+        let id = self
+            .direct_secret_inner_type(expected_ty)
+            .unwrap_or(expected_ty);
         self.is_numeric(id).then_some(id)
     }
 
@@ -901,6 +907,13 @@ impl<'a> TypeChecker<'a> {
         match self.interner.resolve(got) {
             Type::Optional(inner_ty) => self.satisfies_expected_type(expected, *inner_ty),
             _ => false,
+        }
+    }
+
+    fn direct_secret_inner_type(&self, id: TypeId) -> Option<TypeId> {
+        match self.interner.resolve(id) {
+            Type::Secret(inner) => Some(*inner),
+            _ => None,
         }
     }
 
@@ -6765,7 +6778,9 @@ impl<'a> TypeChecker<'a> {
                 self.check_binary_for_expected_numeric(lhs, *op, rhs, *span, operand_ty)
             }
             Expr::ListConstruct(elems, _span) => {
-                let expected_inner = self.secret_inner_type(expected_ty).unwrap_or(expected_ty);
+                let expected_inner = self
+                    .direct_secret_inner_type(expected_ty)
+                    .unwrap_or(expected_ty);
                 match self.interner.resolve(expected_inner).clone() {
                     Type::List(expected_element) => self.check_list_construct_for_expected(
                         elems,
@@ -6777,7 +6792,9 @@ impl<'a> TypeChecker<'a> {
                 }
             }
             Expr::MapConstruct(entries, _span) => {
-                let expected_inner = self.secret_inner_type(expected_ty).unwrap_or(expected_ty);
+                let expected_inner = self
+                    .direct_secret_inner_type(expected_ty)
+                    .unwrap_or(expected_ty);
                 match self.interner.resolve(expected_inner).clone() {
                     Type::Map(expected_key, expected_value) => self
                         .check_map_construct_for_expected(
@@ -6791,7 +6808,9 @@ impl<'a> TypeChecker<'a> {
                 }
             }
             Expr::Some(inner, _span) => {
-                let expected_inner = self.secret_inner_type(expected_ty).unwrap_or(expected_ty);
+                let expected_inner = self
+                    .direct_secret_inner_type(expected_ty)
+                    .unwrap_or(expected_ty);
                 match self.interner.resolve(expected_inner).clone() {
                     Type::Optional(expected_payload) => self.check_wrapper_payload_for_expected(
                         inner,
@@ -6803,7 +6822,9 @@ impl<'a> TypeChecker<'a> {
                 }
             }
             Expr::Ok(inner, _span) => {
-                let expected_inner = self.secret_inner_type(expected_ty).unwrap_or(expected_ty);
+                let expected_inner = self
+                    .direct_secret_inner_type(expected_ty)
+                    .unwrap_or(expected_ty);
                 match self.interner.resolve(expected_inner).clone() {
                     Type::Result(expected_payload, _) => self.check_wrapper_payload_for_expected(
                         inner,
@@ -6815,7 +6836,9 @@ impl<'a> TypeChecker<'a> {
                 }
             }
             Expr::Fail(inner, _span) => {
-                let expected_inner = self.secret_inner_type(expected_ty).unwrap_or(expected_ty);
+                let expected_inner = self
+                    .direct_secret_inner_type(expected_ty)
+                    .unwrap_or(expected_ty);
                 match self.interner.resolve(expected_inner).clone() {
                     Type::Result(_, expected_payload) => self.check_wrapper_payload_for_expected(
                         inner,
@@ -6827,7 +6850,9 @@ impl<'a> TypeChecker<'a> {
                 }
             }
             Expr::None(_) => {
-                let expected_inner = self.secret_inner_type(expected_ty).unwrap_or(expected_ty);
+                let expected_inner = self
+                    .direct_secret_inner_type(expected_ty)
+                    .unwrap_or(expected_ty);
                 match self.interner.resolve(expected_inner) {
                     Type::Optional(_) => expected_ty,
                     _ => self.check_expr(expr),
