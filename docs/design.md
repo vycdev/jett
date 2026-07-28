@@ -6408,6 +6408,8 @@ function bad_sort[T](items: list[T]) returns list[T]:
 
 **Monomorphization — generics are resolved at compile time:**
 
+> Tracked by [#20](https://github.com/vycdev/jett/issues/20).
+
 The compiler generates a separate version of each generic function for every concrete type used at call sites. If the codebase calls `sort[int64](numbers)` and `sort[string](names)`, the compiler produces two functions: one for `int64` and one for `string`. There is no runtime type erasure and no runtime overhead — generic code runs at the same speed as hand-written type-specific code.
 
 The interface constraint does not cause the compiler to pre-generate code for all implementing types. It only generates code for types **actually used**. The constraint is for type-checking the function body, not for driving code generation.

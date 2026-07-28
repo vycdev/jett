@@ -586,6 +586,8 @@ These are compile errors, not warnings.
 
 ## Phase 7: High-Level IR (`jett_hir`)
 
+> Tracked by [#20](https://github.com/vycdev/jett/issues/20).
+
 **Input:** TypedTree from Phase 6.
 
 **Output:** HIR — a fully monomorphized intermediate representation.
