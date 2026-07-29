@@ -2712,6 +2712,25 @@ fn output_path_identity(path: &Path) -> PathBuf {
     normalized.canonicalize().unwrap_or(normalized)
 }
 
+#[cfg(unix)]
+fn existing_paths_share_file_identity(left: &Path, right: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    let Ok(left_metadata) = fs::metadata(left) else {
+        return false;
+    };
+    let Ok(right_metadata) = fs::metadata(right) else {
+        return false;
+    };
+
+    left_metadata.dev() == right_metadata.dev() && left_metadata.ino() == right_metadata.ino()
+}
+
+#[cfg(not(unix))]
+fn existing_paths_share_file_identity(_left: &Path, _right: &Path) -> bool {
+    false
+}
+
 /// Discover all `.jett` files under a project root (walks up from `start_dir`
 /// to find `jett.proj`, then collects all `.jett` files in the project) and
 /// run verify blocks in each one.
@@ -2772,6 +2791,19 @@ pub fn bundle_project_detailed(
     collect_jett_files(&project_dir, &mut files)
         .map_err(|e| format!("error scanning project: {e}"))?;
     files.sort();
+    for file in &files {
+        let file_identity = file.canonicalize().unwrap_or_else(|_| file.clone());
+        if file_identity != output_identity
+            && existing_paths_share_file_identity(file, &output_identity)
+        {
+            return Err(format!(
+                "bundle output {} is a hard-link alias of source {}; refusing to overwrite the source",
+                output_abs.display(),
+                file.display()
+            )
+            .into());
+        }
+    }
     files.retain(|path| path.canonicalize().unwrap_or_else(|_| path.clone()) != output_identity);
 
     if files.is_empty() {
@@ -3417,6 +3449,45 @@ mod tests {
         assert_eq!(result.files[0].path.replace('\\', "/"), "src/core.jett");
         assert!(bundled.contains("namespace core"));
         assert!(!bundled.contains("namespace stale"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bundle_project_rejects_hard_linked_source_output() {
+        let root = temp_test_dir("jett_driver_bundle_output_hard_link_alias");
+        fs::create_dir_all(root.join("dist")).expect("temp bundle dist dir should be created");
+        fs::create_dir_all(root.join("src")).expect("temp bundle src dir should be created");
+        fs::write(root.join("jett.proj"), "name: bundle_fixture\n")
+            .expect("project marker should be written");
+        let source = root.join("src").join("core.jett");
+        let source_text =
+            "namespace core\n\nexport function answer() returns int64:\n    return 42\n";
+        fs::write(&source, source_text).expect("bundle source should be written");
+        let output = root.join("dist").join("lib.jett");
+        fs::hard_link(&source, &output).expect("hard-linked output should be created");
+        let output_alias = root
+            .join("missing")
+            .join("..")
+            .join("dist")
+            .join("lib.jett");
+
+        let error = match bundle_project(&root, &output_alias) {
+            Ok(_) => panic!("hard-link alias should be rejected"),
+            Err(error) => error,
+        };
+
+        let preserved_source =
+            fs::read_to_string(&source).expect("bundle source should remain readable");
+        let preserved_output =
+            fs::read_to_string(&output).expect("bundle output should remain readable");
+        fs::remove_dir_all(&root).expect("temp bundle dir should be removed");
+
+        assert!(
+            error.contains("is a hard-link alias of source"),
+            "expected hard-link alias error, got {error}"
+        );
+        assert_eq!(preserved_source, source_text);
+        assert_eq!(preserved_output, source_text);
     }
 
     #[cfg(unix)]
