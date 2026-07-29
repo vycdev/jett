@@ -1,0 +1,15 @@
+namespace test
+enum IpProtocol:
+    icmp = 1
+    tcp = 6
+    udp = 17
+bitfield network Header:
+    version: 4 bits
+    header_length: 4 bits
+    protocol: 8 bits as IpProtocol
+function main(view stdout: Stdout) returns nothing:
+    Header header = Header(version: 4, header_length: 5, protocol: IpProtocol.tcp)
+    bytes raw = Header.to_bytes(header)
+    Header decoded = Header.from_bytes(raw) handle error:
+        default Header(version: 0, header_length: 0, protocol: IpProtocol.icmp)
+    Stdout.write(view stdout, "{decoded.protocol == IpProtocol.tcp}")

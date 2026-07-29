@@ -2465,14 +2465,12 @@ impl Interpreter {
     }
 
     fn call_bitfield_builtin(&self, name: &str, args: &[Value]) -> Option<Result<Value, String>> {
-        let (bitfield_name, method_name) = name.rsplit_once('.')?;
-        if !self.bitfields.contains_key(bitfield_name) {
-            return None;
-        }
+        let (source_bitfield_name, method_name) = name.rsplit_once('.')?;
+        let bitfield_name = self.registry_name(&self.bitfields, source_bitfield_name)?;
 
         match method_name {
-            "to_bytes" => Some(self.bitfield_to_bytes(bitfield_name, args)),
-            "from_bytes" => Some(self.bitfield_from_bytes(bitfield_name, args)),
+            "to_bytes" => Some(self.bitfield_to_bytes(&bitfield_name, args)),
+            "from_bytes" => Some(self.bitfield_from_bytes(&bitfield_name, args)),
             _ => None,
         }
     }
@@ -2636,7 +2634,7 @@ impl Interpreter {
                     };
 
                     let value = if let Some(enum_ty) = as_type {
-                        let enum_name = type_expr_name(enum_ty);
+                        let enum_name = self.bitfield_enum_name(bitfield, enum_ty);
                         self.enum_value_from_numeric(&enum_name, numeric)
                             .map_err(|message| {
                                 format!(
@@ -2696,7 +2694,7 @@ impl Interpreter {
         value: &Value,
     ) -> Result<u64, String> {
         if let Some(enum_ty) = as_type {
-            let enum_name = type_expr_name(enum_ty);
+            let enum_name = self.bitfield_enum_name(bitfield, enum_ty);
             let Value::Enum {
                 type_name,
                 variant,
@@ -2731,6 +2729,23 @@ impl Interpreter {
         }
 
         Self::plain_bitfield_field_numeric_value(&bitfield.name.name, field_name, width, value)
+    }
+
+    fn bitfield_enum_name(&self, bitfield: &BitfieldDef, enum_ty: &TypeExpr) -> String {
+        let enum_name = type_expr_name(enum_ty);
+        if enum_name.contains('.') {
+            return enum_name;
+        }
+
+        let Some(namespace) = Self::type_name_namespace(&bitfield.name.name) else {
+            return enum_name;
+        };
+        let qualified = format!("{namespace}.{enum_name}");
+        if self.enums.contains_key(&qualified) {
+            qualified
+        } else {
+            enum_name
+        }
     }
 
     fn enum_numeric_value(&self, enum_name: &str, variant_name: &str) -> Result<u64, String> {
