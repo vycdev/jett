@@ -2802,6 +2802,8 @@ bool match = secret.compare(stored_hash, computed_hash)
 # Constant-time comparison that returns bool without declassifying either value.
 ```
 
+The supported payload and lowering boundary is [tracked by #33](https://github.com/vycdev/jett/issues/33).
+
 #### Secret Types with Refinement Types
 
 Secret types compose with refinement types (Rule Set 3) for validated, secure data:
