@@ -1,4 +1,4 @@
-namespace math
+namespace app
 
 function fibonacci(n: int64) returns int64:
     if n <= 1:

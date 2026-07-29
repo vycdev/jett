@@ -41,6 +41,18 @@ function is_odd_test() returns bool:
 function is_even_false_test() returns bool:
     return math.is_even(3)
 
+function is_even_negative_test() returns bool:
+    return math.is_even(-4)
+
+function is_odd_negative_test() returns bool:
+    return math.is_odd(-5)
+
+function is_even_zero_test() returns bool:
+    return math.is_even(0)
+
+function is_odd_zero_test() returns bool:
+    return math.is_odd(0)
+
 verify is_even_test:
     assert is_even_test() == true
 
@@ -49,6 +61,18 @@ verify is_odd_test:
 
 verify is_even_false_test:
     assert is_even_false_test() == false
+
+verify is_even_negative_test:
+    assert is_even_negative_test() == true
+
+verify is_odd_negative_test:
+    assert is_odd_negative_test() == true
+
+verify is_even_zero_test:
+    assert is_even_zero_test() == true
+
+verify is_odd_zero_test:
+    assert is_odd_zero_test() == false
 
 # --- math.mod ---
 

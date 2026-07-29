@@ -8686,20 +8686,6 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects two int64 arguments"))),
                 }
             }
-            "math.is_even" => {
-                require_args!(name, 1, args);
-                match &args[0] {
-                    Value::Int64(n) => Some(Ok(Value::Bool(n % 2 == 0))),
-                    _ => Some(Err(format!("{name} expects an int64 argument"))),
-                }
-            }
-            "math.is_odd" => {
-                require_args!(name, 1, args);
-                match &args[0] {
-                    Value::Int64(n) => Some(Ok(Value::Bool(n % 2 != 0))),
-                    _ => Some(Err(format!("{name} expects an int64 argument"))),
-                }
-            }
             "math.sum" => {
                 require_args!(name, 1, args);
                 match &args[0] {
@@ -8775,37 +8761,6 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects an int64 argument"))),
                 }
             }
-            "math.sign" => {
-                require_args!(name, 1, args);
-                match &args[0] {
-                    Value::Int64(n) => {
-                        let s = if *n < 0 {
-                            -1
-                        } else if *n > 0 {
-                            1
-                        } else {
-                            0
-                        };
-                        Some(Ok(Value::Int64(s)))
-                    }
-                    _ => Some(Err(format!("{name} expects an int64 argument"))),
-                }
-            }
-            "math.to_radians" => {
-                require_args!(name, 1, args);
-                match &args[0] {
-                    Value::Float64(deg) => Some(Ok(Value::Float64(deg.to_radians()))),
-                    _ => Some(Err(format!("{name} expects a float64 argument"))),
-                }
-            }
-            "math.to_degrees" => {
-                require_args!(name, 1, args);
-                match &args[0] {
-                    Value::Float64(rad) => Some(Ok(Value::Float64(rad.to_degrees()))),
-                    _ => Some(Err(format!("{name} expects a float64 argument"))),
-                }
-            }
-
             // -- list.enumerate (returns list of [index, value] pairs) ----------
             "list.enumerate" => {
                 require_args!(name, 1, args);
