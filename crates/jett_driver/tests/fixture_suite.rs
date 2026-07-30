@@ -459,6 +459,12 @@ run_pass_fixture!(
     "handle_result_optional.jett"
 );
 run_pass_fixture!(run_pass_bitfield_roundtrip, "bitfield_roundtrip.jett");
+
+#[test]
+fn run_pass_namespace_bitfield_enum_roundtrip() {
+    assert_run_stdout("namespace_bitfield_enum_roundtrip.jett", "true");
+}
+
 run_pass_fixture!(
     run_pass_bitfield_payload_roundtrip,
     "bitfield_payload_roundtrip.jett"
