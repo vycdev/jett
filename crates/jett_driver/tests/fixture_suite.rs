@@ -390,15 +390,22 @@ fn run_file_capture_stdout_captures_json_runtime_output() {
 
 #[test]
 fn run_file_capture_output_captures_debug_lines() {
-    let path = fixture_path("run_pass", "trace_basic.jett");
-    let output = run_file_capture_output(&path).unwrap_or_else(|err| {
-        panic!(
-            "expected {} to run successfully with captured output: {err}",
-            path.display()
-        )
-    });
-    assert_eq!(output.stdout, "");
-    assert_eq!(output.debug_output, vec!["trace total: int64 = 42"]);
+    let cases = [
+        ("trace_basic.jett", "trace total: int64 = 42"),
+        ("breakpoint_basic.jett", "breakpoint hit: total: int64 = 42"),
+    ];
+
+    for (name, expected) in cases {
+        let path = fixture_path("run_pass", name);
+        let output = run_file_capture_output(&path).unwrap_or_else(|err| {
+            panic!(
+                "expected {} to run successfully with captured output: {err}",
+                path.display()
+            )
+        });
+        assert_eq!(output.stdout, "");
+        assert_eq!(output.debug_output, vec![expected]);
+    }
 }
 
 run_pass_fixture!(
