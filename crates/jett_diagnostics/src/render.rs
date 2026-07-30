@@ -26,6 +26,25 @@ fn get_source_line(source: &str, line_number: usize) -> &str {
     source.lines().nth(line_number - 1).unwrap_or("")
 }
 
+fn span_underline_len(
+    source: &str,
+    source_line: &str,
+    column: usize,
+    start: u32,
+    end: u32,
+) -> usize {
+    let start = (start as usize).min(source.len());
+    let end = (end as usize).min(source.len());
+    let span_len = source
+        .get(start..end)
+        .map(|span| span.chars().take_while(|ch| *ch != '\n').count())
+        .unwrap_or(0)
+        .max(1);
+    let line_remaining = source_line.chars().count().saturating_sub(column - 1);
+
+    span_len.min(line_remaining).max(1)
+}
+
 /// Render a single diagnostic with source context into a human-readable string.
 ///
 /// Output format:
@@ -74,18 +93,9 @@ pub fn render_diagnostic(diag: &Diagnostic, source: &str, file_path: &str) -> St
         width = gutter_width + 1
     ));
 
-    // Underline with carets
-    // Compute the start column within this line (1-based) and the span length
-    let span_len = if diag.span.end > diag.span.start {
-        (diag.span.end - diag.span.start) as usize
-    } else {
-        1
-    };
-
-    // Clamp underline length to not exceed end of the source line
-    let underline_len = span_len
-        .min(source_line.len().saturating_sub(col - 1))
-        .max(1);
+    // Underline with carets, clamped to the current source line.
+    let underline_len =
+        span_underline_len(source, source_line, col, diag.span.start, diag.span.end);
 
     // Build the underline: spaces up to col, then carets
     let padding = " ".repeat(col - 1);
@@ -113,14 +123,13 @@ pub fn render_diagnostic(diag: &Diagnostic, source: &str, file_path: &str) -> St
     for label in diag.labels.iter().skip(1) {
         let (lbl_line, lbl_col) = line_col(source, label.span.start);
         let lbl_source_line = get_source_line(source, lbl_line);
-        let lbl_span_len = if label.span.end > label.span.start {
-            (label.span.end - label.span.start) as usize
-        } else {
-            1
-        };
-        let lbl_underline_len = lbl_span_len
-            .min(lbl_source_line.len().saturating_sub(lbl_col - 1))
-            .max(1);
+        let lbl_underline_len = span_underline_len(
+            source,
+            lbl_source_line,
+            lbl_col,
+            label.span.start,
+            label.span.end,
+        );
 
         out.push_str(&format!(
             "{:>width$} | {}\n",
@@ -228,5 +237,27 @@ mod tests {
         assert!(rendered.contains("warning[E0100]: unused variable: x"));
         assert!(rendered.contains("--> test.jett:2:"));
         assert!(rendered.contains("^"));
+    }
+
+    #[test]
+    fn render_unicode_spans_use_character_width() {
+        let source = "let π = λ\n";
+        let file_id = FileId::new(0);
+        let diag = Diagnostic::error(300, "invalid value", Span::new(file_id, 4, 6))
+            .with_label(Span::new(file_id, 4, 6), "primary")
+            .with_label(Span::new(file_id, 9, 11), "secondary");
+
+        let rendered = render_diagnostic(&diag, source, "test.jett");
+        let primary = rendered
+            .lines()
+            .find(|line| line.ends_with("primary"))
+            .expect("primary label should be rendered");
+        let secondary = rendered
+            .lines()
+            .find(|line| line.ends_with("secondary"))
+            .expect("secondary label should be rendered");
+
+        assert_eq!(primary.matches('^').count(), 1);
+        assert_eq!(secondary.matches('^').count(), 1);
     }
 }
