@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 pub enum DiscoverError {
     /// No jett.proj file found walking up from the given path.
     NoProjectFile(PathBuf),
+    /// No Jett source files found in the project directory.
+    NoSourceFiles(PathBuf),
     /// Failed to read a file.
     IoError(PathBuf, std::io::Error),
     /// The jett.proj file is missing required fields.
@@ -19,6 +21,9 @@ impl std::fmt::Display for DiscoverError {
         match self {
             DiscoverError::NoProjectFile(path) => {
                 write!(f, "no jett.proj found starting from {}", path.display())
+            }
+            DiscoverError::NoSourceFiles(path) => {
+                write!(f, "no .jett source files found in {}", path.display())
             }
             DiscoverError::IoError(path, err) => {
                 write!(f, "failed to read {}: {}", path.display(), err)
@@ -49,6 +54,9 @@ pub fn discover_project(
     let (name, version, entry) = parse_project_file(&proj_content)?;
 
     let jett_files = find_jett_files(&project_dir)?;
+    if jett_files.is_empty() {
+        return Err(DiscoverError::NoSourceFiles(project_dir));
+    }
 
     let mut files = Vec::new();
     let mut entry_file = None;
@@ -308,5 +316,25 @@ mod tests {
 
         // Cleanup
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn discover_project_rejects_project_without_source_files() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after the Unix epoch")
+            .as_nanos();
+        let tmp = std::env::temp_dir().join(format!("jett_empty_project_{nanos}"));
+        fs::create_dir_all(&tmp).unwrap();
+        fs::write(tmp.join("jett.proj"), "name: empty\n").unwrap();
+
+        let mut interner = SymbolInterner::new();
+        let error = discover_project(&tmp, &mut interner).unwrap_err();
+
+        let _ = fs::remove_dir_all(&tmp);
+        match error {
+            DiscoverError::NoSourceFiles(path) => assert_eq!(path, tmp),
+            other => panic!("expected no-source-files error, got {other}"),
+        }
     }
 }
