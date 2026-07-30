@@ -1,7 +1,8 @@
 # Raw JSON Access Semantics
 
-Status: implemented for the helper split; long-term naming/default guidance
-remains open.
+Status: decided. The helper split is implemented and its naming/default
+guidance is stable. This note remains at its originating path as the durable
+policy record.
 
 This note records the staged policy decision around `json.field` and
 `json.index`.
@@ -118,10 +119,10 @@ Cons:
 
 ## Decision
 
-Tracked by [#5](https://github.com/vycdev/jett/issues/5) for the remaining
-long-term naming and usage-guidance decision.
+The final naming and usage-guidance decision is recorded in
+[#5](https://github.com/vycdev/jett/issues/5).
 
-Option C is implemented.
+Option C is the durable public API and is implemented.
 
 It fits Jett's "one obvious pattern per intent" principle better than changing
 `field` into a nested result/optional:
@@ -131,10 +132,20 @@ It fits Jett's "one obvious pattern per intent" principle better than changing
 - use `json.object_field` / `json.array_index` when shape must be correct but
   absence is meaningful.
 
+`json.field` and `json.index` remain stable, first-class probing names. There
+is no planned deprecation or compatibility migration for existing callers.
+Documentation should keep them available for exploratory traversal, but should
+teach the strict helpers for production validation so wrong-shaped input is not
+silently treated as an absent value.
+
+Changing or removing the probing names later would require an explicit
+deprecation mechanism and a separate compatibility decision. The future
+module/import work does not implicitly change this policy.
+
 The implemented path keeps the existing lenient helpers unchanged and adds the
-strict helpers for code that needs shape validation. Treat the future question
-as documentation and compatibility guidance, not as an unresolved type or
-stdlib surface gap.
+strict helpers for code that needs shape validation. This policy is
+documentation and compatibility guidance, not an unresolved type or stdlib
+surface gap.
 
 Status: implemented. The strict helper surface is pinned in
 `tests/run_pass/json_raw_strict_accessors.jett`, while lenient probing edge
@@ -148,9 +159,7 @@ Handle-policy diagnostics for the optional probing helpers and strict
 result-returning helpers are pinned in
 `tests/compile_fail/json_raw_probe_facades_require_handle.jett` and
 `tests/compile_fail/json_raw_result_facades_require_handle.jett`.
-The remaining design question is whether the lenient `json.field` /
-`json.index` names should stay as the primary public spelling forever, or
-whether a later compatibility stage should guide users toward the stricter
-helpers for most production code. The current JSON transition docs explicitly
-describe `field` / `index` as probing helpers and the strict helpers as the
-production validation surface.
+The lenient `json.field` / `json.index` names remain the public probing
+spelling, while the strict helpers are the recommended production validation
+surface. This intent-based guidance preserves source compatibility without
+making lenient lookup the default example for validated input.

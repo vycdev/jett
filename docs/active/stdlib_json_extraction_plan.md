@@ -372,21 +372,23 @@ The public API can return plain `string` for serialization only if the compiler
 continues to prove that the chosen policy cannot fail. The internal reflected
 functions should probably use `result` while format policy is still evolving.
 
-## Open Questions
+## Resolved Raw Lookup Guidance
 
-Raw JSON lookup naming and default usage guidance are tracked by
-[#5](https://github.com/vycdev/jett/issues/5).
+Raw JSON lookup naming and default usage guidance were finalized in
+[#5](https://github.com/vycdev/jett/issues/5). `json.field` and `json.index`
+remain stable probing helpers for exploratory traversal. Production validation
+should use `json.object_field` / `json.array_index` when absence is allowed and
+`json.require_field` / `json.require_index` when presence is required. There is
+no planned deprecation of the probing helpers; any later removal would require
+an explicit deprecation mechanism and a separate compatibility decision.
+
+## Open Questions
 
 - Should `json.serialize[T]` stay a compiler-checked secret exposure boundary
   even after its implementation body moves to stdlib code?
 - Should unknown object fields be ignored, rejected, or configurable? See
   `docs/open_design/json_unknown_field_policy.md` for the staged
   `parse_exact` path, now implemented while keeping `json.parse[T]` lenient.
-- `json.field` and `json.index` remain lenient probing helpers returning
-  `optional[JsonTree]`, while `json.object_field`, `json.array_index`,
-  `json.require_field`, and `json.require_index` distinguish wrong shape from
-  absence. See `docs/open_design/json_raw_access_semantics.md`; the remaining
-  question is long-term naming/default guidance, not the helper surface.
 - Representative shape is pinned for bytes, `float32`/`float64`, sets, maps,
   optionals/results, unit and payload enums, bitfields, aliases/refinements,
   serialize names, and nested matrix combinations. The remaining shape

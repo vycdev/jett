@@ -1288,6 +1288,13 @@ string city = json.as_string(view city_raw) handle error:
     return fail(error)
 ```
 
+For production validation, use `json.require_field` / `json.require_index`
+when a value must be present. Use `json.object_field` / `json.array_index` when
+the container shape must be correct but absence is allowed. The stable
+`json.field` / `json.index` helpers are for exploratory probing: they return
+`none` for both absence and a wrong-shaped input, so validated parsers should
+not use them as a substitute for the strict helpers.
+
 **HTTP — high-level client out of the box:**
 
 The `net.http` module defines its own error type for HTTP operations:
