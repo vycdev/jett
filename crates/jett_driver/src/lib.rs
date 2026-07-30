@@ -1891,27 +1891,26 @@ fn line_col_to_offset(source: &str, line: u32, col: u32) -> Option<u32> {
     if line == 0 || col == 0 {
         return None;
     }
-    let mut current_line = 1u32;
+
     let mut line_start = 0usize;
-    for (i, ch) in source.char_indices() {
-        if current_line == line {
-            // col is 1-based within the line; advance col-1 chars.
-            let col_offset = source[line_start..]
-                .char_indices()
-                .nth((col - 1) as usize)
-                .map(|(o, _)| o)
-                .unwrap_or(source.len() - line_start);
-            return Some((line_start + col_offset) as u32);
-        }
-        if ch == '\n' {
-            current_line += 1;
-            line_start = i + 1;
-        }
+    for _ in 1..line {
+        line_start += source[line_start..].find('\n')? + 1;
     }
-    if current_line == line {
-        return Some(line_start as u32);
+
+    let line_end = source[line_start..]
+        .find('\n')
+        .map_or(source.len(), |offset| line_start + offset);
+    let line_source = &source[line_start..line_end];
+    let column_offset = (col - 1) as usize;
+    if column_offset > line_source.chars().count() {
+        return None;
     }
-    None
+
+    let byte_offset = line_source
+        .char_indices()
+        .nth(column_offset)
+        .map_or(line_source.len(), |(offset, _)| offset);
+    u32::try_from(line_start + byte_offset).ok()
 }
 
 /// Run the full compilation pipeline on a single file: lex → parse → resolve → typecheck.
@@ -3008,9 +3007,12 @@ mod tests {
         .expect("query type fixture should be written");
 
         let result = query_type_at(&file, 4, 19).expect("type query should succeed");
+        let outside_error =
+            query_type_at(&file, 4, 999).expect_err("out-of-range column should fail");
 
         fs::remove_dir_all(&root).expect("temp query dir should be removed");
 
+        assert!(outside_error.contains("position 4:999 is outside"));
         assert_eq!(result.type_name, Some("int64".to_string()));
         assert_eq!(
             (
@@ -3021,6 +3023,20 @@ mod tests {
             ),
             (Some(4), Some(19), Some(4), Some(20))
         );
+    }
+
+    #[test]
+    fn line_col_to_offset_rejects_columns_past_line_end() {
+        let source = "alpha\nβeta\n";
+
+        assert_eq!(line_col_to_offset(source, 1, 1), Some(0));
+        assert_eq!(line_col_to_offset(source, 1, 6), Some(5));
+        assert_eq!(line_col_to_offset(source, 1, 7), None);
+        assert_eq!(line_col_to_offset(source, 2, 1), Some(6));
+        assert_eq!(line_col_to_offset(source, 2, 5), Some(11));
+        assert_eq!(line_col_to_offset(source, 2, 6), None);
+        assert_eq!(line_col_to_offset(source, 3, 1), Some(12));
+        assert_eq!(line_col_to_offset(source, 3, 2), None);
     }
 
     #[test]
