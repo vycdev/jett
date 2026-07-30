@@ -5669,6 +5669,9 @@ The trace TOON goes through the ASP. The LLM receives it as structured data it c
 
 ### Rule Set 27: The Interactive Agent Breakpoint
 
+The unresolved pause, inspection, and transport protocol is tracked by
+[#41](https://github.com/vycdev/jett/issues/41).
+
 #### The Problem: LLMs Can't Step-Debug, and Print-Debugging Requires Predicting What to Inspect
 
 Human developers use interactive debuggers — set a breakpoint, step through code, inspect variables on demand. LLMs cannot do this because debuggers are interactive, cursor-driven tools designed for human terminal sessions.

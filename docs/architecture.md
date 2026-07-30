@@ -1061,7 +1061,7 @@ The runtime sits between Rust (~2K lines, no scheduler) and Pony (~15-20K lines,
 | **Task scheduler** | ~500 lines | For `run`/`join`/`cancel` structured concurrency. Built on top of the actor scheduler — a spawned task is a lightweight actor. |
 | **Capability constructors** | ~200 lines | Functions that create capability values at program startup. Called by the generated `main` wrapper. |
 | **Panic handler** | ~100 lines | For `assert` failures and unrecoverable errors. Prints the message and aborts. |
-| **Breakpoint IPC server** | ~300 lines | Debug-only. When a `breakpoint` is hit, pauses execution and opens a localhost HTTP server (or stdin/stdout loop) for the LLM to query variables and expressions. Compiled out in release. |
+| **Breakpoint IPC server** | ~300 lines | Debug-only. When a `breakpoint` is hit, pauses execution and opens a localhost HTTP server (or stdin/stdout loop) for the LLM to query variables and expressions. The pause, inspection, and transport protocol is tracked by [#41](https://github.com/vycdev/jett/issues/41). Compiled out in release. |
 | **Entry point** | ~100 lines | `_jett_entry` initializes the runtime (thread pool, event loop), constructs capabilities, calls user's `main()`, and shuts down cleanly. |
 
 ### How the Compiler Uses the Runtime
