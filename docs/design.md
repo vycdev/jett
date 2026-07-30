@@ -3843,6 +3843,9 @@ C interop introduces problems that Jett cannot fully solve:
 
 ### Rule Set 21: The Agent Server Protocol (ASP)
 
+> Tracked by [#35](https://github.com/vycdev/jett/issues/35) for the remaining
+> structured diagnostic context and agent-mode failure envelope.
+
 #### The Problem: Compiler Errors Are Designed for Human Eyes
 
 Modern compilers produce beautifully formatted error messages — Rust's errors have colored arrows pointing to the exact character, GCC draws ASCII underlines, Clang shows column-aligned source snippets with carets. These are excellent for humans reading a terminal.

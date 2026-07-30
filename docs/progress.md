@@ -118,6 +118,9 @@
 
 ### Phase H: Agent Tooling — PARTIAL
 
+> Tracked by [#35](https://github.com/vycdev/jett/issues/35) for the remaining
+> structured diagnostic context and agent-mode failure envelope.
+
 | Component | Status |
 |---|---|
 | TOON output (`--agent` flag) | Partial (build diagnostics include file, ok/error status, severity counts, ranged diagnostics/labels, and tabular suggested fixes; format status, run stdout/typed debug output, ranged verify/property test summaries, and namespace/symbol/type-at/definition-at/references-at/completion/signature query results are structured) |

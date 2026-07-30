@@ -1219,6 +1219,9 @@ The stdlib is a set of `.jett` files bundled with the compiler installation. At 
 
 ## Diagnostics System (`jett_diagnostics`)
 
+> Tracked by [#35](https://github.com/vycdev/jett/issues/35) for the optional
+> ASP diagnostic context and structured command-failure contract.
+
 All compiler errors flow through a unified diagnostics system that supports dual output modes.
 
 ### Diagnostic Structure
@@ -1260,6 +1263,9 @@ Every error has a stable code (e.g., `E0601` for secret type exposure, `E0801` f
 
 ## Query Engine (`jett_query`)
 
+> Agent-mode diagnostic preservation is tracked by
+> [#35](https://github.com/vycdev/jett/issues/35).
+
 The query engine powers both LSP and ASP interactive queries. It provides:
 
 | Query | Description | Used by |
@@ -1297,6 +1303,9 @@ The LSP server wraps the query engine and reacts to `textDocument/didChange` eve
 ---
 
 ## ASP Server (`jett_asp`)
+
+> The remaining cross-command failure envelope is tracked by
+> [#35](https://github.com/vycdev/jett/issues/35).
 
 The Agent Server Protocol is not a persistent server — it's the `--agent` flag on CLI commands. Each invocation produces a TOON document on stdout:
 
