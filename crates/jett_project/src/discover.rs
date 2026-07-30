@@ -47,6 +47,7 @@ pub fn discover_project(
         fs::read_to_string(&proj_path).map_err(|e| DiscoverError::IoError(proj_path.clone(), e))?;
 
     let (name, version, entry) = parse_project_file(&proj_content)?;
+    let entry = Path::new(&entry);
 
     let jett_files = find_jett_files(&project_dir)?;
 
@@ -60,7 +61,10 @@ pub fn discover_project(
 
         let namespaces = prescan_namespaces(&content, interner);
 
-        if path.ends_with(&entry) {
+        if path
+            .strip_prefix(&project_dir)
+            .is_ok_and(|relative| relative == entry)
+        {
             entry_file = Some(id);
         }
 
@@ -285,6 +289,7 @@ mod tests {
         let tmp = std::env::temp_dir().join("jett_test_project");
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(tmp.join("src")).unwrap();
+        fs::create_dir_all(tmp.join("vendor/src")).unwrap();
 
         fs::write(
             tmp.join("jett.proj"),
@@ -296,13 +301,22 @@ mod tests {
             "namespace app\n\nfunction main(stdout: Stdout) returns nothing:\n    Stdout.write(view stdout, \"hello\")\n",
         )
         .unwrap();
+        fs::write(
+            tmp.join("vendor/src/main.jett"),
+            "namespace vendor\n\nfunction helper() returns nothing:\n    return nothing\n",
+        )
+        .unwrap();
 
         let mut interner = SymbolInterner::new();
         let project = discover_project(&tmp, &mut interner).unwrap();
 
         assert_eq!(project.name, "testproject");
         assert_eq!(project.version, "0.1.0");
-        assert_eq!(project.files.len(), 1);
+        assert_eq!(project.files.len(), 2);
+        assert_eq!(
+            project.files[project.entry_file.index() as usize].path,
+            tmp.join("src/main.jett")
+        );
         assert_eq!(project.files[0].namespaces.len(), 1);
         assert_eq!(interner.resolve(project.files[0].namespaces[0].name), "app");
 
