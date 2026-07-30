@@ -1295,14 +1295,17 @@ mod tests {
     fn run_agent_output_includes_stdout_and_debug_rows() {
         let output = jett_driver::RunOutput {
             stdout: "hello\n".to_string(),
-            debug_output: vec!["trace total: int64 = 42".to_string()],
+            debug_output: vec![
+                "trace total: int64 = 42".to_string(),
+                "breakpoint hit: total: int64 = 42".to_string(),
+            ],
         };
 
         let rendered = render_run_agent_output("app.jett", &output);
 
         assert_eq!(
             rendered,
-            "status: ok\nfile: app.jett\nstdout: hello\\n\ndebug[1]{kind,message}:\n  trace,trace total: int64 = 42\n"
+            "status: ok\nfile: app.jett\nstdout: hello\\n\ndebug[2]{kind,message}:\n  trace,trace total: int64 = 42\n  breakpoint,breakpoint hit: total: int64 = 42\n"
         );
     }
 
