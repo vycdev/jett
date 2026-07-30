@@ -4100,6 +4100,9 @@ LSP is optimized for interactive, keystroke-by-keystroke human development. ASP 
 
 #### MCP Server — Agents Connect Directly
 
+> Tracked by [#37](https://github.com/vycdev/jett/issues/37) for the initial
+> transport, tool/resource inventory, and ASP handoff boundary.
+
 `jett mcp` starts a local MCP (Model Context Protocol) server that wraps the compiler. Any MCP-compatible agent (Claude, VS Code Copilot, Cursor, etc.) gets Jett support without a custom integration.
 
 **Tools** — the compiler's ASP commands exposed as callable tools:

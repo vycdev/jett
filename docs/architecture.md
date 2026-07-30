@@ -1321,6 +1321,9 @@ The ASP module formats `Diagnostic` structs and query results into TOON. It shar
 
 ## MCP Server (`jett_mcp`)
 
+> Tracked by [#37](https://github.com/vycdev/jett/issues/37) for the initial
+> transport, lifecycle, and shared ASP operation boundary.
+
 `jett mcp` starts a local MCP server (HTTP on localhost) that wraps ASP commands as MCP tools. Any MCP-compatible agent connects and calls tools like `jett_build`, `jett_query_type`, `jett_test`, etc.
 
 MCP is purely a transport layer — tools return the same TOON payloads as the ASP CLI commands.
