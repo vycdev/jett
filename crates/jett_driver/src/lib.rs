@@ -2726,7 +2726,12 @@ fn existing_paths_share_file_identity(left: &Path, right: &Path) -> bool {
     left_metadata.dev() == right_metadata.dev() && left_metadata.ino() == right_metadata.ino()
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn existing_paths_share_file_identity(left: &Path, right: &Path) -> bool {
+    same_file::is_same_file(left, right).unwrap_or(false)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn existing_paths_share_file_identity(_left: &Path, _right: &Path) -> bool {
     false
 }
@@ -3451,7 +3456,7 @@ mod tests {
         assert!(!bundled.contains("namespace stale"));
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[test]
     fn bundle_project_rejects_hard_linked_source_output() {
         let root = temp_test_dir("jett_driver_bundle_output_hard_link_alias");
