@@ -1,8 +1,7 @@
 # Raw JSON Access Semantics
 
 Status: decided. The helper split is implemented and its naming/default
-guidance is stable. This note remains at its originating path as the durable
-policy record.
+guidance is stable. This completed note is the durable policy record.
 
 This note records the staged policy decision around `json.field` and
 `json.index`.
