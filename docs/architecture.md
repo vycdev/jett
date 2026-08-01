@@ -1405,6 +1405,9 @@ Both profilers output via the diagnostics system in either human or TOON format.
 
 ## C Binding Generator (`jett_bind`)
 
+> Tracked by [#53](https://github.com/vycdev/jett/issues/53) for the initial C
+> FFI and generated binding contract.
+
 `jett bind "header.h" --output deps/binding.jett`
 
 ### Architecture
