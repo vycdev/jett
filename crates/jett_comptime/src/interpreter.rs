@@ -7765,14 +7765,6 @@ impl Interpreter {
                 }
             }
 
-            "string.is_not_empty" => {
-                require_args!(name, 1, args);
-                match &args[0] {
-                    Value::String(s) => Some(Ok(Value::Bool(!s.is_empty()))),
-                    _ => Some(Err(format!("{name} expects a string argument"))),
-                }
-            }
-
             "string.slugify" => {
                 require_args!(name, 1, args);
                 match &args[0] {
@@ -7810,32 +7802,6 @@ impl Interpreter {
                         Some(Ok(Value::String(result)))
                     }
                     _ => Some(Err(format!("{name} expects (string, int64, string)"))),
-                }
-            }
-
-            "string.between" => {
-                if args.len() != 3 {
-                    return Some(Err(format!("{name} expects 3 arguments")));
-                }
-                match (&args[0], &args[1], &args[2]) {
-                    (Value::String(s), Value::String(start), Value::String(end)) => {
-                        // Returns "" when the markers are not found (design doc shows plain string)
-                        let result =
-                            if let Some((_, start_end, _)) = string_find_grapheme_match(s, start) {
-                                let after_start = &s[start_end..];
-                                if let Some((end_pos, _, _)) =
-                                    string_find_grapheme_match(after_start, end)
-                                {
-                                    after_start[..end_pos].to_string()
-                                } else {
-                                    String::new()
-                                }
-                            } else {
-                                String::new()
-                            };
-                        Some(Ok(Value::String(result)))
-                    }
-                    _ => Some(Err(format!("{name} expects (string, string, string)"))),
                 }
             }
 
@@ -8891,50 +8857,6 @@ impl Interpreter {
                         }
                     }
                     _ => Some(Err(format!("{name} expects a list and two int64 indices"))),
-                }
-            }
-
-            // -- Additional string operations (stdlib/string.jett) ------------
-            "string.reverse" => {
-                require_args!(name, 1, args);
-                match &args[0] {
-                    Value::String(s) => {
-                        let reversed = string_graphemes(s).into_iter().rev().collect();
-                        Some(Ok(Value::String(reversed)))
-                    }
-                    _ => Some(Err(format!("{name} expects a string argument"))),
-                }
-            }
-
-            "string.after" => {
-                require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
-                    (Value::String(s), Value::String(marker)) => {
-                        let result =
-                            if let Some((_, end, _)) = string_find_grapheme_match(s, marker) {
-                                s[end..].to_string()
-                            } else {
-                                String::new()
-                            };
-                        Some(Ok(Value::String(result)))
-                    }
-                    _ => Some(Err(format!("{name} expects two string arguments"))),
-                }
-            }
-
-            "string.before" => {
-                require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
-                    (Value::String(s), Value::String(marker)) => {
-                        let result =
-                            if let Some((start, _, _)) = string_find_grapheme_match(s, marker) {
-                                s[..start].to_string()
-                            } else {
-                                s.clone()
-                            };
-                        Some(Ok(Value::String(result)))
-                    }
-                    _ => Some(Err(format!("{name} expects two string arguments"))),
                 }
             }
 

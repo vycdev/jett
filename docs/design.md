@@ -6515,6 +6515,14 @@ The standard library is intentionally massive and opinionated. The goal is to ma
 - **random** — random numbers, random selection, shuffling
 - **uuid** — UUID generation (generation and entropy contract [tracked by #73](https://github.com/vycdev/jett/issues/73))
 
+Compositional string helpers should be ordinary Jett source when the language
+can express them without losing Unicode semantics. `string.is_not_empty`,
+`string.reverse`, `string.after`, `string.before`, and `string.between` are
+therefore defined in `stdlib/string.jett` and resolved like user functions.
+Their Unicode- and grapheme-sensitive dependencies, including `string.chars`,
+`string.index_of`, `string.char_count`, and `string.slice`, remain Rust-backed
+primitive kernels.
+
 ---
 
 ## LLM-Specific Optimizations

@@ -61,6 +61,11 @@ function grapheme_boundary_search_test() returns string:
     return "{starts_partial}:{ends_partial}:{after_whole}:{bytes.to_hex(bytes.from_string(before_partial))}:{bytes.to_hex(bytes.from_string(removed_prefix))}"
 verify grapheme_boundary_search_test:
     assert grapheme_boundary_search_test() == "false:false::ok:65cc81:65cc81"
+function grapheme_between_test() returns string:
+    string cluster = combining_grapheme_text()
+    return string.between("{cluster}value{cluster}", cluster, cluster)
+verify grapheme_between_test:
+    assert grapheme_between_test() == "value"
 # --- string.to_upper_first / string.to_lower_first ---
 function capitalize_test() returns string:
     return string.to_upper_first("hello world")
