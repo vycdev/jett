@@ -804,12 +804,10 @@ impl<'src> Lexer<'src> {
                 return;
             }
             _ => {
-                self.pos += 1;
+                let character = self.source[start..].chars().next().unwrap_or('?');
+                self.pos += character.len_utf8();
                 self.errors.push(LexError {
-                    message: format!(
-                        "unexpected character '{}'",
-                        self.source[start..self.pos].chars().next().unwrap_or('?')
-                    ),
+                    message: format!("unexpected character '{character}'"),
                     span: Span::new(self.file, start as u32, self.pos as u32),
                 });
                 TokenKind::InvalidToken
@@ -1621,6 +1619,17 @@ mod tests {
         let k: Vec<_> = result.tokens.iter().map(|t| t.kind).collect();
         assert!(k.contains(&TokenKind::Ident));
         assert!(k.contains(&TokenKind::InvalidToken));
+    }
+
+    #[test]
+    fn test_non_ascii_unknown_char() {
+        let result = tokenize("é", file());
+
+        assert_eq!(result.errors.len(), 1);
+        assert_eq!(result.errors[0].message, "unexpected character 'é'");
+        assert_eq!(result.errors[0].span, Span::new(file(), 0, 2));
+        assert_eq!(result.tokens[0].kind, TokenKind::InvalidToken);
+        assert_eq!(text_of(&result, 0), "é");
     }
 
     #[test]
