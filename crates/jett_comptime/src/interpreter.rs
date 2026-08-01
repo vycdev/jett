@@ -8707,7 +8707,14 @@ impl Interpreter {
                         let mut total: i64 = 0;
                         for item in items {
                             match item {
-                                Value::Int64(n) => total += n,
+                                Value::Int64(n) => {
+                                    let Some(next_total) = total.checked_add(*n) else {
+                                        return Some(Err(format!(
+                                            "math.sum: integer overflow: {total} + {n}"
+                                        )));
+                                    };
+                                    total = next_total;
+                                }
                                 _ => {
                                     return Some(Err(
                                         "math.sum: list must contain int64 values".to_string()
