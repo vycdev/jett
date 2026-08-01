@@ -1221,7 +1221,26 @@ Format-specific modules such as `json` should live in `.jett` stdlib code once r
 
 Functions like `list.filter`, `string.trim`, `math.sqrt`, `time.format`, `crypto.sha256`, etc. These are regular `.jett` files that use the same language features as user code. The compiler discovers them via the namespace system (they declare namespaces like `namespace string`, `namespace math`, etc.).
 
-The compiler does not have hardcoded knowledge of these functions. They are resolved by name during name resolution like any other `use` import.
+The compiler-backed public map namespace is transitional technical debt. Its
+target boundary is an exported compiler-shipped `.jett` declaration for every
+public `map.*` operation, with compositional helpers implemented by real Jett
+bodies and no hardcoded compiler knowledge of public map names or signatures.
+Storage, key equality, lookup/update, and iteration may delegate to private
+trusted runtime kernels; those kernels are implementation details, not public
+compiler-owned functions.
+
+[#61](https://github.com/vycdev/jett/issues/61) is a bounded first slice that
+moves `map.is_empty`, `map.contains_key`, `map.set`, `map.get_or`, and
+`map.merge`. Follow-up work must add source-owned public declarations for
+`new`, `length`, `has`, `get`, `insert`, `remove`, `keys`, `values`,
+`from_lists`, `entries`, `filter`, `map_values`, and `for_each`, replacing each
+remaining hardcoded public signature and runtime dispatch arm. Only private
+storage, key-equality, lookup/update, and iteration kernels may remain behind
+those source declarations.
+
+At the target boundary, the compiler does not have hardcoded knowledge of
+public stdlib function names or signatures. Source-defined public functions are
+resolved through their declarations like ordinary namespaced code.
 
 The current math extraction is intentionally narrower than that end state.
 `math.is_even`, `math.is_odd`, `math.sign`, `math.to_radians`, and
