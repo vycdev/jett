@@ -1219,6 +1219,11 @@ Format-specific modules such as `json` should live in `.jett` stdlib code once r
 
 **2. Stdlib functions** — normal Jett code shipped in `stdlib/`:
 
+> The first bounded extraction of compositional `string` helpers from
+> checker/interpreter cases into `stdlib/string.jett` is
+> [tracked by #55](https://github.com/vycdev/jett/issues/55). Unicode and
+> grapheme-sensitive primitives remain runtime-backed kernels for that slice.
+
 Functions like `list.filter`, `string.trim`, `math.sqrt`, `time.format`, `crypto.sha256`, etc. These are regular `.jett` files that use the same language features as user code. The compiler discovers them via the namespace system (they declare namespaces like `namespace string`, `namespace math`, etc.).
 
 The compiler does not have hardcoded knowledge of these functions. They are resolved by name during name resolution like any other `use` import.
