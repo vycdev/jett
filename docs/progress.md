@@ -46,7 +46,7 @@
 | MIR (control flow graph) | `jett_mir` | — | Not started ([Tracked by #22](https://github.com/vycdev/jett/issues/22)) |
 | LLVM native codegen | `jett_codegen_llvm` | — | Not started |
 | Runtime library | `jett_runtime` | — | Not started |
-| Core stdlib (.jett files) | `stdlib/` | — | Partial (bootstrap loader plus marker module and extracted `json` module; `math.is_even`, `math.is_odd`, `math.sign`, `math.to_radians`, and `math.to_degrees` are source-defined in `stdlib/math.jett`; `math.sum` source extraction is [tracked by #63](https://github.com/vycdev/jett/issues/63); many other modules and math operations remain Rust-backed) |
+| Core stdlib (.jett files) | `stdlib/` | — | Partial (bootstrap loader plus marker module and extracted `json` module; `math.is_even`, `math.is_odd`, `math.sign`, `math.to_radians`, and `math.to_degrees` are source-defined in `stdlib/math.jett`; `math.sum` source extraction is [tracked by #63](https://github.com/vycdev/jett/issues/63); basic list helper extraction is [tracked by #57](https://github.com/vycdev/jett/issues/57); many other modules and math operations remain Rust-backed) |
 
 ### Phase E: Comptime and Verification — COMPLETE
 
@@ -155,7 +155,7 @@
 | Module | Status |
 |---|---|
 | `string` | Partial (30+ builtins: length/char_count, contains, trim, upper, lower, replace, split, join, starts_with, ends_with, is_empty, slice, repeat, pad_left, pad_end, from_int64, from_float64, from_bool, slugify, truncate, between, reverse, after, before, chars, words, lines, index_of, count, to_upper_first, to_lower_first; count/index/search/extraction helpers avoid partial grapheme matches) |
-| `list` | Partial (40+ builtins: new, length, append, get, first, last, is_empty, skip, take, reverse, sort, contains, index_of, remove, concat, flatten, unique, zip, chunk, sort_by_index, is_sorted, all_elements_in, enumerate, from_set, repeat, range, last_index_of, insert_at, remove_at, swap + higher-order: filter, map, find, sort_by, all, any, count, sum, group_by, reduce, flat_map) |
+| `list` | Partial (40+ compiler-backed public operations are transitional technical debt; every public declaration must ultimately move to compiler-shipped `.jett` source, with only private trusted allocation, indexing, mutation, sorting, and callback kernels retained; the first `is_empty`, `first`, and `last` source extraction slice, including collection-view ownership regressions, is [tracked by #57](https://github.com/vycdev/jett/issues/57)) |
 | `set` | Partial (12 builtins: new, add, remove, contains, length, is_empty, to_list, union, intersection, difference) |
 | `map` | Partial (17+ builtins: new, length, has/contains_key, get, get_or, insert/set, remove, keys, values, is_empty, merge, from_lists, entries + higher-order filter, map_values, for_each) |
 | `math` | Partial (`is_even`, `is_odd`, `sign`, `to_radians`, and `to_degrees` are source-defined in `stdlib/math.jett`; `mod` and `pi` remain primitive Rust kernels used by those helpers; other supported operations such as abs, sqrt, pow, floor, ceil, round, clamp, log, log2, log10, min, max, average, median, e, sin, cos, tan, and sum remain Rust-backed; `math.sum` source extraction is [tracked by #63](https://github.com/vycdev/jett/issues/63)) |
