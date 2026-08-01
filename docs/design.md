@@ -3971,6 +3971,11 @@ symbols[3]{name,kind,namespace,visibility,signature,line,column,end_line,end_col
   auth.validate_user,function,auth,private,auth.validate_user(user: auth.User) returns result[auth.User\, string],21,10,21,23
 ```
 
+If the requested symbol file does not parse, agent mode returns the same
+structured diagnostic envelope as `jett build --agent`, including stable error
+codes and source ranges. File-read and command-usage failures remain
+operational `error` scalars because the compiler did not produce a diagnostic.
+
 **Type information queries:**
 
 ```

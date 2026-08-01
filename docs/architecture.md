@@ -1279,6 +1279,12 @@ The query engine powers both LSP and ASP interactive queries. It provides:
 | `references_at(file, line, col)` | Find all references to the selected symbol with use-site ranges | ASP |
 | `diagnostics(file)` | All errors/warnings for a file | LSP |
 
+File-symbol query failures retain parser `Diagnostic` values through the driver
+boundary. Agent mode renders those failures with the build diagnostic envelope;
+only operational failures without compiler diagnostics use a prose `error`
+scalar. Extending that boundary to the remaining queries and commands is
+tracked by #35.
+
 ### Demand-Driven Computation
 
 The query engine is built on **salsa** — the same demand-driven incremental framework used by rust-analyzer. Queries are pure functions that are memoized and automatically invalidated when their inputs change.
