@@ -2763,15 +2763,11 @@ string combined = string.join(list("prefix", key, "suffix"), "-")
 
 **2. Explicit declassification — the only way to coarsen a secret.**
 
-When code genuinely needs to use a secret value (e.g., to send it in an authentication header, to compare against a hash), it must use the `declassify` keyword. This is a deliberate, auditable action:
-
-```
-function authenticate(stored_hash: secret[string], input_password: string) returns bool:
-    string input_hash = crypto.sha256(input_password)
-    return declassify stored_hash is input_hash
-    # `declassify` explicitly coarsens the secret for this comparison.
-    # This is auditable — grep for "declassify" to find every place secrets are accessed.
-```
+When code genuinely needs to expose or publicly use a secret value (for example,
+to send it in an authentication header), it must use the `declassify` keyword.
+This is a deliberate, auditable action. Comparisons do not require exposure:
+supported string and byte-string secrets should use `secret.compare` instead,
+as described below.
 
 ```
 function call_external_api(view net: Network, api_key: secret[string], payload: string) returns result[Response, string]:
@@ -2802,7 +2798,23 @@ bool match = secret.compare(stored_hash, computed_hash)
 # Constant-time comparison that returns bool without declassifying either value.
 ```
 
-The supported payload and lowering boundary is [tracked by #33](https://github.com/vycdev/jett/issues/33).
+The current `secret.compare` contract is deliberately narrow. It accepts only
+compatible `secret[string]` and `secret[bytes]` values, including refinement
+aliases that coarsen to those secret payloads. Other payloads are rejected
+rather than compared through ordinary runtime equality. Strings compare by
+their UTF-8 bytes; byte strings compare directly. Equality requires the same
+length and the same bytes.
+
+Payload length is observable under this initial contract, so a length mismatch
+may return `false` immediately. Equal-length payloads use a vetted constant-time
+byte comparison with no content-dependent early exit. This gives constant work
+for fixed public lengths; it does not claim to hide length.
+Future HIR, MIR, and native backends must preserve those semantics with a
+vetted constant-time primitive or lowering that cannot be changed into
+content-short-circuiting equality by optimization. This boundary was resolved
+by [#33](https://github.com/vycdev/jett/issues/33); native lowering remains part
+of [#20](https://github.com/vycdev/jett/issues/20) and
+[#22](https://github.com/vycdev/jett/issues/22).
 
 #### Secret Types with Refinement Types
 

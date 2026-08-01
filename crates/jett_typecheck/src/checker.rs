@@ -925,6 +925,54 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn secret_compare_payload_supported(&self, id: TypeId) -> bool {
+        matches!(
+            self.interner.resolve(self.fully_coarsened_type(id)),
+            Type::String | Type::Bytes | Type::Error
+        )
+    }
+
+    fn check_secret_compare_types(&mut self, arg_types: &[TypeId], spans: &[Span]) {
+        if arg_types.len() != 2 || spans.len() != 2 {
+            return;
+        }
+
+        let (Some(lhs_inner), Some(rhs_inner)) = (
+            self.secret_inner_type(arg_types[0]),
+            self.secret_inner_type(arg_types[1]),
+        ) else {
+            return;
+        };
+
+        let mut supported = true;
+        for (arg_type, inner, span) in [
+            (arg_types[0], lhs_inner, spans[0]),
+            (arg_types[1], rhs_inner, spans[1]),
+        ] {
+            if !self.secret_compare_payload_supported(inner) {
+                self.sink.emit(errors::secret_compare_unsupported_payload(
+                    &self.type_name(arg_type),
+                    span,
+                ));
+                supported = false;
+            }
+        }
+
+        let lhs_comparison_type = self.fully_coarsened_type(lhs_inner);
+        let rhs_comparison_type = self.fully_coarsened_type(rhs_inner);
+        if supported
+            && (!self.types_compatible(lhs_comparison_type, rhs_comparison_type)
+                || !self.types_compatible(rhs_comparison_type, lhs_comparison_type))
+        {
+            self.sink.emit(errors::argument_type_mismatch(
+                "#2",
+                &self.type_name(arg_types[0]),
+                &self.type_name(arg_types[1]),
+                spans[1],
+            ));
+        }
+    }
+
     fn strip_secret_type(&self, id: TypeId) -> (TypeId, bool) {
         match self.secret_inner_type(id) {
             Some(inner) => (inner, true),
@@ -8031,23 +8079,15 @@ impl<'a> TypeChecker<'a> {
             );
         }
 
-        if matches!(callee_name.as_deref(), Some("secret.compare")) && checked_arg_types.len() == 2
-        {
-            if let (Some(lhs_inner), Some(rhs_inner)) = (
-                self.secret_inner_type(checked_arg_types[0]),
-                self.secret_inner_type(checked_arg_types[1]),
-            ) {
-                if !self.types_compatible(lhs_inner, rhs_inner)
-                    || !self.types_compatible(rhs_inner, lhs_inner)
-                {
-                    self.sink.emit(errors::argument_type_mismatch(
-                        "#2",
-                        &self.type_name(checked_arg_types[0]),
-                        &self.type_name(checked_arg_types[1]),
-                        step.span,
-                    ));
-                }
-            }
+        if matches!(callee_name.as_deref(), Some("secret.compare")) {
+            let spans = [
+                step.span,
+                extra_args
+                    .first()
+                    .map(|arg| arg.value.span())
+                    .unwrap_or(step.span),
+            ];
+            self.check_secret_compare_types(&checked_arg_types, &spans);
         }
 
         self.check_json_pipeline_public_call_policy(
@@ -9406,23 +9446,9 @@ impl<'a> TypeChecker<'a> {
             }
         }
 
-        if matches!(callee_name.as_deref(), Some("secret.compare")) && checked_arg_types.len() == 2
-        {
-            if let (Some(lhs_inner), Some(rhs_inner)) = (
-                self.secret_inner_type(checked_arg_types[0]),
-                self.secret_inner_type(checked_arg_types[1]),
-            ) {
-                if !self.types_compatible(lhs_inner, rhs_inner)
-                    || !self.types_compatible(rhs_inner, lhs_inner)
-                {
-                    self.sink.emit(errors::argument_type_mismatch(
-                        "#2",
-                        &self.type_name(checked_arg_types[0]),
-                        &self.type_name(checked_arg_types[1]),
-                        args[1].value.span(),
-                    ));
-                }
-            }
+        if matches!(callee_name.as_deref(), Some("secret.compare")) {
+            let spans: Vec<_> = args.iter().map(|arg| arg.value.span()).collect();
+            self.check_secret_compare_types(&checked_arg_types, &spans);
         }
 
         self.check_json_public_call_policy(
@@ -13561,7 +13587,7 @@ function main() returns bool:
             "\
 function main() returns bool:
     secret[string] stored = \"abc\"
-    secret[int64] computed = 1
+    secret[bytes] computed = bytes.from_string(\"abc\")
     return secret.compare(stored, computed)
 ",
         );
@@ -13569,6 +13595,24 @@ function main() returns bool:
         assert!(
             errors.iter().any(|d| d.code.code() == 304),
             "expected E0304, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn secret_compare_rejects_unsupported_payloads() {
+        let errors = check_source_errors(
+            "\
+function main() returns bool:
+    secret[int64] stored = 1
+    secret[int64] computed = 1
+    return secret.compare(stored, computed)
+",
+        );
+
+        assert!(
+            errors.iter().any(|d| d.code.code() == 604),
+            "expected E0604, got: {:?}",
             errors
         );
     }

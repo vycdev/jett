@@ -495,6 +495,15 @@ pub fn secret_operation_requires_secret(operation: &str, got: &str, span: Span) 
     )
 }
 
+/// E0604: `secret.compare` received a payload without a constant-time contract.
+pub fn secret_compare_unsupported_payload(got: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        604,
+        format!("`secret.compare` supports only `secret[string]` and `secret[bytes]`, got `{got}`"),
+        span,
+    )
+}
+
 /// E0603: A type containing secret data reached a forbidden output boundary.
 pub fn type_contains_secret_data(
     boundary: &str,

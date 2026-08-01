@@ -36,7 +36,7 @@
 |---|---|---|---|
 | Ownership analysis (move/view/consume) | `jett_typecheck/ownership` | 9 | Done |
 | Capability purity enforcement | `jett_typecheck/capability` | 7 | Done |
-| Secret taint analysis | — | — | Partial (refined-secret taint fixed by [#18](https://github.com/vycdev/jett/issues/18); constant-time `secret.compare` boundary [tracked by #33](https://github.com/vycdev/jett/issues/33)) |
+| Secret taint analysis | — | — | Partial (refined-secret taint fixed by [#18](https://github.com/vycdev/jett/issues/18); content-constant interpreter comparison for string/bytes secrets defined by [#33](https://github.com/vycdev/jett/issues/33), with native lowering pending [#20](https://github.com/vycdev/jett/issues/20) and [#22](https://github.com/vycdev/jett/issues/22)) |
 
 ### Phase D: Code Generation — NOT STARTED
 
@@ -80,7 +80,7 @@
 | Structured concurrency (`run`, `join`, `cancel`) | Done |
 | Interface/implement blocks | Done |
 | `mutual` blocks | Done |
-| Secret types (`secret[T]`, `declassify`) | Partial (refined-secret taint fixed by [#18](https://github.com/vycdev/jett/issues/18); constant-time `secret.compare` boundary [tracked by #33](https://github.com/vycdev/jett/issues/33)) |
+| Secret types (`secret[T]`, `declassify`) | Partial (refined-secret taint fixed by [#18](https://github.com/vycdev/jett/issues/18); `secret.compare` now accepts only compatible string/bytes secrets and avoids content-dependent early exits in the interpreter per [#33](https://github.com/vycdev/jett/issues/33); native lowering remains pending) |
 | Handle blocks (`handle error:`, `handle:`, `default`) | Done |
 | Generic structs | Done |
 | Generic functions | Done |
