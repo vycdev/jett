@@ -170,8 +170,17 @@ fn collect_jett_files(dir: &Path, files: &mut Vec<PathBuf>) -> Result<(), Discov
     for entry in entries {
         let entry = entry.map_err(|e| DiscoverError::IoError(dir.to_path_buf(), e))?;
         let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|e| DiscoverError::IoError(path.clone(), e))?;
 
-        if path.is_dir() {
+        if file_type.is_symlink() {
+            // Source-file symlinks are supported, but following directory
+            // symlinks could recursively pull in linked trees or create a cycle.
+            if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("jett") {
+                files.push(path);
+            }
+        } else if file_type.is_dir() {
             // Skip hidden directories and target/
             let dir_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
             if !dir_name.starts_with('.') && dir_name != "target" {
@@ -350,5 +359,32 @@ mod tests {
             DiscoverError::NoSourceFiles(path) => assert_eq!(path, tmp),
             other => panic!("expected no-source-files error, got {other}"),
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn discover_project_ignores_symlinked_source_directories() {
+        use std::os::unix::fs::symlink;
+
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after the Unix epoch")
+            .as_nanos();
+        let tmp = std::env::temp_dir().join(format!("jett_symlink_project_{nanos}"));
+        let external = std::env::temp_dir().join(format!("jett_symlink_external_{nanos}"));
+        fs::create_dir_all(tmp.join("src")).unwrap();
+        fs::create_dir_all(&external).unwrap();
+        fs::write(tmp.join("jett.proj"), "name: symlinked\n").unwrap();
+        fs::write(tmp.join("src/main.jett"), "namespace app\n").unwrap();
+        fs::write(external.join("outside.jett"), "namespace outside\n").unwrap();
+        symlink(&external, tmp.join("linked")).unwrap();
+
+        let mut interner = SymbolInterner::new();
+        let project = discover_project(&tmp, &mut interner).unwrap();
+
+        let _ = fs::remove_dir_all(&tmp);
+        let _ = fs::remove_dir_all(&external);
+        assert_eq!(project.files.len(), 1);
+        assert_eq!(project.files[0].path, tmp.join("src/main.jett"));
     }
 }
