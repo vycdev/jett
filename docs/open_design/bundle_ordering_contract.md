@@ -1,7 +1,9 @@
 # Bundle Ordering Contract
 
-Status: partially implemented. The first `jett bundle` implementation uses the
-validation-first contract below. Dependency-aware reordering remains open.
+Status: implemented. `jett bundle` uses resolver-derived dependency edges,
+deterministic whole-file ordering, structured cycle diagnostics, and the
+validation-first write contract below. Future module/import registry work may
+replace the dependency source without changing this bundling contract.
 
 ## Problem
 
@@ -17,35 +19,47 @@ code differs from source-project code.
 
 ## Conservative Contract
 
-The first implementation should be validation-first:
+The implementation remains validation-first:
 
 - Preserve each source file's internal declaration order exactly.
-- Use a deterministic project-file order only as a candidate bundle order.
+- Use deterministic whole-file dependency order as the candidate bundle order.
 - Parse, resolve, and typecheck the generated bundle before writing or reporting
   success.
-- If validation fails because of declaration order, report structured bundle
-  diagnostics and leave the output file untouched.
+- If ordering or validation fails, report structured bundle diagnostics and
+  leave the output file untouched.
 - Do not introduce a bundler-only relaxation of forward-reference rules.
 
 This keeps the command honest: it either produces a distributable file with the
 same compiler policy as ordinary source, or it explains why the current project
 layout cannot be represented as a single file yet.
 
-## Future Direction
+## Implemented Dependency Ordering
 
-Tracked by [#13](https://github.com/vycdev/jett/issues/13) for dependency-aware
-whole-file ordering and structured failure diagnostics.
+Tracked by [#13](https://github.com/vycdev/jett/issues/13).
 
-A later bundler can perform dependency-aware ordering, but only if it preserves
-Jett's local readability constraints:
+The bundler parses every project file with a distinct `FileId`, merges those
+modules for name resolution, and derives file edges from the resolver's
+canonical reference-to-definition mapping. Resolver-owned E0205 definition
+labels supply the same edge when a strict forward reference is intentionally
+absent from the successful-resolution map. This avoids a second approximation
+of Jett expressions, types, namespace qualification, or aliases inside the
+bundler.
 
-- It may reorder whole files only when doing so does not split declarations.
-- It must not reorder declarations within a file.
-- It should emit an agent-readable manifest table that maps source files to
+The graph is topologically sorted with lexical path order as the deterministic
+tie-breaker. This preserves Jett's local readability constraints:
+
+- It reorders whole files only when doing so does not split declarations.
+- It does not reorder declarations within a file.
+- It emits an agent-readable manifest table that maps source files to
   output line ranges.
 - If two files are mutually dependent in a way that requires interleaving
-  declarations, the bundler should fail and recommend extracting shared
+  declarations, the bundler fails and recommends extracting shared
   definitions into an earlier namespace/file.
+
+After ordering, the ordinary single-source build remains authoritative. Parse,
+resolution, type, or policy errors that are unrelated to cross-file ordering
+are reported by candidate validation, and the output is written only after
+that validation succeeds.
 
 ## Agent Output Shape
 
@@ -62,5 +76,5 @@ bundled_files[3]{path,start_line,end_line}:
   src/public_api.jett,99,120
 ```
 
-On failure, use `status: error` with diagnostics from validating the candidate
-bundle, not a prose-only explanation.
+On failure, use `status: error` with structured ordering or candidate-validation
+diagnostics, not a prose-only explanation.
