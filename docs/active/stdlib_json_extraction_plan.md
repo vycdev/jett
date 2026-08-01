@@ -44,7 +44,17 @@ the public `json.*` API.
   compiler-owned signatures for
   `new`/`add`/`remove`/`contains`/`length`/`is_empty`/`to_list`/`union`/
   `intersection`/`difference`, so JSON set parsing fixtures typecheck through
-  normal builtin signatures.
+  normal builtin signatures. This compiler-backed public surface is
+  transitional technical debt: every public `set.*` declaration and signature
+  must ultimately move to compiler-shipped `.jett` source, and the compiler
+  must not retain hardcoded public set names or signatures. Public source
+  declarations may delegate equality, storage, cardinality, iteration, and
+  conversion to private trusted runtime kernels, but those kernels remain
+  implementation details. Extracting the first compositional `is_empty`,
+  `union`, `intersection`, and `difference` slice into real Jett bodies is
+  [tracked by #59](https://github.com/vycdev/jett/issues/59); follow-up remains
+  for public `new`, `add`, `remove`, `contains`, `length`, and `to_list`
+  declarations.
 
 That means physical stdlib JSON fragments under `stdlib/json/` are available
 to single-file builds, but ordinary `namespace json` functions still do not

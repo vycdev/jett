@@ -1221,7 +1221,22 @@ Format-specific modules such as `json` should live in `.jett` stdlib code once r
 
 Functions like `list.filter`, `string.trim`, `math.sqrt`, `time.format`, `crypto.sha256`, etc. These are regular `.jett` files that use the same language features as user code. The compiler discovers them via the namespace system (they declare namespaces like `namespace string`, `namespace math`, etc.).
 
-The compiler does not have hardcoded knowledge of these functions. They are resolved by name during name resolution like any other `use` import.
+The current compiler-backed public `set.*` surface is transitional technical
+debt, not a namespace exception. Every public set declaration and signature
+must ultimately live in compiler-shipped `.jett` source, and compositional
+helpers must have real Jett bodies. Public source functions may delegate to
+private trusted runtime kernels for equality, storage, cardinality, iteration,
+or conversion, but those kernels are implementation details: the compiler must
+not retain hardcoded knowledge of public set names or signatures.
+
+The first extraction slice is
+[tracked by #59](https://github.com/vycdev/jett/issues/59). It moves
+`set.is_empty`, `set.union`, `set.intersection`, and `set.difference` to real
+Jett bodies while preserving existing behavior. Follow-up extraction remains
+required for the public `set.new`, `set.add`, `set.remove`, `set.contains`,
+`set.length`, and `set.to_list` declarations that front the trusted kernels.
+
+In the target architecture, the compiler has no hardcoded knowledge of public stdlib functions. They are resolved by name during name resolution like any other `use` import.
 
 The current math extraction is intentionally narrower than that end state.
 `math.is_even`, `math.is_odd`, `math.sign`, `math.to_radians`, and
