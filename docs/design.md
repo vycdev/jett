@@ -1376,9 +1376,10 @@ separately extracted.
 
 **Hashing and encoding — no third-party dependencies:**
 
-> Tracked by [#71](https://github.com/vycdev/jett/issues/71) for the stable
-> encoding API, byte/string representations, failure contract, and
-> stdlib/runtime boundary.
+> Tracked by [#69](https://github.com/vycdev/jett/issues/69) for the stable
+> hashing API, security guarantees, and stdlib/runtime boundary.
+> Encoding API representations, failure behavior, and its stdlib/runtime
+> boundary are separately [tracked by #71](https://github.com/vycdev/jett/issues/71).
 
 ```
 use crypto
@@ -6502,7 +6503,7 @@ The standard library is intentionally massive and opinionated. The goal is to ma
 - **test** — mock infrastructure for property-based testing (`test.mock` for mock filesystems, networks, etc.)
 - **log** — structured logging with levels
 - **format** — number formatting, padding, and text alignment
-- **crypto** — hashing (sha256, sha512, md5), HMAC
+- **crypto** — hashing (sha256, sha512, md5), HMAC; the stable API, security guarantees, and stdlib/runtime boundary are [tracked by #69](https://github.com/vycdev/jett/issues/69)
 - **encoding** — base64, hex, URL encoding/decoding; the stable representations,
   failure contract, and stdlib/runtime boundary are [tracked by #71](https://github.com/vycdev/jett/issues/71)
 - **validate** — standard refinement types for common formats: Email, URL, UUID, IPv4, IPv6. The type IS the validation — once assigned, the value is guaranteed valid.
