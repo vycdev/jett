@@ -64,6 +64,9 @@ impl<'src> Lexer<'src> {
             }
         }
 
+        // A final line does not need a newline, so validate its line ending at EOF too.
+        self.check_trailing_whitespace();
+
         // At EOF, emit dedents back to level 0
         let eof_pos = self.pos as u32;
         while self.indent_stack.len() > 1 {
@@ -121,6 +124,15 @@ impl<'src> Lexer<'src> {
             self.emit(TokenKind::InvalidToken, line_start, self.pos);
         }
 
+        let is_blank_line =
+            self.at_end() || self.current_byte() == b'\n' || self.current_byte() == b'\r';
+        if is_blank_line && spaces > 0 && !has_tab {
+            self.errors.push(LexError {
+                message: "trailing whitespace is not allowed".into(),
+                span: Span::new(self.file, line_start as u32, self.pos as u32),
+            });
+        }
+
         // Check if rest of line is blank or comment-only
         if self.at_end() || self.current_byte() == b'\n' {
             // Blank line — skip the newline
@@ -143,7 +155,9 @@ impl<'src> Lexer<'src> {
         if self.current_byte() == b'#' {
             // Comment line — skip to end of line
             self.skip_comment();
-            // After comment, we'll hit newline or EOF, handle in next iteration
+            if !self.at_end() {
+                self.check_trailing_whitespace();
+            }
             self.skip_newline();
             // stay at_line_start
             return;
@@ -312,7 +326,7 @@ impl<'src> Lexer<'src> {
     }
 
     fn check_trailing_whitespace(&mut self) {
-        // Walk backwards to find if spaces precede the newline
+        // Walk backwards to find if spaces precede the current line ending.
         if self.pos > 0 {
             let mut check = self.pos - 1;
             let mut found_trailing = false;
@@ -1953,6 +1967,50 @@ mod tests {
                 .any(|e| e.message.contains("trailing whitespace")),
             "should report trailing whitespace error"
         );
+    }
+
+    #[test]
+    fn test_trailing_whitespace_error_at_eof() {
+        let result = tokenize("x   ", file());
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.message.contains("trailing whitespace")),
+            "should report trailing whitespace error at EOF"
+        );
+        let error = result
+            .errors
+            .iter()
+            .find(|e| e.message.contains("trailing whitespace"))
+            .unwrap();
+        assert_eq!((error.span.start, error.span.end), (1, 4));
+    }
+
+    #[test]
+    fn test_trailing_whitespace_error_on_comment_only_line() {
+        let result = tokenize("# comment   \ny", file());
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.message.contains("trailing whitespace")),
+            "should report trailing whitespace on comment-only lines"
+        );
+    }
+
+    #[test]
+    fn test_whitespace_only_line_error() {
+        for source in ["   \n", "   "] {
+            let result = tokenize(source, file());
+            assert!(
+                result
+                    .errors
+                    .iter()
+                    .any(|e| e.message.contains("trailing whitespace")),
+                "should report whitespace-only line: {source:?}"
+            );
+        }
     }
 
     #[test]
