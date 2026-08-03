@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use rand::Rng;
+use subtle::ConstantTimeEq;
 
 use jett_common::{FileId, Span, is_json_raw_facade, json_public_bridge_spec};
 use jett_parser::ast::{
@@ -33,6 +34,14 @@ fn check_args(name: &str, expected: usize, args: &[Value]) -> Option<Result<Valu
     } else {
         None
     }
+}
+
+/// Compare secret byte strings without content-dependent early exits.
+///
+/// Payload lengths are observable by contract. Equal-length contents are handed
+/// to a vetted constant-time primitive instead of ordinary slice equality.
+fn constant_time_secret_bytes_equal(lhs: &[u8], rhs: &[u8]) -> bool {
+    lhs.len() == rhs.len() && bool::from(lhs.ct_eq(rhs))
 }
 
 /// Convenience macro: invoke `check_args` and, if the count is wrong,
@@ -7495,7 +7504,20 @@ impl Interpreter {
 
             "secret.compare" => {
                 require_args!(name, 2, args);
-                Some(Ok(Value::Bool(args[0] == args[1])))
+                let equal = match (&args[0], &args[1]) {
+                    (Value::String(lhs), Value::String(rhs)) => {
+                        constant_time_secret_bytes_equal(lhs.as_bytes(), rhs.as_bytes())
+                    }
+                    (Value::Bytes(lhs), Value::Bytes(rhs)) => {
+                        constant_time_secret_bytes_equal(lhs, rhs)
+                    }
+                    _ => {
+                        return Some(Err(
+                            "secret.compare expects two strings or two byte strings".to_string(),
+                        ));
+                    }
+                };
+                Some(Ok(Value::Bool(equal)))
             }
 
             // -- Random operations (stdlib/random.jett) -----------------------

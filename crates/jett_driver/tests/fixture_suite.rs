@@ -275,6 +275,14 @@ compile_fail_fixture!(compile_fail_type_mismatch, "type_mismatch.jett");
 compile_fail_fixture!(compile_fail_secret_stdout, "secret_stdout.jett");
 compile_fail_fixture!(compile_fail_secret_print, "secret_print.jett");
 compile_fail_fixture!(
+    compile_fail_secret_compare_unsupported_payload,
+    "secret_compare_unsupported_payload.jett"
+);
+compile_fail_fixture!(
+    compile_fail_secret_compare_incompatible_payloads,
+    "secret_compare_incompatible_payloads.jett"
+);
+compile_fail_fixture!(
     compile_fail_refined_secret_exposure,
     "refined_secret_exposure.jett"
 );
@@ -757,6 +765,10 @@ run_pass_fixture!(run_pass_string_format, "string_format.jett");
 run_pass_fixture!(run_pass_list_extras, "list_extras.jett");
 run_pass_fixture!(run_pass_map_advanced, "map_advanced.jett");
 run_pass_fixture!(run_pass_bytes_operations, "bytes_operations.jett");
+run_pass_fixture!(
+    run_pass_secret_compare_boundary,
+    "secret_compare_boundary.jett"
+);
 run_pass_fixture!(run_pass_enum_advanced, "enum_advanced.jett");
 
 compile_fail_fixture!(
