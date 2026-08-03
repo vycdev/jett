@@ -96,6 +96,66 @@ pub struct FileSymbolsQueryResult {
     pub symbols: Vec<FileSymbolQueryEntry>,
 }
 
+/// A file-symbol query failure that retains compiler diagnostics when available.
+#[derive(Debug, Clone)]
+pub struct FileSymbolsQueryError {
+    message: String,
+    diagnostics: Vec<Diagnostic>,
+    source: Option<String>,
+    file_path: Option<String>,
+}
+
+impl FileSymbolsQueryError {
+    fn operational(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            diagnostics: Vec::new(),
+            source: None,
+            file_path: None,
+        }
+    }
+
+    fn compilation(
+        message: impl Into<String>,
+        diagnostics: Vec<Diagnostic>,
+        source: String,
+        file_path: String,
+    ) -> Self {
+        Self {
+            message: message.into(),
+            diagnostics,
+            source: Some(source),
+            file_path: Some(file_path),
+        }
+    }
+
+    /// Return the compiler diagnostics and their source context, if this query
+    /// reached the compiler and failed there.
+    pub fn diagnostic_context(&self) -> Option<(&[Diagnostic], &str, &str)> {
+        Some((
+            &self.diagnostics,
+            self.source.as_deref()?,
+            self.file_path.as_deref()?,
+        ))
+    }
+}
+
+impl std::fmt::Display for FileSymbolsQueryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)?;
+        for diagnostic in self
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+        {
+            write!(f, "\n{}: {}", diagnostic.code, diagnostic.message)?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for FileSymbolsQueryError {}
+
 /// Result of `jett query --agent --type-at file:line:column`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeAtQueryResult {
@@ -1202,12 +1262,24 @@ pub fn query_namespaces(start_dir: &Path) -> Result<NamespaceQueryResult, String
 /// Return a file-local outline of top-level declarations, including private
 /// symbols that are intentionally omitted from the global namespace query.
 pub fn query_file_symbols(path: &Path) -> Result<FileSymbolsQueryResult, String> {
-    let source = fs::read_to_string(path)
-        .map_err(|e| format!("failed to read {}: {}", path.display(), e))?;
+    query_file_symbols_detailed(path).map_err(|error| error.to_string())
+}
+
+/// Return a file-local outline while retaining compiler diagnostics on failure.
+pub fn query_file_symbols_detailed(
+    path: &Path,
+) -> Result<FileSymbolsQueryResult, FileSymbolsQueryError> {
+    let source = fs::read_to_string(path).map_err(|error| {
+        FileSymbolsQueryError::operational(format!("failed to read {}: {}", path.display(), error))
+    })?;
     let parsed = parse(&source, FileId::new(0));
-    let parse_errors = error_messages_from_diagnostics(&parsed.errors);
-    if !parse_errors.is_empty() {
-        return Err(format!("parse errors:\n{}", parse_errors.join("\n")));
+    if has_error_diagnostics(&parsed.errors) {
+        return Err(FileSymbolsQueryError::compilation(
+            "parse errors:",
+            parsed.errors,
+            source,
+            path.display().to_string(),
+        ));
     }
 
     let mut symbols = Vec::new();
@@ -3030,6 +3102,27 @@ mod tests {
             "expected verify block in file symbols, got {:?}",
             result.symbols
         );
+    }
+
+    #[test]
+    fn query_file_symbols_preserves_parse_diagnostics() {
+        let root = temp_test_dir("jett_driver_query_file_symbols_error");
+        fs::create_dir_all(&root).expect("temp query dir should be created");
+        let file = root.join("broken.jett");
+        let source = "function broken( returns int64:\n    return 1\n";
+        fs::write(&file, source).expect("broken symbols fixture should be written");
+
+        let error = query_file_symbols_detailed(&file).expect_err("symbols query should fail");
+
+        fs::remove_dir_all(&root).expect("temp query dir should be removed");
+
+        let (diagnostics, diagnostic_source, diagnostic_path) = error
+            .diagnostic_context()
+            .expect("parse failure should retain diagnostic context");
+        assert_eq!(diagnostic_source, source);
+        assert_eq!(diagnostic_path, file.display().to_string());
+        assert!(has_error_diagnostics(diagnostics));
+        assert!(error.to_string().starts_with("parse errors:\nE"));
     }
 
     #[test]

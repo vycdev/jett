@@ -123,13 +123,13 @@
 
 | Component | Status |
 |---|---|
-| TOON output (`--agent` flag) | Partial (build diagnostics include file, ok/error status, severity counts, ranged diagnostics/labels, and tabular suggested fixes; format status, run stdout/typed debug output, ranged verify/property test summaries, and namespace/symbol/type-at/definition-at/references-at/completion/signature query results are structured) |
+| TOON output (`--agent` flag) | Partial (build diagnostics include file, ok/error status, severity counts, ranged diagnostics/labels, and tabular suggested fixes; format status, run stdout/typed debug output, ranged verify/property test summaries, namespace/symbol/type-at/definition-at/references-at/completion/signature query results, and file-symbol parse failures are structured) |
 | LSP server (diagnostics on save) | Done |
 | LSP hover (type at cursor) | Done |
 | LSP go-to-definition | Done |
 | LSP completions | Done |
 | MCP server | Not started; initial transport, tool/resource, and ASP handoff boundary tracked by [#37](https://github.com/vycdev/jett/issues/37) |
-| ASP query system | Partial (`jett query --agent --namespaces`, `--symbols`, `--type-at`, `--definition-at`, `--references-at`, prefix-filtered `--complete-at`, and `--signature` are implemented; namespace, type, symbol, definition, reference, and completion rows include source ranges, and completion rows also include deterministic rank, match kind, namespace, visibility, and source-level signatures where available) |
+| ASP query system | Partial (`jett query --agent --namespaces`, `--symbols`, `--type-at`, `--definition-at`, `--references-at`, prefix-filtered `--complete-at`, and `--signature` are implemented; namespace, type, symbol, definition, reference, and completion rows include source ranges, file-symbol parse failures preserve structured diagnostics, and completion rows also include deterministic rank, match kind, namespace, visibility, and source-level signatures where available) |
 
 ### Phase I: Testing and Profiling — PARTIAL
 

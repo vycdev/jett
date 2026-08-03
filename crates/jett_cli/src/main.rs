@@ -369,7 +369,7 @@ fn main() {
             }
 
             if let Some(file) = symbols {
-                match jett_driver::query_file_symbols(Path::new(&file)) {
+                match jett_driver::query_file_symbols_detailed(Path::new(&file)) {
                     Ok(result) => {
                         if agent {
                             print!("{}", render_query_file_symbols_agent_output(&result));
@@ -379,7 +379,7 @@ fn main() {
                     }
                     Err(e) => {
                         if agent {
-                            print!("{}", render_query_agent_error(&e));
+                            print!("{}", render_file_symbols_query_agent_error(&e));
                         } else {
                             eprintln!("error: {e}");
                         }
@@ -845,6 +845,14 @@ fn render_query_file_symbols_agent_output(result: &jett_driver::FileSymbolsQuery
 
 fn render_query_agent_error(error: &str) -> String {
     format!("status: error\nerror: {}\n", escape_toon_scalar(error))
+}
+
+fn render_file_symbols_query_agent_error(error: &jett_driver::FileSymbolsQueryError) -> String {
+    if let Some((diagnostics, source, file_path)) = error.diagnostic_context() {
+        jett_diagnostics::toon::render_toon(diagnostics, source, file_path)
+    } else {
+        render_query_agent_error(&error.to_string())
+    }
 }
 
 fn render_query_type_at_agent_output(result: &jett_driver::TypeAtQueryResult) -> String {
@@ -1542,6 +1550,29 @@ mod tests {
         let rendered = render_query_agent_error("query\nfailed");
 
         assert_eq!(rendered, "status: error\nerror: query\\nfailed\n");
+    }
+
+    #[test]
+    fn file_symbols_query_agent_error_lists_structured_parse_diagnostics() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after the Unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("jett_cli_symbols_agent_error_{nanos}"));
+        std::fs::create_dir_all(&root).expect("temporary query directory should be created");
+        let file = root.join("broken.jett");
+        std::fs::write(&file, "function broken( returns int64:\n    return 1\n")
+            .expect("invalid source should be written");
+        let error = jett_driver::query_file_symbols_detailed(&file)
+            .expect_err("invalid symbols query should fail");
+
+        let rendered = render_file_symbols_query_agent_error(&error);
+        std::fs::remove_dir_all(&root).expect("temporary query directory should be removed");
+
+        assert!(rendered.starts_with("status: error\nfile: "));
+        assert!(rendered.contains("{code,severity,message,file,line,column,end_line,end_column}:"));
+        assert!(rendered.contains("E1000,error,"));
+        assert!(!rendered.contains("error: parse errors"));
     }
 
     #[test]
