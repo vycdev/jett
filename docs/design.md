@@ -6466,7 +6466,7 @@ The standard library is intentionally massive and opinionated. The goal is to ma
 - **regex** — pattern matching and extraction (when string functions aren't enough)
 - **csv** — parsing and writing CSV data
 - **random** — random numbers, random selection, shuffling
-- **uuid** — UUID generation
+- **uuid** — UUID generation (generation and entropy contract [tracked by #73](https://github.com/vycdev/jett/issues/73))
 
 ---
 

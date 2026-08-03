@@ -164,7 +164,7 @@
 | `crypto` | Partial (sha256, md5) |
 | `encoding` | Partial (6 builtins: base64_encode, base64_decode, hex_encode, hex_decode, url_encode, url_decode) |
 | `bytes` | Partial (9 builtins: new, length, slice, concat, from_string, to_string, get, to_hex, from_hex) |
-| `uuid` | Partial (uuid.new) |
+| `uuid` | Partial (`uuid.new`; generation and entropy contract [tracked by #73](https://github.com/vycdev/jett/issues/73)) |
 | `time` | Partial (time.now_ms, time.now_s) |
 | `os` | Partial (os.env, os.args) |
 | `net.http` | Not started |

@@ -1644,7 +1644,7 @@ Core stdlib (string, list, math, json) is implemented in Phase D. This phase com
 - **Time:** `time`
 - **Security:** `crypto`, `encoding`, `validate`
 - **OS:** `os` (environment variables, process management, argv — wraps `Environment` and `Process` capabilities)
-- **Utilities:** `regex`, `random`, `uuid`, `log`, `format`
+- **Utilities:** `regex`, `random`, `uuid` (generation and entropy contract [tracked by #73](https://github.com/vycdev/jett/issues/73)), `log`, `format`
 - **Testing:** `test.mock` (mock capabilities for property-based testing)
 
 **Milestone:** The standard library covers virtually every common operation. LLMs write orchestration code, not algorithms.
