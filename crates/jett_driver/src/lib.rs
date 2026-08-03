@@ -3651,6 +3651,30 @@ mod tests {
         assert!(bundled.contains("namespace core"));
         assert!(!bundled.contains("namespace stale"));
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn project_file_collection_ignores_symlinked_directories() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_test_dir("jett_driver_symlink_project");
+        let external = temp_test_dir("jett_driver_symlink_external");
+        fs::create_dir_all(root.join("src")).expect("temp project src dir should be created");
+        fs::create_dir_all(&external).expect("external source dir should be created");
+        let source = root.join("src").join("main.jett");
+        fs::write(&source, "namespace app\n").expect("project source should be written");
+        fs::write(external.join("outside.jett"), "namespace outside\n")
+            .expect("external source should be written");
+        symlink(&external, root.join("linked"))
+            .expect("source directory symlink should be created");
+
+        let mut files = Vec::new();
+        collect_jett_files(&root, &mut files).expect("project files should be collected");
+
+        fs::remove_dir_all(&root).expect("temp project dir should be removed");
+        fs::remove_dir_all(&external).expect("external source dir should be removed");
+        assert_eq!(files, vec![source]);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -3679,13 +3703,19 @@ fn find_project_root(start_dir: &Path) -> Result<std::path::PathBuf, String> {
     }
 }
 
-/// Recursively collect all `.jett` files in a directory, skipping hidden dirs
-/// and `target/`.
+/// Recursively collect all `.jett` files in a directory, skipping hidden dirs,
+/// `target/`, and symlinked directories.
 fn collect_jett_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) -> std::io::Result<()> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
-        if path.is_dir() {
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() {
+            // Preserve source-file symlinks without traversing linked trees.
+            if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("jett") {
+                out.push(path);
+            }
+        } else if file_type.is_dir() {
             let dir_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
             if !dir_name.starts_with('.') && dir_name != "target" {
                 collect_jett_files(&path, out)?;
