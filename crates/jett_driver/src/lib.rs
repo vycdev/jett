@@ -3347,6 +3347,35 @@ mod tests {
     }
 
     #[test]
+    fn query_signature_reports_source_defined_math_helpers() {
+        let expected = [
+            ("math.is_even", "int64", "bool"),
+            ("math.is_odd", "int64", "bool"),
+            ("math.sign", "int64", "int64"),
+            ("math.to_radians", "float64", "float64"),
+            ("math.to_degrees", "float64", "float64"),
+        ];
+
+        for (name, param_type, return_type) in expected {
+            let result = query_signature(Path::new("."), name)
+                .expect("signature query should succeed")
+                .unwrap_or_else(|| panic!("{name} signature should be found"));
+
+            assert_eq!(result.params.len(), 1);
+            assert_eq!(result.params[0].type_name, param_type);
+            assert_eq!(result.return_type, return_type);
+            assert!(
+                result
+                    .file_path
+                    .replace('\\', "/")
+                    .ends_with("stdlib/math.jett"),
+                "{name} should resolve to compiler-shipped source, got {}",
+                result.file_path
+            );
+        }
+    }
+
+    #[test]
     fn bundle_project_writes_validated_single_file() {
         let root = temp_test_dir("jett_driver_bundle_project");
         fs::create_dir_all(root.join("src")).expect("temp bundle dir should be created");

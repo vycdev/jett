@@ -3312,14 +3312,13 @@ impl<'a> TypeChecker<'a> {
             "math.pi" | "math.e" => {
                 self.no_type_args_signature(&name, type_args, span, vec![], TypeInterner::FLOAT64)
             }
-            "math.sin" | "math.cos" | "math.tan" | "math.to_radians" | "math.to_degrees" => self
-                .no_type_args_signature(
-                    &name,
-                    type_args,
-                    span,
-                    vec![TypeInterner::FLOAT64],
-                    TypeInterner::FLOAT64,
-                ),
+            "math.sin" | "math.cos" | "math.tan" => self.no_type_args_signature(
+                &name,
+                type_args,
+                span,
+                vec![TypeInterner::FLOAT64],
+                TypeInterner::FLOAT64,
+            ),
             "math.mod" | "math.gcd" | "math.lcm" => self.no_type_args_signature(
                 &name,
                 type_args,
@@ -3327,14 +3326,7 @@ impl<'a> TypeChecker<'a> {
                 vec![TypeInterner::INT64, TypeInterner::INT64],
                 TypeInterner::INT64,
             ),
-            "math.is_even" | "math.is_odd" => self.no_type_args_signature(
-                &name,
-                type_args,
-                span,
-                vec![TypeInterner::INT64],
-                TypeInterner::BOOL,
-            ),
-            "math.factorial" | "math.sign" => self.no_type_args_signature(
+            "math.factorial" => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,

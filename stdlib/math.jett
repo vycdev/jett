@@ -1,0 +1,15 @@
+namespace math
+export function is_even(value: int64) returns bool:
+    return math.mod(value, 2) == 0
+export function is_odd(value: int64) returns bool:
+    return math.mod(value, 2) != 0
+export function sign(value: int64) returns int64:
+    if value < 0:
+        return -1
+    if value > 0:
+        return 1
+    return 0
+export function to_radians(degrees: float64) returns float64:
+    return degrees * math.pi() / 180.0
+export function to_degrees(radians: float64) returns float64:
+    return radians * 180.0 / math.pi()

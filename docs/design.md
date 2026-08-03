@@ -1359,6 +1359,14 @@ float64 ceiled = math.ceil(3.2)
 float64 power = math.pow(base, exponent)
 ```
 
+Compositional math helpers should be ordinary Jett source when the language can
+express them without losing numeric semantics. `math.is_even`, `math.is_odd`,
+`math.sign`, `math.to_radians`, and `math.to_degrees` are therefore defined in
+`stdlib/math.jett` and resolved like user functions. `math.mod` and `math.pi`
+remain compiler-owned Rust primitive kernels used by those definitions; the
+other currently supported math builtins also remain Rust-backed until they are
+separately extracted.
+
 **Hashing and encoding — no third-party dependencies:**
 
 ```
