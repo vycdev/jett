@@ -2,7 +2,8 @@
 
 ## Status
 
-Decided for the current compiler stage.
+Completed for the current compiler stage. Broader generic numeric constraints
+remain deferred until the language has a general model for them.
 
 ## Current Boundary
 

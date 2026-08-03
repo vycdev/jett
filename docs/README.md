@@ -53,6 +53,7 @@ plans above for current work.
 - [JSON raw value design](completed/json_raw_value_design.md)
 - [JSON reflection plan](completed/json_reflection_plan.md)
 - [JsonTree decoder blocker](completed/json_tree_decoder_blocker.md)
+- [Math numeric overload boundary](completed/math_numeric_overload_boundary.md)
 - [Reflected construction staging](completed/reflected_construction_staging.md)
 - [Type kind design](completed/type_kind_design.md)
 
