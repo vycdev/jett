@@ -1376,6 +1376,10 @@ separately extracted.
 
 **Hashing and encoding — no third-party dependencies:**
 
+> Tracked by [#71](https://github.com/vycdev/jett/issues/71) for the stable
+> encoding API, byte/string representations, failure contract, and
+> stdlib/runtime boundary.
+
 ```
 use crypto
 use encoding
@@ -6499,7 +6503,8 @@ The standard library is intentionally massive and opinionated. The goal is to ma
 - **log** — structured logging with levels
 - **format** — number formatting, padding, and text alignment
 - **crypto** — hashing (sha256, sha512, md5), HMAC
-- **encoding** — base64, hex, URL encoding/decoding
+- **encoding** — base64, hex, URL encoding/decoding; the stable representations,
+  failure contract, and stdlib/runtime boundary are [tracked by #71](https://github.com/vycdev/jett/issues/71)
 - **validate** — standard refinement types for common formats: Email, URL, UUID, IPv4, IPv6. The type IS the validation — once assigned, the value is guaranteed valid.
 - **regex** — pattern matching and extraction (when string functions aren't enough)
 - **csv** — parsing and writing CSV data

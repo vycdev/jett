@@ -1158,6 +1158,9 @@ flowchart LR
 
 ## Compiler Intrinsics vs Standard Library
 
+> Tracked by [#71](https://github.com/vycdev/jett/issues/71) for the stable
+> encoding representations, failure contract, and stdlib/runtime boundary.
+
 The boundary between compiler-generated code and stdlib-implemented code is a critical architectural decision.
 
 ### Three Categories
@@ -1669,7 +1672,7 @@ Core stdlib (string, list, math, json) is implemented in Phase D. This phase com
 
 - **I/O:** `net.http`, `net.socket`, `csv`
 - **Time:** `time`
-- **Security:** `crypto`, `encoding`, `validate`
+- **Security:** `crypto`, `encoding`, `validate` (the encoding contract is [tracked by #71](https://github.com/vycdev/jett/issues/71))
 - **OS:** `os` (environment variables, process management, argv — wraps `Environment` and `Process` capabilities)
 - **Utilities:** `regex`, `random`, `uuid`, `log`, `format`
 - **Testing:** `test.mock` (mock capabilities for property-based testing)
