@@ -2970,18 +2970,64 @@ fn bundle_dependency_order(
         "bundle ordering cycle requires declaration interleaving between: {}. Extract shared declarations into an earlier file",
         cycle_files.join(", ")
     );
-    let diagnostic = Diagnostic::error(0, &message, Span::new(FileId::new(0), 0, 0));
-    Err(BundleError {
+    Err(bundle_ordering_error(
+        message,
+        String::new(),
+        project_dir.display().to_string(),
+        Span::new(FileId::new(0), 0, 0),
+    ))
+}
+
+fn bundle_ordering_error(
+    message: String,
+    source: String,
+    file_path: String,
+    span: Span,
+) -> BundleError {
+    let diagnostic = Diagnostic::error(0, &message, span);
+    BundleError {
         message,
         details: Some(BundleErrorDetails::Ordering(BuildResult {
             diagnostics: vec![diagnostic],
             has_errors: true,
-            source: String::new(),
-            file_path: project_dir.display().to_string(),
+            source,
+            file_path,
             reflection_metadata: None,
             checked_expression_types: None,
         })),
-    })
+    }
+}
+
+fn validate_bundle_namespace_boundaries(
+    files: &[BundleSourceFile],
+    file_order: &[usize],
+    project_dir: &Path,
+) -> Result<(), BundleError> {
+    let mut bundled_namespace = None;
+    for &index in file_order {
+        let file = &files[index];
+        let mut source_namespace = None;
+        for item in &file.module.items {
+            if let Item::Namespace(namespace) = item {
+                source_namespace = Some(namespace.name.name.as_str());
+                bundled_namespace = source_namespace;
+            } else if source_namespace != bundled_namespace {
+                let relative = file.path.strip_prefix(project_dir).unwrap_or(&file.path);
+                let message = format!(
+                    "bundle ordering cannot preserve root-namespace declarations in {} after namespace `{}`; add an explicit namespace to that file or move its root declarations before namespaced files",
+                    display_query_path(relative),
+                    bundled_namespace.expect("namespace mismatch should retain a namespace")
+                );
+                return Err(bundle_ordering_error(
+                    message,
+                    file.source.clone(),
+                    file.path.display().to_string(),
+                    Span::new(file.file_id, 0, 0),
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn bundle_file_is_in_cycle(start: usize, dependencies: &[HashSet<usize>]) -> bool {
@@ -3058,7 +3104,9 @@ pub fn bundle_project_detailed(
     let file_order = if has_parse_errors {
         (0..source_files.len()).collect()
     } else {
-        bundle_dependency_order(&source_files, &project_dir)?
+        let order = bundle_dependency_order(&source_files, &project_dir)?;
+        validate_bundle_namespace_boundaries(&source_files, &order, &project_dir)?;
+        order
     };
 
     let mut bundled = String::new();
@@ -3750,6 +3798,80 @@ mod tests {
                 "src/a_consumer.jett"
             ]
         );
+    }
+
+    #[test]
+    fn bundle_project_rejects_root_declarations_after_a_namespace() {
+        let root = temp_test_dir("jett_driver_bundle_root_namespace_boundary");
+        fs::create_dir_all(root.join("dist")).expect("temp bundle dist dir should be created");
+        fs::create_dir_all(root.join("src")).expect("temp bundle src dir should be created");
+        fs::write(root.join("jett.proj"), "name: bundle_fixture\n")
+            .expect("project marker should be written");
+        fs::write(
+            root.join("src/provider.jett"),
+            "namespace provider\n\nexport function value() returns int64:\n    return 42\n",
+        )
+        .expect("provider source should be written");
+        fs::write(
+            root.join("src/main.jett"),
+            "function main() returns int64:\n    return provider.value()\n",
+        )
+        .expect("root source should be written");
+        let output = root.join("dist/lib.jett");
+        fs::write(&output, "existing bundle\n").expect("existing output should be written");
+
+        let error = match bundle_project_detailed(&root, &output) {
+            Ok(_) => panic!("a leaked namespace across a file boundary should fail"),
+            Err(error) => error,
+        };
+        let preserved = fs::read_to_string(&output).expect("existing output should be readable");
+        fs::remove_dir_all(&root).expect("temp bundle dir should be removed");
+
+        assert_eq!(error.kind_name(), Some("ordering"));
+        let diagnostics = error
+            .diagnostic_result()
+            .expect("namespace boundary failure should retain structured diagnostics");
+        assert_eq!(diagnostics.diagnostics.len(), 1);
+        assert!(
+            diagnostics.diagnostics[0].message.contains(
+                "root-namespace declarations in src/main.jett after namespace `provider`"
+            )
+        );
+        assert_eq!(preserved, "existing bundle\n");
+    }
+
+    #[test]
+    fn bundle_project_preserves_root_declarations_before_a_namespace() {
+        let root = temp_test_dir("jett_driver_bundle_root_before_namespace");
+        fs::create_dir_all(root.join("src")).expect("temp bundle src dir should be created");
+        fs::write(root.join("jett.proj"), "name: bundle_fixture\n")
+            .expect("project marker should be written");
+        fs::write(
+            root.join("src/a_root.jett"),
+            "function main() returns int64:\n    return 42\n",
+        )
+        .expect("root source should be written");
+        fs::write(
+            root.join("src/z_namespace.jett"),
+            "namespace helper\n\nexport function value() returns int64:\n    return 7\n",
+        )
+        .expect("namespaced source should be written");
+        let output = root.join("dist/lib.jett");
+
+        let result = bundle_project(&root, &output)
+            .expect("root declarations before a namespace should bundle successfully");
+        let bundled = fs::read_to_string(&output).expect("bundle output should be readable");
+        fs::remove_dir_all(&root).expect("temp bundle dir should be removed");
+
+        assert_eq!(
+            result
+                .files
+                .iter()
+                .map(|file| file.path.replace('\\', "/"))
+                .collect::<Vec<_>>(),
+            ["src/a_root.jett", "src/z_namespace.jett"]
+        );
+        assert!(bundled.find("function main").unwrap() < bundled.find("namespace helper").unwrap());
     }
 
     #[test]

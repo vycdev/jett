@@ -27,6 +27,8 @@ The implementation remains validation-first:
   success.
 - If ordering or validation fails, report structured bundle diagnostics and
   leave the output file untouched.
+- Reject an order that would place root-level declarations after a namespace,
+  because a single Jett file has no syntax for resetting to the root namespace.
 - Do not introduce a bundler-only relaxation of forward-reference rules.
 
 This keeps the command honest: it either produces a distributable file with the
@@ -55,6 +57,9 @@ tie-breaker. This preserves Jett's local readability constraints:
 - If two files are mutually dependent in a way that requires interleaving
   declarations, the bundler fails and recommends extracting shared
   definitions into an earlier namespace/file.
+- If dependency order would move a root-level declaration under a preceding
+  file's namespace, the bundler fails and recommends giving that file an
+  explicit namespace or moving its root declarations earlier.
 
 After ordering, the ordinary single-source build remains authoritative. Parse,
 resolution, type, or policy errors that are unrelated to cross-file ordering

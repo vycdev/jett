@@ -148,7 +148,7 @@
 |---|---|
 | Cross-compilation (`--target`) | Not started |
 | C binding generator (`jett bind`) | Not started (initial FFI and generated binding contract tracked by [#53](https://github.com/vycdev/jett/issues/53)) |
-| `jett bundle` | Working (resolver-derived whole-file dependency ordering, stable lexical tie-breaking, structured cycle diagnostics, line manifests, and validation-before-write) |
+| `jett bundle` | Working (resolver-derived whole-file dependency ordering, stable lexical tie-breaking, structured cycle and namespace-boundary diagnostics, line manifests, and validation-before-write) |
 
 ### Phase K: Full Standard Library — NOT STARTED
 
@@ -200,6 +200,6 @@
 | `jett test [--agent] [file.jett]` | Working (verify + property blocks; `--agent` emits compact block tables) |
 | `jett lsp` | Working (diagnostics on save) |
 | `jett bind header.h` | Not started (tracked by [#53](https://github.com/vycdev/jett/issues/53)) |
-| `jett bundle` | Working (resolver-derived whole-file dependency ordering, stable lexical tie-breaking, structured cycle diagnostics, line manifests, and validation-before-write) |
+| `jett bundle` | Working (resolver-derived whole-file dependency ordering, stable lexical tie-breaking, structured cycle and namespace-boundary diagnostics, line manifests, and validation-before-write) |
 | `jett mcp` | Not started |
 | `jett query --agent --namespaces` / `--symbols file.jett` / `--type-at file:line:column` / `--definition-at file:line:column` / `--references-at file:line:column` / `--complete-at file:line:column` / `--signature name` | Partial (ranged namespace registry, file-local symbols with declaration ranges and function signatures, ranged type lookup, ranged definition lookup, ranged reference lookup, ranked prefix-filtered completion candidates with context metadata and ranges, and source-level function signatures) |
