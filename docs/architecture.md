@@ -1232,7 +1232,7 @@ separate extraction work.
 
 **3. Runtime-backed stdlib** — Jett functions that call into the runtime:
 
-Functions like `Filesystem.read_file`, `Network.listen`, `Stdout.write`, `Clock.now` are Jett function signatures that the compiler maps to runtime calls. These exist as `.jett` signature stubs in `stdlib/` with bodies that call `jett_rt_*` runtime functions.
+Functions like `Filesystem.read_file`, `Network.listen`, `Stdout.write`, `Clock.now` are Jett function signatures that the compiler maps to runtime calls. These exist as `.jett` signature stubs in `stdlib/` with bodies that call `jett_rt_*` runtime functions. The time value and `Clock` capability contract is [tracked by #75](https://github.com/vycdev/jett/issues/75).
 
 ### How the Compiler Locates the Stdlib
 
@@ -1673,7 +1673,7 @@ The compiler should be built incrementally, with each phase producing a usable (
 Core stdlib (string, list, math, json) is implemented in Phase D. This phase completes the remaining modules:
 
 - **I/O:** `net.http`, `net.socket`, `csv`
-- **Time:** `time`
+- **Time:** `time` (time value and `Clock` capability contract [tracked by #75](https://github.com/vycdev/jett/issues/75))
 - **Security:** `crypto`, `encoding`, `validate` (the crypto hashing contract is [tracked by #69](https://github.com/vycdev/jett/issues/69), and the encoding contract is [tracked by #71](https://github.com/vycdev/jett/issues/71))
 - **OS:** `os` (environment variables, process management, argv — wraps `Environment` and `Process` capabilities)
 - **Utilities:** `regex`, `random`, `uuid` (generation and entropy contract [tracked by #73](https://github.com/vycdev/jett/issues/73)), `log`, `format`

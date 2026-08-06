@@ -1248,6 +1248,9 @@ No regex for simple operations. No manual index arithmetic. Each function does o
 
 **Date and time — no manual formatting:**
 
+> The time value and `Clock` capability contract is
+> [tracked by #75](https://github.com/vycdev/jett/issues/75).
+
 ```
 use time
 
@@ -6498,7 +6501,7 @@ The standard library is intentionally massive and opinionated. The goal is to ma
 - **net.http** — HTTP client (get, post, put, delete), response handling, HttpError enum (connection_failed, timeout, status_error)
 - **net.socket** — low-level TCP/UDP networking
 - **json** — parse, parse_exact, parse_raw, serialize, serialize_public, raw `JsonTree` field/index access, strict raw accessors, scalar casts
-- **time** — now, format, parse, difference, add/subtract, comparisons, day_of_week, years_between
+- **time** — now, format, parse, difference, add/subtract, comparisons, day_of_week, years_between (time value and `Clock` capability contract [tracked by #75](https://github.com/vycdev/jett/issues/75))
 - **os** — environment variables, process management, file system, argv
 - **test** — mock infrastructure for property-based testing (`test.mock` for mock filesystems, networks, etc.)
 - **log** — structured logging with levels
