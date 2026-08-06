@@ -1158,8 +1158,10 @@ flowchart LR
 
 ## Compiler Intrinsics vs Standard Library
 
-> Tracked by [#71](https://github.com/vycdev/jett/issues/71) for the stable
-> encoding representations, failure contract, and stdlib/runtime boundary.
+> Tracked by [#69](https://github.com/vycdev/jett/issues/69) for the stable
+> crypto hashing API, security guarantees, and stdlib/runtime boundary.
+> Encoding representations, failure behavior, and its stdlib/runtime boundary
+> are separately [tracked by #71](https://github.com/vycdev/jett/issues/71).
 
 The boundary between compiler-generated code and stdlib-implemented code is a critical architectural decision.
 
@@ -1672,7 +1674,7 @@ Core stdlib (string, list, math, json) is implemented in Phase D. This phase com
 
 - **I/O:** `net.http`, `net.socket`, `csv`
 - **Time:** `time` (time value and `Clock` capability contract [tracked by #75](https://github.com/vycdev/jett/issues/75))
-- **Security:** `crypto`, `encoding`, `validate` (the encoding contract is [tracked by #71](https://github.com/vycdev/jett/issues/71))
+- **Security:** `crypto`, `encoding`, `validate` (the crypto hashing contract is [tracked by #69](https://github.com/vycdev/jett/issues/69), and the encoding contract is [tracked by #71](https://github.com/vycdev/jett/issues/71))
 - **OS:** `os` (environment variables, process management, argv — wraps `Environment` and `Process` capabilities)
 - **Utilities:** `regex`, `random`, `uuid` (generation and entropy contract [tracked by #73](https://github.com/vycdev/jett/issues/73)), `log`, `format`
 - **Testing:** `test.mock` (mock capabilities for property-based testing)
