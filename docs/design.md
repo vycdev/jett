@@ -4036,6 +4036,16 @@ span_end_line: 45
 span_end_column: 21
 ```
 
+If parsing, resolution, or type checking fails with known source context, the
+type query returns the same structured diagnostic envelope as
+`jett build --agent`. Diagnostic and label rows use the source file matching
+each compiler span, including sibling project and stdlib files. The existing
+suggested-fix table has no file column, so this query emits fixes only when the
+fix targets the requested file. Invalid positions, file-read failures, and
+compiler failures without matching source context remain operational `error`
+scalars. The file-aware fix schema and other query and command failure paths
+remain tracked by #35.
+
 **Definition lookup:**
 
 ```

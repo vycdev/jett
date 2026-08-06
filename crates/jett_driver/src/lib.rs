@@ -24,6 +24,7 @@ struct DiscoveredModules {
     modules: Vec<Module>,
     diagnostics: Vec<Diagnostic>,
     files: HashMap<FileId, PathBuf>,
+    sources: HashMap<FileId, String>,
 }
 
 impl DiscoveredModules {
@@ -31,6 +32,7 @@ impl DiscoveredModules {
         self.modules.extend(other.modules);
         self.diagnostics.extend(other.diagnostics);
         self.files.extend(other.files);
+        self.sources.extend(other.sources);
     }
 }
 
@@ -96,22 +98,30 @@ pub struct FileSymbolsQueryResult {
     pub symbols: Vec<FileSymbolQueryEntry>,
 }
 
-/// A file-symbol query failure that retains compiler diagnostics when available.
-#[derive(Debug, Clone)]
-pub struct FileSymbolsQueryError {
-    message: String,
-    diagnostics: Vec<Diagnostic>,
-    source: Option<String>,
-    file_path: Option<String>,
+/// Source text and display path retained for a compiler query diagnostic.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QueryDiagnosticSource {
+    pub file_id: FileId,
+    pub source: String,
+    pub file_path: String,
 }
 
-impl FileSymbolsQueryError {
+/// A compiler query failure that retains diagnostics and source context when available.
+#[derive(Debug, Clone)]
+pub struct QueryError {
+    message: String,
+    diagnostics: Vec<Diagnostic>,
+    primary_file: Option<FileId>,
+    sources: Vec<QueryDiagnosticSource>,
+}
+
+impl QueryError {
     fn operational(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
             diagnostics: Vec::new(),
-            source: None,
-            file_path: None,
+            primary_file: None,
+            sources: Vec::new(),
         }
     }
 
@@ -121,26 +131,51 @@ impl FileSymbolsQueryError {
         source: String,
         file_path: String,
     ) -> Self {
+        Self::compilation_with_sources(
+            message,
+            diagnostics,
+            FileId::new(0),
+            vec![QueryDiagnosticSource {
+                file_id: FileId::new(0),
+                source,
+                file_path,
+            }],
+        )
+    }
+
+    fn compilation_with_sources(
+        message: impl Into<String>,
+        diagnostics: Vec<Diagnostic>,
+        primary_file: FileId,
+        sources: Vec<QueryDiagnosticSource>,
+    ) -> Self {
         Self {
             message: message.into(),
             diagnostics,
-            source: Some(source),
-            file_path: Some(file_path),
+            primary_file: Some(primary_file),
+            sources,
         }
     }
 
-    /// Return the compiler diagnostics and their source context, if this query
-    /// reached the compiler and failed there.
+    /// Return the compiler diagnostics and requested primary source, if this
+    /// query reached the compiler and failed there. Call `diagnostic_sources`
+    /// when diagnostic or label spans may refer to support files.
     pub fn diagnostic_context(&self) -> Option<(&[Diagnostic], &str, &str)> {
-        Some((
-            &self.diagnostics,
-            self.source.as_deref()?,
-            self.file_path.as_deref()?,
-        ))
+        let primary_file = self.primary_file?;
+        let source = self
+            .sources
+            .iter()
+            .find(|source| source.file_id == primary_file)?;
+        Some((&self.diagnostics, &source.source, &source.file_path))
+    }
+
+    /// Return compiler diagnostics with every retained source file.
+    pub fn diagnostic_sources(&self) -> Option<(&[Diagnostic], FileId, &[QueryDiagnosticSource])> {
+        Some((&self.diagnostics, self.primary_file?, &self.sources))
     }
 }
 
-impl std::fmt::Display for FileSymbolsQueryError {
+impl std::fmt::Display for QueryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.message)?;
         for diagnostic in self
@@ -154,7 +189,13 @@ impl std::fmt::Display for FileSymbolsQueryError {
     }
 }
 
-impl std::error::Error for FileSymbolsQueryError {}
+impl std::error::Error for QueryError {}
+
+/// Error returned by a detailed file-symbol query.
+pub type FileSymbolsQueryError = QueryError;
+
+/// Error returned by a detailed type-at query.
+pub type TypeAtQueryError = QueryError;
 
 /// Result of `jett query --agent --type-at file:line:column`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -413,44 +454,112 @@ pub fn hover_type(source: &str, line: u32, col: u32) -> Option<String> {
 /// This query parses, resolves, and typechecks with stdlib plus sibling project
 /// modules, but it does not execute verify/property blocks.
 pub fn query_type_at(path: &Path, line: u32, column: u32) -> Result<TypeAtQueryResult, String> {
-    let source = fs::read_to_string(path)
-        .map_err(|e| format!("failed to read {}: {}", path.display(), e))?;
+    query_type_at_detailed(path, line, column).map_err(|error| error.to_string())
+}
+
+/// Return the inferred type while retaining compiler diagnostics on failure.
+pub fn query_type_at_detailed(
+    path: &Path,
+    line: u32,
+    column: u32,
+) -> Result<TypeAtQueryResult, TypeAtQueryError> {
+    let source = fs::read_to_string(path).map_err(|error| {
+        TypeAtQueryError::operational(format!("failed to read {}: {}", path.display(), error))
+    })?;
     let file_path = path.display().to_string();
     let file_id = FileId::new(0);
     let Some(offset) = line_col_to_offset(&source, line, column) else {
-        return Err(format!(
+        return Err(TypeAtQueryError::operational(format!(
             "position {line}:{column} is outside {}",
             path.display()
-        ));
+        )));
     };
 
     let mut parse_result = parse(&source, file_id);
-    let parse_errors = error_messages_from_diagnostics(&parse_result.errors);
-    if !parse_errors.is_empty() {
-        return Err(format!("parse errors:\n{}", parse_errors.join("\n")));
+    if has_error_diagnostics(&parse_result.errors) {
+        return Err(TypeAtQueryError::compilation(
+            "parse errors:",
+            parse_result.errors,
+            source,
+            file_path,
+        ));
     }
 
     let mut support_modules = discover_stdlib_modules_with_diagnostics();
     support_modules.extend(discover_project_modules_with_diagnostics(path));
     let support_errors = error_messages_from_diagnostics(&support_modules.diagnostics);
     if !support_errors.is_empty() {
-        return Err(format!(
+        let diagnostic_sources = query_diagnostic_sources(
+            file_id,
+            &source,
+            &file_path,
+            &support_modules,
+            &support_modules.diagnostics,
+        );
+        if diagnostics_have_source_context(&support_modules.diagnostics, &diagnostic_sources) {
+            return Err(TypeAtQueryError::compilation_with_sources(
+                "support parse errors:",
+                support_modules.diagnostics,
+                file_id,
+                diagnostic_sources,
+            ));
+        }
+        return Err(TypeAtQueryError::operational(format!(
             "support parse errors:\n{}",
             support_errors.join("\n")
-        ));
+        )));
     }
-    prepend_support_modules(&mut parse_result.module, support_modules.modules);
+    prepend_support_modules(
+        &mut parse_result.module,
+        std::mem::take(&mut support_modules.modules),
+    );
 
     let resolve_result = resolve(&parse_result.module);
     let resolve_errors = error_messages_from_diagnostics(&resolve_result.diagnostics);
     if !resolve_errors.is_empty() {
-        return Err(format!("resolution errors:\n{}", resolve_errors.join("\n")));
+        let diagnostic_sources = query_diagnostic_sources(
+            file_id,
+            &source,
+            &file_path,
+            &support_modules,
+            &resolve_result.diagnostics,
+        );
+        if diagnostics_have_source_context(&resolve_result.diagnostics, &diagnostic_sources) {
+            return Err(TypeAtQueryError::compilation_with_sources(
+                "resolution errors:",
+                resolve_result.diagnostics,
+                file_id,
+                diagnostic_sources,
+            ));
+        }
+        return Err(TypeAtQueryError::operational(format!(
+            "resolution errors:\n{}",
+            resolve_errors.join("\n")
+        )));
     }
 
     let check_result = check(&parse_result.module, &resolve_result);
     let type_errors = error_messages_from_diagnostics(&check_result.diagnostics);
     if !type_errors.is_empty() {
-        return Err(format!("type errors:\n{}", type_errors.join("\n")));
+        let diagnostic_sources = query_diagnostic_sources(
+            file_id,
+            &source,
+            &file_path,
+            &support_modules,
+            &check_result.diagnostics,
+        );
+        if diagnostics_have_source_context(&check_result.diagnostics, &diagnostic_sources) {
+            return Err(TypeAtQueryError::compilation_with_sources(
+                "type errors:",
+                check_result.diagnostics,
+                file_id,
+                diagnostic_sources,
+            ));
+        }
+        return Err(TypeAtQueryError::operational(format!(
+            "type errors:\n{}",
+            type_errors.join("\n")
+        )));
     }
 
     let mut best: Option<(u32, Span, jett_types::TypeId)> = None;
@@ -2139,6 +2248,61 @@ fn has_error_diagnostics(diagnostics: &[Diagnostic]) -> bool {
         .any(|d| d.severity == jett_diagnostics::Severity::Error)
 }
 
+fn diagnostics_have_source_context(
+    diagnostics: &[Diagnostic],
+    sources: &[QueryDiagnosticSource],
+) -> bool {
+    diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+        .all(|diagnostic| {
+            sources
+                .iter()
+                .any(|source| source.file_id == diagnostic.span.file)
+        })
+}
+
+fn query_diagnostic_sources(
+    primary_file: FileId,
+    primary_source: &str,
+    primary_path: &str,
+    support_modules: &DiscoveredModules,
+    diagnostics: &[Diagnostic],
+) -> Vec<QueryDiagnosticSource> {
+    let mut sources = vec![QueryDiagnosticSource {
+        file_id: primary_file,
+        source: primary_source.to_string(),
+        file_path: primary_path.to_string(),
+    }];
+    let mut support_file_ids = Vec::new();
+    for diagnostic in diagnostics {
+        support_file_ids.push(diagnostic.span.file);
+        support_file_ids.extend(diagnostic.labels.iter().map(|label| label.span.file));
+        if let Some(fix) = &diagnostic.suggested_fix {
+            support_file_ids.push(fix.span.file);
+        }
+    }
+    support_file_ids.sort_by_key(|file_id| file_id.index());
+    support_file_ids.dedup_by_key(|file_id| file_id.index());
+    for file_id in support_file_ids {
+        if file_id == primary_file {
+            continue;
+        }
+        let Some(source) = support_modules.sources.get(&file_id) else {
+            continue;
+        };
+        let Some(file_path) = support_modules.files.get(&file_id) else {
+            continue;
+        };
+        sources.push(QueryDiagnosticSource {
+            file_id,
+            source: source.clone(),
+            file_path: display_query_path(file_path),
+        });
+    }
+    sources
+}
+
 fn expression_type_names(check_result: &CheckResult) -> HashMap<Span, String> {
     check_result
         .type_map
@@ -2222,6 +2386,7 @@ fn discover_project_modules_with_diagnostics(entry_path: &Path) -> DiscoveredMod
             modules: Vec::new(),
             diagnostics: Vec::new(),
             files: HashMap::new(),
+            sources: HashMap::new(),
         };
     };
     discover_modules_in_dir(&root, canon.as_deref(), 1, "project")
@@ -2233,6 +2398,7 @@ fn discover_query_project_modules_with_diagnostics(start_dir: &Path) -> Discover
             modules: Vec::new(),
             diagnostics: Vec::new(),
             files: HashMap::new(),
+            sources: HashMap::new(),
         };
     };
     discover_modules_in_dir(&root, None, 1, "project")
@@ -2257,6 +2423,7 @@ fn discover_modules_in_dir(
                 jett_common::Span::new(FileId::new(start_file_id), 0, 0),
             )],
             files: HashMap::new(),
+            sources: HashMap::new(),
         };
     }
     files.sort();
@@ -2264,6 +2431,7 @@ fn discover_modules_in_dir(
     let mut modules = Vec::new();
     let mut diagnostics = Vec::new();
     let mut module_files = HashMap::new();
+    let mut module_sources = HashMap::new();
     for (idx, file_path) in files.iter().enumerate() {
         // Skip the entry file when parsing project siblings.
         let should_skip = skip_canon
@@ -2287,6 +2455,11 @@ fn discover_modules_in_dir(
                 continue;
             }
         };
+        let display_path = file_path
+            .canonicalize()
+            .unwrap_or_else(|_| file_path.clone());
+        module_files.insert(file_id, display_path);
+        module_sources.insert(file_id, source.clone());
         let parsed = parse(&source, file_id);
         if has_error_diagnostics(&parsed.errors) {
             for mut diagnostic in parsed.errors {
@@ -2300,10 +2473,6 @@ fn discover_modules_in_dir(
                 }
             }
         } else {
-            let display_path = file_path
-                .canonicalize()
-                .unwrap_or_else(|_| file_path.clone());
-            module_files.insert(file_id, display_path);
             modules.push(parsed.module);
         }
     }
@@ -2311,6 +2480,7 @@ fn discover_modules_in_dir(
         modules,
         diagnostics,
         files: module_files,
+        sources: module_sources,
     }
 }
 
@@ -3153,6 +3323,116 @@ mod tests {
             ),
             (Some(4), Some(19), Some(4), Some(20))
         );
+    }
+
+    #[test]
+    fn query_type_at_preserves_parse_and_type_diagnostics() {
+        let root = temp_test_dir("jett_driver_query_type_at_errors");
+        fs::create_dir_all(&root).expect("temp query dir should be created");
+        let parse_file = root.join("parse_error.jett");
+        let parse_source = "function broken( returns int64:\n    return 1\n";
+        fs::write(&parse_file, parse_source).expect("parse-error fixture should be written");
+        let type_file = root.join("type_error.jett");
+        let type_source =
+            "function main() returns nothing:\n    int64 value = \"wrong\"\n    return nothing\n";
+        fs::write(&type_file, type_source).expect("type-error fixture should be written");
+
+        let parse_error = query_type_at_detailed(&parse_file, 1, 1)
+            .expect_err("type query should retain parse errors");
+        let type_error = query_type_at_detailed(&type_file, 2, 11)
+            .expect_err("type query should retain type errors");
+
+        fs::remove_dir_all(&root).expect("temp query dir should be removed");
+
+        for (error, source, file, message) in [
+            (parse_error, parse_source, &parse_file, "parse errors:"),
+            (type_error, type_source, &type_file, "type errors:"),
+        ] {
+            let (diagnostics, diagnostic_source, diagnostic_path) = error
+                .diagnostic_context()
+                .expect("compiler failure should retain diagnostic context");
+            assert_eq!(diagnostic_source, source);
+            assert_eq!(diagnostic_path, file.display().to_string());
+            assert!(has_error_diagnostics(diagnostics));
+            assert!(error.to_string().starts_with(message));
+        }
+    }
+
+    #[test]
+    fn query_type_at_preserves_support_parse_diagnostics() {
+        let root = temp_test_dir("jett_driver_query_type_at_support_error");
+        fs::create_dir_all(&root).expect("temp query dir should be created");
+        fs::write(root.join("jett.proj"), "name: query_fixture\n")
+            .expect("project marker should be written");
+        let support_file = root.join("broken.jett");
+        let support_source = "function broken( returns int64:\n    return 1\n";
+        fs::write(&support_file, support_source).expect("broken support file should be written");
+        let requested_file = root.join("main.jett");
+        fs::write(
+            &requested_file,
+            "function main() returns nothing:\n    return nothing\n",
+        )
+        .expect("query fixture should be written");
+
+        let error = query_type_at_detailed(&requested_file, 1, 10)
+            .expect_err("support parse failure should fail the query");
+
+        fs::remove_dir_all(&root).expect("temp query dir should be removed");
+
+        let (diagnostics, primary_file, sources) = error
+            .diagnostic_sources()
+            .expect("support parse failure should retain source files");
+        let support_diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.span.file != primary_file)
+            .expect("support diagnostic should retain its file id");
+        let diagnostic_source = sources
+            .iter()
+            .find(|source| source.file_id == support_diagnostic.span.file)
+            .expect("support diagnostic source should be retained");
+        assert!(diagnostic_source.file_path.ends_with("broken.jett"));
+        assert_eq!(diagnostic_source.source, support_source);
+        assert!(error.to_string().starts_with("support parse errors:"));
+    }
+
+    #[test]
+    fn query_type_at_preserves_cross_file_resolution_labels() {
+        let root = temp_test_dir("jett_driver_query_type_at_cross_file_error");
+        fs::create_dir_all(&root).expect("temp query dir should be created");
+        fs::write(root.join("jett.proj"), "name: query_fixture\n")
+            .expect("project marker should be written");
+        let support_file = root.join("api.jett");
+        fs::write(
+            &support_file,
+            "namespace api\n\nfunction hidden() returns int64:\n    return 1\n",
+        )
+        .expect("support fixture should be written");
+        let requested_file = root.join("main.jett");
+        fs::write(
+            &requested_file,
+            "namespace app\n\nfunction main() returns nothing:\n    int64 value = api.hidden()\n    return nothing\n",
+        )
+        .expect("query fixture should be written");
+
+        let error = query_type_at_detailed(&requested_file, 4, 25)
+            .expect_err("private cross-file use should fail resolution");
+
+        fs::remove_dir_all(&root).expect("temp query dir should be removed");
+
+        let (diagnostics, primary_file, sources) = error
+            .diagnostic_sources()
+            .expect("resolution failure should retain source files");
+        let cross_file_label = diagnostics
+            .iter()
+            .flat_map(|diagnostic| &diagnostic.labels)
+            .find(|label| label.span.file != primary_file)
+            .expect("resolution diagnostic should retain its cross-file label");
+        let label_source = sources
+            .iter()
+            .find(|source| source.file_id == cross_file_label.span.file)
+            .expect("cross-file label source should be retained");
+        assert!(label_source.file_path.ends_with("api.jett"));
+        assert!(label_source.source.contains("function hidden"));
     }
 
     #[test]
