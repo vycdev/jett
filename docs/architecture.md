@@ -758,6 +758,21 @@ The comptime interpreter supports basic type-level reflection for generic type p
 
 These are built-in operations of the comptime interpreter that query the compiler's type table. They enable `if comptime` branching on type properties.
 
+Generic specialization uses only reflection facts that remain structurally
+tied to the reflected type: direct `TypeKind` / `TypePrimitive` comparisons,
+immutable locals carrying those tags, typed helper parameters receiving them
+from the same generic instantiation, and matching arms. Arbitrary tags supplied
+by callers are not facts about `T`. The checker can use visible facts to
+determine branch reachability and validate casts for a concrete instantiation.
+Predicate calls that return `bool` and reflection comparisons copied into
+arbitrary `bool` locals do not carry type evidence. This conservative boundary
+prevents facts from being detached from their generic parameter or from hiding
+mixed runtime carriers behind a classifier; it is pinned by the
+`generic_reflection_predicate_fact_boundary.jett` and
+`generic_reflection_boolean_fact_boundary.jett` compile-fail fixtures. Static
+predicate folding, trusted predicate annotations, and general flow-sensitive
+boolean refinement remain separate future design work.
+
 ### Capability Restriction
 
 The comptime interpreter refuses to execute any function that takes capability parameters. If a `verify` block tries to call an impure function, it's a compile error. This is checked before interpretation begins.

@@ -1,15 +1,57 @@
 # Reflection Predicate Facts
 
-Status: current conservative boundary implemented and pinned; broader
-predicate semantics remain open.
+Status: conservative reflection-fact policy selected and pinned; broader
+predicate semantics are deferred rather than implied by this contract.
 
 Jett now propagates several reflection facts through generic functions:
 
 - direct `type.kind_tag[T]()` and `type.info[T]().kind_tag` comparisons,
 - direct `type.primitive_tag[T]()` and `TypeInfo.primitive_tag` comparisons,
 - immutable local `TypeKind` / `TypePrimitive` values,
-- helper parameters that receive those direct reflection values,
+- helper parameters that receive those direct reflection values for the same
+  generic instantiation,
 - `match` arms over `TypeKind` and `TypePrimitive`.
+
+## Decision
+
+Jett keeps this conservative boundary as the reflection-fact policy for generic
+specialization. A fact must remain structurally tied to the reflected generic
+type through a direct comparison, an immutable `TypeKind` / `TypePrimitive`
+value, a typed helper parameter carrying that value from the same generic
+instantiation, or a matching arm. An arbitrary tag supplied by a caller is not
+evidence about `T`. The checker may use valid facts to prove branch reachability
+and validate casts for the concrete generic instantiation.
+
+A function call that returns `bool` does not create a reflection fact, even
+when the function body is pure or compares only reflection tags. Copying a
+reflection comparison into an arbitrary `bool` local also discards the fact.
+This rule keeps type evidence local and inspectable: a boolean cannot be
+detached from the reflected value or generic parameter that it was intended to
+describe, and mixed runtime carriers cannot be hidden behind a broad
+classifier.
+
+Small same-carrier classifiers remain useful for organizing runtime logic, but
+their result does not authorize a generic cast. Code that needs a cast must use
+a visible direct fact or `match` arm. This is a deliberate language/checker
+contract, not merely an implementation gap.
+
+## Conformance Boundaries
+
+- `generic_reflection_branch_specialization.jett` covers direct comparisons,
+  immutable tag locals, and helper parameters receiving reflection values tied
+  to the same `T`.
+- `generic_reflection_match_specialization.jett` covers direct and helper-local
+  `TypeKind` / `TypePrimitive` matches.
+- `generic_reflection_local_fact_specialization.jett` pins local fact use for a
+  concrete instantiation.
+- `generic_reflection_predicate_fact_boundary.jett` rejects a predicate call as
+  a generic cast guard.
+- `generic_reflection_boolean_fact_boundary.jett` rejects detached boolean
+  evidence.
+- `generic_reflection_helper_kind_fact_cache.jett` and
+  `generic_reflection_helper_primitive_fact_cache.jett` reject arbitrary
+  caller-supplied tags as facts about `T`, including cases that could hide a
+  mixed runtime carrier.
 
 That is enough for the current stdlib JSON implementation to keep casts such as
 `int64 item = value`, `float64 item = value`, and `bytes item = value` inside
@@ -20,7 +62,7 @@ integers and narrower unsigned integers.
 
 ## Deferred Shape
 
-The checker does not currently understand predicate-derived facts:
+Under the selected policy, the checker does not derive facts from predicates:
 
 ```jett
 function json_type_primitive_is_integer(primitive: TypePrimitive) returns bool:
@@ -40,37 +82,20 @@ function reflected[T](value: T, primitive: TypePrimitive) returns string:
 
 This is tempting for JSON because `stdlib/json/60_reflect_serialize.jett` and
 `stdlib/json/70_reflect_decode.jett` both need the same primitive families. But
-using a predicate to guard a generic cast can hide the exact primitive fact from
-the checker unless the called helper is itself narrow enough to be checked for
-each concrete instantiation.
+a predicate result does not retain which `TypePrimitive` fact made the branch
+reachable. Treating that boolean as a cast guard could therefore hide a
+mixed-carrier family from the checker.
 
-For now, keep direct `TypePrimitive` matches in JSON helpers that choose a
-different runtime carrier, such as the separate `uint64` path. Small classifier
-helpers are acceptable only when all selected primitives share one safe cast
-target. Avoid broader predicates that mix carriers or imply facts the checker
-cannot see. The compile-fail fixture
-`generic_reflection_predicate_fact_boundary.jett` pins this boundary: a boolean
-helper over `TypePrimitive` is not a generic cast guard yet.
-`generic_reflection_boolean_fact_boundary.jett` also pins that assigning a
-reflection comparison to a `bool` local does not preserve the fact. A future
-flow-sensitive boolean fact model can change that, but it should do so
-deliberately because arbitrary booleans are easier for agents to detach from
-the carrier they were meant to prove.
-
-## Possible Directions
-
-Tracked by [#6](https://github.com/vycdev/jett/issues/6) for the unresolved
-predicate-fact policy and narrow static-folding candidate.
-
-1. Keep the current rule and accept some repeated primitive match arms.
-2. Add a small language-level predicate mechanism for reflection facts, for
-   example a trusted stdlib predicate annotation.
-3. Teach the checker to inline/evaluate simple pure predicates over
-   `TypeKind` and `TypePrimitive` values.
-
-Option 1 plus the narrow same-carrier classifier rule is the current behavior.
-Options 2 and 3 need a separate design pass because they affect generic
-specialization beyond JSON.
+Keep direct `TypePrimitive` matches in JSON helpers that choose different
+runtime carriers, such as the separate `uint64` path. Small classifier helpers
+are acceptable when all selected primitives share one safe cast target, but the
+classifier result does not authorize the cast. The compile-fail fixture
+`generic_reflection_predicate_fact_boundary.jett` pins that a boolean helper
+over `TypePrimitive` is not a generic cast guard.
+`generic_reflection_boolean_fact_boundary.jett` similarly pins that assigning a
+reflection comparison to a `bool` local does not preserve the fact. Changing
+either rule requires a separate design decision because arbitrary booleans are
+easier for agents to detach from the carrier they were meant to prove.
 
 ## Narrow Candidate For Later
 
@@ -98,5 +123,13 @@ instantiation?", not "what type facts does this arbitrary boolean imply?".
 
 This could reduce repeated primitive-family checks beyond the current
 same-carrier cases, but it still changes which predicate-shaped generic code
-typechecks. Keep it as a design follow-up rather than slipping it into JSON
-cleanup.
+typechecks. A trusted predicate annotation would change the contract as well.
+Either extension requires a new design decision that specifies eligibility,
+purity or trust, static evaluation, reachability, diagnostics, and mixed-carrier
+conformance tests. Until then, neither helper calls nor detached booleans carry
+reflection facts.
+
+This note addresses the policy decision requested by
+[#6](https://github.com/vycdev/jett/issues/6). The selected policy does not
+pre-approve static folding, trusted predicate annotations, or general
+flow-sensitive boolean refinement.
