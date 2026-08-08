@@ -165,7 +165,7 @@
 | `encoding` | Partial (6 builtins: base64_encode, base64_decode, hex_encode, hex_decode, url_encode, url_decode; stable representations, failure behavior, and stdlib/runtime boundary [tracked by #71](https://github.com/vycdev/jett/issues/71)) |
 | `bytes` | Partial (9 builtins: new, length, slice, concat, from_string, to_string, get, to_hex, from_hex) |
 | `uuid` | Partial (`uuid.new`; generation and entropy contract [tracked by #73](https://github.com/vycdev/jett/issues/73)) |
-| `time` | Partial (`time.now_ms`, `time.now_s`; time value and `Clock` capability contract [tracked by #75](https://github.com/vycdev/jett/issues/75)) |
+| `time` | Partial (transitional ambient `time.now_ms` and `time.now_s` builtins; the proposed contract selects capability-backed `Clock.now(view clock) -> time.Timestamp`, distinct signed-millisecond `Timestamp`/`Duration` values, deterministic clock injection, and removal of the ambient builtins; see [#75](https://github.com/vycdev/jett/issues/75) and the [time/Clock contract](open_design/time_clock_capability_contract.md)) |
 | `os` | Partial (os.env, os.args) |
 | `net.http` | Not started |
 | `net.socket` | Not started |
