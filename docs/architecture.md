@@ -1221,13 +1221,22 @@ Format-specific modules such as `json` should live in `.jett` stdlib code once r
 
 `string.is_not_empty`, `string.reverse`, `string.after`, `string.before`, and
 `string.between` are ordinary source-defined functions in
-`stdlib/string.jett`. Their Unicode- and grapheme-sensitive dependencies,
-including `string.chars`, `string.index_of`, `string.char_count`, and
-`string.slice`, remain Rust-backed primitive kernels.
+`stdlib/string.jett`. The complete public `string.*` API ultimately belongs in
+compiler-shipped `.jett` source. Its Unicode- and grapheme-sensitive operations
+may delegate to private trusted runtime kernels; the remaining hardcoded public
+signatures and Rust dispatch cases are transitional bootstrap debt to remove in
+follow-up extraction slices.
 
-Functions like `list.filter`, `string.trim`, `math.sqrt`, `time.format`, `crypto.sha256`, etc. These are regular `.jett` files that use the same language features as user code. The compiler discovers them via the namespace system (they declare namespaces like `namespace string`, `namespace math`, etc.).
+Public APIs such as `list.filter`, `string.trim`, `math.sqrt`, `time.format`,
+and `crypto.sha256` are intended to be regular `.jett` functions. The compiler
+will discover their source declarations through namespaces such as `string` and
+`math`; any public APIs that still exist only as hardcoded compiler signatures
+or Rust dispatch cases are transitional bootstrap implementations.
 
-The compiler does not have hardcoded knowledge of these functions. They are resolved by name during name resolution like any other `use` import.
+In the target architecture, the compiler has no hardcoded knowledge of public
+stdlib functions. They resolve by name like declarations from any other trusted
+compiler-shipped source file, while only private implementation kernels cross
+the runtime boundary.
 
 The current math extraction is intentionally narrower than that end state.
 `math.is_even`, `math.is_odd`, `math.sign`, `math.to_radians`, and

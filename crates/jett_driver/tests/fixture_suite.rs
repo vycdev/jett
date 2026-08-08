@@ -1055,6 +1055,10 @@ compile_fail_fixture!(
     "stdlib_namespace_collision.jett"
 );
 compile_fail_fixture!(
+    compile_fail_string_namespace_collision,
+    "string_namespace_collision.jett"
+);
+compile_fail_fixture!(
     compile_fail_export_root_type_project_file,
     "export_root_type_project_file.jett"
 );

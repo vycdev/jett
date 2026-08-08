@@ -154,7 +154,7 @@
 
 | Module | Status |
 |---|---|
-| `string` | Partial (`is_not_empty`, `reverse`, `after`, `before`, and `between` are source-defined in `stdlib/string.jett`; primitive operations including length/char_count, contains, trim, upper, lower, replace, split, join, starts_with, ends_with, is_empty, slice, repeat, pad_left, pad_end, conversions, slugify, truncate, chars, words, lines, index_of, count, to_upper_first, and to_lower_first remain Rust-backed; count/index/search/extraction helpers avoid partial grapheme matches) |
+| `string` | Partial (`is_not_empty`, `reverse`, `after`, `before`, and `between` are source-defined in `stdlib/string.jett`; the complete public `string.*` API remains the source-owned target, while hardcoded public signatures and Rust dispatch for the other operations are transitional bootstrap debt pending follow-up extraction into source declarations backed only as needed by private trusted Unicode/grapheme kernels; count/index/search/extraction helpers avoid partial grapheme matches) |
 | `list` | Partial (40+ builtins: new, length, append, get, first, last, is_empty, skip, take, reverse, sort, contains, index_of, remove, concat, flatten, unique, zip, chunk, sort_by_index, is_sorted, all_elements_in, enumerate, from_set, repeat, range, last_index_of, insert_at, remove_at, swap + higher-order: filter, map, find, sort_by, all, any, count, sum, group_by, reduce, flat_map) |
 | `set` | Partial (12 builtins: new, add, remove, contains, length, is_empty, to_list, union, intersection, difference) |
 | `map` | Partial (17+ builtins: new, length, has/contains_key, get, get_or, insert/set, remove, keys, values, is_empty, merge, from_lists, entries + higher-order filter, map_values, for_each) |
