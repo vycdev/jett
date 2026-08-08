@@ -1158,8 +1158,9 @@ flowchart LR
 
 ## Compiler Intrinsics vs Standard Library
 
-> Tracked by [#69](https://github.com/vycdev/jett/issues/69) for the stable
-> crypto hashing API, security guarantees, and stdlib/runtime boundary.
+> The proposed crypto text-digest API, algorithm classifications, secret policy,
+> and stdlib/runtime boundary are defined in the
+> [Crypto hashing and security contract](open_design/crypto_hashing_security_contract.md).
 > Encoding representations, failure behavior, and its stdlib/runtime boundary
 > are separately [tracked by #71](https://github.com/vycdev/jett/issues/71).
 
@@ -1219,9 +1220,20 @@ Format-specific modules such as `json` should live in `.jett` stdlib code once r
 
 **2. Stdlib functions** — normal Jett code shipped in `stdlib/`:
 
-Functions like `list.filter`, `string.trim`, `math.sqrt`, `time.format`, `crypto.sha256`, etc. These are regular `.jett` files that use the same language features as user code. The compiler discovers them via the namespace system (they declare namespaces like `namespace string`, `namespace math`, etc.).
+Functions like `list.filter`, `string.trim`, `math.sqrt`, and `time.format` are
+regular `.jett` files in the target architecture and use the same language
+features as user code. The compiler discovers them via the namespace system
+(they declare namespaces like `namespace string`, `namespace math`, etc.).
 
 The compiler does not have hardcoded knowledge of these functions. They are resolved by name during name resolution like any other `use` import.
+
+Crypto has not reached that end state yet. Its public SHA-256 and MD5 signatures
+and dispatch are still hardcoded in the checker and interpreter. The target
+keeps every public `crypto.*` declaration in trusted compiler-shipped `.jett`
+source while private trusted runtime kernels perform digest compression and
+future HMAC processing. Exact UTF-8, hexadecimal, taint, and backend obligations
+are defined by the
+[Crypto hashing and security contract](open_design/crypto_hashing_security_contract.md).
 
 The current math extraction is intentionally narrower than that end state.
 `math.is_even`, `math.is_odd`, `math.sign`, `math.to_radians`, and
@@ -1674,7 +1686,10 @@ Core stdlib (string, list, math, json) is implemented in Phase D. This phase com
 
 - **I/O:** `net.http`, `net.socket`, `csv`
 - **Time:** `time` (time value and `Clock` capability contract [tracked by #75](https://github.com/vycdev/jett/issues/75))
-- **Security:** `crypto`, `encoding`, `validate` (the crypto hashing contract is [tracked by #69](https://github.com/vycdev/jett/issues/69), and the encoding contract is [tracked by #71](https://github.com/vycdev/jett/issues/71))
+- **Security:** `crypto`, `encoding`, `validate` (the proposed hashing API,
+  security policy, and source/runtime boundary are defined in the
+  [crypto contract](open_design/crypto_hashing_security_contract.md), and the
+  encoding contract is [tracked by #71](https://github.com/vycdev/jett/issues/71))
 - **OS:** `os` (environment variables, process management, argv — wraps `Environment` and `Process` capabilities)
 - **Utilities:** `regex`, `random`, `uuid` (generation and entropy contract [tracked by #73](https://github.com/vycdev/jett/issues/73)), `log`, `format`
 - **Testing:** `test.mock` (mock capabilities for property-based testing)

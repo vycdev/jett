@@ -1377,10 +1377,11 @@ remain compiler-owned Rust primitive kernels used by those definitions; the
 other currently supported math builtins also remain Rust-backed until they are
 separately extracted.
 
-**Hashing and encoding — no third-party dependencies:**
+**Hashing and encoding — no application dependencies:**
 
-> Tracked by [#69](https://github.com/vycdev/jett/issues/69) for the stable
-> hashing API, security guarantees, and stdlib/runtime boundary.
+> The proposed stable text-digest API, algorithm classifications, HMAC shape,
+> secret policy, and stdlib/runtime boundary are defined in the
+> [Crypto hashing and security contract](open_design/crypto_hashing_security_contract.md).
 > Encoding API representations, failure behavior, and its stdlib/runtime
 > boundary are separately [tracked by #71](https://github.com/vycdev/jett/issues/71).
 
@@ -1388,13 +1389,19 @@ separately extracted.
 use crypto
 use encoding
 
-string hashed = crypto.sha256(password)
+string artifact_digest = crypto.sha256(artifact_text)
 string b64 = encoding.base64_encode(data)
 string decoded = encoding.base64_decode(b64)
 string url_safe = encoding.url_encode(query)
 bytes raw = bytes.from_string(data)
 string hex = bytes.to_hex(raw)
 ```
+
+`crypto.sha256` hashes exact UTF-8 text and returns 64 lowercase hexadecimal
+characters. `crypto.md5` keeps the same representation only for explicit legacy
+compatibility and is not a secure digest. SHA-512 and key-first binary HMAC are
+planned additions, not currently supported declarations. None of these
+operations is a password-hashing API.
 
 **Validation — standard library refinement types:**
 
@@ -6506,7 +6513,9 @@ The standard library is intentionally massive and opinionated. The goal is to ma
 - **test** — mock infrastructure for property-based testing (`test.mock` for mock filesystems, networks, etc.)
 - **log** — structured logging with levels
 - **format** — number formatting, padding, and text alignment
-- **crypto** — hashing (sha256, sha512, md5), HMAC; the stable API, security guarantees, and stdlib/runtime boundary are [tracked by #69](https://github.com/vycdev/jett/issues/69)
+- **crypto** — stable UTF-8-to-lowercase-hex SHA-256, legacy-only MD5, and
+  planned SHA-512/key-first HMAC; see the
+  [crypto hashing and security contract](open_design/crypto_hashing_security_contract.md)
 - **encoding** — base64, hex, URL encoding/decoding; the stable representations,
   failure contract, and stdlib/runtime boundary are [tracked by #71](https://github.com/vycdev/jett/issues/71)
 - **validate** — standard refinement types for common formats: Email, URL, UUID, IPv4, IPv6. The type IS the validation — once assigned, the value is guaranteed valid.
