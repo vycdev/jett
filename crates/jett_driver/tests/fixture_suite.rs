@@ -397,6 +397,14 @@ fn math_sum_reports_overflow() {
 }
 
 #[test]
+fn math_mod_reports_overflow() {
+    assert_runtime_fail(
+        "math_mod_overflow.jett",
+        "runtime error: math.mod: integer overflow: -9223372036854775808 % -1",
+    );
+}
+
+#[test]
 fn run_file_capture_stdout_captures_json_runtime_output() {
     assert_run_stdout(
         "json_tree_parse_runtime.jett",
