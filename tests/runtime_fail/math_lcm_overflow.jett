@@ -1,0 +1,4 @@
+function main() returns nothing:
+    int64 value = math.lcm(3037000500, 3037000501)
+    println(value)
+    return nothing
