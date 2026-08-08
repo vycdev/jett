@@ -397,6 +397,14 @@ fn math_sum_reports_overflow() {
 }
 
 #[test]
+fn math_abs_reports_overflow() {
+    assert_runtime_fail(
+        "math_abs_int64_min.jett",
+        "runtime error: math.abs: integer overflow: abs(-9223372036854775808)",
+    );
+}
+
+#[test]
 fn run_file_capture_stdout_captures_json_runtime_output() {
     assert_run_stdout(
         "json_tree_parse_runtime.jett",

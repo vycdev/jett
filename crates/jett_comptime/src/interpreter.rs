@@ -8494,7 +8494,11 @@ impl Interpreter {
             "math.abs" => {
                 require_args!(name, 1, args);
                 match &args[0] {
-                    Value::Int64(n) => Some(Ok(Value::Int64(n.abs()))),
+                    Value::Int64(n) => Some(
+                        n.checked_abs()
+                            .map(Value::Int64)
+                            .ok_or_else(|| format!("{name}: integer overflow: abs({n})")),
+                    ),
                     Value::Float64(n) => Some(Ok(Value::Float64(n.abs()))),
                     _ => Some(Err(format!("{name} expects a numeric argument"))),
                 }
@@ -17411,6 +17415,16 @@ mod builtin_tests {
         let mut interp = Interpreter::new();
         let expr = dotted_call("math", "abs", vec![int(-7)]);
         assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(7));
+    }
+
+    #[test]
+    fn builtin_math_abs_int64_min_reports_overflow() {
+        let mut interp = Interpreter::new();
+        let expr = dotted_call("math", "abs", vec![int(i64::MIN)]);
+        assert_eq!(
+            interp.eval_expr(&expr).unwrap_err(),
+            "math.abs: integer overflow: abs(-9223372036854775808)"
+        );
     }
 
     #[test]
