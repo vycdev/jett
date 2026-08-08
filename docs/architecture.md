@@ -1160,8 +1160,9 @@ flowchart LR
 
 > Tracked by [#69](https://github.com/vycdev/jett/issues/69) for the stable
 > crypto hashing API, security guarantees, and stdlib/runtime boundary.
-> Encoding representations, failure behavior, and its stdlib/runtime boundary
-> are separately [tracked by #71](https://github.com/vycdev/jett/issues/71).
+> Encoding's proposed byte/string representations, strict failures, URL/form
+> distinction, and source/runtime boundary are defined in the
+> [Encoding representation and failure contract](open_design/encoding_representation_failure_contract.md).
 
 The boundary between compiler-generated code and stdlib-implemented code is a critical architectural decision.
 
@@ -1222,6 +1223,14 @@ Format-specific modules such as `json` should live in `.jett` stdlib code once r
 Functions like `list.filter`, `string.trim`, `math.sqrt`, `time.format`, `crypto.sha256`, etc. These are regular `.jett` files that use the same language features as user code. The compiler discovers them via the namespace system (they declare namespaces like `namespace string`, `namespace math`, etc.).
 
 The compiler does not have hardcoded knowledge of these functions. They are resolved by name during name resolution like any other `use` import.
+
+Encoding has not reached that end state. Its six current public signatures and
+dispatch arms are hardcoded, all use `string -> string`, and do not expose
+decoder failures. The target places byte-native Base64/hex and textual URL/form
+public declarations in trusted compiler-shipped `.jett` source. Only private
+trusted byte kernels may remain runtime-backed; strict acceptance, error, and
+backend obligations are defined by the
+[Encoding representation and failure contract](open_design/encoding_representation_failure_contract.md).
 
 The current math extraction is intentionally narrower than that end state.
 `math.is_even`, `math.is_odd`, `math.sign`, `math.to_radians`, and
@@ -1674,7 +1683,10 @@ Core stdlib (string, list, math, json) is implemented in Phase D. This phase com
 
 - **I/O:** `net.http`, `net.socket`, `csv`
 - **Time:** `time` (time value and `Clock` capability contract [tracked by #75](https://github.com/vycdev/jett/issues/75))
-- **Security:** `crypto`, `encoding`, `validate` (the crypto hashing contract is [tracked by #69](https://github.com/vycdev/jett/issues/69), and the encoding contract is [tracked by #71](https://github.com/vycdev/jett/issues/71))
+- **Security:** `crypto`, `encoding`, `validate` (the crypto hashing contract is
+  [tracked by #69](https://github.com/vycdev/jett/issues/69), and encoding's
+  proposed byte-native codecs and strict failure policy are defined by the
+  [encoding contract](open_design/encoding_representation_failure_contract.md))
 - **OS:** `os` (environment variables, process management, argv — wraps `Environment` and `Process` capabilities)
 - **Utilities:** `regex`, `random`, `uuid` (generation and entropy contract [tracked by #73](https://github.com/vycdev/jett/issues/73)), `log`, `format`
 - **Testing:** `test.mock` (mock capabilities for property-based testing)

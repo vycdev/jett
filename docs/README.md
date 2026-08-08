@@ -38,6 +38,7 @@ enough pressure from real code:
 - [Reflection predicate facts](open_design/reflection_predicate_facts.md)
 - [Print debug builtin policy](open_design/print_debug_builtin_policy.md)
 - [uint64 runtime value model](open_design/uint64_runtime_value_model.md)
+- [Encoding representation and failure contract](open_design/encoding_representation_failure_contract.md)
 
 ## Completed Records
 
