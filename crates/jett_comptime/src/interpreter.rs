@@ -8708,34 +8708,6 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects two int64 arguments"))),
                 }
             }
-            "math.sum" => {
-                require_args!(name, 1, args);
-                match &args[0] {
-                    Value::List(items) => {
-                        let mut total: i64 = 0;
-                        for item in items {
-                            match item {
-                                Value::Int64(n) => {
-                                    let Some(next_total) = total.checked_add(*n) else {
-                                        return Some(Err(format!(
-                                            "math.sum: integer overflow: {total} + {n}"
-                                        )));
-                                    };
-                                    total = next_total;
-                                }
-                                _ => {
-                                    return Some(Err(
-                                        "math.sum: list must contain int64 values".to_string()
-                                    ));
-                                }
-                            }
-                        }
-                        Some(Ok(Value::Int64(total)))
-                    }
-                    _ => Some(Err(format!("{name} expects a list argument"))),
-                }
-            }
-
             "math.gcd" => {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {

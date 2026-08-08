@@ -392,7 +392,7 @@ fn sized_integer_runtime_bounds_reject_variable_arithmetic() {
 fn math_sum_reports_overflow() {
     assert_runtime_fail(
         "math_sum_overflow.jett",
-        "runtime error: math.sum: integer overflow: 9223372036854775807 + 1",
+        "runtime error: integer overflow: 9223372036854775807 + 1",
     );
 }
 
@@ -755,6 +755,7 @@ compile_fail_fixture!(
 run_pass_fixture!(run_pass_string_search, "string_search.jett");
 run_pass_fixture!(run_pass_time_and_os, "time_and_os.jett");
 run_pass_fixture!(run_pass_math_trig, "math_trig.jett");
+run_pass_fixture!(run_pass_math_sum_source, "math_sum_source.jett");
 run_pass_fixture!(run_pass_logical_ops, "logical_ops.jett");
 run_pass_fixture!(run_pass_trace_basic, "trace_basic.jett");
 run_pass_fixture!(run_pass_breakpoint_basic, "breakpoint_basic.jett");
@@ -881,6 +882,14 @@ compile_fail_fixture!(
 compile_fail_fixture!(
     compile_fail_ownership_branch_partial_move,
     "ownership_branch_partial_move.jett"
+);
+compile_fail_fixture!(
+    compile_fail_math_sum_consumes_list,
+    "math_sum_consumes_list.jett"
+);
+compile_fail_fixture!(
+    compile_fail_math_sum_argument_shape,
+    "math_sum_argument_shape.jett"
 );
 compile_fail_fixture!(
     compile_fail_pipeline_builtin_input_mismatch,

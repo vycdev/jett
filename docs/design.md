@@ -609,12 +609,13 @@ function fetch_data(view net: Network, url: string) returns result[map[string, s
         return fail(parse_error)
     return ok(data)
 
-function compute_stats(values: list[float64]) returns float64:
+function compute_stats(values: list[int64]) returns float64:
     use math
-    float64 total = math.sum(values)
-    int64 count = list.length[float64](values)
+    int64 count = list.length[int64](view values)
+    int64 total = math.sum(values)
+    float64 total_f = float64.from_int64(total)
     float64 count_f = float64.from_int64(count)
-    return total / count_f
+    return total_f / count_f
 ```
 
 **What this achieves:**
@@ -1371,11 +1372,14 @@ float64 power = math.pow(base, exponent)
 
 Compositional math helpers should be ordinary Jett source when the language can
 express them without losing numeric semantics. `math.is_even`, `math.is_odd`,
-`math.sign`, `math.to_radians`, and `math.to_degrees` are therefore defined in
-`stdlib/math.jett` and resolved like user functions. `math.mod` and `math.pi`
-remain compiler-owned Rust primitive kernels used by those definitions; the
-other currently supported math builtins also remain Rust-backed until they are
-separately extracted.
+`math.sign`, `math.to_radians`, `math.to_degrees`, and the consuming
+`math.sum(list[int64])` helper are therefore defined in `stdlib/math.jett` and
+resolved like user functions. `math.sum` uses ordinary checked source addition,
+so overflow reports the same deterministic arithmetic error as other Jett
+`int64` expressions. `math.mod` and `math.pi` remain compiler-owned Rust
+primitive kernels used by those definitions. Exact numeric overloads such as
+`math.abs`, `math.min`, and `math.max`, along with the other supported math
+builtins, remain Rust-backed until they are separately extracted.
 
 **Hashing and encoding — no third-party dependencies:**
 
