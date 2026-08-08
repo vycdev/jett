@@ -3345,7 +3345,19 @@ impl<'a> TypeChecker<'a> {
             "math.average" | "math.median" => {
                 let inner = match type_args.len() {
                     0 => TypeInterner::FLOAT64,
-                    1 => self.resolve_type_expr(&type_args[0]),
+                    1 => {
+                        let inner = self.resolve_type_expr(&type_args[0]);
+                        if inner != TypeInterner::ERROR && !self.is_numeric(inner) {
+                            self.sink.emit(errors::type_mismatch(
+                                "numeric",
+                                &self.type_name(inner),
+                                span,
+                            ));
+                            TypeInterner::ERROR
+                        } else {
+                            inner
+                        }
+                    }
                     got => {
                         self.sink.emit(errors::unknown_type(
                             &format!("{name} (expected 0 or 1 type arguments, got {got})"),

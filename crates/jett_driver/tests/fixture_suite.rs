@@ -1153,6 +1153,16 @@ compile_fail_fixture!(
     "math_numeric_builtin_argument_shapes.jett"
 );
 
+compile_fail_fixture!(
+    compile_fail_math_average_median_non_numeric,
+    "math_average_median_non_numeric.jett"
+);
+
+#[test]
+fn compile_fail_math_average_median_non_numeric_count() {
+    assert_compile_fail_error_count("math_average_median_non_numeric.jett", 300, 4);
+}
+
 #[test]
 fn compile_fail_math_numeric_builtin_argument_shape_counts() {
     assert_compile_fail_error_count("math_numeric_builtin_argument_shapes.jett", 303, 6);

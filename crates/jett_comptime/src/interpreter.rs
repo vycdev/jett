@@ -8621,15 +8621,13 @@ impl Interpreter {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::List(items) if !items.is_empty() => {
-                        let sum: f64 = items
-                            .iter()
-                            .map(|v| match v {
-                                Value::Int64(n) => *n as f64,
-                                Value::Float64(n) => *n,
-                                _ => 0.0,
-                            })
-                            .sum();
-                        Some(Ok(Value::Float64(sum / items.len() as f64)))
+                        let sum = items.iter().try_fold(0.0, |sum, value| match value {
+                            Value::Int64(n) => Ok(sum + *n as f64),
+                            Value::Uint64(n) => Ok(sum + *n as f64),
+                            Value::Float64(n) => Ok(sum + *n),
+                            _ => Err(format!("{name} expects a list of numeric values")),
+                        });
+                        Some(sum.map(|sum| Value::Float64(sum / items.len() as f64)))
                     }
                     Value::List(_) => Some(Err("math.average: list is empty".to_string())),
                     _ => Some(Err(format!("{name} expects a list of numbers"))),
@@ -8640,22 +8638,27 @@ impl Interpreter {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::List(items) if !items.is_empty() => {
-                        let mut nums: Vec<f64> = items
+                        let nums: Result<Vec<f64>, String> = items
                             .iter()
-                            .map(|v| match v {
-                                Value::Int64(n) => *n as f64,
-                                Value::Float64(n) => *n,
-                                _ => 0.0,
+                            .map(|value| match value {
+                                Value::Int64(n) => Ok(*n as f64),
+                                Value::Uint64(n) => Ok(*n as f64),
+                                Value::Float64(n) => Ok(*n),
+                                _ => Err(format!("{name} expects a list of numeric values")),
                             })
                             .collect();
-                        nums.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-                        let mid = nums.len() / 2;
-                        let median = if nums.len() % 2 == 0 {
-                            (nums[mid - 1] + nums[mid]) / 2.0
-                        } else {
-                            nums[mid]
-                        };
-                        Some(Ok(Value::Float64(median)))
+                        Some(nums.map(|mut nums| {
+                            nums.sort_by(|a, b| {
+                                a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+                            });
+                            let mid = nums.len() / 2;
+                            let median = if nums.len() % 2 == 0 {
+                                (nums[mid - 1] + nums[mid]) / 2.0
+                            } else {
+                                nums[mid]
+                            };
+                            Value::Float64(median)
+                        }))
                     }
                     Value::List(_) => Some(Err("math.median: list is empty".to_string())),
                     _ => Some(Err(format!("{name} expects a list of numbers"))),
@@ -17559,6 +17562,27 @@ mod builtin_tests {
         let mut interp = Interpreter::new();
         let expr = dotted_call("string", "trim", vec![string("a"), string("b")]);
         assert!(interp.eval_expr(&expr).is_err());
+    }
+
+    #[test]
+    fn math_average_and_median_validate_numeric_values() {
+        let mut interp = Interpreter::new();
+        let non_numeric = [Value::List(vec![Value::String("not a number".to_string())])];
+        let unsigned = [Value::List(vec![Value::Uint64(2), Value::Uint64(4)])];
+
+        for name in ["math.average", "math.median"] {
+            let error = interp
+                .call_builtin(name, &non_numeric)
+                .expect("math builtin should be recognized")
+                .expect_err("non-numeric values should fail");
+            assert_eq!(error, format!("{name} expects a list of numeric values"));
+
+            let result = interp
+                .call_builtin(name, &unsigned)
+                .expect("math builtin should be recognized")
+                .expect("uint64 values should remain supported");
+            assert_eq!(result, Value::Float64(3.0));
+        }
     }
 
     #[test]
