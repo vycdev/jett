@@ -397,6 +397,14 @@ fn math_sum_reports_overflow() {
 }
 
 #[test]
+fn math_factorial_reports_overflow() {
+    assert_runtime_fail(
+        "math_factorial_overflow.jett",
+        "runtime error: math.factorial: integer overflow: 2432902008176640000 * 21",
+    );
+}
+
+#[test]
 fn run_file_capture_stdout_captures_json_runtime_output() {
     assert_run_stdout(
         "json_tree_parse_runtime.jett",

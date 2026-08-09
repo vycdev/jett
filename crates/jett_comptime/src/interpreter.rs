@@ -8782,7 +8782,12 @@ impl Interpreter {
                         } else {
                             let mut result: i64 = 1;
                             for i in 2..=*n {
-                                result = result.saturating_mul(i);
+                                let Some(next_result) = result.checked_mul(i) else {
+                                    return Some(Err(format!(
+                                        "math.factorial: integer overflow: {result} * {i}"
+                                    )));
+                                };
+                                result = next_result;
                             }
                             Some(Ok(Value::Int64(result)))
                         }
