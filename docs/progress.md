@@ -147,7 +147,7 @@
 | Component | Status |
 |---|---|
 | Cross-compilation (`--target`) | Not started |
-| C binding generator (`jett bind`) | Not started (initial FFI and generated binding contract tracked by [#53](https://github.com/vycdev/jett/issues/53)) |
+| C binding generator (`jett bind`) | Not started (initial syntax, safety boundary, supported subset, and staged implementation specified by the [C FFI binding contract](open_design/c_ffi_binding_contract.md), tracked by [#53](https://github.com/vycdev/jett/issues/53)) |
 | `jett bundle` | Working (validation-first concatenation; dependency-aware reordering remains open) |
 
 ### Phase K: Full Standard Library — NOT STARTED
@@ -199,7 +199,7 @@
 | `jett run [--agent] file.jett` | Working (tree-walking interpreter; `--agent` captures stdout plus typed trace/breakpoint debug rows) |
 | `jett test [--agent] [file.jett]` | Working (verify + property blocks; `--agent` emits compact block tables) |
 | `jett lsp` | Working (diagnostics on save) |
-| `jett bind header.h` | Not started (tracked by [#53](https://github.com/vycdev/jett/issues/53)) |
+| `jett bind header.h` | Not started (contract specified in [C FFI binding contract](open_design/c_ffi_binding_contract.md); implementation tracked by [#53](https://github.com/vycdev/jett/issues/53)) |
 | `jett bundle` | Working (validation-first concatenation; dependency-aware reordering remains open) |
 | `jett mcp` | Not started |
 | `jett query --agent --namespaces` / `--symbols file.jett` / `--type-at file:line:column` / `--definition-at file:line:column` / `--references-at file:line:column` / `--complete-at file:line:column` / `--signature name` | Partial (ranged namespace registry, file-local symbols with declaration ranges and function signatures, ranged type lookup, ranged definition lookup, ranged reference lookup, ranked prefix-filtered completion candidates with context metadata and ranges, and source-level function signatures) |
