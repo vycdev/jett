@@ -9857,6 +9857,10 @@ impl<'a> TypeChecker<'a> {
                         arg.value.span(),
                     ));
                 }
+            } else {
+                // Keep checking surplus arguments so nested type errors are not
+                // hidden behind the arity diagnostic.
+                self.check_expr(&arg.value);
             }
         }
 
@@ -12976,6 +12980,30 @@ function main() returns int64:
             .filter(|d| d.severity == jett_diagnostics::Severity::Error)
             .collect();
         assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+    }
+
+    #[test]
+    fn enum_variant_construction_checks_surplus_argument_expressions() {
+        let errors = check_source_errors(
+            "\
+enum Shape:
+    point(x: int64, y: int64)
+
+function main() returns nothing:
+    Shape shape = Shape.point(1, 2, true + \"bad\")
+",
+        );
+
+        assert!(
+            errors.iter().any(|d| d.code.code() == 303),
+            "expected the enum arity diagnostic, got: {:?}",
+            errors
+        );
+        assert!(
+            errors.iter().any(|d| d.code.code() == 301),
+            "expected surplus argument expression to be type-checked, got: {:?}",
+            errors
+        );
     }
 
     #[test]
