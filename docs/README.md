@@ -45,6 +45,7 @@ These documents are retained as historical implementation records. Some of them
 describe blockers or plans that have since been resolved, so use the active
 plans above for current work.
 
+- [Breakpoint pause and inspection protocol](completed/breakpoint_pause_inspection_protocol.md)
 - [Bitfield reflection metadata](completed/bitfield_reflection_metadata.md)
 - [Comptime type bind](completed/comptime_type_bind.md)
 - [JSON public bridge handoff](completed/json_public_bridge_handoff.md)

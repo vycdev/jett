@@ -1072,8 +1072,44 @@ The runtime sits between Rust (~2K lines, no scheduler) and Pony (~15-20K lines,
 | **Task scheduler** | ~500 lines | For `run`/`join`/`cancel` structured concurrency. Built on top of the actor scheduler — a spawned task is a lightweight actor. |
 | **Capability constructors** | ~200 lines | Functions that create capability values at program startup. Called by the generated `main` wrapper. |
 | **Panic handler** | ~100 lines | For `assert` failures and unrecoverable errors. Prints the message and aborts. |
-| **Breakpoint IPC server** | ~300 lines | Debug-only. When a `breakpoint` is hit, pauses execution and opens a localhost HTTP server (or stdin/stdout loop) for the LLM to query variables and expressions. The pause, inspection, and transport protocol is tracked by [#41](https://github.com/vycdev/jett/issues/41). Compiled out in release. |
+| **Breakpoint control plane** | ~300 lines | Debug-only. A compiler-owned operation layer exposes pause, inspection, evaluation, and resume through an authenticated loopback HTTP adapter. The [decided protocol](completed/breakpoint_pause_inspection_protocol.md) is compiled out in release. |
 | **Entry point** | ~100 lines | `_jett_entry` initializes the runtime (thread pool, event loop), constructs capabilities, calls user's `main()`, and shuts down cleanly. |
+
+### Breakpoint Control Plane
+
+The breakpoint protocol is shared compiler/runtime policy, not an HTTP-specific
+debugger API. A debug launch creates the operation service before user code,
+binds an ephemeral exact-loopback address, and publishes its endpoint and fresh
+bearer token through an owner-only control descriptor. Stdio is not the initial
+transport because the running Jett program may own stdin and stdout. The
+listener must never bind a wildcard/non-loopback address, place the token in a
+URL or process arguments, or grant user code a `Network` capability.
+
+On a breakpoint hit, the interpreter pauses immediately after the optional
+condition. A future concurrent runtime quiesces all Jett tasks at scheduler safe
+points before publishing a process-scoped `pause_id`; callbacks from completed
+OS work remain unscheduled until resume. One authenticated controller then uses
+the shared `wait`, `bindings`, `value`, `evaluate`, `stack`, `continue`, and
+`disconnect` operations. Requests and responses are correlated TOON envelopes.
+Protocol failures have stable breakpoint codes, while compiler-produced
+expression diagnostics reuse the ASP diagnostic collection owned by #35.
+
+Inspection reads the checked scope and the compiler's loaded source map. It
+cannot read arbitrary filesystem paths, reveal capabilities or secret-bearing
+values, consume/mutate program values, or execute effectful expressions.
+Evaluation uses implicit views, checked pure calls, bounded scratch state, and
+no committed writes. Disconnect resumes by default (or aborts when selected by
+the launcher), invalidates the token, and removes the descriptor so an abandoned
+agent cannot leave the process paused indefinitely.
+
+The current tree-walking interpreter's one-line binding snapshot is the
+compatibility baseline, not the interactive implementation. The staged order is
+typed protocol/renderer tests, interpreter pause and operations, complete
+stack/source context, then HIR/MIR/native safe-point lowering. Native code adapts
+values to the same operation model instead of defining a second debugger wire
+schema. See the
+[breakpoint protocol record](completed/breakpoint_pause_inspection_protocol.md)
+for the lifecycle, authorization, envelopes, examples, and verification slices.
 
 ### How the Compiler Uses the Runtime
 
