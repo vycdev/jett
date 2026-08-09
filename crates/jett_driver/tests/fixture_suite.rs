@@ -397,6 +397,14 @@ fn math_sum_reports_overflow() {
 }
 
 #[test]
+fn encoding_hex_decode_rejects_non_ascii_without_panicking() {
+    assert_runtime_fail(
+        "encoding_hex_decode_non_ascii.jett",
+        "runtime error: encoding.hex_decode: invalid hex characters",
+    );
+}
+
+#[test]
 fn run_file_capture_stdout_captures_json_runtime_output() {
     assert_run_stdout(
         "json_tree_parse_runtime.jett",

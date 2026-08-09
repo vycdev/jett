@@ -9333,13 +9333,29 @@ impl Interpreter {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => {
-                        if s.len() % 2 != 0 {
+                        let raw = s.as_bytes();
+                        if raw.len() % 2 != 0 {
                             return Some(Err(
                                 "encoding.hex_decode: odd-length hex string".to_string()
                             ));
                         }
-                        let bytes: Result<Vec<u8>, _> = (0..s.len() / 2)
-                            .map(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16))
+                        let bytes: Result<Vec<u8>, ()> = raw
+                            .chunks_exact(2)
+                            .map(|pair| {
+                                let high = match pair[0] {
+                                    b'0'..=b'9' => pair[0] - b'0',
+                                    b'a'..=b'f' => pair[0] - b'a' + 10,
+                                    b'A'..=b'F' => pair[0] - b'A' + 10,
+                                    _ => return Err(()),
+                                };
+                                let low = match pair[1] {
+                                    b'0'..=b'9' => pair[1] - b'0',
+                                    b'a'..=b'f' => pair[1] - b'a' + 10,
+                                    b'A'..=b'F' => pair[1] - b'A' + 10,
+                                    _ => return Err(()),
+                                };
+                                Ok((high << 4) | low)
+                            })
                             .collect();
                         match bytes {
                             Ok(b) => match String::from_utf8(b) {
@@ -17610,6 +17626,16 @@ mod builtin_tests {
         let expr = Expr::Pipeline(Box::new(initial), steps, sp());
         let result = interp.eval_expr(&expr).unwrap();
         assert_eq!(result, Value::String("hello jett".to_string()));
+    }
+
+    #[test]
+    fn builtin_encoding_hex_decode_rejects_non_ascii_without_panicking() {
+        let mut interp = Interpreter::new();
+        let expr = dotted_call("encoding", "hex_decode", vec![string("aééa")]);
+        assert_eq!(
+            interp.eval_expr(&expr).unwrap_err(),
+            "encoding.hex_decode: invalid hex characters"
+        );
     }
 
     #[test]
