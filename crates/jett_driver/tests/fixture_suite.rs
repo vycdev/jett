@@ -334,6 +334,10 @@ run_pass_fixture!(
     run_pass_property_generic_lists,
     "property_generic_lists.jett"
 );
+run_pass_fixture!(
+    run_pass_property_recursive_structs,
+    "property_recursive_structs.jett"
+);
 
 #[test]
 fn run_file_capture_stdout_captures_capability_writes() {
@@ -1322,6 +1326,10 @@ compile_fail_fixture!(
 compile_fail_fixture!(
     compile_fail_property_given_type_binding,
     "property_given_type_binding.jett"
+);
+compile_fail_fixture!(
+    compile_fail_property_direct_recursive_struct,
+    "property_direct_recursive_struct.jett"
 );
 compile_fail_fixture!(
     compile_fail_json_private_tree_parse_scalar,

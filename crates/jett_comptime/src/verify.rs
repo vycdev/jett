@@ -5,6 +5,7 @@ use jett_parser::ast::{
     PropertyBlock, StructDef, TypeAlias, TypeExpr, VerifyBlock,
 };
 use jett_types::ReflectionMetadata;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -51,8 +52,77 @@ fn update_current_namespace(
 // ---------------------------------------------------------------------------
 
 const PROPERTY_DEFAULT_ITERATIONS: usize = 100;
+// Backstop recursion whose generic arguments change on every expansion.
+const PROPERTY_GENERATION_MAX_DEPTH: usize = 32;
+const PROPERTY_GENERATION_MAX_TYPE_NODES: usize = 1024;
+const PROPERTY_GENERATION_MAX_WORK: usize = 1024;
 const SHRINK_MAX_STEPS: usize = 50;
 const VERIFY_STACK_SIZE: usize = 8 * 1024 * 1024;
+
+thread_local! {
+    static PROPERTY_GENERATION_STATE: RefCell<PropertyGenerationState> = const {
+        RefCell::new(PropertyGenerationState {
+            depth: 0,
+            work: 0,
+            active_types: Vec::new(),
+        })
+    };
+}
+
+struct PropertyGenerationState {
+    depth: usize,
+    work: usize,
+    active_types: Vec<String>,
+}
+
+struct PropertyGenerationGuard {
+    tracks_type: bool,
+}
+
+impl PropertyGenerationGuard {
+    fn enter(type_key: Option<String>) -> Option<Self> {
+        PROPERTY_GENERATION_STATE.with(|state| {
+            let mut state = state.borrow_mut();
+            if state.depth == 0 {
+                debug_assert!(state.active_types.is_empty());
+                state.work = 0;
+            }
+            if state.depth >= PROPERTY_GENERATION_MAX_DEPTH
+                || state.work >= PROPERTY_GENERATION_MAX_WORK
+                || type_key
+                    .as_ref()
+                    .is_some_and(|key| state.active_types.contains(key))
+            {
+                return None;
+            }
+
+            state.depth += 1;
+            state.work += 1;
+            let tracks_type = type_key.is_some();
+            if let Some(type_key) = type_key {
+                state.active_types.push(type_key);
+            }
+            Some(Self { tracks_type })
+        })
+    }
+}
+
+impl Drop for PropertyGenerationGuard {
+    fn drop(&mut self) {
+        PROPERTY_GENERATION_STATE.with(|state| {
+            let mut state = state.borrow_mut();
+            if self.tracks_type {
+                state.active_types.pop();
+            }
+            debug_assert!(state.depth > 0);
+            state.depth = state.depth.saturating_sub(1);
+            if state.depth == 0 {
+                debug_assert!(state.active_types.is_empty());
+                state.work = 0;
+            }
+        });
+    }
+}
 
 #[derive(Debug, Clone)]
 struct PropertyEnumDef {
@@ -814,6 +884,21 @@ fn generate_values_for_type_in_namespace(
     bitfield_defs: &[PropertyBitfieldDef],
     type_alias_defs: &[PropertyTypeAliasDef],
 ) -> Vec<Value> {
+    if !property_type_expr_within_generation_budget(ty) {
+        return Vec::new();
+    }
+    let type_key = property_generation_type_key(
+        ty,
+        namespace,
+        enum_defs,
+        struct_defs,
+        bitfield_defs,
+        type_alias_defs,
+    );
+    let Some(_generation_guard) = PropertyGenerationGuard::enter(type_key) else {
+        return Vec::new();
+    };
+
     match ty {
         TypeExpr::Named(ident) => match ident.name.as_str() {
             "int8" => generate_signed_integer_values(i8::MIN as i64, i8::MAX as i64),
@@ -968,6 +1053,98 @@ fn generate_values_for_type_in_namespace(
             type_alias_defs,
         ),
         TypeExpr::Function(_, _, _) => vec![], // cannot generate function values
+    }
+}
+
+fn property_type_expr_within_generation_budget(ty: &TypeExpr) -> bool {
+    fn visit(ty: &TypeExpr, remaining: &mut usize) -> bool {
+        if *remaining == 0 {
+            return false;
+        }
+        *remaining -= 1;
+
+        match ty {
+            TypeExpr::Named(_) => true,
+            TypeExpr::Generic(_, args, _) => args.iter().all(|arg| visit(arg, remaining)),
+            TypeExpr::View(inner, _) | TypeExpr::StateQualified(inner, _, _) => {
+                visit(inner, remaining)
+            }
+            TypeExpr::Function(params, return_ty, _) => {
+                params.iter().all(|param| visit(param, remaining)) && visit(return_ty, remaining)
+            }
+        }
+    }
+
+    let mut remaining = PROPERTY_GENERATION_MAX_TYPE_NODES;
+    visit(ty, &mut remaining)
+}
+
+fn property_generation_type_key(
+    ty: &TypeExpr,
+    namespace: Option<&str>,
+    enum_defs: &[PropertyEnumDef],
+    struct_defs: &[PropertyStructDef],
+    bitfield_defs: &[PropertyBitfieldDef],
+    type_alias_defs: &[PropertyTypeAliasDef],
+) -> Option<String> {
+    match ty {
+        TypeExpr::Named(ident) => find_property_type_alias(&ident.name, namespace, type_alias_defs)
+            .map(|def| def.type_name.clone())
+            .or_else(|| {
+                find_property_enum(&ident.name, namespace, enum_defs)
+                    .map(|def| def.type_name.clone())
+            })
+            .or_else(|| {
+                find_property_struct(&ident.name, namespace, struct_defs)
+                    .map(|def| def.type_name.clone())
+            })
+            .or_else(|| {
+                find_property_bitfield(&ident.name, namespace, bitfield_defs)
+                    .map(|def| def.type_name.clone())
+            }),
+        TypeExpr::Generic(ident, args, _) => {
+            let struct_def = find_property_struct(&ident.name, namespace, struct_defs)?;
+            let args = args
+                .iter()
+                .map(property_type_expr_generation_key)
+                .collect::<Vec<_>>()
+                .join(",");
+            Some(format!("{}[{args}]", struct_def.type_name))
+        }
+        TypeExpr::View(_, _) | TypeExpr::StateQualified(_, _, _) | TypeExpr::Function(_, _, _) => {
+            None
+        }
+    }
+}
+
+fn property_type_expr_generation_key(ty: &TypeExpr) -> String {
+    match ty {
+        TypeExpr::Named(ident) => ident.name.clone(),
+        TypeExpr::Generic(ident, args, _) => {
+            let args = args
+                .iter()
+                .map(property_type_expr_generation_key)
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("{}[{args}]", ident.name)
+        }
+        TypeExpr::View(inner, _) => format!("view {}", property_type_expr_generation_key(inner)),
+        TypeExpr::StateQualified(inner, state, _) => format!(
+            "{} at {}",
+            property_type_expr_generation_key(inner),
+            state.name
+        ),
+        TypeExpr::Function(params, return_ty, _) => {
+            let params = params
+                .iter()
+                .map(property_type_expr_generation_key)
+                .collect::<Vec<_>>()
+                .join(",");
+            format!(
+                "function({params}) returns {}",
+                property_type_expr_generation_key(return_ty)
+            )
+        }
     }
 }
 
@@ -1129,10 +1306,7 @@ fn generate_optional_values_for_type(
         bitfield_defs,
         type_alias_defs,
     );
-    if inner_values.is_empty() {
-        return Vec::new();
-    }
-
+    // `none` is valid even when no inner samples can be generated.
     let mut values = vec![Value::OptionalNone];
     values.extend(
         inner_values
@@ -3329,6 +3503,153 @@ mod tests {
             }),
             "expected struct generation to include generated fields"
         );
+    }
+
+    #[test]
+    fn property_generator_bounds_optional_recursive_structs() {
+        let mut interp = Interpreter::new();
+        let struct_defs = vec![PropertyStructDef {
+            type_name: "Node".to_string(),
+            namespace: None,
+            def: generic_struct_def(
+                "Node",
+                vec![],
+                vec![
+                    ("value", type_named("int64")),
+                    ("next", type_generic("optional", vec![type_named("Node")])),
+                    (
+                        "alternate",
+                        type_generic("optional", vec![type_named("Node")]),
+                    ),
+                ],
+            ),
+        }];
+
+        let values = generate_values_for_type_in_namespace(
+            &mut interp,
+            &type_named("Node"),
+            None,
+            &[],
+            &struct_defs,
+            &[],
+            &[],
+        );
+
+        assert!(!values.is_empty());
+        assert!(values.iter().any(|value| {
+            matches!(
+                value,
+                Value::Struct { fields, .. }
+                    if fields.iter().any(|(name, value)| {
+                        name == "next" && matches!(value, Value::OptionalNone)
+                    })
+            )
+        }));
+        assert!(!generate_values_for_type(&type_named("int64")).is_empty());
+    }
+
+    #[test]
+    fn property_generator_supports_deep_acyclic_types() {
+        let mut ty = type_named("int64");
+        for _ in 0..24 {
+            ty = type_generic("optional", vec![ty]);
+        }
+
+        assert!(!generate_values_for_type(&ty).is_empty());
+    }
+
+    #[test]
+    fn property_generator_bounds_recursive_generic_argument_growth() {
+        let mut interp = Interpreter::new();
+        let struct_defs = vec![PropertyStructDef {
+            type_name: "Nest".to_string(),
+            namespace: None,
+            def: generic_struct_def(
+                "Nest",
+                vec!["T"],
+                vec![(
+                    "next",
+                    type_generic(
+                        "optional",
+                        vec![type_generic(
+                            "Nest",
+                            vec![type_generic("map", vec![type_named("T"), type_named("T")])],
+                        )],
+                    ),
+                )],
+            ),
+        }];
+
+        let values = generate_values_for_type_in_namespace(
+            &mut interp,
+            &type_generic("Nest", vec![type_named("int64")]),
+            None,
+            &[],
+            &struct_defs,
+            &[],
+            &[],
+        );
+
+        assert!(!values.is_empty());
+    }
+
+    #[test]
+    fn property_generator_rejects_direct_recursive_structs() {
+        let mut interp = Interpreter::new();
+        let struct_defs = vec![PropertyStructDef {
+            type_name: "Node".to_string(),
+            namespace: None,
+            def: struct_def("Node", vec![("next", "Node")], vec![]),
+        }];
+
+        let values = generate_values_for_type_in_namespace(
+            &mut interp,
+            &type_named("Node"),
+            None,
+            &[],
+            &struct_defs,
+            &[],
+            &[],
+        );
+
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn property_generator_bounds_mutually_recursive_optional_structs() {
+        let mut interp = Interpreter::new();
+        let struct_defs = vec![
+            PropertyStructDef {
+                type_name: "Left".to_string(),
+                namespace: None,
+                def: generic_struct_def(
+                    "Left",
+                    vec![],
+                    vec![("right", type_generic("optional", vec![type_named("Right")]))],
+                ),
+            },
+            PropertyStructDef {
+                type_name: "Right".to_string(),
+                namespace: None,
+                def: generic_struct_def(
+                    "Right",
+                    vec![],
+                    vec![("left", type_generic("optional", vec![type_named("Left")]))],
+                ),
+            },
+        ];
+
+        let values = generate_values_for_type_in_namespace(
+            &mut interp,
+            &type_named("Left"),
+            None,
+            &[],
+            &struct_defs,
+            &[],
+            &[],
+        );
+
+        assert!(!values.is_empty());
     }
 
     #[test]
