@@ -2908,6 +2908,9 @@ secret[T] ──→ secret.compare() ALLOWED (constant-time comparison)
 > Tracked by [#67](https://github.com/vycdev/jett/issues/67) for the stable
 > `Random` capability, entropy, determinism, and stdlib/runtime boundary.
 
+> The `Environment`/argv contract and public `os` stdlib/runtime boundary are
+> [tracked by #94](https://github.com/vycdev/jett/issues/94).
+
 #### The Problem: Side Effects Hide in the Call Stack
 
 In high-performance languages like C++ or Rust, any function can open a file, connect to a network socket, or spawn a process. The function signature says `fn process(data: Vec<u8>) -> Result<Output>` — nothing in the signature reveals that this function writes to disk, sends network packets, or reads environment variables.
