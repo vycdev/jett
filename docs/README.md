@@ -38,6 +38,7 @@ enough pressure from real code:
 - [Reflection predicate facts](open_design/reflection_predicate_facts.md)
 - [Print debug builtin policy](open_design/print_debug_builtin_policy.md)
 - [uint64 runtime value model](open_design/uint64_runtime_value_model.md)
+- [Initial `net.socket` transport contract](open_design/net_socket_transport_contract.md)
 
 ## Completed Records
 

@@ -1055,6 +1055,11 @@ The design document specifies a future secondary target: **transpilation to C**.
 
 ## Runtime Library (`jett_runtime`)
 
+> The TCP-first `net.socket` source/runtime boundary, opaque resource handles,
+> event-loop behavior, and capability provenance are proposed in
+> [`docs/open_design/net_socket_transport_contract.md`](open_design/net_socket_transport_contract.md)
+> for [#104](https://github.com/vycdev/jett/issues/104).
+
 Every compiled Jett binary links against the runtime library. The runtime is written in Rust (later self-hosted in Jett) and provides the services that cannot be inlined by the compiler.
 
 ### Runtime Size
@@ -1162,6 +1167,9 @@ flowchart LR
 > crypto hashing API, security guarantees, and stdlib/runtime boundary.
 > Encoding representations, failure behavior, and its stdlib/runtime boundary
 > are separately [tracked by #71](https://github.com/vycdev/jett/issues/71).
+> The proposed public-source/private-kernel boundary for TCP sockets is recorded
+> in [`docs/open_design/net_socket_transport_contract.md`](open_design/net_socket_transport_contract.md)
+> for [#104](https://github.com/vycdev/jett/issues/104).
 
 The boundary between compiler-generated code and stdlib-implemented code is a critical architectural decision.
 
@@ -1672,7 +1680,10 @@ The compiler should be built incrementally, with each phase producing a usable (
 
 Core stdlib (string, list, math, json) is implemented in Phase D. This phase completes the remaining modules:
 
-- **I/O:** `net.http`, `net.socket`, `csv`
+- **I/O:** `net.http`, `net.socket` (TCP-first transport and runtime contract
+  proposed in
+  [`docs/open_design/net_socket_transport_contract.md`](open_design/net_socket_transport_contract.md)
+  for [#104](https://github.com/vycdev/jett/issues/104)), `csv`
 - **Time:** `time` (time value and `Clock` capability contract [tracked by #75](https://github.com/vycdev/jett/issues/75))
 - **Security:** `crypto`, `encoding`, `validate` (the crypto hashing contract is [tracked by #69](https://github.com/vycdev/jett/issues/69), and the encoding contract is [tracked by #71](https://github.com/vycdev/jett/issues/71))
 - **OS:** `os` (environment variables, process management, argv — wraps `Environment` and `Process` capabilities)

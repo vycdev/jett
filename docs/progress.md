@@ -168,7 +168,7 @@
 | `time` | Partial (`time.now_ms`, `time.now_s`; time value and `Clock` capability contract [tracked by #75](https://github.com/vycdev/jett/issues/75)) |
 | `os` | Partial (os.env, os.args) |
 | `net.http` | Not started |
-| `net.socket` | Not started |
+| `net.socket` | Not started (TCP-first transport contract proposed in [`docs/open_design/net_socket_transport_contract.md`](open_design/net_socket_transport_contract.md) for [#104](https://github.com/vycdev/jett/issues/104)) |
 | `csv` | Partial (interpreter builtins for `csv.parse`, `csv.stringify`, and `csv.parse_with_header`; quoted commas, quotes, and multiline fields are covered) |
 | `regex` | Not started |
 | `log` | Not started |

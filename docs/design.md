@@ -1300,6 +1300,13 @@ not use them as a substitute for the strict helpers.
 
 **HTTP — high-level client out of the box:**
 
+> The initial outbound `net.http` client is tracked by
+> [#101](https://github.com/vycdev/jett/issues/101). Low-level sockets use a
+> separate TCP-first transport, ownership, deadline, and `Network.allow`
+> contract proposed in
+> [`docs/open_design/net_socket_transport_contract.md`](open_design/net_socket_transport_contract.md)
+> for [#104](https://github.com/vycdev/jett/issues/104).
+
 The `net.http` module defines its own error type for HTTP operations:
 
 ```
@@ -2907,6 +2914,9 @@ secret[T] ──→ secret.compare() ALLOWED (constant-time comparison)
 
 > Tracked by [#67](https://github.com/vycdev/jett/issues/67) for the stable
 > `Random` capability, entropy, determinism, and stdlib/runtime boundary.
+> The TCP-first `net.socket` resource and `Network.allow` policy is proposed in
+> [`docs/open_design/net_socket_transport_contract.md`](open_design/net_socket_transport_contract.md)
+> for [#104](https://github.com/vycdev/jett/issues/104).
 
 #### The Problem: Side Effects Hide in the Call Stack
 
@@ -6499,7 +6509,10 @@ The standard library is intentionally massive and opinionated. The goal is to ma
 - **map** — get, set, keys, values, merge, filter, contains_key, get_or
 - **set** — add, remove, union, intersection, difference, contains
 - **net.http** — HTTP client (get, post, put, delete), response handling, HttpError enum (connection_failed, timeout, status_error)
-- **net.socket** — low-level TCP/UDP networking
+- **net.socket** — low-level networking; a TCP-only first slice with explicit
+  linear handles, deadlines, cancellation, and capability checks is proposed in
+  [`docs/open_design/net_socket_transport_contract.md`](open_design/net_socket_transport_contract.md)
+  for [#104](https://github.com/vycdev/jett/issues/104), while UDP is deferred
 - **json** — parse, parse_exact, parse_raw, serialize, serialize_public, raw `JsonTree` field/index access, strict raw accessors, scalar casts
 - **time** — now, format, parse, difference, add/subtract, comparisons, day_of_week, years_between (time value and `Clock` capability contract [tracked by #75](https://github.com/vycdev/jett/issues/75))
 - **os** — environment variables, process management, file system, argv
