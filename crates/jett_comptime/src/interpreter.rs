@@ -16929,21 +16929,37 @@ fn base64_decode(s: &str) -> Result<Vec<u8>, String> {
         return Err("base64 string length must be a multiple of 4".to_string());
     }
     let mut out = Vec::new();
-    let mut i = 0;
-    while i < bytes.len() {
-        let v0 = char_val(bytes[i])?;
-        let v1 = char_val(bytes[i + 1])?;
-        let v2 = char_val(bytes[i + 2])?;
-        let v3 = char_val(bytes[i + 3])?;
+    for (chunk_index, chunk) in bytes.chunks_exact(4).enumerate() {
+        let is_last = chunk_index + 1 == bytes.len() / 4;
+        let padding = match (chunk[2], chunk[3]) {
+            (b'=', b'=') => 2,
+            (b'=', _) => return Err("invalid base64 padding".to_string()),
+            (_, b'=') => 1,
+            (_, _) => 0,
+        };
+        if chunk[0] == b'='
+            || chunk[1] == b'='
+            || (padding != 0 && !is_last)
+            || (padding == 0 && (chunk[2] == b'=' || chunk[3] == b'='))
+        {
+            return Err("invalid base64 padding".to_string());
+        }
+
+        let v0 = char_val(chunk[0])?;
+        let v1 = char_val(chunk[1])?;
+        let v2 = char_val(chunk[2])?;
+        let v3 = char_val(chunk[3])?;
+        if (padding == 2 && v1 & 0x0F != 0) || (padding == 1 && v2 & 0x03 != 0) {
+            return Err("invalid base64 padding".to_string());
+        }
         let combined = (v0 << 18) | (v1 << 12) | (v2 << 6) | v3;
         out.push(((combined >> 16) & 0xFF) as u8);
-        if bytes[i + 2] != b'=' {
+        if padding < 2 {
             out.push(((combined >> 8) & 0xFF) as u8);
         }
-        if bytes[i + 3] != b'=' {
+        if padding == 0 {
             out.push((combined & 0xFF) as u8);
         }
-        i += 4;
     }
     Ok(out)
 }
