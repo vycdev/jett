@@ -9572,12 +9572,18 @@ impl Interpreter {
                             if *step > 0 {
                                 while i < *end {
                                     items.push(Value::Int64(i));
-                                    i += step;
+                                    let Some(next) = i.checked_add(*step) else {
+                                        break;
+                                    };
+                                    i = next;
                                 }
                             } else {
                                 while i > *end {
                                     items.push(Value::Int64(i));
-                                    i += step;
+                                    let Some(next) = i.checked_add(*step) else {
+                                        break;
+                                    };
+                                    i = next;
                                 }
                             }
                             Some(Ok(Value::List(items)))
