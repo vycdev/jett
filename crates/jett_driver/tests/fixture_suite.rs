@@ -746,6 +746,10 @@ run_pass_fixture!(
 run_pass_fixture!(run_pass_set_operations, "set_operations.jett");
 run_pass_fixture!(run_pass_error_handling, "error_handling.jett");
 
+compile_fail_fixture!(
+    compile_fail_float_literal_out_of_range,
+    "float_literal_out_of_range.jett"
+);
 compile_fail_fixture!(compile_fail_unhandled_result, "unhandled_result.jett");
 compile_fail_fixture!(
     compile_fail_float64_from_string_unhandled_result,
