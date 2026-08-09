@@ -10089,7 +10089,14 @@ impl Interpreter {
                                 let mut total = 0i64;
                                 for item in items {
                                     match item {
-                                        Value::Int64(n) => total += n,
+                                        Value::Int64(n) => {
+                                            let Some(next_total) = total.checked_add(*n) else {
+                                                return Some(Err(format!(
+                                                    "list.sum: integer overflow: {total} + {n}"
+                                                )));
+                                            };
+                                            total = next_total;
+                                        }
                                         _ => return Some(Err("list.sum: mixed types".into())),
                                     }
                                 }
