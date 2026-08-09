@@ -1300,6 +1300,10 @@ not use them as a substitute for the strict helpers.
 
 **HTTP — high-level client out of the box:**
 
+> The initial outbound client API, `Network` capability behavior, failure model,
+> HTTPS guarantees, and stdlib/runtime boundary are
+> [tracked by #101](https://github.com/vycdev/jett/issues/101).
+
 The `net.http` module defines its own error type for HTTP operations:
 
 ```
@@ -2907,6 +2911,8 @@ secret[T] ──→ secret.compare() ALLOWED (constant-time comparison)
 
 > Tracked by [#67](https://github.com/vycdev/jett/issues/67) for the stable
 > `Random` capability, entropy, determinism, and stdlib/runtime boundary.
+> The initial `net.http` client contract and its `Network` capability boundary
+> are separately [tracked by #101](https://github.com/vycdev/jett/issues/101).
 
 #### The Problem: Side Effects Hide in the Call Stack
 
@@ -6498,7 +6504,7 @@ The standard library is intentionally massive and opinionated. The goal is to ma
 - **list** — filter, map, reduce, find, sort, sort_by, sort_by_index, unique, chunk, zip, group_by, flatten, first, last, skip, take, length, get, append, is_sorted, all_elements_in
 - **map** — get, set, keys, values, merge, filter, contains_key, get_or
 - **set** — add, remove, union, intersection, difference, contains
-- **net.http** — HTTP client (get, post, put, delete), response handling, HttpError enum (connection_failed, timeout, status_error)
+- **net.http** — HTTP client (get, post, put, delete), response handling, HttpError enum (connection_failed, timeout, status_error); the initial outbound client and `Network` capability contract are [tracked by #101](https://github.com/vycdev/jett/issues/101)
 - **net.socket** — low-level TCP/UDP networking
 - **json** — parse, parse_exact, parse_raw, serialize, serialize_public, raw `JsonTree` field/index access, strict raw accessors, scalar casts
 - **time** — now, format, parse, difference, add/subtract, comparisons, day_of_week, years_between (time value and `Clock` capability contract [tracked by #75](https://github.com/vycdev/jett/issues/75))
