@@ -131,7 +131,7 @@ fn parse_project_file(content: &str) -> Result<(String, String, String), Discove
     let mut version = None;
     let mut entry = None;
 
-    for line in content.lines() {
+    for line in content.split(|character| character == '\n' || character == '\r') {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
@@ -249,6 +249,15 @@ mod tests {
         let (name, version, _) = parse_project_file(content).unwrap();
         assert_eq!(name, "test");
         assert_eq!(version, "1.0.0");
+    }
+
+    #[test]
+    fn parse_project_file_accepts_lone_carriage_return_lines() {
+        let content = "name: test\rversion: 1.0.0\rentry: src/main.jett\r";
+        let (name, version, entry) = parse_project_file(content).unwrap();
+        assert_eq!(name, "test");
+        assert_eq!(version, "1.0.0");
+        assert_eq!(entry, "src/main.jett");
     }
 
     #[test]
