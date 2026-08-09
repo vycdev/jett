@@ -6,8 +6,24 @@ use tower_lsp::{Client, LanguageServer};
 /// The Jett LSP backend.
 pub struct JettBackend {
     client: Client,
-    /// In-memory document store: URI → source text.
-    documents: tokio::sync::RwLock<HashMap<Url, String>>,
+    /// In-memory document store: URI → latest source text and LSP version.
+    documents: tokio::sync::RwLock<HashMap<Url, DocumentState>>,
+}
+
+#[derive(Debug, Clone)]
+struct DocumentState {
+    text: String,
+    version: i32,
+}
+
+fn should_publish_diagnostics(
+    documents: &HashMap<Url, DocumentState>,
+    uri: &Url,
+    version: i32,
+) -> bool {
+    documents
+        .get(uri)
+        .is_some_and(|document| document.version == version)
 }
 
 impl JettBackend {
@@ -20,7 +36,7 @@ impl JettBackend {
 
     /// Run the Jett compiler pipeline on the given source text and publish
     /// diagnostics back to the client.
-    async fn validate(&self, uri: Url, text: &str) {
+    async fn validate(&self, uri: Url, version: i32, text: &str) {
         let file_path = uri
             .to_file_path()
             .map(|p| p.display().to_string())
@@ -60,9 +76,12 @@ impl JettBackend {
             })
             .collect();
 
-        self.client
-            .publish_diagnostics(uri, diagnostics, None)
-            .await;
+        let documents = self.documents.read().await;
+        if should_publish_diagnostics(&documents, &uri, version) {
+            self.client
+                .publish_diagnostics(uri, diagnostics, None)
+                .await;
+        }
     }
 }
 
@@ -96,11 +115,15 @@ impl LanguageServer for JettBackend {
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let uri = params.text_document.uri.clone();
         let text = params.text_document.text.clone();
-        self.documents
-            .write()
-            .await
-            .insert(uri.clone(), text.clone());
-        self.validate(uri, &text).await;
+        self.documents.write().await.insert(
+            uri.clone(),
+            DocumentState {
+                text: text.clone(),
+                version: params.text_document.version,
+            },
+        );
+        self.validate(uri, params.text_document.version, &text)
+            .await;
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
@@ -108,11 +131,15 @@ impl LanguageServer for JettBackend {
         if let Some(change) = params.content_changes.into_iter().last() {
             let uri = params.text_document.uri.clone();
             let text = change.text.clone();
-            self.documents
-                .write()
-                .await
-                .insert(uri.clone(), text.clone());
-            self.validate(uri, &text).await;
+            self.documents.write().await.insert(
+                uri.clone(),
+                DocumentState {
+                    text: text.clone(),
+                    version: params.text_document.version,
+                },
+            );
+            self.validate(uri, params.text_document.version, &text)
+                .await;
         }
     }
 
@@ -128,9 +155,10 @@ impl LanguageServer for JettBackend {
         let position = params.text_document_position_params.position;
 
         let docs = self.documents.read().await;
-        let Some(source) = docs.get(uri) else {
+        let Some(document) = docs.get(uri) else {
             return Ok(None);
         };
+        let source = &document.text;
 
         // LSP positions are 0-based; hover_type expects 1-based.
         let line = position.line + 1;
@@ -159,9 +187,10 @@ impl LanguageServer for JettBackend {
         let position = params.text_document_position_params.position;
 
         let docs = self.documents.read().await;
-        let Some(source) = docs.get(uri) else {
+        let Some(document) = docs.get(uri) else {
             return Ok(None);
         };
+        let source = &document.text;
 
         let line = position.line + 1;
         let col = position.character + 1;
@@ -188,9 +217,10 @@ impl LanguageServer for JettBackend {
         let uri = &params.text_document_position.text_document.uri;
 
         let docs = self.documents.read().await;
-        let Some(source) = docs.get(uri) else {
+        let Some(document) = docs.get(uri) else {
             return Ok(None);
         };
+        let source = &document.text;
 
         let position = params.text_document_position.position;
         let candidates =
@@ -242,6 +272,28 @@ pub async fn run_server() {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use tower_lsp::lsp_types::Url;
+
+    #[test]
+    fn stale_document_versions_are_not_publishable() {
+        let uri = Url::parse("file:///workspace/main.jett").unwrap();
+        let mut documents = HashMap::new();
+        documents.insert(
+            uri.clone(),
+            DocumentState {
+                text: "new source".to_string(),
+                version: 2,
+            },
+        );
+
+        assert!(should_publish_diagnostics(&documents, &uri, 2));
+        assert!(!should_publish_diagnostics(&documents, &uri, 1));
+
+        documents.remove(&uri);
+        assert!(!should_publish_diagnostics(&documents, &uri, 2));
+    }
+
     /// Verify that `build_source` produces diagnostics for invalid Jett code.
     /// This exercises the same path the LSP uses to validate documents.
     #[test]
