@@ -883,6 +883,14 @@ compile_fail_fixture!(
     "ownership_branch_partial_move.jett"
 );
 compile_fail_fixture!(
+    compile_fail_ownership_implement_method_use_after_move,
+    "ownership_implement_method_use_after_move.jett"
+);
+compile_fail_fixture!(
+    compile_fail_ownership_struct_method_use_after_move,
+    "ownership_struct_method_use_after_move.jett"
+);
+compile_fail_fixture!(
     compile_fail_pipeline_builtin_input_mismatch,
     "pipeline_builtin_input_mismatch.jett"
 );

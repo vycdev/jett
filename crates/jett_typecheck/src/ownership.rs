@@ -95,6 +95,16 @@ impl<'a> OwnershipChecker<'a> {
         for item in &module.items {
             match item {
                 Item::Function(func) => self.check_function(func),
+                Item::Implement(block) => {
+                    for method in &block.methods {
+                        self.check_function(method);
+                    }
+                }
+                Item::Struct(def) => {
+                    for method in &def.methods {
+                        self.check_function(method);
+                    }
+                }
                 Item::VarDecl(decl) => self.check_var_decl(decl),
                 _ => {}
             }
