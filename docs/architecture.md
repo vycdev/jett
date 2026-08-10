@@ -1317,10 +1317,15 @@ The query engine powers both LSP and ASP interactive queries. It provides:
 | `references_at(file, line, col)` | Find all references to the selected symbol with use-site ranges | ASP |
 | `diagnostics(file)` | All errors/warnings for a file | LSP |
 
-File-symbol query failures retain parser `Diagnostic` values through the driver
-boundary. Agent mode renders those failures with the build diagnostic envelope;
-only operational failures without compiler diagnostics use a prose `error`
-scalar. Extending that boundary to the remaining queries and commands is
+File-symbol parse failures and type-at parse, resolution, and type-check
+failures with known source context retain `Diagnostic` values through the
+driver boundary. Type-at failures retain the source map used by the compiler,
+so diagnostics and labels in sibling project or stdlib files keep their own
+paths and ranges. Agent mode renders those failures with the build diagnostic
+envelope. Because the current suggested-fix table has no file column, type-at
+fixes are emitted only for the requested file. Operational failures without
+matching compiler source context use a prose `error` scalar. Extending that
+boundary and a file-aware fix schema to the remaining queries and commands is
 tracked by #35.
 
 ### Demand-Driven Computation
