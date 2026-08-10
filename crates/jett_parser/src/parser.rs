@@ -124,6 +124,17 @@ impl<'src> Parser<'src> {
         })
     }
 
+    fn parse_f64_token(&mut self, token: &Token, context: &str) -> f64 {
+        let text = self.token_text(token).to_string();
+        match text.parse::<f64>() {
+            Ok(value) if value.is_finite() => value,
+            Ok(_) | Err(_) => {
+                self.error(format!("{context} is out of range"), token.span);
+                0.0
+            }
+        }
+    }
+
     fn skip_newlines(&mut self) {
         while self.peek() == TokenKind::Newline {
             self.advance();
@@ -2008,8 +2019,7 @@ impl<'src> Parser<'src> {
             }
             TokenKind::FloatLiteral => {
                 self.advance();
-                let text = self.token_text(&tok);
-                let value = text.parse::<f64>().unwrap_or(0.0);
+                let value = self.parse_f64_token(&tok, "float literal");
                 Expr::FloatLiteral(value, tok.span)
             }
             TokenKind::StringLiteral => {
@@ -2627,6 +2637,23 @@ function add(a: int64, b: int64) returns int64:
             }
             other => panic!("expected Function, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn parse_out_of_range_float_literal_reports_error() {
+        let src = format!(
+            "function main() returns float64:\n    return {}.0\n",
+            "9".repeat(400)
+        );
+        let result = parse_str(&src);
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|error| error.message == "float literal is out of range"),
+            "unexpected errors: {:?}",
+            result.errors
+        );
     }
 
     #[test]
