@@ -225,7 +225,7 @@ fn prescan_namespaces(content: &str, interner: &mut SymbolInterner) -> Vec<Names
     for (byte_offset, line) in line_offsets(content) {
         let trimmed = line.trim();
         if let Some(rest) = trimmed.strip_prefix("namespace ") {
-            let name = rest.trim();
+            let name = rest.split_once('#').map_or(rest, |(name, _)| name).trim();
             if !name.is_empty() && !name.contains(' ') {
                 namespaces.push(NamespaceSpan {
                     name: interner.intern(name),
@@ -339,6 +339,17 @@ mod tests {
         let ns = prescan_namespaces(content, &mut interner);
         assert_eq!(ns.len(), 1);
         assert_eq!(interner.resolve(ns[0].name), "net.http.server");
+    }
+
+    #[test]
+    fn prescan_namespaces_ignores_inline_comments() {
+        let mut interner = SymbolInterner::new();
+        let content = "namespace app.models # keep project metadata discoverable\n";
+
+        let ns = prescan_namespaces(content, &mut interner);
+
+        assert_eq!(ns.len(), 1);
+        assert_eq!(interner.resolve(ns[0].name), "app.models");
     }
 
     #[test]
