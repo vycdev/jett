@@ -8721,17 +8721,25 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::Int64(a), Value::Int64(b)) => {
-                        if *a == 0 && *b == 0 {
+                        if *a == 0 || *b == 0 {
                             Some(Ok(Value::Int64(0)))
                         } else {
-                            let (mut x, mut y) = (a.abs(), b.abs());
-                            let product = x * y;
+                            let Some(left) = a.checked_abs() else {
+                                return Some(Err(format!("math.lcm: integer overflow: abs({a})")));
+                            };
+                            let Some(right) = b.checked_abs() else {
+                                return Some(Err(format!("math.lcm: integer overflow: abs({b})")));
+                            };
+                            let (mut x, mut y) = (left, right);
                             while y != 0 {
                                 let t = y;
                                 y = x % y;
                                 x = t;
                             }
-                            Some(Ok(Value::Int64(product / x)))
+                            let factor = left / x;
+                            Some(factor.checked_mul(right).map(Value::Int64).ok_or_else(|| {
+                                format!("math.lcm: integer overflow: {factor} * {right}")
+                            }))
                         }
                     }
                     _ => Some(Err(format!("{name} expects two int64 arguments"))),
@@ -17368,6 +17376,23 @@ mod builtin_tests {
         let mut interp = Interpreter::new();
         let expr = dotted_call("math", "max", vec![float(1.5), float(2.5)]);
         assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Float64(2.5));
+    }
+
+    #[test]
+    fn builtin_math_lcm_avoids_intermediate_overflow() {
+        let mut interp = Interpreter::new();
+        let expr = dotted_call("math", "lcm", vec![int(3_037_000_500), int(3_037_000_500)]);
+        assert_eq!(
+            interp.eval_expr(&expr).unwrap(),
+            Value::Int64(3_037_000_500)
+        );
+    }
+
+    #[test]
+    fn builtin_math_lcm_zero_with_int64_min_is_zero() {
+        let mut interp = Interpreter::new();
+        let expr = dotted_call("math", "lcm", vec![int(0), int(i64::MIN)]);
+        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(0));
     }
 
     #[test]

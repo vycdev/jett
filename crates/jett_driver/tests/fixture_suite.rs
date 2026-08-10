@@ -389,6 +389,24 @@ fn sized_integer_runtime_bounds_reject_variable_arithmetic() {
 }
 
 #[test]
+fn math_lcm_reports_overflow() {
+    let cases = [
+        (
+            "math_lcm_overflow.jett",
+            "runtime error: math.lcm: integer overflow: 3037000500 * 3037000501",
+        ),
+        (
+            "math_lcm_int64_min.jett",
+            "runtime error: math.lcm: integer overflow: abs(-9223372036854775808)",
+        ),
+    ];
+
+    for (name, expected) in cases {
+        assert_runtime_fail(name, expected);
+    }
+}
+
+#[test]
 fn math_sum_reports_overflow() {
     assert_runtime_fail(
         "math_sum_overflow.jett",
