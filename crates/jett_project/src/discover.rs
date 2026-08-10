@@ -84,10 +84,12 @@ pub fn discover_project(
         });
     }
 
-    let entry_file = entry_file.unwrap_or_else(|| {
-        // If no entry file matched, default to first file
-        FileId::new(0)
-    });
+    let entry_file = entry_file.ok_or_else(|| {
+        DiscoverError::InvalidProjectFile(format!(
+            "entry file '{}' was not found in the project",
+            entry.display()
+        ))
+    })?;
 
     Ok(Project {
         name,
@@ -339,6 +341,33 @@ mod tests {
 
         // Cleanup
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn discover_project_rejects_missing_entry_file() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after the Unix epoch")
+            .as_nanos();
+        let tmp = std::env::temp_dir().join(format!("jett_missing_entry_{nanos}"));
+        fs::create_dir_all(tmp.join("src")).unwrap();
+        fs::write(
+            tmp.join("jett.proj"),
+            "name: missing-entry\nentry: src/missing.jett\n",
+        )
+        .unwrap();
+        fs::write(tmp.join("src/main.jett"), "namespace app\n").unwrap();
+
+        let mut interner = SymbolInterner::new();
+        let error = discover_project(&tmp, &mut interner).unwrap_err();
+
+        let _ = fs::remove_dir_all(&tmp);
+        match error {
+            DiscoverError::InvalidProjectFile(message) => {
+                assert!(message.contains("entry file 'src/missing.jett' was not found"));
+            }
+            other => panic!("expected invalid-project-file error, got {other}"),
+        }
     }
 
     #[test]
