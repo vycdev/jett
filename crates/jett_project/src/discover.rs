@@ -142,9 +142,30 @@ fn parse_project_file(content: &str) -> Result<(String, String, String), Discove
             let key = key.trim();
             let value = value.trim();
             match key {
-                "name" => name = Some(value.to_string()),
-                "version" => version = Some(value.to_string()),
-                "entry" => entry = Some(value.to_string()),
+                "name" => {
+                    if name.is_some() {
+                        return Err(DiscoverError::InvalidProjectFile(
+                            "duplicate 'name' field".to_string(),
+                        ));
+                    }
+                    name = Some(value.to_string());
+                }
+                "version" => {
+                    if version.is_some() {
+                        return Err(DiscoverError::InvalidProjectFile(
+                            "duplicate 'version' field".to_string(),
+                        ));
+                    }
+                    version = Some(value.to_string());
+                }
+                "entry" => {
+                    if entry.is_some() {
+                        return Err(DiscoverError::InvalidProjectFile(
+                            "duplicate 'entry' field".to_string(),
+                        ));
+                    }
+                    entry = Some(value.to_string());
+                }
                 _ => {} // ignore unknown keys
             }
         }
@@ -257,6 +278,24 @@ mod tests {
     fn parse_project_file_missing_name() {
         let content = "version: 1.0.0\n";
         assert!(parse_project_file(content).is_err());
+    }
+
+    #[test]
+    fn parse_project_file_rejects_duplicate_fields() {
+        for (field, content) in [
+            ("name", "name: first\nname: second\n"),
+            ("version", "name: test\nversion: 1.0.0\nversion: 2.0.0\n"),
+            (
+                "entry",
+                "name: test\nentry: src/main.jett\nentry: src/other.jett\n",
+            ),
+        ] {
+            let error = parse_project_file(content).expect_err("duplicate fields must fail");
+            assert_eq!(
+                error.to_string(),
+                format!("invalid jett.proj: duplicate '{field}' field")
+            );
+        }
     }
 
     #[test]
