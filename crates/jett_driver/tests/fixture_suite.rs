@@ -788,6 +788,7 @@ compile_fail_fixture!(
 );
 
 run_pass_fixture!(run_pass_string_search, "string_search.jett");
+run_pass_fixture!(run_pass_string_indic_grapheme, "string_indic_grapheme.jett");
 run_pass_fixture!(run_pass_time_and_os, "time_and_os.jett");
 run_pass_fixture!(run_pass_math_trig, "math_trig.jett");
 run_pass_fixture!(run_pass_logical_ops, "logical_ops.jett");
