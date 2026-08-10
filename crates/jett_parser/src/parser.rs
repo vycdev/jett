@@ -1099,6 +1099,9 @@ impl<'src> Parser<'src> {
                 if self.peek() != TokenKind::RBracket {
                     args.push(self.parse_type());
                     while self.eat(TokenKind::Comma).is_some() {
+                        if self.peek() == TokenKind::RBracket {
+                            break;
+                        }
                         args.push(self.parse_type());
                     }
                 }
@@ -2405,6 +2408,9 @@ impl<'src> Parser<'src> {
         if self.peek() != TokenKind::RBracket {
             type_args.push(self.parse_type());
             while self.eat(TokenKind::Comma).is_some() {
+                if self.peek() == TokenKind::RBracket {
+                    break;
+                }
                 type_args.push(self.parse_type());
             }
         }
@@ -4105,6 +4111,27 @@ function dump(view user: User) returns string:
                 assert!(ta.constraint.is_none(), "expected no where constraint");
             }
             other => panic!("expected TypeAlias, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_trailing_commas_in_generic_type_arguments() {
+        let src = "function main() returns nothing:\n    list[int64,] values = list[int64,](1)\n";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        match &result.module.items[0] {
+            Item::Function(function) => match &function.body.stmts[0] {
+                Stmt::VarDecl(variable) => {
+                    assert!(
+                        matches!(&variable.ty, TypeExpr::Generic(_, args, _) if args.len() == 1)
+                    );
+                    assert!(
+                        matches!(&variable.value, Expr::GenericCall(_, args, _, _) if args.len() == 1)
+                    );
+                }
+                other => panic!("expected VarDecl, got {:?}", other),
+            },
+            other => panic!("expected Function, got {:?}", other),
         }
     }
 
