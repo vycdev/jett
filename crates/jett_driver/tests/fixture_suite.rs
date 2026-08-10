@@ -768,6 +768,7 @@ run_pass_fixture!(run_pass_crypto, "crypto.jett");
 run_pass_fixture!(run_pass_closures, "closures.jett");
 run_pass_fixture!(run_pass_use_imports, "use_imports.jett");
 run_pass_fixture!(run_pass_loops, "loops.jett");
+run_pass_fixture!(run_pass_range_step_boundaries, "range_step_boundaries.jett");
 run_pass_fixture!(run_pass_conversions, "conversions.jett");
 run_pass_fixture!(
     run_pass_uint64_checked_expression_runtime_types,
