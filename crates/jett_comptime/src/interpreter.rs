@@ -36,6 +36,12 @@ fn check_args(name: &str, expected: usize, args: &[Value]) -> Option<Result<Valu
     }
 }
 
+/// Convert a non-negative Jett count to a host index without truncating on
+/// platforms whose `usize` is narrower than `i64`.
+fn nonnegative_usize(value: i64) -> usize {
+    usize::try_from(value.max(0)).unwrap_or(usize::MAX)
+}
+
 /// Compare secret byte strings without content-dependent early exits.
 ///
 /// Payload lengths are observable by contract. Equal-length contents are handed
@@ -7718,7 +7724,7 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::String(s), Value::Int64(n)) => {
-                        let n = (*n).max(0) as usize;
+                        let n = nonnegative_usize(*n);
                         Some(Ok(Value::String(s.repeat(n))))
                     }
                     _ => Some(Err(format!("{name} expects a string and an int64"))),
@@ -7929,7 +7935,9 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::List(items), Value::Int64(index)) => {
-                        let idx = *index as usize;
+                        let Some(idx) = usize::try_from(*index).ok() else {
+                            return Some(Ok(Value::OptionalNone));
+                        };
                         if idx < items.len() {
                             Some(Ok(Value::OptionalSome(Box::new(items[idx].clone()))))
                         } else {
@@ -7982,7 +7990,7 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::List(items), Value::Int64(n)) => {
-                        let n = (*n).max(0) as usize;
+                        let n = nonnegative_usize(*n);
                         Some(Ok(Value::List(items[n.min(items.len())..].to_vec())))
                     }
                     _ => Some(Err(format!("{name} expects a list and an int64"))),
@@ -7993,7 +8001,7 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::List(items), Value::Int64(n)) => {
-                        let n = (*n).max(0) as usize;
+                        let n = nonnegative_usize(*n);
                         Some(Ok(Value::List(items[..n.min(items.len())].to_vec())))
                     }
                     _ => Some(Err(format!("{name} expects a list and an int64"))),
@@ -8058,7 +8066,9 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::List(items), Value::Int64(index)) => {
-                        let idx = *index as usize;
+                        let Some(idx) = usize::try_from(*index).ok() else {
+                            return Some(Err(format!("{name}: index {index} out of bounds")));
+                        };
                         if idx < items.len() {
                             let mut new_list = items.clone();
                             new_list.remove(idx);
@@ -8387,7 +8397,7 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::List(items), Value::Int64(size)) => {
-                        let size = (*size).max(1) as usize;
+                        let size = usize::try_from((*size).max(1)).unwrap_or(usize::MAX);
                         let chunks: Vec<Value> = items
                             .chunks(size)
                             .map(|c| Value::List(c.to_vec()))
@@ -8404,7 +8414,7 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::List(items), Value::Int64(idx)) => {
-                        let idx = *idx as usize;
+                        let idx = usize::try_from(*idx).unwrap_or(usize::MAX);
                         let mut sorted = items.clone();
                         sorted.sort_by(|a, b| {
                             let va = match a {
@@ -8801,7 +8811,7 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match &args[1] {
                     Value::Int64(count) => {
-                        let n = (*count).max(0) as usize;
+                        let n = nonnegative_usize(*count);
                         let items: Vec<Value> =
                             std::iter::repeat(args[0].clone()).take(n).collect();
                         Some(Ok(Value::List(items)))
@@ -8827,7 +8837,9 @@ impl Interpreter {
                 require_args!(name, 3, args);
                 match (&args[0], &args[1]) {
                     (Value::List(items), Value::Int64(index)) => {
-                        let idx = *index as usize;
+                        let Some(idx) = usize::try_from(*index).ok() else {
+                            return Some(Err(format!("{name}: index {index} out of bounds")));
+                        };
                         if idx <= items.len() {
                             let mut new_list = items.clone();
                             new_list.insert(idx, args[2].clone());
@@ -8845,7 +8857,9 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::List(items), Value::Int64(index)) => {
-                        let idx = *index as usize;
+                        let Some(idx) = usize::try_from(*index).ok() else {
+                            return Some(Err(format!("{name}: index {index} out of bounds")));
+                        };
                         if idx < items.len() {
                             let mut new_list = items.clone();
                             new_list.remove(idx);
@@ -8861,8 +8875,11 @@ impl Interpreter {
                 require_args!(name, 3, args);
                 match (&args[0], &args[1], &args[2]) {
                     (Value::List(items), Value::Int64(i), Value::Int64(j)) => {
-                        let a = *i as usize;
-                        let b = *j as usize;
+                        let (Some(a), Some(b)) =
+                            (usize::try_from(*i).ok(), usize::try_from(*j).ok())
+                        else {
+                            return Some(Err(format!("{name}: index out of bounds")));
+                        };
                         if a >= items.len() || b >= items.len() {
                             Some(Err(format!("{name}: index out of bounds")))
                         } else {
@@ -8972,7 +8989,7 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::String(s), Value::Int64(n)) => {
-                        let n = (*n).max(0) as usize;
+                        let n = nonnegative_usize(*n);
                         let result = string_graphemes(s).into_iter().take(n).collect();
                         Some(Ok(Value::String(result)))
                     }
@@ -8984,7 +9001,7 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::String(s), Value::Int64(n)) => {
-                        let n = (*n).max(0) as usize;
+                        let n = nonnegative_usize(*n);
                         let graphemes = string_graphemes(s);
                         let start = graphemes.len().saturating_sub(n);
                         let result = graphemes[start..].concat();
@@ -8998,7 +9015,7 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::String(s), Value::Int64(n)) => {
-                        let n = (*n).max(0) as usize;
+                        let n = nonnegative_usize(*n);
                         let result = string_graphemes(s).into_iter().skip(n).collect();
                         Some(Ok(Value::String(result)))
                     }
@@ -9624,7 +9641,9 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::Bytes(b), Value::Int64(index)) => {
-                        let idx = *index as usize;
+                        let Some(idx) = usize::try_from(*index).ok() else {
+                            return Some(Ok(Value::OptionalNone));
+                        };
                         if idx < b.len() {
                             Some(Ok(Value::OptionalSome(Box::new(Value::Int64(
                                 b[idx] as i64,
