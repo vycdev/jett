@@ -507,15 +507,30 @@ OwnershipEnv {
 
 Track which capabilities flow through the program:
 
-- A function with no capability parameters is **pure** — the compiler guarantees it.
+- A function with no capability parameters is free of semantic program effects.
+  Explicit compiler-owned debug observations are tracked separately from this
+  capability guarantee.
 - A function that calls another function requiring a capability must itself accept that capability.
 - Capability narrowing consumes the original and produces a restricted version. All narrowing operations: `Filesystem.read_only(fs)`, `Filesystem.scoped(fs, "/data/")`, `Network.allow(net, "localhost")`, `Stdout.buffered(stdout)`. The runtime enforces restricted permissions (e.g., `read_only` prevents write operations, `scoped` restricts file paths).
 - **Only `main()` owns capabilities.** Every other function must borrow them via `view`. A non-`main` function declaring an owned (non-view) capability parameter is a compile error.
 - Actors receive capabilities at spawn time via `clone` (since passing would consume the caller's capability).
 - **Verify blocks** can only call pure functions (no capabilities).
 - **`trace` and `breakpoint` are capability-exempt** — they produce output/open connections without requiring a `Stdout` or `Network` capability. They are compiler keywords with special treatment, compiled out in release mode.
+- **`print` and `println` are compiler-owned debug builtins, not ordinary I/O.**
+  They remain secret-output boundaries and require no `Stdout` capability. The
+  current interpreter shares its stdout path with `Stdout.write`; a distinct
+  debug-event channel is pending. Once mode-aware checking exists, release
+  builds must reject them. Future backends must either route them through a
+  debug diagnostic channel or reject them; they must never silently lower to
+  ambient process stdout. Verify/comptime entrypoints may allow them only when
+  debug text is isolated from protocol output. See the
+  [decided policy](open_design/print_debug_builtin_policy.md).
 
-**Implementation:** For each function, compute the set of capabilities it transitively requires. Compare against its declared parameters. If a function's body requires a capability not in its parameters → compile error.
+**Implementation:** For each function, compute the set of semantic capabilities
+it transitively requires. Compare against its declared parameters. If a
+function's body requires a capability not in its parameters → compile error.
+Compiler-owned debug observations follow their separate mode policy and do not
+grant a program capability.
 
 #### 6f. Secret Taint Analysis
 

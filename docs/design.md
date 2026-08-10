@@ -168,7 +168,7 @@ There must be **no spooky action at a distance**. A variable must never be silen
 
 - No global mutable variables. Global constants are allowed (they never change), but mutable global state is forbidden.
 - No module-level side effects on import. `use math` loads definitions — it does not execute code, register handlers, or modify state.
-- Side effects must be declared in the function signature via **capability parameters** (see Rule Set 16). If a function writes to a file, it receives a `Filesystem` capability. If it accesses the network, it receives a `Network` capability. The signature is the contract.
+- Semantic program side effects must be declared in the function signature via **capability parameters** (see Rule Set 16). If a function writes to a file, it receives a `Filesystem` capability. If it accesses the network, it receives a `Network` capability. The signature is the contract. Compiler-owned debug observations such as `trace`, `breakpoint`, `print`, and `println` are non-release tooling instrumentation, not semantic I/O.
 - All inputs to a function come through its parameters. No reading from ambient scope, no closures over mutable state, no thread-local storage. Anonymous functions can capture **immutable** values from the enclosing scope. Captured values are implicitly viewed — they are not consumed by the closure. Closures over **mutable** state are banned. This allows patterns like `list.find(users, function(u: User) returns bool: return u.id == target_id)` where `target_id` is an immutable value from the outer scope.
 
 **Example — side effects are declared, not hidden:**
@@ -196,10 +196,10 @@ Functions in Jett are **pure by default**. They take explicit inputs through the
 
 **Rules:**
 
-- A function without capability parameters is guaranteed pure by the compiler.
+- A function without capability parameters is guaranteed free of semantic program effects by the compiler. Non-release tooling may still observe explicitly written compiler debug instrumentation.
 - Pure functions cannot call impure functions — the capability system propagates. A function that needs to call an I/O function must itself accept the required capability.
 - Pure functions can be tested with nothing but their inputs and outputs. No mocks, no setup, no teardown, no dependency injection frameworks.
-- Pure functions are safe to cache, parallelize, and reorder — the compiler and runtime can optimize aggressively.
+- Pure function results are safe to cache, parallelize, and reorder. A debug-enabled toolchain must separately preserve the relative order of requested debug events; the settled policy requires release builds to reject global debug printing once mode-aware checking exists.
 
 **What this enables for LLMs:**
 
@@ -3010,9 +3010,32 @@ function main(stdout: Stdout, fs: Filesystem) returns nothing:
     Stdout.write(view stdout, "done")
 ```
 
-Every function that touches the filesystem has `view fs: Filesystem` in its parameters. Every function that writes output has `view stdout: Stdout`. **By reading only the function signature**, the LLM (or a human) knows exactly which side effects a function can perform.
+Every function that touches the filesystem has `view fs: Filesystem` in its parameters. Every function that writes application output has `view stdout: Stdout`. **By reading only the function signature**, the LLM (or a human) knows exactly which semantic side effects a function can perform.
 
 This is the same `view` system as any other type — no special rules for capabilities. The programmer already knows how `view` works; capabilities just use it.
+
+#### Debug Output Is Not Program Output
+
+Global `print` and `println` are a narrow, compiler-owned debugging exception,
+not a second output API. They may emit diagnostic text without a `Stdout`
+capability. They remain secret-output boundaries and their text cannot be read
+by Jett code or treated as a semantic program result.
+
+The current interpreter shares their path with `Stdout.write`; separating debug
+events is pending. When the release/backend boundary is implemented, release
+builds must reject `print` and `println` with guidance to use `Stdout.write`;
+they must not silently strip calls or lower them to ambient process stdout.
+Future native or bytecode backends may support the calls only through an
+explicit debug diagnostic channel, and must otherwise reject them. `verify`
+and comptime execution may use the helpers only when tooling isolates their
+debug events from protocol output. Production output always requires
+`Stdout`, while structured debugging should prefer `trace` or `breakpoint`.
+
+This exception does not grant user code an output capability. A
+capability-free function remains free of semantic I/O: debug observations are
+tooling instrumentation and cannot be required for program behavior. The full
+mode, compatibility, and conformance policy is recorded in
+[`docs/open_design/print_debug_builtin_policy.md`](open_design/print_debug_builtin_policy.md).
 
 #### What the Compiler Rejects
 
@@ -3044,10 +3067,10 @@ function calculate_tax(income: float64, rate: float64) returns float64:
     # No capability parameters. The compiler GUARANTEES this function:
     # - Does not read or write files
     # - Does not access the network
-    # - Does not print to stdout
+    # - Does not perform semantic stdout I/O
     # - Does not read the clock
     # - Does not use randomness
-    # - Has ZERO side effects of any kind
+    # - Has ZERO semantic side effects (tooling may observe explicit debug instrumentation)
 ```
 
 #### Scoped Capabilities — Restricting What a Function Can Do
@@ -3101,7 +3124,7 @@ The LLM reads `function send_report(view net: Network, view stdout: Stdout, repo
 
 **2. Pure functions are provably pure.**
 
-If a function has no capability parameters, it is pure. Not "probably pure" or "assumed pure" — the compiler has mathematically proven it cannot perform side effects. The LLM can trust this guarantee completely.
+If a function has no capability parameters, it is semantically pure. Not "probably pure" or "assumed pure" — the compiler has proven it cannot perform program side effects. Non-release compiler debug observations are tooling instrumentation governed by the debug-output policy, not an ambient program capability.
 
 **3. The LLM can't hallucinate side effects.**
 
