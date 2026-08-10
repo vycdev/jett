@@ -8668,7 +8668,11 @@ impl Interpreter {
                         if *b == 0 {
                             Some(Err("math.mod: division by zero".to_string()))
                         } else {
-                            Some(Ok(Value::Int64(a % b)))
+                            Some(
+                                a.checked_rem(*b).map(Value::Int64).ok_or_else(|| {
+                                    format!("math.mod: integer overflow: {a} % {b}")
+                                }),
+                            )
                         }
                     }
                     _ => Some(Err(format!("{name} expects two int64 arguments"))),
