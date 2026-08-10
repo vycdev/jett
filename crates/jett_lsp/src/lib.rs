@@ -66,19 +66,32 @@ impl JettBackend {
     }
 }
 
+fn document_text_for_save<'a>(documents: &'a HashMap<Url, String>, uri: &Url) -> Option<&'a str> {
+    documents.get(uri).map(String::as_str)
+}
+
+fn server_capabilities() -> ServerCapabilities {
+    ServerCapabilities {
+        text_document_sync: Some(TextDocumentSyncCapability::Options(
+            TextDocumentSyncOptions {
+                open_close: Some(true),
+                change: Some(TextDocumentSyncKind::FULL),
+                save: Some(TextDocumentSyncSaveOptions::Supported(true)),
+                ..TextDocumentSyncOptions::default()
+            },
+        )),
+        hover_provider: Some(HoverProviderCapability::Simple(true)),
+        definition_provider: Some(OneOf::Left(true)),
+        completion_provider: Some(CompletionOptions::default()),
+        ..ServerCapabilities::default()
+    }
+}
+
 #[tower_lsp::async_trait]
 impl LanguageServer for JettBackend {
     async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
         Ok(InitializeResult {
-            capabilities: ServerCapabilities {
-                text_document_sync: Some(TextDocumentSyncCapability::Kind(
-                    TextDocumentSyncKind::FULL,
-                )),
-                hover_provider: Some(HoverProviderCapability::Simple(true)),
-                definition_provider: Some(OneOf::Left(true)),
-                completion_provider: Some(CompletionOptions::default()),
-                ..ServerCapabilities::default()
-            },
+            capabilities: server_capabilities(),
             ..InitializeResult::default()
         })
     }
@@ -112,6 +125,17 @@ impl LanguageServer for JettBackend {
                 .write()
                 .await
                 .insert(uri.clone(), text.clone());
+            self.validate(uri, &text).await;
+        }
+    }
+
+    async fn did_save(&self, params: DidSaveTextDocumentParams) {
+        let uri = params.text_document.uri;
+        let text = {
+            let documents = self.documents.read().await;
+            document_text_for_save(&documents, &uri).map(str::to_owned)
+        };
+        if let Some(text) = text {
             self.validate(uri, &text).await;
         }
     }
@@ -242,6 +266,8 @@ pub async fn run_server() {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     /// Verify that `build_source` produces diagnostics for invalid Jett code.
     /// This exercises the same path the LSP uses to validate documents.
     #[test]
@@ -281,5 +307,32 @@ mod tests {
         // col 15 = the '4' in '42'
         let ty = jett_driver::hover_type(source, 4, 15);
         assert_eq!(ty, Some("int64".to_string()), "expected int64 hover type");
+    }
+
+    #[test]
+    fn server_capabilities_advertise_save_notifications() {
+        let capabilities = server_capabilities();
+        let Some(TextDocumentSyncCapability::Options(options)) = capabilities.text_document_sync
+        else {
+            panic!("expected explicit text document synchronization options");
+        };
+
+        assert_eq!(options.change, Some(TextDocumentSyncKind::FULL));
+        assert!(matches!(
+            options.save,
+            Some(TextDocumentSyncSaveOptions::Supported(true))
+        ));
+    }
+
+    #[test]
+    fn save_validation_reads_the_latest_open_document() {
+        let uri = Url::parse("file:///workspace/main.jett").unwrap();
+        let mut documents = HashMap::new();
+        documents.insert(uri.clone(), "latest source".to_string());
+
+        assert_eq!(
+            document_text_for_save(&documents, &uri),
+            Some("latest source")
+        );
     }
 }
