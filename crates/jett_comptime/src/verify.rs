@@ -427,7 +427,9 @@ fn shrink_value(value: &Value) -> Vec<Value> {
             if *n < -1 {
                 candidates.push(Value::Int64(n / 2));
                 candidates.push(Value::Int64(n + 1));
-                candidates.push(Value::Int64(-n)); // try positive version
+                if let Some(positive) = n.checked_neg() {
+                    candidates.push(Value::Int64(positive));
+                }
             }
             if *n == -1 {
                 candidates.push(Value::Int64(1));
@@ -3646,6 +3648,14 @@ mod tests {
             Value::String("score".to_string()),
             Value::Int64(0),
         )])));
+    }
+
+    #[test]
+    fn property_shrinker_handles_minimum_int64() {
+        let candidates = shrink_value(&Value::Int64(i64::MIN));
+        assert!(candidates.contains(&Value::Int64(0)));
+        assert!(candidates.contains(&Value::Int64(i64::MIN / 2)));
+        assert!(candidates.contains(&Value::Int64(i64::MIN + 1)));
     }
 
     #[test]
