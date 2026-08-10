@@ -1,0 +1,6 @@
+# ERROR: E0400
+function generic_pipeline_extra_arg_is_consumed() returns int64:
+    list[list[int64]] groups = list()
+    list[int64] inner = list(1)
+    list[list[int64]] extended = groups into list.append[list[int64]](inner)
+    return list.length[int64](inner)
