@@ -3387,19 +3387,11 @@ impl<'a> TypeChecker<'a> {
                 Some((vec![list_int], TypeInterner::INT64))
             }
             // string extras
-            "string.reverse" | "string.trim_start" | "string.trim_end" => self
-                .no_type_args_signature(
-                    &name,
-                    type_args,
-                    span,
-                    vec![TypeInterner::STRING],
-                    TypeInterner::STRING,
-                ),
-            "string.after" | "string.before" => self.no_type_args_signature(
+            "string.trim_start" | "string.trim_end" => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
-                vec![TypeInterner::STRING, TypeInterner::STRING],
+                vec![TypeInterner::STRING],
                 TypeInterner::STRING,
             ),
             // string.chars / string.words / string.lines → list[string]
@@ -3433,13 +3425,6 @@ impl<'a> TypeChecker<'a> {
                 Some((vec![list_ty], list_ty))
             }
             "string.is_empty" => self.no_type_args_signature(
-                &name,
-                type_args,
-                span,
-                vec![TypeInterner::STRING],
-                TypeInterner::BOOL,
-            ),
-            "string.is_not_empty" => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
@@ -3491,17 +3476,6 @@ impl<'a> TypeChecker<'a> {
                 vec![
                     TypeInterner::STRING,
                     TypeInterner::INT64,
-                    TypeInterner::STRING,
-                ],
-                TypeInterner::STRING,
-            ),
-            "string.between" => self.no_type_args_signature(
-                &name,
-                type_args,
-                span,
-                vec![
-                    TypeInterner::STRING,
-                    TypeInterner::STRING,
                     TypeInterner::STRING,
                 ],
                 TypeInterner::STRING,

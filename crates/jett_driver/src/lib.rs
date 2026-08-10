@@ -3686,6 +3686,26 @@ mod tests {
     }
 
     #[test]
+    fn query_signature_reports_extracted_string_helper_source() {
+        let result = query_signature(Path::new("."), "string.reverse")
+            .expect("signature query should succeed")
+            .expect("string.reverse signature should be found");
+
+        assert_eq!(result.name, "string.reverse");
+        assert!(result.type_params.is_empty());
+        assert_eq!(result.params.len(), 1);
+        assert_eq!(result.params[0].name, "value");
+        assert_eq!(result.params[0].type_name, "string");
+        assert_eq!(result.return_type, "string");
+        assert!(
+            result
+                .file_path
+                .replace('\\', "/")
+                .ends_with("stdlib/string.jett")
+        );
+    }
+
+    #[test]
     fn bundle_project_writes_validated_single_file() {
         let root = temp_test_dir("jett_driver_bundle_project");
         fs::create_dir_all(root.join("src")).expect("temp bundle dir should be created");

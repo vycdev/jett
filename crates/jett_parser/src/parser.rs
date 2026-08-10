@@ -285,7 +285,11 @@ impl<'src> Parser<'src> {
 
     fn parse_namespace(&mut self) -> NamespaceDecl {
         let kw = self.expect(TokenKind::Namespace);
-        let name = self.parse_qualified_ident();
+        let name = if self.peek() == TokenKind::String_ {
+            self.parse_type_ident()
+        } else {
+            self.parse_qualified_ident()
+        };
         NamespaceDecl {
             span: kw.span.merge(name.span),
             name,
@@ -3318,6 +3322,20 @@ function f() returns nothing:
         match &result.module.items[0] {
             Item::Namespace(ns) => {
                 assert_eq!(ns.name.name, "myapp");
+            }
+            other => panic!("expected Namespace, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_builtin_type_namespace() {
+        let src = "namespace string\n";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        assert_eq!(result.module.items.len(), 1);
+        match &result.module.items[0] {
+            Item::Namespace(ns) => {
+                assert_eq!(ns.name.name, "string");
             }
             other => panic!("expected Namespace, got {:?}", other),
         }
