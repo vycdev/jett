@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use rand::Rng;
 use subtle::ConstantTimeEq;
+use unicode_segmentation::UnicodeSegmentation;
 
 use jett_common::{FileId, Span, is_json_raw_facade, json_public_bridge_spec};
 use jett_parser::ast::{
@@ -10790,62 +10791,7 @@ fn string_grapheme_boundaries(s: &str) -> Vec<usize> {
 }
 
 fn string_graphemes(s: &str) -> Vec<&str> {
-    if s.is_empty() {
-        return Vec::new();
-    }
-
-    let mut clusters = Vec::new();
-    let mut cluster_start = 0;
-    let mut previous = None;
-    let mut regional_indicator_count = 0usize;
-
-    for (index, ch) in s.char_indices() {
-        if index == 0 {
-            regional_indicator_count = if is_regional_indicator(ch) { 1 } else { 0 };
-            previous = Some(ch);
-            continue;
-        }
-
-        let joins_previous = is_grapheme_extend(ch)
-            || ch == '\u{200D}'
-            || previous == Some('\u{200D}')
-            || previous == Some('\r') && ch == '\n'
-            || is_regional_indicator(ch) && regional_indicator_count % 2 == 1;
-
-        if !joins_previous {
-            clusters.push(&s[cluster_start..index]);
-            cluster_start = index;
-            regional_indicator_count = 0;
-        }
-
-        if is_regional_indicator(ch) {
-            regional_indicator_count += 1;
-        } else if !is_grapheme_extend(ch) && ch != '\u{200D}' {
-            regional_indicator_count = 0;
-        }
-        previous = Some(ch);
-    }
-
-    clusters.push(&s[cluster_start..]);
-    clusters
-}
-
-fn is_grapheme_extend(ch: char) -> bool {
-    matches!(
-        ch as u32,
-        0x0300..=0x036F
-            | 0x1AB0..=0x1AFF
-            | 0x1DC0..=0x1DFF
-            | 0x20D0..=0x20FF
-            | 0xFE00..=0xFE0F
-            | 0xFE20..=0xFE2F
-            | 0xE0100..=0xE01EF
-            | 0x1F3FB..=0x1F3FF
-    )
-}
-
-fn is_regional_indicator(ch: char) -> bool {
-    matches!(ch as u32, 0x1F1E6..=0x1F1FF)
+    UnicodeSegmentation::graphemes(s, true).collect()
 }
 
 fn uint64_arithmetic_operand(value: i64) -> Result<u64, String> {
