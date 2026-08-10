@@ -121,8 +121,17 @@ pub fn render_diagnostic(diag: &Diagnostic, source: &str, file_path: &str) -> St
     // Location line: --> file:line:col
     out.push_str(&format!("  --> {}:{}:{}\n", file_path, line, col));
 
-    // Determine gutter width based on line number
-    let gutter_width = line.to_string().len();
+    // Determine gutter width from every rendered line number so secondary labels align.
+    let gutter_width = std::iter::once(line)
+        .chain(
+            diag.labels
+                .iter()
+                .map(|label| line_col(source, label.span.start).0),
+        )
+        .max()
+        .unwrap_or(line)
+        .to_string()
+        .len();
 
     // Empty gutter line
     out.push_str(&format!("{} |\n", " ".repeat(gutter_width + 1)));
@@ -314,5 +323,44 @@ mod tests {
 
         assert_eq!(primary.matches('^').count(), 1);
         assert_eq!(secondary.matches('^').count(), 1);
+    }
+
+    #[test]
+    fn render_secondary_labels_align_with_wide_line_numbers() {
+        let source = format!("{}last\n", "first\n".repeat(99));
+        let file_id = FileId::new(0);
+        let secondary_start = (source.len() - 5) as u32;
+        let diag = Diagnostic::error(300, "multiple locations", Span::new(file_id, 0, 1))
+            .with_label(Span::new(file_id, 0, 1), "primary")
+            .with_label(
+                Span::new(file_id, secondary_start, secondary_start + 4),
+                "secondary",
+            );
+
+        let rendered = render_diagnostic(&diag, &source, "test.jett");
+        let source_lines: Vec<_> = rendered.lines().collect();
+        let primary_source = source_lines
+            .iter()
+            .find(|line| line.contains(" | first"))
+            .expect("primary source line should be rendered");
+        let secondary_source = source_lines
+            .iter()
+            .find(|line| line.contains(" | last"))
+            .expect("secondary source line should be rendered");
+        let secondary_underline = source_lines
+            .iter()
+            .find(|line| line.ends_with("secondary"))
+            .expect("secondary label should be rendered");
+
+        assert_eq!(
+            primary_source.find('|'),
+            secondary_source.find('|'),
+            "source gutters should share one column"
+        );
+        assert_eq!(
+            secondary_source.find('|'),
+            secondary_underline.find('|'),
+            "secondary underline should share the source gutter"
+        );
     }
 }
