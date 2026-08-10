@@ -1336,6 +1336,10 @@ compile_fail_fixture!(
     "json_private_parse_reflected.jett"
 );
 compile_fail_fixture!(
+    compile_fail_json_private_parse_reflected_alias,
+    "json_private_parse_reflected_alias.jett"
+);
+compile_fail_fixture!(
     compile_fail_json_private_parse_exact_reflected,
     "json_private_parse_exact_reflected.jett"
 );
