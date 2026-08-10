@@ -9133,6 +9133,9 @@ impl<'a> TypeChecker<'a> {
                             ),
                             span,
                         ));
+                        for arg in args {
+                            self.check_expr(&arg.value);
+                        }
                         return TypeInterner::ERROR;
                     }
 
@@ -12935,6 +12938,25 @@ function main(view point: Point) returns int64:
         assert!(
             errors.iter().any(|d| d.code.code() == 319),
             "expected E0319, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn generic_type_argument_arity_still_checks_value_expressions() {
+        let errors = check_source_errors(
+            "\
+function identity[T](value: T) returns T:
+    return value
+
+function main() returns nothing:
+    identity[int64, string](true + \"bad\")
+",
+        );
+
+        assert!(
+            errors.iter().any(|d| d.code.code() == 301),
+            "expected nested binary expression diagnostic, got: {:?}",
             errors
         );
     }
