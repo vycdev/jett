@@ -767,12 +767,15 @@ fn render_bundle_agent_error(
         escape_toon_scalar(start),
         escape_toon_scalar(output)
     );
-    if let Some(validation) = error.validation_result() {
-        out.push_str("kind: validation\n");
+    if let Some(result) = error.diagnostic_result() {
+        out.push_str(&format!(
+            "kind: {}\n",
+            error.kind_name().unwrap_or("diagnostic")
+        ));
         let diagnostics = jett_diagnostics::toon::render_toon(
-            &validation.diagnostics,
-            &validation.source,
-            &validation.file_path,
+            &result.diagnostics,
+            &result.source,
+            &result.file_path,
         );
         out.push_str(
             diagnostics
@@ -1494,6 +1497,47 @@ mod tests {
         ));
         assert!(rendered.contains("E0200,error,undefined name: `missing`,"));
         assert!(!rendered.contains("error: candidate bundle failed validation"));
+    }
+
+    #[test]
+    fn bundle_agent_ordering_error_lists_structured_diagnostics() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after the Unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("jett_cli_bundle_order_error_{nanos}"));
+        std::fs::create_dir_all(root.join("src"))
+            .expect("temporary bundle project should be created");
+        std::fs::write(root.join("jett.proj"), "name: bundle_error\n")
+            .expect("project marker should be written");
+        std::fs::write(
+            root.join("src/alpha.jett"),
+            "namespace alpha\n\nexport function value() returns int64:\n    return beta.value()\n",
+        )
+        .expect("alpha source should be written");
+        std::fs::write(
+            root.join("src/beta.jett"),
+            "namespace beta\n\nexport function value() returns int64:\n    return alpha.value()\n",
+        )
+        .expect("beta source should be written");
+        let error = match jett_driver::bundle_project_detailed(&root, Path::new("dist/lib.jett")) {
+            Ok(_) => panic!("cyclic bundle should fail ordering"),
+            Err(error) => error,
+        };
+
+        let rendered = render_bundle_agent_error(".", "dist/lib.jett", &error);
+        std::fs::remove_dir_all(&root).expect("temporary bundle project should be removed");
+
+        assert!(
+            rendered.starts_with(
+                "status: error\nstart: .\noutput: dist/lib.jett\nkind: ordering\nfile: "
+            )
+        );
+        assert!(rendered.contains(
+            "diagnostics[1]{code,severity,message,file,line,column,end_line,end_column}:"
+        ));
+        assert!(rendered.contains("bundle ordering cycle requires declaration interleaving"));
+        assert!(!rendered.contains("error: bundle ordering cycle"));
     }
 
     #[test]

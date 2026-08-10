@@ -1661,7 +1661,7 @@ The compiler should be built incrementally, with each phase producing a usable (
 1. Platform-specific capability lowering in codegen (Linux, Windows, macOS, WASM).
 2. Cross-compilation support in the CLI (`--target` flag).
 3. `jett_bind` — C header binding generator.
-4. `jett_bundle` — Validation-first single-file distributable `.jett` bundles; dependency-aware reordering is tracked in `docs/open_design/bundle_ordering_contract.md`.
+4. `jett_bundle` — Resolver-owned cross-file dependency edges, deterministic whole-file topological ordering, structured cycle and namespace-boundary diagnostics, source-to-output line manifests, and validation-before-write for single-file distributable `.jett` bundles. The bundler never reorders declarations inside a file; the implemented contract is recorded in `docs/completed/bundle_ordering_contract.md`.
 5. `jett_cli` — `jett bind` and `jett bundle` commands.
 
 **Milestone:** Cross-compile for all supported platforms, call C libraries from Jett, distribute libraries as single files.
