@@ -167,7 +167,7 @@
 | `uuid` | Partial (`uuid.new`; generation and entropy contract [tracked by #73](https://github.com/vycdev/jett/issues/73)) |
 | `time` | Partial (`time.now_ms`, `time.now_s`; time value and `Clock` capability contract [tracked by #75](https://github.com/vycdev/jett/issues/75)) |
 | `os` | Partial (os.env, os.args) |
-| `net.http` | Not started |
+| `net.http` | Not started (initial outbound client and `Network` capability contract [tracked by #101](https://github.com/vycdev/jett/issues/101)) |
 | `net.socket` | Not started |
 | `csv` | Partial (interpreter builtins for `csv.parse`, `csv.stringify`, and `csv.parse_with_header`; quoted commas, quotes, and multiline fields are covered) |
 | `regex` | Not started |
