@@ -427,6 +427,28 @@ fn math_sum_reports_overflow() {
 }
 
 #[test]
+fn math_clamp_rejects_invalid_bounds() {
+    let cases = [
+        (
+            "math_clamp_reversed_float_bounds.jett",
+            "runtime error: math.clamp requires lower bound <= upper bound",
+        ),
+        (
+            "math_clamp_nan_bound.jett",
+            "runtime error: math.clamp bounds must not be NaN",
+        ),
+        (
+            "math_clamp_nan_upper_bound.jett",
+            "runtime error: math.clamp bounds must not be NaN",
+        ),
+    ];
+
+    for (name, expected) in cases {
+        assert_runtime_fail(name, expected);
+    }
+}
+
+#[test]
 fn math_abs_reports_overflow() {
     assert_runtime_fail(
         "math_abs_int64_min.jett",

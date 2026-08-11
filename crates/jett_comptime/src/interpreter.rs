@@ -8563,7 +8563,13 @@ impl Interpreter {
                         Some(Ok(Value::Int64((*v).clamp(*lo, *hi))))
                     }
                     (Value::Float64(v), Value::Float64(lo), Value::Float64(hi)) => {
-                        Some(Ok(Value::Float64(v.clamp(*lo, *hi))))
+                        if lo.is_nan() || hi.is_nan() {
+                            Some(Err(format!("{name} bounds must not be NaN")))
+                        } else if lo > hi {
+                            Some(Err(format!("{name} requires lower bound <= upper bound")))
+                        } else {
+                            Some(Ok(Value::Float64(v.clamp(*lo, *hi))))
+                        }
                     }
                     _ => Some(Err(format!(
                         "{name} expects three arguments of the same numeric type"
