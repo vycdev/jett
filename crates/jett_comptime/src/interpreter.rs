@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use rand::Rng;
 use subtle::ConstantTimeEq;
+use unicode_segmentation::UnicodeSegmentation;
 
 use jett_common::{FileId, Span, is_json_raw_facade, json_public_bridge_spec};
 use jett_parser::ast::{
@@ -34,6 +35,12 @@ fn check_args(name: &str, expected: usize, args: &[Value]) -> Option<Result<Valu
     } else {
         None
     }
+}
+
+/// Convert a non-negative Jett count to a host index without truncating on
+/// platforms whose `usize` is narrower than `i64`.
+fn nonnegative_usize(value: i64) -> usize {
+    usize::try_from(value.max(0)).unwrap_or(usize::MAX)
 }
 
 /// Compare secret byte strings without content-dependent early exits.
@@ -7718,7 +7725,7 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::String(s), Value::Int64(n)) => {
-                        let n = (*n).max(0) as usize;
+                        let n = nonnegative_usize(*n);
                         Some(Ok(Value::String(s.repeat(n))))
                     }
                     _ => Some(Err(format!("{name} expects a string and an int64"))),
@@ -7765,14 +7772,6 @@ impl Interpreter {
                 }
             }
 
-            "string.is_not_empty" => {
-                require_args!(name, 1, args);
-                match &args[0] {
-                    Value::String(s) => Some(Ok(Value::Bool(!s.is_empty()))),
-                    _ => Some(Err(format!("{name} expects a string argument"))),
-                }
-            }
-
             "string.slugify" => {
                 require_args!(name, 1, args);
                 match &args[0] {
@@ -7810,32 +7809,6 @@ impl Interpreter {
                         Some(Ok(Value::String(result)))
                     }
                     _ => Some(Err(format!("{name} expects (string, int64, string)"))),
-                }
-            }
-
-            "string.between" => {
-                if args.len() != 3 {
-                    return Some(Err(format!("{name} expects 3 arguments")));
-                }
-                match (&args[0], &args[1], &args[2]) {
-                    (Value::String(s), Value::String(start), Value::String(end)) => {
-                        // Returns "" when the markers are not found (design doc shows plain string)
-                        let result =
-                            if let Some((_, start_end, _)) = string_find_grapheme_match(s, start) {
-                                let after_start = &s[start_end..];
-                                if let Some((end_pos, _, _)) =
-                                    string_find_grapheme_match(after_start, end)
-                                {
-                                    after_start[..end_pos].to_string()
-                                } else {
-                                    String::new()
-                                }
-                            } else {
-                                String::new()
-                            };
-                        Some(Ok(Value::String(result)))
-                    }
-                    _ => Some(Err(format!("{name} expects (string, string, string)"))),
                 }
             }
 
@@ -7963,7 +7936,9 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::List(items), Value::Int64(index)) => {
-                        let idx = *index as usize;
+                        let Some(idx) = usize::try_from(*index).ok() else {
+                            return Some(Ok(Value::OptionalNone));
+                        };
                         if idx < items.len() {
                             Some(Ok(Value::OptionalSome(Box::new(items[idx].clone()))))
                         } else {
@@ -8016,7 +7991,7 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::List(items), Value::Int64(n)) => {
-                        let n = (*n).max(0) as usize;
+                        let n = nonnegative_usize(*n);
                         Some(Ok(Value::List(items[n.min(items.len())..].to_vec())))
                     }
                     _ => Some(Err(format!("{name} expects a list and an int64"))),
@@ -8027,7 +8002,7 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::List(items), Value::Int64(n)) => {
-                        let n = (*n).max(0) as usize;
+                        let n = nonnegative_usize(*n);
                         Some(Ok(Value::List(items[..n.min(items.len())].to_vec())))
                     }
                     _ => Some(Err(format!("{name} expects a list and an int64"))),
@@ -8092,7 +8067,9 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::List(items), Value::Int64(index)) => {
-                        let idx = *index as usize;
+                        let Some(idx) = usize::try_from(*index).ok() else {
+                            return Some(Err(format!("{name}: index {index} out of bounds")));
+                        };
                         if idx < items.len() {
                             let mut new_list = items.clone();
                             new_list.remove(idx);
@@ -8421,7 +8398,7 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::List(items), Value::Int64(size)) => {
-                        let size = (*size).max(1) as usize;
+                        let size = usize::try_from((*size).max(1)).unwrap_or(usize::MAX);
                         let chunks: Vec<Value> = items
                             .chunks(size)
                             .map(|c| Value::List(c.to_vec()))
@@ -8438,7 +8415,7 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::List(items), Value::Int64(idx)) => {
-                        let idx = *idx as usize;
+                        let idx = usize::try_from(*idx).unwrap_or(usize::MAX);
                         let mut sorted = items.clone();
                         sorted.sort_by(|a, b| {
                             let va = match a {
@@ -8625,15 +8602,13 @@ impl Interpreter {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::List(items) if !items.is_empty() => {
-                        let sum: f64 = items
-                            .iter()
-                            .map(|v| match v {
-                                Value::Int64(n) => *n as f64,
-                                Value::Float64(n) => *n,
-                                _ => 0.0,
-                            })
-                            .sum();
-                        Some(Ok(Value::Float64(sum / items.len() as f64)))
+                        let sum = items.iter().try_fold(0.0, |sum, value| match value {
+                            Value::Int64(n) => Ok(sum + *n as f64),
+                            Value::Uint64(n) => Ok(sum + *n as f64),
+                            Value::Float64(n) => Ok(sum + *n),
+                            _ => Err(format!("{name} expects a list of numeric values")),
+                        });
+                        Some(sum.map(|sum| Value::Float64(sum / items.len() as f64)))
                     }
                     Value::List(_) => Some(Err("math.average: list is empty".to_string())),
                     _ => Some(Err(format!("{name} expects a list of numbers"))),
@@ -8644,22 +8619,27 @@ impl Interpreter {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::List(items) if !items.is_empty() => {
-                        let mut nums: Vec<f64> = items
+                        let nums: Result<Vec<f64>, String> = items
                             .iter()
-                            .map(|v| match v {
-                                Value::Int64(n) => *n as f64,
-                                Value::Float64(n) => *n,
-                                _ => 0.0,
+                            .map(|value| match value {
+                                Value::Int64(n) => Ok(*n as f64),
+                                Value::Uint64(n) => Ok(*n as f64),
+                                Value::Float64(n) => Ok(*n),
+                                _ => Err(format!("{name} expects a list of numeric values")),
                             })
                             .collect();
-                        nums.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-                        let mid = nums.len() / 2;
-                        let median = if nums.len() % 2 == 0 {
-                            (nums[mid - 1] + nums[mid]) / 2.0
-                        } else {
-                            nums[mid]
-                        };
-                        Some(Ok(Value::Float64(median)))
+                        Some(nums.map(|mut nums| {
+                            nums.sort_by(|a, b| {
+                                a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+                            });
+                            let mid = nums.len() / 2;
+                            let median = if nums.len() % 2 == 0 {
+                                (nums[mid - 1] + nums[mid]) / 2.0
+                            } else {
+                                nums[mid]
+                            };
+                            Value::Float64(median)
+                        }))
                     }
                     Value::List(_) => Some(Err("math.median: list is empty".to_string())),
                     _ => Some(Err(format!("{name} expects a list of numbers"))),
@@ -8706,7 +8686,11 @@ impl Interpreter {
                         if *b == 0 {
                             Some(Err("math.mod: division by zero".to_string()))
                         } else {
-                            Some(Ok(Value::Int64(a % b)))
+                            Some(
+                                a.checked_rem(*b).map(Value::Int64).ok_or_else(|| {
+                                    format!("math.mod: integer overflow: {a} % {b}")
+                                }),
+                            )
                         }
                     }
                     _ => Some(Err(format!("{name} expects two int64 arguments"))),
@@ -8759,17 +8743,25 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::Int64(a), Value::Int64(b)) => {
-                        if *a == 0 && *b == 0 {
+                        if *a == 0 || *b == 0 {
                             Some(Ok(Value::Int64(0)))
                         } else {
-                            let (mut x, mut y) = (a.abs(), b.abs());
-                            let product = x * y;
+                            let Some(left) = a.checked_abs() else {
+                                return Some(Err(format!("math.lcm: integer overflow: abs({a})")));
+                            };
+                            let Some(right) = b.checked_abs() else {
+                                return Some(Err(format!("math.lcm: integer overflow: abs({b})")));
+                            };
+                            let (mut x, mut y) = (left, right);
                             while y != 0 {
                                 let t = y;
                                 y = x % y;
                                 x = t;
                             }
-                            Some(Ok(Value::Int64(product / x)))
+                            let factor = left / x;
+                            Some(factor.checked_mul(right).map(Value::Int64).ok_or_else(|| {
+                                format!("math.lcm: integer overflow: {factor} * {right}")
+                            }))
                         }
                     }
                     _ => Some(Err(format!("{name} expects two int64 arguments"))),
@@ -8824,7 +8816,7 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match &args[1] {
                     Value::Int64(count) => {
-                        let n = (*count).max(0) as usize;
+                        let n = nonnegative_usize(*count);
                         let items: Vec<Value> =
                             std::iter::repeat(args[0].clone()).take(n).collect();
                         Some(Ok(Value::List(items)))
@@ -8850,7 +8842,9 @@ impl Interpreter {
                 require_args!(name, 3, args);
                 match (&args[0], &args[1]) {
                     (Value::List(items), Value::Int64(index)) => {
-                        let idx = *index as usize;
+                        let Some(idx) = usize::try_from(*index).ok() else {
+                            return Some(Err(format!("{name}: index {index} out of bounds")));
+                        };
                         if idx <= items.len() {
                             let mut new_list = items.clone();
                             new_list.insert(idx, args[2].clone());
@@ -8868,7 +8862,9 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::List(items), Value::Int64(index)) => {
-                        let idx = *index as usize;
+                        let Some(idx) = usize::try_from(*index).ok() else {
+                            return Some(Err(format!("{name}: index {index} out of bounds")));
+                        };
                         if idx < items.len() {
                             let mut new_list = items.clone();
                             new_list.remove(idx);
@@ -8884,8 +8880,11 @@ impl Interpreter {
                 require_args!(name, 3, args);
                 match (&args[0], &args[1], &args[2]) {
                     (Value::List(items), Value::Int64(i), Value::Int64(j)) => {
-                        let a = *i as usize;
-                        let b = *j as usize;
+                        let (Some(a), Some(b)) =
+                            (usize::try_from(*i).ok(), usize::try_from(*j).ok())
+                        else {
+                            return Some(Err(format!("{name}: index out of bounds")));
+                        };
                         if a >= items.len() || b >= items.len() {
                             Some(Err(format!("{name}: index out of bounds")))
                         } else {
@@ -8895,50 +8894,6 @@ impl Interpreter {
                         }
                     }
                     _ => Some(Err(format!("{name} expects a list and two int64 indices"))),
-                }
-            }
-
-            // -- Additional string operations (stdlib/string.jett) ------------
-            "string.reverse" => {
-                require_args!(name, 1, args);
-                match &args[0] {
-                    Value::String(s) => {
-                        let reversed = string_graphemes(s).into_iter().rev().collect();
-                        Some(Ok(Value::String(reversed)))
-                    }
-                    _ => Some(Err(format!("{name} expects a string argument"))),
-                }
-            }
-
-            "string.after" => {
-                require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
-                    (Value::String(s), Value::String(marker)) => {
-                        let result =
-                            if let Some((_, end, _)) = string_find_grapheme_match(s, marker) {
-                                s[end..].to_string()
-                            } else {
-                                String::new()
-                            };
-                        Some(Ok(Value::String(result)))
-                    }
-                    _ => Some(Err(format!("{name} expects two string arguments"))),
-                }
-            }
-
-            "string.before" => {
-                require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
-                    (Value::String(s), Value::String(marker)) => {
-                        let result =
-                            if let Some((start, _, _)) = string_find_grapheme_match(s, marker) {
-                                s[..start].to_string()
-                            } else {
-                                s.clone()
-                            };
-                        Some(Ok(Value::String(result)))
-                    }
-                    _ => Some(Err(format!("{name} expects two string arguments"))),
                 }
             }
 
@@ -9039,7 +8994,7 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::String(s), Value::Int64(n)) => {
-                        let n = (*n).max(0) as usize;
+                        let n = nonnegative_usize(*n);
                         let result = string_graphemes(s).into_iter().take(n).collect();
                         Some(Ok(Value::String(result)))
                     }
@@ -9051,7 +9006,7 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::String(s), Value::Int64(n)) => {
-                        let n = (*n).max(0) as usize;
+                        let n = nonnegative_usize(*n);
                         let graphemes = string_graphemes(s);
                         let start = graphemes.len().saturating_sub(n);
                         let result = graphemes[start..].concat();
@@ -9065,7 +9020,7 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::String(s), Value::Int64(n)) => {
-                        let n = (*n).max(0) as usize;
+                        let n = nonnegative_usize(*n);
                         let result = string_graphemes(s).into_iter().skip(n).collect();
                         Some(Ok(Value::String(result)))
                     }
@@ -9576,12 +9531,18 @@ impl Interpreter {
                             if *step > 0 {
                                 while i < *end {
                                     items.push(Value::Int64(i));
-                                    i += step;
+                                    let Some(next) = i.checked_add(*step) else {
+                                        break;
+                                    };
+                                    i = next;
                                 }
                             } else {
                                 while i > *end {
                                     items.push(Value::Int64(i));
-                                    i += step;
+                                    let Some(next) = i.checked_add(*step) else {
+                                        break;
+                                    };
+                                    i = next;
                                 }
                             }
                             Some(Ok(Value::List(items)))
@@ -9685,7 +9646,9 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::Bytes(b), Value::Int64(index)) => {
-                        let idx = *index as usize;
+                        let Some(idx) = usize::try_from(*index).ok() else {
+                            return Some(Ok(Value::OptionalNone));
+                        };
                         if idx < b.len() {
                             Some(Ok(Value::OptionalSome(Box::new(Value::Int64(
                                 b[idx] as i64,
@@ -10794,62 +10757,7 @@ fn string_grapheme_boundaries(s: &str) -> Vec<usize> {
 }
 
 fn string_graphemes(s: &str) -> Vec<&str> {
-    if s.is_empty() {
-        return Vec::new();
-    }
-
-    let mut clusters = Vec::new();
-    let mut cluster_start = 0;
-    let mut previous = None;
-    let mut regional_indicator_count = 0usize;
-
-    for (index, ch) in s.char_indices() {
-        if index == 0 {
-            regional_indicator_count = if is_regional_indicator(ch) { 1 } else { 0 };
-            previous = Some(ch);
-            continue;
-        }
-
-        let joins_previous = is_grapheme_extend(ch)
-            || ch == '\u{200D}'
-            || previous == Some('\u{200D}')
-            || previous == Some('\r') && ch == '\n'
-            || is_regional_indicator(ch) && regional_indicator_count % 2 == 1;
-
-        if !joins_previous {
-            clusters.push(&s[cluster_start..index]);
-            cluster_start = index;
-            regional_indicator_count = 0;
-        }
-
-        if is_regional_indicator(ch) {
-            regional_indicator_count += 1;
-        } else if !is_grapheme_extend(ch) && ch != '\u{200D}' {
-            regional_indicator_count = 0;
-        }
-        previous = Some(ch);
-    }
-
-    clusters.push(&s[cluster_start..]);
-    clusters
-}
-
-fn is_grapheme_extend(ch: char) -> bool {
-    matches!(
-        ch as u32,
-        0x0300..=0x036F
-            | 0x1AB0..=0x1AFF
-            | 0x1DC0..=0x1DFF
-            | 0x20D0..=0x20FF
-            | 0xFE00..=0xFE0F
-            | 0xFE20..=0xFE2F
-            | 0xE0100..=0xE01EF
-            | 0x1F3FB..=0x1F3FF
-    )
-}
-
-fn is_regional_indicator(ch: char) -> bool {
-    matches!(ch as u32, 0x1F1E6..=0x1F1FF)
+    UnicodeSegmentation::graphemes(s, true).collect()
 }
 
 fn uint64_arithmetic_operand(value: i64) -> Result<u64, String> {
@@ -17463,6 +17371,23 @@ mod builtin_tests {
     }
 
     #[test]
+    fn builtin_math_lcm_avoids_intermediate_overflow() {
+        let mut interp = Interpreter::new();
+        let expr = dotted_call("math", "lcm", vec![int(3_037_000_500), int(3_037_000_500)]);
+        assert_eq!(
+            interp.eval_expr(&expr).unwrap(),
+            Value::Int64(3_037_000_500)
+        );
+    }
+
+    #[test]
+    fn builtin_math_lcm_zero_with_int64_min_is_zero() {
+        let mut interp = Interpreter::new();
+        let expr = dotted_call("math", "lcm", vec![int(0), int(i64::MIN)]);
+        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(0));
+    }
+
+    #[test]
     fn builtin_int64_from_string() {
         let mut interp = Interpreter::new();
         let expr = dotted_call("int64", "from_string", vec![string("123")]);
@@ -17573,6 +17498,27 @@ mod builtin_tests {
         let mut interp = Interpreter::new();
         let expr = dotted_call("string", "trim", vec![string("a"), string("b")]);
         assert!(interp.eval_expr(&expr).is_err());
+    }
+
+    #[test]
+    fn math_average_and_median_validate_numeric_values() {
+        let mut interp = Interpreter::new();
+        let non_numeric = [Value::List(vec![Value::String("not a number".to_string())])];
+        let unsigned = [Value::List(vec![Value::Uint64(2), Value::Uint64(4)])];
+
+        for name in ["math.average", "math.median"] {
+            let error = interp
+                .call_builtin(name, &non_numeric)
+                .expect("math builtin should be recognized")
+                .expect_err("non-numeric values should fail");
+            assert_eq!(error, format!("{name} expects a list of numeric values"));
+
+            let result = interp
+                .call_builtin(name, &unsigned)
+                .expect("math builtin should be recognized")
+                .expect("uint64 values should remain supported");
+            assert_eq!(result, Value::Float64(3.0));
+        }
     }
 
     #[test]

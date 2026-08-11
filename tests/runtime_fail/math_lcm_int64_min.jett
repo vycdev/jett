@@ -1,0 +1,6 @@
+function main() returns nothing:
+    int64 minimum = int64.from_string("-9223372036854775808") handle error:
+        return nothing
+    int64 value = math.lcm(minimum, 1)
+    println(value)
+    return nothing
