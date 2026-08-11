@@ -8519,8 +8519,14 @@ impl Interpreter {
                         Some(Ok(Value::Float64(base.powf(*exp))))
                     }
                     (Value::Int64(base), Value::Int64(exp)) => {
-                        let exp_u = (*exp).max(0) as u32;
-                        Some(Ok(Value::Int64(base.pow(exp_u))))
+                        let exp_u = match u32::try_from((*exp).max(0)) {
+                            Ok(exp_u) => exp_u,
+                            Err(_) => return Some(Err(format!("{name}: exponent out of range"))),
+                        };
+                        match base.checked_pow(exp_u) {
+                            Some(value) => Some(Ok(Value::Int64(value))),
+                            None => Some(Err(format!("{name}: integer overflow"))),
+                        }
                     }
                     (Value::Float64(base), Value::Int64(exp)) => {
                         Some(Ok(Value::Float64(base.powi(*exp as i32))))
@@ -17381,6 +17387,23 @@ mod builtin_tests {
         let mut interp = Interpreter::new();
         let expr = dotted_call("math", "max", vec![float(1.5), float(2.5)]);
         assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Float64(2.5));
+    }
+
+    #[test]
+    fn builtin_math_pow_int_overflow_returns_error() {
+        let mut interp = Interpreter::new();
+        let expr = dotted_call("math", "pow", vec![int(2), int(63)]);
+        assert_eq!(
+            interp.eval_expr(&expr),
+            Err("math.pow: integer overflow".to_string())
+        );
+    }
+
+    #[test]
+    fn builtin_math_pow_int_preserves_valid_values() {
+        let mut interp = Interpreter::new();
+        let expr = dotted_call("math", "pow", vec![int(-2), int(3)]);
+        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(-8));
     }
 
     #[test]
