@@ -112,14 +112,18 @@ cargo test -p jett_comptime
 The main binary is `jett`.
 
 ```text
-jett format [--check] <file.jett>
-jett build [--agent] [--release] [--target <triple>] <file.jett>
-jett run <file.jett>
-jett test [file.jett]
+jett format [--check] [--agent] <file.jett>
+jett build [--release] [--agent] [--target <triple>] <file.jett>
+jett run [--agent] <file.jett>
+jett test [--agent] [file.jett]
+jett bundle [--agent] --output <file.jett> [project-file-or-directory]
+jett query [--agent] (--namespaces | --symbols <file> | --type-at <file:line:column> | --definition-at <file:line:column> | --references-at <file:line:column> | --complete-at <file:line:column> | --signature <namespace.function>)
 jett lsp
 ```
 
-`--agent` on `build` emits structured TOON diagnostics so a coding agent can parse compiler feedback mechanically.
+`format`, `build`, `run`, `test`, `bundle`, and `query` accept `--agent` to emit structured TOON output that a coding agent can parse mechanically. `query` requires exactly one of the listed query options.
+
+`build` currently type-checks without generating native code; `--release` and `--target` are accepted but currently have no effect and reserve the intended code-generation interface.
 
 ## Repository Layout
 

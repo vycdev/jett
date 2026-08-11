@@ -334,6 +334,10 @@ run_pass_fixture!(
     run_pass_property_generic_lists,
     "property_generic_lists.jett"
 );
+run_pass_fixture!(
+    run_pass_property_recursive_structs,
+    "property_recursive_structs.jett"
+);
 
 #[test]
 fn run_file_capture_stdout_captures_capability_writes() {
@@ -397,10 +401,44 @@ fn math_gcd_reports_unrepresentable_result() {
 }
 
 #[test]
+fn math_lcm_reports_overflow() {
+    let cases = [
+        (
+            "math_lcm_overflow.jett",
+            "runtime error: math.lcm: integer overflow: 3037000500 * 3037000501",
+        ),
+        (
+            "math_lcm_int64_min.jett",
+            "runtime error: math.lcm: integer overflow: abs(-9223372036854775808)",
+        ),
+    ];
+
+    for (name, expected) in cases {
+        assert_runtime_fail(name, expected);
+    }
+}
+
+#[test]
 fn math_sum_reports_overflow() {
     assert_runtime_fail(
         "math_sum_overflow.jett",
         "runtime error: math.sum: integer overflow: 9223372036854775807 + 1",
+    );
+}
+
+#[test]
+fn math_abs_reports_overflow() {
+    assert_runtime_fail(
+        "math_abs_int64_min.jett",
+        "runtime error: math.abs: integer overflow: abs(-9223372036854775808)",
+    );
+}
+
+#[test]
+fn math_mod_reports_overflow() {
+    assert_runtime_fail(
+        "math_mod_overflow.jett",
+        "runtime error: math.mod: integer overflow: -9223372036854775808 % -1",
     );
 }
 
@@ -746,6 +784,7 @@ run_pass_fixture!(run_pass_crypto, "crypto.jett");
 run_pass_fixture!(run_pass_closures, "closures.jett");
 run_pass_fixture!(run_pass_use_imports, "use_imports.jett");
 run_pass_fixture!(run_pass_loops, "loops.jett");
+run_pass_fixture!(run_pass_range_step_boundaries, "range_step_boundaries.jett");
 run_pass_fixture!(run_pass_conversions, "conversions.jett");
 run_pass_fixture!(
     run_pass_uint64_checked_expression_runtime_types,
@@ -754,6 +793,10 @@ run_pass_fixture!(
 run_pass_fixture!(run_pass_set_operations, "set_operations.jett");
 run_pass_fixture!(run_pass_error_handling, "error_handling.jett");
 
+compile_fail_fixture!(
+    compile_fail_float_literal_out_of_range,
+    "float_literal_out_of_range.jett"
+);
 compile_fail_fixture!(compile_fail_unhandled_result, "unhandled_result.jett");
 compile_fail_fixture!(
     compile_fail_float64_from_string_unhandled_result,
@@ -761,6 +804,7 @@ compile_fail_fixture!(
 );
 
 run_pass_fixture!(run_pass_string_search, "string_search.jett");
+run_pass_fixture!(run_pass_string_indic_grapheme, "string_indic_grapheme.jett");
 run_pass_fixture!(run_pass_time_and_os, "time_and_os.jett");
 run_pass_fixture!(run_pass_math_trig, "math_trig.jett");
 run_pass_fixture!(run_pass_logical_ops, "logical_ops.jett");
@@ -889,6 +933,14 @@ compile_fail_fixture!(
 compile_fail_fixture!(
     compile_fail_ownership_branch_partial_move,
     "ownership_branch_partial_move.jett"
+);
+compile_fail_fixture!(
+    compile_fail_ownership_implement_method_use_after_move,
+    "ownership_implement_method_use_after_move.jett"
+);
+compile_fail_fixture!(
+    compile_fail_ownership_struct_method_use_after_move,
+    "ownership_struct_method_use_after_move.jett"
 );
 compile_fail_fixture!(
     compile_fail_pipeline_builtin_input_mismatch,
@@ -1063,6 +1115,10 @@ compile_fail_fixture!(
     "stdlib_namespace_collision.jett"
 );
 compile_fail_fixture!(
+    compile_fail_string_namespace_collision,
+    "string_namespace_collision.jett"
+);
+compile_fail_fixture!(
     compile_fail_export_root_type_project_file,
     "export_root_type_project_file.jett"
 );
@@ -1160,6 +1216,16 @@ compile_fail_fixture!(
     compile_fail_math_numeric_builtin_argument_shapes,
     "math_numeric_builtin_argument_shapes.jett"
 );
+
+compile_fail_fixture!(
+    compile_fail_math_average_median_non_numeric,
+    "math_average_median_non_numeric.jett"
+);
+
+#[test]
+fn compile_fail_math_average_median_non_numeric_count() {
+    assert_compile_fail_error_count("math_average_median_non_numeric.jett", 300, 4);
+}
 
 #[test]
 fn compile_fail_math_numeric_builtin_argument_shape_counts() {
@@ -1332,12 +1398,20 @@ compile_fail_fixture!(
     "property_given_type_binding.jett"
 );
 compile_fail_fixture!(
+    compile_fail_property_direct_recursive_struct,
+    "property_direct_recursive_struct.jett"
+);
+compile_fail_fixture!(
     compile_fail_json_private_tree_parse_scalar,
     "json_private_tree_parse_scalar.jett"
 );
 compile_fail_fixture!(
     compile_fail_json_private_parse_reflected,
     "json_private_parse_reflected.jett"
+);
+compile_fail_fixture!(
+    compile_fail_json_private_parse_reflected_alias,
+    "json_private_parse_reflected_alias.jett"
 );
 compile_fail_fixture!(
     compile_fail_json_private_parse_exact_reflected,

@@ -1,43 +1,40 @@
 namespace app
-
 function reverse_test() returns string:
     return string.reverse("hello")
-
 verify reverse_test:
     assert reverse_test() == "olleh"
-
 function after_found_test() returns string:
     return string.after("user@example.com", "@")
-
 verify after_found_test:
     assert after_found_test() == "example.com"
-
 function after_missing_test() returns string:
     return string.after("no-marker", "@")
-
 verify after_missing_test:
     assert after_missing_test() == ""
-
 function before_found_test() returns string:
     return string.before("user@example.com", "@")
-
 verify before_found_test:
     assert before_found_test() == "user"
-
 function before_missing_test() returns string:
     return string.before("no-marker", "@")
-
 verify before_missing_test:
     assert before_missing_test() == "no-marker"
-
+function empty_marker_behavior_test() returns string:
+    string after = string.after("abc", "")
+    string before = string.before("abc", "")
+    string between = string.between("abc", "", "")
+    return "{after}|{before}|{between}"
+verify empty_marker_behavior_test:
+    assert empty_marker_behavior_test() == "abc||"
+function between_missing_end_test() returns string:
+    return string.between("<title>Hello", "<title>", "</title>")
+verify between_missing_end_test:
+    assert between_missing_end_test() == ""
 function trim_start_test() returns string:
     return string.trim_start("  hello  ")
-
 verify trim_start_test:
     assert trim_start_test() == "hello  "
-
 function trim_end_test() returns string:
     return string.trim_end("  hello  ")
-
 verify trim_end_test:
     assert trim_end_test() == "  hello"
