@@ -387,6 +387,23 @@ impl Resolver {
             {
                 return Some(prev_id);
             }
+            if prev.kind == DefKind::Constant
+                && ns.span.file.is_stdlib()
+                && ns.name.name == "string"
+            {
+                let def_id = self.scope_table.new_def_with_visibility(
+                    ns.name.name.clone(),
+                    DefKind::Namespace,
+                    ns.span,
+                    None,
+                    DefVisibility::Public,
+                );
+                self.scope_table
+                    .bind(self.current_scope, ns.name.name.clone(), def_id);
+                self.top_level_order
+                    .insert(ns.name.name.clone(), (def_id, order));
+                return Some(def_id);
+            }
 
             self.sink.emit(errors::duplicate_definition(
                 &ns.name.name,
@@ -1660,6 +1677,55 @@ mod tests {
             .iter()
             .find(|def| def.name == name)
             .unwrap_or_else(|| panic!("expected definition named {name}"))
+    }
+
+    #[test]
+    fn stdlib_builtin_type_namespace_replaces_builtin_binding() {
+        let module = parse_module_with_file(
+            r#"
+namespace string
+
+export function is_not_empty(value: string) returns bool:
+    return string.is_empty(value)
+"#,
+            FileId::new(STDLIB_FILE_ID_START),
+        );
+
+        let result = resolve(&module);
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == Severity::Error)
+            .collect();
+
+        assert!(errors.is_empty(), "expected no errors, got: {errors:#?}");
+        assert!(
+            result
+                .scope_table
+                .definitions
+                .iter()
+                .any(|def| def.name == "string" && def.kind == DefKind::Namespace),
+            "expected stdlib string namespace definition"
+        );
+        assert_eq!(
+            def_by_name(&result, "string.is_not_empty")
+                .namespace
+                .as_deref(),
+            Some("string")
+        );
+    }
+
+    #[test]
+    fn project_builtin_type_namespace_is_rejected() {
+        let module = parse_module("namespace string\n");
+        let result = resolve(&module);
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == Severity::Error && d.code.code() == 204)
+            .collect();
+
+        assert_eq!(errors.len(), 1, "expected duplicate namespace error");
     }
 
     #[test]

@@ -51,6 +51,15 @@ function get_oob_test() returns int64:
 verify get_oob_test:
     assert get_oob_test() == -1
 
+function get_negative_test() returns int64:
+    bytes b = bytes.from_string("A")
+    int64 val = bytes.get(b, -1) handle:
+        default -1
+    return val
+
+verify get_negative_test:
+    assert get_negative_test() == -1
+
 # --- bytes.slice ---
 
 function slice_test() returns int64:

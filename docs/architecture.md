@@ -507,15 +507,30 @@ OwnershipEnv {
 
 Track which capabilities flow through the program:
 
-- A function with no capability parameters is **pure** — the compiler guarantees it.
+- A function with no capability parameters is free of semantic program effects.
+  Explicit compiler-owned debug observations are tracked separately from this
+  capability guarantee.
 - A function that calls another function requiring a capability must itself accept that capability.
 - Capability narrowing consumes the original and produces a restricted version. All narrowing operations: `Filesystem.read_only(fs)`, `Filesystem.scoped(fs, "/data/")`, `Network.allow(net, "localhost")`, `Stdout.buffered(stdout)`. The runtime enforces restricted permissions (e.g., `read_only` prevents write operations, `scoped` restricts file paths).
 - **Only `main()` owns capabilities.** Every other function must borrow them via `view`. A non-`main` function declaring an owned (non-view) capability parameter is a compile error.
 - Actors receive capabilities at spawn time via `clone` (since passing would consume the caller's capability).
 - **Verify blocks** can only call pure functions (no capabilities).
 - **`trace` and `breakpoint` are capability-exempt** — they produce output/open connections without requiring a `Stdout` or `Network` capability. They are compiler keywords with special treatment, compiled out in release mode.
+- **`print` and `println` are compiler-owned debug builtins, not ordinary I/O.**
+  They remain secret-output boundaries and require no `Stdout` capability. The
+  current interpreter shares its stdout path with `Stdout.write`; a distinct
+  debug-event channel is pending. Once mode-aware checking exists, release
+  builds must reject them. Future backends must either route them through a
+  debug diagnostic channel or reject them; they must never silently lower to
+  ambient process stdout. Verify/comptime entrypoints may allow them only when
+  debug text is isolated from protocol output. See the
+  [decided policy](open_design/print_debug_builtin_policy.md).
 
-**Implementation:** For each function, compute the set of capabilities it transitively requires. Compare against its declared parameters. If a function's body requires a capability not in its parameters → compile error.
+**Implementation:** For each function, compute the set of semantic capabilities
+it transitively requires. Compare against its declared parameters. If a
+function's body requires a capability not in its parameters → compile error.
+Compiler-owned debug observations follow their separate mode policy and do not
+grant a program capability.
 
 #### 6f. Secret Taint Analysis
 
@@ -1055,6 +1070,10 @@ The design document specifies a future secondary target: **transpilation to C**.
 
 ## Runtime Library (`jett_runtime`)
 
+> The initial outbound `net.http` client, including its `Network` capability,
+> cancellation, HTTPS, and private runtime-hook boundary, is
+> [tracked by #101](https://github.com/vycdev/jett/issues/101).
+
 Every compiled Jett binary links against the runtime library. The runtime is written in Rust (later self-hosted in Jett) and provides the services that cannot be inlined by the compiler.
 
 ### Runtime Size
@@ -1162,6 +1181,8 @@ flowchart LR
 > crypto hashing API, security guarantees, and stdlib/runtime boundary.
 > Encoding representations, failure behavior, and its stdlib/runtime boundary
 > are separately [tracked by #71](https://github.com/vycdev/jett/issues/71).
+> The public-source/private-runtime boundary for the initial `net.http` client
+> is separately [tracked by #101](https://github.com/vycdev/jett/issues/101).
 
 The boundary between compiler-generated code and stdlib-implemented code is a critical architectural decision.
 
@@ -1219,7 +1240,13 @@ Format-specific modules such as `json` should live in `.jett` stdlib code once r
 
 **2. Stdlib functions** — normal Jett code shipped in `stdlib/`:
 
-Functions like `list.filter`, `string.trim`, `math.sqrt`, `time.format`, `crypto.sha256`, etc. These are regular `.jett` files that use the same language features as user code. The compiler discovers them via the namespace system (they declare namespaces like `namespace string`, `namespace math`, etc.).
+`string.is_not_empty`, `string.reverse`, `string.after`, `string.before`, and
+`string.between` are ordinary source-defined functions in
+`stdlib/string.jett`. The complete public `string.*` API ultimately belongs in
+compiler-shipped `.jett` source. Its Unicode- and grapheme-sensitive operations
+may delegate to private trusted runtime kernels; the remaining hardcoded public
+signatures and Rust dispatch cases are transitional bootstrap debt to remove in
+follow-up extraction slices.
 
 The current compiler-backed public `set.*` surface is transitional technical
 debt, not a namespace exception. Every public set declaration and signature
@@ -1236,14 +1263,50 @@ Jett bodies while preserving existing behavior. Follow-up extraction remains
 required for the public `set.new`, `set.add`, `set.remove`, `set.contains`,
 `set.length`, and `set.to_list` declarations that front the trusted kernels.
 
-In the target architecture, the compiler has no hardcoded knowledge of public stdlib functions. They are resolved by name during name resolution like any other `use` import.
+The current compiler-backed public `list.*` surface is transitional technical
+debt, not a namespace exception. Every public list declaration and signature
+must ultimately live in compiler-shipped `.jett` source, and compositional
+helpers must have real Jett bodies. Public source functions may delegate to
+private trusted runtime kernels for allocation, indexing, mutation, sorting,
+or callback execution, but those kernels are implementation details: the
+compiler must not retain hardcoded knowledge of public list names or
+signatures.
+
+The first extraction slice is
+[tracked by #57](https://github.com/vycdev/jett/issues/57). It gives the three
+collection-view helpers ordinary source signatures equivalent to:
+
+```jett
+export function is_empty[T](view items: list[T]) returns bool
+export function first[T](view items: list[T]) returns optional[T]
+export function last[T](view items: list[T]) returns optional[T]
+```
+
+Their Jett bodies may compose over indexing and length kernels during the
+transition. The signatures must preserve the current borrow/view behavior, and
+regressions must call each helper and then successfully reuse the original
+list. Follow-up extraction remains required for every other public `list.*`
+operation, including the public declarations that front foundational kernels.
+
+Public APIs such as `list.filter`, `string.trim`, `math.sqrt`, `time.format`,
+and `crypto.sha256` are intended to be regular `.jett` functions. The compiler
+will discover their source declarations through namespaces such as `string` and
+`math`; any public APIs that still exist only as hardcoded compiler signatures
+or Rust dispatch cases are transitional bootstrap implementations.
+
+In the target architecture, the compiler has no hardcoded knowledge of public
+stdlib functions. They resolve by name like declarations from any other trusted
+compiler-shipped source file, while only private implementation kernels cross
+the runtime boundary.
 
 The current math extraction is intentionally narrower than that end state.
 `math.is_even`, `math.is_odd`, `math.sign`, `math.to_radians`, and
 `math.to_degrees` are ordinary source-defined functions in `stdlib/math.jett`.
-Their primitive dependencies, `math.mod` and `math.pi`, remain compiler-owned
-Rust kernels, and the other supported math builtins remain Rust-backed pending
-separate extraction work.
+The consuming `math.sum(list[int64])` helper is source-defined there as well and
+accumulates with checked Jett `int64` addition. The primitive dependencies
+`math.mod` and `math.pi` remain compiler-owned Rust kernels. Exact numeric
+overloads such as `math.abs`, `math.min`, and `math.max`, and the other supported
+math builtins remain Rust-backed pending separate extraction work.
 
 **3. Runtime-backed stdlib** — Jett functions that call into the runtime:
 
@@ -1317,10 +1380,15 @@ The query engine powers both LSP and ASP interactive queries. It provides:
 | `references_at(file, line, col)` | Find all references to the selected symbol with use-site ranges | ASP |
 | `diagnostics(file)` | All errors/warnings for a file | LSP |
 
-File-symbol query failures retain parser `Diagnostic` values through the driver
-boundary. Agent mode renders those failures with the build diagnostic envelope;
-only operational failures without compiler diagnostics use a prose `error`
-scalar. Extending that boundary to the remaining queries and commands is
+File-symbol parse failures and type-at parse, resolution, and type-check
+failures with known source context retain `Diagnostic` values through the
+driver boundary. Type-at failures retain the source map used by the compiler,
+so diagnostics and labels in sibling project or stdlib files keep their own
+paths and ranges. Agent mode renders those failures with the build diagnostic
+envelope. Because the current suggested-fix table has no file column, type-at
+fixes are emitted only for the requested file. Operational failures without
+matching compiler source context use a prose `error` scalar. Extending that
+boundary and a file-aware fix schema to the remaining queries and commands is
 tracked by #35.
 
 ### Demand-Driven Computation
@@ -1676,7 +1744,7 @@ The compiler should be built incrementally, with each phase producing a usable (
 1. Platform-specific capability lowering in codegen (Linux, Windows, macOS, WASM).
 2. Cross-compilation support in the CLI (`--target` flag).
 3. `jett_bind` — C header binding generator.
-4. `jett_bundle` — Validation-first single-file distributable `.jett` bundles; dependency-aware reordering is tracked in `docs/open_design/bundle_ordering_contract.md`.
+4. `jett_bundle` — Resolver-owned cross-file dependency edges, deterministic whole-file topological ordering, structured cycle and namespace-boundary diagnostics, source-to-output line manifests, and validation-before-write for single-file distributable `.jett` bundles. The bundler never reorders declarations inside a file; the implemented contract is recorded in `docs/completed/bundle_ordering_contract.md`.
 5. `jett_cli` — `jett bind` and `jett bundle` commands.
 
 **Milestone:** Cross-compile for all supported platforms, call C libraries from Jett, distribute libraries as single files.
@@ -1687,7 +1755,7 @@ The compiler should be built incrementally, with each phase producing a usable (
 
 Core stdlib (string, list, math, json) is implemented in Phase D. This phase completes the remaining modules:
 
-- **I/O:** `net.http`, `net.socket`, `csv`
+- **I/O:** `net.http` (initial outbound client and `Network` capability contract [tracked by #101](https://github.com/vycdev/jett/issues/101)), `net.socket`, `csv`
 - **Time:** `time` (time value and `Clock` capability contract [tracked by #75](https://github.com/vycdev/jett/issues/75))
 - **Security:** `crypto`, `encoding`, `validate` (the crypto hashing contract is [tracked by #69](https://github.com/vycdev/jett/issues/69), and the encoding contract is [tracked by #71](https://github.com/vycdev/jett/issues/71))
 - **OS:** `os` (environment variables, process management, argv — wraps `Environment` and `Process` capabilities)
