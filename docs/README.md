@@ -47,6 +47,7 @@ describe blockers or plans that have since been resolved, so use the active
 plans above for current work.
 
 - [Bitfield reflection metadata](completed/bitfield_reflection_metadata.md)
+- [Bundle ordering contract](completed/bundle_ordering_contract.md)
 - [Comptime type bind](completed/comptime_type_bind.md)
 - [JSON public bridge handoff](completed/json_public_bridge_handoff.md)
 - [JSON public parse policy](completed/json_public_parse_policy.md)

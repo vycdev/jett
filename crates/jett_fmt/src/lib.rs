@@ -316,6 +316,10 @@ fn needs_space_before(kind: TokenKind, prev: Option<TokenKind>) -> bool {
     if prev == TokenKind::Dot {
         return false;
     }
+    // Unary bang attaches to its operand, like unary minus.
+    if prev == TokenKind::Bang {
+        return false;
+    }
     // No space before .
     if kind == TokenKind::Dot {
         return false;
@@ -473,6 +477,14 @@ mod tests {
         let formatted = fmt(source);
         assert!(formatted.contains("return -1"));
         assert!(!formatted.contains("return - 1"));
+    }
+
+    #[test]
+    fn format_keeps_unary_bang_attached() {
+        let source = "function f(value: bool) returns bool:\n    return !value\n";
+        let formatted = fmt(source);
+        assert!(formatted.contains("return !value"));
+        assert!(!formatted.contains("return ! value"));
     }
 
     #[test]
