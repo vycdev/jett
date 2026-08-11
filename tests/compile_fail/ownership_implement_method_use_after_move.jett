@@ -1,0 +1,12 @@
+# ERROR: E0400
+function consume(values: list[int64]) returns nothing:
+    list.length[int64](view values)
+    return nothing
+interface Processor:
+    function process(view self: Processor, values: list[int64]) returns nothing
+struct Worker:
+    name: string
+implement Processor for Worker:
+    function process(view self: Worker, values: list[int64]) returns nothing:
+        consume(values)
+        consume(values)

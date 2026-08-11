@@ -1,0 +1,6 @@
+# ERROR: E9000
+struct Loop:
+    next: Loop
+property direct_recursive_struct_is_unsupported:
+    given value: Loop
+    assert true

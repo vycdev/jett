@@ -1,0 +1,7 @@
+# ERROR: E0400
+namespace test
+function sum_consumes_list() returns int64:
+    list[int64] values = list(1, 2, 3)
+    int64 total = math.sum(values)
+    int64 length = list.length[int64](values)
+    return total + length
