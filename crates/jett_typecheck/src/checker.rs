@@ -3345,7 +3345,19 @@ impl<'a> TypeChecker<'a> {
             "math.average" | "math.median" => {
                 let inner = match type_args.len() {
                     0 => TypeInterner::FLOAT64,
-                    1 => self.resolve_type_expr(&type_args[0]),
+                    1 => {
+                        let inner = self.resolve_type_expr(&type_args[0]);
+                        if inner != TypeInterner::ERROR && !self.is_numeric(inner) {
+                            self.sink.emit(errors::type_mismatch(
+                                "numeric",
+                                &self.type_name(inner),
+                                span,
+                            ));
+                            TypeInterner::ERROR
+                        } else {
+                            inner
+                        }
+                    }
                     got => {
                         self.sink.emit(errors::unknown_type(
                             &format!("{name} (expected 0 or 1 type arguments, got {got})"),
@@ -3387,19 +3399,11 @@ impl<'a> TypeChecker<'a> {
                 Some((vec![list_int], TypeInterner::INT64))
             }
             // string extras
-            "string.reverse" | "string.trim_start" | "string.trim_end" => self
-                .no_type_args_signature(
-                    &name,
-                    type_args,
-                    span,
-                    vec![TypeInterner::STRING],
-                    TypeInterner::STRING,
-                ),
-            "string.after" | "string.before" => self.no_type_args_signature(
+            "string.trim_start" | "string.trim_end" => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
-                vec![TypeInterner::STRING, TypeInterner::STRING],
+                vec![TypeInterner::STRING],
                 TypeInterner::STRING,
             ),
             // string.chars / string.words / string.lines → list[string]
@@ -3433,13 +3437,6 @@ impl<'a> TypeChecker<'a> {
                 Some((vec![list_ty], list_ty))
             }
             "string.is_empty" => self.no_type_args_signature(
-                &name,
-                type_args,
-                span,
-                vec![TypeInterner::STRING],
-                TypeInterner::BOOL,
-            ),
-            "string.is_not_empty" => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
@@ -3491,17 +3488,6 @@ impl<'a> TypeChecker<'a> {
                 vec![
                     TypeInterner::STRING,
                     TypeInterner::INT64,
-                    TypeInterner::STRING,
-                ],
-                TypeInterner::STRING,
-            ),
-            "string.between" => self.no_type_args_signature(
-                &name,
-                type_args,
-                span,
-                vec![
-                    TypeInterner::STRING,
-                    TypeInterner::STRING,
                     TypeInterner::STRING,
                 ],
                 TypeInterner::STRING,
@@ -9147,6 +9133,9 @@ impl<'a> TypeChecker<'a> {
                             ),
                             span,
                         ));
+                        for arg in args {
+                            self.check_expr(&arg.value);
+                        }
                         return TypeInterner::ERROR;
                     }
 
@@ -9857,6 +9846,10 @@ impl<'a> TypeChecker<'a> {
                         arg.value.span(),
                     ));
                 }
+            } else {
+                // Keep checking surplus arguments so nested type errors are not
+                // hidden behind the arity diagnostic.
+                self.check_expr(&arg.value);
             }
         }
 
@@ -12950,6 +12943,25 @@ function main(view point: Point) returns int64:
     }
 
     #[test]
+    fn generic_type_argument_arity_still_checks_value_expressions() {
+        let errors = check_source_errors(
+            "\
+function identity[T](value: T) returns T:
+    return value
+
+function main() returns nothing:
+    identity[int64, string](true + \"bad\")
+",
+        );
+
+        assert!(
+            errors.iter().any(|d| d.code.code() == 301),
+            "expected nested binary expression diagnostic, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
     fn enum_variant_construction_and_match_typecheck_cleanly() {
         let result = check_source_result(
             "\
@@ -12976,6 +12988,30 @@ function main() returns int64:
             .filter(|d| d.severity == jett_diagnostics::Severity::Error)
             .collect();
         assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+    }
+
+    #[test]
+    fn enum_variant_construction_checks_surplus_argument_expressions() {
+        let errors = check_source_errors(
+            "\
+enum Shape:
+    point(x: int64, y: int64)
+
+function main() returns nothing:
+    Shape shape = Shape.point(1, 2, true + \"bad\")
+",
+        );
+
+        assert!(
+            errors.iter().any(|d| d.code.code() == 303),
+            "expected the enum arity diagnostic, got: {:?}",
+            errors
+        );
+        assert!(
+            errors.iter().any(|d| d.code.code() == 301),
+            "expected surplus argument expression to be type-checked, got: {:?}",
+            errors
+        );
     }
 
     #[test]

@@ -1,0 +1,7 @@
+namespace test
+
+function indic_combining_mark_is_one_grapheme() returns int64:
+    return string.char_count("का")
+
+verify indic_combining_mark_is_one_grapheme:
+    assert indic_combining_mark_is_one_grapheme() == 1
