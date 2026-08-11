@@ -1289,26 +1289,30 @@ string extracted = string.between(html, "<title>", "</title>")
 
 No regex for simple operations. No manual index arithmetic. Each function does one thing, is named obviously, and handles edge cases internally.
 
-**Date and time — no manual formatting:**
+**Wall-clock time — explicit capability:**
 
-> The time value and `Clock` capability contract is
-> [tracked by #75](https://github.com/vycdev/jett/issues/75).
+> The proposed time value and `Clock` capability contract is recorded in
+> [Time and Clock capability contract](open_design/time_clock_capability_contract.md).
 
 ```
 use time
 
-Time now = Clock.now(view clock)
-string formatted = time.format(now, "YYYY-MM-DD")
-Time parsed = time.parse("2025-03-15", "YYYY-MM-DD") handle error:
-    return fail("invalid date")
-Duration diff = time.difference(start, end)
-Time tomorrow = time.add_days(now, 1)
-string weekday = time.day_of_week(now)
-bool is_before = time.before(start, end)
-int64 age = time.years_between(birth_date, now)
+function current_unix_seconds(view clock: Clock) returns int64:
+    time.Timestamp now = Clock.now(view clock)
+    return time.to_unix_seconds(now)
+
+function elapsed(start: time.Timestamp, end: time.Timestamp) returns result[time.Duration, string]:
+    time.Duration diff = time.difference(start, end) handle error:
+        return fail(error)
+    return ok(diff)
 ```
 
-Date logic is one of the most error-prone areas in programming. An LLM should never be computing leap years or timezone offsets — the standard library does it correctly.
+`Clock.now` is the single wall-clock sampling operation and requires an explicit
+`Clock` capability. `time.Timestamp` is an absolute signed-millisecond Unix
+timestamp; `time.Duration` is a distinct signed-millisecond difference. Calendar
+formatting, parsing, date arithmetic, and time-zone behavior remain deferred.
+When they are added, an LLM should never need to compute leap years or timezone
+offsets manually.
 
 **JSON — zero boilerplate:**
 
@@ -1638,7 +1642,7 @@ function post_comment(view clock: Clock, session: UserAuth at logged_in, text: s
     # No if-checks needed. This function can ONLY be called when
     # the session is in the "logged_in" state. The compiler enforces this
     # at every call site. The LLM cannot forget. The human cannot forget.
-    Timestamp now = Clock.now(view clock)
+    time.Timestamp now = Clock.now(view clock)
     Comment comment = Comment(author: session.user_id, text: text, created: now)
     return ok(comment)
 ```
@@ -1718,7 +1722,7 @@ function get_tracking(order: OrderProcess at shipped) returns string:
     return order.tracking
 
 function ship_order(view clock: Clock, order: OrderProcess at submitted, tracking: string) returns OrderProcess at shipped:
-    Timestamp shipped_at = Clock.now(view clock)
+    time.Timestamp shipped_at = Clock.now(view clock)
     return OrderProcess.transition(order, shipped, tracking: tracking, shipped_at: shipped_at)
 ```
 
@@ -2957,6 +2961,10 @@ secret[T] ──→ secret.compare() ALLOWED (constant-time comparison)
 
 > Tracked by [#67](https://github.com/vycdev/jett/issues/67) for the stable
 > `Random` capability, entropy, determinism, and stdlib/runtime boundary.
+> The proposed wall-clock API, value model, deterministic injection, and removal
+> of ambient `time.now_ms`/`time.now_s` are defined in the
+> [Time and Clock capability contract](open_design/time_clock_capability_contract.md).
+
 > The initial `net.http` client contract and its `Network` capability boundary
 > are separately [tracked by #101](https://github.com/vycdev/jett/issues/101).
 
@@ -3296,7 +3304,11 @@ string config = Filesystem.read_file(view fs, "data/config/app.json") handle err
 # The LLM never writes backslashes. The LLM never handles path separators.
 ```
 
-**The full capability lowering table:**
+**The future capability lowering contract:**
+
+These rows describe the required backend boundary, not current native-codegen
+status. Each backend must preserve the source-level capability operation and the
+checked conversion rules of its linked contract.
 
 | Capability | What the LLM writes | Windows lowering | Linux lowering | macOS lowering |
 |-----------|---------------------|-----------------|---------------|---------------|
@@ -3306,7 +3318,7 @@ string config = Filesystem.read_file(view fs, "data/config/app.json") handle err
 | `Network.connect` | `Network.connect(view net, addr, port)` | Winsock `connect` | `connect` | `connect` |
 | `Stdout.write` | `Stdout.write(view stdout, text)` | `WriteConsoleW` | `write(1, ...)` | `write(1, ...)` |
 | `Process.spawn` | `Process.spawn(view proc, cmd, args)` | `CreateProcessW` | `fork` + `execvp` | `posix_spawn` |
-| `Clock.now` | `Clock.now(view clock)` | `GetSystemTimeAsFileTime` | `clock_gettime` | `gettimeofday` |
+| `Clock.now` | `Clock.now(view clock)` | checked Unix milliseconds from `GetSystemTimeAsFileTime` | checked Unix milliseconds from `clock_gettime(CLOCK_REALTIME)` | checked Unix milliseconds from `clock_gettime(CLOCK_REALTIME)` |
 | `Environment.get` | `Environment.get(view env, key)` | `GetEnvironmentVariableW` | `getenv` | `getenv` |
 
 The entire left column is what the LLM writes. The right columns are what the compiler generates. The LLM never sees the right columns.
@@ -6589,7 +6601,10 @@ The standard library is intentionally massive and opinionated. The goal is to ma
 - **net.http** — HTTP client (get, post, put, delete), response handling, HttpError enum (connection_failed, timeout, status_error); the initial outbound client and `Network` capability contract are [tracked by #101](https://github.com/vycdev/jett/issues/101)
 - **net.socket** — low-level TCP/UDP networking
 - **json** — parse, parse_exact, parse_raw, serialize, serialize_public, raw `JsonTree` field/index access, strict raw accessors, scalar casts
-- **time** — now, format, parse, difference, add/subtract, comparisons, day_of_week, years_between (time value and `Clock` capability contract [tracked by #75](https://github.com/vycdev/jett/issues/75))
+- **time** — capability-backed `Clock.now`, timestamp/duration conversion,
+  difference, checked add/subtract, and comparisons; calendar formatting,
+  parsing, day-of-week, and time-zone behavior are deferred (see the
+  [Time and Clock capability contract](open_design/time_clock_capability_contract.md))
 - **os** — environment variables, process management, file system, argv
 - **test** — mock infrastructure for property-based testing (`test.mock` for mock filesystems, networks, etc.)
 - **log** — structured logging with levels

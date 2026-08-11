@@ -515,6 +515,13 @@ Track which capabilities flow through the program:
 - **Only `main()` owns capabilities.** Every other function must borrow them via `view`. A non-`main` function declaring an owned (non-view) capability parameter is a compile error.
 - Actors receive capabilities at spawn time via `clone` (since passing would consume the caller's capability).
 - **Verify blocks** can only call pure functions (no capabilities).
+- **Clock reads are capability operations.** The canonical operation is
+  `Clock.now(view clock) -> time.Timestamp`; zero-argument `time.now_ms` and
+  `time.now_s` are transitional ambient effects to remove. Verify and comptime
+  evaluation cannot read a clock. Interpreters and later backends receive an
+  injected clock so tests can provide deterministic signed Unix-millisecond
+  samples. See the
+  [Time and Clock capability contract](open_design/time_clock_capability_contract.md).
 - **`trace` and `breakpoint` are capability-exempt** — they produce output/open connections without requiring a `Stdout` or `Network` capability. They are compiler keywords with special treatment, compiled out in release mode.
 - **`print` and `println` are compiler-owned debug builtins, not ordinary I/O.**
   They remain secret-output boundaries and require no `Stdout` capability. The
@@ -1331,7 +1338,14 @@ math builtins remain Rust-backed pending separate extraction work.
 
 **3. Runtime-backed stdlib** — Jett functions that call into the runtime:
 
-Functions like `Filesystem.read_file`, `Network.listen`, `Stdout.write`, `Clock.now` are Jett function signatures that the compiler maps to runtime calls. These exist as `.jett` signature stubs in `stdlib/` with bodies that call `jett_rt_*` runtime functions. The time value and `Clock` capability contract is [tracked by #75](https://github.com/vycdev/jett/issues/75).
+Functions like `Filesystem.read_file`, `Network.listen`, `Stdout.write`, and
+`Clock.now` are Jett function signatures that the compiler maps to runtime
+calls. These exist as `.jett` signature stubs in `stdlib/` with bodies that call
+`jett_rt_*` runtime functions. For time, only injected wall-clock sampling is a
+runtime kernel; public timestamp/duration conversions, comparisons, and checked
+arithmetic belong in compiler-shipped `.jett` source. The exact value,
+capability, determinism, and compatibility rules are defined in the
+[Time and Clock capability contract](open_design/time_clock_capability_contract.md).
 
 ### How the Compiler Locates the Stdlib
 
@@ -1777,7 +1791,9 @@ The compiler should be built incrementally, with each phase producing a usable (
 Core stdlib (string, list, math, json) is implemented in Phase D. This phase completes the remaining modules:
 
 - **I/O:** `net.http` (initial outbound client and `Network` capability contract [tracked by #101](https://github.com/vycdev/jett/issues/101)), `net.socket`, `csv`
-- **Time:** `time` (time value and `Clock` capability contract [tracked by #75](https://github.com/vycdev/jett/issues/75))
+- **Time:** `time` (the proposed wall-clock value, capability, determinism, and
+  source/runtime boundary is defined in the
+  [Time and Clock capability contract](open_design/time_clock_capability_contract.md))
 - **Security:** `crypto`, `encoding`, `validate` (the crypto hashing contract is [tracked by #69](https://github.com/vycdev/jett/issues/69), and the encoding contract is [tracked by #71](https://github.com/vycdev/jett/issues/71))
 - **OS:** `os` (environment variables, process management, argv — the `Environment`/argv capability and public stdlib/runtime boundary are [tracked by #94](https://github.com/vycdev/jett/issues/94))
 - **Utilities:** `regex`, `random`, `uuid` (generation and entropy contract [tracked by #73](https://github.com/vycdev/jett/issues/73)), `log`, `format`
