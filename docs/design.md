@@ -5965,11 +5965,13 @@ quiesces Jett tasks at scheduler safe points so inspection observes one stable
 state.
 
 One controller sends correlated TOON operations: `wait`, `bindings`, `value`,
-`evaluate`, `stack`, `continue`, and `disconnect`. `continue` invalidates all
-pause-scoped handles before resuming. Explicit disconnect resumes and closes the
-session; unexpected disconnect also resumes after a bounded grace period by
-default, with an opt-in abort policy for launchers. This prevents abandoned
-agents from hanging a target indefinitely.
+`evaluate`, `stack`, `continue`, and `disconnect`. Commands are serialized on a
+command lane while one `wait` may remain outstanding on a separate event lane;
+this lets `continue` acknowledge and produce the `continued` event that releases
+the long poll. `continue` invalidates all pause-scoped handles before resuming.
+Explicit disconnect resumes and closes the session; unexpected disconnect also
+resumes after a bounded grace period by default, with an opt-in abort policy for
+launchers. This prevents abandoned agents from hanging a target indefinitely.
 
 The first adapter uses an ephemeral exact-loopback HTTP address and a fresh
 bearer token published through an owner-only control descriptor. It never binds
@@ -5978,7 +5980,9 @@ capability-exempt keyword into a general `Network` capability. Source locations
 come only from the launch's compilation manifest and loaded source map; the
 debugger accepts no arbitrary file paths.
 
-Requests identify the protocol, session, pause, request, and operation:
+Paused-state command requests identify the protocol, session, current pause,
+request, and operation. `wait` omits `pause_id`; a running-state `disconnect`
+does too, while a paused-state `disconnect` includes the current pause:
 
 ```toon
 protocol: jett.breakpoint.v1

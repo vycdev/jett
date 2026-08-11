@@ -1152,7 +1152,10 @@ condition. A future concurrent runtime quiesces all Jett tasks at scheduler safe
 points before publishing a process-scoped `pause_id`; callbacks from completed
 OS work remain unscheduled until resume. One authenticated controller then uses
 the shared `wait`, `bindings`, `value`, `evaluate`, `stack`, `continue`, and
-`disconnect` operations. Requests and responses are correlated TOON envelopes.
+`disconnect` operations. Commands are serialized separately from the one
+permitted outstanding event `wait`, allowing `continue` or `disconnect` to
+complete a long poll without introducing competing command order. Requests and
+responses are correlated TOON envelopes.
 Protocol failures have stable breakpoint codes, while compiler-produced
 expression diagnostics reuse the ASP diagnostic collection owned by #35.
 

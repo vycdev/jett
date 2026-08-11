@@ -57,9 +57,13 @@ The rules are:
 3. Once quiescent, the runtime allocates a monotonically increasing `pause_id`
    within the session. Values and frame identifiers are valid only for that
    pause.
-4. One authenticated controller sends requests sequentially. Request IDs are
-   unique within the session. An exact duplicate returns the cached response; a
-   reused ID with different content is a protocol error.
+4. One authenticated controller uses two logical request lanes. The command
+   lane accepts at most one request at a time and preserves request order. The
+   event lane permits at most one outstanding `wait`, so a controller blocked
+   waiting for an event can still send `continue` or `disconnect` on the
+   command lane. Request IDs are unique across both lanes within the session.
+   An exact duplicate returns the cached response; a reused ID with different
+   content is a protocol error.
 5. `continue` acknowledges the request, invalidates all pause-scoped handles,
    and then resumes scheduling. The next hit receives a new `pause_id`.
 6. `disconnect` acknowledges, resumes if currently paused, invalidates the
@@ -125,8 +129,8 @@ from becoming a capability-free file reader.
 
 ## Request and Response Envelope
 
-Every operation is an HTTP request carrying a TOON document. Except for
-`wait`, requests identify the active pause:
+Every operation is an HTTP request carrying a TOON document. Paused-state
+commands identify the active pause:
 
 ```toon
 protocol: jett.breakpoint.v1
@@ -138,8 +142,8 @@ arguments:
   frame_id: frame-0
 ```
 
-Every response repeats the correlation fields and has exactly one of `result`
-or `failure`:
+Every response repeats `protocol`, `session_id`, and `request_id`, applies the
+`pause_id` presence rules below, and has exactly one of `result` or `failure`:
 
 ```toon
 protocol: jett.breakpoint.v1
@@ -178,19 +182,44 @@ embeds the shared ASP diagnostic collection owned by
 not redefine diagnostic ranges, labels, scope, constraints, or suggested fixes.
 Operational failures with no compiler diagnostic use only the `failure` object.
 
+`pause_id` has state-dependent presence rather than being a universal envelope
+field:
+
+- `bindings`, `value`, `evaluate`, `stack`, and `continue` require the current
+  `pause_id`;
+- `wait` always omits `pause_id` in its request. Its `paused` and `continued`
+  event responses include the pause they describe; terminal events include it
+  only when they close an active pause;
+- `disconnect` requires the current `pause_id` when paused and omits it when
+  running. Its acknowledgement mirrors that presence.
+
+A missing required pause, a pause supplied where it must be absent, or a pause
+that is no longer current is `invalid_request` or `stale_pause` as applicable.
+This lets a controller close a running session without inventing a pause while
+still protecting commands that act on inspected state.
+
 ## Operations
 
 V1 defines seven operations:
 
 | Operation | State | Result |
 |---|---|---|
-| `wait` | running or paused | The next `paused`, `continued`, `failed`, or `exited` event. It omits `pause_id` in the request and may long-poll. |
+| `wait` | running or paused | The next queued `paused`, `continued`, `failed`, or `exited` event. It omits `pause_id` in the request and may long-poll on the event lane. |
 | `bindings` | paused | Binding names, declared types, availability, and secret flags for one frame; values are not included. |
 | `value` | paused | A bounded structured rendering of one available, non-secret binding. |
 | `evaluate` | paused | The type and bounded structured value of one non-destructive expression. |
 | `stack` | paused | Ordered frames with function/namespace, source ID, path, and range. |
 | `continue` | paused | An acknowledgement followed by resume. |
 | `disconnect` | running or paused | An acknowledgement followed by resume-if-needed and session closure. |
+
+Lifecycle events are queued once in order for the controller. A `wait` drains
+the next event whether it was already queued or arrives while polling. The
+controller may keep one `wait` outstanding while issuing a command; for
+example, a paused controller can long-poll on the event lane, send `continue`
+on the command lane, receive the command acknowledgement, and then receive the
+corresponding `continued` event from `wait`. A second simultaneous `wait` is an
+`invalid_request`. Command requests remain serialized, so this exception does
+not introduce competing mutations or ambiguous command order.
 
 `wait` returns the pause summary that agents need before choosing a query:
 
@@ -371,8 +400,9 @@ Each stage is independently testable and must preserve earlier behavior:
    the CLI/driver, then connect the current tree-walking interpreter to `wait`,
    `bindings`, `value`, bounded `evaluate`, `continue`, and `disconnect`.
    Fixture tests cover bare/conditional hits, false conditions, stale handles,
-   malformed/unauthorized requests, disconnect policy, secrets, and release
-   stripping.
+   malformed/unauthorized requests, running and paused disconnect envelopes,
+   an outstanding `wait` completed by a concurrent `continue`, rejection of a
+   second outstanding `wait`, disconnect policy, secrets, and release stripping.
 3. **Interpreter stack/source context:** expose stable frame/source IDs from the
    interpreter and source map, with manifest/path escape tests. This may follow
    stage 2 if only `frame-0` is initially available.
