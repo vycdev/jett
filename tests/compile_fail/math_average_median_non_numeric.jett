@@ -1,0 +1,18 @@
+# ERROR: E0300
+namespace test
+
+function average_strings() returns float64:
+    list[string] values = list("one", "two")
+    return math.average[string](values)
+
+function average_bools() returns float64:
+    list[bool] values = list(true, false)
+    return math.average[bool](values)
+
+function median_strings() returns float64:
+    list[string] values = list("one", "two")
+    return math.median[string](values)
+
+function median_bools() returns float64:
+    list[bool] values = list(true, false)
+    return math.median[bool](values)

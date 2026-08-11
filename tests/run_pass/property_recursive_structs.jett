@@ -1,0 +1,10 @@
+struct Node:
+    value: int64
+    next: optional[Node]
+property recursive_nodes_are_generated_with_a_finite_tail:
+    given node: Node
+    assert node.value == node.value
+    optional[Node] next = node.next
+    Node child = next handle:
+        default node
+    assert child.value == child.value
