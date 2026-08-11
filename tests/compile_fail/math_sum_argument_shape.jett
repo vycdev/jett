@@ -1,0 +1,7 @@
+# ERROR: E0303
+# ERROR: E0300
+namespace test
+function sum_requires_one_list() returns int64:
+    return math.sum()
+function sum_requires_int64_items() returns int64:
+    return math.sum(list("not an integer"))
