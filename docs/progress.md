@@ -166,7 +166,7 @@
 | `bytes` | Partial (9 builtins: new, length, slice, concat, from_string, to_string, get, to_hex, from_hex) |
 | `uuid` | Partial (`uuid.new`; generation and entropy contract [tracked by #73](https://github.com/vycdev/jett/issues/73)) |
 | `time` | Partial (`time.now_ms`, `time.now_s`; time value and `Clock` capability contract [tracked by #75](https://github.com/vycdev/jett/issues/75)) |
-| `os` | Partial (os.env, os.args) |
+| `os` | Partial (`os.env`, `os.args`; `Environment`/argv capability and public stdlib/runtime boundary [tracked by #94](https://github.com/vycdev/jett/issues/94)) |
 | `net.http` | Not started (initial outbound client and `Network` capability contract [tracked by #101](https://github.com/vycdev/jett/issues/101)) |
 | `net.socket` | Not started |
 | `csv` | Partial (interpreter builtins for `csv.parse`, `csv.stringify`, and `csv.parse_with_header`; quoted commas, quotes, and multiline fields are covered) |

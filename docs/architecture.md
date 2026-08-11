@@ -406,7 +406,7 @@ Walk all type declarations and build the type registry:
 - **Built-in generic types:** `list[T]`, `map[K, V]`, `set[T]`, `optional[T]`, `result[T, E]`.
 - **User-defined types:** structs, enums, machines, actors, bitfields, interfaces, type aliases (including refinement types).
 - **Function types:** `function(T) returns U`.
-- **Capability types:** `Filesystem`, `Network`, `Stdout`, `Stderr`, `Stdin`, `Clock`, `Random`, `Process`, `Environment`. The stable `Random` capability, entropy, determinism, and stdlib/runtime boundary is [tracked by #67](https://github.com/vycdev/jett/issues/67).
+- **Capability types:** `Filesystem`, `Network`, `Stdout`, `Stderr`, `Stdin`, `Clock`, `Random`, `Process`, `Environment`. The stable `Random` capability, entropy, determinism, and stdlib/runtime boundary is [tracked by #67](https://github.com/vycdev/jett/issues/67). The `os` `Environment`/argv effect and public stdlib/runtime boundary are [tracked by #94](https://github.com/vycdev/jett/issues/94).
 - **Secret wrapper:** `secret[T]`.
 - **State-qualified types:** `Machine at state`.
 - **Built-in error types:** `CancelledError` (returned when a cancelled task's next I/O operation executes).
@@ -1779,7 +1779,7 @@ Core stdlib (string, list, math, json) is implemented in Phase D. This phase com
 - **I/O:** `net.http` (initial outbound client and `Network` capability contract [tracked by #101](https://github.com/vycdev/jett/issues/101)), `net.socket`, `csv`
 - **Time:** `time` (time value and `Clock` capability contract [tracked by #75](https://github.com/vycdev/jett/issues/75))
 - **Security:** `crypto`, `encoding`, `validate` (the crypto hashing contract is [tracked by #69](https://github.com/vycdev/jett/issues/69), and the encoding contract is [tracked by #71](https://github.com/vycdev/jett/issues/71))
-- **OS:** `os` (environment variables, process management, argv — wraps `Environment` and `Process` capabilities)
+- **OS:** `os` (environment variables, process management, argv — the `Environment`/argv capability and public stdlib/runtime boundary are [tracked by #94](https://github.com/vycdev/jett/issues/94))
 - **Utilities:** `regex`, `random`, `uuid` (generation and entropy contract [tracked by #73](https://github.com/vycdev/jett/issues/73)), `log`, `format`
 - **Testing:** `test.mock` (mock capabilities for property-based testing)
 
