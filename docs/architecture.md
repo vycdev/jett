@@ -1248,6 +1248,31 @@ may delegate to private trusted runtime kernels; the remaining hardcoded public
 signatures and Rust dispatch cases are transitional bootstrap debt to remove in
 follow-up extraction slices.
 
+The current compiler-backed public `list.*` surface is transitional technical
+debt, not a namespace exception. Every public list declaration and signature
+must ultimately live in compiler-shipped `.jett` source, and compositional
+helpers must have real Jett bodies. Public source functions may delegate to
+private trusted runtime kernels for allocation, indexing, mutation, sorting,
+or callback execution, but those kernels are implementation details: the
+compiler must not retain hardcoded knowledge of public list names or
+signatures.
+
+The first extraction slice is
+[tracked by #57](https://github.com/vycdev/jett/issues/57). It gives the three
+collection-view helpers ordinary source signatures equivalent to:
+
+```jett
+export function is_empty[T](view items: list[T]) returns bool
+export function first[T](view items: list[T]) returns optional[T]
+export function last[T](view items: list[T]) returns optional[T]
+```
+
+Their Jett bodies may compose over indexing and length kernels during the
+transition. The signatures must preserve the current borrow/view behavior, and
+regressions must call each helper and then successfully reuse the original
+list. Follow-up extraction remains required for every other public `list.*`
+operation, including the public declarations that front foundational kernels.
+
 Public APIs such as `list.filter`, `string.trim`, `math.sqrt`, `time.format`,
 and `crypto.sha256` are intended to be regular `.jett` functions. The compiler
 will discover their source declarations through namespaces such as `string` and

@@ -1228,6 +1228,21 @@ map[string, list[User]] by_role = list.group_by(users, function(u: User) returns
 
 An LLM calling `list.filter` cannot produce an off-by-one error. It cannot forget to handle an empty list. It cannot accidentally mutate the original. The standard library handles all of this.
 
+The current compiler-backed public list surface is transitional technical debt.
+Every public `list.*` declaration must ultimately be compiler-shipped `.jett`
+source; compositional helpers have real Jett bodies, while only private trusted
+kernels may provide allocation, indexing, mutation, sorting, or callback
+execution. Those kernels are implementation details, so the compiler does not
+retain hardcoded public list names or signatures as the final architecture.
+
+The first extraction slice, [tracked by
+#57](https://github.com/vycdev/jett/issues/57), moves `list.is_empty`,
+`list.first`, and `list.last` to generic source declarations whose parameter is
+`view items: list[T]`. That view spelling is part of the contract: ownership
+regressions must call each helper and then reuse the original list. The slice
+may compose over length and indexing kernels, but all remaining public list
+operations still require follow-up source declarations.
+
 **String operations — no manual parsing:**
 
 ```
