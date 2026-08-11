@@ -427,6 +427,14 @@ fn math_sum_reports_overflow() {
 }
 
 #[test]
+fn list_sum_reports_overflow() {
+    assert_runtime_fail(
+        "list_sum_overflow.jett",
+        "runtime error: list.sum: integer overflow: 9223372036854775807 + 1",
+    );
+}
+
+#[test]
 fn math_factorial_reports_overflow() {
     assert_runtime_fail(
         "math_factorial_overflow.jett",
