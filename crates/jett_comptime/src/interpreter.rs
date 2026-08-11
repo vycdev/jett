@@ -8728,13 +8728,15 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::Int64(a), Value::Int64(b)) => {
-                        let (mut x, mut y) = (a.abs(), b.abs());
+                        let (mut x, mut y) = (a.unsigned_abs(), b.unsigned_abs());
                         while y != 0 {
                             let t = y;
                             y = x % y;
                             x = t;
                         }
-                        Some(Ok(Value::Int64(x)))
+                        Some(i64::try_from(x).map(Value::Int64).map_err(|_| {
+                            format!("math.gcd: integer overflow: result {x} does not fit int64")
+                        }))
                     }
                     _ => Some(Err(format!("{name} expects two int64 arguments"))),
                 }
@@ -17368,6 +17370,24 @@ mod builtin_tests {
         let mut interp = Interpreter::new();
         let expr = dotted_call("math", "max", vec![float(1.5), float(2.5)]);
         assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Float64(2.5));
+    }
+
+    #[test]
+    fn builtin_math_gcd_handles_int64_min_with_fitting_result() {
+        let mut interp = Interpreter::new();
+        let expr = dotted_call("math", "gcd", vec![int(i64::MIN), int(6)]);
+        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(2));
+    }
+
+    #[test]
+    fn builtin_math_gcd_reports_unrepresentable_result() {
+        let mut interp = Interpreter::new();
+        let expr = dotted_call("math", "gcd", vec![int(i64::MIN), int(0)]);
+        let err = interp.eval_expr(&expr).unwrap_err();
+        assert_eq!(
+            err,
+            "math.gcd: integer overflow: result 9223372036854775808 does not fit int64".to_string()
+        );
     }
 
     #[test]

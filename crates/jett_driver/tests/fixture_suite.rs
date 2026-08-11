@@ -393,6 +393,14 @@ fn sized_integer_runtime_bounds_reject_variable_arithmetic() {
 }
 
 #[test]
+fn math_gcd_reports_unrepresentable_result() {
+    assert_runtime_fail(
+        "math_gcd_int64_min.jett",
+        "runtime error: math.gcd: integer overflow: result 9223372036854775808 does not fit int64",
+    );
+}
+
+#[test]
 fn math_lcm_reports_overflow() {
     let cases = [
         (
