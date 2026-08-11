@@ -3944,6 +3944,7 @@ mod tests {
             ("math.sign", "int64", "int64"),
             ("math.to_radians", "float64", "float64"),
             ("math.to_degrees", "float64", "float64"),
+            ("math.sum", "list[int64]", "int64"),
         ];
 
         for (name, param_type, return_type) in expected {
