@@ -95,6 +95,16 @@ impl<'a> OwnershipChecker<'a> {
         for item in &module.items {
             match item {
                 Item::Function(func) => self.check_function(func),
+                Item::Implement(block) => {
+                    for method in &block.methods {
+                        self.check_function(method);
+                    }
+                }
+                Item::Struct(def) => {
+                    for method in &def.methods {
+                        self.check_function(method);
+                    }
+                }
                 Item::VarDecl(decl) => self.check_var_decl(decl),
                 _ => {}
             }
@@ -403,9 +413,17 @@ impl<'a> OwnershipChecker<'a> {
 
     fn check_match(&mut self, match_stmt: &ast::MatchStmt) {
         self.check_expr_ownership(&match_stmt.expr);
+        let baseline = self.states.clone();
+        let mut fallthrough_states = Vec::new();
+
         for arm in &match_stmt.arms {
-            self.check_block(&arm.body);
+            let arm_state = self.check_block_from_state(&baseline, &arm.body);
+            if Self::block_can_fall_through(&arm.body) {
+                fallthrough_states.push(arm_state);
+            }
         }
+
+        self.states = self.merge_fallthrough_states(&baseline, &fallthrough_states);
     }
 
     // ------------------------------------------------------------------
@@ -1472,5 +1490,104 @@ mod tests {
             "unexpected diagnostics: {:?}",
             diagnostics
         );
+    }
+
+    #[test]
+    fn match_arms_have_independent_ownership_paths() {
+        let func = FunctionDef {
+            name: ident("example", sp(0, 7)),
+            type_params: vec![],
+            params: vec![],
+            return_type: Some(TypeExpr::Named(ident("nothing", sp(8, 15)))),
+            body: Block {
+                stmts: vec![
+                    Stmt::VarDecl(VarDecl {
+                        mutable: false,
+                        ty: TypeExpr::Generic(
+                            ident("list", sp(20, 24)),
+                            vec![TypeExpr::Named(ident("int64", sp(25, 30)))],
+                            sp(20, 31),
+                        ),
+                        name: ident("items", sp(32, 37)),
+                        value: Expr::ListConstruct(
+                            vec![Expr::IntLiteral(1, sp(40, 41))],
+                            sp(39, 42),
+                        ),
+                        span: sp(20, 42),
+                    }),
+                    Stmt::Match(MatchStmt {
+                        expr: Expr::IntLiteral(0, sp(45, 46)),
+                        arms: vec![
+                            MatchArm {
+                                pattern: Pattern::Ident(ident("red", sp(47, 50))),
+                                body: Block {
+                                    stmts: vec![Stmt::Expr(ExprStmt {
+                                        expr: Expr::Call(
+                                            Box::new(Expr::Ident(ident("process", sp(55, 62)))),
+                                            vec![CallArg {
+                                                name: None,
+                                                value: Expr::Ident(ident("items", sp(63, 68))),
+                                                span: sp(63, 68),
+                                            }],
+                                            sp(55, 69),
+                                        ),
+                                        span: sp(55, 69),
+                                    })],
+                                    span: sp(55, 69),
+                                },
+                                span: sp(47, 69),
+                            },
+                            MatchArm {
+                                pattern: Pattern::Ident(ident("green", sp(70, 75))),
+                                body: Block {
+                                    stmts: vec![Stmt::Expr(ExprStmt {
+                                        expr: Expr::Call(
+                                            Box::new(Expr::Ident(ident("process", sp(78, 85)))),
+                                            vec![CallArg {
+                                                name: None,
+                                                value: Expr::Ident(ident("items", sp(86, 91))),
+                                                span: sp(86, 91),
+                                            }],
+                                            sp(78, 92),
+                                        ),
+                                        span: sp(78, 92),
+                                    })],
+                                    span: sp(78, 92),
+                                },
+                                span: sp(70, 92),
+                            },
+                        ],
+                        span: sp(45, 92),
+                    }),
+                    Stmt::Expr(ExprStmt {
+                        expr: Expr::Call(
+                            Box::new(Expr::Ident(ident("process", sp(95, 102)))),
+                            vec![CallArg {
+                                name: None,
+                                value: Expr::Ident(ident("items", sp(103, 108))),
+                                span: sp(103, 108),
+                            }],
+                            sp(95, 109),
+                        ),
+                        span: sp(95, 109),
+                    }),
+                ],
+                span: sp(20, 109),
+            },
+            exported: false,
+            span: sp(0, 109),
+        };
+
+        let interner = TypeInterner::new();
+        let diagnostics = check_ownership(&module_with_func(func), &interner);
+
+        let errs = errors(&diagnostics);
+        assert_eq!(
+            errs.len(),
+            1,
+            "match arms must be isolated while preserving the post-match move: {diagnostics:?}"
+        );
+        assert_eq!(errs[0].code.code(), 400);
+        assert_eq!(errs[0].span, sp(103, 108));
     }
 }
