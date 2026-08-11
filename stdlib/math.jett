@@ -13,3 +13,8 @@ export function to_radians(degrees: float64) returns float64:
     return degrees * math.pi() / 180.0
 export function to_degrees(radians: float64) returns float64:
     return radians * 180.0 / math.pi()
+export function sum(values: list[int64]) returns int64:
+    mutable int64 total = 0
+    for value in values:
+        total = total + value
+    return total

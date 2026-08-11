@@ -168,7 +168,7 @@ There must be **no spooky action at a distance**. A variable must never be silen
 
 - No global mutable variables. Global constants are allowed (they never change), but mutable global state is forbidden.
 - No module-level side effects on import. `use math` loads definitions — it does not execute code, register handlers, or modify state.
-- Side effects must be declared in the function signature via **capability parameters** (see Rule Set 16). If a function writes to a file, it receives a `Filesystem` capability. If it accesses the network, it receives a `Network` capability. The signature is the contract.
+- Semantic program side effects must be declared in the function signature via **capability parameters** (see Rule Set 16). If a function writes to a file, it receives a `Filesystem` capability. If it accesses the network, it receives a `Network` capability. The signature is the contract. Compiler-owned debug observations such as `trace`, `breakpoint`, `print`, and `println` are non-release tooling instrumentation, not semantic I/O.
 - All inputs to a function come through its parameters. No reading from ambient scope, no closures over mutable state, no thread-local storage. Anonymous functions can capture **immutable** values from the enclosing scope. Captured values are implicitly viewed — they are not consumed by the closure. Closures over **mutable** state are banned. This allows patterns like `list.find(users, function(u: User) returns bool: return u.id == target_id)` where `target_id` is an immutable value from the outer scope.
 
 **Example — side effects are declared, not hidden:**
@@ -196,10 +196,10 @@ Functions in Jett are **pure by default**. They take explicit inputs through the
 
 **Rules:**
 
-- A function without capability parameters is guaranteed pure by the compiler.
+- A function without capability parameters is guaranteed free of semantic program effects by the compiler. Non-release tooling may still observe explicitly written compiler debug instrumentation.
 - Pure functions cannot call impure functions — the capability system propagates. A function that needs to call an I/O function must itself accept the required capability.
 - Pure functions can be tested with nothing but their inputs and outputs. No mocks, no setup, no teardown, no dependency injection frameworks.
-- Pure functions are safe to cache, parallelize, and reorder — the compiler and runtime can optimize aggressively.
+- Pure function results are safe to cache, parallelize, and reorder. A debug-enabled toolchain must separately preserve the relative order of requested debug events; the settled policy requires release builds to reject global debug printing once mode-aware checking exists.
 
 **What this enables for LLMs:**
 
@@ -609,12 +609,13 @@ function fetch_data(view net: Network, url: string) returns result[map[string, s
         return fail(parse_error)
     return ok(data)
 
-function compute_stats(values: list[float64]) returns float64:
+function compute_stats(values: list[int64]) returns float64:
     use math
-    float64 total = math.sum(values)
-    int64 count = list.length[float64](values)
+    int64 count = list.length[int64](view values)
+    int64 total = math.sum(values)
+    float64 total_f = float64.from_int64(total)
     float64 count_f = float64.from_int64(count)
-    return total / count_f
+    return total_f / count_f
 ```
 
 **What this achieves:**
@@ -1227,6 +1228,48 @@ map[string, list[User]] by_role = list.group_by(users, function(u: User) returns
 
 An LLM calling `list.filter` cannot produce an off-by-one error. It cannot forget to handle an empty list. It cannot accidentally mutate the original. The standard library handles all of this.
 
+The current compiler-backed public map surface is transitional technical debt.
+Every public `map.*` declaration must ultimately live in compiler-shipped
+`.jett` source, with compositional helpers implemented as real Jett bodies and
+no public names or signatures hardcoded in the compiler. Low-level storage,
+key-equality, lookup/update, and iteration behavior may remain behind private
+trusted runtime kernels, but those kernels are not public API.
+
+[#61](https://github.com/vycdev/jett/issues/61) starts that transition with
+`map.is_empty`, `map.contains_key`, `map.set`, `map.get_or`, and `map.merge`.
+Follow-up work must provide source-owned wrappers or bodies for the remaining
+public constructors, accessors, mutations, conversions, iteration helpers, and
+higher-order operations, then remove their hardcoded public signatures and
+dispatch paths.
+
+The current compiler-backed public set surface is transitional technical debt.
+Every public `set.*` declaration must ultimately be compiler-shipped `.jett`
+source; compositional helpers have real Jett bodies, while only private trusted
+kernels may provide equality, storage, cardinality, iteration, or conversion.
+Those kernels are implementation details, so the compiler does not retain
+hardcoded public set names or signatures as the final architecture.
+
+The first extraction slice, [tracked by
+#59](https://github.com/vycdev/jett/issues/59), moves `set.is_empty`,
+`set.union`, `set.intersection`, and `set.difference` into source. Follow-up is
+required for public `new`, `add`, `remove`, `contains`, `length`, and `to_list`
+declarations that front the trusted kernels.
+
+The current compiler-backed public list surface is transitional technical debt.
+Every public `list.*` declaration must ultimately be compiler-shipped `.jett`
+source; compositional helpers have real Jett bodies, while only private trusted
+kernels may provide allocation, indexing, mutation, sorting, or callback
+execution. Those kernels are implementation details, so the compiler does not
+retain hardcoded public list names or signatures as the final architecture.
+
+The first extraction slice, [tracked by
+#57](https://github.com/vycdev/jett/issues/57), moves `list.is_empty`,
+`list.first`, and `list.last` to generic source declarations whose parameter is
+`view items: list[T]`. That view spelling is part of the contract: ownership
+regressions must call each helper and then reuse the original list. The slice
+may compose over length and indexing kernels, but all remaining public list
+operations still require follow-up source declarations.
+
 **String operations — no manual parsing:**
 
 ```
@@ -1246,26 +1289,30 @@ string extracted = string.between(html, "<title>", "</title>")
 
 No regex for simple operations. No manual index arithmetic. Each function does one thing, is named obviously, and handles edge cases internally.
 
-**Date and time — no manual formatting:**
+**Wall-clock time — explicit capability:**
 
-> The time value and `Clock` capability contract is
-> [tracked by #75](https://github.com/vycdev/jett/issues/75).
+> The proposed time value and `Clock` capability contract is recorded in
+> [Time and Clock capability contract](open_design/time_clock_capability_contract.md).
 
 ```
 use time
 
-Time now = Clock.now(view clock)
-string formatted = time.format(now, "YYYY-MM-DD")
-Time parsed = time.parse("2025-03-15", "YYYY-MM-DD") handle error:
-    return fail("invalid date")
-Duration diff = time.difference(start, end)
-Time tomorrow = time.add_days(now, 1)
-string weekday = time.day_of_week(now)
-bool is_before = time.before(start, end)
-int64 age = time.years_between(birth_date, now)
+function current_unix_seconds(view clock: Clock) returns int64:
+    time.Timestamp now = Clock.now(view clock)
+    return time.to_unix_seconds(now)
+
+function elapsed(start: time.Timestamp, end: time.Timestamp) returns result[time.Duration, string]:
+    time.Duration diff = time.difference(start, end) handle error:
+        return fail(error)
+    return ok(diff)
 ```
 
-Date logic is one of the most error-prone areas in programming. An LLM should never be computing leap years or timezone offsets — the standard library does it correctly.
+`Clock.now` is the single wall-clock sampling operation and requires an explicit
+`Clock` capability. `time.Timestamp` is an absolute signed-millisecond Unix
+timestamp; `time.Duration` is a distinct signed-millisecond difference. Calendar
+formatting, parsing, date arithmetic, and time-zone behavior remain deferred.
+When they are added, an LLM should never need to compute leap years or timezone
+offsets manually.
 
 **JSON — zero boilerplate:**
 
@@ -1299,6 +1346,10 @@ the container shape must be correct but absence is allowed. The stable
 not use them as a substitute for the strict helpers.
 
 **HTTP — high-level client out of the box:**
+
+> The initial outbound client API, `Network` capability behavior, failure model,
+> HTTPS guarantees, and stdlib/runtime boundary are
+> [tracked by #101](https://github.com/vycdev/jett/issues/101).
 
 The `net.http` module defines its own error type for HTTP operations:
 
@@ -1371,30 +1422,49 @@ float64 power = math.pow(base, exponent)
 
 Compositional math helpers should be ordinary Jett source when the language can
 express them without losing numeric semantics. `math.is_even`, `math.is_odd`,
-`math.sign`, `math.to_radians`, and `math.to_degrees` are therefore defined in
-`stdlib/math.jett` and resolved like user functions. `math.mod` and `math.pi`
-remain compiler-owned Rust primitive kernels used by those definitions; the
-other currently supported math builtins also remain Rust-backed until they are
-separately extracted.
+`math.sign`, `math.to_radians`, `math.to_degrees`, and the consuming
+`math.sum(list[int64])` helper are therefore defined in `stdlib/math.jett` and
+resolved like user functions. `math.sum` uses ordinary checked source addition,
+so overflow reports the same deterministic arithmetic error as other Jett
+`int64` expressions. `math.mod` and `math.pi` remain compiler-owned Rust
+primitive kernels used by those definitions. Exact numeric overloads such as
+`math.abs`, `math.min`, and `math.max`, along with the other supported math
+builtins, remain Rust-backed until they are separately extracted.
 
-**Hashing and encoding — no third-party dependencies:**
+**Hashing and encoding — no application dependencies:**
 
-> Tracked by [#69](https://github.com/vycdev/jett/issues/69) for the stable
-> hashing API, security guarantees, and stdlib/runtime boundary.
-> Encoding API representations, failure behavior, and its stdlib/runtime
-> boundary are separately [tracked by #71](https://github.com/vycdev/jett/issues/71).
+> The proposed stable text-digest API, algorithm classifications, HMAC shape,
+> secret policy, and stdlib/runtime boundary are defined in the
+> [Crypto hashing and security contract](open_design/crypto_hashing_security_contract.md).
+> The proposed byte-native binary codecs, strict decoder failures, distinct URL
+> and form-component policy, and stdlib/runtime boundary are defined in the
+> [Encoding representation and failure contract](open_design/encoding_representation_failure_contract.md).
 
 ```
 use crypto
 use encoding
 
-string hashed = crypto.sha256(password)
-string b64 = encoding.base64_encode(data)
-string decoded = encoding.base64_decode(b64)
-string url_safe = encoding.url_encode(query)
+string artifact_digest = crypto.sha256(artifact_text)
 bytes raw = bytes.from_string(data)
-string hex = bytes.to_hex(raw)
+string b64 = encoding.base64_encode(view raw)
+bytes decoded = encoding.base64_decode(b64) handle error:
+    return fail(error)
+string url_safe = encoding.url_encode(query)
+string hex = encoding.hex_encode(view raw)
 ```
+
+`crypto.sha256` hashes exact UTF-8 text and returns 64 lowercase hexadecimal
+characters. `crypto.md5` keeps the same representation only for explicit legacy
+compatibility and is not a secure digest. SHA-512 and key-first binary HMAC are
+planned additions, not currently supported declarations. None of these
+operations is a password-hashing API.
+
+The proposed encoding contract uses strict padded RFC 4648 Base64 and lowercase
+hex over arbitrary `bytes`. Their decoders return `result[bytes, string]`.
+`url_encode` treats `+` literally and encodes spaces as `%20`; separate
+`form_encode` and `form_decode` operations own the form-style `+`/space rule.
+All public declarations ultimately live in compiler-shipped `.jett` source over
+private trusted byte kernels.
 
 **Validation — standard library refinement types:**
 
@@ -1588,7 +1658,7 @@ function post_comment(view clock: Clock, session: UserAuth at logged_in, text: s
     # No if-checks needed. This function can ONLY be called when
     # the session is in the "logged_in" state. The compiler enforces this
     # at every call site. The LLM cannot forget. The human cannot forget.
-    Timestamp now = Clock.now(view clock)
+    time.Timestamp now = Clock.now(view clock)
     Comment comment = Comment(author: session.user_id, text: text, created: now)
     return ok(comment)
 ```
@@ -1668,7 +1738,7 @@ function get_tracking(order: OrderProcess at shipped) returns string:
     return order.tracking
 
 function ship_order(view clock: Clock, order: OrderProcess at submitted, tracking: string) returns OrderProcess at shipped:
-    Timestamp shipped_at = Clock.now(view clock)
+    time.Timestamp shipped_at = Clock.now(view clock)
     return OrderProcess.transition(order, shipped, tracking: tracking, shipped_at: shipped_at)
 ```
 
@@ -2911,6 +2981,16 @@ secret[T] ──→ secret.compare() ALLOWED (constant-time comparison)
 > claim. See the
 > [Random capability and entropy contract](open_design/random_capability_entropy_contract.md).
 
+> The proposed wall-clock API, value model, deterministic injection, and removal
+> of ambient `time.now_ms`/`time.now_s` are defined in the
+> [Time and Clock capability contract](open_design/time_clock_capability_contract.md).
+
+> The initial `net.http` client contract and its `Network` capability boundary
+> are separately [tracked by #101](https://github.com/vycdev/jett/issues/101).
+
+> The `Environment`/argv contract and public `os` stdlib/runtime boundary are
+> [tracked by #94](https://github.com/vycdev/jett/issues/94).
+
 #### The Problem: Side Effects Hide in the Call Stack
 
 In high-performance languages like C++ or Rust, any function can open a file, connect to a network socket, or spawn a process. The function signature says `fn process(data: Vec<u8>) -> Result<Output>` — nothing in the signature reveals that this function writes to disk, sends network packets, or reads environment variables.
@@ -3028,9 +3108,32 @@ function main(stdout: Stdout, fs: Filesystem) returns nothing:
     Stdout.write(view stdout, "done")
 ```
 
-Every function that touches the filesystem has `view fs: Filesystem` in its parameters. Every function that writes output has `view stdout: Stdout`. **By reading only the function signature**, the LLM (or a human) knows exactly which side effects a function can perform.
+Every function that touches the filesystem has `view fs: Filesystem` in its parameters. Every function that writes application output has `view stdout: Stdout`. **By reading only the function signature**, the LLM (or a human) knows exactly which semantic side effects a function can perform.
 
 This is the same `view` system as any other type — no special rules for capabilities. The programmer already knows how `view` works; capabilities just use it.
+
+#### Debug Output Is Not Program Output
+
+Global `print` and `println` are a narrow, compiler-owned debugging exception,
+not a second output API. They may emit diagnostic text without a `Stdout`
+capability. They remain secret-output boundaries and their text cannot be read
+by Jett code or treated as a semantic program result.
+
+The current interpreter shares their path with `Stdout.write`; separating debug
+events is pending. When the release/backend boundary is implemented, release
+builds must reject `print` and `println` with guidance to use `Stdout.write`;
+they must not silently strip calls or lower them to ambient process stdout.
+Future native or bytecode backends may support the calls only through an
+explicit debug diagnostic channel, and must otherwise reject them. `verify`
+and comptime execution may use the helpers only when tooling isolates their
+debug events from protocol output. Production output always requires
+`Stdout`, while structured debugging should prefer `trace` or `breakpoint`.
+
+This exception does not grant user code an output capability. A
+capability-free function remains free of semantic I/O: debug observations are
+tooling instrumentation and cannot be required for program behavior. The full
+mode, compatibility, and conformance policy is recorded in
+[`docs/open_design/print_debug_builtin_policy.md`](open_design/print_debug_builtin_policy.md).
 
 #### What the Compiler Rejects
 
@@ -3062,10 +3165,10 @@ function calculate_tax(income: float64, rate: float64) returns float64:
     # No capability parameters. The compiler GUARANTEES this function:
     # - Does not read or write files
     # - Does not access the network
-    # - Does not print to stdout
+    # - Does not perform semantic stdout I/O
     # - Does not read the clock
     # - Does not use randomness
-    # - Has ZERO side effects of any kind
+    # - Has ZERO semantic side effects (tooling may observe explicit debug instrumentation)
 ```
 
 #### Scoped Capabilities — Restricting What a Function Can Do
@@ -3119,7 +3222,7 @@ The LLM reads `function send_report(view net: Network, view stdout: Stdout, repo
 
 **2. Pure functions are provably pure.**
 
-If a function has no capability parameters, it is pure. Not "probably pure" or "assumed pure" — the compiler has mathematically proven it cannot perform side effects. The LLM can trust this guarantee completely.
+If a function has no capability parameters, it is semantically pure. Not "probably pure" or "assumed pure" — the compiler has proven it cannot perform program side effects. Non-release compiler debug observations are tooling instrumentation governed by the debug-output policy, not an ambient program capability.
 
 **3. The LLM can't hallucinate side effects.**
 
@@ -3236,7 +3339,11 @@ string config = Filesystem.read_file(view fs, "data/config/app.json") handle err
 # The LLM never writes backslashes. The LLM never handles path separators.
 ```
 
-**The full capability lowering table:**
+**The future capability lowering contract:**
+
+These rows describe the required backend boundary, not current native-codegen
+status. Each backend must preserve the source-level capability operation and the
+checked conversion rules of its linked contract.
 
 | Capability | What the LLM writes | Windows lowering | Linux lowering | macOS lowering |
 |-----------|---------------------|-----------------|---------------|---------------|
@@ -3246,7 +3353,7 @@ string config = Filesystem.read_file(view fs, "data/config/app.json") handle err
 | `Network.connect` | `Network.connect(view net, addr, port)` | Winsock `connect` | `connect` | `connect` |
 | `Stdout.write` | `Stdout.write(view stdout, text)` | `WriteConsoleW` | `write(1, ...)` | `write(1, ...)` |
 | `Process.spawn` | `Process.spawn(view proc, cmd, args)` | `CreateProcessW` | `fork` + `execvp` | `posix_spawn` |
-| `Clock.now` | `Clock.now(view clock)` | `GetSystemTimeAsFileTime` | `clock_gettime` | `gettimeofday` |
+| `Clock.now` | `Clock.now(view clock)` | checked Unix milliseconds from `GetSystemTimeAsFileTime` | checked Unix milliseconds from `clock_gettime(CLOCK_REALTIME)` | checked Unix milliseconds from `clock_gettime(CLOCK_REALTIME)` |
 | `Environment.get` | `Environment.get(view env, key)` | `GetEnvironmentVariableW` | `getenv` | `getenv` |
 
 The entire left column is what the LLM writes. The right columns are what the compiler generates. The LLM never sees the right columns.
@@ -4054,6 +4161,16 @@ span_end_line: 45
 span_end_column: 21
 ```
 
+If parsing, resolution, or type checking fails with known source context, the
+type query returns the same structured diagnostic envelope as
+`jett build --agent`. Diagnostic and label rows use the source file matching
+each compiler span, including sibling project and stdlib files. The existing
+suggested-fix table has no file column, so this query emits fixes only when the
+fix targets the requested file. Invalid positions, file-read failures, and
+compiler failures without matching source context remain operational `error`
+scalars. The file-aware fix schema and other query and command failure paths
+remain tracked by #35.
+
 **Definition lookup:**
 
 ```
@@ -4555,7 +4672,7 @@ function main(net: Network, stdout: Stdout) returns nothing:
 jett bundle --output my_library.jett
 ```
 
-This produces a single distributable file after validating that the generated output still satisfies Jett's ordinary top-to-bottom declaration rules. The result is a self-contained `.jett` file that can be hosted at any URL and imported by other projects. Library authors develop with whatever file organization they prefer, then bundle for distribution. Dependency-aware reordering remains tracked in `docs/open_design/bundle_ordering_contract.md`.
+This produces a single distributable file after deriving cross-file dependencies from the resolver's canonical definition/reference data and applying deterministic whole-file topological ordering. Declarations inside each source file remain byte-for-byte ordered, and the generated output is validated against Jett's ordinary top-to-bottom declaration rules before it is written. Cycles that would require declaration interleaving, or orders that would leak a namespace into a later file's root declarations, fail with structured agent diagnostics and preserve any existing output. The result is a self-contained `.jett` file that can be hosted at any URL and imported by other projects. The completed contract and its constraints are recorded in `docs/completed/bundle_ordering_contract.md`.
 
 #### Sub-Namespaces for Large Projects
 
@@ -6516,17 +6633,23 @@ The standard library is intentionally massive and opinionated. The goal is to ma
 - **list** — filter, map, reduce, find, sort, sort_by, sort_by_index, unique, chunk, zip, group_by, flatten, first, last, skip, take, length, get, append, is_sorted, all_elements_in
 - **map** — get, set, keys, values, merge, filter, contains_key, get_or
 - **set** — add, remove, union, intersection, difference, contains
-- **net.http** — HTTP client (get, post, put, delete), response handling, HttpError enum (connection_failed, timeout, status_error)
+- **net.http** — HTTP client (get, post, put, delete), response handling, HttpError enum (connection_failed, timeout, status_error); the initial outbound client and `Network` capability contract are [tracked by #101](https://github.com/vycdev/jett/issues/101)
 - **net.socket** — low-level TCP/UDP networking
 - **json** — parse, parse_exact, parse_raw, serialize, serialize_public, raw `JsonTree` field/index access, strict raw accessors, scalar casts
-- **time** — now, format, parse, difference, add/subtract, comparisons, day_of_week, years_between (time value and `Clock` capability contract [tracked by #75](https://github.com/vycdev/jett/issues/75))
+- **time** — capability-backed `Clock.now`, timestamp/duration conversion,
+  difference, checked add/subtract, and comparisons; calendar formatting,
+  parsing, day-of-week, and time-zone behavior are deferred (see the
+  [Time and Clock capability contract](open_design/time_clock_capability_contract.md))
 - **os** — environment variables, process management, file system, argv
 - **test** — mock infrastructure for property-based testing (`test.mock` for mock filesystems, networks, etc.)
 - **log** — structured logging with levels
 - **format** — number formatting, padding, and text alignment
-- **crypto** — hashing (sha256, sha512, md5), HMAC; the stable API, security guarantees, and stdlib/runtime boundary are [tracked by #69](https://github.com/vycdev/jett/issues/69)
-- **encoding** — base64, hex, URL encoding/decoding; the stable representations,
-  failure contract, and stdlib/runtime boundary are [tracked by #71](https://github.com/vycdev/jett/issues/71)
+- **crypto** — stable UTF-8-to-lowercase-hex SHA-256, legacy-only MD5, and
+  planned SHA-512/key-first HMAC; see the
+  [crypto hashing and security contract](open_design/crypto_hashing_security_contract.md)
+- **encoding** — byte-native strict Base64/hex and separate URL/form component
+  codecs; see the proposed
+  [encoding representation and failure contract](open_design/encoding_representation_failure_contract.md)
 - **validate** — standard refinement types for common formats: Email, URL, UUID, IPv4, IPv6. The type IS the validation — once assigned, the value is guaranteed valid.
 - **regex** — pattern matching and extraction (when string functions aren't enough)
 - **csv** — parsing and writing CSV data
@@ -6534,6 +6657,14 @@ The standard library is intentionally massive and opinionated. The goal is to ma
   random selection, and non-mutating shuffling; see the proposed
   [random capability and entropy contract](open_design/random_capability_entropy_contract.md)
 - **uuid** — UUID generation (generation and entropy contract [tracked by #73](https://github.com/vycdev/jett/issues/73))
+
+The complete public `string.*` API should be ordinary Jett source, with private
+trusted runtime kernels only where Unicode or grapheme behavior cannot yet be
+expressed safely in Jett. `string.is_not_empty`, `string.reverse`,
+`string.after`, `string.before`, and `string.between` are defined in
+`stdlib/string.jett` and resolved like user functions. Remaining hardcoded
+public string signatures and Rust dispatch cases are transitional bootstrap
+debt for follow-up extraction slices, not the permanent stdlib boundary.
 
 ---
 
@@ -6634,6 +6765,30 @@ entry: src/main.jett
 ```
 
 External dependencies live in the `deps/` directory as vendored `.jett` files tracked in git (see Rule Set 14).
+
+---
+
+## Generic Reflection Specialization Facts
+
+Generic casts may be justified only by reflection evidence that stays visibly
+tied to the reflected type. Direct `TypeKind` / `TypePrimitive` comparisons,
+immutable locals carrying those tags, typed helper parameters receiving them
+from the same generic instantiation, and matching arms can specialize a branch
+for that instantiation. Arbitrary caller-supplied tags are not facts about `T`.
+A predicate call returning `bool` does not create such a fact,
+and copying a reflection comparison into an arbitrary `bool` local discards
+the evidence.
+
+This conservative rule keeps type proofs local for agents and prevents broad
+classifiers from hiding incompatible runtime carriers. Same-carrier classifier
+helpers may organize ordinary runtime logic, but code that performs a generic
+cast must retain a visible direct fact or match arm. Static predicate folding,
+trusted predicate annotations, and general flow-sensitive boolean refinement
+are deferred changes rather than part of the current policy. The decision and
+its pinned compile-fail boundaries are recorded in the completed
+[reflection predicate fact contract](completed/reflection_predicate_facts.md).
+The narrower static-folding possibility remains a separate
+[open-design follow-up](open_design/reflection_predicate_static_folding.md).
 
 ---
 

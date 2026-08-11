@@ -44,7 +44,28 @@ the public `json.*` API.
   compiler-owned signatures for
   `new`/`add`/`remove`/`contains`/`length`/`is_empty`/`to_list`/`union`/
   `intersection`/`difference`, so JSON set parsing fixtures typecheck through
-  normal builtin signatures.
+  normal builtin signatures. This compiler-backed public surface is
+  transitional technical debt: every public `set.*` declaration and signature
+  must ultimately move to compiler-shipped `.jett` source, and the compiler
+  must not retain hardcoded public set names or signatures. Public source
+  declarations may delegate equality, storage, cardinality, iteration, and
+  conversion to private trusted runtime kernels, but those kernels remain
+  implementation details. Extracting the first compositional `is_empty`,
+  `union`, `intersection`, and `difference` slice into real Jett bodies is
+  [tracked by #59](https://github.com/vycdev/jett/issues/59); follow-up remains
+  for public `new`, `add`, `remove`, `contains`, `length`, and `to_list`
+  declarations.
+- The compiler-backed public `map.*` surface is transitional technical debt.
+  The final boundary requires every public map declaration and signature to
+  come from compiler-shipped `.jett` source, with compositional operations
+  implemented by real Jett bodies and no compiler dispatch by public name.
+  [#61](https://github.com/vycdev/jett/issues/61) is the first bounded slice for
+  `is_empty`, `contains_key`, `set`, `get_or`, and `merge`. Follow-up extraction
+  must source-own the remaining public constructors, accessors, mutations,
+  conversions, iteration helpers, and higher-order operations. Storage, key
+  equality, lookup/update, and iteration may use private trusted runtime
+  kernels, but those kernels are implementation details rather than public
+  compiler-owned functions.
 
 That means physical stdlib JSON fragments under `stdlib/json/` are available
 to single-file builds, but ordinary `namespace json` functions still do not
