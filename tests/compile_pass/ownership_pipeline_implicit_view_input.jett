@@ -1,0 +1,5 @@
+function pipeline_implicit_view_input_remains_available() returns int64:
+    list[list[int64]] groups = list()
+    list[int64] inner = list(1)
+    list[list[int64]] extended = groups into list.append[list[int64]](inner)
+    return list.length[list[int64]](groups) + list.length[list[int64]](extended)

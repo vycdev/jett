@@ -263,6 +263,10 @@ compile_pass_fixture!(
     "ownership_branch_return_consumes.jett"
 );
 compile_pass_fixture!(
+    compile_pass_ownership_pipeline_implicit_view_input,
+    "ownership_pipeline_implicit_view_input.jett"
+);
+compile_pass_fixture!(
     compile_pass_math_numeric_builtin_secret_lifting,
     "math_numeric_builtin_secret_lifting.jett"
 );
@@ -1004,6 +1008,10 @@ compile_fail_fixture!(
 compile_fail_fixture!(
     compile_fail_ownership_struct_method_use_after_move,
     "ownership_struct_method_use_after_move.jett"
+);
+compile_fail_fixture!(
+    compile_fail_ownership_pipeline_generic_extra_arg_use_after_move,
+    "ownership_pipeline_generic_extra_arg_use_after_move.jett"
 );
 compile_fail_fixture!(
     compile_fail_pipeline_builtin_input_mismatch,

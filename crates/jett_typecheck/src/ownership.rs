@@ -508,12 +508,21 @@ impl<'a> OwnershipChecker<'a> {
                 self.check_expr_ownership(inner);
             }
             Expr::Pipeline(initial, steps, _) => {
-                self.check_expr_ownership(initial);
-                for step in steps {
-                    self.check_expr_ownership(&step.function);
-                    for arg in &step.extra_args {
-                        self.check_expr_ownership(&arg.value);
+                if let Some(first_step) = steps.first() {
+                    let (callee, _, piped_as_view) = Self::pipeline_step_call_parts(first_step);
+                    if piped_as_view || Self::first_argument_is_implicit_view(callee) {
+                        self.check_expr_ownership(initial);
+                    } else {
+                        self.consume_expr(initial, initial.span());
                     }
+                } else {
+                    self.check_expr_ownership(initial);
+                }
+
+                for step in steps {
+                    let (callee, extra_args, _) = Self::pipeline_step_call_parts(step);
+                    self.check_expr_ownership(callee);
+                    self.check_call_arguments_ownership(callee, extra_args, 1);
                 }
             }
             Expr::At(inner, _, _) => {
@@ -546,6 +555,17 @@ impl<'a> OwnershipChecker<'a> {
         }
     }
 
+    fn pipeline_step_call_parts(step: &ast::PipelineStep) -> (&Expr, &[CallArg], bool) {
+        let (function, piped_as_view) = match &step.function {
+            Expr::View(inner, _) => (inner.as_ref(), true),
+            _ => (&step.function, false),
+        };
+        match function {
+            Expr::GenericCall(callee, _, args, _) => (callee, args, piped_as_view),
+            _ => (function, &step.extra_args, piped_as_view),
+        }
+    }
+
     /// Check a function call for ownership effects.
     ///
     /// Arguments passed with `view` (i.e., `Expr::View(inner)`) do not consume
@@ -554,10 +574,39 @@ impl<'a> OwnershipChecker<'a> {
     fn check_call_ownership(&mut self, callee: &Expr, args: &[CallArg], _span: Span) {
         // Check the callee itself (e.g., reading a function variable).
         self.check_expr_ownership(callee);
+        self.check_call_arguments_ownership(callee, args, 0);
+    }
 
+    fn check_call_arguments_ownership(
+        &mut self,
+        callee: &Expr,
+        args: &[CallArg],
+        position_offset: usize,
+    ) {
+        let first_arg_is_view = Self::first_argument_is_implicit_view(callee);
+
+        for (index, arg) in args.iter().enumerate() {
+            let argument_position = position_offset + index;
+            match &arg.value {
+                Expr::View(inner, _) => {
+                    // `view x` — the argument is passed as a view; no consumption.
+                    self.check_expr_ownership(inner);
+                }
+                _ if first_arg_is_view && argument_position == 0 => {
+                    // First argument to a collection builtin is implicitly viewed.
+                    self.check_expr_ownership(&arg.value);
+                }
+                _ => {
+                    // Non-view argument — consumes the value.
+                    self.consume_expr(&arg.value, arg.span);
+                }
+            }
+        }
+    }
+
+    fn first_argument_is_implicit_view(callee: &Expr) -> bool {
         // Map and list builtins that operate on a collection without consuming it.
         // The first argument (the collection) is implicitly viewed.
-        let callee_name = Self::dotted_name_str(callee);
         let collection_view_builtins: &[&str] = &[
             "map.length",
             "map.has",
@@ -606,27 +655,10 @@ impl<'a> OwnershipChecker<'a> {
             "map.contains_key",
             "map.set",
         ];
-        let first_arg_is_view = callee_name
+        Self::dotted_name_str(callee)
             .as_deref()
             .map(|n| collection_view_builtins.contains(&n) || is_json_implicit_view_facade(n))
-            .unwrap_or(false);
-
-        for (i, arg) in args.iter().enumerate() {
-            match &arg.value {
-                Expr::View(inner, _) => {
-                    // `view x` — the argument is passed as a view; no consumption.
-                    self.check_expr_ownership(inner);
-                }
-                _ if first_arg_is_view && i == 0 => {
-                    // First argument to a collection builtin is implicitly viewed.
-                    self.check_expr_ownership(&arg.value);
-                }
-                _ => {
-                    // Non-view argument — consumes the value.
-                    self.consume_expr(&arg.value, arg.span);
-                }
-            }
-        }
+            .unwrap_or(false)
     }
 
     fn dotted_name_str(expr: &Expr) -> Option<String> {
@@ -1183,6 +1215,87 @@ mod tests {
             "mutable rebinding should reset ownership, got errors: {:?}",
             errs
         );
+    }
+
+    // ---------------------------------------------------------------
+    // Test: An owned pipeline input is consumed by its first step
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn pipeline_consumes_owned_input() {
+        // function example() returns nothing:
+        //     list[int64] items = list(1)
+        //     items into consume
+        //     list.length(items)  # ERROR: items was consumed by the pipeline
+        let pipeline = Expr::Pipeline(
+            Box::new(Expr::Ident(ident("items", sp(50, 55)))),
+            vec![PipelineStep {
+                function: Expr::Ident(ident("consume", sp(60, 67))),
+                extra_args: vec![],
+                handle: None,
+                span: sp(60, 67),
+            }],
+            sp(50, 67),
+        );
+        let length = Expr::FieldAccess(
+            Box::new(Expr::Ident(ident("list", sp(80, 84)))),
+            ident("length", sp(85, 91)),
+            sp(80, 91),
+        );
+        let func = FunctionDef {
+            name: ident("example", sp(0, 7)),
+            type_params: vec![],
+            params: vec![],
+            return_type: Some(TypeExpr::Named(ident("nothing", sp(8, 15)))),
+            body: Block {
+                stmts: vec![
+                    Stmt::VarDecl(VarDecl {
+                        mutable: false,
+                        ty: TypeExpr::Generic(
+                            ident("list", sp(20, 24)),
+                            vec![TypeExpr::Named(ident("int64", sp(25, 30)))],
+                            sp(20, 31),
+                        ),
+                        name: ident("items", sp(32, 37)),
+                        value: Expr::ListConstruct(
+                            vec![Expr::IntLiteral(1, sp(40, 41))],
+                            sp(39, 42),
+                        ),
+                        span: sp(20, 42),
+                    }),
+                    Stmt::Expr(ExprStmt {
+                        expr: pipeline,
+                        span: sp(50, 67),
+                    }),
+                    Stmt::Expr(ExprStmt {
+                        expr: Expr::Call(
+                            Box::new(length),
+                            vec![CallArg {
+                                name: None,
+                                value: Expr::Ident(ident("items", sp(92, 97))),
+                                span: sp(92, 97),
+                            }],
+                            sp(80, 98),
+                        ),
+                        span: sp(80, 98),
+                    }),
+                ],
+                span: sp(20, 98),
+            },
+            exported: false,
+            span: sp(0, 98),
+        };
+
+        let interner = TypeInterner::new();
+        let diagnostics = check_ownership(&module_with_func(func), &interner);
+        let errs = errors(&diagnostics);
+        assert_eq!(
+            errs.len(),
+            1,
+            "expected one use-after-move error, got: {errs:?}"
+        );
+        assert_eq!(errs[0].code.code(), 400);
+        assert!(errs[0].message.contains("items"));
     }
 
     // ---------------------------------------------------------------
