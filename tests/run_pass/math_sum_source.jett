@@ -1,0 +1,21 @@
+namespace app
+function sum_positive_test() returns int64:
+    return math.sum(list(1, 2, 3, 4, 5))
+verify sum_positive_test:
+    assert sum_positive_test() == 15
+function sum_empty_test() returns int64:
+    return math.sum(list())
+verify sum_empty_test:
+    assert sum_empty_test() == 0
+function sum_singleton_test() returns int64:
+    return math.sum(list(-7))
+verify sum_singleton_test:
+    assert sum_singleton_test() == -7
+function sum_negative_test() returns int64:
+    return math.sum(list(-1, -2, -3, -4))
+verify sum_negative_test:
+    assert sum_negative_test() == -10
+function sum_cancellation_test() returns int64:
+    return math.sum(list(9223372036854775807, -9223372036854775807, 1))
+verify sum_cancellation_test:
+    assert sum_cancellation_test() == 1
