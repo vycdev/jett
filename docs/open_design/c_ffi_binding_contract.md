@@ -158,9 +158,11 @@ Consequences follow the existing capability rules:
 - a program that uses a foreign binding declares an owned `Foreign` parameter
   on `main`, and the entry wrapper injects an unforgeable zero-sized token;
 - ordinary functions borrow it and propagate it to callers;
-- actors/tasks receive it only through the ordinary explicit `clone` handoff
-  used for other capabilities; it is not serializable or constructible by user
-  code, but may occupy capability parameters/fields under the existing rules;
+- actors receive it through explicit `clone` handoff because they may outlive
+  the caller; structured `run` tasks may borrow `view Foreign` like other
+  capabilities, with the owner remaining borrowed until `join`; it is not
+  serializable or constructible by user code, but may occupy capability
+  parameters/fields under the existing rules;
 - capability-free functions cannot call foreign declarations or wrappers;
 - `verify`, property generation, comptime evaluation, and constant folding
   cannot execute a foreign call;
@@ -191,11 +193,29 @@ The source parameter mode carries the ownership contract:
   a view whose lifetime escapes the call.
 
 An owned handle returned from C must have an explicitly named release function.
-A consumed handle must be paired by policy with a C parameter that takes
-ownership. Handles with no valid release operation are unsupported in the
-initial subset because they cannot satisfy Jett's linear consumption rule. The
-generator never infers ownership from `create`, `new`, `destroy`, or `free`
-name fragments.
+That declaration registers the handle's compiler-managed cleanup operation; it
+does not rely on Jett's current general linear checker diagnosing an unused
+owner at scope exit. A consumed handle must be paired by policy with a C
+parameter that takes ownership. Handles with no valid release operation are
+unsupported in the initial subset. The generator never infers ownership from
+`create`, `new`, `destroy`, or `free` name fragments.
+
+MIR drop elaboration must release every live owned foreign handle exactly once
+on fallthrough, explicit return, error propagation, and task cancellation.
+Cleanup runs in reverse acquisition order. An explicit release or ownership
+transfer marks the handle moved and suppresses the implicit cleanup; a borrowed
+handle never owns cleanup. `optional[Handle]` cleanup calls release only for
+`some`. This is a destructor rule specific to policy-backed foreign handles,
+not a silent change to ordinary Jett linear values.
+
+Compiler-inserted release is infallible, non-suspending, and non-cancellable.
+When cancellation is observed at a capability checkpoint, cleanup for all live
+foreign handles runs before `join` surfaces `CancelledError`. A foreign call
+already dispatched is atomic from Jett's task-control perspective: its declared
+ownership transfer either completed or did not begin, and cleanup follows that
+result. Process aborts and host failures outside Jett's control cannot promise
+cleanup. Native callable bindings remain unavailable until this drop
+elaboration is implemented and verified.
 
 A release function must be declared `infallible`, return C `void`, and consume
 exactly one handle of the matching type. A release API that can report failure
@@ -460,7 +480,11 @@ This depends on the checked-program/HIR boundary in
 [#22](https://github.com/vycdev/jett/issues/22). Foreign identity, target, ABI,
 symbol, ownership mode, and no-body status must survive lowering as typed data.
 MIR verifies consumes/borrows and treats each call as an opaque side-effecting
-operation. No optimizer may infer purity from the C signature.
+operation. This slice also elaborates the registered release function on every
+fallthrough, return, propagated-error, and cancellation edge, in reverse
+acquisition order, and proves that explicit release or transfer suppresses the
+cleanup exactly once. No optimizer may infer purity from the C signature or
+remove/reorder foreign cleanup.
 
 ### Slice 4: native lowering, libraries, and linking
 
@@ -487,6 +511,12 @@ The implementation must eventually cover:
 - target-resolved scalar, constant, and pointer widths without host leakage;
 - every unsupported matrix row with stable diagnostics;
 - absent ownership/fallibility policy with no heuristic fallback;
+- exactly-once owned-handle cleanup on fallthrough, early return, propagated
+  error, and cancellation, including reverse acquisition order;
+- no duplicate cleanup after explicit release or ownership transfer, no cleanup
+  for borrowed handles or `none`, and cleanup for `some(handle)`;
+- structured tasks borrowing `view Foreign` until `join`, versus actor clone
+  handoff for potentially longer-lived authority;
 - identical output from identical normalized inputs;
 - `--check`, failure atomicity, and LF output;
 - interpreter/comptime/verify rejection before dispatch;
