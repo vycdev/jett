@@ -168,7 +168,7 @@
 | `time` | Partial (transitional ambient `time.now_ms` and `time.now_s` builtins; the proposed contract selects capability-backed `Clock.now(view clock) -> time.Timestamp`, distinct signed-millisecond `Timestamp`/`Duration` values, deterministic clock injection, and removal of the ambient builtins; see [#75](https://github.com/vycdev/jett/issues/75) and the [time/Clock contract](open_design/time_clock_capability_contract.md)) |
 | `os` | Partial (`os.env`, `os.args`; `Environment`/argv capability and public stdlib/runtime boundary [tracked by #94](https://github.com/vycdev/jett/issues/94)) |
 | `net.http` | Not started (initial outbound client and `Network` capability contract [tracked by #101](https://github.com/vycdev/jett/issues/101)) |
-| `net.socket` | Not started |
+| `net.socket` | Not started (TCP-first transport contract proposed in [`docs/open_design/net_socket_transport_contract.md`](open_design/net_socket_transport_contract.md) for [#104](https://github.com/vycdev/jett/issues/104)) |
 | `csv` | Partial (interpreter builtins for `csv.parse`, `csv.stringify`, and `csv.parse_with_header`; quoted commas, quotes, and multiline fields are covered) |
 | `regex` | Not started |
 | `log` | Not started |

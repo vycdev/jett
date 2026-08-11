@@ -1109,6 +1109,10 @@ The design document specifies a future secondary target: **transpilation to C**.
 
 ## Runtime Library (`jett_runtime`)
 
+> The TCP-first `net.socket` source/runtime boundary, opaque resource handles,
+> event-loop behavior, and capability provenance are proposed in
+> [`docs/open_design/net_socket_transport_contract.md`](open_design/net_socket_transport_contract.md)
+> for [#104](https://github.com/vycdev/jett/issues/104).
 > The initial outbound `net.http` client, including its `Network` capability,
 > cancellation, HTTPS, and private runtime-hook boundary, is
 > [tracked by #101](https://github.com/vycdev/jett/issues/101).
@@ -1222,6 +1226,9 @@ flowchart LR
 > Encoding's proposed byte/string representations, strict failures, URL/form
 > distinction, and source/runtime boundary are defined in the
 > [Encoding representation and failure contract](open_design/encoding_representation_failure_contract.md).
+> The proposed public-source/private-kernel boundary for TCP sockets is recorded
+> in [`docs/open_design/net_socket_transport_contract.md`](open_design/net_socket_transport_contract.md)
+> for [#104](https://github.com/vycdev/jett/issues/104).
 > The public-source/private-runtime boundary for the initial `net.http` client
 > is separately [tracked by #101](https://github.com/vycdev/jett/issues/101).
 
@@ -1401,7 +1408,7 @@ math builtins remain Rust-backed pending separate extraction work.
 
 **3. Runtime-backed stdlib** — Jett functions that call into the runtime:
 
-Functions like `Filesystem.read_file`, `Network.listen`, `Stdout.write`, and
+Functions like `Filesystem.read_file`, `net.socket.listen`, `Stdout.write`, and
 `Clock.now` are Jett function signatures that the compiler maps to runtime
 calls. These exist as `.jett` signature stubs in `stdlib/` with bodies that call
 `jett_rt_*` runtime functions. Random follows the same public-source/private-runtime
@@ -1879,7 +1886,10 @@ The compiler should be built incrementally, with each phase producing a usable (
 
 Core stdlib (string, list, math, json) is implemented in Phase D. This phase completes the remaining modules:
 
-- **I/O:** `net.http` (initial outbound client and `Network` capability contract [tracked by #101](https://github.com/vycdev/jett/issues/101)), `net.socket`, `csv`
+- **I/O:** `net.http` (initial outbound client and `Network` capability contract [tracked by #101](https://github.com/vycdev/jett/issues/101)), `net.socket` (TCP-first transport and runtime contract
+  proposed in
+  [`docs/open_design/net_socket_transport_contract.md`](open_design/net_socket_transport_contract.md)
+  for [#104](https://github.com/vycdev/jett/issues/104)), `csv`
 - **Time:** `time` (the proposed wall-clock value, capability, determinism, and
   source/runtime boundary is defined in the
   [Time and Clock capability contract](open_design/time_clock_capability_contract.md))

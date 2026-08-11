@@ -293,7 +293,7 @@ Dog my_dog = Dog(name: "Rex", breed: "labrador")
 string sound = Dog.speak(view my_dog)
 ```
 
-Structs define methods with `self` as the first parameter. Methods are called with module syntax: `Dog.speak(my_dog)`, `Point.distance(p1, p2)`. There is no `my_dog.speak()` form. This rule applies uniformly to ALL types, including capability types — `Stdout.write(view stdout, msg)`, `Filesystem.read_file(view fs, path)`, `Network.listen(view net, addr, port)`. Capabilities are not an exception.
+Structs define methods with `self` as the first parameter. Methods are called with module syntax: `Dog.speak(my_dog)`, `Point.distance(p1, p2)`. There is no `my_dog.speak()` form. Capability operations follow the same explicit module-call shape — `Stdout.write(view stdout, msg)`, `Filesystem.read_file(view fs, path)`, and `net.socket.listen(view net, view endpoint, backlog)`. `Network` supplies authority to `net.*` modules; it does not own duplicate `Network.listen` / `Network.connect` / `Network.accept` spellings.
 
 Everything about `Dog` is right here. No context needed from parent classes. No files to chase.
 
@@ -1349,7 +1349,11 @@ not use them as a substitute for the strict helpers.
 
 > The initial outbound client API, `Network` capability behavior, failure model,
 > HTTPS guarantees, and stdlib/runtime boundary are
-> [tracked by #101](https://github.com/vycdev/jett/issues/101).
+> [tracked by #101](https://github.com/vycdev/jett/issues/101). Low-level sockets use a
+> separate TCP-first transport, ownership, deadline, and `Network.allow`
+> contract proposed in
+> [`docs/open_design/net_socket_transport_contract.md`](open_design/net_socket_transport_contract.md)
+> for [#104](https://github.com/vycdev/jett/issues/104).
 
 The `net.http` module defines its own error type for HTTP operations:
 
@@ -2981,6 +2985,10 @@ secret[T] ──→ secret.compare() ALLOWED (constant-time comparison)
 > claim. See the
 > [Random capability and entropy contract](open_design/random_capability_entropy_contract.md).
 
+> The TCP-first `net.socket` resource and `Network.allow` policy is proposed in
+> [`docs/open_design/net_socket_transport_contract.md`](open_design/net_socket_transport_contract.md)
+> for [#104](https://github.com/vycdev/jett/issues/104).
+
 > The proposed wall-clock API, value model, deterministic injection, and removal
 > of ambient `time.now_ms`/`time.now_s` are defined in the
 > [Time and Clock capability contract](open_design/time_clock_capability_contract.md).
@@ -3267,14 +3275,18 @@ Jett's capability system (Rule Set 16) naturally solves cross-platform compilati
 
 ```
 function start_server(view net: Network, view stdout: Stdout, port: int64) returns nothing:
-    Listener listener = Network.listen(view net, "0.0.0.0", port) handle error:
+    net.socket.SocketEndpoint endpoint = net.socket.endpoint("0.0.0.0", port) handle error:
+        Stdout.write(view stdout, "invalid listen endpoint")
+        return nothing
+    net.socket.SocketDeadline deadline = net.socket.SocketDeadline.no_deadline
+    net.socket.TcpListener listener = net.socket.listen(view net, view endpoint, 128) handle error:
         Stdout.write(view stdout, "failed to bind port")
         return nothing
 
     Stdout.write(view stdout, "listening on port {port}")
 
     while true:
-        Connection connection = Network.accept(view net, listener) handle error:
+        net.socket.TcpStream connection = net.socket.accept(view net, view listener, view deadline) handle error:
             Stdout.write(view stdout, "accept failed")
             continue
         handle_connection(view net, view stdout, connection)
@@ -3286,22 +3298,22 @@ This code does not contain a single OS-specific reference. No `#ifdef`, no `cfg!
 
 ```
 jett build server.jett --target linux-x86_64
-# Compiler maps: Network.listen() → POSIX socket() + bind() + listen()
-# Compiler maps: Network.accept() → POSIX accept()
+# Compiler maps: net.socket.listen() → POSIX socket() + bind() + listen()
+# Compiler maps: net.socket.accept() → POSIX accept()
 # Output: native Linux ELF binary
 
 jett build server.jett --target windows-x86_64
-# Compiler maps: Network.listen() → Winsock WSASocket() + bind() + listen()
-# Compiler maps: Network.accept() → Winsock accept()
+# Compiler maps: net.socket.listen() → Winsock WSASocket() + bind() + listen()
+# Compiler maps: net.socket.accept() → Winsock accept()
 # Output: native Windows PE binary
 
 jett build server.jett --target macos-arm64
-# Compiler maps: Network.listen() → BSD socket() + bind() + listen()
-# Compiler maps: Network.accept() → BSD accept() with kqueue
+# Compiler maps: net.socket.listen() → BSD socket() + bind() + listen()
+# Compiler maps: net.socket.accept() → BSD accept() with kqueue
 # Output: native macOS Mach-O binary
 
 jett build server.jett --target wasm
-# Compiler maps: Network.listen() → WASI socket API
+# Compiler maps: net.socket.listen() → WASI socket API
 # Output: WebAssembly module
 ```
 
@@ -3350,8 +3362,8 @@ checked conversion rules of its linked contract.
 |-----------|---------------------|-----------------|---------------|---------------|
 | `Filesystem.read_file` | `Filesystem.read_file(view fs, path)` | `CreateFileW` + `ReadFile` | `open` + `read` | `open` + `read` |
 | `Filesystem.write_file` | `Filesystem.write_file(view fs, path, data)` | `CreateFileW` + `WriteFile` | `open` + `write` | `open` + `write` |
-| `Network.listen` | `Network.listen(view net, addr, port)` | Winsock `WSASocket` + `bind` | `socket` + `bind` + `listen` | BSD `socket` + `bind` + `listen` |
-| `Network.connect` | `Network.connect(view net, addr, port)` | Winsock `connect` | `connect` | `connect` |
+| `Network` / `net.socket.listen` | `net.socket.listen(view net, view endpoint, backlog)` | Winsock `WSASocket` + `bind` | `socket` + `bind` + `listen` | BSD `socket` + `bind` + `listen` |
+| `Network` / `net.socket.connect` | `net.socket.connect(view net, view endpoint, view deadline)` | Winsock `connect` | `connect` | `connect` |
 | `Stdout.write` | `Stdout.write(view stdout, text)` | `WriteConsoleW` | `write(1, ...)` | `write(1, ...)` |
 | `Process.spawn` | `Process.spawn(view proc, cmd, args)` | `CreateProcessW` | `fork` + `execvp` | `posix_spawn` |
 | `Clock.now` | `Clock.now(view clock)` | checked Unix milliseconds from `GetSystemTimeAsFileTime` | checked Unix milliseconds from `clock_gettime(CLOCK_REALTIME)` | checked Unix milliseconds from `clock_gettime(CLOCK_REALTIME)` |
@@ -3403,7 +3415,7 @@ LLMs frequently hallucinate the syntax or semantics of conditional compilation. 
 
 **3. The capability interface is the only API surface.**
 
-The LLM learns `Filesystem.read_file`, `Network.listen`, `Stdout.write`. These work on every platform. The total API surface the LLM needs to know is the capability interface — a small, stable, well-documented set of functions. Not N × M platform-specific functions.
+The LLM learns `Filesystem.read_file`, `net.socket.listen`, and `Stdout.write`. These work on every platform. `Network` remains the explicit authority passed into the canonical `net.*` modules rather than a second namespace of networking operations. The total API surface the LLM needs to know is small, stable, and well documented—not N × M platform-specific functions.
 
 **4. Cross-compilation is a build flag, not a code change.**
 
@@ -6652,7 +6664,10 @@ The standard library is intentionally massive and opinionated. The goal is to ma
 - **map** — get, set, keys, values, merge, filter, contains_key, get_or
 - **set** — add, remove, union, intersection, difference, contains
 - **net.http** — HTTP client (get, post, put, delete), response handling, HttpError enum (connection_failed, timeout, status_error); the initial outbound client and `Network` capability contract are [tracked by #101](https://github.com/vycdev/jett/issues/101)
-- **net.socket** — low-level TCP/UDP networking
+- **net.socket** — low-level networking; a TCP-only first slice with explicit
+  linear handles, deadlines, cancellation, and capability checks is proposed in
+  [`docs/open_design/net_socket_transport_contract.md`](open_design/net_socket_transport_contract.md)
+  for [#104](https://github.com/vycdev/jett/issues/104), while UDP is deferred
 - **json** — parse, parse_exact, parse_raw, serialize, serialize_public, raw `JsonTree` field/index access, strict raw accessors, scalar casts
 - **time** — capability-backed `Clock.now`, timestamp/duration conversion,
   difference, checked add/subtract, and comparisons; calendar formatting,
