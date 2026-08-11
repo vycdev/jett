@@ -393,6 +393,14 @@ fn sized_integer_runtime_bounds_reject_variable_arithmetic() {
 }
 
 #[test]
+fn math_gcd_reports_unrepresentable_result() {
+    assert_runtime_fail(
+        "math_gcd_int64_min.jett",
+        "runtime error: math.gcd: integer overflow: result 9223372036854775808 does not fit int64",
+    );
+}
+
+#[test]
 fn math_lcm_reports_overflow() {
     let cases = [
         (
@@ -414,7 +422,53 @@ fn math_lcm_reports_overflow() {
 fn math_sum_reports_overflow() {
     assert_runtime_fail(
         "math_sum_overflow.jett",
-        "runtime error: math.sum: integer overflow: 9223372036854775807 + 1",
+        "runtime error: integer overflow: 9223372036854775807 + 1",
+    );
+}
+
+#[test]
+fn list_sum_reports_overflow() {
+    assert_runtime_fail(
+        "list_sum_overflow.jett",
+        "runtime error: list.sum: integer overflow: 9223372036854775807 + 1",
+    );
+}
+
+#[test]
+fn math_factorial_reports_overflow() {
+    assert_runtime_fail(
+        "math_factorial_overflow.jett",
+        "runtime error: math.factorial: integer overflow: 2432902008176640000 * 21",
+    );
+}
+
+#[test]
+fn math_clamp_rejects_invalid_bounds() {
+    let cases = [
+        (
+            "math_clamp_reversed_float_bounds.jett",
+            "runtime error: math.clamp requires lower bound <= upper bound",
+        ),
+        (
+            "math_clamp_nan_bound.jett",
+            "runtime error: math.clamp bounds must not be NaN",
+        ),
+        (
+            "math_clamp_nan_upper_bound.jett",
+            "runtime error: math.clamp bounds must not be NaN",
+        ),
+    ];
+
+    for (name, expected) in cases {
+        assert_runtime_fail(name, expected);
+    }
+}
+
+#[test]
+fn math_abs_reports_overflow() {
+    assert_runtime_fail(
+        "math_abs_int64_min.jett",
+        "runtime error: math.abs: integer overflow: abs(-9223372036854775808)",
     );
 }
 
@@ -423,6 +477,22 @@ fn math_mod_reports_overflow() {
     assert_runtime_fail(
         "math_mod_overflow.jett",
         "runtime error: math.mod: integer overflow: -9223372036854775808 % -1",
+    );
+}
+
+#[test]
+fn encoding_hex_decode_rejects_non_ascii_without_panicking() {
+    assert_runtime_fail(
+        "encoding_hex_decode_non_ascii.jett",
+        "runtime error: encoding.hex_decode: invalid hex characters",
+    );
+}
+
+#[test]
+fn base64_decode_rejects_invalid_padding() {
+    assert_runtime_fail(
+        "base64_invalid_padding.jett",
+        "runtime error: encoding.base64_decode: invalid base64 padding",
     );
 }
 
@@ -791,6 +861,7 @@ run_pass_fixture!(run_pass_string_search, "string_search.jett");
 run_pass_fixture!(run_pass_string_indic_grapheme, "string_indic_grapheme.jett");
 run_pass_fixture!(run_pass_time_and_os, "time_and_os.jett");
 run_pass_fixture!(run_pass_math_trig, "math_trig.jett");
+run_pass_fixture!(run_pass_math_sum_source, "math_sum_source.jett");
 run_pass_fixture!(run_pass_logical_ops, "logical_ops.jett");
 run_pass_fixture!(run_pass_trace_basic, "trace_basic.jett");
 run_pass_fixture!(run_pass_breakpoint_basic, "breakpoint_basic.jett");
@@ -917,6 +988,14 @@ compile_fail_fixture!(
 compile_fail_fixture!(
     compile_fail_ownership_branch_partial_move,
     "ownership_branch_partial_move.jett"
+);
+compile_fail_fixture!(
+    compile_fail_math_sum_consumes_list,
+    "math_sum_consumes_list.jett"
+);
+compile_fail_fixture!(
+    compile_fail_math_sum_argument_shape,
+    "math_sum_argument_shape.jett"
 );
 compile_fail_fixture!(
     compile_fail_ownership_implement_method_use_after_move,

@@ -3393,11 +3393,6 @@ impl<'a> TypeChecker<'a> {
                 vec![TypeInterner::INT64],
                 TypeInterner::INT64,
             ),
-            "math.sum" => {
-                self.expect_no_type_args(&name, type_args, span);
-                let list_int = self.interner.intern(Type::List(TypeInterner::INT64));
-                Some((vec![list_int], TypeInterner::INT64))
-            }
             // string extras
             "string.trim_start" | "string.trim_end" => self.no_type_args_signature(
                 &name,

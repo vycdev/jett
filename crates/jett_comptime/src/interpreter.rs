@@ -8471,7 +8471,11 @@ impl Interpreter {
             "math.abs" => {
                 require_args!(name, 1, args);
                 match &args[0] {
-                    Value::Int64(n) => Some(Ok(Value::Int64(n.abs()))),
+                    Value::Int64(n) => Some(
+                        n.checked_abs()
+                            .map(Value::Int64)
+                            .ok_or_else(|| format!("{name}: integer overflow: abs({n})")),
+                    ),
                     Value::Float64(n) => Some(Ok(Value::Float64(n.abs()))),
                     _ => Some(Err(format!("{name} expects a numeric argument"))),
                 }
@@ -8515,8 +8519,14 @@ impl Interpreter {
                         Some(Ok(Value::Float64(base.powf(*exp))))
                     }
                     (Value::Int64(base), Value::Int64(exp)) => {
-                        let exp_u = (*exp).max(0) as u32;
-                        Some(Ok(Value::Int64(base.pow(exp_u))))
+                        let exp_u = match u32::try_from((*exp).max(0)) {
+                            Ok(exp_u) => exp_u,
+                            Err(_) => return Some(Err(format!("{name}: exponent out of range"))),
+                        };
+                        match base.checked_pow(exp_u) {
+                            Some(value) => Some(Ok(Value::Int64(value))),
+                            None => Some(Err(format!("{name}: integer overflow"))),
+                        }
                     }
                     (Value::Float64(base), Value::Int64(exp)) => {
                         Some(Ok(Value::Float64(base.powi(*exp as i32))))
@@ -8559,7 +8569,13 @@ impl Interpreter {
                         Some(Ok(Value::Int64((*v).clamp(*lo, *hi))))
                     }
                     (Value::Float64(v), Value::Float64(lo), Value::Float64(hi)) => {
-                        Some(Ok(Value::Float64(v.clamp(*lo, *hi))))
+                        if lo.is_nan() || hi.is_nan() {
+                            Some(Err(format!("{name} bounds must not be NaN")))
+                        } else if lo > hi {
+                            Some(Err(format!("{name} requires lower bound <= upper bound")))
+                        } else {
+                            Some(Ok(Value::Float64(v.clamp(*lo, *hi))))
+                        }
                     }
                     _ => Some(Err(format!(
                         "{name} expects three arguments of the same numeric type"
@@ -8692,45 +8708,19 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects two int64 arguments"))),
                 }
             }
-            "math.sum" => {
-                require_args!(name, 1, args);
-                match &args[0] {
-                    Value::List(items) => {
-                        let mut total: i64 = 0;
-                        for item in items {
-                            match item {
-                                Value::Int64(n) => {
-                                    let Some(next_total) = total.checked_add(*n) else {
-                                        return Some(Err(format!(
-                                            "math.sum: integer overflow: {total} + {n}"
-                                        )));
-                                    };
-                                    total = next_total;
-                                }
-                                _ => {
-                                    return Some(Err(
-                                        "math.sum: list must contain int64 values".to_string()
-                                    ));
-                                }
-                            }
-                        }
-                        Some(Ok(Value::Int64(total)))
-                    }
-                    _ => Some(Err(format!("{name} expects a list argument"))),
-                }
-            }
-
             "math.gcd" => {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::Int64(a), Value::Int64(b)) => {
-                        let (mut x, mut y) = (a.abs(), b.abs());
+                        let (mut x, mut y) = (a.unsigned_abs(), b.unsigned_abs());
                         while y != 0 {
                             let t = y;
                             y = x % y;
                             x = t;
                         }
-                        Some(Ok(Value::Int64(x)))
+                        Some(i64::try_from(x).map(Value::Int64).map_err(|_| {
+                            format!("math.gcd: integer overflow: result {x} does not fit int64")
+                        }))
                     }
                     _ => Some(Err(format!("{name} expects two int64 arguments"))),
                 }
@@ -8774,7 +8764,12 @@ impl Interpreter {
                         } else {
                             let mut result: i64 = 1;
                             for i in 2..=*n {
-                                result = result.saturating_mul(i);
+                                let Some(next_result) = result.checked_mul(i) else {
+                                    return Some(Err(format!(
+                                        "math.factorial: integer overflow: {result} * {i}"
+                                    )));
+                                };
+                                result = next_result;
                             }
                             Some(Ok(Value::Int64(result)))
                         }
@@ -9288,13 +9283,29 @@ impl Interpreter {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => {
-                        if s.len() % 2 != 0 {
+                        let raw = s.as_bytes();
+                        if raw.len() % 2 != 0 {
                             return Some(Err(
                                 "encoding.hex_decode: odd-length hex string".to_string()
                             ));
                         }
-                        let bytes: Result<Vec<u8>, _> = (0..s.len() / 2)
-                            .map(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16))
+                        let bytes: Result<Vec<u8>, ()> = raw
+                            .chunks_exact(2)
+                            .map(|pair| {
+                                let high = match pair[0] {
+                                    b'0'..=b'9' => pair[0] - b'0',
+                                    b'a'..=b'f' => pair[0] - b'a' + 10,
+                                    b'A'..=b'F' => pair[0] - b'A' + 10,
+                                    _ => return Err(()),
+                                };
+                                let low = match pair[1] {
+                                    b'0'..=b'9' => pair[1] - b'0',
+                                    b'a'..=b'f' => pair[1] - b'a' + 10,
+                                    b'A'..=b'F' => pair[1] - b'A' + 10,
+                                    _ => return Err(()),
+                                };
+                                Ok((high << 4) | low)
+                            })
                             .collect();
                         match bytes {
                             Ok(b) => match String::from_utf8(b) {
@@ -10052,7 +10063,14 @@ impl Interpreter {
                                 let mut total = 0i64;
                                 for item in items {
                                     match item {
-                                        Value::Int64(n) => total += n,
+                                        Value::Int64(n) => {
+                                            let Some(next_total) = total.checked_add(*n) else {
+                                                return Some(Err(format!(
+                                                    "list.sum: integer overflow: {total} + {n}"
+                                                )));
+                                            };
+                                            total = next_total;
+                                        }
                                         _ => return Some(Err("list.sum: mixed types".into())),
                                     }
                                 }
@@ -16837,21 +16855,37 @@ fn base64_decode(s: &str) -> Result<Vec<u8>, String> {
         return Err("base64 string length must be a multiple of 4".to_string());
     }
     let mut out = Vec::new();
-    let mut i = 0;
-    while i < bytes.len() {
-        let v0 = char_val(bytes[i])?;
-        let v1 = char_val(bytes[i + 1])?;
-        let v2 = char_val(bytes[i + 2])?;
-        let v3 = char_val(bytes[i + 3])?;
+    for (chunk_index, chunk) in bytes.chunks_exact(4).enumerate() {
+        let is_last = chunk_index + 1 == bytes.len() / 4;
+        let padding = match (chunk[2], chunk[3]) {
+            (b'=', b'=') => 2,
+            (b'=', _) => return Err("invalid base64 padding".to_string()),
+            (_, b'=') => 1,
+            (_, _) => 0,
+        };
+        if chunk[0] == b'='
+            || chunk[1] == b'='
+            || (padding != 0 && !is_last)
+            || (padding == 0 && (chunk[2] == b'=' || chunk[3] == b'='))
+        {
+            return Err("invalid base64 padding".to_string());
+        }
+
+        let v0 = char_val(chunk[0])?;
+        let v1 = char_val(chunk[1])?;
+        let v2 = char_val(chunk[2])?;
+        let v3 = char_val(chunk[3])?;
+        if (padding == 2 && v1 & 0x0F != 0) || (padding == 1 && v2 & 0x03 != 0) {
+            return Err("invalid base64 padding".to_string());
+        }
         let combined = (v0 << 18) | (v1 << 12) | (v2 << 6) | v3;
         out.push(((combined >> 16) & 0xFF) as u8);
-        if bytes[i + 2] != b'=' {
+        if padding < 2 {
             out.push(((combined >> 8) & 0xFF) as u8);
         }
-        if bytes[i + 3] != b'=' {
+        if padding == 0 {
             out.push((combined & 0xFF) as u8);
         }
-        i += 4;
     }
     Ok(out)
 }
@@ -17322,6 +17356,16 @@ mod builtin_tests {
     }
 
     #[test]
+    fn builtin_math_abs_int64_min_reports_overflow() {
+        let mut interp = Interpreter::new();
+        let expr = dotted_call("math", "abs", vec![int(i64::MIN)]);
+        assert_eq!(
+            interp.eval_expr(&expr).unwrap_err(),
+            "math.abs: integer overflow: abs(-9223372036854775808)"
+        );
+    }
+
+    #[test]
     fn builtin_math_abs_float() {
         let mut interp = Interpreter::new();
         let expr = dotted_call("math", "abs", vec![float(-3.5)]);
@@ -17354,6 +17398,41 @@ mod builtin_tests {
         let mut interp = Interpreter::new();
         let expr = dotted_call("math", "max", vec![float(1.5), float(2.5)]);
         assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Float64(2.5));
+    }
+
+    #[test]
+    fn builtin_math_pow_int_overflow_returns_error() {
+        let mut interp = Interpreter::new();
+        let expr = dotted_call("math", "pow", vec![int(2), int(63)]);
+        assert_eq!(
+            interp.eval_expr(&expr),
+            Err("math.pow: integer overflow".to_string())
+        );
+    }
+
+    #[test]
+    fn builtin_math_pow_int_preserves_valid_values() {
+        let mut interp = Interpreter::new();
+        let expr = dotted_call("math", "pow", vec![int(-2), int(3)]);
+        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(-8));
+    }
+
+    #[test]
+    fn builtin_math_gcd_handles_int64_min_with_fitting_result() {
+        let mut interp = Interpreter::new();
+        let expr = dotted_call("math", "gcd", vec![int(i64::MIN), int(6)]);
+        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(2));
+    }
+
+    #[test]
+    fn builtin_math_gcd_reports_unrepresentable_result() {
+        let mut interp = Interpreter::new();
+        let expr = dotted_call("math", "gcd", vec![int(i64::MIN), int(0)]);
+        let err = interp.eval_expr(&expr).unwrap_err();
+        assert_eq!(
+            err,
+            "math.gcd: integer overflow: result 9223372036854775808 does not fit int64".to_string()
+        );
     }
 
     #[test]
@@ -17556,6 +17635,16 @@ mod builtin_tests {
         let expr = Expr::Pipeline(Box::new(initial), steps, sp());
         let result = interp.eval_expr(&expr).unwrap();
         assert_eq!(result, Value::String("hello jett".to_string()));
+    }
+
+    #[test]
+    fn builtin_encoding_hex_decode_rejects_non_ascii_without_panicking() {
+        let mut interp = Interpreter::new();
+        let expr = dotted_call("encoding", "hex_decode", vec![string("aééa")]);
+        assert_eq!(
+            interp.eval_expr(&expr).unwrap_err(),
+            "encoding.hex_decode: invalid hex characters"
+        );
     }
 
     #[test]

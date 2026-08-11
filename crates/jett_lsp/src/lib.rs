@@ -6,8 +6,24 @@ use tower_lsp::{Client, LanguageServer};
 /// The Jett LSP backend.
 pub struct JettBackend {
     client: Client,
-    /// In-memory document store: URI → source text.
-    documents: tokio::sync::RwLock<HashMap<Url, String>>,
+    /// In-memory document store: URI → latest source text and LSP version.
+    documents: tokio::sync::RwLock<HashMap<Url, DocumentState>>,
+}
+
+#[derive(Debug, Clone)]
+struct DocumentState {
+    text: String,
+    version: i32,
+}
+
+fn should_publish_diagnostics(
+    documents: &HashMap<Url, DocumentState>,
+    uri: &Url,
+    version: i32,
+) -> bool {
+    documents
+        .get(uri)
+        .is_some_and(|document| document.version == version)
 }
 
 impl JettBackend {
@@ -20,43 +36,45 @@ impl JettBackend {
 
     /// Run the Jett compiler pipeline on the given source text and publish
     /// diagnostics back to the client.
-    async fn validate(&self, uri: Url, text: &str) {
+    async fn validate(&self, uri: Url, version: i32, text: &str) {
         let file_path = uri
             .to_file_path()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|_| uri.to_string());
 
-        let result = jett_driver::build_source(text, &file_path);
+        let diagnostics = diagnostics_for_source(text, &file_path);
 
-        let diagnostics: Vec<Diagnostic> = result
-            .diagnostics
-            .iter()
-            .map(|d| {
-                let severity = match d.severity {
-                    jett_diagnostics::Severity::Error => Some(DiagnosticSeverity::ERROR),
-                    jett_diagnostics::Severity::Warning => Some(DiagnosticSeverity::WARNING),
-                    jett_diagnostics::Severity::Info => Some(DiagnosticSeverity::INFORMATION),
-                };
+        let documents = self.documents.read().await;
+        if should_publish_diagnostics(&documents, &uri, version) {
+            self.client
+                .publish_diagnostics(uri, diagnostics, None)
+                .await;
+        }
+    }
+}
 
-                let range = Range::new(
-                    lsp_position(&result.source, d.span.start),
-                    lsp_position(&result.source, d.span.end),
-                );
+fn document_for_save<'a>(
+    documents: &'a HashMap<Url, DocumentState>,
+    uri: &Url,
+) -> Option<&'a DocumentState> {
+    documents.get(uri)
+}
 
-                Diagnostic {
-                    range,
-                    severity,
-                    code: Some(NumberOrString::String(d.code.to_string())),
-                    source: Some("jett".to_string()),
-                    message: d.message.clone(),
-                    ..Diagnostic::default()
-                }
-            })
-            .collect();
-
-        self.client
-            .publish_diagnostics(uri, diagnostics, None)
-            .await;
+fn server_capabilities() -> ServerCapabilities {
+    ServerCapabilities {
+        text_document_sync: Some(TextDocumentSyncCapability::Options(
+            TextDocumentSyncOptions {
+                open_close: Some(true),
+                change: Some(TextDocumentSyncKind::FULL),
+                save: Some(TextDocumentSyncSaveOptions::Supported(true)),
+                ..TextDocumentSyncOptions::default()
+            },
+        )),
+        hover_provider: Some(HoverProviderCapability::Simple(true)),
+        definition_provider: Some(OneOf::Left(true)),
+        completion_provider: Some(CompletionOptions::default()),
+        position_encoding: Some(PositionEncodingKind::UTF16),
+        ..ServerCapabilities::default()
     }
 }
 
@@ -109,16 +127,7 @@ fn lsp_position(source: &str, byte_offset: u32) -> Position {
 impl LanguageServer for JettBackend {
     async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
         Ok(InitializeResult {
-            capabilities: ServerCapabilities {
-                text_document_sync: Some(TextDocumentSyncCapability::Kind(
-                    TextDocumentSyncKind::FULL,
-                )),
-                hover_provider: Some(HoverProviderCapability::Simple(true)),
-                definition_provider: Some(OneOf::Left(true)),
-                completion_provider: Some(CompletionOptions::default()),
-                position_encoding: Some(PositionEncodingKind::UTF16),
-                ..ServerCapabilities::default()
-            },
+            capabilities: server_capabilities(),
             ..InitializeResult::default()
         })
     }
@@ -136,11 +145,15 @@ impl LanguageServer for JettBackend {
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let uri = params.text_document.uri.clone();
         let text = params.text_document.text.clone();
-        self.documents
-            .write()
-            .await
-            .insert(uri.clone(), text.clone());
-        self.validate(uri, &text).await;
+        self.documents.write().await.insert(
+            uri.clone(),
+            DocumentState {
+                text: text.clone(),
+                version: params.text_document.version,
+            },
+        );
+        self.validate(uri, params.text_document.version, &text)
+            .await;
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
@@ -148,19 +161,36 @@ impl LanguageServer for JettBackend {
         if let Some(change) = params.content_changes.into_iter().last() {
             let uri = params.text_document.uri.clone();
             let text = change.text.clone();
-            self.documents
-                .write()
-                .await
-                .insert(uri.clone(), text.clone());
-            self.validate(uri, &text).await;
+            self.documents.write().await.insert(
+                uri.clone(),
+                DocumentState {
+                    text: text.clone(),
+                    version: params.text_document.version,
+                },
+            );
+            self.validate(uri, params.text_document.version, &text)
+                .await;
+        }
+    }
+
+    async fn did_save(&self, params: DidSaveTextDocumentParams) {
+        let uri = params.text_document.uri;
+        let document = {
+            let documents = self.documents.read().await;
+            document_for_save(&documents, &uri).cloned()
+        };
+        if let Some(document) = document {
+            self.validate(uri, document.version, &document.text).await;
         }
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
-        self.documents
-            .write()
-            .await
-            .remove(&params.text_document.uri);
+        let uri = params.text_document.uri;
+        self.documents.write().await.remove(&uri);
+
+        // A client keeps the last published diagnostics after a document is
+        // closed unless the server explicitly clears them.
+        self.client.publish_diagnostics(uri, Vec::new(), None).await;
     }
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
@@ -168,9 +198,10 @@ impl LanguageServer for JettBackend {
         let position = params.text_document_position_params.position;
 
         let docs = self.documents.read().await;
-        let Some(source) = docs.get(uri) else {
+        let Some(document) = docs.get(uri) else {
             return Ok(None);
         };
+        let source = &document.text;
 
         let Some((line, col)) = driver_position(source, position) else {
             return Ok(None);
@@ -199,9 +230,10 @@ impl LanguageServer for JettBackend {
         let position = params.text_document_position_params.position;
 
         let docs = self.documents.read().await;
-        let Some(source) = docs.get(uri) else {
+        let Some(document) = docs.get(uri) else {
             return Ok(None);
         };
+        let source = &document.text;
 
         let Some((line, col)) = driver_position(source, position) else {
             return Ok(None);
@@ -223,9 +255,10 @@ impl LanguageServer for JettBackend {
         let uri = &params.text_document_position.text_document.uri;
 
         let docs = self.documents.read().await;
-        let Some(source) = docs.get(uri) else {
+        let Some(document) = docs.get(uri) else {
             return Ok(None);
         };
+        let source = &document.text;
 
         let position = params.text_document_position.position;
         let Some((line, col)) = driver_position(source, position) else {
@@ -265,6 +298,42 @@ impl LanguageServer for JettBackend {
     }
 }
 
+fn diagnostics_for_source(source: &str, file_path: &str) -> Vec<Diagnostic> {
+    let result = jett_driver::build_source(source, file_path);
+
+    result
+        .diagnostics
+        .iter()
+        .map(|d| {
+            let (start_line, start_col) =
+                jett_diagnostics::render::line_col(&result.source, d.span.start);
+            let (end_line, end_col) =
+                jett_diagnostics::render::line_col(&result.source, d.span.end);
+
+            let severity = match d.severity {
+                jett_diagnostics::Severity::Error => Some(DiagnosticSeverity::ERROR),
+                jett_diagnostics::Severity::Warning => Some(DiagnosticSeverity::WARNING),
+                jett_diagnostics::Severity::Info => Some(DiagnosticSeverity::INFORMATION),
+            };
+
+            // LSP positions are 0-based; line_col returns 1-based.
+            let range = Range::new(
+                Position::new(start_line as u32 - 1, start_col as u32 - 1),
+                Position::new(end_line as u32 - 1, end_col as u32 - 1),
+            );
+
+            Diagnostic {
+                range,
+                severity,
+                code: Some(NumberOrString::String(d.code.to_string())),
+                source: Some("jett".to_string()),
+                message: d.message.clone(),
+                ..Diagnostic::default()
+            }
+        })
+        .collect()
+}
+
 /// Start the LSP server on stdin/stdout. This is the main entry point called
 /// by `jett lsp`.
 pub async fn run_server() {
@@ -279,8 +348,27 @@ pub async fn run_server() {
 
 #[cfg(test)]
 mod tests {
-    use super::{driver_position, lsp_position};
-    use tower_lsp::lsp_types::Position;
+    use super::*;
+    use tower_lsp::lsp_types::Url;
+
+    #[test]
+    fn stale_document_versions_are_not_publishable() {
+        let uri = Url::parse("file:///workspace/main.jett").unwrap();
+        let mut documents = HashMap::new();
+        documents.insert(
+            uri.clone(),
+            DocumentState {
+                text: "new source".to_string(),
+                version: 2,
+            },
+        );
+
+        assert!(should_publish_diagnostics(&documents, &uri, 2));
+        assert!(!should_publish_diagnostics(&documents, &uri, 1));
+
+        documents.remove(&uri);
+        assert!(!should_publish_diagnostics(&documents, &uri, 2));
+    }
 
     #[test]
     fn driver_position_converts_utf16_columns_to_scalar_columns() {
@@ -342,6 +430,20 @@ mod tests {
         );
     }
 
+    #[test]
+    fn diagnostics_for_source_maps_compiler_diagnostic_to_lsp_fields() {
+        let diagnostics = diagnostics_for_source("this is not valid jett code !!!", "test.jett");
+        let diagnostic = diagnostics.first().expect("invalid source should diagnose");
+
+        assert_eq!(diagnostic.source.as_deref(), Some("jett"));
+        assert!(matches!(
+            diagnostic.code,
+            Some(NumberOrString::String(ref code)) if code.starts_with('E')
+        ));
+        assert_eq!(diagnostic.range.start.line, 0);
+        assert_eq!(diagnostic.range.start.character, 0);
+    }
+
     /// Verify that hover_type returns a type for a known expression.
     #[test]
     fn hover_type_returns_type_for_identifier() {
@@ -350,5 +452,37 @@ mod tests {
         // col 15 = the '4' in '42'
         let ty = jett_driver::hover_type(source, 4, 15);
         assert_eq!(ty, Some("int64".to_string()), "expected int64 hover type");
+    }
+
+    #[test]
+    fn server_capabilities_advertise_save_notifications() {
+        let capabilities = server_capabilities();
+        let Some(TextDocumentSyncCapability::Options(options)) = capabilities.text_document_sync
+        else {
+            panic!("expected explicit text document synchronization options");
+        };
+
+        assert_eq!(options.change, Some(TextDocumentSyncKind::FULL));
+        assert!(matches!(
+            options.save,
+            Some(TextDocumentSyncSaveOptions::Supported(true))
+        ));
+    }
+
+    #[test]
+    fn save_validation_reads_the_latest_open_document() {
+        let uri = Url::parse("file:///workspace/main.jett").unwrap();
+        let mut documents = HashMap::new();
+        documents.insert(
+            uri.clone(),
+            DocumentState {
+                text: "latest source".to_string(),
+                version: 7,
+            },
+        );
+
+        let document = document_for_save(&documents, &uri).expect("open document");
+        assert_eq!(document.text, "latest source");
+        assert_eq!(document.version, 7);
     }
 }

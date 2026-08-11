@@ -1,0 +1,3 @@
+function main() returns nothing:
+    string decoded = encoding.hex_decode("aééa")
+    return nothing
