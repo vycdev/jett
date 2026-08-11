@@ -5888,8 +5888,10 @@ The trace TOON goes through the ASP. The LLM receives it as structured data it c
 
 ### Rule Set 27: The Interactive Agent Breakpoint
 
-The unresolved pause, inspection, and transport protocol is tracked by
-[#41](https://github.com/vycdev/jett/issues/41).
+The pause, inspection, transport, and security contract is decided in the
+[breakpoint protocol record](completed/breakpoint_pause_inspection_protocol.md).
+Implementation remains staged because the native runtime, HIR, and MIR do not
+exist yet.
 
 #### The Problem: LLMs Can't Step-Debug, and Print-Debugging Requires Predicting What to Inspect
 
@@ -5904,7 +5906,8 @@ The fundamental mismatch: debugging is inherently **interactive and exploratory*
 Jett provides a `breakpoint` keyword. When the native application hits this statement during execution, it:
 
 1. **Pauses execution** at that exact point.
-2. **Opens an ASP communication channel** (lightweight HTTP server on localhost or stdin/stdout loop).
+2. **Uses the authenticated breakpoint control plane** (loopback HTTP in the
+   first implementation, over a transport-independent operation layer).
 3. **Sends a structured prompt** to the LLM describing the current execution state.
 4. **Waits for queries** from the LLM.
 5. **Responds to each query** with structured TOON.
@@ -5930,19 +5933,81 @@ function process_order(view fs: Filesystem, order: Order) returns result[Receipt
 **What the LLM receives when the breakpoint is hit:**
 
 ```toon
-type: breakpoint
-file: src/orders.jett
-line: 6
-function: process_order
-scope:
-    variables[3]{name,type,status}:
-        order,     Order,         consumed
-        validated, ValidatedOrder, owned
-        fs,        Filesystem,    owned
-awaiting: query
+protocol: jett.breakpoint.v1
+session_id: 7f0c...
+pause_id: 3
+request_id: 1
+status: ok
+result:
+    event: paused
+    reason: breakpoint
+    function: process_order
+    source_id: project:src/orders.jett
+    path: src/orders.jett
+    line: 6
+    column: 5
+    frame_id: frame-0
+    bindings[3]{name,type,availability,secret}:
+        order,Order,consumed,false
+        validated,ValidatedOrder,owned,false
+        fs,Filesystem,view,false
 ```
 
-The LLM now knows: execution is paused at line 6 of `process_order`, `validated` is available to inspect, `order` has been consumed (moved into `validate_order`), and `fs` is available. The LLM can then query the paused program — inspect variables, evaluate expressions, view the call stack — and send a `continue` command when done.
+The LLM now knows: execution is paused at line 6 of `process_order`, `validated` is available to inspect, `order` has been consumed (moved into `validate_order`), and `fs` is available as a view. The LLM can then query the paused program — inspect variables, evaluate expressions, view the call stack — and send a `continue` command when done.
+
+#### Protocol and Lifecycle
+
+A debug launch creates one authenticated session before user code starts. A
+true breakpoint condition requests a process-scoped pause and receives a fresh
+`pause_id`; a false condition emits no protocol traffic. The initial
+tree-walking interpreter stops immediately. A future concurrent runtime first
+quiesces Jett tasks at scheduler safe points so inspection observes one stable
+state.
+
+One controller sends correlated TOON operations: `wait`, `bindings`, `value`,
+`evaluate`, `stack`, `continue`, and `disconnect`. Commands are serialized on a
+command lane while one `wait` may remain outstanding on a separate event lane;
+this lets `continue` acknowledge and produce the `continued` event that releases
+the long poll. `continue` invalidates all pause-scoped handles before resuming.
+Explicit disconnect resumes and closes the session; unexpected disconnect also
+resumes after a bounded grace period by default, with an opt-in abort policy for
+launchers. This prevents abandoned agents from hanging a target indefinitely.
+
+The first adapter uses an ephemeral exact-loopback HTTP address and a fresh
+bearer token published through an owner-only control descriptor. It never binds
+remotely, puts credentials in URLs or process arguments, or turns the
+capability-exempt keyword into a general `Network` capability. Source locations
+come only from the launch's compilation manifest and loaded source map; the
+debugger accepts no arbitrary file paths.
+
+Paused-state command requests identify the protocol, session, current pause,
+request, and operation. `wait` omits `pause_id`; a running-state `disconnect`
+does too, while a paused-state `disconnect` includes the current pause:
+
+```toon
+protocol: jett.breakpoint.v1
+session_id: 7f0c...
+pause_id: 3
+request_id: 3
+operation: evaluate
+arguments:
+    frame_id: frame-0
+    expression: order.total > 1500.0
+```
+
+Successful responses repeat those correlation fields and contain `status: ok`
+plus one `result`. Protocol/runtime failures contain `status: error` plus one
+stable `failure` object. Expression parse/type failures embed the shared ASP
+diagnostic collection owned by #35 rather than defining a second diagnostic
+schema.
+
+Inspection is non-destructive. Consumed/uninitialized bindings, capabilities,
+and secret-bearing values expose metadata but not values. Evaluated expressions
+use implicit views and bounded scratch state; they cannot declassify, mutate,
+consume, perform I/O, invoke capabilities or FFI, spawn work, or commit writes.
+The complete record includes conditional-hit, binding/value, expression,
+failure, continue, disconnect, authorization, and interpreter/native staging
+examples.
 
 #### Conditional Breakpoints
 
@@ -5973,7 +6038,11 @@ The LLM doesn't have to step through 500 normal orders to reach the one that's b
 
 **4. Works with the compile-fix loop.** Insert breakpoint → run → inspect → identify bug → remove breakpoint → fix → re-run. This fits naturally into the existing ASP compile-fix loop (Rule Set 21).
 
-> **Open question:** The exact query protocol (how the LLM sends queries to the paused program, the set of available queries, the TOON format of responses, communication modes) needs to be designed. The concept is clear — the LLM interrogates a paused program via structured TOON — but the wire protocol is not yet specified.
+> **Implementation status:** The wire protocol is decided. The current
+> interpreter still emits one conditional binding snapshot and does not pause;
+> typed protocol tests and interpreter control-plane support are the next
+> independently verifiable stages. HIR/MIR/native lowering follows later using
+> the same operation model.
 
 ---
 

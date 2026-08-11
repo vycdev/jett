@@ -140,7 +140,7 @@
 | CPU profiler (`--profile`) | Not started |
 | Memory profiler (`--profile-memory`) | Not started |
 | `trace` keyword | Partial (parses, typechecks, runtime type-tagged current-value output in `jett run`) |
-| `breakpoint` keyword | Partial (parses, typechecks, conditional runtime debug output with visible binding types in `jett run`; pause/inspection protocol tracked by [#41](https://github.com/vycdev/jett/issues/41)) |
+| `breakpoint` keyword | Partial (parses, typechecks, and emits conditional runtime debug snapshots with visible binding types in `jett run`; the pause/inspection protocol is [decided](completed/breakpoint_pause_inspection_protocol.md), while its interpreter and future native-runtime stages remain unimplemented) |
 
 ### Phase J: Cross-Platform and Interop — PARTIAL
 
