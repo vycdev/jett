@@ -26,33 +26,7 @@ impl JettBackend {
             .map(|p| p.display().to_string())
             .unwrap_or_else(|_| uri.to_string());
 
-        let result = jett_driver::build_source(text, &file_path);
-
-        let diagnostics: Vec<Diagnostic> = result
-            .diagnostics
-            .iter()
-            .map(|d| {
-                let severity = match d.severity {
-                    jett_diagnostics::Severity::Error => Some(DiagnosticSeverity::ERROR),
-                    jett_diagnostics::Severity::Warning => Some(DiagnosticSeverity::WARNING),
-                    jett_diagnostics::Severity::Info => Some(DiagnosticSeverity::INFORMATION),
-                };
-
-                let range = Range::new(
-                    lsp_position(&result.source, d.span.start),
-                    lsp_position(&result.source, d.span.end),
-                );
-
-                Diagnostic {
-                    range,
-                    severity,
-                    code: Some(NumberOrString::String(d.code.to_string())),
-                    source: Some("jett".to_string()),
-                    message: d.message.clone(),
-                    ..Diagnostic::default()
-                }
-            })
-            .collect();
+        let diagnostics = diagnostics_for_source(text, &file_path);
 
         self.client
             .publish_diagnostics(uri, diagnostics, None)
@@ -157,10 +131,12 @@ impl LanguageServer for JettBackend {
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
-        self.documents
-            .write()
-            .await
-            .remove(&params.text_document.uri);
+        let uri = params.text_document.uri;
+        self.documents.write().await.remove(&uri);
+
+        // A client keeps the last published diagnostics after a document is
+        // closed unless the server explicitly clears them.
+        self.client.publish_diagnostics(uri, Vec::new(), None).await;
     }
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
@@ -265,6 +241,42 @@ impl LanguageServer for JettBackend {
     }
 }
 
+fn diagnostics_for_source(source: &str, file_path: &str) -> Vec<Diagnostic> {
+    let result = jett_driver::build_source(source, file_path);
+
+    result
+        .diagnostics
+        .iter()
+        .map(|d| {
+            let (start_line, start_col) =
+                jett_diagnostics::render::line_col(&result.source, d.span.start);
+            let (end_line, end_col) =
+                jett_diagnostics::render::line_col(&result.source, d.span.end);
+
+            let severity = match d.severity {
+                jett_diagnostics::Severity::Error => Some(DiagnosticSeverity::ERROR),
+                jett_diagnostics::Severity::Warning => Some(DiagnosticSeverity::WARNING),
+                jett_diagnostics::Severity::Info => Some(DiagnosticSeverity::INFORMATION),
+            };
+
+            // LSP positions are 0-based; line_col returns 1-based.
+            let range = Range::new(
+                Position::new(start_line as u32 - 1, start_col as u32 - 1),
+                Position::new(end_line as u32 - 1, end_col as u32 - 1),
+            );
+
+            Diagnostic {
+                range,
+                severity,
+                code: Some(NumberOrString::String(d.code.to_string())),
+                source: Some("jett".to_string()),
+                message: d.message.clone(),
+                ..Diagnostic::default()
+            }
+        })
+        .collect()
+}
+
 /// Start the LSP server on stdin/stdout. This is the main entry point called
 /// by `jett lsp`.
 pub async fn run_server() {
@@ -279,8 +291,7 @@ pub async fn run_server() {
 
 #[cfg(test)]
 mod tests {
-    use super::{driver_position, lsp_position};
-    use tower_lsp::lsp_types::Position;
+    use super::*;
 
     #[test]
     fn driver_position_converts_utf16_columns_to_scalar_columns() {
@@ -340,6 +351,20 @@ mod tests {
                 .map(|d| &d.message)
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn diagnostics_for_source_maps_compiler_diagnostic_to_lsp_fields() {
+        let diagnostics = diagnostics_for_source("this is not valid jett code !!!", "test.jett");
+        let diagnostic = diagnostics.first().expect("invalid source should diagnose");
+
+        assert_eq!(diagnostic.source.as_deref(), Some("jett"));
+        assert!(matches!(
+            diagnostic.code,
+            Some(NumberOrString::String(ref code)) if code.starts_with('E')
+        ));
+        assert_eq!(diagnostic.range.start.line, 0);
+        assert_eq!(diagnostic.range.start.character, 0);
     }
 
     /// Verify that hover_type returns a type for a known expression.
