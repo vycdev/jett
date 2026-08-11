@@ -282,7 +282,8 @@ Still staged:
 - Ordinary source access to private JSON hooks/helpers is rejected for tree
   parsing, reflected parsing, exact reflected parsing, reflected decoding, raw
   type detection, and reflected serialization fixtures under
-  `tests/compile_fail/json_private_*.jett`.
+  `tests/compile_fail/json_private_*.jett`; the reflected parsing fixture also
+  pins rejection through a namespace alias.
 - `jett build`, `jett run`, `jett test file`, project tests, and LSP-style
   `build_source` all see the same stdlib exports. The marker stdlib module and
   JSON raw facade are covered for `build_source`; file/project paths are covered

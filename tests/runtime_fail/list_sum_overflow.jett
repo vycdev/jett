@@ -1,0 +1,6 @@
+namespace app
+
+function main() returns nothing:
+    int64 maximum = 9223372036854775807
+    int64 total = list.sum[int64](list(maximum, 1))
+    return nothing

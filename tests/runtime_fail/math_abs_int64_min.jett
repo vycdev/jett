@@ -1,0 +1,5 @@
+function main() returns nothing:
+    int64 minimum = int64.from_string("-9223372036854775808") handle error:
+        return nothing
+    int64 absolute = math.abs(minimum)
+    return nothing
