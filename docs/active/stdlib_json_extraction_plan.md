@@ -55,6 +55,17 @@ the public `json.*` API.
   [tracked by #59](https://github.com/vycdev/jett/issues/59); follow-up remains
   for public `new`, `add`, `remove`, `contains`, `length`, and `to_list`
   declarations.
+- The compiler-backed public `map.*` surface is transitional technical debt.
+  The final boundary requires every public map declaration and signature to
+  come from compiler-shipped `.jett` source, with compositional operations
+  implemented by real Jett bodies and no compiler dispatch by public name.
+  [#61](https://github.com/vycdev/jett/issues/61) is the first bounded slice for
+  `is_empty`, `contains_key`, `set`, `get_or`, and `merge`. Follow-up extraction
+  must source-own the remaining public constructors, accessors, mutations,
+  conversions, iteration helpers, and higher-order operations. Storage, key
+  equality, lookup/update, and iteration may use private trusted runtime
+  kernels, but those kernels are implementation details rather than public
+  compiler-owned functions.
 
 That means physical stdlib JSON fragments under `stdlib/json/` are available
 to single-file builds, but ordinary `namespace json` functions still do not

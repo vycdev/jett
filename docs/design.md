@@ -1228,6 +1228,20 @@ map[string, list[User]] by_role = list.group_by(users, function(u: User) returns
 
 An LLM calling `list.filter` cannot produce an off-by-one error. It cannot forget to handle an empty list. It cannot accidentally mutate the original. The standard library handles all of this.
 
+The current compiler-backed public map surface is transitional technical debt.
+Every public `map.*` declaration must ultimately live in compiler-shipped
+`.jett` source, with compositional helpers implemented as real Jett bodies and
+no public names or signatures hardcoded in the compiler. Low-level storage,
+key-equality, lookup/update, and iteration behavior may remain behind private
+trusted runtime kernels, but those kernels are not public API.
+
+[#61](https://github.com/vycdev/jett/issues/61) starts that transition with
+`map.is_empty`, `map.contains_key`, `map.set`, `map.get_or`, and `map.merge`.
+Follow-up work must provide source-owned wrappers or bodies for the remaining
+public constructors, accessors, mutations, conversions, iteration helpers, and
+higher-order operations, then remove their hardcoded public signatures and
+dispatch paths.
+
 The current compiler-backed public set surface is transitional technical debt.
 Every public `set.*` declaration must ultimately be compiler-shipped `.jett`
 source; compositional helpers have real Jett bodies, while only private trusted

@@ -1248,6 +1248,27 @@ may delegate to private trusted runtime kernels; the remaining hardcoded public
 signatures and Rust dispatch cases are transitional bootstrap debt to remove in
 follow-up extraction slices.
 
+The compiler-backed public map namespace is transitional technical debt. Its
+target boundary is an exported compiler-shipped `.jett` declaration for every
+public `map.*` operation, with compositional helpers implemented by real Jett
+bodies and no hardcoded compiler knowledge of public map names or signatures.
+Storage, key equality, lookup/update, and iteration may delegate to private
+trusted runtime kernels; those kernels are implementation details, not public
+compiler-owned functions.
+
+[#61](https://github.com/vycdev/jett/issues/61) is a bounded first slice that
+moves `map.is_empty`, `map.contains_key`, `map.set`, `map.get_or`, and
+`map.merge`. Follow-up work must add source-owned public declarations for
+`new`, `length`, `has`, `get`, `insert`, `remove`, `keys`, `values`,
+`from_lists`, `entries`, `filter`, `map_values`, and `for_each`, replacing each
+remaining hardcoded public signature and runtime dispatch arm. Only private
+storage, key-equality, lookup/update, and iteration kernels may remain behind
+those source declarations.
+
+At the target boundary, the compiler does not have hardcoded knowledge of
+public stdlib function names or signatures. Source-defined public functions are
+resolved through their declarations like ordinary namespaced code.
+
 The current compiler-backed public `set.*` surface is transitional technical
 debt, not a namespace exception. Every public set declaration and signature
 must ultimately live in compiler-shipped `.jett` source, and compositional
