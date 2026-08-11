@@ -427,6 +427,14 @@ fn math_sum_reports_overflow() {
 }
 
 #[test]
+fn math_factorial_reports_overflow() {
+    assert_runtime_fail(
+        "math_factorial_overflow.jett",
+        "runtime error: math.factorial: integer overflow: 2432902008176640000 * 21",
+    );
+}
+
+#[test]
 fn math_clamp_rejects_invalid_bounds() {
     let cases = [
         (
