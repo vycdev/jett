@@ -27,6 +27,7 @@ and reflection implementation steps:
 These notes capture choices that should stay deliberate until the language has
 enough pressure from real code:
 
+- [Initial C FFI and generated binding contract](open_design/c_ffi_binding_contract.md)
 - [Type construction design](open_design/type_construction_design.md)
 - [Type construction block syntax](open_design/type_construction_block_syntax.md)
 - [Namespace-qualified type follow-up](open_design/namespace_qualified_types_followup.md)

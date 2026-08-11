@@ -406,7 +406,7 @@ Walk all type declarations and build the type registry:
 - **Built-in generic types:** `list[T]`, `map[K, V]`, `set[T]`, `optional[T]`, `result[T, E]`.
 - **User-defined types:** structs, enums, machines, actors, bitfields, interfaces, type aliases (including refinement types).
 - **Function types:** `function(T) returns U`.
-- **Capability types:** `Filesystem`, `Network`, `Stdout`, `Stderr`, `Stdin`, `Clock`, `Random`, `Process`, `Environment`. Random sampling uses the proposed explicit `view Random` API, injected per-runtime generator state, and non-cryptographic contract defined in the [Random capability and entropy contract](open_design/random_capability_entropy_contract.md). The `os` `Environment`/argv effect and public stdlib/runtime boundary are [tracked by #94](https://github.com/vycdev/jett/issues/94).
+- **Capability types:** `Filesystem`, `Network`, `Stdout`, `Stderr`, `Stdin`, `Clock`, `Random`, `Process`, `Environment`, `Foreign`. Random sampling uses the proposed explicit `view Random` API, injected per-runtime generator state, and non-cryptographic contract defined in the [Random capability and entropy contract](open_design/random_capability_entropy_contract.md). The `os` `Environment`/argv effect and public stdlib/runtime boundary are [tracked by #94](https://github.com/vycdev/jett/issues/94). `Foreign` guards the generated native C boundary specified by the [C FFI contract](open_design/c_ffi_binding_contract.md).
 - **Secret wrapper:** `secret[T]`.
 - **State-qualified types:** `Machine at state`.
 - **Task-control failures:** `CancelledError` terminates a cancelled pending task
@@ -1167,7 +1167,7 @@ fn _jett_entry() {
 }
 ```
 
-Capability values are opaque structs containing OS-level handles (file descriptors, socket handles, etc.). `Filesystem.read_only(fs)` creates a new capability with a restricted permission flag — the runtime checks this flag before executing write operations.
+Capability values are opaque structs containing OS-level handles (file descriptors, socket handles, etc.). `Filesystem.read_only(fs)` creates a new capability with a restricted permission flag — the runtime checks this flag before executing write operations. `Foreign` is the exception with no OS handle: when `main` requests it, the entry wrapper creates an unforgeable zero-sized token that authorizes calls through checked generated foreign declarations. It otherwise follows the same ownership, `view`, and explicit actor/task clone rules.
 
 ---
 
@@ -1620,24 +1620,45 @@ Both profilers output via the diagnostics system in either human or TOON format.
 
 ## C Binding Generator (`jett_bind`)
 
-> Tracked by [#53](https://github.com/vycdev/jett/issues/53) for the initial C
-> FFI and generated binding contract.
+> The staged architecture is specified by the [initial C FFI and generated
+> binding contract](open_design/c_ffi_binding_contract.md), tracked by
+> [#53](https://github.com/vycdev/jett/issues/53).
 
-`jett bind "header.h" --output deps/binding.jett`
+`jett bind "header.h" --policy binding-policy.toml --target x86_64-unknown-linux-gnu --output deps/binding.jett`
 
 ### Architecture
 
-1. **Parse C headers** using `libclang` (via the `clang-sys` crate) to get the full AST.
-2. **Extract declarations:** functions, structs, enums, constants, typedefs.
-3. **Map C types to Jett types:**
-   - `int` → `int32`, `long` → `int64`, `char*` → `string`, etc.
-   - Pointers to structs → opaque linear handle types.
-   - `void` return → `returns nothing`.
-4. **Wrap error patterns:** Functions returning `NULL` or negative values → `result[T, string]`.
-5. **Convert names:** `SDL_CreateWindow` → `create_window` (strip prefix, snake_case).
-6. **Emit a `.jett` file** with the generated bindings.
+Delivery is dependency-ordered:
 
-The generated file is plain Jett source — the LLM can read it, the compiler compiles it normally. FFI functions are marked with a `# foreign: symbol_name` comment annotation that the parser preserves as metadata on the `FunctionDef` node. The codegen phase checks this metadata: if present, instead of generating a call to a Jett function body, it generates a call to the named C symbol via the platform's C calling convention. The capability analyzer treats FFI functions as **impure by default** (they may perform arbitrary side effects) — they cannot be called from pure contexts or used in `verify` blocks.
+1. **Source model:** the parser and AST gain first-class foreign blocks, opaque
+   handle types, target/ABI metadata, no-body function declarations, and C
+   symbol links. The resolver, typechecker, formatter, LSP, and ASP enforce and
+   expose that data. Semantic comments are not metadata.
+2. **Capability boundary:** every foreign function has an exact leading
+   `view ffi: Foreign` source parameter. It propagates through ordinary
+   capability analysis but is omitted from the C ABI. The interpreter,
+   comptime engine, and verify paths reject execution before dispatch.
+3. **Deterministic generator:** `jett_bind` configures its C frontend for the
+   explicit target, resolves only selected declarations and dependencies,
+   validates reviewed ownership/error policy, and emits canonical private
+   declarations plus public wrappers and an adjacent `.jett.bind.toml` input
+   registration. It formats, regenerates, and checks both files before an atomic
+   replacement; `--check` compares without writing.
+4. **Checked lowering:** after the checked-program/HIR and MIR boundaries in
+   [#20](https://github.com/vycdev/jett/issues/20) and
+   [#22](https://github.com/vycdev/jett/issues/22), lowering preserves target,
+   ABI, symbol, ownership mode, and side-effecting status as typed data.
+5. **Native backend and linker:** native lowering handles only the supported
+   scalar and opaque-pointer carriers, then resolves target-specific project
+   libraries and symbols. Target or symbol mismatches fail before producing an
+   artifact.
+
+The initial generator does not infer ownership or fallibility from C names and
+does not silently skip unsupported selected declarations. Variadics, callbacks,
+arbitrary pointers, character pointers/string marshalling, enum-typed function
+signatures, borrowed returns, writable buffers, by-value records, unions,
+additional calling conventions, dynamic loading, and C++ remain future design
+work.
 
 ---
 
