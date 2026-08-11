@@ -489,6 +489,14 @@ fn encoding_hex_decode_rejects_non_ascii_without_panicking() {
 }
 
 #[test]
+fn base64_decode_rejects_invalid_padding() {
+    assert_runtime_fail(
+        "base64_invalid_padding.jett",
+        "runtime error: encoding.base64_decode: invalid base64 padding",
+    );
+}
+
+#[test]
 fn run_file_capture_stdout_captures_json_runtime_output() {
     assert_run_stdout(
         "json_tree_parse_runtime.jett",
