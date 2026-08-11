@@ -1,0 +1,4 @@
+function main() returns nothing:
+    float64 value = math.clamp(1.0, 2.0, 1.0)
+    println(value)
+    return nothing
