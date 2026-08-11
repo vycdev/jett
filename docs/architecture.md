@@ -1248,6 +1248,21 @@ may delegate to private trusted runtime kernels; the remaining hardcoded public
 signatures and Rust dispatch cases are transitional bootstrap debt to remove in
 follow-up extraction slices.
 
+The current compiler-backed public `set.*` surface is transitional technical
+debt, not a namespace exception. Every public set declaration and signature
+must ultimately live in compiler-shipped `.jett` source, and compositional
+helpers must have real Jett bodies. Public source functions may delegate to
+private trusted runtime kernels for equality, storage, cardinality, iteration,
+or conversion, but those kernels are implementation details: the compiler must
+not retain hardcoded knowledge of public set names or signatures.
+
+The first extraction slice is
+[tracked by #59](https://github.com/vycdev/jett/issues/59). It moves
+`set.is_empty`, `set.union`, `set.intersection`, and `set.difference` to real
+Jett bodies while preserving existing behavior. Follow-up extraction remains
+required for the public `set.new`, `set.add`, `set.remove`, `set.contains`,
+`set.length`, and `set.to_list` declarations that front the trusted kernels.
+
 The current compiler-backed public `list.*` surface is transitional technical
 debt, not a namespace exception. Every public list declaration and signature
 must ultimately live in compiler-shipped `.jett` source, and compositional
