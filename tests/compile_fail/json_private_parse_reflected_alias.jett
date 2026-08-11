@@ -1,0 +1,5 @@
+# ERROR: E0207
+namespace test
+function bad() returns result[string, string]:
+    use json as j
+    return j.json_parse_reflected[string]("\"Ada\"")
