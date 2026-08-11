@@ -1436,19 +1436,21 @@ builtins, remain Rust-backed until they are separately extracted.
 > The proposed stable text-digest API, algorithm classifications, HMAC shape,
 > secret policy, and stdlib/runtime boundary are defined in the
 > [Crypto hashing and security contract](open_design/crypto_hashing_security_contract.md).
-> Encoding API representations, failure behavior, and its stdlib/runtime
-> boundary are separately [tracked by #71](https://github.com/vycdev/jett/issues/71).
+> The proposed byte-native binary codecs, strict decoder failures, distinct URL
+> and form-component policy, and stdlib/runtime boundary are defined in the
+> [Encoding representation and failure contract](open_design/encoding_representation_failure_contract.md).
 
 ```
 use crypto
 use encoding
 
 string artifact_digest = crypto.sha256(artifact_text)
-string b64 = encoding.base64_encode(data)
-string decoded = encoding.base64_decode(b64)
-string url_safe = encoding.url_encode(query)
 bytes raw = bytes.from_string(data)
-string hex = bytes.to_hex(raw)
+string b64 = encoding.base64_encode(view raw)
+bytes decoded = encoding.base64_decode(b64) handle error:
+    return fail(error)
+string url_safe = encoding.url_encode(query)
+string hex = encoding.hex_encode(view raw)
 ```
 
 `crypto.sha256` hashes exact UTF-8 text and returns 64 lowercase hexadecimal
@@ -1456,6 +1458,13 @@ characters. `crypto.md5` keeps the same representation only for explicit legacy
 compatibility and is not a secure digest. SHA-512 and key-first binary HMAC are
 planned additions, not currently supported declarations. None of these
 operations is a password-hashing API.
+
+The proposed encoding contract uses strict padded RFC 4648 Base64 and lowercase
+hex over arbitrary `bytes`. Their decoders return `result[bytes, string]`.
+`url_encode` treats `+` literally and encodes spaces as `%20`; separate
+`form_encode` and `form_decode` operations own the form-style `+`/space rule.
+All public declarations ultimately live in compiler-shipped `.jett` source over
+private trusted byte kernels.
 
 **Validation — standard library refinement types:**
 
@@ -6619,8 +6628,9 @@ The standard library is intentionally massive and opinionated. The goal is to ma
 - **crypto** — stable UTF-8-to-lowercase-hex SHA-256, legacy-only MD5, and
   planned SHA-512/key-first HMAC; see the
   [crypto hashing and security contract](open_design/crypto_hashing_security_contract.md)
-- **encoding** — base64, hex, URL encoding/decoding; the stable representations,
-  failure contract, and stdlib/runtime boundary are [tracked by #71](https://github.com/vycdev/jett/issues/71)
+- **encoding** — byte-native strict Base64/hex and separate URL/form component
+  codecs; see the proposed
+  [encoding representation and failure contract](open_design/encoding_representation_failure_contract.md)
 - **validate** — standard refinement types for common formats: Email, URL, UUID, IPv4, IPv6. The type IS the validation — once assigned, the value is guaranteed valid.
 - **regex** — pattern matching and extraction (when string functions aren't enough)
 - **csv** — parsing and writing CSV data

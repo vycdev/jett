@@ -1187,8 +1187,9 @@ flowchart LR
 > The proposed crypto text-digest API, algorithm classifications, secret policy,
 > and stdlib/runtime boundary are defined in the
 > [Crypto hashing and security contract](open_design/crypto_hashing_security_contract.md).
-> Encoding representations, failure behavior, and its stdlib/runtime boundary
-> are separately [tracked by #71](https://github.com/vycdev/jett/issues/71).
+> Encoding's proposed byte/string representations, strict failures, URL/form
+> distinction, and source/runtime boundary are defined in the
+> [Encoding representation and failure contract](open_design/encoding_representation_failure_contract.md).
 > The public-source/private-runtime boundary for the initial `net.http` client
 > is separately [tracked by #101](https://github.com/vycdev/jett/issues/101).
 
@@ -1340,6 +1341,14 @@ source while private trusted runtime kernels perform digest compression and
 future HMAC processing. Exact UTF-8, hexadecimal, taint, and backend obligations
 are defined by the
 [Crypto hashing and security contract](open_design/crypto_hashing_security_contract.md).
+
+Encoding has not reached that end state. Its six current public signatures and
+dispatch arms are hardcoded, all use `string -> string`, and do not expose
+decoder failures. The target places byte-native Base64/hex and textual URL/form
+public declarations in trusted compiler-shipped `.jett` source. Only private
+trusted byte kernels may remain runtime-backed; strict acceptance, error, and
+backend obligations are defined by the
+[Encoding representation and failure contract](open_design/encoding_representation_failure_contract.md).
 
 The current math extraction is intentionally narrower than that end state.
 `math.is_even`, `math.is_odd`, `math.sign`, `math.to_radians`, and
@@ -1808,10 +1817,10 @@ Core stdlib (string, list, math, json) is implemented in Phase D. This phase com
 - **Time:** `time` (the proposed wall-clock value, capability, determinism, and
   source/runtime boundary is defined in the
   [Time and Clock capability contract](open_design/time_clock_capability_contract.md))
-- **Security:** `crypto`, `encoding`, `validate` (the proposed hashing API,
-  security policy, and source/runtime boundary are defined in the
-  [crypto contract](open_design/crypto_hashing_security_contract.md), and the
-  encoding contract is [tracked by #71](https://github.com/vycdev/jett/issues/71))
+- **Security:** `crypto`, `encoding`, `validate` (the crypto hashing contract is
+  defined in the [crypto contract](open_design/crypto_hashing_security_contract.md), and encoding's
+  proposed byte-native codecs and strict failure policy are defined by the
+  [encoding contract](open_design/encoding_representation_failure_contract.md))
 - **OS:** `os` (environment variables, process management, argv — the `Environment`/argv capability and public stdlib/runtime boundary are [tracked by #94](https://github.com/vycdev/jett/issues/94))
 - **Utilities:** `regex`, `random`, `uuid` (generation and entropy contract [tracked by #73](https://github.com/vycdev/jett/issues/73)), `log`, `format`
 - **Testing:** `test.mock` (mock capabilities for property-based testing)
