@@ -6747,6 +6747,30 @@ External dependencies live in the `deps/` directory as vendored `.jett` files tr
 
 ---
 
+## Generic Reflection Specialization Facts
+
+Generic casts may be justified only by reflection evidence that stays visibly
+tied to the reflected type. Direct `TypeKind` / `TypePrimitive` comparisons,
+immutable locals carrying those tags, typed helper parameters receiving them
+from the same generic instantiation, and matching arms can specialize a branch
+for that instantiation. Arbitrary caller-supplied tags are not facts about `T`.
+A predicate call returning `bool` does not create such a fact,
+and copying a reflection comparison into an arbitrary `bool` local discards
+the evidence.
+
+This conservative rule keeps type proofs local for agents and prevents broad
+classifiers from hiding incompatible runtime carriers. Same-carrier classifier
+helpers may organize ordinary runtime logic, but code that performs a generic
+cast must retain a visible direct fact or match arm. Static predicate folding,
+trusted predicate annotations, and general flow-sensitive boolean refinement
+are deferred changes rather than part of the current policy. The decision and
+its pinned compile-fail boundaries are recorded in the completed
+[reflection predicate fact contract](completed/reflection_predicate_facts.md).
+The narrower static-folding possibility remains a separate
+[open-design follow-up](open_design/reflection_predicate_static_folding.md).
+
+---
+
 ## Open Questions
 
 - **Comptime boundaries** — what standard library functions are available at comptime? All pure functions? Only a subset? File I/O at comptime (for code generation from schemas)?
