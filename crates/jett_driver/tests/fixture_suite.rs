@@ -419,6 +419,14 @@ fn math_sum_reports_overflow() {
 }
 
 #[test]
+fn math_abs_reports_overflow() {
+    assert_runtime_fail(
+        "math_abs_int64_min.jett",
+        "runtime error: math.abs: integer overflow: abs(-9223372036854775808)",
+    );
+}
+
+#[test]
 fn math_mod_reports_overflow() {
     assert_runtime_fail(
         "math_mod_overflow.jett",
