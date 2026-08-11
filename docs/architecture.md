@@ -1262,9 +1262,11 @@ the runtime boundary.
 The current math extraction is intentionally narrower than that end state.
 `math.is_even`, `math.is_odd`, `math.sign`, `math.to_radians`, and
 `math.to_degrees` are ordinary source-defined functions in `stdlib/math.jett`.
-Their primitive dependencies, `math.mod` and `math.pi`, remain compiler-owned
-Rust kernels, and the other supported math builtins remain Rust-backed pending
-separate extraction work.
+The consuming `math.sum(list[int64])` helper is source-defined there as well and
+accumulates with checked Jett `int64` addition. The primitive dependencies
+`math.mod` and `math.pi` remain compiler-owned Rust kernels. Exact numeric
+overloads such as `math.abs`, `math.min`, and `math.max`, and the other supported
+math builtins remain Rust-backed pending separate extraction work.
 
 **3. Runtime-backed stdlib** — Jett functions that call into the runtime:
 
