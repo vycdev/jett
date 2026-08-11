@@ -1,0 +1,3 @@
+function main() returns nothing:
+    int64 result = math.factorial(21)
+    return nothing

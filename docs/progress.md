@@ -46,7 +46,7 @@
 | MIR (control flow graph) | `jett_mir` | — | Not started ([Tracked by #22](https://github.com/vycdev/jett/issues/22)) |
 | LLVM native codegen | `jett_codegen_llvm` | — | Not started |
 | Runtime library | `jett_runtime` | — | Not started |
-| Core stdlib (.jett files) | `stdlib/` | — | Partial (bootstrap loader plus marker module and extracted `json` module; `math.is_even`, `math.is_odd`, `math.sign`, `math.to_radians`, `math.to_degrees`, and consuming `math.sum(list[int64])` are source-defined in `stdlib/math.jett`; many other modules and math operations remain Rust-backed) |
+| Core stdlib (.jett files) | `stdlib/` | — | Partial (bootstrap loader plus marker module and extracted `json` module; `math.is_even`, `math.is_odd`, `math.sign`, `math.to_radians`, `math.to_degrees`, and consuming `math.sum(list[int64])` are source-defined in `stdlib/math.jett`; `string.is_not_empty`, `string.reverse`, `string.after`, `string.before`, and `string.between` are source-defined in `stdlib/string.jett`; many other modules and operations remain Rust-backed) |
 
 ### Phase E: Comptime and Verification — COMPLETE
 
@@ -110,7 +110,7 @@
 | `and`/`or` keyword operators for logical expressions | Done |
 | Unhandled result/optional detection (E0341, E0342) | Done |
 | Set value type and 12 set builtins (`new`, `add`, `remove`, `contains`, `union`, `intersection`, `difference`) | Done |
-| `print`/`println` builtins | Done (current secret-blocked debug helpers; stable capability policy remains open) |
+| `print`/`println` builtins | Partial (interpreter support and secret blocking are done; [debug-only capability policy](open_design/print_debug_builtin_policy.md) is decided, while debug-event isolation, release diagnostics, and future-backend conformance remain pending) |
 | Type conversions: `float64.from_string`, `string.from_float64`, `string.from_bool` | Done |
 | `time.now_ms`, `time.now_s` | Done |
 | `os.env`, `os.args` | Done |
@@ -123,13 +123,13 @@
 
 | Component | Status |
 |---|---|
-| TOON output (`--agent` flag) | Partial (build diagnostics include file, ok/error status, severity counts, ranged diagnostics/labels, and tabular suggested fixes; format status, run stdout/typed debug output, ranged verify/property test summaries, namespace/symbol/type-at/definition-at/references-at/completion/signature query results, and file-symbol parse failures are structured) |
+| TOON output (`--agent` flag) | Partial (build diagnostics include file, ok/error status, severity counts, ranged diagnostics/labels, and tabular suggested fixes; format status, run stdout/typed debug output, ranged verify/property test summaries, namespace/symbol/type-at/definition-at/references-at/completion/signature query results, file-symbol parse failures, and type-at compiler failures with known source context and cross-file labels are structured) |
 | LSP server (diagnostics on save) | Done |
 | LSP hover (type at cursor) | Done |
 | LSP go-to-definition | Done |
 | LSP completions | Done |
 | MCP server | Not started; initial transport, tool/resource, and ASP handoff boundary tracked by [#37](https://github.com/vycdev/jett/issues/37) |
-| ASP query system | Partial (`jett query --agent --namespaces`, `--symbols`, `--type-at`, `--definition-at`, `--references-at`, prefix-filtered `--complete-at`, and `--signature` are implemented; namespace, type, symbol, definition, reference, and completion rows include source ranges, file-symbol parse failures preserve structured diagnostics, and completion rows also include deterministic rank, match kind, namespace, visibility, and source-level signatures where available) |
+| ASP query system | Partial (`jett query --agent --namespaces`, `--symbols`, `--type-at`, `--definition-at`, `--references-at`, prefix-filtered `--complete-at`, and `--signature` are implemented; namespace, type, symbol, definition, reference, and completion rows include source ranges; file-symbol parse failures and type-at parse, resolution, and type-check failures with known source context preserve structured diagnostics and cross-file labels; completion rows also include deterministic rank, match kind, namespace, visibility, and source-level signatures where available) |
 
 ### Phase I: Testing and Profiling — PARTIAL
 
@@ -148,13 +148,13 @@
 |---|---|
 | Cross-compilation (`--target`) | Not started |
 | C binding generator (`jett bind`) | Not started (initial FFI and generated binding contract tracked by [#53](https://github.com/vycdev/jett/issues/53)) |
-| `jett bundle` | Working (validation-first concatenation; dependency-aware reordering remains open) |
+| `jett bundle` | Working (resolver-derived whole-file dependency ordering, stable lexical tie-breaking, structured cycle and namespace-boundary diagnostics, line manifests, and validation-before-write) |
 
 ### Phase K: Full Standard Library — NOT STARTED
 
 | Module | Status |
 |---|---|
-| `string` | Partial (30+ builtins: length/char_count, contains, trim, upper, lower, replace, split, join, starts_with, ends_with, is_empty, slice, repeat, pad_left, pad_end, from_int64, from_float64, from_bool, slugify, truncate, between, reverse, after, before, chars, words, lines, index_of, count, to_upper_first, to_lower_first; count/index/search/extraction helpers avoid partial grapheme matches) |
+| `string` | Partial (`is_not_empty`, `reverse`, `after`, `before`, and `between` are source-defined in `stdlib/string.jett`; the complete public `string.*` API remains the source-owned target, while hardcoded public signatures and Rust dispatch for the other operations are transitional bootstrap debt pending follow-up extraction into source declarations backed only as needed by private trusted Unicode/grapheme kernels; count/index/search/extraction helpers avoid partial grapheme matches) |
 | `list` | Partial (40+ builtins: new, length, append, get, first, last, is_empty, skip, take, reverse, sort, contains, index_of, remove, concat, flatten, unique, zip, chunk, sort_by_index, is_sorted, all_elements_in, enumerate, from_set, repeat, range, last_index_of, insert_at, remove_at, swap + higher-order: filter, map, find, sort_by, all, any, count, sum, group_by, reduce, flat_map) |
 | `set` | Partial (12 builtins: new, add, remove, contains, length, is_empty, to_list, union, intersection, difference) |
 | `map` | Partial (17+ builtins: new, length, has/contains_key, get, get_or, insert/set, remove, keys, values, is_empty, merge, from_lists, entries + higher-order filter, map_values, for_each) |
@@ -167,7 +167,7 @@
 | `uuid` | Partial (`uuid.new`; generation and entropy contract [tracked by #73](https://github.com/vycdev/jett/issues/73)) |
 | `time` | Partial (`time.now_ms`, `time.now_s`; time value and `Clock` capability contract [tracked by #75](https://github.com/vycdev/jett/issues/75)) |
 | `os` | Partial (os.env, os.args) |
-| `net.http` | Not started |
+| `net.http` | Not started (initial outbound client and `Network` capability contract [tracked by #101](https://github.com/vycdev/jett/issues/101)) |
 | `net.socket` | Not started |
 | `csv` | Partial (interpreter builtins for `csv.parse`, `csv.stringify`, and `csv.parse_with_header`; quoted commas, quotes, and multiline fields are covered) |
 | `regex` | Not started |
@@ -200,6 +200,6 @@
 | `jett test [--agent] [file.jett]` | Working (verify + property blocks; `--agent` emits compact block tables) |
 | `jett lsp` | Working (diagnostics on save) |
 | `jett bind header.h` | Not started (tracked by [#53](https://github.com/vycdev/jett/issues/53)) |
-| `jett bundle` | Working (validation-first concatenation; dependency-aware reordering remains open) |
+| `jett bundle` | Working (resolver-derived whole-file dependency ordering, stable lexical tie-breaking, structured cycle and namespace-boundary diagnostics, line manifests, and validation-before-write) |
 | `jett mcp` | Not started |
-| `jett query --agent --namespaces` / `--symbols file.jett` / `--type-at file:line:column` / `--definition-at file:line:column` / `--references-at file:line:column` / `--complete-at file:line:column` / `--signature name` | Partial (ranged namespace registry, file-local symbols with declaration ranges and function signatures, ranged type lookup, ranged definition lookup, ranged reference lookup, ranked prefix-filtered completion candidates with context metadata and ranges, and source-level function signatures) |
+| `jett query --agent --namespaces` / `--symbols file.jett` / `--type-at file:line:column` / `--definition-at file:line:column` / `--references-at file:line:column` / `--complete-at file:line:column` / `--signature name` | Partial (ranged namespace registry, file-local symbols with declaration ranges and function signatures, ranged type lookup with structured compiler failures and cross-file labels when source context is known, ranged definition lookup, ranged reference lookup, ranked prefix-filtered completion candidates with context metadata and ranges, and source-level function signatures) |

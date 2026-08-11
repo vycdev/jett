@@ -84,10 +84,12 @@ pub fn discover_project(
         });
     }
 
-    let entry_file = entry_file.unwrap_or_else(|| {
-        // If no entry file matched, default to first file
-        FileId::new(0)
-    });
+    let entry_file = entry_file.ok_or_else(|| {
+        DiscoverError::InvalidProjectFile(format!(
+            "entry file '{}' was not found in the project",
+            entry.display()
+        ))
+    })?;
 
     Ok(Project {
         name,
@@ -131,7 +133,7 @@ fn parse_project_file(content: &str) -> Result<(String, String, String), Discove
     let mut version = None;
     let mut entry = None;
 
-    for line in content.lines() {
+    for line in content.split(|character| character == '\n' || character == '\r') {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
@@ -140,9 +142,30 @@ fn parse_project_file(content: &str) -> Result<(String, String, String), Discove
             let key = key.trim();
             let value = value.trim();
             match key {
-                "name" => name = Some(value.to_string()),
-                "version" => version = Some(value.to_string()),
-                "entry" => entry = Some(value.to_string()),
+                "name" => {
+                    if name.is_some() {
+                        return Err(DiscoverError::InvalidProjectFile(
+                            "duplicate 'name' field".to_string(),
+                        ));
+                    }
+                    name = Some(value.to_string());
+                }
+                "version" => {
+                    if version.is_some() {
+                        return Err(DiscoverError::InvalidProjectFile(
+                            "duplicate 'version' field".to_string(),
+                        ));
+                    }
+                    version = Some(value.to_string());
+                }
+                "entry" => {
+                    if entry.is_some() {
+                        return Err(DiscoverError::InvalidProjectFile(
+                            "duplicate 'entry' field".to_string(),
+                        ));
+                    }
+                    entry = Some(value.to_string());
+                }
                 _ => {} // ignore unknown keys
             }
         }
@@ -202,7 +225,7 @@ fn prescan_namespaces(content: &str, interner: &mut SymbolInterner) -> Vec<Names
     for (byte_offset, line) in line_offsets(content) {
         let trimmed = line.trim();
         if let Some(rest) = trimmed.strip_prefix("namespace ") {
-            let name = rest.trim();
+            let name = rest.split_once('#').map_or(rest, |(name, _)| name).trim();
             if !name.is_empty() && !name.contains(' ') {
                 namespaces.push(NamespaceSpan {
                     name: interner.intern(name),
@@ -252,9 +275,36 @@ mod tests {
     }
 
     #[test]
+    fn parse_project_file_accepts_lone_carriage_return_lines() {
+        let content = "name: test\rversion: 1.0.0\rentry: src/main.jett\r";
+        let (name, version, entry) = parse_project_file(content).unwrap();
+        assert_eq!(name, "test");
+        assert_eq!(version, "1.0.0");
+        assert_eq!(entry, "src/main.jett");
+    }
+
+    #[test]
     fn parse_project_file_missing_name() {
         let content = "version: 1.0.0\n";
         assert!(parse_project_file(content).is_err());
+    }
+
+    #[test]
+    fn parse_project_file_rejects_duplicate_fields() {
+        for (field, content) in [
+            ("name", "name: first\nname: second\n"),
+            ("version", "name: test\nversion: 1.0.0\nversion: 2.0.0\n"),
+            (
+                "entry",
+                "name: test\nentry: src/main.jett\nentry: src/other.jett\n",
+            ),
+        ] {
+            let error = parse_project_file(content).expect_err("duplicate fields must fail");
+            assert_eq!(
+                error.to_string(),
+                format!("invalid jett.proj: duplicate '{field}' field")
+            );
+        }
     }
 
     #[test]
@@ -301,6 +351,17 @@ mod tests {
     }
 
     #[test]
+    fn prescan_namespaces_ignores_inline_comments() {
+        let mut interner = SymbolInterner::new();
+        let content = "namespace app.models # keep project metadata discoverable\n";
+
+        let ns = prescan_namespaces(content, &mut interner);
+
+        assert_eq!(ns.len(), 1);
+        assert_eq!(interner.resolve(ns[0].name), "app.models");
+    }
+
+    #[test]
     fn discover_project_integration() {
         // Create a temporary project
         let tmp = std::env::temp_dir().join("jett_test_project");
@@ -339,6 +400,33 @@ mod tests {
 
         // Cleanup
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn discover_project_rejects_missing_entry_file() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after the Unix epoch")
+            .as_nanos();
+        let tmp = std::env::temp_dir().join(format!("jett_missing_entry_{nanos}"));
+        fs::create_dir_all(tmp.join("src")).unwrap();
+        fs::write(
+            tmp.join("jett.proj"),
+            "name: missing-entry\nentry: src/missing.jett\n",
+        )
+        .unwrap();
+        fs::write(tmp.join("src/main.jett"), "namespace app\n").unwrap();
+
+        let mut interner = SymbolInterner::new();
+        let error = discover_project(&tmp, &mut interner).unwrap_err();
+
+        let _ = fs::remove_dir_all(&tmp);
+        match error {
+            DiscoverError::InvalidProjectFile(message) => {
+                assert!(message.contains("entry file 'src/missing.jett' was not found"));
+            }
+            other => panic!("expected invalid-project-file error, got {other}"),
+        }
     }
 
     #[test]

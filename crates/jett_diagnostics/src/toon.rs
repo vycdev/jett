@@ -1,5 +1,14 @@
 use crate::render::line_col;
 use crate::{Diagnostic, Severity};
+use jett_common::{FileId, Span};
+
+/// Source text and display path for one file in a multi-file diagnostic payload.
+#[derive(Debug, Clone, Copy)]
+pub struct ToonSource<'a> {
+    pub file_id: FileId,
+    pub source: &'a str,
+    pub file_path: &'a str,
+}
 
 /// Render a slice of diagnostics as a TOON agent payload.
 ///
@@ -26,6 +35,51 @@ use crate::{Diagnostic, Severity};
 /// diagnostics[0]{code,severity,message,file,line,column,end_line,end_column}:
 /// ```
 pub fn render_toon(diagnostics: &[Diagnostic], source: &str, file_path: &str) -> String {
+    render_toon_inner(
+        diagnostics,
+        source,
+        file_path,
+        |_| Some((source, file_path)),
+        |_| true,
+    )
+}
+
+/// Render diagnostics whose spans may refer to more than one source file.
+///
+/// Diagnostic and label locations are resolved against the source matching
+/// each span's file id. Suggested fixes retain the existing single-file schema,
+/// so fixes outside `primary_file` are omitted rather than attributed to the
+/// wrong file.
+pub fn render_toon_with_sources(
+    diagnostics: &[Diagnostic],
+    primary_file: FileId,
+    sources: &[ToonSource<'_>],
+) -> String {
+    let primary_source = sources.iter().find(|source| source.file_id == primary_file);
+    let source = primary_source.map_or("", |source| source.source);
+    let file_path = primary_source.map_or("unknown", |source| source.file_path);
+
+    render_toon_inner(
+        diagnostics,
+        source,
+        file_path,
+        |file_id| {
+            sources
+                .iter()
+                .find(|source| source.file_id == file_id)
+                .map(|source| (source.source, source.file_path))
+        },
+        |span| span.file == primary_file,
+    )
+}
+
+fn render_toon_inner<'a>(
+    diagnostics: &[Diagnostic],
+    source: &'a str,
+    file_path: &'a str,
+    source_for_file: impl Fn(FileId) -> Option<(&'a str, &'a str)>,
+    include_fix: impl Fn(Span) -> bool,
+) -> String {
     let error_count = diagnostics
         .iter()
         .filter(|d| d.severity == Severity::Error)
@@ -64,15 +118,21 @@ pub fn render_toon(diagnostics: &[Diagnostic], source: &str, file_path: &str) ->
             Severity::Info => "info",
         };
 
-        let (line, col) = line_col(source, diag.span.start);
-        let (end_line, end_col) = line_col(source, diag.span.end);
+        let (span_file_path, line, col, end_line, end_col) =
+            if let Some((span_source, span_file_path)) = source_for_file(diag.span.file) {
+                let (line, col) = line_col(span_source, diag.span.start);
+                let (end_line, end_col) = line_col(span_source, diag.span.end);
+                (span_file_path, line, col, end_line, end_col)
+            } else {
+                ("unknown", 0, 0, 0, 0)
+            };
 
         out.push_str(&format!(
             "  {},{},{},{},{},{},{},{}\n",
             diag.code,
             severity_str,
             escape_toon_scalar(&diag.message),
-            escape_toon_scalar(file_path),
+            escape_toon_scalar(span_file_path),
             line,
             col,
             end_line,
@@ -87,13 +147,19 @@ pub fn render_toon(diagnostics: &[Diagnostic], source: &str, file_path: &str) ->
     ));
     for diag in diagnostics {
         for label in &diag.labels {
-            let (line, col) = line_col(source, label.span.start);
-            let (end_line, end_col) = line_col(source, label.span.end);
+            let (label_file_path, line, col, end_line, end_col) =
+                if let Some((label_source, label_file_path)) = source_for_file(label.span.file) {
+                    let (line, col) = line_col(label_source, label.span.start);
+                    let (end_line, end_col) = line_col(label_source, label.span.end);
+                    (label_file_path, line, col, end_line, end_col)
+                } else {
+                    ("unknown", 0, 0, 0, 0)
+                };
             out.push_str(&format!(
                 "  {},{},{},{},{},{},{}\n",
                 diag.code,
                 escape_toon_scalar(&label.message),
-                escape_toon_scalar(file_path),
+                escape_toon_scalar(label_file_path),
                 line,
                 col,
                 end_line,
@@ -104,7 +170,11 @@ pub fn render_toon(diagnostics: &[Diagnostic], source: &str, file_path: &str) ->
 
     let fix_count = diagnostics
         .iter()
-        .filter(|diag| diag.suggested_fix.is_some())
+        .filter(|diag| {
+            diag.suggested_fix
+                .as_ref()
+                .is_some_and(|fix| include_fix(fix.span))
+        })
         .count();
     out.push_str(&format!(
         "suggested_fixes[{}]{{code,line,column,old_text,new_text,explanation}}:\n",
@@ -112,7 +182,13 @@ pub fn render_toon(diagnostics: &[Diagnostic], source: &str, file_path: &str) ->
     ));
     for diag in diagnostics {
         if let Some(ref fix) = diag.suggested_fix {
-            let (fix_line, fix_col) = line_col(source, fix.span.start);
+            if !include_fix(fix.span) {
+                continue;
+            }
+            let fix_source = source_for_file(fix.span.file)
+                .map(|(source, _)| source)
+                .unwrap_or(source);
+            let (fix_line, fix_col) = line_col(fix_source, fix.span.start);
             out.push_str(&format!(
                 "  {},{},{},{},{},{}\n",
                 diag.code,
@@ -229,6 +305,43 @@ mod tests {
 
         assert!(result.contains("labels[1]{code,message,file,line,column,end_line,end_column}:"));
         assert!(result.contains("E0201,original definition,test.jett,1,1,1,6"));
+    }
+
+    #[test]
+    fn toon_multi_file_locations_use_their_matching_sources() {
+        let requested_file = FileId::new(0);
+        let support_file = FileId::new(1);
+        let requested_source = "use hidden\n";
+        let support_source = "first\nfunction hidden\n";
+        let diagnostics = vec![
+            Diagnostic::error(207, "private declaration", Span::new(requested_file, 4, 10))
+                .with_label(Span::new(support_file, 6, 21), "declared private here")
+                .with_fix(
+                    Span::new(support_file, 6, 14),
+                    "function",
+                    "export function",
+                    "export the declaration",
+                ),
+        ];
+        let sources = [
+            ToonSource {
+                file_id: requested_file,
+                source: requested_source,
+                file_path: "main.jett",
+            },
+            ToonSource {
+                file_id: support_file,
+                source: support_source,
+                file_path: "support.jett",
+            },
+        ];
+
+        let result = render_toon_with_sources(&diagnostics, requested_file, &sources);
+
+        assert!(result.contains("E0207,error,private declaration,main.jett,1,5,1,11"));
+        assert!(result.contains("E0207,declared private here,support.jett,2,1,2,16"));
+        assert!(result.contains("suggested_fixes[0]"));
+        assert!(!result.contains("export the declaration"));
     }
 
     #[test]

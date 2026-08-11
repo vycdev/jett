@@ -379,7 +379,7 @@ fn main() {
                     }
                     Err(e) => {
                         if agent {
-                            print!("{}", render_file_symbols_query_agent_error(&e));
+                            print!("{}", render_query_diagnostic_agent_error(&e));
                         } else {
                             eprintln!("error: {e}");
                         }
@@ -400,7 +400,7 @@ fn main() {
                         process::exit(1);
                     }
                 };
-                match jett_driver::query_type_at(
+                match jett_driver::query_type_at_detailed(
                     Path::new(&position.file),
                     position.line,
                     position.column,
@@ -414,7 +414,7 @@ fn main() {
                     }
                     Err(e) => {
                         if agent {
-                            print!("{}", render_query_agent_error(&e));
+                            print!("{}", render_query_diagnostic_agent_error(&e));
                         } else {
                             eprintln!("error: {e}");
                         }
@@ -767,12 +767,15 @@ fn render_bundle_agent_error(
         escape_toon_scalar(start),
         escape_toon_scalar(output)
     );
-    if let Some(validation) = error.validation_result() {
-        out.push_str("kind: validation\n");
+    if let Some(result) = error.diagnostic_result() {
+        out.push_str(&format!(
+            "kind: {}\n",
+            error.kind_name().unwrap_or("diagnostic")
+        ));
         let diagnostics = jett_diagnostics::toon::render_toon(
-            &validation.diagnostics,
-            &validation.source,
-            &validation.file_path,
+            &result.diagnostics,
+            &result.source,
+            &result.file_path,
         );
         out.push_str(
             diagnostics
@@ -847,9 +850,17 @@ fn render_query_agent_error(error: &str) -> String {
     format!("status: error\nerror: {}\n", escape_toon_scalar(error))
 }
 
-fn render_file_symbols_query_agent_error(error: &jett_driver::FileSymbolsQueryError) -> String {
-    if let Some((diagnostics, source, file_path)) = error.diagnostic_context() {
-        jett_diagnostics::toon::render_toon(diagnostics, source, file_path)
+fn render_query_diagnostic_agent_error(error: &jett_driver::QueryError) -> String {
+    if let Some((diagnostics, primary_file, sources)) = error.diagnostic_sources() {
+        let sources: Vec<jett_diagnostics::toon::ToonSource<'_>> = sources
+            .iter()
+            .map(|source| jett_diagnostics::toon::ToonSource {
+                file_id: source.file_id,
+                source: &source.source,
+                file_path: &source.file_path,
+            })
+            .collect();
+        jett_diagnostics::toon::render_toon_with_sources(diagnostics, primary_file, &sources)
     } else {
         render_query_agent_error(&error.to_string())
     }
@@ -1497,6 +1508,47 @@ mod tests {
     }
 
     #[test]
+    fn bundle_agent_ordering_error_lists_structured_diagnostics() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after the Unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("jett_cli_bundle_order_error_{nanos}"));
+        std::fs::create_dir_all(root.join("src"))
+            .expect("temporary bundle project should be created");
+        std::fs::write(root.join("jett.proj"), "name: bundle_error\n")
+            .expect("project marker should be written");
+        std::fs::write(
+            root.join("src/alpha.jett"),
+            "namespace alpha\n\nexport function value() returns int64:\n    return beta.value()\n",
+        )
+        .expect("alpha source should be written");
+        std::fs::write(
+            root.join("src/beta.jett"),
+            "namespace beta\n\nexport function value() returns int64:\n    return alpha.value()\n",
+        )
+        .expect("beta source should be written");
+        let error = match jett_driver::bundle_project_detailed(&root, Path::new("dist/lib.jett")) {
+            Ok(_) => panic!("cyclic bundle should fail ordering"),
+            Err(error) => error,
+        };
+
+        let rendered = render_bundle_agent_error(".", "dist/lib.jett", &error);
+        std::fs::remove_dir_all(&root).expect("temporary bundle project should be removed");
+
+        assert!(
+            rendered.starts_with(
+                "status: error\nstart: .\noutput: dist/lib.jett\nkind: ordering\nfile: "
+            )
+        );
+        assert!(rendered.contains(
+            "diagnostics[1]{code,severity,message,file,line,column,end_line,end_column}:"
+        ));
+        assert!(rendered.contains("bundle ordering cycle requires declaration interleaving"));
+        assert!(!rendered.contains("error: bundle ordering cycle"));
+    }
+
+    #[test]
     fn query_namespaces_agent_output_lists_definition_rows() {
         let result = jett_driver::NamespaceQueryResult {
             definitions: vec![jett_driver::QueryDefinition {
@@ -1566,13 +1618,72 @@ mod tests {
         let error = jett_driver::query_file_symbols_detailed(&file)
             .expect_err("invalid symbols query should fail");
 
-        let rendered = render_file_symbols_query_agent_error(&error);
+        let rendered = render_query_diagnostic_agent_error(&error);
         std::fs::remove_dir_all(&root).expect("temporary query directory should be removed");
 
         assert!(rendered.starts_with("status: error\nfile: "));
         assert!(rendered.contains("{code,severity,message,file,line,column,end_line,end_column}:"));
         assert!(rendered.contains("E1000,error,"));
         assert!(!rendered.contains("error: parse errors"));
+    }
+
+    #[test]
+    fn type_at_query_agent_error_lists_structured_type_diagnostics() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after the Unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("jett_cli_type_at_agent_error_{nanos}"));
+        std::fs::create_dir_all(&root).expect("temporary query directory should be created");
+        let file = root.join("broken.jett");
+        std::fs::write(
+            &file,
+            "function main() returns nothing:\n    int64 value = \"wrong\"\n    return nothing\n",
+        )
+        .expect("invalid source should be written");
+        let error = jett_driver::query_type_at_detailed(&file, 2, 11)
+            .expect_err("invalid type query should fail");
+
+        let rendered = render_query_diagnostic_agent_error(&error);
+        std::fs::remove_dir_all(&root).expect("temporary query directory should be removed");
+
+        assert!(rendered.starts_with("status: error\nfile: "));
+        assert!(rendered.contains("{code,severity,message,file,line,column,end_line,end_column}:"));
+        assert!(rendered.contains(",error,"));
+        assert!(!rendered.contains("error: type errors"));
+    }
+
+    #[test]
+    fn type_at_query_agent_error_lists_cross_file_resolution_labels() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after the Unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("jett_cli_type_at_labels_{nanos}"));
+        std::fs::create_dir_all(&root).expect("temporary query directory should be created");
+        std::fs::write(root.join("jett.proj"), "name: query_fixture\n")
+            .expect("project marker should be written");
+        let support_file = root.join("api.jett");
+        std::fs::write(
+            &support_file,
+            "namespace api\n\nfunction hidden() returns int64:\n    return 1\n",
+        )
+        .expect("support source should be written");
+        let requested_file = root.join("main.jett");
+        std::fs::write(
+            &requested_file,
+            "namespace app\n\nfunction main() returns nothing:\n    int64 value = api.hidden()\n    return nothing\n",
+        )
+        .expect("query source should be written");
+        let error = jett_driver::query_type_at_detailed(&requested_file, 4, 25)
+            .expect_err("private cross-file use should fail resolution");
+
+        let rendered = render_query_diagnostic_agent_error(&error);
+        std::fs::remove_dir_all(&root).expect("temporary query directory should be removed");
+
+        assert!(rendered.contains("labels[1]{code,message,file,line,column,end_line,end_column}:"));
+        assert!(rendered.contains(&escape_toon_scalar(&support_file.display().to_string())));
+        assert!(!rendered.contains("labels[0]"));
     }
 
     #[test]
