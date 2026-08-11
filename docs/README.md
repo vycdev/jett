@@ -38,6 +38,7 @@ enough pressure from real code:
 - [Reflection predicate static folding](open_design/reflection_predicate_static_folding.md)
 - [Print debug builtin policy](open_design/print_debug_builtin_policy.md)
 - [uint64 runtime value model](open_design/uint64_runtime_value_model.md)
+- [Random capability and entropy contract](open_design/random_capability_entropy_contract.md)
 - [Encoding representation and failure contract](open_design/encoding_representation_failure_contract.md)
 - [Crypto hashing and security contract](open_design/crypto_hashing_security_contract.md)
 - [Time and Clock capability contract](open_design/time_clock_capability_contract.md)

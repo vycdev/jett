@@ -406,10 +406,12 @@ Walk all type declarations and build the type registry:
 - **Built-in generic types:** `list[T]`, `map[K, V]`, `set[T]`, `optional[T]`, `result[T, E]`.
 - **User-defined types:** structs, enums, machines, actors, bitfields, interfaces, type aliases (including refinement types).
 - **Function types:** `function(T) returns U`.
-- **Capability types:** `Filesystem`, `Network`, `Stdout`, `Stderr`, `Stdin`, `Clock`, `Random`, `Process`, `Environment`. The stable `Random` capability, entropy, determinism, and stdlib/runtime boundary is [tracked by #67](https://github.com/vycdev/jett/issues/67). The `os` `Environment`/argv effect and public stdlib/runtime boundary are [tracked by #94](https://github.com/vycdev/jett/issues/94).
+- **Capability types:** `Filesystem`, `Network`, `Stdout`, `Stderr`, `Stdin`, `Clock`, `Random`, `Process`, `Environment`. Random sampling uses the proposed explicit `view Random` API, injected per-runtime generator state, and non-cryptographic contract defined in the [Random capability and entropy contract](open_design/random_capability_entropy_contract.md). The `os` `Environment`/argv effect and public stdlib/runtime boundary are [tracked by #94](https://github.com/vycdev/jett/issues/94).
 - **Secret wrapper:** `secret[T]`.
 - **State-qualified types:** `Machine at state`.
-- **Built-in error types:** `CancelledError` (returned when a cancelled task's next I/O operation executes).
+- **Task-control failures:** `CancelledError` terminates a cancelled pending task
+  at its next capability checkpoint and is surfaced by `join`; it is not the
+  `E` parameter of the interrupted function's declared `result[T, E]`.
 - **String position policy:** source code never sees byte offsets. Current
   string search helpers return optional grapheme indices or extracted strings;
   no `StringPosition` runtime type is exposed yet.
@@ -486,7 +488,11 @@ This sub-phase tracks the ownership state of every variable through the control 
 - **Run/join:** `run` marks a value as pending; it cannot be used until `join`ed.
 - **No orphaned tasks:** every `run` must have a matching `join` or `cancel` before the function returns.
 - **No rebinding while viewed:** The owner of a variable cannot rebind it while a `view` to it exists. This prevents `items = new_list` inside a `for item in view items:` loop body, and prevents rebinding a variable that was passed as `view` to a `run` task until the task is `join`ed or `cancel`led.
-- **Cancellation semantics:** `cancel task` sets a cancellation flag. The task is not killed immediately — the next capability use (I/O operation) inside the cancelled task returns a `CancelledError`. The task handle remains live and must still be `join`ed.
+- **Cancellation semantics:** `cancel task` sets a cancellation flag. The task is
+  not killed immediately — its next capability checkpoint terminates the pending
+  task with `CancelledError` before the capability operation takes effect. The
+  task handle remains live and must still be `join`ed; `join` exposes the
+  task-control failure independently of the function's declared result error.
 - **View propagation:** Views propagate through field access and collection element access. `view list[T]` element access yields `view T`, not an owned copy. `clone` is required to get an owned value from a view.
 - **Closure capture analysis:** Anonymous functions can capture **immutable** values from the enclosing scope. Captured values are implicitly viewed — they are not consumed by the closure. Closures over **mutable** state are a compile error. The ownership analyzer verifies that all captured variables are either immutable bindings or primitives.
 
@@ -515,6 +521,13 @@ Track which capabilities flow through the program:
 - **Only `main()` owns capabilities.** Every other function must borrow them via `view`. A non-`main` function declaring an owned (non-view) capability parameter is a compile error.
 - Actors receive capabilities at spawn time via `clone` (since passing would consume the caller's capability).
 - **Verify blocks** can only call pure functions (no capabilities).
+- **Target random sampling is a capability operation.** The proposed public
+  `random.*` functions borrow `view Random`; capability-free compatibility
+  signatures are to be removed.
+  The runner injects generator state so production uses platform entropy while
+  tests use scripted deterministic samples. Verify and comptime evaluation
+  cannot sample randomness. See the
+  [Random capability and entropy contract](open_design/random_capability_entropy_contract.md).
 - **Clock reads are capability operations.** The canonical operation is
   `Clock.now(view clock) -> time.Timestamp`; zero-argument `time.now_ms` and
   `time.now_s` are transitional ambient effects to remove. Verify and comptime
@@ -1369,6 +1382,14 @@ trusted byte kernels may remain runtime-backed; strict acceptance, error, and
 backend obligations are defined by the
 [Encoding representation and failure contract](open_design/encoding_representation_failure_contract.md).
 
+Random has not reached that end state. Its five public signatures and interpreter
+dispatch are hardcoded and currently read an ambient host RNG. The target places
+capability-visible public declarations, range validation, choice, and shuffle in
+trusted compiler-shipped `.jett` source. Only private unbiased generator kernels
+remain runtime-backed, with deterministic injection and backend obligations
+defined by the
+[Random capability and entropy contract](open_design/random_capability_entropy_contract.md).
+
 The current math extraction is intentionally narrower than that end state.
 `math.is_even`, `math.is_odd`, `math.sign`, `math.to_radians`, and
 `math.to_degrees` are ordinary source-defined functions in `stdlib/math.jett`.
@@ -1383,7 +1404,12 @@ math builtins remain Rust-backed pending separate extraction work.
 Functions like `Filesystem.read_file`, `Network.listen`, `Stdout.write`, and
 `Clock.now` are Jett function signatures that the compiler maps to runtime
 calls. These exist as `.jett` signature stubs in `stdlib/` with bodies that call
-`jett_rt_*` runtime functions. For time, only injected wall-clock sampling is a
+`jett_rt_*` runtime functions. Random follows the same public-source/private-runtime
+split: public `random.*` wrappers visibly borrow `Random`, while opaque generator
+state and unbiased primitive sampling stay behind trusted kernels. The exact
+capability, deterministic-test, distribution, and security rules are defined in
+the [Random capability and entropy contract](open_design/random_capability_entropy_contract.md).
+For time, only injected wall-clock sampling is a
 runtime kernel; public timestamp/duration conversions, comparisons, and checked
 arithmetic belong in compiler-shipped `.jett` source. The exact value,
 capability, determinism, and compatibility rules are defined in the
@@ -1841,7 +1867,10 @@ Core stdlib (string, list, math, json) is implemented in Phase D. This phase com
   proposed byte-native codecs and strict failure policy are defined by the
   [encoding contract](open_design/encoding_representation_failure_contract.md))
 - **OS:** `os` (environment variables, process management, argv — the `Environment`/argv capability and public stdlib/runtime boundary are [tracked by #94](https://github.com/vycdev/jett/issues/94))
-- **Utilities:** `regex`, `random`, `uuid` (generation and entropy contract [tracked by #73](https://github.com/vycdev/jett/issues/73)), `log`, `format`
+- **Utilities:** `regex`, `random` (the proposed explicit capability, entropy,
+  deterministic injection, and source/runtime policy is defined in the
+  [random contract](open_design/random_capability_entropy_contract.md)), `uuid`
+  (generation and entropy contract [tracked by #73](https://github.com/vycdev/jett/issues/73)), `log`, `format`
 - **Testing:** `test.mock` (mock capabilities for property-based testing)
 
 **Milestone:** The standard library covers virtually every common operation. LLMs write orchestration code, not algorithms.

@@ -2073,16 +2073,16 @@ function fetch_all_data(view net: Network) returns result[DashboardData, HttpErr
 
 **Cancellation through capabilities:**
 
-`cancel` sets a cancellation flag on a task. The task is not killed immediately — instead, the next capability use (I/O operation) inside the cancelled task returns a `CancelledError`. The task's normal error handling cleans up resources. No cancellation tokens, no manual flag checking — the capability system provides natural cancellation checkpoints:
+`cancel` sets a cancellation flag on a task. The task is not killed immediately — instead, its next capability checkpoint terminates the pending task with a `CancelledError` before the operation takes effect. This task-control failure is surfaced by `join`; it is separate from the interrupted function's declared `result[T, E]` error type. No cancellation tokens or manual flag checking are needed — the capability system provides natural cancellation checkpoints:
 
 ```
 Data work = run expensive_operation(view net, data)
 
 # If we need to stop the task:
 cancel work
-# Inside expensive_operation, the next I/O call (http.get, file.read, etc.)
-# returns a CancelledError through normal error handling.
-# Linear resources are cleaned up by the function's existing handle blocks.
+# Inside expensive_operation, the next capability call (http.get, file.read,
+# random.int64, etc.) terminates the pending task before taking effect.
+# join surfaces that task-control failure as CancelledError.
 
 # A cancelled task must still be joined to collect its result:
 join work handle error:
@@ -2975,8 +2975,12 @@ secret[T] ──→ secret.compare() ALLOWED (constant-time comparison)
 
 ### Rule Set 16: Capability-Based I/O (Zero Hidden Side Effects)
 
-> Tracked by [#67](https://github.com/vycdev/jett/issues/67) for the stable
-> `Random` capability, entropy, determinism, and stdlib/runtime boundary.
+> The proposed random API requires every `random.*` operation to borrow an
+> explicit `Random` capability. Production generator state is runtime-injected,
+> tests can inject scripted samples, and the API makes no cryptographic security
+> claim. See the
+> [Random capability and entropy contract](open_design/random_capability_entropy_contract.md).
+
 > The proposed wall-clock API, value model, deterministic injection, and removal
 > of ambient `time.now_ms`/`time.now_s` are defined in the
 > [Time and Clock capability contract](open_design/time_clock_capability_contract.md).
@@ -3017,6 +3021,21 @@ Capability objects are created **only in `main()`** and must be explicitly passe
 # Process      — spawn child processes
 # Environment  — read environment variables
 ```
+
+Randomness follows the same visible rule as I/O. The existing capability-free
+`random.int64`, `random.float64`, `random.bool`, `random.choice`, and
+`random.shuffle` signatures are transitional and are replaced by source-owned
+declarations whose first parameter is `view Random`:
+
+```jett
+function roll_die(view rng: Random) returns result[int64, string]:
+    return random.int64(view rng, 1, 7)
+```
+
+`random.int64` uses a half-open unbiased range, list choice/shuffle preserve
+their viewed input, and verify/comptime code cannot sample randomness. The first
+contract intentionally exposes no source-level seed or cryptographic RNG API;
+deterministic compiler/driver tests inject the runtime provider instead.
 
 **Capabilities are a closed, built-in set.** Users cannot define custom capability types. Capabilities represent primitive OS-level side effects (file I/O, networking, stdout, etc.) — these are a finite, well-known set. Higher-level abstractions like database access or HTTP clients are built on top of primitive capabilities (e.g., a database module takes a `Network` parameter internally). This keeps the capability system simple: the compiler knows the full set, purity tracking is straightforward, and LLMs have a small, fixed list to learn rather than an open-ended set that varies per project. Capability types are not syntactically distinguished from other types in function signatures — they follow the same `view` pattern as any other borrowed parameter.
 
@@ -6634,7 +6653,9 @@ The standard library is intentionally massive and opinionated. The goal is to ma
 - **validate** — standard refinement types for common formats: Email, URL, UUID, IPv4, IPv6. The type IS the validation — once assigned, the value is guaranteed valid.
 - **regex** — pattern matching and extraction (when string functions aren't enough)
 - **csv** — parsing and writing CSV data
-- **random** — random numbers, random selection, shuffling
+- **random** — capability-backed unbiased integer/unit-float/boolean sampling,
+  random selection, and non-mutating shuffling; see the proposed
+  [random capability and entropy contract](open_design/random_capability_entropy_contract.md)
 - **uuid** — UUID generation (generation and entropy contract [tracked by #73](https://github.com/vycdev/jett/issues/73))
 
 The complete public `string.*` API should be ordinary Jett source, with private
