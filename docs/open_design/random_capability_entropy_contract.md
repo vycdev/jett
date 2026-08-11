@@ -165,20 +165,25 @@ The compiler must reject an unavailable capability before interpreter dispatch.
 It must not classify the functions as pure merely because their public bodies
 are compiler-shipped source wrappers.
 
-In the target concurrent runtime, every random operation is a capability-use
-cancellation checkpoint. Cancellation is a task-control outcome, not the `E` in
-the operation's declared `result[T, E]`: it terminates the pending task before
-argument validation or generator-state advancement, and `join` surfaces the
-task's `CancelledError`. A direct synchronous call cannot be externally
-cancelled. After the checkpoint, the operation runs to completion without
-suspending or checking cancellation again. It may advance generator state more
-than once internally—for example, once per Fisher-Yates swap—but those advances
-form one atomic capability operation from the task's perspective. Cancellation
-does not interrupt a draw halfway through or expose partially shuffled output.
-The current sequential
-interpreter's `run`/`cancel` simulation does not implement this boundary yet, so
-it belongs in the capability-runtime implementation slice rather than being
-claimed as current behavior.
+In the target concurrent runtime, each private primitive sampling-kernel call is
+a capability-use cancellation checkpoint; merely entering a public
+compiler-shipped source wrapper does not create a second checkpoint. `int64`,
+`float64`, `bool`, and non-empty `choice` therefore check once, while a
+source-composed Fisher-Yates `shuffle` checks once before each bounded draw.
+Empty and singleton shuffles call no sampling kernel and do not advance or
+observe generator state.
+
+Cancellation is a task-control outcome, not the `E` in an operation's declared
+`result[T, E]`. Cancellation before a primitive draw prevents that draw and
+`join` surfaces the task's `CancelledError`; a draw already completed is not
+rolled back. Consequently, cancellation between shuffle swaps leaves the
+generator advanced for the completed swaps, discards the private partially
+shuffled clone, and never mutates the borrowed input or exposes partial output.
+A primitive draw itself remains atomic. A direct synchronous call cannot be
+externally cancelled. The current sequential interpreter's `run`/`cancel`
+simulation does not implement this boundary yet, so it belongs in the
+capability-runtime implementation slice rather than being claimed as current
+behavior.
 
 ## Production Entropy and Generator State
 
@@ -331,7 +336,8 @@ operation. A native or bytecode backend may use a different internal provider,
 but it must preserve:
 
 - capability visibility and transitive effect checking;
-- cancellation before state advancement;
+- cancellation before each primitive sample, with completed generator advances
+  retained and partial source-composed outputs kept unobservable;
 - half-open unbiased integer ranges and deterministic invalid-range errors;
 - finite `[0.0, 1.0)` floats and unbiased booleans;
 - positional choice/shuffle distributions and non-consuming collection views;
@@ -358,7 +364,8 @@ the interpreter-facing capability and injection work.
    - classify random calls as effects and reject them from pure, verify, and
      comptime contexts;
    - inject production and scripted providers into each runtime context;
-   - add cancellation and provider-failure tests.
+   - add cancellation and provider-failure tests, including cancellation
+     between shuffle draws and the resulting provider position.
 3. **Extract the public declarations**
    - add compiler-shipped `stdlib/random.jett` wrappers;
    - make invalid integer ranges an explicit stable `result` failure;
@@ -384,8 +391,10 @@ the interpreter-facing capability and injection work.
 - Empty/singleton shuffle does not advance state; nontrivial shuffle preserves
   all positional elements and leaves the input reusable.
 - Scripted providers make outcomes and exhaustion deterministic.
-- Cancelled pending tasks surface `CancelledError` through `join` before the
-  random operation advances state; cancellation is not a declared result error.
+- Cancelled pending tasks surface `CancelledError` through `join`; cancellation
+  before a primitive sample prevents that sample, while cancellation between
+  shuffle draws retains completed provider advances, exposes no partial output,
+  and leaves the input reusable. Cancellation is not a declared result error.
 - Independent runtime contexts do not share state; cloned actor capabilities do.
 - Project declarations cannot claim the stdlib namespace or trusted hooks.
 - Interpreter, bytecode, and native implementations satisfy the same scenarios
