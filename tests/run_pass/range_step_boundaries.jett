@@ -1,0 +1,14 @@
+namespace app
+function positive_step_boundary() returns int64:
+    int64 value = 0
+    for item in range(9223372036854775806, 9223372036854775807, 2):
+        value = item
+    return value
+function negative_step_boundary() returns int64:
+    int64 value = 0
+    for item in range(-9223372036854775807, -9223372036854775808, -2):
+        value = item
+    return value
+verify range_step_boundaries:
+    assert positive_step_boundary() == 9223372036854775806
+    assert negative_step_boundary() == -9223372036854775807
