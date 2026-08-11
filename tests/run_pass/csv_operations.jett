@@ -112,3 +112,21 @@ function csv_roundtrip_test() returns string:
         default "err"
 verify csv_roundtrip_test:
     assert csv_roundtrip_test() == "2"
+function csv_parse_escaped_quote_test() returns string:
+    string data = "name,desc\nalice,\"say \"\"hello\"\"\""
+    list[list[string]] rows = csv.parse(data)
+    list[string] row = list.get[list[string]](rows, 1) handle:
+        default list("err")
+    return list.get[string](row, 1) handle:
+        default "err"
+verify csv_parse_escaped_quote_test:
+    assert csv_parse_escaped_quote_test() == "say \"hello\""
+function csv_parse_crlf_test() returns string:
+    string data = "name,age\r\nalice,30\r\n"
+    list[list[string]] rows = csv.parse(data)
+    list[string] row = list.get[list[string]](rows, 1) handle:
+        default list("err")
+    return list.get[string](row, 1) handle:
+        default "err"
+verify csv_parse_crlf_test:
+    assert csv_parse_crlf_test() == "30"

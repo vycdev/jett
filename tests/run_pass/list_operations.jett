@@ -103,3 +103,11 @@ function empty_literal_argument_test() returns int64:
 
 verify empty_literal_argument_test:
     assert empty_literal_argument_test() == 7
+
+function negative_get_test() returns int64:
+    list[int64] nums = list(10, 20)
+    return list.get[int64](nums, -1) handle:
+        default 7
+
+verify negative_get_test:
+    assert negative_get_test() == 7

@@ -12,3 +12,4 @@ jett_parser.workspace = true
 jett_types.workspace = true
 rand.workspace = true
 subtle.workspace = true
+unicode-segmentation.workspace = true

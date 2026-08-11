@@ -1,0 +1,34 @@
+namespace string
+export function is_not_empty(value: string) returns bool:
+    if string.is_empty(value):
+        return false
+    return true
+export function reverse(value: string) returns string:
+    list[string] chars = string.chars(value)
+    list[string] reversed = list.reverse(chars)
+    return string.join(reversed, "")
+export function after(value: string, marker: string) returns string:
+    optional[int64] marker_start = string.index_of(value, marker)
+    int64 start = marker_start handle:
+        return ""
+    int64 marker_length = string.char_count(marker)
+    int64 value_length = string.char_count(value)
+    int64 slice_start = start + marker_length
+    return string.slice(value, slice_start, value_length)
+export function before(value: string, marker: string) returns string:
+    optional[int64] marker_start = string.index_of(value, marker)
+    int64 end = marker_start handle:
+        return value
+    return string.slice(value, 0, end)
+export function between(value: string, start_marker: string, end_marker: string) returns string:
+    optional[int64] marker_start = string.index_of(value, start_marker)
+    int64 start = marker_start handle:
+        return ""
+    int64 start_length = string.char_count(start_marker)
+    int64 value_length = string.char_count(value)
+    int64 content_start = start + start_length
+    string after_start = string.slice(value, content_start, value_length)
+    optional[int64] marker_end = string.index_of(after_start, end_marker)
+    int64 end = marker_end handle:
+        return ""
+    return string.slice(after_start, 0, end)

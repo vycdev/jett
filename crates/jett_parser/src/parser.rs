@@ -124,6 +124,17 @@ impl<'src> Parser<'src> {
         })
     }
 
+    fn parse_f64_token(&mut self, token: &Token, context: &str) -> f64 {
+        let text = self.token_text(token).to_string();
+        match text.parse::<f64>() {
+            Ok(value) if value.is_finite() => value,
+            Ok(_) | Err(_) => {
+                self.error(format!("{context} is out of range"), token.span);
+                0.0
+            }
+        }
+    }
+
     fn skip_newlines(&mut self) {
         while self.peek() == TokenKind::Newline {
             self.advance();
@@ -285,7 +296,11 @@ impl<'src> Parser<'src> {
 
     fn parse_namespace(&mut self) -> NamespaceDecl {
         let kw = self.expect(TokenKind::Namespace);
-        let name = self.parse_qualified_ident();
+        let name = if self.peek() == TokenKind::String_ {
+            self.parse_type_ident()
+        } else {
+            self.parse_qualified_ident()
+        };
         NamespaceDecl {
             span: kw.span.merge(name.span),
             name,
@@ -1084,6 +1099,9 @@ impl<'src> Parser<'src> {
                 if self.peek() != TokenKind::RBracket {
                     args.push(self.parse_type());
                     while self.eat(TokenKind::Comma).is_some() {
+                        if self.peek() == TokenKind::RBracket {
+                            break;
+                        }
                         args.push(self.parse_type());
                     }
                 }
@@ -2004,8 +2022,7 @@ impl<'src> Parser<'src> {
             }
             TokenKind::FloatLiteral => {
                 self.advance();
-                let text = self.token_text(&tok);
-                let value = text.parse::<f64>().unwrap_or(0.0);
+                let value = self.parse_f64_token(&tok, "float literal");
                 Expr::FloatLiteral(value, tok.span)
             }
             TokenKind::StringLiteral => {
@@ -2391,6 +2408,9 @@ impl<'src> Parser<'src> {
         if self.peek() != TokenKind::RBracket {
             type_args.push(self.parse_type());
             while self.eat(TokenKind::Comma).is_some() {
+                if self.peek() == TokenKind::RBracket {
+                    break;
+                }
                 type_args.push(self.parse_type());
             }
         }
@@ -2623,6 +2643,23 @@ function add(a: int64, b: int64) returns int64:
             }
             other => panic!("expected Function, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn parse_out_of_range_float_literal_reports_error() {
+        let src = format!(
+            "function main() returns float64:\n    return {}.0\n",
+            "9".repeat(400)
+        );
+        let result = parse_str(&src);
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|error| error.message == "float literal is out of range"),
+            "unexpected errors: {:?}",
+            result.errors
+        );
     }
 
     #[test]
@@ -3318,6 +3355,20 @@ function f() returns nothing:
         match &result.module.items[0] {
             Item::Namespace(ns) => {
                 assert_eq!(ns.name.name, "myapp");
+            }
+            other => panic!("expected Namespace, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_builtin_type_namespace() {
+        let src = "namespace string\n";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        assert_eq!(result.module.items.len(), 1);
+        match &result.module.items[0] {
+            Item::Namespace(ns) => {
+                assert_eq!(ns.name.name, "string");
             }
             other => panic!("expected Namespace, got {:?}", other),
         }
@@ -4060,6 +4111,27 @@ function dump(view user: User) returns string:
                 assert!(ta.constraint.is_none(), "expected no where constraint");
             }
             other => panic!("expected TypeAlias, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_trailing_commas_in_generic_type_arguments() {
+        let src = "function main() returns nothing:\n    list[int64,] values = list[int64,](1)\n";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        match &result.module.items[0] {
+            Item::Function(function) => match &function.body.stmts[0] {
+                Stmt::VarDecl(variable) => {
+                    assert!(
+                        matches!(&variable.ty, TypeExpr::Generic(_, args, _) if args.len() == 1)
+                    );
+                    assert!(
+                        matches!(&variable.value, Expr::GenericCall(_, args, _, _) if args.len() == 1)
+                    );
+                }
+                other => panic!("expected VarDecl, got {:?}", other),
+            },
+            other => panic!("expected Function, got {:?}", other),
         }
     }
 
