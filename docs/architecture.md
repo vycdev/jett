@@ -771,7 +771,11 @@ mixed runtime carriers behind a classifier; it is pinned by the
 `generic_reflection_predicate_fact_boundary.jett` and
 `generic_reflection_boolean_fact_boundary.jett` compile-fail fixtures. Static
 predicate folding, trusted predicate annotations, and general flow-sensitive
-boolean refinement remain separate future design work.
+boolean refinement remain separate future design work. The settled boundary is
+recorded in the completed
+[reflection predicate fact contract](completed/reflection_predicate_facts.md),
+while possible static folding remains an
+[open-design follow-up](open_design/reflection_predicate_static_folding.md).
 
 ### Capability Restriction
 

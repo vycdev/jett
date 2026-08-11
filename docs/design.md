@@ -6681,9 +6681,10 @@ helpers may organize ordinary runtime logic, but code that performs a generic
 cast must retain a visible direct fact or match arm. Static predicate folding,
 trusted predicate annotations, and general flow-sensitive boolean refinement
 are deferred changes rather than part of the current policy. The decision and
-its pinned compile-fail boundaries are recorded in
-[`docs/open_design/reflection_predicate_facts.md`](open_design/reflection_predicate_facts.md)
-and [#6](https://github.com/vycdev/jett/issues/6).
+its pinned compile-fail boundaries are recorded in the completed
+[reflection predicate fact contract](completed/reflection_predicate_facts.md).
+The narrower static-folding possibility remains a separate
+[open-design follow-up](open_design/reflection_predicate_static_folding.md).
 
 ---
 
