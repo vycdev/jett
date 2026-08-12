@@ -14,9 +14,9 @@ canonical project overview:
 
 ## Active Plans
 
-These notes describe work that is still live or directly feeds the next JSON
-and reflection implementation steps:
+These notes describe live implementation and architecture staging:
 
+- [Frontend syntax tree staging](active/frontend_syntax_tree_staging.md)
 - [JsonValue to JsonTree transition](active/json_value_transition_plan.md)
 - [JSON stdlib extraction plan](active/stdlib_json_extraction_plan.md)
 - [Canonical reflection metadata plan](active/canonical_reflection_metadata_plan.md)
