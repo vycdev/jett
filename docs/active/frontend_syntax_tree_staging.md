@@ -49,4 +49,3 @@ should connect those layers rather than treating the CST as runtime metadata.
    it.
 4. Lower CST to the existing AST and migrate formatter/LSP features
    incrementally.
-
