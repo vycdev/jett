@@ -1386,8 +1386,9 @@ compiler must not retain hardcoded knowledge of public list names or
 signatures.
 
 The first extraction slice is
-[tracked by #57](https://github.com/vycdev/jett/issues/57). It gives the three
-collection-view helpers ordinary source signatures equivalent to:
+[tracked by #57](https://github.com/vycdev/jett/issues/57). The three
+collection-view helpers are now ordinary functions in `stdlib/list.jett` with
+source signatures equivalent to:
 
 ```jett
 export function is_empty[T](view items: list[T]) returns bool
@@ -1395,9 +1396,9 @@ export function first[T](view items: list[T]) returns optional[T]
 export function last[T](view items: list[T]) returns optional[T]
 ```
 
-Their Jett bodies may compose over indexing and length kernels during the
-transition. The signatures must preserve the current borrow/view behavior, and
-regressions must call each helper and then successfully reuse the original
+Their Jett bodies compose over indexing and length kernels during the
+transition. The signatures preserve the current borrow/view behavior, with
+regressions that call each helper and then successfully reuse the original
 list. Follow-up extraction remains required for every other public `list.*`
 operation, including the public declarations that front foundational kernels.
 

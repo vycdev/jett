@@ -1263,12 +1263,13 @@ execution. Those kernels are implementation details, so the compiler does not
 retain hardcoded public list names or signatures as the final architecture.
 
 The first extraction slice, [tracked by
-#57](https://github.com/vycdev/jett/issues/57), moves `list.is_empty`,
-`list.first`, and `list.last` to generic source declarations whose parameter is
-`view items: list[T]`. That view spelling is part of the contract: ownership
-regressions must call each helper and then reuse the original list. The slice
-may compose over length and indexing kernels, but all remaining public list
-operations still require follow-up source declarations.
+#57](https://github.com/vycdev/jett/issues/57), defines `list.is_empty`,
+`list.first`, and `list.last` as generic functions in `stdlib/list.jett` whose
+parameter is `view items: list[T]`. That view spelling is part of the contract:
+ownership regressions call each helper and then reuse the original list. These
+functions compose over the transitional public length and indexing kernels;
+all remaining public list operations still require follow-up source
+declarations.
 
 **String operations — no manual parsing:**
 

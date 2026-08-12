@@ -1459,6 +1459,116 @@ impl Interpreter {
     /// Evaluate a single pipeline step: call the step's function with the
     /// accumulated `piped_value` as the first argument, followed by any
     /// extra arguments.
+    fn inferred_user_function_type_args(
+        &self,
+        callee: &Expr,
+        type_args: &[TypeExpr],
+        args: &[CallArg],
+    ) -> Option<Vec<TypeExpr>> {
+        let actual_types = args
+            .iter()
+            .map(|arg| self.call_argument_type(&arg.value))
+            .collect::<Option<Vec<_>>>()?;
+        self.inferred_user_function_type_args_from_types(callee, type_args, &actual_types)
+    }
+
+    fn inferred_user_function_type_args_from_types(
+        &self,
+        callee: &Expr,
+        type_args: &[TypeExpr],
+        actual_types: &[TypeExpr],
+    ) -> Option<Vec<TypeExpr>> {
+        if !type_args.is_empty() {
+            return None;
+        }
+        let source_name = match callee {
+            Expr::FieldAccess(owner, field, _) => Self::extract_dotted_name(owner, &field.name),
+            Expr::Ident(ident) => Some(ident.name.clone()),
+            _ => None,
+        }?;
+        let function_name = self.runtime_name(&source_name);
+        let function = self.functions.get(&function_name)?;
+        if function.type_params.is_empty() {
+            return None;
+        }
+
+        let mut inferred = HashMap::new();
+        for (param, actual) in function.params.iter().zip(actual_types) {
+            Self::infer_type_arguments(&param.ty, actual, &function.type_params, &mut inferred);
+        }
+        function
+            .type_params
+            .iter()
+            .map(|param| inferred.get(&param.name).cloned())
+            .collect()
+    }
+
+    fn call_argument_type(&self, expression: &Expr) -> Option<TypeExpr> {
+        match expression {
+            Expr::Ident(argument) => self.get_variable_type(&argument.name).cloned(),
+            _ => self
+                .checked_expression_types
+                .as_ref()
+                .and_then(|types| types.get(&expression.span()))
+                .and_then(|type_name| {
+                    Self::simple_type_expr_from_name(type_name, expression.span())
+                }),
+        }
+    }
+
+    fn infer_type_arguments(
+        expected: &TypeExpr,
+        actual: &TypeExpr,
+        type_params: &[Ident],
+        inferred: &mut HashMap<String, TypeExpr>,
+    ) {
+        match (expected, actual) {
+            (TypeExpr::Named(expected), actual)
+                if type_params.iter().any(|param| param.name == expected.name) =>
+            {
+                inferred
+                    .entry(expected.name.clone())
+                    .or_insert_with(|| actual.clone());
+            }
+            (
+                TypeExpr::Generic(expected_owner, expected_args, _),
+                TypeExpr::Generic(actual_owner, actual_args, _),
+            ) if expected_owner.name == actual_owner.name => {
+                for (expected, actual) in expected_args.iter().zip(actual_args) {
+                    Self::infer_type_arguments(expected, actual, type_params, inferred);
+                }
+            }
+            (TypeExpr::View(expected, _), actual) => {
+                Self::infer_type_arguments(expected, actual, type_params, inferred);
+            }
+            (expected, TypeExpr::View(actual, _)) => {
+                Self::infer_type_arguments(expected, actual, type_params, inferred);
+            }
+            _ => {}
+        }
+    }
+
+    fn simple_type_expr_from_name(type_name: &str, span: Span) -> Option<TypeExpr> {
+        if let Some((owner, args)) = Self::split_generic_type_display(type_name) {
+            let args = Self::split_type_display_args(args)
+                .into_iter()
+                .map(|arg| Self::simple_type_expr_from_name(arg.trim(), span))
+                .collect::<Option<Vec<_>>>()?;
+            return Some(TypeExpr::Generic(
+                Ident {
+                    name: owner.to_string(),
+                    span,
+                },
+                args,
+                span,
+            ));
+        }
+        Some(TypeExpr::Named(Ident {
+            name: type_name.to_string(),
+            span,
+        }))
+    }
+
     fn eval_call_flow(
         &mut self,
         callee: &Expr,
@@ -1498,6 +1608,9 @@ impl Interpreter {
             }
             _ => {}
         }
+
+        let inferred_type_args = self.inferred_user_function_type_args(callee, type_args, args);
+        let type_args = inferred_type_args.as_deref().unwrap_or(type_args);
 
         let mut arg_values = Vec::with_capacity(args.len());
         for arg in args {
@@ -1707,6 +1820,28 @@ impl Interpreter {
             Expr::GenericCall(callee, type_args, args, _) => (callee, type_args, args),
             _ => (function, &[], &step.extra_args),
         };
+
+        let mut actual_types = Vec::with_capacity(extra_args.len() + 1);
+        if let Some(piped_type) = self
+            .checked_expression_types
+            .as_ref()
+            .and_then(|types| types.get(&step.span))
+            .and_then(|type_name| Self::simple_type_expr_from_name(type_name, step.span))
+        {
+            actual_types.push(piped_type);
+            if let Some(extra_types) = extra_args
+                .iter()
+                .map(|arg| self.call_argument_type(&arg.value))
+                .collect::<Option<Vec<_>>>()
+            {
+                actual_types.extend(extra_types);
+            } else {
+                actual_types.clear();
+            }
+        }
+        let inferred_type_args =
+            self.inferred_user_function_type_args_from_types(function, type_args, &actual_types);
+        let type_args = inferred_type_args.as_deref().unwrap_or(type_args);
 
         // Build argument list: piped value first, then extra args.
         let mut arg_values = vec![piped_value];
@@ -7946,44 +8081,6 @@ impl Interpreter {
                         }
                     }
                     _ => Some(Err(format!("{name} expects a list and an int64 index"))),
-                }
-            }
-
-            "list.first" => {
-                require_args!(name, 1, args);
-                match &args[0] {
-                    Value::List(items) => {
-                        if items.is_empty() {
-                            Some(Ok(Value::OptionalNone))
-                        } else {
-                            Some(Ok(Value::OptionalSome(Box::new(items[0].clone()))))
-                        }
-                    }
-                    _ => Some(Err(format!("{name} expects a list argument"))),
-                }
-            }
-
-            "list.last" => {
-                require_args!(name, 1, args);
-                match &args[0] {
-                    Value::List(items) => {
-                        if items.is_empty() {
-                            Some(Ok(Value::OptionalNone))
-                        } else {
-                            Some(Ok(Value::OptionalSome(Box::new(
-                                items[items.len() - 1].clone(),
-                            ))))
-                        }
-                    }
-                    _ => Some(Err(format!("{name} expects a list argument"))),
-                }
-            }
-
-            "list.is_empty" => {
-                require_args!(name, 1, args);
-                match &args[0] {
-                    Value::List(items) => Some(Ok(Value::Bool(items.is_empty()))),
-                    _ => Some(Err(format!("{name} expects a list argument"))),
                 }
             }
 
@@ -17292,28 +17389,6 @@ mod builtin_tests {
     }
 
     #[test]
-    fn builtin_list_first() {
-        let mut interp = Interpreter::new();
-        let list_expr = Expr::ListConstruct(vec![int(10), int(20)], sp());
-        let expr = dotted_call("list", "first", vec![list_expr]);
-        assert_eq!(
-            interp.eval_expr(&expr).unwrap(),
-            Value::OptionalSome(Box::new(Value::Int64(10)))
-        );
-    }
-
-    #[test]
-    fn builtin_list_last() {
-        let mut interp = Interpreter::new();
-        let list_expr = Expr::ListConstruct(vec![int(10), int(20)], sp());
-        let expr = dotted_call("list", "last", vec![list_expr]);
-        assert_eq!(
-            interp.eval_expr(&expr).unwrap(),
-            Value::OptionalSome(Box::new(Value::Int64(20)))
-        );
-    }
-
-    #[test]
     fn builtin_list_new() {
         let mut interp = Interpreter::new();
         let expr = Expr::GenericCall(
@@ -17323,22 +17398,6 @@ mod builtin_tests {
             sp(),
         );
         assert_eq!(interp.eval_expr(&expr).unwrap(), Value::List(vec![]));
-    }
-
-    #[test]
-    fn builtin_list_is_empty_true() {
-        let mut interp = Interpreter::new();
-        let list_expr = Expr::ListConstruct(vec![], sp());
-        let expr = dotted_call("list", "is_empty", vec![list_expr]);
-        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Bool(true));
-    }
-
-    #[test]
-    fn builtin_list_is_empty_false() {
-        let mut interp = Interpreter::new();
-        let list_expr = Expr::ListConstruct(vec![int(1)], sp());
-        let expr = dotted_call("list", "is_empty", vec![list_expr]);
-        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Bool(false));
     }
 
     #[test]

@@ -1,0 +1,10 @@
+namespace list
+export function is_empty[T](view items: list[T]) returns bool:
+    return list.length(view items) == 0
+export function first[T](view items: list[T]) returns optional[T]:
+    return list.get[T](view items, 0)
+export function last[T](view items: list[T]) returns optional[T]:
+    int64 length = list.length(view items)
+    if length == 0:
+        return none
+    return list.get[T](view items, length - 1)

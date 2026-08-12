@@ -83,6 +83,14 @@ struct ReflectionTypeInfoStaticFacts {
     primitive_tag: Option<String>,
 }
 
+struct InferredGenericSignature {
+    concrete_args: Vec<TypeId>,
+    subst: HashMap<String, TypeId>,
+    kind_subst: HashMap<String, String>,
+    param_types: Vec<TypeId>,
+    return_type: TypeId,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum StaticReflectionEnumValue {
     TypeKind(String),
@@ -3268,11 +3276,6 @@ impl<'a> TypeChecker<'a> {
                 let list_ty = self.interner.intern(Type::List(inner));
                 Some((vec![list_ty], list_ty))
             }
-            "list.is_empty" => {
-                let inner = self.optional_type_arg(&name, type_args, span);
-                let list_ty = self.interner.intern(Type::List(inner));
-                Some((vec![list_ty], TypeInterner::BOOL))
-            }
             "list.skip" | "list.take" => {
                 let inner = self.optional_type_arg(&name, type_args, span);
                 let list_ty = self.interner.intern(Type::List(inner));
@@ -3567,12 +3570,6 @@ impl<'a> TypeChecker<'a> {
                 Some((vec![set_ty, set_ty], set_ty))
             }
 
-            // list.first / list.last — no fn arg
-            "list.first" | "list.last" => {
-                let inner = self.optional_type_arg(&name, type_args, span);
-                let list_ty = self.interner.intern(Type::List(inner));
-                Some((vec![list_ty], self.interner.intern(Type::Optional(inner))))
-            }
             // higher-order: list.filter[T](list, fn) -> list[T]
             "list.filter" => {
                 let inner = self.optional_type_arg(&name, type_args, span);
@@ -7878,6 +7875,9 @@ impl<'a> TypeChecker<'a> {
     fn check_pipeline(&mut self, initial: &Expr, steps: &[ast::PipelineStep]) -> TypeId {
         let mut current_ty = self.check_expr(initial);
         for step in steps {
+            // The interpreter uses the checked input type to infer source-generic
+            // arguments for the synthetic first argument of a pipeline call.
+            self.type_map.insert(step.span, current_ty);
             current_ty = self.check_pipeline_step(current_ty, step);
         }
         current_ty
@@ -7973,6 +7973,16 @@ impl<'a> TypeChecker<'a> {
         }
 
         let builtin_signature = self.builtin_signature(function, type_args, step.span);
+        if builtin_signature.is_none() && type_args.is_empty() {
+            if let Some(return_type) = self.check_inferred_generic_function_pipeline_step(
+                callee_name.as_deref(),
+                current_ty,
+                extra_args,
+                step.span,
+            ) {
+                return return_type;
+            }
+        }
         if builtin_signature.is_none() && !type_args.is_empty() {
             if let Some(return_type) = self.check_generic_function_pipeline_step(
                 callee_name.as_deref(),
@@ -8079,6 +8089,71 @@ impl<'a> TypeChecker<'a> {
         }
 
         return_type
+    }
+
+    fn check_inferred_generic_function_pipeline_step(
+        &mut self,
+        callee_name: Option<&str>,
+        current_ty: TypeId,
+        extra_args: &[ast::CallArg],
+        span: Span,
+    ) -> Option<TypeId> {
+        let function_name = callee_name?;
+        let template = self.generic_function_templates.get(function_name)?.clone();
+        let arg_count = extra_args.len() + 1;
+        if arg_count != template.params.len() {
+            self.sink.emit(errors::argument_count_mismatch(
+                function_name,
+                template.params.len(),
+                arg_count,
+                span,
+            ));
+            for arg in extra_args {
+                self.check_expr(&arg.value);
+            }
+            return Some(TypeInterner::ERROR);
+        }
+
+        let mut actual_types = Vec::with_capacity(arg_count);
+        actual_types.push(current_ty);
+        actual_types.extend(extra_args.iter().map(|arg| self.check_expr(&arg.value)));
+        let Some(inferred) = self.infer_generic_signature(&template, &actual_types) else {
+            self.emit_cannot_infer_generic(function_name, &template, span);
+            return Some(TypeInterner::ERROR);
+        };
+
+        let mut arguments_match = true;
+        if !self.types_compatible(inferred.param_types[0], current_ty) {
+            arguments_match = false;
+            self.sink.emit(errors::type_mismatch(
+                &self.type_name(inferred.param_types[0]),
+                &self.type_name(current_ty),
+                span,
+            ));
+        }
+        for (arg, &expected) in extra_args.iter().zip(inferred.param_types.iter().skip(1)) {
+            let got = self.check_expr_for_expected(&arg.value, expected, false);
+            if !self.types_compatible(expected, got) {
+                arguments_match = false;
+                self.sink.emit(errors::type_mismatch(
+                    &self.type_name(expected),
+                    &self.type_name(got),
+                    arg.value.span(),
+                ));
+            }
+        }
+
+        if arguments_match {
+            self.check_generic_function_instantiation(
+                function_name,
+                &template,
+                &inferred.concrete_args,
+                inferred.subst,
+                inferred.kind_subst,
+                ReflectionParamFacts::default(),
+            );
+        }
+        Some(inferred.return_type)
     }
 
     fn check_generic_function_pipeline_step(
@@ -9108,6 +9183,14 @@ impl<'a> TypeChecker<'a> {
             }
         }
 
+        if builtin_signature.is_none()
+            && type_args.is_empty()
+            && let Some(function_name) = callee_name.as_deref()
+            && self.generic_function_templates.contains_key(function_name)
+        {
+            return self.check_inferred_generic_function_call(function_name, args, span);
+        }
+
         // Check for generic function call: `name[T](args...)`.
         if builtin_signature.is_none() && !type_args.is_empty() {
             if let Some(function_name) = callee_name.as_deref() {
@@ -9441,6 +9524,203 @@ impl<'a> TypeChecker<'a> {
         }
 
         return_type
+    }
+
+    fn check_inferred_generic_function_call(
+        &mut self,
+        function_name: &str,
+        args: &[ast::CallArg],
+        span: Span,
+    ) -> TypeId {
+        let template = self
+            .generic_function_templates
+            .get(function_name)
+            .expect("generic template existence checked by caller")
+            .clone();
+        if args.len() != template.params.len() {
+            self.sink.emit(errors::argument_count_mismatch(
+                function_name,
+                template.params.len(),
+                args.len(),
+                span,
+            ));
+            for arg in args {
+                self.check_expr(&arg.value);
+            }
+            return TypeInterner::ERROR;
+        }
+
+        let actual_types = args
+            .iter()
+            .map(|arg| self.check_expr(&arg.value))
+            .collect::<Vec<_>>();
+        let Some(inferred) = self.infer_generic_signature(&template, &actual_types) else {
+            self.emit_cannot_infer_generic(function_name, &template, span);
+            return TypeInterner::ERROR;
+        };
+
+        let mut arguments_match = true;
+        for (arg, &expected) in args.iter().zip(&inferred.param_types) {
+            let got = self.check_expr_for_expected(&arg.value, expected, false);
+            if !self.types_compatible(expected, got) {
+                arguments_match = false;
+                self.sink.emit(errors::type_mismatch(
+                    &self.type_name(expected),
+                    &self.type_name(got),
+                    arg.value.span(),
+                ));
+            }
+        }
+
+        if arguments_match {
+            let param_facts =
+                self.reflection_param_facts_for_call(&template, &inferred.param_types, args);
+            self.check_generic_function_instantiation(
+                function_name,
+                &template,
+                &inferred.concrete_args,
+                inferred.subst,
+                inferred.kind_subst,
+                param_facts,
+            );
+        }
+        inferred.return_type
+    }
+
+    fn infer_generic_signature(
+        &mut self,
+        template: &FunctionDef,
+        actual_types: &[TypeId],
+    ) -> Option<InferredGenericSignature> {
+        let type_params = template
+            .type_params
+            .iter()
+            .map(|param| param.name.as_str())
+            .collect::<HashSet<_>>();
+        let mut subst = HashMap::new();
+        for (param, &actual) in template.params.iter().zip(actual_types) {
+            self.infer_type_params_from_type(&param.ty, actual, &type_params, &mut subst);
+        }
+        let concrete_args = template
+            .type_params
+            .iter()
+            .map(|param| subst.get(&param.name).copied())
+            .collect::<Option<Vec<_>>>()?;
+        let kind_subst = template
+            .type_params
+            .iter()
+            .zip(&concrete_args)
+            .map(|(param, &ty)| {
+                (
+                    param.name.clone(),
+                    self.reflection_kind_tag_for_type(ty).to_string(),
+                )
+            })
+            .collect();
+
+        let old_subst = std::mem::replace(&mut self.type_var_subst, subst.clone());
+        let param_types = template
+            .params
+            .iter()
+            .map(|param| self.resolve_type_expr(&param.ty))
+            .collect();
+        let return_type = template
+            .return_type
+            .as_ref()
+            .map(|ty| self.resolve_type_expr(ty))
+            .unwrap_or(TypeInterner::NOTHING);
+        self.type_var_subst = old_subst;
+
+        Some(InferredGenericSignature {
+            concrete_args,
+            subst,
+            kind_subst,
+            param_types,
+            return_type,
+        })
+    }
+
+    fn infer_type_params_from_type(
+        &self,
+        expected: &TypeExpr,
+        actual: TypeId,
+        type_params: &HashSet<&str>,
+        subst: &mut HashMap<String, TypeId>,
+    ) {
+        match expected {
+            TypeExpr::Named(ident) if type_params.contains(ident.name.as_str()) => {
+                match subst.get_mut(&ident.name) {
+                    Some(inferred) if *inferred == TypeInterner::ERROR => *inferred = actual,
+                    Some(_) => {}
+                    None => {
+                        subst.insert(ident.name.clone(), actual);
+                    }
+                }
+            }
+            TypeExpr::View(inner, _) => {
+                self.infer_type_params_from_type(inner, actual, type_params, subst);
+            }
+            TypeExpr::Generic(owner, args, _) => {
+                match (owner.name.as_str(), self.interner.resolve(actual)) {
+                    ("list", Type::List(inner))
+                    | ("set", Type::Set(inner))
+                    | ("optional", Type::Optional(inner))
+                    | ("secret", Type::Secret(inner))
+                        if args.len() == 1 =>
+                    {
+                        self.infer_type_params_from_type(&args[0], *inner, type_params, subst);
+                    }
+                    ("map", Type::Map(key, value)) | ("result", Type::Result(key, value))
+                        if args.len() == 2 =>
+                    {
+                        self.infer_type_params_from_type(&args[0], *key, type_params, subst);
+                        self.infer_type_params_from_type(&args[1], *value, type_params, subst);
+                    }
+                    _ => {}
+                }
+            }
+            TypeExpr::Function(params, return_type, _) => {
+                if let Type::Function {
+                    params: actual_params,
+                    return_type: actual_return,
+                } = self.interner.resolve(actual)
+                {
+                    for (expected, &actual) in params.iter().zip(actual_params) {
+                        self.infer_type_params_from_type(expected, actual, type_params, subst);
+                    }
+                    self.infer_type_params_from_type(
+                        return_type,
+                        *actual_return,
+                        type_params,
+                        subst,
+                    );
+                }
+            }
+            TypeExpr::StateQualified(base, _, _) => {
+                self.infer_type_params_from_type(base, actual, type_params, subst);
+            }
+            _ => {}
+        }
+    }
+
+    fn emit_cannot_infer_generic(
+        &mut self,
+        function_name: &str,
+        template: &FunctionDef,
+        span: Span,
+    ) {
+        let params = template
+            .type_params
+            .iter()
+            .map(|param| param.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        self.sink.emit(errors::unknown_type(
+            &format!(
+                "{function_name} (cannot infer type argument(s) {params}; provide explicit type arguments)"
+            ),
+            span,
+        ));
     }
 
     fn check_field_access(&mut self, base: &Expr, field: &ast::Ident, span: Span) -> TypeId {
@@ -11268,6 +11548,56 @@ mod tests {
             .into_iter()
             .filter(|d| d.severity == jett_diagnostics::Severity::Error)
             .collect()
+    }
+
+    #[test]
+    fn inferred_generic_calls_record_concrete_direct_and_pipeline_types() {
+        let source = r#"function first[T](view items: list[T]) returns optional[T]:
+    return list.get[T](view items, 0)
+function direct() returns optional[int64]:
+    list[int64] items = list(1)
+    return first(items)
+function piped() returns optional[int64]:
+    list[int64] items = list(2)
+    return items
+        into first()
+"#;
+        let result = check_source_result(source);
+        let errors = result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+            .collect::<Vec<_>>();
+        assert!(errors.is_empty(), "unexpected errors: {errors:#?}");
+
+        let direct_text = "first(items)";
+        let direct_start = source.find(direct_text).expect("direct call should exist") as u32;
+        let direct_span = Span::new(
+            FileId::new(0),
+            direct_start,
+            direct_start + direct_text.len() as u32,
+        );
+        let pipeline_text = "items\n        into first()";
+        let pipeline_start = source
+            .rfind(pipeline_text)
+            .expect("pipeline expression should exist") as u32;
+        let pipeline_span = Span::new(
+            FileId::new(0),
+            pipeline_start,
+            pipeline_start + pipeline_text.len() as u32,
+        );
+
+        for span in [direct_span, pipeline_span] {
+            let ty = result.type_map[&span];
+            assert!(
+                matches!(
+                    result.interner.resolve(ty),
+                    Type::Optional(inner) if *inner == TypeInterner::INT64
+                ),
+                "expected optional[int64], got {:?}",
+                result.interner.resolve(ty)
+            );
+        }
     }
 
     // ---------------------------------------------------------------

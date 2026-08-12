@@ -3987,6 +3987,27 @@ mod tests {
     }
 
     #[test]
+    fn query_signature_reports_extracted_list_helper_source() {
+        let result = query_signature(Path::new("."), "list.first")
+            .expect("signature query should succeed")
+            .expect("list.first signature should be found");
+
+        assert_eq!(result.name, "list.first");
+        assert_eq!(result.type_params, vec!["T".to_string()]);
+        assert_eq!(result.params.len(), 1);
+        assert_eq!(result.params[0].name, "items");
+        assert!(result.params[0].view);
+        assert_eq!(result.params[0].type_name, "list[T]");
+        assert_eq!(result.return_type, "optional[T]");
+        assert!(
+            result
+                .file_path
+                .replace('\\', "/")
+                .ends_with("stdlib/list.jett")
+        );
+    }
+
+    #[test]
     fn bundle_project_writes_validated_single_file() {
         let root = temp_test_dir("jett_driver_bundle_project");
         fs::create_dir_all(root.join("src")).expect("temp bundle dir should be created");

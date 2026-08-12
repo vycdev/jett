@@ -389,7 +389,7 @@ impl Resolver {
             }
             if prev.kind == DefKind::Constant
                 && ns.span.file.is_stdlib()
-                && ns.name.name == "string"
+                && matches!(ns.name.name.as_str(), "string" | "list" | "map" | "set")
             {
                 let def_id = self.scope_table.new_def_with_visibility(
                     ns.name.name.clone(),
@@ -1680,39 +1680,54 @@ mod tests {
     }
 
     #[test]
-    fn stdlib_builtin_type_namespace_replaces_builtin_binding() {
-        let module = parse_module_with_file(
-            r#"
-namespace string
-
-export function is_not_empty(value: string) returns bool:
-    return string.is_empty(value)
-"#,
-            FileId::new(STDLIB_FILE_ID_START),
-        );
-
-        let result = resolve(&module);
-        let errors: Vec<_> = result
-            .diagnostics
-            .iter()
-            .filter(|d| d.severity == Severity::Error)
-            .collect();
-
-        assert!(errors.is_empty(), "expected no errors, got: {errors:#?}");
-        assert!(
-            result
-                .scope_table
-                .definitions
+    fn stdlib_builtin_type_namespaces_replace_builtin_bindings() {
+        for (namespace, function_name, source) in [
+            (
+                "string",
+                "string.is_not_empty",
+                "namespace string\nexport function is_not_empty(value: string) returns bool:\n    return string.is_empty(value)\n",
+            ),
+            (
+                "list",
+                "list.is_empty",
+                "namespace list\nexport function is_empty[T](view items: list[T]) returns bool:\n    return list.length(view items) == 0\n",
+            ),
+            (
+                "map",
+                "map.is_empty",
+                "namespace map\nexport function is_empty[K, V](view items: map[K, V]) returns bool:\n    return map.length(view items) == 0\n",
+            ),
+            (
+                "set",
+                "set.is_empty",
+                "namespace set\nexport function is_empty[T](view items: set[T]) returns bool:\n    return set.length(view items) == 0\n",
+            ),
+        ] {
+            let module = parse_module_with_file(source, FileId::new(STDLIB_FILE_ID_START));
+            let result = resolve(&module);
+            let errors: Vec<_> = result
+                .diagnostics
                 .iter()
-                .any(|def| def.name == "string" && def.kind == DefKind::Namespace),
-            "expected stdlib string namespace definition"
-        );
-        assert_eq!(
-            def_by_name(&result, "string.is_not_empty")
-                .namespace
-                .as_deref(),
-            Some("string")
-        );
+                .filter(|d| d.severity == Severity::Error)
+                .collect();
+
+            assert!(
+                errors.is_empty(),
+                "expected no errors for {namespace}, got: {errors:#?}"
+            );
+            assert!(
+                result
+                    .scope_table
+                    .definitions
+                    .iter()
+                    .any(|def| def.name == namespace && def.kind == DefKind::Namespace),
+                "expected stdlib {namespace} namespace definition"
+            );
+            assert_eq!(
+                def_by_name(&result, function_name).namespace.as_deref(),
+                Some(namespace)
+            );
+        }
     }
 
     #[test]
