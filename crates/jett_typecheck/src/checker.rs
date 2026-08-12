@@ -3268,11 +3268,6 @@ impl<'a> TypeChecker<'a> {
                 let list_ty = self.interner.intern(Type::List(inner));
                 Some((vec![list_ty], list_ty))
             }
-            "list.is_empty" => {
-                let inner = self.optional_type_arg(&name, type_args, span);
-                let list_ty = self.interner.intern(Type::List(inner));
-                Some((vec![list_ty], TypeInterner::BOOL))
-            }
             "list.skip" | "list.take" => {
                 let inner = self.optional_type_arg(&name, type_args, span);
                 let list_ty = self.interner.intern(Type::List(inner));
@@ -3567,12 +3562,6 @@ impl<'a> TypeChecker<'a> {
                 Some((vec![set_ty, set_ty], set_ty))
             }
 
-            // list.first / list.last — no fn arg
-            "list.first" | "list.last" => {
-                let inner = self.optional_type_arg(&name, type_args, span);
-                let list_ty = self.interner.intern(Type::List(inner));
-                Some((vec![list_ty], self.interner.intern(Type::Optional(inner))))
-            }
             // higher-order: list.filter[T](list, fn) -> list[T]
             "list.filter" => {
                 let inner = self.optional_type_arg(&name, type_args, span);

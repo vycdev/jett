@@ -1,0 +1,4 @@
+# ERROR: E0204
+namespace list
+function local_list_helper() returns nothing:
+    return nothing

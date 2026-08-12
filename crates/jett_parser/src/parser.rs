@@ -296,7 +296,10 @@ impl<'src> Parser<'src> {
 
     fn parse_namespace(&mut self) -> NamespaceDecl {
         let kw = self.expect(TokenKind::Namespace);
-        let name = if self.peek() == TokenKind::String_ {
+        let name = if matches!(
+            self.peek(),
+            TokenKind::String_ | TokenKind::List_ | TokenKind::Map_ | TokenKind::Set_
+        ) {
             self.parse_type_ident()
         } else {
             self.parse_qualified_ident()

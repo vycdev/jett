@@ -1,0 +1,46 @@
+namespace test
+function inferred_first_reuses_list() returns int64:
+    list[int64] items = list(10, 20, 30)
+    optional[int64] first = list.first(items)
+    int64 value = first handle:
+        default 0
+    return value + list.length(items)
+verify inferred_first_reuses_list:
+    assert inferred_first_reuses_list() == 13
+function inferred_first_from_view(view items: list[int64]) returns int64:
+    optional[int64] first = list.first(items)
+    return first handle:
+        default 0
+function inferred_first_view_parameter() returns int64:
+    list[int64] items = list(40, 50)
+    int64 first = inferred_first_from_view(view items)
+    return first + list.length(items)
+verify inferred_first_view_parameter:
+    assert inferred_first_view_parameter() == 42
+function explicit_last_reuses_list() returns int64:
+    list[int64] items = list(10, 20, 30)
+    optional[int64] last = list.last[int64](view items)
+    int64 value = last handle:
+        default 0
+    return value + list.length(items)
+verify explicit_last_reuses_list:
+    assert explicit_last_reuses_list() == 33
+function empty_first_and_last() returns bool:
+    list[int64] items = list()
+    optional[int64] first = list.first(items)
+    optional[int64] last = list.last[int64](items)
+    int64 first_value = first handle:
+        default 7
+    int64 last_value = last handle:
+        default 9
+    return first_value == 7 and last_value == 9 and list.length(items) == 0
+verify empty_first_and_last:
+    assert empty_first_and_last() == true
+function is_empty_outcomes_reuse_lists() returns bool:
+    list[int64] empty = list()
+    list[int64] filled = list(1)
+    bool empty_result = list.is_empty[int64](empty)
+    bool filled_result = list.is_empty(filled)
+    return empty_result and not filled_result and list.length(empty) == 0 and list.length(filled) == 1
+verify is_empty_outcomes_reuse_lists:
+    assert is_empty_outcomes_reuse_lists() == true

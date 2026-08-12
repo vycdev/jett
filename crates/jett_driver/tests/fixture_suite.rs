@@ -668,6 +668,7 @@ run_pass_fixture!(
 );
 run_pass_fixture!(run_pass_map_operations, "map_operations.jett");
 run_pass_fixture!(run_pass_list_operations, "list_operations.jett");
+run_pass_fixture!(run_pass_list_access_source, "list_access_source.jett");
 run_pass_fixture!(run_pass_math_operations, "math_operations.jett");
 run_pass_fixture!(run_pass_json_serialize, "json_serialize.jett");
 run_pass_fixture!(run_pass_json_sized_primitives, "json_sized_primitives.jett");
@@ -1188,6 +1189,10 @@ compile_fail_fixture!(
 compile_fail_fixture!(
     compile_fail_string_namespace_collision,
     "string_namespace_collision.jett"
+);
+compile_fail_fixture!(
+    compile_fail_list_namespace_collision,
+    "list_namespace_collision.jett"
 );
 compile_fail_fixture!(
     compile_fail_export_root_type_project_file,
