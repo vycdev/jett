@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use jett_common::{Span, is_json_implicit_view_facade};
 use jett_diagnostics::Diagnostic;
@@ -79,6 +79,8 @@ pub struct OwnershipChecker<'a> {
     diagnostics: Vec<Diagnostic>,
     /// The type interner, needed to check whether a type is a copyable primitive.
     interner: &'a TypeInterner,
+    /// Source-defined functions whose first parameter is declared as a view.
+    source_first_argument_views: HashSet<String>,
 }
 
 impl<'a> OwnershipChecker<'a> {
@@ -87,11 +89,13 @@ impl<'a> OwnershipChecker<'a> {
             states: HashMap::new(),
             diagnostics: Vec::new(),
             interner,
+            source_first_argument_views: HashSet::new(),
         }
     }
 
     /// Run ownership analysis on a module and return collected diagnostics.
     pub fn check_module(mut self, module: &Module) -> Vec<Diagnostic> {
+        self.collect_source_first_argument_views(module);
         for item in &module.items {
             match item {
                 Item::Function(func) => self.check_function(func),
@@ -110,6 +114,48 @@ impl<'a> OwnershipChecker<'a> {
             }
         }
         self.diagnostics
+    }
+
+    fn collect_source_first_argument_views(&mut self, module: &Module) {
+        let mut current_file = None;
+        let mut current_namespace: Option<&str> = None;
+        for item in &module.items {
+            let item_file = match item {
+                Item::Namespace(value) => value.span.file,
+                Item::Function(value) => value.span.file,
+                Item::Mutual(value) => value.span.file,
+                Item::Interface(value) => value.span.file,
+                Item::Implement(value) => value.span.file,
+                Item::Struct(value) => value.span.file,
+                Item::Bitfield(value) => value.span.file,
+                Item::Enum(value) => value.span.file,
+                Item::Machine(value) => value.span.file,
+                Item::Actor(value) => value.span.file,
+                Item::VarDecl(value) => value.span.file,
+                Item::Verify(value) => value.span.file,
+                Item::Property(value) => value.span.file,
+                Item::TypeAlias(value) => value.span.file,
+            };
+            if current_file.is_some_and(|file| file != item_file) {
+                current_namespace = None;
+            }
+            current_file = Some(item_file);
+
+            match item {
+                Item::Namespace(namespace) => {
+                    current_namespace = Some(&namespace.name.name);
+                }
+                Item::Function(function)
+                    if function.params.first().is_some_and(|param| param.view) =>
+                {
+                    let name = current_namespace
+                        .map(|namespace| format!("{namespace}.{}", function.name.name))
+                        .unwrap_or_else(|| function.name.name.clone());
+                    self.source_first_argument_views.insert(name);
+                }
+                _ => {}
+            }
+        }
     }
 
     // ------------------------------------------------------------------
@@ -510,7 +556,7 @@ impl<'a> OwnershipChecker<'a> {
             Expr::Pipeline(initial, steps, _) => {
                 if let Some(first_step) = steps.first() {
                     let (callee, _, piped_as_view) = Self::pipeline_step_call_parts(first_step);
-                    if piped_as_view || Self::first_argument_is_implicit_view(callee) {
+                    if piped_as_view || self.first_argument_is_implicit_view(callee) {
                         self.check_expr_ownership(initial);
                     } else {
                         self.consume_expr(initial, initial.span());
@@ -583,7 +629,7 @@ impl<'a> OwnershipChecker<'a> {
         args: &[CallArg],
         position_offset: usize,
     ) {
-        let first_arg_is_view = Self::first_argument_is_implicit_view(callee);
+        let first_arg_is_view = self.first_argument_is_implicit_view(callee);
 
         for (index, arg) in args.iter().enumerate() {
             let argument_position = position_offset + index;
@@ -604,7 +650,7 @@ impl<'a> OwnershipChecker<'a> {
         }
     }
 
-    fn first_argument_is_implicit_view(callee: &Expr) -> bool {
+    fn first_argument_is_implicit_view(&self, callee: &Expr) -> bool {
         // Map and list builtins that operate on a collection without consuming it.
         // The first argument (the collection) is implicitly viewed.
         let collection_view_builtins: &[&str] = &[
@@ -618,10 +664,7 @@ impl<'a> OwnershipChecker<'a> {
             "map.is_empty",
             "list.length",
             "list.get",
-            "list.first",
-            "list.last",
             "list.append",
-            "list.is_empty",
             "list.skip",
             "list.take",
             "list.reverse",
@@ -657,7 +700,11 @@ impl<'a> OwnershipChecker<'a> {
         ];
         Self::dotted_name_str(callee)
             .as_deref()
-            .map(|n| collection_view_builtins.contains(&n) || is_json_implicit_view_facade(n))
+            .map(|n| {
+                self.source_first_argument_views.contains(n)
+                    || collection_view_builtins.contains(&n)
+                    || is_json_implicit_view_facade(n)
+            })
             .unwrap_or(false)
     }
 

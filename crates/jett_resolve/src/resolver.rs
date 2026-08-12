@@ -1692,6 +1692,16 @@ mod tests {
                 "list.is_empty",
                 "namespace list\nexport function is_empty[T](view items: list[T]) returns bool:\n    return list.length(view items) == 0\n",
             ),
+            (
+                "map",
+                "map.is_empty",
+                "namespace map\nexport function is_empty[K, V](view items: map[K, V]) returns bool:\n    return map.length(view items) == 0\n",
+            ),
+            (
+                "set",
+                "set.is_empty",
+                "namespace set\nexport function is_empty[T](view items: set[T]) returns bool:\n    return set.length(view items) == 0\n",
+            ),
         ] {
             let module = parse_module_with_file(source, FileId::new(STDLIB_FILE_ID_START));
             let result = resolve(&module);

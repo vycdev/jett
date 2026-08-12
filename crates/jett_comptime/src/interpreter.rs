@@ -1465,6 +1465,19 @@ impl Interpreter {
         type_args: &[TypeExpr],
         args: &[CallArg],
     ) -> Option<Vec<TypeExpr>> {
+        let actual_types = args
+            .iter()
+            .map(|arg| self.call_argument_type(&arg.value))
+            .collect::<Option<Vec<_>>>()?;
+        self.inferred_user_function_type_args_from_types(callee, type_args, &actual_types)
+    }
+
+    fn inferred_user_function_type_args_from_types(
+        &self,
+        callee: &Expr,
+        type_args: &[TypeExpr],
+        actual_types: &[TypeExpr],
+    ) -> Option<Vec<TypeExpr>> {
         if !type_args.is_empty() {
             return None;
         }
@@ -1480,9 +1493,8 @@ impl Interpreter {
         }
 
         let mut inferred = HashMap::new();
-        for (param, arg) in function.params.iter().zip(args) {
-            let actual = self.call_argument_type(&arg.value)?;
-            Self::infer_type_arguments(&param.ty, &actual, &function.type_params, &mut inferred);
+        for (param, actual) in function.params.iter().zip(actual_types) {
+            Self::infer_type_arguments(&param.ty, actual, &function.type_params, &mut inferred);
         }
         function
             .type_params
@@ -1808,6 +1820,28 @@ impl Interpreter {
             Expr::GenericCall(callee, type_args, args, _) => (callee, type_args, args),
             _ => (function, &[], &step.extra_args),
         };
+
+        let mut actual_types = Vec::with_capacity(extra_args.len() + 1);
+        if let Some(piped_type) = self
+            .checked_expression_types
+            .as_ref()
+            .and_then(|types| types.get(&step.span))
+            .and_then(|type_name| Self::simple_type_expr_from_name(type_name, step.span))
+        {
+            actual_types.push(piped_type);
+            if let Some(extra_types) = extra_args
+                .iter()
+                .map(|arg| self.call_argument_type(&arg.value))
+                .collect::<Option<Vec<_>>>()
+            {
+                actual_types.extend(extra_types);
+            } else {
+                actual_types.clear();
+            }
+        }
+        let inferred_type_args =
+            self.inferred_user_function_type_args_from_types(function, type_args, &actual_types);
+        let type_args = inferred_type_args.as_deref().unwrap_or(type_args);
 
         // Build argument list: piped value first, then extra args.
         let mut arg_values = vec![piped_value];

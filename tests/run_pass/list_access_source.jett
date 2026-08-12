@@ -17,6 +17,14 @@ function inferred_first_view_parameter() returns int64:
     return first + list.length(items)
 verify inferred_first_view_parameter:
     assert inferred_first_view_parameter() == 42
+function inferred_pipeline_first_reuses_list() returns int64:
+    list[int64] items = list(60, 70)
+    int64 first = items
+        into list.first() handle:
+            default 0
+    return first + list.length(items)
+verify inferred_pipeline_first_reuses_list:
+    assert inferred_pipeline_first_reuses_list() == 62
 function explicit_last_reuses_list() returns int64:
     list[int64] items = list(10, 20, 30)
     optional[int64] last = list.last[int64](view items)
