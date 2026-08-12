@@ -406,7 +406,7 @@ Walk all type declarations and build the type registry:
 - **Built-in generic types:** `list[T]`, `map[K, V]`, `set[T]`, `optional[T]`, `result[T, E]`.
 - **User-defined types:** structs, enums, machines, actors, bitfields, interfaces, type aliases (including refinement types).
 - **Function types:** `function(T) returns U`.
-- **Capability types:** `Filesystem`, `Network`, `Stdout`, `Stderr`, `Stdin`, `Clock`, `Random`, `Process`, `Environment`, `Foreign`. Random sampling uses the proposed explicit `view Random` API, injected per-runtime generator state, and non-cryptographic contract defined in the [Random capability and entropy contract](open_design/random_capability_entropy_contract.md). The `os` `Environment`/argv effect and public stdlib/runtime boundary are [tracked by #94](https://github.com/vycdev/jett/issues/94). `Foreign` guards the generated native C boundary specified by the [C FFI contract](open_design/c_ffi_binding_contract.md).
+- **Capability types:** `Filesystem`, `Network`, `Stdout`, `Stderr`, `Stdin`, `Clock`, `Random`, `Process`, `Environment`, `Foreign`. Random sampling uses the proposed explicit `view Random` API, injected per-runtime generator state, and non-cryptographic contract defined in the [Random capability and entropy contract](open_design/random_capability_entropy_contract.md). The proposed [`Environment` contract](open_design/environment_argv_capability_contract.md) replaces ambient `os.env`/`os.args` with capability-backed reads from one immutable launch snapshot. `Foreign` guards the generated native C boundary specified by the [C FFI contract](open_design/c_ffi_binding_contract.md).
 - **Secret wrapper:** `secret[T]`.
 - **State-qualified types:** `Machine at state`.
 - **Task-control failures:** `CancelledError` terminates a cancelled pending task
@@ -535,6 +535,12 @@ Track which capabilities flow through the program:
   injected clock so tests can provide deterministic signed Unix-millisecond
   samples. See the
   [Time and Clock capability contract](open_design/time_clock_capability_contract.md).
+- **Launch inputs are capability operations.** The proposed
+  `Environment.get(view env, key)` and `Environment.args(view env)` read one
+  immutable runtime-injected launch snapshot. Capability-free `os.env` and
+  `os.args` are transitional ambient effects to remove. Verify, property, and
+  comptime evaluation cannot access process launch data. See the
+  [Environment and argument capability contract](open_design/environment_argv_capability_contract.md).
 - **`trace` and `breakpoint` are capability-exempt** — they produce output/open connections without requiring a `Stdout` or `Network` capability. They are compiler keywords with special treatment, compiled out in release mode.
 - **`print` and `println` are compiler-owned debug builtins, not ordinary I/O.**
   They remain secret-output boundaries and require no `Stdout` capability. The
@@ -1195,22 +1201,24 @@ The runtime library is compiled as a static library (`.a` / `.lib`) and linked i
 The compiler generates a thin wrapper around the user's `main()` that constructs capability values based on the declared parameters:
 
 ```
-// User writes:
-function main(stdout: Stdout, fs: Filesystem) returns nothing:
+// User writes (target capability contract; implementation is staged):
+function main(stdout: Stdout, fs: Filesystem, env: Environment) returns nothing:
     ...
 
 // Compiler generates (pseudocode):
 fn _jett_entry() {
     let stdout = jett_rt_create_stdout();      // Creates Stdout capability
     let fs = jett_rt_create_filesystem();      // Creates Filesystem capability
+    let env = jett_rt_capture_environment();   // Freezes argv + environment
     // Network is NOT created — main() didn't request it
-    user_main(stdout, fs);
+    user_main(stdout, fs, env);
+    jett_rt_drop_environment(env);             // Releases the launch snapshot
     jett_rt_drop_filesystem(fs);               // Cleanup
     jett_rt_drop_stdout(stdout);
 }
 ```
 
-Capability values are opaque structs containing OS-level handles (file descriptors, socket handles, etc.). `Filesystem.read_only(fs)` creates a new capability with a restricted permission flag — the runtime checks this flag before executing write operations. `Foreign` is the exception with no OS handle: when `main` requests it, the entry wrapper creates an unforgeable zero-sized token that authorizes calls through checked generated foreign declarations. It otherwise follows the same ownership, `view`, and explicit actor/task clone rules.
+Capability values are opaque structs containing OS-level handles (file descriptors, socket handles, etc.) or runner-owned state. `Environment` carries an immutable copy of launch arguments and environment entries; it never performs a fresh ambient host lookup after entry. `Filesystem.read_only(fs)` creates a new capability with a restricted permission flag — the runtime checks this flag before executing write operations. `Foreign` is the exception with no OS handle: when `main` requests it, the entry wrapper creates an unforgeable zero-sized token that authorizes calls through checked generated foreign declarations. It otherwise follows the same ownership, `view`, and explicit actor/task clone rules.
 
 ---
 
@@ -1936,7 +1944,7 @@ Core stdlib (string, list, math, json) is implemented in Phase D. This phase com
   defined in the [crypto contract](open_design/crypto_hashing_security_contract.md), and encoding's
   proposed byte-native codecs and strict failure policy are defined by the
   [encoding contract](open_design/encoding_representation_failure_contract.md))
-- **OS:** `os` (environment variables, process management, argv — the `Environment`/argv capability and public stdlib/runtime boundary are [tracked by #94](https://github.com/vycdev/jett/issues/94))
+- **OS:** `Environment` for read-only launch environment variables and user arguments (the proposed capability, snapshot, Unicode-failure, compatibility, and source/runtime boundary is defined in the [Environment and argument contract](open_design/environment_argv_capability_contract.md)); process management remains a separate `Process` capability concern
 - **Utilities:** `regex`, `random` (the proposed explicit capability, entropy,
   deterministic injection, and source/runtime policy is defined in the
   [random contract](open_design/random_capability_entropy_contract.md)), `uuid`
