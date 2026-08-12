@@ -17,7 +17,7 @@
 | Diagnostics, error rendering, TOON output | `jett_diagnostics` | 12 | Done |
 | Project discovery, jett.proj parsing | `jett_project` | 7 | Done |
 | Lexer (indentation, interpolation, 90+ tokens) | `jett_lexer` | 62 | Done |
-| Parser (recursive descent + Pratt) | `jett_parser` | 67 | Done |
+| Parser (recursive descent + Pratt, direct source-spanned AST) | `jett_parser` | 67 | Done; lossless CST-to-AST frontend is [planned later](active/frontend_syntax_tree_staging.md) |
 | Formatter (canonical whitespace) | `jett_fmt` | 8 | Done |
 | Pipeline orchestration | `jett_driver` | 36 | Done |
 | CLI (format, build, run, test, lsp) | `jett_cli` | 0 | Done |

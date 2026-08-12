@@ -18,8 +18,8 @@ flowchart TD
     SRC["Source Files (.jett)"]
     P1["1. Discovery<br/><small>Scan project, find .jett files, read namespace declarations</small>"]
     P2["2. Lexer<br/><small>Source text → Token stream (per file)</small>"]
-    P3["3. Parser<br/><small>Token stream → CST (Concrete Syntax Tree)</small>"]
-    P4["4. AST Lowering<br/><small>CST → AST with desugaring</small>"]
+    P3["3. Parser<br/><small>Token stream → source-spanned AST</small>"]
+    P4["4. Future syntax layer<br/><small>Lossless CST → stable AST boundary</small>"]
     P5["5. Name Resolution<br/><small>Resolve namespaces, types, functions, variables</small>"]
     P6["6. Type Check<br/><small>Full type checking, ownership analysis, capability tracking</small>"]
     P7["7. HIR<br/><small>Typed, ownership-annotated, monomorphized</small>"]
@@ -29,8 +29,13 @@ flowchart TD
     P11["11. Codegen<br/><small>MIR → LLVM IR → native code (or interpreter bytecode)</small>"]
     BIN["Native Binary"]
 
-    SRC --> P1 --> P2 --> P3 --> P4 --> P5 --> P6 --> P7 --> P8 --> P9 --> P10 --> P11 --> BIN
+    SRC --> P1 --> P2 --> P3 --> P5 --> P6 --> P7 --> P8 --> P9 --> P10 --> P11 --> BIN
+    P2 -. "later frontend revision" .-> P4 -.-> P3
 ```
+
+Initial versions intentionally parse directly into the AST. A later frontend
+revision will insert a lossless CST before the same AST boundary; see the
+[frontend syntax tree staging decision](active/frontend_syntax_tree_staging.md).
 
 ---
 
@@ -45,8 +50,8 @@ jett/
 │   ├── jett_common/            # Shared types: Span, FileId, Symbol, diagnostics
 │   ├── jett_diagnostics/       # Error/warning types, TOON + human formatting
 │   ├── jett_lexer/             # Tokenizer
-│   ├── jett_parser/            # Parser → CST
-│   ├── jett_ast/               # AST data structures and lowering from CST
+│   ├── jett_parser/            # Current direct source-spanned AST parser
+│   ├── jett_ast/               # Reserved future AST boundary; not implemented yet
 │   ├── jett_resolve/           # Name resolution, namespace registry, import resolution
 │   ├── jett_types/             # Type representations, type interning, type relationships
 │   ├── jett_typecheck/         # Type checking, ownership analysis, capability tracking
@@ -241,7 +246,8 @@ This lets the parser handle interpolated expressions using the same expression p
 
 **Input:** `Vec<Token>` from the lexer.
 
-**Output:** CST (Concrete Syntax Tree) — a lossless, fully-faithful representation of the source.
+**Current output:** a source-spanned syntax AST. Tokens and comment trivia are
+retained separately where formatting and source tooling need them.
 
 ### Parser Strategy: Recursive Descent with Pratt Parsing
 
@@ -249,16 +255,20 @@ This lets the parser handle interpolated expressions using the same expression p
 - **Pratt parsing** (precedence climbing) for expressions — handles arithmetic operators, comparisons, boolean operators, and `modulo` with correct precedence.
 - **Error recovery:** On a parse error, the parser skips to the next `Dedent` at the current level or `Newline`, emitting an error node. This allows reporting multiple errors per file.
 
-### CST vs AST
+### Direct AST now, CST later
 
-The CST preserves every token including whitespace, comments, and exact formatting. This is needed for:
-- **`jett format`** — the formatter works on the CST to preserve/restructure whitespace.
-- **LSP** — syntax highlighting, goto-definition, etc. need exact source positions.
-- **JSON AST round-tripping** (Rule Set 3) — lossless source ↔ AST conversion.
+Initial Jett versions deliberately parse directly into the AST while language
+semantics stabilize. The formatter currently works from lexer tokens and
+comment trivia, and semantic tooling uses AST spans plus compiler side tables.
 
-The CST uses a flat arena-allocated representation (like `rowan` in rust-analyzer) for memory efficiency.
+A later version will introduce a lossless, error-tolerant CST for exact source
+structure, malformed-file tooling, structural agent edits, comment attachment,
+and incremental parsing. CST nodes will lower into the same AST consumed by
+semantic phases and retain provenance through HIR, MIR, diagnostics, and
+runtime debugging. The staged requirements are recorded in the
+[frontend syntax tree decision](active/frontend_syntax_tree_staging.md).
 
-### Key CST Node Types
+### Key Syntax Node Types
 
 ```
 File            → (NamespaceDecl (TopLevelItem)*)+    // One or more namespace blocks per file
@@ -300,11 +310,15 @@ Expression      → Literal | Ident | BinaryExpr | UnaryExpr |
 
 ---
 
-## Phase 4: AST Lowering (`jett_ast`)
+## Phase 4: Future CST-to-AST Lowering (`jett_ast`)
 
-**Input:** CST.
+**Status:** planned for a later frontend version; not present in the current
+compiler.
 
-**Output:** AST — a cleaner, desugared representation dropping trivia (whitespace, comments).
+**Future input:** lossless CST.
+
+**Future output:** the stable semantic AST, dropping trivia while preserving
+source-node provenance.
 
 ### Desugaring Performed
 

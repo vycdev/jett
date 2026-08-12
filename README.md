@@ -132,8 +132,8 @@ crates/
     jett_common        shared spans, file ids, and symbols
     jett_diagnostics   human and TOON diagnostics
     jett_lexer         tokenization and indentation handling
-    jett_parser        parser and CST construction
-    jett_ast           AST data structures and lowering
+    jett_parser        current direct, source-spanned AST parser
+    jett_ast           reserved future AST boundary (not yet implemented)
     jett_resolve       namespaces, imports, and name resolution
     jett_types         type representations and definitions
     jett_typecheck     type checking, ownership, capabilities, complexity limits
@@ -154,6 +154,7 @@ editor/vscode/         VS Code extension
 - [Language design](docs/design.md)
 - [Compiler architecture](docs/architecture.md)
 - [Implementation progress](docs/progress.md)
+- [Frontend syntax tree staging](docs/active/frontend_syntax_tree_staging.md)
 - [JsonValue to JsonTree transition](docs/active/json_value_transition_plan.md)
 - [JSON stdlib extraction plan](docs/active/stdlib_json_extraction_plan.md)
 
