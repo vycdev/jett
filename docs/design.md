@@ -2997,8 +2997,9 @@ secret[T] ──→ secret.compare() ALLOWED (constant-time comparison)
 > The initial `net.http` client contract and its `Network` capability boundary
 > are separately [tracked by #101](https://github.com/vycdev/jett/issues/101).
 
-> The `Environment`/argv contract and public `os` stdlib/runtime boundary are
-> [tracked by #94](https://github.com/vycdev/jett/issues/94).
+> The proposed `Environment` API, immutable launch snapshot, Unicode-failure
+> policy, and removal of ambient `os.env`/`os.args` are defined in the
+> [Environment and argument capability contract](open_design/environment_argv_capability_contract.md).
 
 #### The Problem: Side Effects Hide in the Call Stack
 
@@ -3028,7 +3029,7 @@ Capability objects are created **only in `main()`** and must be explicitly passe
 # Clock        — read the current time
 # Random       — generate random numbers
 # Process      — spawn child processes
-# Environment  — read environment variables
+# Environment  — read launch environment variables and user arguments
 # Foreign      — cross an unverified generated native C boundary
 ```
 
@@ -3049,11 +3050,15 @@ deterministic compiler/driver tests inject the runtime provider instead.
 
 **Capabilities are a closed, built-in set.** Users cannot define custom capability types. Capabilities represent primitive OS-level side effects (file I/O, networking, stdout, etc.) or, for `Foreign`, explicit permission to cross a native boundary whose narrower effects cannot be proven from a C header. These are a finite, well-known set. Higher-level abstractions like database access or HTTP clients are built on top of primitive capabilities (e.g., a database module takes a `Network` parameter internally). This keeps the capability system simple: the compiler knows the full set, purity tracking is straightforward, and LLMs have a small, fixed list to learn rather than an open-ended set that varies per project. Capability types are not syntactically distinguished from other types in function signatures — they follow the same `view` pattern as any other borrowed parameter.
 
-**How `main()` receives capabilities:**
+**How `main()` receives capabilities (proposed target surface; the current
+interpreter still has transitional ambient builtins):**
 
 ```
 function main(stdout: Stdout, stderr: Stderr, fs: Filesystem, net: Network, env: Environment) returns nothing:
-    string config_path = Environment.get(view env, "CONFIG_PATH") handle error:
+    optional[string] configured_path = Environment.get(view env, "CONFIG_PATH") handle error:
+        Stderr.write(view stderr, "CONFIG_PATH could not be read")
+        return nothing
+    string config_path = configured_path handle:
         Stderr.write(view stderr, "CONFIG_PATH not set")
         return nothing
 
@@ -3065,7 +3070,7 @@ function main(stdout: Stdout, stderr: Stderr, fs: Filesystem, net: Network, env:
     Stdout.write(view stdout, "server stopped")
 ```
 
-**Command-line arguments** are accessed through the same `Environment` capability via `Environment.args()`:
+**Command-line arguments** are accessed through the same `Environment` capability via `Environment.args(view env)`:
 
 ```
 function main(stdout: Stdout, env: Environment, fs: Filesystem) returns nothing:
@@ -3087,7 +3092,16 @@ function main(stdout: Stdout, env: Environment, fs: Filesystem) returns nothing:
         Stdout.write(view stdout, "failed to write output")
 ```
 
-`Environment.args()` returns `list[string]` — the raw arguments passed to the program, excluding the program name. Arguments are read-only data from the OS, so they belong with `Environment.get()` for environment variables.
+`Environment.args(view env)` returns `list[string]` — the user arguments passed
+to the program, excluding the executable name. Order and empty arguments are
+preserved. `Environment.get(view env, key)` returns
+`result[optional[string], string]`, distinguishing a missing variable from an
+invalid name or a value that cannot be represented as Jett text. Both operations
+read one immutable launch snapshot so tests can inject deterministic process
+inputs and runtime calls never consult ambient host state. Arguments and
+environment variables belong together because both are read-only launch data;
+the full policy is specified in the
+[Environment and argument capability contract](open_design/environment_argv_capability_contract.md).
 
 `main()` is the **only** function that receives capabilities from the runtime. Every other function in the program gets its capabilities by having them passed in as parameters. If a function doesn't have a `Filesystem` parameter, it **cannot** touch the file system. Period. The compiler enforces this.
 
@@ -3368,7 +3382,8 @@ checked conversion rules of its linked contract.
 | `Stdout.write` | `Stdout.write(view stdout, text)` | `WriteConsoleW` | `write(1, ...)` | `write(1, ...)` |
 | `Process.spawn` | `Process.spawn(view proc, cmd, args)` | `CreateProcessW` | `fork` + `execvp` | `posix_spawn` |
 | `Clock.now` | `Clock.now(view clock)` | checked Unix milliseconds from `GetSystemTimeAsFileTime` | checked Unix milliseconds from `clock_gettime(CLOCK_REALTIME)` | checked Unix milliseconds from `clock_gettime(CLOCK_REALTIME)` |
-| `Environment.get` | `Environment.get(view env, key)` | `GetEnvironmentVariableW` | `getenv` | `getenv` |
+| `Environment.get` | `Environment.get(view env, key)` | injected launch snapshot copied from `GetEnvironmentStringsW` | injected launch snapshot copied from `environ` | injected launch snapshot copied from `environ` |
+| `Environment.args` | `Environment.args(view env)` | injected user arguments parsed from `GetCommandLineW` with `CommandLineToArgvW` | injected user arguments copied from `argv[1..]` | injected user arguments copied from `argv[1..]` |
 
 The entire left column is what the LLM writes. The right columns are what the compiler generates. The LLM never sees the right columns.
 
@@ -6743,7 +6758,13 @@ The standard library is intentionally massive and opinionated. The goal is to ma
   difference, checked add/subtract, and comparisons; calendar formatting,
   parsing, day-of-week, and time-zone behavior are deferred (see the
   [Time and Clock capability contract](open_design/time_clock_capability_contract.md))
-- **os** — environment variables, process management, file system, argv
+- **Environment** — capability-backed read-only launch environment and user
+  arguments over an immutable injected snapshot; ambient `os.env`/`os.args` are
+  transitional and removed by the proposed
+  [Environment and argument contract](open_design/environment_argv_capability_contract.md)
+- **Process** — future process management remains separate under the `Process`
+  capability; filesystem operations remain under `Filesystem`, and no
+  `os.process` namespace is implied
 - **test** — mock infrastructure for property-based testing (`test.mock` for mock filesystems, networks, etc.)
 - **log** — structured logging with levels
 - **format** — number formatting, padding, and text alignment

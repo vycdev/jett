@@ -113,7 +113,7 @@
 | `print`/`println` builtins | Partial (interpreter support and secret blocking are done; [debug-only capability policy](open_design/print_debug_builtin_policy.md) is decided, while debug-event isolation, release diagnostics, and future-backend conformance remain pending) |
 | Type conversions: `float64.from_string`, `string.from_float64`, `string.from_bool` | Done |
 | `time.now_ms`, `time.now_s` | Done |
-| `os.env`, `os.args` | Done |
+| `os.env`, `os.args` | Legacy behavior done (transitional ambient builtins; capability-backed replacement specified by the [Environment and argument contract](open_design/environment_argv_capability_contract.md)) |
 | Math: `pi`, `e`, `sin`, `cos`, `tan`, `mod`, `is_even`, `is_odd`, `sum` | Done |
 
 ### Phase H: Agent Tooling — PARTIAL
@@ -166,7 +166,7 @@
 | `bytes` | Partial (9 builtins: new, length, slice, concat, from_string, to_string, get, to_hex, from_hex) |
 | `uuid` | Partial (`uuid.new`; generation and entropy contract [tracked by #73](https://github.com/vycdev/jett/issues/73)) |
 | `time` | Partial (transitional ambient `time.now_ms` and `time.now_s` builtins; the proposed contract selects capability-backed `Clock.now(view clock) -> time.Timestamp`, distinct signed-millisecond `Timestamp`/`Duration` values, deterministic clock injection, and removal of the ambient builtins; see [#75](https://github.com/vycdev/jett/issues/75) and the [time/Clock contract](open_design/time_clock_capability_contract.md)) |
-| `os` | Partial (`os.env`, `os.args`; `Environment`/argv capability and public stdlib/runtime boundary [tracked by #94](https://github.com/vycdev/jett/issues/94)) |
+| `Environment` / `os` | Partial (transitional capability-free `os.env` and `os.args` builtins read ambient host state; the proposed contract replaces them with `Environment.get(view env, key)` and `Environment.args(view env)` over an immutable injected launch snapshot, with distinct missing/invalid-text behavior and source-owned public declarations; see [#94](https://github.com/vycdev/jett/issues/94) and the [Environment and argument contract](open_design/environment_argv_capability_contract.md)) |
 | `net.http` | Not started (initial outbound client and `Network` capability contract [tracked by #101](https://github.com/vycdev/jett/issues/101)) |
 | `net.socket` | Not started (TCP-first transport contract proposed in [`docs/open_design/net_socket_transport_contract.md`](open_design/net_socket_transport_contract.md) for [#104](https://github.com/vycdev/jett/issues/104)) |
 | `csv` | Partial (interpreter builtins for `csv.parse`, `csv.stringify`, and `csv.parse_with_header`; quoted commas, quotes, and multiline fields are covered) |

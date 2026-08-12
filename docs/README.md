@@ -44,6 +44,7 @@ enough pressure from real code:
 - [Encoding representation and failure contract](open_design/encoding_representation_failure_contract.md)
 - [Crypto hashing and security contract](open_design/crypto_hashing_security_contract.md)
 - [Time and Clock capability contract](open_design/time_clock_capability_contract.md)
+- [Environment and argument capability contract](open_design/environment_argv_capability_contract.md)
 
 ## Completed Records
 
