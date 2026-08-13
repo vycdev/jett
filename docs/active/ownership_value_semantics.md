@@ -84,6 +84,13 @@ value must instead be passed explicitly as a parameter.
 Compiler enforcement and existing closure fixtures must be aligned with this
 rule before it is considered implemented.
 
+### Cross-context transfer
+
+Passing a move-only value into a task or actor message transfers ownership; the
+sender can no longer use it. Implicitly copyable values are copied instead and
+remain usable by the sender. Views cannot be sent to actors. A scoped task may
+borrow a view only until that task is joined or cancelled.
+
 ## Still Undecided
 
-- exact mutation and concurrency rules.
+- exact mutation rules.

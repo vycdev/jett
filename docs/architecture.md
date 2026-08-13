@@ -1275,7 +1275,7 @@ flowchart LR
 
 **Actor lifecycle:** An actor runs until its message queue is empty and all `ActorRef` handles to it have been dropped (no more possible senders). The thread pool detects this and deallocates the actor's state. If `main()` returns while actors are still running, the runtime drops all `ActorRef` handles and waits for actors to drain their queues before exiting.
 
-**Linear type safety across actors:** When a value is `send`/`ask`'d to an actor, ownership is transferred into the message queue. For small values (primitives, small structs), this is a bitwise copy into the queue slot. For heap-allocated values (lists, maps, large structs), the pointer is moved — the sender's handle becomes invalid (enforced by the linear type checker at compile time). No deep copy is needed because single ownership guarantees no aliasing. This is the key advantage of linear types for actor message passing — zero-copy transfer with compile-time safety.
+**Linear type safety across actors:** When a move-only value is `send`/`ask`'d to an actor, ownership is transferred into the message queue and the sender's handle becomes invalid. The runtime may transfer a small value's bits or move a heap allocation's pointer; neither operation duplicates semantic ownership. Implicitly copyable values are copied into the queue and remain usable by the sender. No deep copy of move-only heap data is needed because single ownership guarantees no aliasing. This is the key advantage of linear types for actor message passing — zero-copy transfer with compile-time safety.
 
 ---
 
