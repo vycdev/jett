@@ -9091,12 +9091,12 @@ impl Interpreter {
             }
 
             // -- Bytes operations (stdlib/bytes.jett) ---------------------------
-            "bytes.new" => {
+            "bytes.__new" if self.current_function_trusted_stdlib => {
                 require_args!(name, 0, args);
                 Some(Ok(Value::Bytes(Vec::new())))
             }
 
-            "bytes.length" => {
+            "bytes.__length" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Bytes(b) => Some(Ok(Value::Int64(b.len() as i64))),
@@ -9104,7 +9104,7 @@ impl Interpreter {
                 }
             }
 
-            "bytes.slice" => {
+            "bytes.__slice" if self.current_function_trusted_stdlib => {
                 require_args!(name, 3, args);
                 match (&args[0], &args[1], &args[2]) {
                     (Value::Bytes(b), Value::Int64(start), Value::Int64(end)) => {
@@ -9120,7 +9120,7 @@ impl Interpreter {
                 }
             }
 
-            "bytes.concat" => {
+            "bytes.__concat" if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::Bytes(a), Value::Bytes(b)) => {
@@ -9132,7 +9132,7 @@ impl Interpreter {
                 }
             }
 
-            "bytes.from_string" => {
+            "bytes.__from_string" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => Some(Ok(Value::Bytes(s.as_bytes().to_vec()))),
@@ -9140,7 +9140,7 @@ impl Interpreter {
                 }
             }
 
-            "bytes.to_string" => {
+            "bytes.__to_string" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Bytes(b) => match String::from_utf8(b.clone()) {
@@ -9153,7 +9153,7 @@ impl Interpreter {
                 }
             }
 
-            "bytes.to_hex" => {
+            "bytes.__to_hex" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Bytes(b) => {
@@ -9164,7 +9164,7 @@ impl Interpreter {
                 }
             }
 
-            "bytes.from_hex" => {
+            "bytes.__from_hex" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(raw) => match Self::parse_hex_bytes(
@@ -9179,7 +9179,7 @@ impl Interpreter {
                 }
             }
 
-            "bytes.get" => {
+            "bytes.__get" if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::Bytes(b), Value::Int64(index)) => {
@@ -16346,6 +16346,48 @@ mod builtin_tests {
         assert_eq!(
             interp.eval_expr(&expr),
             Err("undefined function 'string.char_count'".to_string())
+        );
+    }
+
+    #[test]
+    fn private_bytes_kernels_preserve_raw_byte_behavior() {
+        let mut interp = Interpreter::new();
+        interp.current_function_trusted_stdlib = true;
+
+        assert_eq!(
+            interp
+                .call_builtin(
+                    "bytes.__slice",
+                    &[
+                        Value::Bytes(vec![0, 1, 255]),
+                        Value::Int64(1),
+                        Value::Int64(9),
+                    ],
+                )
+                .expect("private bytes kernel should be recognized")
+                .expect("private bytes kernel should succeed"),
+            Value::Bytes(vec![1, 255])
+        );
+        assert_eq!(
+            interp
+                .call_builtin("bytes.__to_hex", &[Value::Bytes(vec![0, 1, 255])])
+                .expect("private bytes kernel should be recognized")
+                .expect("private bytes kernel should succeed"),
+            Value::String("0001ff".to_string())
+        );
+    }
+
+    #[test]
+    fn public_bytes_runtime_dispatch_is_absent_without_stdlib_source() {
+        let mut interp = Interpreter::new();
+        assert!(
+            interp.call_builtin("bytes.__new", &[]).is_none(),
+            "private bytes kernels must require trusted stdlib execution"
+        );
+        let expr = dotted_call("bytes", "new", vec![]);
+        assert_eq!(
+            interp.eval_expr(&expr),
+            Err("undefined function 'bytes.new'".to_string())
         );
     }
 

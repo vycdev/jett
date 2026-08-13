@@ -1,0 +1,7 @@
+# ERROR: E0400
+namespace app
+function concat_consumes_both_inputs() returns int64:
+    bytes first = bytes.from_string("a")
+    bytes second = bytes.from_string("b")
+    bytes combined = bytes.concat(first, second)
+    return bytes.length(first) + bytes.length(second) + bytes.length(combined)

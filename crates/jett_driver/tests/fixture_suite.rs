@@ -1239,6 +1239,15 @@ compile_fail_fixture!(
     compile_fail_collection_transform_consumes,
     "collection_transform_consumes.jett"
 );
+compile_fail_fixture!(
+    compile_fail_bytes_concat_consumes_inputs,
+    "bytes_concat_consumes_inputs.jett"
+);
+
+#[test]
+fn compile_fail_bytes_concat_consumes_both_inputs() {
+    assert_compile_fail_error_count("bytes_concat_consumes_inputs.jett", 400, 2);
+}
 
 #[test]
 fn compile_fail_collection_transform_consumes_count() {

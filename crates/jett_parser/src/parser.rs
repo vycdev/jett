@@ -298,7 +298,11 @@ impl<'src> Parser<'src> {
         let kw = self.expect(TokenKind::Namespace);
         let name = if matches!(
             self.peek(),
-            TokenKind::String_ | TokenKind::List_ | TokenKind::Map_ | TokenKind::Set_
+            TokenKind::String_
+                | TokenKind::Bytes_
+                | TokenKind::List_
+                | TokenKind::Map_
+                | TokenKind::Set_
         ) {
             self.parse_type_ident()
         } else {
@@ -3412,6 +3416,16 @@ function f() returns nothing:
             Item::Namespace(ns) => {
                 assert_eq!(ns.name.name, "myapp");
             }
+            other => panic!("expected Namespace, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_bytes_type_keyword_namespace() {
+        let result = parse_str("namespace bytes\n");
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        match &result.module.items[0] {
+            Item::Namespace(ns) => assert_eq!(ns.name.name, "bytes"),
             other => panic!("expected Namespace, got {:?}", other),
         }
     }

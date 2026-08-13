@@ -491,7 +491,9 @@ This sub-phase tracks the ownership state of every variable through the control 
 - `Uninitialized` — before first assignment.
 
 **Rules enforced:**
-- A variable can only be used once unless it is a `view` or a primitive (primitives are implicitly copyable).
+- A variable can only be used once unless it is a `view` or has an explicitly
+  copyable type. Numeric primitives, `bool`, `nothing`, and immutable `string`
+  are implicitly copyable; the primitive `bytes` type is move-only.
 - After a variable is passed to a non-`view` parameter, it becomes `Consumed`.
 - Using a `Consumed` variable is a compile error.
 - `view` parameters can read but not consume.
@@ -668,7 +670,9 @@ The HIR is the first representation where generic functions are fully expanded. 
 1. **Monomorphization:** Generate concrete versions of all generic functions for each type parameter combination used in the program.
 2. **Method resolution:** `Dog.speak(view my_dog)` is resolved to the specific `implement Speaker for Dog` function.
 3. **Auto-view for field access:** `self.x` is annotated as an implicit view operation.
-4. **Primitive copyability:** Primitive types (`int64`, `float64`, `bool`, `string`) are marked as implicitly copyable — they don't follow linear consumption rules.
+4. **Explicit copyability:** Numeric primitives, `bool`, `nothing`, and immutable
+   `string` are implicitly copyable. The primitive `bytes` type remains
+   move-only and follows the same view/consume rules as other owned storage.
 5. **Comptime reflection lowering:** Preserve enough type metadata for comptime code to inspect `type.name[T]()`, `type.kind[T]()`, `type.has_secret[T]()`, `type.fields[T]()`, bitfield layout metadata, state-machine state/transition metadata, active machine states, and reflected active-state payload fields. JSON serialization is expressible in terms of these reflection primitives rather than as format-specific HIR magic. Struct, bitfield, enum, and state-machine deserialization can now use the `TypeConstruction` builder family to build `T` from parsed field values; the final construction-block syntax is still pending.
 
 ---
@@ -1361,6 +1365,13 @@ operations have Jett bodies. Private trusted runtime kernels are limited to
 primitive conversions and Unicode-, grapheme-, search-, or text-sensitive work
 that Jett cannot yet express safely; their checker and interpreter entry points
 reject project calls.
+
+The complete public `bytes.*` API is defined in `stdlib/bytes.jett`. Bytes are
+move-only: `length`, `get`, `slice`, `to_string`, and `to_hex` borrow their
+input as a read-only view, while `concat` consumes both inputs and returns the
+replacement. `slice` returns an independent owned range. Private trusted
+kernels provide raw allocation, indexing, slicing, concatenation, and exact
+UTF-8/hex conversion behavior; project code cannot call them.
 
 The public map namespace is defined in `stdlib/map.jett`. Every public map
 operation resolves through an exported source declaration, including

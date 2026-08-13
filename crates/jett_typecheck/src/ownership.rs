@@ -34,7 +34,7 @@ struct VarInfo {
     state: OwnershipState,
     /// Whether the variable was declared `mutable`.
     mutable: bool,
-    /// The type of the variable (used to determine if it's a copyable primitive).
+    /// The type of the variable (used to determine whether it is implicitly copyable).
     type_id: TypeId,
     /// The span where the variable was consumed (for "previously consumed here" labels).
     consumed_span: Option<Span>,
@@ -106,7 +106,7 @@ pub struct OwnershipChecker<'a> {
     states: HashMap<String, VarInfo>,
     /// Collected diagnostics.
     diagnostics: Vec<Diagnostic>,
-    /// The type interner, needed to check whether a type is a copyable primitive.
+    /// The type interner, needed to check whether a type is implicitly copyable.
     interner: &'a TypeInterner,
     /// Source-defined functions whose first parameter is declared as a view.
     source_first_argument_views: HashSet<String>,
@@ -188,11 +188,11 @@ impl<'a> OwnershipChecker<'a> {
     }
 
     // ------------------------------------------------------------------
-    // Primitives: implicitly copyable types
+    // Implicitly copyable types
     // ------------------------------------------------------------------
 
-    /// Returns `true` if the type is a primitive that is implicitly copyable
-    /// and therefore not subject to linear consumption rules.
+    /// Returns `true` if the type is implicitly copyable and therefore not
+    /// subject to linear consumption rules. `bytes` is deliberately excluded.
     fn is_copyable(&self, type_id: TypeId) -> bool {
         is_implicitly_copyable(self.interner, type_id)
     }
@@ -732,7 +732,7 @@ impl<'a> OwnershipChecker<'a> {
     /// and error reporting.
     fn consume_variable(&mut self, name: &str, name_span: Span, consume_span: Span) {
         if let Some(info) = self.states.get(name) {
-            // Copyable primitives are never consumed.
+            // Implicitly copyable values are never consumed.
             if self.is_copyable(info.type_id) {
                 return;
             }

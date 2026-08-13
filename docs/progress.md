@@ -101,6 +101,7 @@
 | Complete source-owned `set` API | Done |
 | `encoding` module: `base64_encode`, `base64_decode`, `hex_encode`, `hex_decode`, `url_encode`, `url_decode` | Done |
 | Byte-native hex helpers (`bytes.to_hex`, `bytes.from_hex`) | Done |
+| Complete source-owned `bytes` API with move-only/view semantics | Done |
 | Closure captures (inline functions capture immutable enclosing scope) | Done |
 | Function type expressions (`function(T) returns U` in type annotations) | Done |
 | Dotted `use` paths (`use net.http`) | Done |
@@ -165,7 +166,7 @@
 | `random` | Partial (5 hardcoded capability-free builtins: int64, float64, bool, choice, shuffle; the proposed contract adds explicit `view Random`, unbiased value/collection semantics, deterministic runtime-provider injection, no public seed or cryptographic claim, and source-owned public declarations over private generator kernels; see [#67](https://github.com/vycdev/jett/issues/67) and the [random contract](open_design/random_capability_entropy_contract.md)) |
 | `crypto` | Partial (hardcoded UTF-8-to-lowercase-hex `sha256` and legacy-only `md5`; the proposed contract pins their compatibility/security policy, reserves SHA-512 and key-first binary HMAC shapes, and requires source-owned public declarations over private runtime kernels; see [#69](https://github.com/vycdev/jett/issues/69) and the [crypto contract](open_design/crypto_hashing_security_contract.md)) |
 | `encoding` | Partial (6 hardcoded `string -> string` builtins: base64_encode, base64_decode, hex_encode, hex_decode, url_encode, url_decode; the proposed contract migrates Base64/hex to strict byte-native codecs, makes every decoder fallible, separates URL and form components, and requires source-owned public declarations over private runtime kernels; see [#71](https://github.com/vycdev/jett/issues/71) and the [encoding contract](open_design/encoding_representation_failure_contract.md)) |
-| `bytes` | Partial (9 builtins: new, length, slice, concat, from_string, to_string, get, to_hex, from_hex) |
+| `bytes` | Done (all 9 public declarations are source-owned in `stdlib/bytes.jett`; observers use read-only views, `slice` returns independent owned bytes, `concat` consumes both inputs, and only private trusted raw-byte and UTF-8/hex kernels remain) |
 | `uuid` | Partial (`uuid.new`; generation and entropy contract [tracked by #73](https://github.com/vycdev/jett/issues/73)) |
 | `time` | Partial (transitional ambient `time.now_ms` and `time.now_s` builtins; the proposed contract selects capability-backed `Clock.now(view clock) -> time.Timestamp`, distinct signed-millisecond `Timestamp`/`Duration` values, deterministic clock injection, and removal of the ambient builtins; see [#75](https://github.com/vycdev/jett/issues/75) and the [time/Clock contract](open_design/time_clock_capability_contract.md)) |
 | `Environment` / `os` | Partial (transitional capability-free `os.env` and `os.args` builtins read ambient host state; the proposed contract replaces them with `Environment.get(view env, key)` and `Environment.args(view env)` over an immutable injected launch snapshot, with distinct missing/invalid-text behavior and source-owned public declarations; see [#94](https://github.com/vycdev/jett/issues/94) and the [Environment and argument contract](open_design/environment_argv_capability_contract.md)) |

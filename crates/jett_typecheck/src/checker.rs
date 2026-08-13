@@ -2480,6 +2480,15 @@ impl<'a> TypeChecker<'a> {
                 | "set.__remove"
                 | "set.__contains"
                 | "set.__length"
+                | "bytes.__new"
+                | "bytes.__length"
+                | "bytes.__slice"
+                | "bytes.__concat"
+                | "bytes.__from_string"
+                | "bytes.__to_string"
+                | "bytes.__get"
+                | "bytes.__to_hex"
+                | "bytes.__from_hex"
         );
         if private_stdlib_kernel && !span.file.is_stdlib() {
             self.sink
@@ -3165,17 +3174,17 @@ impl<'a> TypeChecker<'a> {
                 let secret_ty = self.interner.intern(Type::Secret(TypeInterner::ERROR));
                 Some((vec![secret_ty, secret_ty], TypeInterner::BOOL))
             }
-            "bytes.new" => {
+            "bytes.__new" => {
                 self.no_type_args_signature(&name, type_args, span, vec![], TypeInterner::BYTES)
             }
-            "bytes.length" => self.no_type_args_signature(
+            "bytes.__length" => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::BYTES],
                 TypeInterner::INT64,
             ),
-            "bytes.slice" => self.no_type_args_signature(
+            "bytes.__slice" => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
@@ -3186,21 +3195,21 @@ impl<'a> TypeChecker<'a> {
                 ],
                 TypeInterner::BYTES,
             ),
-            "bytes.concat" => self.no_type_args_signature(
+            "bytes.__concat" => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::BYTES, TypeInterner::BYTES],
                 TypeInterner::BYTES,
             ),
-            "bytes.from_string" => self.no_type_args_signature(
+            "bytes.__from_string" => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::STRING],
                 TypeInterner::BYTES,
             ),
-            "bytes.to_string" => {
+            "bytes.__to_string" => {
                 self.expect_no_type_args(&name, type_args, span);
                 Some((
                     vec![TypeInterner::BYTES],
@@ -3208,21 +3217,21 @@ impl<'a> TypeChecker<'a> {
                         .intern(Type::Result(TypeInterner::STRING, TypeInterner::STRING)),
                 ))
             }
-            "bytes.get" => {
+            "bytes.__get" => {
                 self.expect_no_type_args(&name, type_args, span);
                 Some((
                     vec![TypeInterner::BYTES, TypeInterner::INT64],
                     self.interner.intern(Type::Optional(TypeInterner::INT64)),
                 ))
             }
-            "bytes.to_hex" => self.no_type_args_signature(
+            "bytes.__to_hex" => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::BYTES],
                 TypeInterner::STRING,
             ),
-            "bytes.from_hex" => {
+            "bytes.__from_hex" => {
                 self.expect_no_type_args(&name, type_args, span);
                 Some((
                     vec![TypeInterner::STRING],
@@ -9186,7 +9195,8 @@ impl<'a> TypeChecker<'a> {
             if let Some(function_name) = callee_name.as_deref()
                 && (function_name.starts_with("list.")
                     || function_name.starts_with("string.")
-                    || function_name.starts_with("math."))
+                    || function_name.starts_with("math.")
+                    || function_name.starts_with("bytes."))
             {
                 self.sink.emit(errors::unknown_type(
                     &format!("function `{function_name}`"),

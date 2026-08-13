@@ -1,0 +1,19 @@
+namespace bytes
+export function new() returns bytes:
+    return bytes.__new()
+export function length(view value: bytes) returns int64:
+    return bytes.__length(view value)
+export function slice(view value: bytes, start: int64, end: int64) returns bytes:
+    return bytes.__slice(view value, start, end)
+export function concat(first: bytes, second: bytes) returns bytes:
+    return bytes.__concat(first, second)
+export function from_string(value: string) returns bytes:
+    return bytes.__from_string(value)
+export function to_string(view value: bytes) returns result[string, string]:
+    return bytes.__to_string(view value)
+export function get(view value: bytes, index: int64) returns optional[int64]:
+    return bytes.__get(view value, index)
+export function to_hex(view value: bytes) returns string:
+    return bytes.__to_hex(view value)
+export function from_hex(value: string) returns result[bytes, string]:
+    return bytes.__from_hex(value)

@@ -389,7 +389,10 @@ impl Resolver {
             }
             if prev.kind == DefKind::Constant
                 && ns.span.file.is_stdlib()
-                && matches!(ns.name.name.as_str(), "string" | "list" | "map" | "set")
+                && matches!(
+                    ns.name.name.as_str(),
+                    "string" | "bytes" | "list" | "map" | "set"
+                )
             {
                 let def_id = self.scope_table.new_def_with_visibility(
                     ns.name.name.clone(),

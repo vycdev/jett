@@ -4209,6 +4209,41 @@ mod tests {
     }
 
     #[test]
+    fn query_signature_reports_source_owned_bytes_surface() {
+        let functions = [
+            ("new", None),
+            ("length", Some(true)),
+            ("slice", Some(true)),
+            ("concat", Some(false)),
+            ("from_string", Some(false)),
+            ("to_string", Some(true)),
+            ("get", Some(true)),
+            ("to_hex", Some(true)),
+            ("from_hex", Some(false)),
+        ];
+
+        for (function, first_param_view) in functions {
+            let name = format!("bytes.{function}");
+            let result = query_signature(Path::new("."), &name)
+                .expect("bytes signature query should succeed")
+                .unwrap_or_else(|| panic!("{name} signature should be found"));
+            assert!(
+                result
+                    .file_path
+                    .replace('\\', "/")
+                    .ends_with("/stdlib/bytes.jett"),
+                "{name} should resolve to compiler-shipped source, got {}",
+                result.file_path
+            );
+            if let Some(expected_view) = first_param_view {
+                assert_eq!(result.params[0].view, expected_view, "{name} view contract");
+            } else {
+                assert!(result.params.is_empty());
+            }
+        }
+    }
+
+    #[test]
     fn query_signature_reports_source_owned_map_and_set_surfaces() {
         let map_functions = [
             "new",

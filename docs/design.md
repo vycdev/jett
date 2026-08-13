@@ -1264,6 +1264,13 @@ heterogeneous wildcard-list results. `list.flatten[T]` accepts
 `list[list[T]]`, and `list.sort_by_index[T]` accepts and returns
 `list[list[T]]`, so their source signatures state their actual shapes.
 
+The complete public byte-buffer surface is compiler-shipped source in
+`stdlib/bytes.jett`. A `bytes` value is move-only and has no implicit aliasing:
+read-only operations (`length`, `get`, `slice`, `to_string`, and `to_hex`)
+take views, `slice` creates an independent owned range, and `concat` consumes
+both inputs. Reusing or independently changing a buffer requires an explicit
+`clone`. Rust retains only private trusted raw-byte and conversion kernels.
+
 **String operations — no manual parsing:**
 
 ```
@@ -1882,7 +1889,11 @@ float64 dy = self.y - other.y
 # Neither access consumes `self` or `other` — field access is a view operation.
 ```
 
-Both `self.x` and `self.y` work because each field access creates an implicit view rather than consuming the struct. Similarly, `dx * dx` is valid because primitive types (`int64`, `float64`, `bool`, `string`) are implicitly copyable — they are not linear. Linear typing only restricts compound types (structs, lists, maps, etc.) that own heap-allocated resources.
+Both `self.x` and `self.y` work because each field access creates an implicit
+view rather than consuming the struct. Similarly, `dx * dx` is valid because
+numeric primitives, `bool`, `nothing`, and immutable `string` are implicitly
+copyable. Copyability is an explicit type rule, not a consequence of being a
+primitive: `bytes` is primitive but move-only, as are compound owned values.
 
 **Rebinding semantics for mutable variables:**
 

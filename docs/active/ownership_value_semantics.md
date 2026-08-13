@@ -1,6 +1,6 @@
 # Ownership and Value Semantics
 
-Status: decisions in progress.
+Status: established.
 
 This record contains only decisions explicitly accepted for initial Jett
 versions. Undecided value categories are not implied by these rules.
@@ -38,6 +38,12 @@ value semantics.
 `bytes` is move-only. Reading without transfer requires `view`; independent
 duplication requires explicit `clone`. This leaves room for efficient mutable
 byte buffers without implicit aliasing or hidden copy-on-write behavior.
+
+The source-owned `bytes` API makes that rule visible in its declarations.
+`length`, `get`, `slice`, `to_string`, and `to_hex` observe a view; `slice`
+returns an independent owned range without consuming its input. `concat`
+consumes both buffers and returns their owned replacement. There is no public
+in-place mutation or mutable aliasing API.
 
 ### Collections
 
