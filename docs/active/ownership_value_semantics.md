@@ -55,7 +55,11 @@ All enums are move-only, including enums whose variants have no payload fields.
 Copyability is not inferred from the current variant shapes, so adding a payload
 cannot silently change the ownership semantics of an existing enum.
 
+### Capabilities
+
+Capability values are move-only. Authority cannot be duplicated implicitly.
+
 ## Still Undecided
 
-- capability, actor, task, and other resource values;
+- actor, task, and other resource values;
 - exact `view`, mutation, closure-capture, and concurrency rules.
