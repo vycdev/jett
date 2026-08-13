@@ -1286,9 +1286,9 @@ flowchart LR
 
 ## Compiler Intrinsics vs Standard Library
 
-> The proposed crypto text-digest API, algorithm classifications, secret policy,
+> The crypto text-digest API, algorithm classifications, secret policy,
 > and stdlib/runtime boundary are defined in the
-> [Crypto hashing and security contract](open_design/crypto_hashing_security_contract.md).
+> [Crypto hashing and security contract](completed/crypto_hashing_security_contract.md).
 > Encoding's byte/string representations, strict failures, URL/form
 > distinction, and source/runtime boundary are defined in the
 > [Encoding representation and failure contract](completed/encoding_representation_failure_contract.md).
@@ -1419,13 +1419,14 @@ stdlib functions. They resolve by name like declarations from any other trusted
 compiler-shipped source file, while only private implementation kernels cross
 the runtime boundary.
 
-Crypto has not reached that end state yet. Its public SHA-256 and MD5 signatures
-and dispatch are still hardcoded in the checker and interpreter. The target
-keeps every public `crypto.*` declaration in trusted compiler-shipped `.jett`
-source while private trusted runtime kernels perform digest compression and
-future HMAC processing. Exact UTF-8, hexadecimal, taint, and backend obligations
-are defined by the
-[Crypto hashing and security contract](open_design/crypto_hashing_security_contract.md).
+Crypto has reached that boundary for its implemented initial surface. Public
+`crypto.sha256` and legacy-only `crypto.md5` declarations live in
+`stdlib/crypto.jett`; source wrappers convert exact UTF-8 through `bytes` and
+format raw fixed-size digests as lowercase hex. Only private trusted compression
+kernels remain in the interpreter, and project code cannot call them. SHA-512
+and HMAC remain reserved and undiscoverable until implemented. Exact taint,
+security, and backend obligations are defined by the
+[Crypto hashing and security contract](completed/crypto_hashing_security_contract.md).
 
 Encoding has reached that boundary for the interpreter-backed compiler. All
 eight public byte-native Base64/hex and textual URL/form declarations live in
@@ -1940,7 +1941,7 @@ Core stdlib (string, list, math, json) is implemented in Phase D. This phase com
   source/runtime boundary is defined in the
   [Time and Clock capability contract](open_design/time_clock_capability_contract.md))
 - **Security:** `crypto`, `encoding`, `validate` (the crypto hashing contract is
-  defined in the [crypto contract](open_design/crypto_hashing_security_contract.md), and encoding's
+  defined in the [crypto contract](completed/crypto_hashing_security_contract.md), and encoding's
   implemented byte-native codecs and strict failure policy are defined by the
   [encoding contract](completed/encoding_representation_failure_contract.md))
 - **OS:** `Environment` for read-only launch environment variables and user arguments (the proposed capability, snapshot, Unicode-failure, compatibility, and source/runtime boundary is defined in the [Environment and argument contract](open_design/environment_argv_capability_contract.md)); process management remains a separate `Process` capability concern

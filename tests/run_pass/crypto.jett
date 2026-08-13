@@ -1,37 +1,28 @@
 namespace app
-
-function sha256_empty_test() returns string:
-    return crypto.sha256("")
-
-verify sha256_empty_test:
-    assert sha256_empty_test() == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-
-function sha256_abc_test() returns string:
-    return crypto.sha256("abc")
-
-verify sha256_abc_test:
-    assert sha256_abc_test() == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-
-function sha256_length_test() returns int64:
-    return string.length(crypto.sha256(""))
-
-verify sha256_length_test:
-    assert sha256_length_test() == 64
-
-function md5_empty_test() returns string:
-    return crypto.md5("")
-
-verify md5_empty_test:
-    assert md5_empty_test() == "d41d8cd98f00b204e9800998ecf8427e"
-
-function md5_abc_test() returns string:
-    return crypto.md5("abc")
-
-verify md5_abc_test:
-    assert md5_abc_test() == "900150983cd24fb0d6963f7d28e17f72"
-
-function md5_length_test() returns int64:
-    return string.length(crypto.md5(""))
-
-verify md5_length_test:
-    assert md5_length_test() == 32
+function string_with_nul() returns string:
+    bytes raw = bytes.from_hex("610062") handle error:
+        return ""
+    return bytes.to_string(view raw) handle error:
+        default ""
+verify sha256_vectors:
+    assert crypto.sha256("") == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    assert crypto.sha256("abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    assert crypto.sha256("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq") == "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"
+    assert crypto.sha256("é🎉") == "457eec3d021f59e24b2e57e2bc9f0239490b4c290f4ab01820e159caa757ba93"
+    assert crypto.sha256(string_with_nul()) == "59b271ae1bbcb1d31d41929817f4b16fb439eb4f31520b5ad1d5ce98920a7138"
+verify md5_legacy_vectors:
+    assert crypto.md5("") == "d41d8cd98f00b204e9800998ecf8427e"
+    assert crypto.md5("abc") == "900150983cd24fb0d6963f7d28e17f72"
+    assert crypto.md5("message digest") == "f96b697d7cb7938d525a2f31aaf161d0"
+    assert crypto.md5("12345678901234567890123456789012345678901234567890123456789012345678901234567890") == "57edf4a22be3c955ac49da2e2107b67a"
+    assert crypto.md5("é🎉") == "780522ef8cf2955af87414e456bb4138"
+    assert crypto.md5(string_with_nul()) == "70350f6027bce3713f6b76473084309b"
+verify digest_representation_and_determinism:
+    string sha = crypto.sha256("same input")
+    string legacy = crypto.md5("same input")
+    assert string.length(sha) == 64
+    assert string.length(legacy) == 32
+    assert sha == string.lower(sha)
+    assert legacy == string.lower(legacy)
+    assert sha == crypto.sha256("same input")
+    assert legacy == crypto.md5("same input")

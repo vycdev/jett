@@ -13,3 +13,5 @@ function bytes_kernel_is_private() returns bytes:
     return bytes.__new()
 function encoding_kernel_is_private() returns string:
     return encoding.__base64_encode(bytes.new())
+function crypto_kernel_is_private() returns bytes:
+    return crypto.__sha256(bytes.new())

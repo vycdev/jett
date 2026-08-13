@@ -8848,19 +8848,19 @@ impl Interpreter {
             }
 
             // -- Crypto operations (stdlib/crypto.jett) -----------------------
-            "crypto.sha256" => {
+            "crypto.__sha256" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
-                    Value::String(s) => Some(Ok(Value::String(sha256_hash(s.as_bytes())))),
-                    _ => Some(Err(format!("{name} expects a string argument"))),
+                    Value::Bytes(bytes) => Some(Ok(Value::Bytes(sha256_digest(bytes)))),
+                    _ => Some(Err(format!("{name} expects a bytes argument"))),
                 }
             }
 
-            "crypto.md5" => {
+            "crypto.__md5" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
-                    Value::String(s) => Some(Ok(Value::String(md5_hash(s.as_bytes())))),
-                    _ => Some(Err(format!("{name} expects a string argument"))),
+                    Value::Bytes(bytes) => Some(Ok(Value::Bytes(md5_digest(bytes)))),
+                    _ => Some(Err(format!("{name} expects a bytes argument"))),
                 }
             }
 
@@ -15828,7 +15828,7 @@ fn base64_encode(data: &[u8]) -> String {
 // SHA-256 helper (no external crate dependency)
 // ---------------------------------------------------------------------------
 
-fn sha256_hash(data: &[u8]) -> String {
+fn sha256_digest(data: &[u8]) -> Vec<u8> {
     #[rustfmt::skip]
     const K: [u32; 64] = [
         0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,
@@ -15907,17 +15907,16 @@ fn sha256_hash(data: &[u8]) -> String {
         h[6] = h[6].wrapping_add(g);
         h[7] = h[7].wrapping_add(hh);
     }
-    format!(
-        "{:08x}{:08x}{:08x}{:08x}{:08x}{:08x}{:08x}{:08x}",
-        h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7]
-    )
+    h.into_iter()
+        .flat_map(u32::to_be_bytes)
+        .collect::<Vec<u8>>()
 }
 
 // ---------------------------------------------------------------------------
 // MD5 helper (no external crate dependency)
 // ---------------------------------------------------------------------------
 
-fn md5_hash(data: &[u8]) -> String {
+fn md5_digest(data: &[u8]) -> Vec<u8> {
     #[rustfmt::skip]
     const S: [u32; 64] = [
         7, 12, 17, 22,  7, 12, 17, 22,  7, 12, 17, 22,  7, 12, 17, 22,
@@ -16000,7 +15999,7 @@ fn md5_hash(data: &[u8]) -> String {
     out[4..8].copy_from_slice(&b0.to_le_bytes());
     out[8..12].copy_from_slice(&c0.to_le_bytes());
     out[12..16].copy_from_slice(&d0.to_le_bytes());
-    out.iter().map(|b| format!("{b:02x}")).collect()
+    out.to_vec()
 }
 
 fn base64_decode(s: &str) -> Result<Vec<u8>, &'static str> {
@@ -16886,14 +16885,20 @@ mod builtin_tests {
 
     #[test]
     fn test_sha256_known_vectors() {
+        let hex = |bytes: Vec<u8>| {
+            bytes
+                .into_iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        };
         // NIST test vectors
         assert_eq!(
-            sha256_hash(b""),
+            hex(sha256_digest(b"")),
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "sha256 of empty string"
         );
         assert_eq!(
-            sha256_hash(b"abc"),
+            hex(sha256_digest(b"abc")),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
             "sha256 of 'abc'"
         );
@@ -16901,7 +16906,52 @@ mod builtin_tests {
 
     #[test]
     fn test_md5_known_vectors() {
-        assert_eq!(md5_hash(b""), "d41d8cd98f00b204e9800998ecf8427e");
-        assert_eq!(md5_hash(b"abc"), "900150983cd24fb0d6963f7d28e17f72");
+        let hex = |bytes: Vec<u8>| {
+            bytes
+                .into_iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        };
+        assert_eq!(hex(md5_digest(b"")), "d41d8cd98f00b204e9800998ecf8427e");
+        assert_eq!(hex(md5_digest(b"abc")), "900150983cd24fb0d6963f7d28e17f72");
+    }
+
+    #[test]
+    fn private_crypto_kernels_return_fixed_size_raw_bytes() {
+        let mut interp = Interpreter::new();
+        interp.current_function_trusted_stdlib = true;
+
+        assert_eq!(
+            interp
+                .call_builtin("crypto.__sha256", &[Value::Bytes(b"abc".to_vec())])
+                .expect("private crypto kernel should be recognized")
+                .expect("private crypto kernel should succeed"),
+            Value::Bytes(sha256_digest(b"abc"))
+        );
+        assert_eq!(
+            interp
+                .call_builtin("crypto.__md5", &[Value::Bytes(b"abc".to_vec())])
+                .expect("private crypto kernel should be recognized")
+                .expect("private crypto kernel should succeed"),
+            Value::Bytes(md5_digest(b"abc"))
+        );
+        assert_eq!(sha256_digest(b"").len(), 32);
+        assert_eq!(md5_digest(b"").len(), 16);
+    }
+
+    #[test]
+    fn public_crypto_runtime_dispatch_is_absent_without_stdlib_source() {
+        let mut interp = Interpreter::new();
+        assert!(
+            interp
+                .call_builtin("crypto.__sha256", &[Value::Bytes(vec![])])
+                .is_none(),
+            "private crypto kernels must require trusted stdlib execution"
+        );
+        let expr = dotted_call("crypto", "sha256", vec![string("abc")]);
+        assert_eq!(
+            interp.eval_expr(&expr),
+            Err("undefined function 'crypto.sha256'".to_string())
+        );
     }
 }

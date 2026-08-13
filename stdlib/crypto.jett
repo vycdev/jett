@@ -1,0 +1,9 @@
+namespace crypto
+export function sha256(input: string) returns string:
+    bytes input_bytes = bytes.from_string(input)
+    bytes digest = crypto.__sha256(view input_bytes)
+    return bytes.to_hex(view digest)
+export function md5(input: string) returns string:
+    bytes input_bytes = bytes.from_string(input)
+    bytes digest = crypto.__md5(view input_bytes)
+    return bytes.to_hex(view digest)

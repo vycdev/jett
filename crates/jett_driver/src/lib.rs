@@ -4278,6 +4278,37 @@ mod tests {
     }
 
     #[test]
+    fn query_signature_reports_source_owned_crypto_surface() {
+        for function in ["sha256", "md5"] {
+            let name = format!("crypto.{function}");
+            let result = query_signature(Path::new("."), &name)
+                .expect("crypto signature query should succeed")
+                .unwrap_or_else(|| panic!("{name} signature should be found"));
+            assert!(
+                result
+                    .file_path
+                    .replace('\\', "/")
+                    .ends_with("/stdlib/crypto.jett"),
+                "{name} should resolve to compiler-shipped source, got {}",
+                result.file_path
+            );
+            assert_eq!(result.params.len(), 1);
+            assert_eq!(result.params[0].name, "input");
+            assert_eq!(result.params[0].type_name, "string");
+            assert_eq!(result.return_type, "string");
+        }
+
+        for reserved in ["crypto.sha512", "crypto.hmac_sha256", "crypto.hmac_sha512"] {
+            assert!(
+                query_signature(Path::new("."), reserved)
+                    .expect("reserved crypto query should succeed")
+                    .is_none(),
+                "{reserved} must remain undiscoverable until implemented"
+            );
+        }
+    }
+
+    #[test]
     fn query_signature_reports_source_owned_map_and_set_surfaces() {
         let map_functions = [
             "new",

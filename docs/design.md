@@ -1437,9 +1437,9 @@ gate, not public runtime dispatch or general overloading.
 
 **Hashing and encoding — no application dependencies:**
 
-> The proposed stable text-digest API, algorithm classifications, HMAC shape,
+> The stable text-digest API, algorithm classifications, reserved HMAC shape,
 > secret policy, and stdlib/runtime boundary are defined in the
-> [Crypto hashing and security contract](open_design/crypto_hashing_security_contract.md).
+> [Crypto hashing and security contract](completed/crypto_hashing_security_contract.md).
 > The byte-native binary codecs, strict decoder failures, distinct URL
 > and form-component policy, and stdlib/runtime boundary are defined in the
 > [Encoding representation and failure contract](completed/encoding_representation_failure_contract.md).
@@ -1462,6 +1462,11 @@ characters. `crypto.md5` keeps the same representation only for explicit legacy
 compatibility and is not a secure digest. SHA-512 and key-first binary HMAC are
 planned additions, not currently supported declarations. None of these
 operations is a password-hashing API.
+
+Both supported public declarations live in `stdlib/crypto.jett`. Source code
+converts exact UTF-8 input through the move-only byte API and formats the raw
+private-kernel digest with lowercase byte hex. Project code cannot call the
+private SHA-256 or MD5 kernels.
 
 The encoding API uses strict padded RFC 4648 Base64 and lowercase
 hex over arbitrary `bytes`. Their decoders return `result[bytes, string]`.
@@ -6778,7 +6783,7 @@ The standard library is intentionally massive and opinionated. The goal is to ma
 - **format** — number formatting, padding, and text alignment
 - **crypto** — stable UTF-8-to-lowercase-hex SHA-256, legacy-only MD5, and
   planned SHA-512/key-first HMAC; see the
-  [crypto hashing and security contract](open_design/crypto_hashing_security_contract.md)
+  [crypto hashing and security contract](completed/crypto_hashing_security_contract.md)
 - **encoding** — byte-native strict Base64/hex and separate URL/form component
   codecs; see the implemented
   [encoding representation and failure contract](completed/encoding_representation_failure_contract.md)

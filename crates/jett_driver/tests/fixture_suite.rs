@@ -271,6 +271,10 @@ compile_pass_fixture!(
     "math_numeric_builtin_secret_lifting.jett"
 );
 compile_pass_fixture!(
+    compile_pass_crypto_secret_lifting,
+    "crypto_secret_lifting.jett"
+);
+compile_pass_fixture!(
     compile_pass_refined_secret_operations,
     "refined_secret_operations.jett"
 );
@@ -1279,6 +1283,18 @@ compile_fail_fixture!(
     compile_fail_encoding_namespace_collision,
     "encoding_namespace_collision.jett"
 );
+compile_fail_fixture!(
+    compile_fail_crypto_argument_and_result_types,
+    "crypto_argument_and_result_types.jett"
+);
+compile_fail_fixture!(
+    compile_fail_crypto_secret_exposure,
+    "crypto_secret_exposure.jett"
+);
+compile_fail_fixture!(
+    compile_fail_crypto_namespace_collision,
+    "crypto_namespace_collision.jett"
+);
 
 #[test]
 fn compile_fail_encoding_argument_type_count() {
@@ -1288,6 +1304,18 @@ fn compile_fail_encoding_argument_type_count() {
 #[test]
 fn compile_fail_encoding_decoder_handle_count() {
     assert_compile_fail_error_count("encoding_decoders_require_handle.jett", 341, 4);
+}
+
+#[test]
+fn compile_fail_crypto_type_counts() {
+    assert_compile_fail_error_count("crypto_argument_and_result_types.jett", 304, 1);
+    assert_compile_fail_error_count("crypto_argument_and_result_types.jett", 305, 1);
+}
+
+#[test]
+fn compile_fail_crypto_secret_exposure_counts() {
+    assert_compile_fail_error_count("crypto_secret_exposure.jett", 600, 3);
+    assert_compile_fail_error_count("crypto_secret_exposure.jett", 603, 1);
 }
 
 #[test]

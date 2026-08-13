@@ -1,16 +1,16 @@
 # Crypto Hashing and Security Contract
 
-Status: proposed decision for [#69](https://github.com/vycdev/jett/issues/69).
-Implementation and stdlib extraction remain pending.
+Status: initial SHA-256/legacy-MD5 surface implemented on 2026-08-13.
+SHA-512 and HMAC names remain reserved and undiscoverable until separately implemented.
 
 ## Context
 
-Jett currently exposes `crypto.sha256(string) -> string` and
+Before extraction, Jett exposed `crypto.sha256(string) -> string` and
 `crypto.md5(string) -> string` through hardcoded checker and interpreter arms.
 Both operations hash the UTF-8 bytes of the input and return lowercase
-hexadecimal text. There is no compiler-shipped `stdlib/crypto.jett`; the current
-hardcoded state is transitional and does not yet match the source-owned stdlib
-target recorded in the architecture.
+hexadecimal text. That transitional state did not match the source-owned stdlib
+target recorded in the architecture; `stdlib/crypto.jett` now owns both public
+declarations and their byte/hex composition.
 
 The language design also names SHA-512 and HMAC without selecting signatures or
 security policy. That leaves agents without a stable answer for input encoding,
@@ -19,7 +19,7 @@ behavior. This record fixes the initial text-digest surface, classifies the
 planned algorithms, and reserves one binary HMAC boundary without implementing
 new algorithms.
 
-## Initial Public Surface
+## Implemented Initial Public Surface
 
 The stable first slice keeps the two implemented text-digest spellings. In API
 signature notation (not complete source bodies):
@@ -213,10 +213,10 @@ must be pinned, audited, license-compatible, and produce the same contract; its
 types, errors, and provider-specific behavior must not leak into Jett source.
 This is an implementation review decision, not a change to the public API.
 
-The current hardcoded checker signatures and interpreter name dispatch are
-transitional technical debt. They must eventually be replaced by source-owned
-public declarations plus trusted-origin private hooks, following the stdlib
-namespace and origin rules tracked by [#3](https://github.com/vycdev/jett/issues/3).
+The former hardcoded public checker signatures and interpreter dispatch have
+been replaced by source-owned declarations plus trusted-origin private hooks,
+following the stdlib namespace and origin rules tracked by
+[#3](https://github.com/vycdev/jett/issues/3).
 
 ## Future Backend Handoff
 
@@ -236,20 +236,20 @@ prerequisites for extracting the interpreter-facing source wrappers.
 
 ## Implementation Slices
 
-1. **Pin the current text digests**
+1. **Pin the current text digests — complete**
    - extend SHA-256 and MD5 vectors beyond empty input and `abc`;
    - add UTF-8, embedded-NUL, fixed output length, lowercase-only, and type-query
      coverage;
    - add compile checks showing secret input produces secret output.
-2. **Extract the public declarations**
+2. **Extract the public declarations — complete**
    - add trusted compiler-shipped `stdlib/crypto.jett` wrappers;
    - keep SHA-256 and MD5 processing behind private runtime hooks;
    - remove hardcoded public signature knowledge from the checker and verify
      project code cannot claim or reopen `namespace crypto`.
-3. **Add SHA-512 independently**
+3. **Add SHA-512 independently — future additive work**
    - implement the reserved text signature and fixed 128-character output;
    - land FIPS known vectors and cross-backend parity with the declaration.
-4. **Add HMAC independently**
+4. **Add HMAC independently — future additive work**
    - implement key-first HMAC-SHA-256 over secret key bytes and message bytes;
    - add RFC 4231 vectors, long-key coverage, empty key/message coverage, secret
      taint checks, and `secret.compare` integration;

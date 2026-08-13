@@ -1,0 +1,7 @@
+# ERROR: E0304
+# ERROR: E0305
+namespace app
+function sha256_requires_text(value: bytes) returns string:
+    return crypto.sha256(value)
+function md5_returns_text() returns bool:
+    return crypto.md5("legacy")
