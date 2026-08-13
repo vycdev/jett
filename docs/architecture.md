@@ -508,7 +508,7 @@ This sub-phase tracks the ownership state of every variable through the control 
   task handle remains live and must still be `join`ed; `join` exposes the
   task-control failure independently of the function's declared result error.
 - **View propagation:** Views propagate through field access and collection element access. `view list[T]` element access yields `view T`, not an owned copy. `clone` is required to get an owned value from a view.
-- **Closure capture analysis:** Anonymous functions can capture **immutable** values from the enclosing scope. Captured values are implicitly viewed — they are not consumed by the closure. Closures over **mutable** state are a compile error. The ownership analyzer verifies that all captured variables are either immutable bindings or primitives.
+- **Closure capture analysis:** Anonymous functions may capture only implicitly copyable values from the enclosing scope. Each capture is copied into the closure. Capturing a move-only value is a compile error; it must be passed explicitly as a parameter.
 
 **Implementation strategy:** Abstract interpretation over the control flow graph. At each program point, maintain a mapping from variable → ownership state. At control flow joins (if/else merge points, loop entries), states must be compatible:
 

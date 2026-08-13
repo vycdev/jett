@@ -169,7 +169,7 @@ There must be **no spooky action at a distance**. A variable must never be silen
 - No global mutable variables. Global constants are allowed (they never change), but mutable global state is forbidden.
 - No module-level side effects on import. `use math` loads definitions — it does not execute code, register handlers, or modify state.
 - Semantic program side effects must be declared in the function signature via **capability parameters** (see Rule Set 16). If a function writes to a file, it receives a `Filesystem` capability. If it accesses the network, it receives a `Network` capability. The signature is the contract. Compiler-owned debug observations such as `trace`, `breakpoint`, `print`, and `println` are non-release tooling instrumentation, not semantic I/O.
-- All inputs to a function come through its parameters. No reading from ambient scope, no closures over mutable state, no thread-local storage. Anonymous functions can capture **immutable** values from the enclosing scope. Captured values are implicitly viewed — they are not consumed by the closure. Closures over **mutable** state are banned. This allows patterns like `list.find(users, function(u: User) returns bool: return u.id == target_id)` where `target_id` is an immutable value from the outer scope.
+- All inputs to a function come through its parameters or an anonymous function's explicit capture environment. No global ambient reads and no thread-local storage. Anonymous functions may capture only implicitly copyable values from the enclosing scope; each captured value is copied into the closure. Move-only values must be passed explicitly as parameters. This allows patterns like `list.find(users, function(u: User) returns bool: return u.id == target_id)` when `target_id` is copyable.
 
 **Example — side effects are declared, not hidden:**
 
@@ -6631,7 +6631,9 @@ function serve(view net: Network, handler: Handler) returns nothing:
 int64 doubled = apply(5, function(x: int64) returns int64: return x * 2)
 ```
 
-Anonymous functions can capture **immutable** values from the enclosing scope. Captured values are implicitly viewed — they are not consumed by the closure. Closures over **mutable** state are banned.
+Anonymous functions may capture only implicitly copyable values from the
+enclosing scope. Each capture is copied into the closure. Move-only values must
+be passed explicitly as parameters instead of being captured.
 
 Function types can be used in variable declarations to store closures:
 

@@ -75,6 +75,15 @@ Resource handles, including files and sockets, are move-only. A resource may
 offer a resource-specific explicit duplication operation when that operation is
 valid, but resource handles are never duplicated implicitly.
 
+### Closure captures
+
+Closures may capture only implicitly copyable values. Each captured value is
+copied into the closure. Capturing a move-only value is a compile error; such a
+value must instead be passed explicitly as a parameter.
+
+Compiler enforcement and existing closure fixtures must be aligned with this
+rule before it is considered implemented.
+
 ## Still Undecided
 
-- exact `view`, mutation, closure-capture, and concurrency rules.
+- exact mutation and concurrency rules.
