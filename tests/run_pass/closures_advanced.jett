@@ -1,22 +1,22 @@
 namespace app
 
-# --- Closure that captures a struct value ---
+# --- Closure that accepts a move-only struct explicitly ---
 
 struct Point:
     x: int64
     y: int64
 
-function make_point_offset(p: Point) returns function(int64, int64) returns int64:
-    return function(dx: int64, dy: int64) returns int64:
+function make_point_offset() returns function(Point, int64, int64) returns int64:
+    return function(p: Point, dx: int64, dy: int64) returns int64:
         return (p.x + dx) + (p.y + dy)
 
-function test_capture_struct() returns int64:
+function test_explicit_struct_parameter() returns int64:
     Point origin = Point(x: 10, y: 20)
-    function(int64, int64) returns int64 offset = make_point_offset(origin)
-    return offset(3, 7)
+    function(Point, int64, int64) returns int64 offset = make_point_offset()
+    return offset(origin, 3, 7)
 
-verify test_capture_struct:
-    assert test_capture_struct() == 40
+verify test_explicit_struct_parameter:
+    assert test_explicit_struct_parameter() == 40
 
 # --- Closure passed as argument to a user-defined higher-order function ---
 

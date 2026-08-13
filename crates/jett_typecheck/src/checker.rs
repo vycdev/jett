@@ -124,6 +124,14 @@ enum MachineStateTruth {
     IsNot,
 }
 
+#[derive(Debug, Default)]
+struct ClosureCaptureScope {
+    /// Definitions declared inside this closure rather than captured by it.
+    locals: HashSet<DefId>,
+    /// Move-only captures already diagnosed in this closure.
+    rejected: HashSet<DefId>,
+}
+
 // ---------------------------------------------------------------------------
 // Internal type checker
 // ---------------------------------------------------------------------------
@@ -171,6 +179,8 @@ struct TypeChecker<'a> {
     current_verify_name: Option<String>,
     /// Nesting depth inside a handle-block body. Used to validate `default`.
     handle_body_depth: usize,
+    /// Active anonymous-function capture boundaries.
+    closure_capture_scopes: Vec<ClosureCaptureScope>,
 
     // -- Generic struct support --
     /// AST templates for user-defined generic structs (have type_params).
@@ -260,6 +270,7 @@ impl<'a> TypeChecker<'a> {
             in_property_block: false,
             current_verify_name: None,
             handle_body_depth: 0,
+            closure_capture_scopes: Vec::new(),
             generic_struct_templates: HashMap::new(),
             monomorphized_structs: HashMap::new(),
             reflection_fields_by_id: HashMap::new(),
@@ -6983,6 +6994,7 @@ impl<'a> TypeChecker<'a> {
         if let Some(name) = bind_name {
             if let Some(def_id) = self.declaration_def_id(name.span) {
                 self.type_env.insert(def_id, TypeInterner::STRING);
+                self.record_closure_local(def_id);
             }
         }
 
@@ -7046,6 +7058,7 @@ impl<'a> TypeChecker<'a> {
         // Bind the variable's DefId to its declared type.
         if let Some(def_id) = self.declaration_def_id(decl.name.span) {
             self.type_env.insert(def_id, declared_type);
+            self.record_closure_local(def_id);
         }
 
         // Check that the initializer type matches the declared type (skip if Error).
@@ -7420,6 +7433,7 @@ impl<'a> TypeChecker<'a> {
         // Bind the loop variable (key for maps, element for lists/strings).
         if let Some(def_id) = self.declaration_def_id(for_stmt.variable.span) {
             self.type_env.insert(def_id, elem_type);
+            self.record_closure_local(def_id);
         }
 
         // Bind the optional value variable (only for map iteration).
@@ -7431,6 +7445,7 @@ impl<'a> TypeChecker<'a> {
             };
             if let Some(def_id) = self.declaration_def_id(val_var.span) {
                 self.type_env.insert(def_id, val_type);
+                self.record_closure_local(def_id);
             }
         }
 
@@ -7639,6 +7654,7 @@ impl<'a> TypeChecker<'a> {
                             {
                                 if let Some(def_id) = self.declaration_def_id(binding.span) {
                                     self.type_env.insert(def_id, *field_ty);
+                                    self.record_closure_local(def_id);
                                 }
                             }
                         }
@@ -7841,11 +7857,14 @@ impl<'a> TypeChecker<'a> {
                     .unwrap_or(TypeInterner::NOTHING);
                 self.current_return_type = Some(ret);
                 self.current_function_pure = false;
+                self.closure_capture_scopes
+                    .push(ClosureCaptureScope::default());
 
                 for param in params {
                     let param_type = self.resolve_type_expr(&param.ty);
                     if let Some(def_id) = self.declaration_def_id(param.name.span) {
                         self.type_env.insert(def_id, param_type);
+                        self.record_closure_local(def_id);
                     }
                 }
 
@@ -7855,6 +7874,7 @@ impl<'a> TypeChecker<'a> {
                     .collect();
 
                 self.check_block(body);
+                self.closure_capture_scopes.pop();
 
                 self.current_return_type = saved_return_type;
                 self.current_function_name = saved_fn_name;
@@ -8619,12 +8639,43 @@ impl<'a> TypeChecker<'a> {
             .or_else(|| self.decl_defs.get(&ident.span))
         {
             if let Some(&type_id) = self.type_env.get(&def_id) {
+                self.check_closure_capture(def_id, type_id, ident);
                 return type_id;
             }
         }
         // If name resolution didn't find this ident, the resolver already
         // emitted an error. We return Error to avoid cascading type errors.
         TypeInterner::ERROR
+    }
+
+    fn record_closure_local(&mut self, def_id: DefId) {
+        if let Some(scope) = self.closure_capture_scopes.last_mut() {
+            scope.locals.insert(def_id);
+        }
+    }
+
+    fn check_closure_capture(&mut self, def_id: DefId, type_id: TypeId, ident: &ast::Ident) {
+        let Some(scope) = self.closure_capture_scopes.last() else {
+            return;
+        };
+        if scope.locals.contains(&def_id)
+            || crate::ownership::is_implicitly_copyable(&self.interner, type_id)
+        {
+            return;
+        }
+
+        let definition = self.resolve.scope_table.def(def_id);
+        if !matches!(definition.kind, DefKind::Variable | DefKind::Param) {
+            return;
+        }
+
+        let scope = self.closure_capture_scopes.last_mut().unwrap();
+        if scope.rejected.insert(def_id) {
+            self.sink.emit(crate::ownership::cannot_capture_move_only(
+                &ident.name,
+                ident.span,
+            ));
+        }
     }
 
     fn is_displayable_type(&self, ty: TypeId) -> bool {
@@ -10796,6 +10847,7 @@ impl<'a> TypeChecker<'a> {
                 if let Some(name) = bind_name {
                     if let Some(def_id) = self.declaration_def_id(name.span) {
                         self.type_env.insert(def_id, err_ty);
+                        self.record_closure_local(def_id);
                     }
                 }
                 self.check_handle_body(body);

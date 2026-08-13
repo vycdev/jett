@@ -81,8 +81,8 @@ Closures may capture only implicitly copyable values. Each captured value is
 copied into the closure. Capturing a move-only value is a compile error; such a
 value must instead be passed explicitly as a parameter.
 
-Compiler enforcement and existing closure fixtures must be aligned with this
-rule before it is considered implemented.
+The compiler rejects move-only captures, and closure fixtures keep move-only
+values explicit as parameters.
 
 ### Cross-context transfer
 
