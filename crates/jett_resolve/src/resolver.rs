@@ -391,7 +391,7 @@ impl Resolver {
                 && ns.span.file.is_stdlib()
                 && matches!(
                     ns.name.name.as_str(),
-                    "string" | "bytes" | "list" | "map" | "set"
+                    "string" | "bytes" | "list" | "map" | "set" | "Clock"
                 )
             {
                 let def_id = self.scope_table.new_def_with_visibility(
@@ -1429,10 +1429,15 @@ impl Resolver {
     ) -> Option<DefId> {
         // Check for shadowing in ancestor scopes.
         if let Some(prev_id) = self.scope_table.lookup_ancestor(self.current_scope, name) {
-            let prev_span = self.scope_table.def(prev_id).span;
-            self.sink
-                .emit(errors::variable_shadowing(name, span, prev_span));
-            return None;
+            let prev = self.scope_table.def(prev_id);
+            let external_project_definition = span.file.is_stdlib()
+                && !prev.span.file.is_stdlib()
+                && prev.kind != DefKind::Constant;
+            if !external_project_definition {
+                self.sink
+                    .emit(errors::variable_shadowing(name, span, prev.span));
+                return None;
+            }
         }
         // Check for duplicate in the current scope.
         if let Some(prev_id) = self.scope_table.lookup_local(self.current_scope, name) {
@@ -1705,6 +1710,11 @@ mod tests {
                 "set.is_empty",
                 "namespace set\nexport function is_empty[T](view items: set[T]) returns bool:\n    return set.length(view items) == 0\n",
             ),
+            (
+                "Clock",
+                "Clock.now",
+                "namespace Clock\nexport function now(view clock: Clock) returns int64:\n    return 0\n",
+            ),
         ] {
             let module = parse_module_with_file(source, FileId::new(STDLIB_FILE_ID_START));
             let result = resolve(&module);
@@ -1731,6 +1741,24 @@ mod tests {
                 Some(namespace)
             );
         }
+    }
+
+    #[test]
+    fn stdlib_local_names_do_not_shadow_later_project_definitions() {
+        let stdlib = parse_module_with_file(
+            "namespace time\nexport function before(left: int64, right: int64) returns bool:\n    return left < right\n",
+            FileId::new(STDLIB_FILE_ID_START),
+        );
+        let project = parse_module(
+            "namespace left\nfunction value() returns int64:\n    return 1\nnamespace right\nfunction value() returns int64:\n    return 2\n",
+        );
+        let result = resolve(&merge_modules(vec![stdlib, project]));
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "unexpected errors: {errors:#?}");
     }
 
     #[test]

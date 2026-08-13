@@ -1306,8 +1306,8 @@ recorded in the [Random capability and entropy contract](completed/random_capabi
 
 **Wall-clock time — explicit capability:**
 
-> The proposed time value and `Clock` capability contract is recorded in
-> [Time and Clock capability contract](open_design/time_clock_capability_contract.md).
+> The implemented time value and `Clock` capability contract is recorded in
+> [Time and Clock capability contract](completed/time_clock_capability_contract.md).
 
 ```
 use time
@@ -3013,9 +3013,9 @@ secret[T] ──→ secret.compare() ALLOWED (constant-time comparison)
 > [`docs/open_design/net_socket_transport_contract.md`](open_design/net_socket_transport_contract.md)
 > for [#104](https://github.com/vycdev/jett/issues/104).
 
-> The proposed wall-clock API, value model, deterministic injection, and removal
+> The wall-clock API, value model, deterministic injection, and removal
 > of ambient `time.now_ms`/`time.now_s` are defined in the
-> [Time and Clock capability contract](open_design/time_clock_capability_contract.md).
+> [Time and Clock capability contract](completed/time_clock_capability_contract.md).
 
 > The initial `net.http` client contract and its `Network` capability boundary
 > are separately [tracked by #101](https://github.com/vycdev/jett/issues/101).
@@ -6784,7 +6784,7 @@ The standard library is intentionally massive and opinionated. The goal is to ma
 - **time** — capability-backed `Clock.now`, timestamp/duration conversion,
   difference, checked add/subtract, and comparisons; calendar formatting,
   parsing, day-of-week, and time-zone behavior are deferred (see the
-  [Time and Clock capability contract](open_design/time_clock_capability_contract.md))
+  [Time and Clock capability contract](completed/time_clock_capability_contract.md))
 - **Environment** — capability-backed read-only launch environment and user
   arguments over an immutable injected snapshot; ambient `os.env`/`os.args` are
   transitional and removed by the proposed

@@ -1,28 +1,6 @@
 namespace app
-
-# --- time.now_ms returns a positive integer ---
-
-function time_now_positive() returns bool:
-    int64 ms = time.now_ms()
-    return ms > 0
-
-verify time_now_positive:
-    assert time_now_positive() == true
-
-# --- time.now_s returns a reasonable unix timestamp ---
-
-function time_now_s_reasonable() returns bool:
-    int64 s = time.now_s()
-    return s > 1700000000
-
-verify time_now_s_reasonable:
-    assert time_now_s_reasonable() == true
-
-# --- os.args returns a non-empty list ---
-
 function args_not_empty() returns bool:
-    list[string] a = os.args()
-    return list.length[string](a) >= 0
-
+    list[string] arguments = os.args()
+    return list.length[string](arguments) >= 0
 verify args_not_empty:
     assert args_not_empty() == true

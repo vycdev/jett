@@ -7,7 +7,7 @@ bitfield network Header:
     version: 4 bits
     header_length: 4 bits
     protocol: 8 bits as IpProtocol
-function main(view stdout: Stdout) returns nothing:
+function main(stdout: Stdout) returns nothing:
     Header header = Header(version: 4, header_length: 5, protocol: IpProtocol.tcp)
     bytes raw = Header.to_bytes(header)
     Header decoded = Header.from_bytes(raw) handle error:

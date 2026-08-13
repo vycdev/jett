@@ -17,3 +17,5 @@ function crypto_kernel_is_private() returns bytes:
     return crypto.__sha256(bytes.new())
 function random_kernel_is_private(view rng: Random) returns bool:
     return random.__bool(view rng)
+function clock_kernel_is_private(view clock: Clock) returns int64:
+    return Clock.__now(view clock)

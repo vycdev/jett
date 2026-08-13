@@ -546,12 +546,11 @@ Track which capabilities flow through the program:
   cannot sample randomness. See the
   [Random capability and entropy contract](completed/random_capability_entropy_contract.md).
 - **Clock reads are capability operations.** The canonical operation is
-  `Clock.now(view clock) -> time.Timestamp`; zero-argument `time.now_ms` and
-  `time.now_s` are transitional ambient effects to remove. Verify and comptime
-  evaluation cannot read a clock. Interpreters and later backends receive an
-  injected clock so tests can provide deterministic signed Unix-millisecond
-  samples. See the
-  [Time and Clock capability contract](open_design/time_clock_capability_contract.md).
+  `Clock.now(view clock) -> time.Timestamp`; the ambient `time.now_ms` and
+  `time.now_s` spellings have been removed. Verify and comptime evaluation
+  cannot read a clock. Runtime contexts receive an injected production or
+  deterministic test clock. See the
+  [Time and Clock capability contract](completed/time_clock_capability_contract.md).
 - **Launch inputs are capability operations.** The proposed
   `Environment.get(view env, key)` and `Environment.args(view env)` read one
   immutable runtime-injected launch snapshot. Capability-free `os.env` and
@@ -1466,7 +1465,7 @@ For time, only injected wall-clock sampling is a
 runtime kernel; public timestamp/duration conversions, comparisons, and checked
 arithmetic belong in compiler-shipped `.jett` source. The exact value,
 capability, determinism, and compatibility rules are defined in the
-[Time and Clock capability contract](open_design/time_clock_capability_contract.md).
+[Time and Clock capability contract](completed/time_clock_capability_contract.md).
 
 ### How the Compiler Locates the Stdlib
 
@@ -1936,9 +1935,9 @@ Core stdlib (string, list, math, json) is implemented in Phase D. This phase com
   proposed in
   [`docs/open_design/net_socket_transport_contract.md`](open_design/net_socket_transport_contract.md)
   for [#104](https://github.com/vycdev/jett/issues/104)), `csv`
-- **Time:** `time` (the proposed wall-clock value, capability, determinism, and
+- **Time:** `time` (the implemented wall-clock value, capability, determinism, and
   source/runtime boundary is defined in the
-  [Time and Clock capability contract](open_design/time_clock_capability_contract.md))
+  [Time and Clock capability contract](completed/time_clock_capability_contract.md))
 - **Security:** `crypto`, `encoding`, `validate` (the crypto hashing contract is
   defined in the [crypto contract](completed/crypto_hashing_security_contract.md), and encoding's
   implemented byte-native codecs and strict failure policy are defined by the
@@ -1998,7 +1997,7 @@ call, type, and handle diagnostics instead of getting a parallel error family.
 | E0200–E0209 | Name resolution errors and warnings (undefined, duplicate, namespace visibility, `export root`) |
 | E0300–E0354 | Type and language policy errors: calls, generic arity, handles, interfaces, refinements, bitfields, JSON policy, state machines, reflection metadata, and pipeline boundaries |
 | E0400–E0401 | Ownership errors (use-after-move, consuming a view) |
-| E0500–E0501 | Capability and purity errors (pure or verify code calling impure code) |
+| E0500–E0503 | Capability and purity errors (impure calls and capability-parameter ownership) |
 | E0600–E0603 | Secret errors (secret exposure, invalid declassification/helper use, secret-containing output) |
 | E0700 | Actor response errors (`respond` outside a handler with `responds`) |
 | E0800–E0802 | Complexity limit errors (too many statements, too much nesting, too much cyclomatic complexity) |

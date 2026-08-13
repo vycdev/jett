@@ -1,10 +1,10 @@
 use jett_common::{FileId, STDLIB_FILE_ID_START, Span};
-pub use jett_comptime::RandomTestSample;
 use jett_comptime::value::Value;
 use jett_comptime::verify::{
     run_verify_blocks_detailed_with_metadata_and_expression_types,
     run_verify_blocks_with_metadata_and_expression_types,
 };
+pub use jett_comptime::{ClockTestSample, RandomTestSample};
 use jett_diagnostics::Diagnostic;
 use jett_fmt::{FormatResult, format_source};
 use jett_parser::ast::{FunctionDecl, FunctionDef, Item, Module, Param, TypeExpr};
@@ -314,6 +314,7 @@ struct RunOptions {
     capture_stdout: bool,
     emit_runtime_debug: bool,
     random_test_samples: Option<Vec<RandomTestSample>>,
+    clock_test_samples: Option<Vec<ClockTestSample>>,
 }
 
 /// Run the full compilation pipeline on in-memory source text.
@@ -2510,6 +2511,7 @@ pub fn run_file(path: &Path) -> Result<(), String> {
             capture_stdout: false,
             emit_runtime_debug: true,
             random_test_samples: None,
+            clock_test_samples: None,
         },
     )
     .map(|_| ())
@@ -2524,6 +2526,7 @@ pub fn run_file_capture_stdout(path: &Path) -> Result<String, String> {
             capture_stdout: true,
             emit_runtime_debug: false,
             random_test_samples: None,
+            clock_test_samples: None,
         },
     )
     .map(|output| output.stdout)
@@ -2537,6 +2540,7 @@ pub fn run_file_capture_output(path: &Path) -> Result<RunOutput, String> {
             capture_stdout: true,
             emit_runtime_debug: false,
             random_test_samples: None,
+            clock_test_samples: None,
         },
     )
 }
@@ -2552,6 +2556,7 @@ pub fn run_file_with_random_test_samples(
             capture_stdout: false,
             emit_runtime_debug: false,
             random_test_samples: Some(samples),
+            clock_test_samples: None,
         },
     )
     .map(|_| ())
@@ -2568,6 +2573,41 @@ pub fn run_file_capture_stdout_with_random_test_samples(
             capture_stdout: true,
             emit_runtime_debug: false,
             random_test_samples: Some(samples),
+            clock_test_samples: None,
+        },
+    )
+    .map(|output| output.stdout)
+}
+
+/// Run with a backend-neutral scripted wall clock for deterministic tests.
+pub fn run_file_with_clock_test_samples(
+    path: &Path,
+    samples: Vec<ClockTestSample>,
+) -> Result<(), String> {
+    run_file_with_options(
+        path,
+        RunOptions {
+            capture_stdout: false,
+            emit_runtime_debug: false,
+            random_test_samples: None,
+            clock_test_samples: Some(samples),
+        },
+    )
+    .map(|_| ())
+}
+
+/// Run with scripted wall-clock samples and capture stdout.
+pub fn run_file_capture_stdout_with_clock_test_samples(
+    path: &Path,
+    samples: Vec<ClockTestSample>,
+) -> Result<String, String> {
+    run_file_with_options(
+        path,
+        RunOptions {
+            capture_stdout: true,
+            emit_runtime_debug: false,
+            random_test_samples: None,
+            clock_test_samples: Some(samples),
         },
     )
     .map(|output| output.stdout)
@@ -2634,6 +2674,17 @@ fn run_file_inner(path: &Path, options: RunOptions) -> Result<RunOutput, String>
             interp.set_random_test_samples(samples);
         } else {
             interp.initialize_random_provider()?;
+        }
+    }
+    if main_func
+        .params
+        .iter()
+        .any(|param| type_expr_name(&param.ty) == "Clock")
+    {
+        if let Some(samples) = options.clock_test_samples.clone() {
+            interp.set_clock_test_samples(samples);
+        } else {
+            interp.initialize_clock_provider();
         }
     }
     if let Some(metadata) = build.reflection_metadata.clone() {
@@ -4451,6 +4502,50 @@ mod tests {
                 result.file_path
             );
         }
+    }
+
+    #[test]
+    fn query_signature_reports_source_owned_time_and_clock_surfaces() {
+        let time_functions = [
+            ("from_unix_milliseconds", 1, "time.Timestamp"),
+            ("to_unix_milliseconds", 1, "int64"),
+            ("to_unix_seconds", 1, "int64"),
+            ("duration_milliseconds", 1, "time.Duration"),
+            ("duration_seconds", 1, "result[time.Duration, string]"),
+            ("duration_to_milliseconds", 1, "int64"),
+            ("difference", 2, "result[time.Duration, string]"),
+            ("add", 2, "result[time.Timestamp, string]"),
+            ("subtract", 2, "result[time.Timestamp, string]"),
+            ("before", 2, "bool"),
+        ];
+        for (function, param_count, return_type) in time_functions {
+            let name = format!("time.{function}");
+            let result = query_signature(Path::new("."), &name)
+                .expect("time signature query should succeed")
+                .unwrap_or_else(|| panic!("{name} signature should be found"));
+            assert_eq!(result.params.len(), param_count);
+            assert_eq!(result.return_type, return_type);
+            assert!(
+                result
+                    .file_path
+                    .replace('\\', "/")
+                    .ends_with("/stdlib/time.jett")
+            );
+        }
+
+        let now = query_signature(Path::new("."), "Clock.now")
+            .expect("Clock.now signature query should succeed")
+            .expect("Clock.now signature should be found");
+        assert_eq!(now.params.len(), 1);
+        assert_eq!(now.params[0].name, "clock");
+        assert_eq!(now.params[0].type_name, "Clock");
+        assert!(now.params[0].view);
+        assert_eq!(now.return_type, "time.Timestamp");
+        assert!(
+            now.file_path
+                .replace('\\', "/")
+                .ends_with("/stdlib/time.jett")
+        );
     }
 
     #[test]

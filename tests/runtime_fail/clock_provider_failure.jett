@@ -1,0 +1,7 @@
+namespace app
+function main(clock: Clock) returns nothing:
+    time.Timestamp now = Clock.now(view clock)
+    int64 milliseconds = time.to_unix_milliseconds(now)
+    if milliseconds == 0:
+        return nothing
+    return nothing

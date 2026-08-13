@@ -1,0 +1,7 @@
+# ERROR: E0500
+# ERROR: E0303
+namespace app
+function sample(view clock: Clock) returns time.Timestamp:
+    return Clock.now(view clock)
+function ambient_clock_is_forbidden() returns time.Timestamp:
+    return sample()

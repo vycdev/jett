@@ -1,0 +1,8 @@
+# ERROR: E0311
+# ERROR: E0304
+namespace app
+function timestamp_and_duration_are_distinct() returns nothing:
+    time.Duration duration = time.duration_milliseconds(1)
+    time.Timestamp timestamp = duration
+    int64 milliseconds = time.to_unix_milliseconds(duration)
+    return nothing

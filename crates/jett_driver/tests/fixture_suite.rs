@@ -4,9 +4,11 @@ use std::path::{Path, PathBuf};
 use jett_common::FileId;
 use jett_diagnostics::Severity;
 use jett_driver::{
-    RandomTestSample, build_file, build_source, completions, completions_at, hover_type, run_file,
-    run_file_capture_output, run_file_capture_stdout,
-    run_file_capture_stdout_with_random_test_samples, run_file_with_random_test_samples, test_file,
+    ClockTestSample, RandomTestSample, build_file, build_source, completions, completions_at,
+    hover_type, run_file, run_file_capture_output, run_file_capture_stdout,
+    run_file_capture_stdout_with_clock_test_samples,
+    run_file_capture_stdout_with_random_test_samples, run_file_with_clock_test_samples,
+    run_file_with_random_test_samples, test_file,
 };
 use jett_parser::ast::Item;
 use jett_parser::parse;
@@ -855,6 +857,8 @@ compile_fail_fixture!(
 run_pass_fixture!(run_pass_string_search, "string_search.jett");
 run_pass_fixture!(run_pass_string_indic_grapheme, "string_indic_grapheme.jett");
 run_pass_fixture!(run_pass_time_and_os, "time_and_os.jett");
+run_pass_fixture!(run_pass_time_values, "time_values.jett");
+run_pass_fixture!(run_pass_clock_production, "clock_production.jett");
 run_pass_fixture!(run_pass_math_trig, "math_trig.jett");
 run_pass_fixture!(run_pass_math_sum_source, "math_sum_source.jett");
 run_pass_fixture!(run_pass_logical_ops, "logical_ops.jett");
@@ -1245,6 +1249,42 @@ compile_fail_fixture!(
     compile_fail_random_verify_forbidden,
     "random_verify_forbidden.jett"
 );
+compile_fail_fixture!(
+    compile_fail_clock_capability_required,
+    "clock_capability_required.jett"
+);
+compile_fail_fixture!(
+    compile_fail_clock_verify_forbidden,
+    "clock_verify_forbidden.jett"
+);
+compile_fail_fixture!(
+    compile_fail_clock_capability_not_constructible,
+    "clock_capability_not_constructible.jett"
+);
+compile_fail_fixture!(
+    compile_fail_time_removed_ambient_calls,
+    "time_removed_ambient_calls.jett"
+);
+compile_fail_fixture!(
+    compile_fail_time_value_type_mismatch,
+    "time_value_type_mismatch.jett"
+);
+compile_fail_fixture!(
+    compile_fail_time_namespace_collision,
+    "time_namespace_collision.jett"
+);
+compile_fail_fixture!(
+    compile_fail_clock_namespace_collision,
+    "clock_namespace_collision.jett"
+);
+compile_fail_fixture!(
+    compile_fail_clock_private_kernel,
+    "clock_private_kernel.jett"
+);
+compile_fail_fixture!(
+    compile_fail_capability_parameter_ownership,
+    "capability_parameter_ownership.jett"
+);
 
 #[test]
 fn compile_fail_random_capability_required_counts() {
@@ -1255,6 +1295,32 @@ fn compile_fail_random_capability_required_counts() {
 #[test]
 fn compile_fail_random_capability_element_count() {
     assert_compile_fail_error_count("random_capability_elements.jett", 355, 4);
+}
+
+#[test]
+fn compile_fail_clock_capability_required_counts() {
+    assert_compile_fail_error_count("clock_capability_required.jett", 500, 1);
+    assert_compile_fail_error_count("clock_capability_required.jett", 303, 1);
+}
+
+#[test]
+fn compile_fail_removed_ambient_time_call_count() {
+    assert_compile_fail_error_count("time_removed_ambient_calls.jett", 356, 2);
+}
+
+#[test]
+fn removed_ambient_time_calls_include_migrations() {
+    let path = fixture_path("compile_fail", "time_removed_ambient_calls.jett");
+    let result = build_file(&path);
+    let messages = error_messages(&path, &result.diagnostics);
+    assert!(
+        messages.contains("time.to_unix_milliseconds(Clock.now(view clock))"),
+        "missing millisecond migration:\n{messages}"
+    );
+    assert!(
+        messages.contains("time.to_unix_seconds(Clock.now(view clock))"),
+        "missing second migration:\n{messages}"
+    );
 }
 compile_fail_fixture!(
     compile_fail_collection_transform_consumes,
@@ -1315,6 +1381,91 @@ fn runtime_fail_random_invalid_test_sample() {
     assert_eq!(
         run_file_with_random_test_samples(&path, vec![RandomTestSample::Bounded(0)]).unwrap_err(),
         "runtime error: Random: invalid test sample"
+    );
+}
+
+#[test]
+fn run_pass_clock_scripted_contract() {
+    let path = fixture_path("run_pass", "clock_scripted.jett");
+    let output = run_file_capture_stdout_with_clock_test_samples(
+        &path,
+        vec![
+            ClockTestSample::Wall {
+                unix_seconds: 0,
+                subsecond_nanoseconds: 0,
+            },
+            ClockTestSample::Wall {
+                unix_seconds: 0,
+                subsecond_nanoseconds: 0,
+            },
+            ClockTestSample::Wall {
+                unix_seconds: -1,
+                subsecond_nanoseconds: 999_999_999,
+            },
+            ClockTestSample::Wall {
+                unix_seconds: 42,
+                subsecond_nanoseconds: 123_456_789,
+            },
+            ClockTestSample::Wall {
+                unix_seconds: 40,
+                subsecond_nanoseconds: 0,
+            },
+        ],
+    )
+    .unwrap_or_else(|err| panic!("expected {} to run successfully: {err}", path.display()));
+    assert_eq!(output, "0:0:-1:42123:40000\n");
+}
+
+#[test]
+fn runtime_fail_clock_script_provider_exhausted() {
+    let path = fixture_path("runtime_fail", "clock_provider_failure.jett");
+    assert_eq!(
+        run_file_with_clock_test_samples(&path, vec![]).unwrap_err(),
+        "runtime error: Clock.now: test clock exhausted"
+    );
+}
+
+#[test]
+fn runtime_fail_clock_unavailable() {
+    let path = fixture_path("runtime_fail", "clock_provider_failure.jett");
+    assert_eq!(
+        run_file_with_clock_test_samples(&path, vec![ClockTestSample::Unavailable]).unwrap_err(),
+        "runtime error: Clock.now: wall clock unavailable"
+    );
+}
+
+#[test]
+fn runtime_fail_clock_timestamp_out_of_range() {
+    let path = fixture_path("runtime_fail", "clock_provider_failure.jett");
+    for unix_seconds in [i128::MAX, i128::MIN] {
+        let error = run_file_with_clock_test_samples(
+            &path,
+            vec![ClockTestSample::Wall {
+                unix_seconds,
+                subsecond_nanoseconds: 0,
+            }],
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            "runtime error: Clock.now: timestamp is outside int64 millisecond range"
+        );
+    }
+}
+
+#[test]
+fn runtime_fail_clock_invalid_test_sample() {
+    let path = fixture_path("runtime_fail", "clock_provider_failure.jett");
+    assert_eq!(
+        run_file_with_clock_test_samples(
+            &path,
+            vec![ClockTestSample::Wall {
+                unix_seconds: 0,
+                subsecond_nanoseconds: 1_000_000_000,
+            }],
+        )
+        .unwrap_err(),
+        "runtime error: Clock.now: invalid test sample"
     );
 }
 
@@ -1463,7 +1614,7 @@ compile_fail_fixture!(
 
 #[test]
 fn compile_fail_environment_csv_builtin_return_types_count() {
-    assert_compile_fail_error_count("environment_csv_builtin_return_types.jett", 311, 7);
+    assert_compile_fail_error_count("environment_csv_builtin_return_types.jett", 311, 5);
 }
 
 compile_fail_fixture!(

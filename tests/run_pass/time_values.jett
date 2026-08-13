@@ -1,0 +1,107 @@
+namespace app
+function epoch_conversions() returns bool:
+    time.Timestamp direct = time.Timestamp(unix_milliseconds: 7)
+    if time.to_unix_milliseconds(direct) != 7:
+        return false
+    time.Timestamp epoch = time.from_unix_milliseconds(0)
+    if time.to_unix_milliseconds(epoch) != 0:
+        return false
+    time.Timestamp before_epoch = time.from_unix_milliseconds(-1)
+    if time.to_unix_seconds(before_epoch) != -1:
+        return false
+    time.Timestamp full_negative_second = time.from_unix_milliseconds(-1000)
+    if time.to_unix_seconds(full_negative_second) != -1:
+        return false
+    time.Timestamp below_negative_second = time.from_unix_milliseconds(-1001)
+    return time.to_unix_seconds(below_negative_second) == -2
+function duration_conversions() returns bool:
+    time.Duration direct_struct = time.Duration(milliseconds: 7)
+    if time.duration_to_milliseconds(direct_struct) != 7:
+        return false
+    time.Duration direct = time.duration_milliseconds(-25)
+    if time.duration_to_milliseconds(direct) != -25:
+        return false
+    time.Duration seconds = time.duration_seconds(3) handle error:
+        return false
+    return time.duration_to_milliseconds(seconds) == 3000
+function time_arithmetic() returns bool:
+    time.Duration forward = time.difference(time.from_unix_milliseconds(10), time.from_unix_milliseconds(25)) handle error:
+        return false
+    if time.duration_to_milliseconds(forward) != 15:
+        return false
+    time.Duration backward = time.difference(time.from_unix_milliseconds(25), time.from_unix_milliseconds(10)) handle error:
+        return false
+    if time.duration_to_milliseconds(backward) != -15:
+        return false
+    time.Timestamp added = time.add(time.from_unix_milliseconds(10), time.duration_milliseconds(5)) handle error:
+        return false
+    if time.to_unix_milliseconds(added) != 15:
+        return false
+    time.Timestamp subtracted = time.subtract(time.from_unix_milliseconds(10), time.duration_milliseconds(5)) handle error:
+        return false
+    return time.to_unix_milliseconds(subtracted) == 5
+function time_ordering() returns bool:
+    return time.before(time.from_unix_milliseconds(-1), time.from_unix_milliseconds(0))
+function duration_seconds_overflow() returns bool:
+    time.duration_seconds(9223372036854776) handle error:
+        return error == "time.duration_seconds: integer overflow"
+    return false
+function duration_seconds_negative_overflow() returns bool:
+    time.duration_seconds(-9223372036854776) handle error:
+        return error == "time.duration_seconds: integer overflow"
+    return false
+function duration_seconds_edges() returns bool:
+    time.Duration maximum = time.duration_seconds(9223372036854775) handle error:
+        return false
+    if time.duration_to_milliseconds(maximum) != 9223372036854775000:
+        return false
+    time.Duration minimum = time.duration_seconds(-9223372036854775) handle error:
+        return false
+    return time.duration_to_milliseconds(minimum) == -9223372036854775000
+function difference_overflow() returns bool:
+    time.difference(time.from_unix_milliseconds(-1), time.from_unix_milliseconds(9223372036854775807)) handle error:
+        return error == "time.difference: integer overflow"
+    return false
+function difference_negative_overflow() returns bool:
+    time.difference(time.from_unix_milliseconds(9223372036854775807), time.from_unix_milliseconds(-9223372036854775808)) handle error:
+        return error == "time.difference: integer overflow"
+    return false
+function add_overflow() returns bool:
+    time.add(time.from_unix_milliseconds(9223372036854775807), time.duration_milliseconds(1)) handle error:
+        return error == "time.add: integer overflow"
+    return false
+function add_negative_overflow() returns bool:
+    time.add(time.from_unix_milliseconds(-9223372036854775808), time.duration_milliseconds(-1)) handle error:
+        return error == "time.add: integer overflow"
+    return false
+function subtract_overflow() returns bool:
+    time.subtract(time.from_unix_milliseconds(-9223372036854775808), time.duration_milliseconds(1)) handle error:
+        return error == "time.subtract: integer overflow"
+    return false
+function subtract_negative_overflow() returns bool:
+    time.subtract(time.from_unix_milliseconds(9223372036854775807), time.duration_milliseconds(-1)) handle error:
+        return error == "time.subtract: integer overflow"
+    return false
+function arithmetic_edges_fit() returns bool:
+    time.Timestamp maximum = time.add(time.from_unix_milliseconds(9223372036854775806), time.duration_milliseconds(1)) handle error:
+        return false
+    if time.to_unix_milliseconds(maximum) != 9223372036854775807:
+        return false
+    time.Timestamp minimum = time.subtract(time.from_unix_milliseconds(-9223372036854775807), time.duration_milliseconds(1)) handle error:
+        return false
+    return time.to_unix_milliseconds(minimum) == -9223372036854775807 - 1
+verify time_value_contract:
+    assert epoch_conversions()
+    assert duration_conversions()
+    assert time_arithmetic()
+    assert time_ordering()
+    assert duration_seconds_overflow()
+    assert duration_seconds_negative_overflow()
+    assert duration_seconds_edges()
+    assert difference_overflow()
+    assert difference_negative_overflow()
+    assert add_overflow()
+    assert add_negative_overflow()
+    assert subtract_overflow()
+    assert subtract_negative_overflow()
+    assert arithmetic_edges_fit()

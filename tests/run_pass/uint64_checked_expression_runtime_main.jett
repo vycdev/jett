@@ -12,6 +12,6 @@ function list_uint64_dispatch() returns string:
     return Show.show(view(list.get[uint64](view values, 0) handle:
         default fallback
     ))
-function main(view stdout: Stdout) returns nothing:
+function main(stdout: Stdout) returns nothing:
     Stdout.write(view stdout, list_uint64_dispatch())
     return nothing

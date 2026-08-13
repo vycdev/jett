@@ -1,0 +1,8 @@
+namespace app
+function main(clock: Clock) returns nothing:
+    int64 epoch = time.to_unix_milliseconds(Clock.now(view clock))
+    int64 repeated = time.to_unix_milliseconds(Clock.now(view clock))
+    int64 before_epoch = time.to_unix_milliseconds(Clock.now(view clock))
+    int64 positive = time.to_unix_milliseconds(Clock.now(view clock))
+    int64 backward = time.to_unix_milliseconds(Clock.now(view clock))
+    println("{epoch}:{repeated}:{before_epoch}:{positive}:{backward}")

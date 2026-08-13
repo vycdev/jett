@@ -1,0 +1,7 @@
+# ERROR: E0502
+# ERROR: E0503
+namespace app
+function helper_must_borrow(clock: Clock) returns time.Timestamp:
+    return Clock.now(view clock)
+function main(view clock: Clock) returns nothing:
+    return nothing

@@ -274,6 +274,8 @@ pub struct Interpreter {
     stdout_capture: Option<String>,
     /// Per-runtime random provider. Compile-time interpreters leave this absent.
     random_provider: Option<RandomProvider>,
+    /// Per-runtime wall-clock provider. Compile-time interpreters leave this absent.
+    clock_provider: Option<ClockProvider>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -288,6 +290,20 @@ enum RandomProvider {
     Scripted(std::collections::VecDeque<RandomTestSample>),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClockTestSample {
+    Wall {
+        unix_seconds: i128,
+        subsecond_nanoseconds: u32,
+    },
+    Unavailable,
+}
+
+enum ClockProvider {
+    Production,
+    Scripted(std::collections::VecDeque<ClockTestSample>),
+}
+
 fn unbiased_bounded_offset(width: u64, mut next_word: impl FnMut() -> u64) -> u64 {
     debug_assert!(width > 0);
     let rejection_threshold = width.wrapping_neg() % width;
@@ -297,6 +313,38 @@ fn unbiased_bounded_offset(width: u64, mut next_word: impl FnMut() -> u64) -> u6
             return word % width;
         }
     }
+}
+
+fn checked_clock_milliseconds(unix_seconds: i128, nanoseconds: u32) -> Result<i64, String> {
+    if nanoseconds >= 1_000_000_000 {
+        return Err("Clock.now: invalid test sample".to_string());
+    }
+    let milliseconds = unix_seconds
+        .checked_mul(1_000)
+        .and_then(|value| value.checked_add(i128::from(nanoseconds / 1_000_000)))
+        .ok_or_else(|| "Clock.now: timestamp is outside int64 millisecond range".to_string())?;
+    i64::try_from(milliseconds)
+        .map_err(|_| "Clock.now: timestamp is outside int64 millisecond range".to_string())
+}
+
+fn raw_wall_clock_sample(value: std::time::SystemTime) -> (i128, u32) {
+    match value.duration_since(std::time::UNIX_EPOCH) {
+        Ok(duration) => (i128::from(duration.as_secs()), duration.subsec_nanos()),
+        Err(error) => {
+            let duration = error.duration();
+            let seconds = i128::from(duration.as_secs());
+            let nanoseconds = duration.subsec_nanos();
+            if nanoseconds == 0 {
+                (-seconds, 0)
+            } else {
+                (-seconds - 1, 1_000_000_000 - nanoseconds)
+            }
+        }
+    }
+}
+
+fn production_wall_clock_sample() -> (i128, u32) {
+    raw_wall_clock_sample(std::time::SystemTime::now())
 }
 
 /// Runtime state of a spawned actor instance.
@@ -341,6 +389,7 @@ impl Interpreter {
             emit_runtime_debug: false,
             stdout_capture: None,
             random_provider: None,
+            clock_provider: None,
         }
     }
 
@@ -369,6 +418,23 @@ impl Interpreter {
     pub fn random_test_samples_remaining(&self) -> Option<usize> {
         match &self.random_provider {
             Some(RandomProvider::Scripted(samples)) => Some(samples.len()),
+            _ => None,
+        }
+    }
+
+    /// Install the system wall clock for this runtime context.
+    pub fn initialize_clock_provider(&mut self) {
+        self.clock_provider = Some(ClockProvider::Production);
+    }
+
+    /// Install deterministic raw wall-clock samples for conformance tests.
+    pub fn set_clock_test_samples(&mut self, samples: Vec<ClockTestSample>) {
+        self.clock_provider = Some(ClockProvider::Scripted(samples.into()));
+    }
+
+    pub fn clock_test_samples_remaining(&self) -> Option<usize> {
+        match &self.clock_provider {
+            Some(ClockProvider::Scripted(samples)) => Some(samples.len()),
             _ => None,
         }
     }
@@ -7771,6 +7837,26 @@ impl Interpreter {
         }
     }
 
+    fn clock_now_milliseconds(&mut self) -> Result<i64, String> {
+        let Some(provider) = self.clock_provider.as_mut() else {
+            return Err("Clock.now: wall clock unavailable".to_string());
+        };
+        let (seconds, nanoseconds) = match provider {
+            ClockProvider::Production => production_wall_clock_sample(),
+            ClockProvider::Scripted(samples) => match samples.pop_front() {
+                None => return Err("Clock.now: test clock exhausted".to_string()),
+                Some(ClockTestSample::Unavailable) => {
+                    return Err("Clock.now: wall clock unavailable".to_string());
+                }
+                Some(ClockTestSample::Wall {
+                    unix_seconds,
+                    subsecond_nanoseconds,
+                }) => (unix_seconds, subsecond_nanoseconds),
+            },
+        };
+        checked_clock_milliseconds(seconds, nanoseconds)
+    }
+
     fn call_builtin(&mut self, name: &str, args: &[Value]) -> Option<Result<Value, String>> {
         if let Some(result) = self.call_bitfield_builtin(name, args) {
             return Some(result);
@@ -8955,22 +9041,16 @@ impl Interpreter {
                 }
             }
 
-            // -- Time operations (stdlib/time.jett) -------------------------------
-            "time.now_ms" => {
-                require_args!(name, 0, args);
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as i64;
-                Some(Ok(Value::Int64(now)))
-            }
-            "time.now_s" => {
-                require_args!(name, 0, args);
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs() as i64;
-                Some(Ok(Value::Int64(now)))
+            // -- Wall-clock operation (stdlib/time.jett) ----------------------
+            "Clock.__now" if self.current_function_trusted_stdlib => {
+                require_args!(name, 1, args);
+                if !matches!(args[0], Value::Nothing) {
+                    return Some(Err(format!("{name} expects Clock")));
+                }
+                match self.clock_now_milliseconds() {
+                    Ok(value) => Some(Ok(Value::Int64(value))),
+                    Err(error) => Some(Err(error)),
+                }
             }
 
             // -- OS operations (stdlib/os.jett) ---------------------------------
@@ -16549,6 +16629,165 @@ mod builtin_tests {
             interp
                 .call_builtin("random.bool", &[Value::Nothing])
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn clock_raw_samples_floor_and_check_the_millisecond_range() {
+        assert_eq!(
+            raw_wall_clock_sample(
+                std::time::UNIX_EPOCH
+                    .checked_sub(std::time::Duration::from_millis(1))
+                    .expect("one millisecond before epoch should be representable")
+            ),
+            (-1, 999_000_000)
+        );
+        assert_eq!(
+            raw_wall_clock_sample(
+                std::time::UNIX_EPOCH
+                    .checked_sub(std::time::Duration::from_millis(1_001))
+                    .expect("pre-epoch sample should be representable")
+            ),
+            (-2, 999_000_000)
+        );
+        assert_eq!(checked_clock_milliseconds(0, 0), Ok(0));
+        assert_eq!(checked_clock_milliseconds(-1, 999_999_999), Ok(-1));
+        assert_eq!(checked_clock_milliseconds(42, 123_456_789), Ok(42_123));
+        assert_eq!(
+            checked_clock_milliseconds(9_223_372_036_854_775, 807_000_000),
+            Ok(i64::MAX)
+        );
+        assert_eq!(
+            checked_clock_milliseconds(-9_223_372_036_854_776, 192_000_000),
+            Ok(i64::MIN)
+        );
+        assert_eq!(
+            checked_clock_milliseconds(9_223_372_036_854_775, 808_000_000),
+            Err("Clock.now: timestamp is outside int64 millisecond range".to_string())
+        );
+        assert_eq!(
+            checked_clock_milliseconds(-9_223_372_036_854_776, 191_000_000),
+            Err("Clock.now: timestamp is outside int64 millisecond range".to_string())
+        );
+        assert_eq!(
+            checked_clock_milliseconds(i128::MAX, 0),
+            Err("Clock.now: timestamp is outside int64 millisecond range".to_string())
+        );
+        assert_eq!(
+            checked_clock_milliseconds(0, 1_000_000_000),
+            Err("Clock.now: invalid test sample".to_string())
+        );
+    }
+
+    #[test]
+    fn scripted_clock_kernel_consumes_sequence_and_reports_faults() {
+        let mut interp = Interpreter::new();
+        interp.current_function_trusted_stdlib = true;
+        interp.set_clock_test_samples(vec![
+            ClockTestSample::Wall {
+                unix_seconds: 2,
+                subsecond_nanoseconds: 500_000_000,
+            },
+            ClockTestSample::Wall {
+                unix_seconds: 1,
+                subsecond_nanoseconds: 0,
+            },
+            ClockTestSample::Unavailable,
+        ]);
+        for expected in [2_500, 1_000] {
+            assert_eq!(
+                interp
+                    .call_builtin("Clock.__now", &[Value::Nothing])
+                    .unwrap()
+                    .unwrap(),
+                Value::Int64(expected)
+            );
+        }
+        assert_eq!(interp.clock_test_samples_remaining(), Some(1));
+        assert_eq!(
+            interp
+                .call_builtin("Clock.__now", &[Value::Nothing])
+                .unwrap(),
+            Err("Clock.now: wall clock unavailable".to_string())
+        );
+        assert_eq!(
+            interp
+                .call_builtin("Clock.__now", &[Value::Nothing])
+                .unwrap(),
+            Err("Clock.now: test clock exhausted".to_string())
+        );
+    }
+
+    #[test]
+    fn clock_state_is_isolated_and_private_kernel_requires_trust() {
+        let mut first = Interpreter::new();
+        let mut second = Interpreter::new();
+        first.current_function_trusted_stdlib = true;
+        second.current_function_trusted_stdlib = true;
+        first.set_clock_test_samples(vec![ClockTestSample::Wall {
+            unix_seconds: 1,
+            subsecond_nanoseconds: 0,
+        }]);
+        assert_eq!(
+            first
+                .call_builtin("Clock.__now", &[Value::Nothing])
+                .unwrap()
+                .unwrap(),
+            Value::Int64(1_000)
+        );
+        assert_eq!(
+            second
+                .call_builtin("Clock.__now", &[Value::Nothing])
+                .unwrap(),
+            Err("Clock.now: wall clock unavailable".to_string())
+        );
+
+        let mut untrusted = Interpreter::new();
+        untrusted.set_clock_test_samples(vec![ClockTestSample::Wall {
+            unix_seconds: 1,
+            subsecond_nanoseconds: 0,
+        }]);
+        assert!(
+            untrusted
+                .call_builtin("Clock.__now", &[Value::Nothing])
+                .is_none()
+        );
+        assert!(
+            untrusted
+                .call_builtin("Clock.now", &[Value::Nothing])
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn cloned_clock_handles_share_one_provider_sequence() {
+        let mut interp = Interpreter::new();
+        interp.current_function_trusted_stdlib = true;
+        interp.set_clock_test_samples(vec![
+            ClockTestSample::Wall {
+                unix_seconds: 1,
+                subsecond_nanoseconds: 0,
+            },
+            ClockTestSample::Wall {
+                unix_seconds: 2,
+                subsecond_nanoseconds: 0,
+            },
+        ]);
+        let first_handle = Value::Nothing;
+        let cloned_handle = first_handle.clone();
+        assert_eq!(
+            interp
+                .call_builtin("Clock.__now", &[first_handle])
+                .unwrap()
+                .unwrap(),
+            Value::Int64(1_000)
+        );
+        assert_eq!(
+            interp
+                .call_builtin("Clock.__now", &[cloned_handle])
+                .unwrap()
+                .unwrap(),
+            Value::Int64(2_000)
         );
     }
 

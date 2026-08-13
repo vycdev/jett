@@ -1,0 +1,9 @@
+namespace app
+function sample(view clock: Clock) returns time.Timestamp:
+    return Clock.now(view clock)
+function main(clock: Clock) returns nothing:
+    time.Timestamp now = sample(view clock)
+    int64 milliseconds = time.to_unix_milliseconds(now)
+    if milliseconds == 0:
+        return nothing
+    return nothing

@@ -1,0 +1,7 @@
+# ERROR: E0356
+# ERROR: E0356
+namespace app
+function removed_milliseconds() returns int64:
+    return time.now_ms()
+function removed_seconds() returns int64:
+    return time.now_s()

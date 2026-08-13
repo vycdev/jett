@@ -15,7 +15,7 @@ verify escaped_braces:
     assert string.ends_with(wrapped("World"), "}}") == true
     assert string.contains(wrapped("World"), "World") == true
     assert inline_conversion_calls() == "true:18446744073709551615"
-function main(view stdout: Stdout) returns nothing:
+function main(stdout: Stdout) returns nothing:
     string conversions = inline_conversion_calls()
     if conversions != "true:18446744073709551615":
         Stdout.write(view stdout, conversions)

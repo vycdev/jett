@@ -46,7 +46,7 @@
 | MIR (control flow graph) | `jett_mir` | — | Not started ([Tracked by #22](https://github.com/vycdev/jett/issues/22)) |
 | LLVM native codegen | `jett_codegen_llvm` | — | Not started |
 | Runtime library | `jett_runtime` | — | Not started |
-| Core stdlib (.jett files) | `stdlib/` | — | Partial (bootstrap loader plus extracted `json`, complete source-owned `list`, `map`, `set`, `string`, `math`, and `random` public APIs, and other modules that remain Rust-backed) |
+| Core stdlib (.jett files) | `stdlib/` | — | Partial (bootstrap loader plus extracted `json`, complete source-owned `list`, `map`, `set`, `string`, `math`, `random`, and `time` public APIs, and other modules that remain Rust-backed) |
 
 ### Phase E: Comptime and Verification — COMPLETE
 
@@ -115,7 +115,7 @@
 | Set value type and 12 set builtins (`new`, `add`, `remove`, `contains`, `union`, `intersection`, `difference`) | Done |
 | `print`/`println` builtins | Partial (interpreter support and secret blocking are done; [debug-only capability policy](open_design/print_debug_builtin_policy.md) is decided, while debug-event isolation, release diagnostics, and future-backend conformance remain pending) |
 | Type conversions: `float64.from_string`, `string.from_float64`, `string.from_bool` | Done |
-| `time.now_ms`, `time.now_s` | Done |
+| `time.now_ms`, `time.now_s` | Removed (replaced by explicit `Clock.now`) |
 | `os.env`, `os.args` | Legacy behavior done (transitional ambient builtins; capability-backed replacement specified by the [Environment and argument contract](open_design/environment_argv_capability_contract.md)) |
 | Math: `pi`, `e`, `sin`, `cos`, `tan`, `mod`, `is_even`, `is_odd`, `sum` | Done |
 
@@ -168,7 +168,7 @@
 | `encoding` | Done for the interpreter-backed compiler (all 8 public declarations are source-owned in `stdlib/encoding.jett`; Base64/hex operate on arbitrary bytes, all decoders return stable handled errors, URL and form component semantics are distinct, project code cannot call private kernels, and the future-backend handoff is recorded in the [encoding contract](completed/encoding_representation_failure_contract.md)) |
 | `bytes` | Done (all 9 public declarations are source-owned in `stdlib/bytes.jett`; observers use read-only views, `slice` returns independent owned bytes, `concat` consumes both inputs, and only private trusted raw-byte and UTF-8/hex kernels remain) |
 | `uuid` | Partial (`uuid.new`; generation and entropy contract [tracked by #73](https://github.com/vycdev/jett/issues/73)) |
-| `time` | Partial (transitional ambient `time.now_ms` and `time.now_s` builtins; the proposed contract selects capability-backed `Clock.now(view clock) -> time.Timestamp`, distinct signed-millisecond `Timestamp`/`Duration` values, deterministic clock injection, and removal of the ambient builtins; see [#75](https://github.com/vycdev/jett/issues/75) and the [time/Clock contract](open_design/time_clock_capability_contract.md)) |
+| `time` | Done for the interpreter-backed compiler (`Clock.now(view clock)` reads an injected wall clock; `time.Timestamp` and `time.Duration` plus conversions, comparison, difference, and checked arithmetic are source-owned in `stdlib/time.jett`; deterministic raw clock samples cover pre-epoch flooring, backward movement, provider failure, exhaustion, and range checks; ambient clock builtins are removed with migration diagnostics; later backends retain the [time/Clock contract](completed/time_clock_capability_contract.md)) |
 | `Environment` / `os` | Partial (transitional capability-free `os.env` and `os.args` builtins read ambient host state; the proposed contract replaces them with `Environment.get(view env, key)` and `Environment.args(view env)` over an immutable injected launch snapshot, with distinct missing/invalid-text behavior and source-owned public declarations; see [#94](https://github.com/vycdev/jett/issues/94) and the [Environment and argument contract](open_design/environment_argv_capability_contract.md)) |
 | `net.http` | Not started (initial outbound client and `Network` capability contract [tracked by #101](https://github.com/vycdev/jett/issues/101)) |
 | `net.socket` | Not started (TCP-first transport contract proposed in [`docs/open_design/net_socket_transport_contract.md`](open_design/net_socket_transport_contract.md) for [#104](https://github.com/vycdev/jett/issues/104)) |

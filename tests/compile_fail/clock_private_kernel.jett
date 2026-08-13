@@ -1,0 +1,4 @@
+# ERROR: E0313
+namespace app
+function private_clock_kernel_is_forbidden(view clock: Clock) returns int64:
+    return Clock.__now(view clock)

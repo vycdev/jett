@@ -1,15 +1,14 @@
 # Time and Clock Capability Contract
 
-Status: proposed decision for [#75](https://github.com/vycdev/jett/issues/75).
-Implementation has not started.
+Status: accepted and implemented for the interpreter-backed compiler.
+Future backend lowering remains handoff work.
 
 ## Context
 
-Jett currently exposes zero-argument `time.now_ms()` and `time.now_s()`
-builtins. The interpreter reads the host wall clock directly, so a function can
-observe time without declaring a capability and a `verify` block can depend on
-the machine running it. Before the Unix epoch the interpreter silently returns
-zero, and large host durations are cast to `int64` without a range check.
+Jett previously exposed zero-argument `time.now_ms()` and `time.now_s()`
+builtins backed by direct host-clock reads. That legacy surface allowed hidden
+time effects, mishandled pre-epoch values, and performed unchecked range
+conversion. The implementation now uses the explicit injected boundary below.
 
 The language design already names `Clock` as the capability for reading current
 time and uses both `Time` and `Timestamp` for the returned value. This record
@@ -173,10 +172,9 @@ wall-clock adjustments, pre-epoch values, and range failures.
 
 ## Compatibility Policy
 
-The zero-argument `time.now_ms()` and `time.now_s()` builtins are transitional
-technical debt and are removed when `Clock.now` lands. They cannot remain as
-compatibility wrappers because a zero-argument clock read would preserve the
-hidden effect this contract is intended to eliminate.
+The zero-argument `time.now_ms()` and `time.now_s()` builtins were removed when
+`Clock.now` landed. They cannot remain as compatibility wrappers because a
+zero-argument clock read would preserve the hidden effect this contract removes.
 
 Migrations are mechanical:
 
@@ -222,10 +220,9 @@ hook.
 
 Compiler-shipped `.jett` source owns the public `time` declarations and the
 bodies for epoch conversions, checked timestamp/duration arithmetic,
-comparison, and difference. The compiler must not retain a hardcoded table of
-those public helper names or signatures. The current hardcoded
-`time.now_ms`/`time.now_s` checker and interpreter arms are transitional state,
-not the target runtime-hook architecture.
+comparison, and difference. The compiler does not retain a hardcoded table of
+those public helper names or signatures. The hardcoded `time.now_ms` and
+`time.now_s` checker and interpreter arms have been removed.
 
 The first extraction does not include:
 
@@ -241,27 +238,27 @@ be source-defined over vetted private runtime/data kernels where platform or
 bundled database access is required, but those kernels remain implementation
 details rather than public compiler-owned functions.
 
-## Implementation Slices
+## Implementation Status
 
-1. **Capability enforcement and deterministic injection**
+1. **Capability enforcement and deterministic injection — complete**
    - add the checked public `Clock.now(view Clock) -> time.Timestamp` boundary;
    - inject the clock into the interpreter instead of calling
      `SystemTime::now()` inside builtin dispatch;
    - reject `Clock.now` from pure functions, `verify`, and comptime contexts;
    - add driver tests with fixed, repeated, backward, pre-epoch, unavailable,
      out-of-range, and exhausted sequences.
-2. **Source-owned value helpers**
+2. **Source-owned value helpers — complete**
    - add compiler-shipped `time.Timestamp` and `time.Duration` declarations;
    - implement conversions, comparison, difference, and checked arithmetic in
      `.jett` source;
    - add signature/query and ownership regressions proving the public surface
      resolves from compiler-shipped source.
-3. **Remove ambient compatibility builtins**
+3. **Remove ambient compatibility builtins — complete**
    - remove zero-argument `time.now_ms` and `time.now_s` checker/interpreter
      dispatch;
    - add focused diagnostics with the `Clock.now` conversion replacements;
    - replace the host-clock-dependent fixture with injected-clock tests.
-4. **Future backend handoff**
+4. **Future backend handoff — pending**
    - carry the `Clock` capability operation explicitly through HIR and MIR;
    - lower it through one runtime ABI that returns checked signed milliseconds;
    - mirror the interpreter tests for native and bytecode backends, including

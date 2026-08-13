@@ -1,0 +1,49 @@
+namespace time
+export struct Timestamp:
+    unix_milliseconds: int64
+export struct Duration:
+    milliseconds: int64
+export function from_unix_milliseconds(value: int64) returns Timestamp:
+    return Timestamp(unix_milliseconds: value)
+export function to_unix_milliseconds(value: Timestamp) returns int64:
+    return value.unix_milliseconds
+export function to_unix_seconds(value: Timestamp) returns int64:
+    if value.unix_milliseconds >= 0:
+        return value.unix_milliseconds / 1000
+    int64 shifted = value.unix_milliseconds + 1
+    return shifted / 1000 - 1
+export function duration_milliseconds(value: int64) returns Duration:
+    return Duration(milliseconds: value)
+export function duration_seconds(value: int64) returns result[Duration, string]:
+    if value > 9223372036854775 or value < -9223372036854775:
+        return fail("time.duration_seconds: integer overflow")
+    return ok(Duration(milliseconds: value * 1000))
+export function duration_to_milliseconds(value: Duration) returns int64:
+    return value.milliseconds
+export function difference(start: Timestamp, end: Timestamp) returns result[Duration, string]:
+    int64 minimum = -9223372036854775807 - 1
+    if start.unix_milliseconds > 0 and end.unix_milliseconds < minimum + start.unix_milliseconds:
+        return fail("time.difference: integer overflow")
+    if start.unix_milliseconds < 0 and end.unix_milliseconds > 9223372036854775807 + start.unix_milliseconds:
+        return fail("time.difference: integer overflow")
+    return ok(Duration(milliseconds: end.unix_milliseconds - start.unix_milliseconds))
+export function add(value: Timestamp, delta: Duration) returns result[Timestamp, string]:
+    int64 minimum = -9223372036854775807 - 1
+    if delta.milliseconds > 0 and value.unix_milliseconds > 9223372036854775807 - delta.milliseconds:
+        return fail("time.add: integer overflow")
+    if delta.milliseconds < 0 and value.unix_milliseconds < minimum - delta.milliseconds:
+        return fail("time.add: integer overflow")
+    return ok(Timestamp(unix_milliseconds: value.unix_milliseconds + delta.milliseconds))
+export function subtract(value: Timestamp, delta: Duration) returns result[Timestamp, string]:
+    int64 minimum = -9223372036854775807 - 1
+    if delta.milliseconds > 0 and value.unix_milliseconds < minimum + delta.milliseconds:
+        return fail("time.subtract: integer overflow")
+    if delta.milliseconds < 0 and value.unix_milliseconds > 9223372036854775807 + delta.milliseconds:
+        return fail("time.subtract: integer overflow")
+    return ok(Timestamp(unix_milliseconds: value.unix_milliseconds - delta.milliseconds))
+export function before(left: Timestamp, right: Timestamp) returns bool:
+    return left.unix_milliseconds < right.unix_milliseconds
+namespace Clock
+export function now(view clock: Clock) returns time.Timestamp:
+    int64 milliseconds = Clock.__now(view clock)
+    return time.Timestamp(unix_milliseconds: milliseconds)

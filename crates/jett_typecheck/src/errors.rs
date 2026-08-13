@@ -464,6 +464,30 @@ pub fn verify_calls_impure(verify_name: &str, callee: &str, span: Span) -> Diagn
     )
 }
 
+/// E0502: Only main may own a capability parameter.
+pub fn owned_capability_outside_main(
+    function_name: &str,
+    param_name: &str,
+    span: Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        502,
+        format!(
+            "function `{function_name}` must borrow capability parameter `{param_name}` with `view`"
+        ),
+        span,
+    )
+}
+
+/// E0503: Main receives owned capabilities from the runtime.
+pub fn viewed_main_capability(param_name: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        503,
+        format!("`main` must own runtime capability parameter `{param_name}`; remove `view`"),
+        span,
+    )
+}
+
 // Diagnostic codes E0600-E0699 are reserved for secret-type checking.
 
 /// E0600: Secret value reaches an output boundary without declassification.
@@ -721,6 +745,15 @@ pub fn random_capability_element(operation: &str, span: Span) -> Diagnostic {
     Diagnostic::error(
         355,
         format!("`{operation}` does not accept capability elements"),
+        span,
+    )
+}
+
+/// E0356: An ambient time builtin was removed in favor of explicit Clock authority.
+pub fn removed_ambient_time_builtin(name: &str, replacement: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        356,
+        format!("`{name}` was removed; use `{replacement}`"),
         span,
     )
 }

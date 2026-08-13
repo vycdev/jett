@@ -2501,6 +2501,7 @@ impl<'a> TypeChecker<'a> {
                 | "random.__bounded"
                 | "random.__unit_float64"
                 | "random.__bool"
+                | "Clock.__now"
         );
         if private_stdlib_kernel && !span.file.is_stdlib() {
             self.sink
@@ -3630,9 +3631,13 @@ impl<'a> TypeChecker<'a> {
                 vec![TypeInterner::BYTES],
                 TypeInterner::BYTES,
             ),
-            "time.now_ms" | "time.now_s" => {
-                self.no_type_args_signature(&name, type_args, span, vec![], TypeInterner::INT64)
-            }
+            "Clock.__now" => self.no_type_args_signature(
+                &name,
+                type_args,
+                span,
+                vec![TypeInterner::ERROR],
+                TypeInterner::INT64,
+            ),
             "os.args" => {
                 self.expect_no_type_args(&name, type_args, span);
                 let list_string = self.interner.intern(Type::List(TypeInterner::STRING));
@@ -5999,6 +6004,23 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn check_function_impl(&mut self, func: &FunctionDef, function_name: String) {
+        let is_main = func.name.name == "main" && !function_name.contains('.');
+        for param in &func.params {
+            if !capability::type_expr_is_capability(&param.ty) {
+                continue;
+            }
+            if is_main && param.view {
+                self.sink
+                    .emit(errors::viewed_main_capability(&param.name.name, param.span));
+            } else if !is_main && !param.view {
+                self.sink.emit(errors::owned_capability_outside_main(
+                    &function_name,
+                    &param.name.name,
+                    param.span,
+                ));
+            }
+        }
+
         let return_type = func
             .return_type
             .as_ref()
@@ -8983,6 +9005,23 @@ impl<'a> TypeChecker<'a> {
             .unwrap_or(false);
         let builtin_signature = self.builtin_signature(callee, type_args, span);
 
+        if let Some(name @ ("time.now_ms" | "time.now_s")) = callee_name.as_deref() {
+            let replacement = if name == "time.now_ms" {
+                "time.to_unix_milliseconds(Clock.now(view clock))"
+            } else {
+                "time.to_unix_seconds(Clock.now(view clock))"
+            };
+            self.sink.emit(errors::removed_ambient_time_builtin(
+                name,
+                replacement,
+                span,
+            ));
+            for arg in args {
+                self.check_expr(&arg.value);
+            }
+            return TypeInterner::ERROR;
+        }
+
         if let Some(name) = callee_name.as_deref()
             && capability::is_capability_type(name)
         {
@@ -9257,7 +9296,8 @@ impl<'a> TypeChecker<'a> {
                     || function_name.starts_with("bytes.")
                     || function_name.starts_with("encoding.")
                     || function_name.starts_with("crypto.")
-                    || function_name.starts_with("random."))
+                    || function_name.starts_with("random.")
+                    || function_name.starts_with("Clock."))
             {
                 self.sink.emit(errors::unknown_type(
                     &format!("function `{function_name}`"),
@@ -13732,7 +13772,7 @@ function main() returns string:
     fn stdout_write_rejects_secret_values() {
         let errors = check_source_errors(
             "\
-function main(view stdout: Stdout) returns nothing:
+function main(stdout: Stdout) returns nothing:
     secret[string] api_key = \"abc\"
     Stdout.write(view stdout, api_key)
 ",
@@ -13963,7 +14003,7 @@ function main() returns string:
     fn filesystem_write_file_rejects_secret_string() {
         let errors = check_source_errors(
             "\
-function main(view fs: Filesystem) returns nothing:
+function main(fs: Filesystem) returns nothing:
     secret[string] api_key = \"abc\"
     Filesystem.write_file(view fs, \"secret.txt\", api_key) handle error:
         return nothing
@@ -14043,7 +14083,7 @@ function main() returns string:
     fn filesystem_read_file_returns_result_string() {
         let result = check_source_result(
             "\
-function main(view fs: Filesystem) returns string:
+function main(fs: Filesystem) returns string:
     string raw = Filesystem.read_file(view fs, \"config.json\") handle error:
         default \"\"
     return raw
@@ -14087,7 +14127,7 @@ function emit(view stdout: Stdout, value: string) returns nothing:
     Stdout.write(view stdout, value)
     return nothing
 
-function main(view stdout: Stdout) returns nothing:
+function main(stdout: Stdout) returns nothing:
     secret[string] api_key = \"abc\"
     emit(view stdout, api_key)
     return nothing
@@ -14110,7 +14150,7 @@ function send_secret(view stdout: Stdout, value: secret[string]) returns nothing
     Stdout.write(view stdout, redacted)
     return nothing
 
-function main(view stdout: Stdout) returns nothing:
+function main(stdout: Stdout) returns nothing:
     secret[string] api_key = \"abc\"
     send_secret(view stdout, api_key)
     return nothing

@@ -1,11 +1,5 @@
 # ERROR: E0311
 namespace test
-function bad_time_now_ms() returns bool:
-    bool value = time.now_ms()
-    return value
-function bad_time_now_s() returns bool:
-    bool value = time.now_s()
-    return value
 function bad_os_args() returns bool:
     bool value = os.args()
     return value
