@@ -46,7 +46,7 @@
 | MIR (control flow graph) | `jett_mir` | — | Not started ([Tracked by #22](https://github.com/vycdev/jett/issues/22)) |
 | LLVM native codegen | `jett_codegen_llvm` | — | Not started |
 | Runtime library | `jett_runtime` | — | Not started |
-| Core stdlib (.jett files) | `stdlib/` | — | Partial (bootstrap loader plus extracted `json`, complete source-owned `list`, `map`, and `set` public APIs, selected source-owned math/string helpers, and other modules that remain Rust-backed) |
+| Core stdlib (.jett files) | `stdlib/` | — | Partial (bootstrap loader plus extracted `json`, complete source-owned `list`, `map`, `set`, and `string` public APIs, selected source-owned math helpers, and other modules that remain Rust-backed) |
 
 ### Phase E: Comptime and Verification — COMPLETE
 
@@ -156,7 +156,7 @@
 
 | Module | Status |
 |---|---|
-| `string` | Partial (`is_not_empty`, `reverse`, `after`, `before`, and `between` are source-defined in `stdlib/string.jett`; the complete public `string.*` API remains the source-owned target, while hardcoded public signatures and Rust dispatch for the other operations are transitional bootstrap debt pending follow-up extraction into source declarations backed only as needed by private trusted Unicode/grapheme kernels; count/index/search/extraction helpers avoid partial grapheme matches) |
+| `string` | Done (all public declarations and compositional behavior are source-owned in `stdlib/string.jett`; only private trusted conversion, Unicode, grapheme, search, and text primitive kernels remain, and project code cannot call them; count/index/search/extraction helpers avoid partial grapheme matches) |
 | `list` | Done (all public declarations and compositional behavior are source-owned; observers use views, transformations consume inputs, `zip`/`enumerate` return typed records, global `range` is canonical, and only private trusted allocation/indexing/mutation/sorting/sum/callback kernels remain) |
 | `set` | Done (all public declarations and set algebra are source-owned; only private trusted storage/equality/cardinality kernels remain) |
 | `map` | Done (all public declarations, conversions, and higher-order operations are source-owned with typed `map.Entry[K, V]`; only private trusted storage/equality/lookup-update kernels remain) |

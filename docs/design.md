@@ -6778,13 +6778,11 @@ The standard library is intentionally massive and opinionated. The goal is to ma
   [random capability and entropy contract](open_design/random_capability_entropy_contract.md)
 - **uuid** — UUID generation (generation and entropy contract [tracked by #73](https://github.com/vycdev/jett/issues/73))
 
-The complete public `string.*` API should be ordinary Jett source, with private
-trusted runtime kernels only where Unicode or grapheme behavior cannot yet be
-expressed safely in Jett. `string.is_not_empty`, `string.reverse`,
-`string.after`, `string.before`, and `string.between` are defined in
-`stdlib/string.jett` and resolved like user functions. Remaining hardcoded
-public string signatures and Rust dispatch cases are transitional bootstrap
-debt for follow-up extraction slices, not the permanent stdlib boundary.
+The complete public `string.*` API is ordinary Jett source in
+`stdlib/string.jett` and resolves like user code. Compositional operations have
+Jett bodies. Private trusted runtime kernels remain only for primitive
+conversions and Unicode-, grapheme-, search-, or text-sensitive work that Jett
+cannot yet express safely; project code cannot call those kernels.
 
 ---
 

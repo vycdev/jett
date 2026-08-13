@@ -7774,13 +7774,8 @@ impl Interpreter {
                 }
             }
 
-            // =================================================================
-            // STANDARD LIBRARY STUBS
-            // (will migrate to stdlib/*.jett once codegen is available)
-            // =================================================================
-
-            // -- String operations (stdlib/string.jett) -----------------------
-            "string.length" | "string.char_count" => {
+            // -- Private string kernels (stdlib/string.jett) ------------------
+            "string.__char_count" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => Some(Ok(Value::Int64(string_grapheme_count(s) as i64))),
@@ -7788,17 +7783,7 @@ impl Interpreter {
                 }
             }
 
-            "string.contains" => {
-                require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
-                    (Value::String(s), Value::String(substr)) => {
-                        Some(Ok(Value::Bool(string_contains_grapheme(s, substr))))
-                    }
-                    _ => Some(Err(format!("{name} expects two string arguments"))),
-                }
-            }
-
-            "string.trim" => {
+            "string.__trim" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => Some(Ok(Value::String(s.trim().to_string()))),
@@ -7806,7 +7791,7 @@ impl Interpreter {
                 }
             }
 
-            "string.upper" => {
+            "string.__upper" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => Some(Ok(Value::String(s.to_uppercase()))),
@@ -7814,7 +7799,7 @@ impl Interpreter {
                 }
             }
 
-            "string.lower" => {
+            "string.__lower" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => Some(Ok(Value::String(s.to_lowercase()))),
@@ -7822,7 +7807,7 @@ impl Interpreter {
                 }
             }
 
-            "string.replace" => {
+            "string.__replace" if self.current_function_trusted_stdlib => {
                 require_args!(name, 3, args);
                 match (&args[0], &args[1], &args[2]) {
                     (Value::String(s), Value::String(from), Value::String(to)) => {
@@ -7832,7 +7817,7 @@ impl Interpreter {
                 }
             }
 
-            "string.split" => {
+            "string.__split" if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::String(s), Value::String(delim)) => {
@@ -7846,7 +7831,7 @@ impl Interpreter {
                 }
             }
 
-            "string.join" => {
+            "string.__join" if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::List(items), Value::String(sep)) => {
@@ -7866,35 +7851,7 @@ impl Interpreter {
                 }
             }
 
-            "string.starts_with" => {
-                require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
-                    (Value::String(s), Value::String(prefix)) => {
-                        Some(Ok(Value::Bool(string_starts_with_grapheme(s, prefix))))
-                    }
-                    _ => Some(Err(format!("{name} expects two string arguments"))),
-                }
-            }
-
-            "string.ends_with" => {
-                require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
-                    (Value::String(s), Value::String(suffix)) => {
-                        Some(Ok(Value::Bool(string_ends_with_grapheme(s, suffix))))
-                    }
-                    _ => Some(Err(format!("{name} expects two string arguments"))),
-                }
-            }
-
-            "string.is_empty" => {
-                require_args!(name, 1, args);
-                match &args[0] {
-                    Value::String(s) => Some(Ok(Value::Bool(s.is_empty()))),
-                    _ => Some(Err(format!("{name} expects a string argument"))),
-                }
-            }
-
-            "string.slice" => {
+            "string.__slice" if self.current_function_trusted_stdlib => {
                 require_args!(name, 3, args);
                 match (&args[0], &args[1], &args[2]) {
                     (Value::String(s), Value::Int64(start), Value::Int64(end)) => {
@@ -7911,7 +7868,7 @@ impl Interpreter {
                 }
             }
 
-            "string.repeat" => {
+            "string.__repeat" if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::String(s), Value::Int64(n)) => {
@@ -7922,38 +7879,15 @@ impl Interpreter {
                 }
             }
 
-            // string.pad_start is an alias for string.pad_left
-            "string.pad_start" => self.call_builtin("string.pad_left", args),
-
-            "string.pad_end" => {
-                require_args!(name, 3, args);
-                match (&args[0], &args[1], &args[2]) {
-                    (Value::String(s), Value::Int64(width), Value::String(pad)) => {
-                        let pad_unit = first_grapheme_or_space(pad);
-                        let current_len = string_grapheme_count(s);
-                        let width = (*width).max(0) as usize;
-                        if current_len >= width {
-                            Some(Ok(Value::String(s.clone())))
-                        } else {
-                            let padding = pad_unit.repeat(width - current_len);
-                            Some(Ok(Value::String(format!("{s}{padding}"))))
-                        }
-                    }
-                    _ => Some(Err(format!(
-                        "{name} expects a string, int64 width, and string pad char"
-                    ))),
-                }
-            }
-
             // -- Type conversions (stdlib/string.jett, stdlib/int64.jett) -----
-            "string.from_int64" => {
+            "string.__from_int64" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Int64(n) => Some(Ok(Value::String(n.to_string()))),
                     _ => Some(Err(format!("{name} expects an int64 argument"))),
                 }
             }
-            "string.from_uint64" => {
+            "string.__from_uint64" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Uint64(n) => Some(Ok(Value::String(n.to_string()))),
@@ -7962,7 +7896,7 @@ impl Interpreter {
                 }
             }
 
-            "string.slugify" => {
+            "string.__slugify" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => {
@@ -7978,46 +7912,6 @@ impl Interpreter {
                         Some(Ok(Value::String(slug)))
                     }
                     _ => Some(Err(format!("{name} expects a string argument"))),
-                }
-            }
-
-            "string.truncate" => {
-                if args.len() != 3 {
-                    return Some(Err(format!("{name} expects 3 arguments")));
-                }
-                match (&args[0], &args[1], &args[2]) {
-                    (Value::String(s), Value::Int64(max_len), Value::String(suffix)) => {
-                        let max = (*max_len).max(0) as usize;
-                        let graphemes = string_graphemes(s);
-                        let result = if graphemes.len() <= max {
-                            s.clone()
-                        } else {
-                            // Keep first `max` graphemes, then append suffix.
-                            let kept = graphemes[..max].concat();
-                            format!("{kept}{suffix}")
-                        };
-                        Some(Ok(Value::String(result)))
-                    }
-                    _ => Some(Err(format!("{name} expects (string, int64, string)"))),
-                }
-            }
-
-            // string.pad_left is the canonical name (design doc); pad_start is an alias
-            "string.pad_left" => {
-                require_args!(name, 3, args);
-                match (&args[0], &args[1], &args[2]) {
-                    (Value::String(s), Value::Int64(width), Value::String(pad)) => {
-                        let pad_unit = first_grapheme_or_space(pad);
-                        let current_len = string_grapheme_count(s);
-                        let width = (*width).max(0) as usize;
-                        if current_len >= width {
-                            Some(Ok(Value::String(s.clone())))
-                        } else {
-                            let padding = pad_unit.repeat(width - current_len);
-                            Some(Ok(Value::String(format!("{padding}{s}"))))
-                        }
-                    }
-                    _ => Some(Err(format!("{name} expects (string, int64, string)"))),
                 }
             }
 
@@ -8069,14 +7963,14 @@ impl Interpreter {
             }
 
             // -- Additional string conversions --------------------------------
-            "string.from_float64" => {
+            "string.__from_float64" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Float64(n) => Some(Ok(Value::String(format!("{n}")))),
                     _ => Some(Err(format!("{name} expects a float64 argument"))),
                 }
             }
-            "string.from_bool" => {
+            "string.__from_bool" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Bool(b) => Some(Ok(Value::String(format!("{b}")))),
@@ -8689,7 +8583,7 @@ impl Interpreter {
                 }
             }
 
-            "string.trim_start" => {
+            "string.__trim_start" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => Some(Ok(Value::String(s.trim_start().to_string()))),
@@ -8697,7 +8591,7 @@ impl Interpreter {
                 }
             }
 
-            "string.trim_end" => {
+            "string.__trim_end" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => Some(Ok(Value::String(s.trim_end().to_string()))),
@@ -8705,8 +8599,8 @@ impl Interpreter {
                 }
             }
 
-            // string.chars / string.words / string.lines — yield list[string]
-            "string.chars" => {
+            // Private string segmentation kernels yield list[string].
+            "string.__chars" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => {
@@ -8720,7 +8614,7 @@ impl Interpreter {
                 }
             }
 
-            "string.words" => {
+            "string.__words" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => {
@@ -8734,7 +8628,7 @@ impl Interpreter {
                 }
             }
 
-            "string.lines" => {
+            "string.__lines" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => {
@@ -8781,66 +8675,7 @@ impl Interpreter {
                 Some(Ok(Value::String(uuid)))
             }
 
-            // -- Additional char-level string operations -----------------------
-            "string.take_chars" => {
-                require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
-                    (Value::String(s), Value::Int64(n)) => {
-                        let n = nonnegative_usize(*n);
-                        let result = string_graphemes(s).into_iter().take(n).collect();
-                        Some(Ok(Value::String(result)))
-                    }
-                    _ => Some(Err(format!("{name} expects a string and an int64"))),
-                }
-            }
-
-            "string.take_last_chars" => {
-                require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
-                    (Value::String(s), Value::Int64(n)) => {
-                        let n = nonnegative_usize(*n);
-                        let graphemes = string_graphemes(s);
-                        let start = graphemes.len().saturating_sub(n);
-                        let result = graphemes[start..].concat();
-                        Some(Ok(Value::String(result)))
-                    }
-                    _ => Some(Err(format!("{name} expects a string and an int64"))),
-                }
-            }
-
-            "string.drop_chars" => {
-                require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
-                    (Value::String(s), Value::Int64(n)) => {
-                        let n = nonnegative_usize(*n);
-                        let result = string_graphemes(s).into_iter().skip(n).collect();
-                        Some(Ok(Value::String(result)))
-                    }
-                    _ => Some(Err(format!("{name} expects a string and an int64"))),
-                }
-            }
-
-            "string.char_at" => {
-                require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
-                    (Value::String(s), Value::Int64(i)) => {
-                        let result = if *i < 0 {
-                            Value::OptionalNone
-                        } else {
-                            match string_graphemes(s).get(*i as usize) {
-                                Some(cluster) => Value::OptionalSome(Box::new(Value::String(
-                                    (*cluster).to_string(),
-                                ))),
-                                None => Value::OptionalNone,
-                            }
-                        };
-                        Some(Ok(result))
-                    }
-                    _ => Some(Err(format!("{name} expects a string and an int64 index"))),
-                }
-            }
-
-            "string.index_of" => {
+            "string.__index_of" if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::String(haystack), Value::String(needle)) => {
@@ -8855,7 +8690,7 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects two string arguments"))),
                 }
             }
-            "string.count" => {
+            "string.__count" if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::String(haystack), Value::String(needle)) => {
@@ -8865,7 +8700,7 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects two string arguments"))),
                 }
             }
-            "string.to_upper_first" => {
+            "string.__to_upper_first" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => {
@@ -8886,7 +8721,7 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects a string argument"))),
                 }
             }
-            "string.to_lower_first" => {
+            "string.__to_lower_first" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => {
@@ -8908,119 +8743,7 @@ impl Interpreter {
                 }
             }
 
-            // -- String formatting operations ----------------------------------
-            "string.center" => {
-                require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
-                    (Value::String(s), Value::Int64(width)) => {
-                        let width = (*width).max(0) as usize;
-                        let grapheme_len = string_grapheme_count(s);
-                        if grapheme_len >= width {
-                            Some(Ok(Value::String(s.clone())))
-                        } else {
-                            let total_pad = width - grapheme_len;
-                            let left_pad = total_pad / 2;
-                            let right_pad = total_pad - left_pad;
-                            let left: String = std::iter::repeat(' ').take(left_pad).collect();
-                            let right: String = std::iter::repeat(' ').take(right_pad).collect();
-                            Some(Ok(Value::String(format!("{left}{s}{right}"))))
-                        }
-                    }
-                    _ => Some(Err(format!("{name} expects a string and an int64 width"))),
-                }
-            }
-
-            "string.ljust" => {
-                require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
-                    (Value::String(s), Value::Int64(width)) => {
-                        let width = (*width).max(0) as usize;
-                        let grapheme_len = string_grapheme_count(s);
-                        if grapheme_len >= width {
-                            Some(Ok(Value::String(s.clone())))
-                        } else {
-                            let padding: String =
-                                std::iter::repeat(' ').take(width - grapheme_len).collect();
-                            Some(Ok(Value::String(format!("{s}{padding}"))))
-                        }
-                    }
-                    _ => Some(Err(format!("{name} expects a string and an int64 width"))),
-                }
-            }
-
-            "string.rjust" => {
-                require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
-                    (Value::String(s), Value::Int64(width)) => {
-                        let width = (*width).max(0) as usize;
-                        let grapheme_len = string_grapheme_count(s);
-                        if grapheme_len >= width {
-                            Some(Ok(Value::String(s.clone())))
-                        } else {
-                            let padding: String =
-                                std::iter::repeat(' ').take(width - grapheme_len).collect();
-                            Some(Ok(Value::String(format!("{padding}{s}"))))
-                        }
-                    }
-                    _ => Some(Err(format!("{name} expects a string and an int64 width"))),
-                }
-            }
-
-            "string.zfill" => {
-                require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
-                    (Value::String(s), Value::Int64(width)) => {
-                        let width = (*width).max(0) as usize;
-                        let grapheme_len = string_grapheme_count(s);
-                        if grapheme_len >= width {
-                            Some(Ok(Value::String(s.clone())))
-                        } else {
-                            // Handle optional leading sign
-                            let (sign, digits) = if s.starts_with('-') || s.starts_with('+') {
-                                (&s[..1], &s[1..])
-                            } else {
-                                ("", s.as_str())
-                            };
-                            let zeros: String =
-                                std::iter::repeat('0').take(width - grapheme_len).collect();
-                            Some(Ok(Value::String(format!("{sign}{zeros}{digits}"))))
-                        }
-                    }
-                    _ => Some(Err(format!("{name} expects a string and an int64 width"))),
-                }
-            }
-
-            "string.remove_prefix" => {
-                require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
-                    (Value::String(s), Value::String(prefix)) => {
-                        let result = if string_starts_with_grapheme(s, prefix) {
-                            s[prefix.len()..].to_string()
-                        } else {
-                            s.clone()
-                        };
-                        Some(Ok(Value::String(result)))
-                    }
-                    _ => Some(Err(format!("{name} expects two string arguments"))),
-                }
-            }
-
-            "string.remove_suffix" => {
-                require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
-                    (Value::String(s), Value::String(suffix)) => {
-                        let result = if string_ends_with_grapheme(s, suffix) {
-                            s[..s.len() - suffix.len()].to_string()
-                        } else {
-                            s.clone()
-                        };
-                        Some(Ok(Value::String(result)))
-                    }
-                    _ => Some(Err(format!("{name} expects two string arguments"))),
-                }
-            }
-
-            "string.is_numeric" => {
+            "string.__is_numeric" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => Some(Ok(Value::Bool(
@@ -9030,7 +8753,7 @@ impl Interpreter {
                 }
             }
 
-            "string.is_alpha" => {
+            "string.__is_alpha" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => Some(Ok(Value::Bool(
@@ -10219,30 +9942,6 @@ fn string_grapheme_count(s: &str) -> usize {
     string_graphemes(s).len()
 }
 
-fn first_grapheme_or_space(s: &str) -> String {
-    string_graphemes(s)
-        .first()
-        .map(|cluster| (*cluster).to_string())
-        .unwrap_or_else(|| " ".to_string())
-}
-
-fn string_contains_grapheme(haystack: &str, needle: &str) -> bool {
-    string_find_grapheme_match(haystack, needle).is_some()
-}
-
-fn string_starts_with_grapheme(haystack: &str, prefix: &str) -> bool {
-    prefix.is_empty()
-        || (haystack.starts_with(prefix) && string_is_grapheme_boundary(haystack, prefix.len()))
-}
-
-fn string_ends_with_grapheme(haystack: &str, suffix: &str) -> bool {
-    if suffix.is_empty() {
-        return true;
-    }
-    haystack.ends_with(suffix)
-        && string_is_grapheme_boundary(haystack, haystack.len() - suffix.len())
-}
-
 fn string_find_grapheme_match(haystack: &str, needle: &str) -> Option<(usize, usize, usize)> {
     if needle.is_empty() {
         return Some((0, 0, 0));
@@ -10286,12 +9985,6 @@ fn string_count_grapheme_matches(haystack: &str, needle: &str) -> usize {
         boundary_index += 1;
     }
     count
-}
-
-fn string_is_grapheme_boundary(s: &str, byte_index: usize) -> bool {
-    string_grapheme_boundaries(s)
-        .binary_search(&byte_index)
-        .is_ok()
 }
 
 fn string_grapheme_boundaries(s: &str) -> Vec<usize> {
@@ -16625,148 +16318,28 @@ mod builtin_tests {
     }
 
     #[test]
-    fn builtin_string_char_count() {
+    fn private_string_kernels_preserve_unicode_and_uint64_behavior() {
         let mut interp = Interpreter::new();
-        let expr = dotted_call("string", "char_count", vec![string("hello")]);
-        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(5));
-    }
+        interp.current_function_trusted_stdlib = true;
 
-    #[test]
-    fn builtin_string_char_count_unicode() {
-        let mut interp = Interpreter::new();
-        let expr = dotted_call(
-            "string",
-            "char_count",
-            vec![string("\u{00e9}\u{00e9}\u{00e9}")],
-        );
-        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(3));
-    }
-
-    #[test]
-    fn builtin_string_length() {
-        let mut interp = Interpreter::new();
-        let expr = dotted_call("string", "length", vec![string("test")]);
-        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(4));
-    }
-
-    #[test]
-    fn builtin_string_contains_true() {
-        let mut interp = Interpreter::new();
-        let expr = dotted_call(
-            "string",
-            "contains",
-            vec![string("hello world"), string("world")],
-        );
-        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Bool(true));
-    }
-
-    #[test]
-    fn builtin_string_contains_false() {
-        let mut interp = Interpreter::new();
-        let expr = dotted_call(
-            "string",
-            "contains",
-            vec![string("hello world"), string("xyz")],
-        );
-        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Bool(false));
-    }
-
-    #[test]
-    fn builtin_string_trim() {
-        let mut interp = Interpreter::new();
-        let expr = dotted_call("string", "trim", vec![string("  hello  ")]);
-        assert_eq!(
-            interp.eval_expr(&expr).unwrap(),
-            Value::String("hello".to_string())
-        );
-    }
-
-    #[test]
-    fn builtin_string_upper() {
-        let mut interp = Interpreter::new();
-        let expr = dotted_call("string", "upper", vec![string("hello")]);
-        assert_eq!(
-            interp.eval_expr(&expr).unwrap(),
-            Value::String("HELLO".to_string())
-        );
-    }
-
-    #[test]
-    fn builtin_string_lower() {
-        let mut interp = Interpreter::new();
-        let expr = dotted_call("string", "lower", vec![string("HELLO")]);
-        assert_eq!(
-            interp.eval_expr(&expr).unwrap(),
-            Value::String("hello".to_string())
-        );
-    }
-
-    #[test]
-    fn builtin_string_split() {
-        let mut interp = Interpreter::new();
-        let expr = dotted_call("string", "split", vec![string("a,b,c"), string(",")]);
-        assert_eq!(
-            interp.eval_expr(&expr).unwrap(),
-            Value::List(vec![
-                Value::String("a".to_string()),
-                Value::String("b".to_string()),
-                Value::String("c".to_string()),
-            ])
-        );
-    }
-
-    #[test]
-    fn builtin_string_join() {
-        let mut interp = Interpreter::new();
-        let list_expr = Expr::ListConstruct(vec![string("a"), string("b"), string("c")], sp());
-        let expr = dotted_call("string", "join", vec![list_expr, string(", ")]);
-        assert_eq!(
-            interp.eval_expr(&expr).unwrap(),
-            Value::String("a, b, c".to_string())
-        );
-    }
-
-    #[test]
-    fn builtin_string_starts_with() {
-        let mut interp = Interpreter::new();
-        let expr = dotted_call(
-            "string",
-            "starts_with",
-            vec![string("hello world"), string("hello")],
-        );
-        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Bool(true));
-    }
-
-    #[test]
-    fn builtin_string_ends_with() {
-        let mut interp = Interpreter::new();
-        let expr = dotted_call(
-            "string",
-            "ends_with",
-            vec![string("hello world"), string("world")],
-        );
-        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Bool(true));
-    }
-
-    #[test]
-    fn builtin_string_from_int64() {
-        let mut interp = Interpreter::new();
-        let expr = dotted_call("string", "from_int64", vec![int(42)]);
-        assert_eq!(
-            interp.eval_expr(&expr).unwrap(),
-            Value::String("42".to_string())
-        );
-    }
-
-    #[test]
-    fn builtin_string_from_uint64() {
-        let mut interp = Interpreter::new();
+        let count = dotted_call("string", "__char_count", vec![string("e\u{301}\u{00e9}")]);
+        assert_eq!(interp.eval_expr(&count).unwrap(), Value::Int64(2));
         assert_eq!(
             interp
-                .call_builtin("string.from_uint64", &[Value::Uint64(u64::MAX)])
-                .expect("string.from_uint64 should be a builtin")
-                .expect("string.from_uint64 should succeed"),
+                .call_builtin("string.__from_uint64", &[Value::Uint64(u64::MAX)])
+                .expect("private string kernel should be recognized")
+                .expect("private string kernel should succeed"),
             Value::String("18446744073709551615".to_string())
+        );
+    }
+
+    #[test]
+    fn public_string_runtime_dispatch_is_absent_without_stdlib_source() {
+        let mut interp = Interpreter::new();
+        let expr = dotted_call("string", "char_count", vec![string("hello")]);
+        assert_eq!(
+            interp.eval_expr(&expr),
+            Err("undefined function 'string.char_count'".to_string())
         );
     }
 
@@ -17080,7 +16653,8 @@ mod builtin_tests {
     #[test]
     fn builtin_wrong_arg_count() {
         let mut interp = Interpreter::new();
-        let expr = dotted_call("string", "trim", vec![string("a"), string("b")]);
+        interp.current_function_trusted_stdlib = true;
+        let expr = dotted_call("string", "__trim", vec![string("a"), string("b")]);
         assert!(interp.eval_expr(&expr).is_err());
     }
 
@@ -17107,18 +16681,18 @@ mod builtin_tests {
 
     #[test]
     fn pipeline_string_trim_and_upper() {
-        // "  hello  " into string.trim into string.upper => "HELLO"
         let mut interp = Interpreter::new();
+        interp.current_function_trusted_stdlib = true;
         let initial = string("  hello  ");
         let steps = vec![
             PipelineStep {
-                function: Expr::FieldAccess(Box::new(var("string")), ident("trim"), sp()),
+                function: Expr::FieldAccess(Box::new(var("string")), ident("__trim"), sp()),
                 extra_args: vec![],
                 handle: None,
                 span: sp(),
             },
             PipelineStep {
-                function: Expr::FieldAccess(Box::new(var("string")), ident("upper"), sp()),
+                function: Expr::FieldAccess(Box::new(var("string")), ident("__upper"), sp()),
                 extra_args: vec![],
                 handle: None,
                 span: sp(),
@@ -17131,11 +16705,11 @@ mod builtin_tests {
 
     #[test]
     fn pipeline_string_replace_with_extra_args() {
-        // "hello world" into string.replace("world", "jett") => "hello jett"
         let mut interp = Interpreter::new();
+        interp.current_function_trusted_stdlib = true;
         let initial = string("hello world");
         let steps = vec![PipelineStep {
-            function: Expr::FieldAccess(Box::new(var("string")), ident("replace"), sp()),
+            function: Expr::FieldAccess(Box::new(var("string")), ident("__replace"), sp()),
             extra_args: vec![
                 CallArg {
                     name: None,

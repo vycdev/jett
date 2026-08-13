@@ -2405,7 +2405,7 @@ impl<'a> TypeChecker<'a> {
         span: Span,
     ) -> Option<(Vec<TypeId>, TypeId)> {
         let name = self.resolved_expr_name(callee)?;
-        let private_collection_kernel = matches!(
+        let private_stdlib_kernel = matches!(
             name.as_str(),
             "list.__new"
                 | "list.__append"
@@ -2420,6 +2420,31 @@ impl<'a> TypeChecker<'a> {
                 | "list.__sum"
                 | "list.__sort_by"
                 | "list.__group_by"
+                | "string.__from_int64"
+                | "string.__from_uint64"
+                | "string.__from_float64"
+                | "string.__from_bool"
+                | "string.__char_count"
+                | "string.__chars"
+                | "string.__slice"
+                | "string.__index_of"
+                | "string.__count"
+                | "string.__trim"
+                | "string.__trim_start"
+                | "string.__trim_end"
+                | "string.__upper"
+                | "string.__lower"
+                | "string.__replace"
+                | "string.__split"
+                | "string.__join"
+                | "string.__repeat"
+                | "string.__slugify"
+                | "string.__words"
+                | "string.__lines"
+                | "string.__to_upper_first"
+                | "string.__to_lower_first"
+                | "string.__is_numeric"
+                | "string.__is_alpha"
                 | "map.__new"
                 | "map.__length"
                 | "map.__has"
@@ -2433,7 +2458,7 @@ impl<'a> TypeChecker<'a> {
                 | "set.__contains"
                 | "set.__length"
         );
-        if private_collection_kernel && !span.file.is_stdlib() {
+        if private_stdlib_kernel && !span.file.is_stdlib() {
             self.sink
                 .emit(errors::not_callable("private stdlib kernel", span));
         }
@@ -2500,28 +2525,28 @@ impl<'a> TypeChecker<'a> {
                         .intern(Type::Result(TypeInterner::FLOAT64, TypeInterner::STRING)),
                 ))
             }
-            "string.from_int64" => self.no_type_args_signature(
+            "string.__from_int64" => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::INT64],
                 TypeInterner::STRING,
             ),
-            "string.from_uint64" => self.no_type_args_signature(
+            "string.__from_uint64" => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::UINT64],
                 TypeInterner::STRING,
             ),
-            "string.from_float64" => self.no_type_args_signature(
+            "string.__from_float64" => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::FLOAT64],
                 TypeInterner::STRING,
             ),
-            "string.from_bool" => self.no_type_args_signature(
+            "string.__from_bool" => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
@@ -2535,29 +2560,21 @@ impl<'a> TypeChecker<'a> {
                 vec![TypeInterner::INT64],
                 TypeInterner::FLOAT64,
             ),
-            "string.length" | "string.char_count" => self.no_type_args_signature(
+            "string.__char_count" => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::STRING],
                 TypeInterner::INT64,
             ),
-            "string.contains" | "string.starts_with" | "string.ends_with" => self
-                .no_type_args_signature(
-                    &name,
-                    type_args,
-                    span,
-                    vec![TypeInterner::STRING, TypeInterner::STRING],
-                    TypeInterner::BOOL,
-                ),
-            "string.trim" | "string.upper" | "string.lower" => self.no_type_args_signature(
+            "string.__trim" | "string.__upper" | "string.__lower" => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::STRING],
                 TypeInterner::STRING,
             ),
-            "string.replace" => self.no_type_args_signature(
+            "string.__replace" => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
@@ -2568,12 +2585,12 @@ impl<'a> TypeChecker<'a> {
                 ],
                 TypeInterner::STRING,
             ),
-            "string.split" => {
+            "string.__split" => {
                 self.expect_no_type_args(&name, type_args, span);
                 let list_ty = self.interner.intern(Type::List(TypeInterner::STRING));
                 Some((vec![TypeInterner::STRING, TypeInterner::STRING], list_ty))
             }
-            "string.join" => {
+            "string.__join" => {
                 self.expect_no_type_args(&name, type_args, span);
                 let list_ty = self.interner.intern(Type::List(TypeInterner::STRING));
                 Some((vec![list_ty, TypeInterner::STRING], TypeInterner::STRING))
@@ -3337,15 +3354,15 @@ impl<'a> TypeChecker<'a> {
                 TypeInterner::INT64,
             ),
             // string extras
-            "string.trim_start" | "string.trim_end" => self.no_type_args_signature(
+            "string.__trim_start" | "string.__trim_end" => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::STRING],
                 TypeInterner::STRING,
             ),
-            // string.chars / string.words / string.lines → list[string]
-            "string.chars" | "string.words" | "string.lines" => {
+            // Private string segmentation kernels return list[string].
+            "string.__chars" | "string.__words" | "string.__lines" => {
                 self.expect_no_type_args(&name, type_args, span);
                 let list_str = self.interner.intern(Type::List(TypeInterner::STRING));
                 Some((vec![TypeInterner::STRING], list_str))
@@ -3374,21 +3391,14 @@ impl<'a> TypeChecker<'a> {
                 let list_ty = self.interner.intern(Type::List(inner));
                 Some((vec![list_ty], list_ty))
             }
-            "string.is_empty" => self.no_type_args_signature(
-                &name,
-                type_args,
-                span,
-                vec![TypeInterner::STRING],
-                TypeInterner::BOOL,
-            ),
-            "string.repeat" => self.no_type_args_signature(
+            "string.__repeat" => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::STRING, TypeInterner::INT64],
                 TypeInterner::STRING,
             ),
-            "string.slice" => self.no_type_args_signature(
+            "string.__slice" => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
@@ -3399,35 +3409,11 @@ impl<'a> TypeChecker<'a> {
                 ],
                 TypeInterner::STRING,
             ),
-            // string.pad_left is the canonical name; pad_start/pad_end are aliases
-            "string.pad_left" | "string.pad_start" | "string.pad_end" => self
-                .no_type_args_signature(
-                    &name,
-                    type_args,
-                    span,
-                    vec![
-                        TypeInterner::STRING,
-                        TypeInterner::INT64,
-                        TypeInterner::STRING,
-                    ],
-                    TypeInterner::STRING,
-                ),
-            "string.slugify" => self.no_type_args_signature(
+            "string.__slugify" => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::STRING],
-                TypeInterner::STRING,
-            ),
-            "string.truncate" => self.no_type_args_signature(
-                &name,
-                type_args,
-                span,
-                vec![
-                    TypeInterner::STRING,
-                    TypeInterner::INT64,
-                    TypeInterner::STRING,
-                ],
                 TypeInterner::STRING,
             ),
             "map.__new" => {
@@ -3506,54 +3492,26 @@ impl<'a> TypeChecker<'a> {
                 self.no_type_args_signature(&name, type_args, span, vec![], TypeInterner::STRING)
             }
             // char-level string operations
-            "string.take_chars" | "string.take_last_chars" | "string.drop_chars" => self
-                .no_type_args_signature(
-                    &name,
-                    type_args,
-                    span,
-                    vec![TypeInterner::STRING, TypeInterner::INT64],
-                    TypeInterner::STRING,
-                ),
-            "string.char_at" => {
-                self.expect_no_type_args(&name, type_args, span);
-                let opt_str = self.interner.intern(Type::Optional(TypeInterner::STRING));
-                Some((vec![TypeInterner::STRING, TypeInterner::INT64], opt_str))
-            }
-            "string.index_of" => {
+            "string.__index_of" => {
                 self.expect_no_type_args(&name, type_args, span);
                 let opt_int = self.interner.intern(Type::Optional(TypeInterner::INT64));
                 Some((vec![TypeInterner::STRING, TypeInterner::STRING], opt_int))
             }
-            "string.count" => self.no_type_args_signature(
+            "string.__count" => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::STRING, TypeInterner::STRING],
                 TypeInterner::INT64,
             ),
-            "string.to_upper_first" | "string.to_lower_first" => self.no_type_args_signature(
+            "string.__to_upper_first" | "string.__to_lower_first" => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::STRING],
                 TypeInterner::STRING,
             ),
-            "string.center" | "string.ljust" | "string.rjust" | "string.zfill" => self
-                .no_type_args_signature(
-                    &name,
-                    type_args,
-                    span,
-                    vec![TypeInterner::STRING, TypeInterner::INT64],
-                    TypeInterner::STRING,
-                ),
-            "string.remove_prefix" | "string.remove_suffix" => self.no_type_args_signature(
-                &name,
-                type_args,
-                span,
-                vec![TypeInterner::STRING, TypeInterner::STRING],
-                TypeInterner::STRING,
-            ),
-            "string.is_numeric" | "string.is_alpha" => self.no_type_args_signature(
+            "string.__is_numeric" | "string.__is_alpha" => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
@@ -9150,7 +9108,7 @@ impl<'a> TypeChecker<'a> {
             signature
         } else {
             if let Some(function_name) = callee_name.as_deref()
-                && function_name.starts_with("list.")
+                && (function_name.starts_with("list.") || function_name.starts_with("string."))
             {
                 self.sink.emit(errors::unknown_type(
                     &format!("function `{function_name}`"),
@@ -13648,9 +13606,12 @@ function main() returns string:
     fn pure_call_with_secret_argument_returns_secret() {
         let result = check_source_result(
             "\
+function echo(value: string) returns string:
+    return value
+
 function main() returns nothing:
     secret[string] api_key = \"abc\"
-    secret[string] upper = string.upper(api_key)
+    secret[string] echoed = echo(api_key)
     return nothing
 ",
         );
@@ -13667,9 +13628,12 @@ function main() returns nothing:
     fn pure_call_with_secret_argument_cannot_be_assigned_to_public_type() {
         let errors = check_source_errors(
             "\
+function echo(value: string) returns string:
+    return value
+
 function main() returns nothing:
     secret[string] api_key = \"abc\"
-    string upper = string.upper(api_key)
+    string echoed = echo(api_key)
     return nothing
 ",
         );
@@ -13816,10 +13780,13 @@ function main() returns nothing:
     fn string_join_rejects_list_of_secret_strings() {
         let errors = check_source_errors(
             "\
+function combine_strings(items: list[string], separator: string) returns string:
+    return separator
+
 function main() returns string:
     secret[string] api_key = \"abc\"
     list[secret[string]] items = list(\"prefix\", api_key, \"suffix\")
-    return string.join(items, \"-\")
+    return combine_strings(items, \"-\")
 ",
         );
 
@@ -13936,7 +13903,7 @@ function main(view fs: Filesystem) returns string:
         let result = check_source_result(
             "\
 function upper(value: string) returns string:
-    return string.upper(value)
+    return value
 
 function main() returns secret[string]:
     secret[string] api_key = \"abc\"
@@ -14144,8 +14111,8 @@ function main() returns JsonValue:
     fn coarsen_can_target_refinement_ancestors() {
         let result = check_source_result(
             "\
-type NonEmpty = string where string.char_count(value) > 0
-type Password = NonEmpty where string.char_count(value) > 8
+type NonEmpty = string where value != \"\"
+type Password = NonEmpty where value != \"short\"
 
 function main() returns string:
     Password password = \"hunter42!\" handle error:

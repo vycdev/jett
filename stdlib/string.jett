@@ -1,34 +1,170 @@
 namespace string
+export function from_int64(value: int64) returns string:
+    return string.__from_int64(value)
+export function from_uint64(value: uint64) returns string:
+    return string.__from_uint64(value)
+export function from_float64(value: float64) returns string:
+    return string.__from_float64(value)
+export function from_bool(value: bool) returns string:
+    return string.__from_bool(value)
+export function char_count(value: string) returns int64:
+    return string.__char_count(value)
+export function length(value: string) returns int64:
+    return string.char_count(value)
+export function is_empty(value: string) returns bool:
+    return string.char_count(value) == 0
 export function is_not_empty(value: string) returns bool:
-    if string.is_empty(value):
+    return not string.is_empty(value)
+export function chars(value: string) returns list[string]:
+    return string.__chars(value)
+export function slice(value: string, start: int64, end: int64) returns string:
+    return string.__slice(value, start, end)
+export function index_of(value: string, needle: string) returns optional[int64]:
+    return string.__index_of(value, needle)
+export function count(value: string, needle: string) returns int64:
+    return string.__count(value, needle)
+export function contains(value: string, needle: string) returns bool:
+    int64 index = string.index_of(value, needle) handle:
         return false
-    return true
+    return index >= 0
+export function starts_with(value: string, prefix: string) returns bool:
+    int64 prefix_length = string.char_count(prefix)
+    if prefix_length > string.char_count(value):
+        return false
+    string candidate = string.slice(value, 0, prefix_length)
+    return candidate == prefix
+export function ends_with(value: string, suffix: string) returns bool:
+    int64 value_length = string.char_count(value)
+    int64 suffix_length = string.char_count(suffix)
+    if suffix_length > value_length:
+        return false
+    string candidate = string.slice(value, value_length - suffix_length, value_length)
+    return candidate == suffix
+export function take_chars(value: string, count: int64) returns string:
+    return string.slice(value, 0, count)
+export function take_last_chars(value: string, count: int64) returns string:
+    if count <= 0:
+        return ""
+    int64 value_length = string.char_count(value)
+    mutable int64 start = value_length - count
+    if start < 0:
+        start = 0
+    return string.slice(value, start, value_length)
+export function drop_chars(value: string, count: int64) returns string:
+    return string.slice(value, count, string.char_count(value))
+export function char_at(value: string, index: int64) returns optional[string]:
+    if index < 0 or index >= string.char_count(value):
+        return none
+    return some(string.slice(value, index, index + 1))
+export function trim(value: string) returns string:
+    return string.__trim(value)
+export function trim_start(value: string) returns string:
+    return string.__trim_start(value)
+export function trim_end(value: string) returns string:
+    return string.__trim_end(value)
+export function upper(value: string) returns string:
+    return string.__upper(value)
+export function lower(value: string) returns string:
+    return string.__lower(value)
+export function replace(value: string, from: string, replacement: string) returns string:
+    return string.__replace(value, from, replacement)
+export function split(value: string, delimiter: string) returns list[string]:
+    return string.__split(value, delimiter)
+export function join(items: list[string], separator: string) returns string:
+    return string.__join(items, separator)
+export function repeat(value: string, count: int64) returns string:
+    return string.__repeat(value, count)
 export function reverse(value: string) returns string:
-    list[string] chars = string.chars(value)
-    list[string] reversed = list.reverse(chars)
+    list[string] characters = string.chars(value)
+    list[string] reversed = list.reverse[string](characters)
     return string.join(reversed, "")
 export function after(value: string, marker: string) returns string:
-    optional[int64] marker_start = string.index_of(value, marker)
-    int64 start = marker_start handle:
+    int64 start = string.index_of(value, marker) handle:
         return ""
-    int64 marker_length = string.char_count(marker)
-    int64 value_length = string.char_count(value)
-    int64 slice_start = start + marker_length
-    return string.slice(value, slice_start, value_length)
+    int64 slice_start = start + string.char_count(marker)
+    return string.slice(value, slice_start, string.char_count(value))
 export function before(value: string, marker: string) returns string:
-    optional[int64] marker_start = string.index_of(value, marker)
-    int64 end = marker_start handle:
+    int64 end = string.index_of(value, marker) handle:
         return value
     return string.slice(value, 0, end)
 export function between(value: string, start_marker: string, end_marker: string) returns string:
-    optional[int64] marker_start = string.index_of(value, start_marker)
-    int64 start = marker_start handle:
+    int64 start = string.index_of(value, start_marker) handle:
         return ""
-    int64 start_length = string.char_count(start_marker)
-    int64 value_length = string.char_count(value)
-    int64 content_start = start + start_length
-    string after_start = string.slice(value, content_start, value_length)
-    optional[int64] marker_end = string.index_of(after_start, end_marker)
-    int64 end = marker_end handle:
+    int64 content_start = start + string.char_count(start_marker)
+    string after_start = string.slice(value, content_start, string.char_count(value))
+    int64 end = string.index_of(after_start, end_marker) handle:
         return ""
     return string.slice(after_start, 0, end)
+export function pad_left(value: string, width: int64, pad: string) returns string:
+    int64 current_length = string.char_count(value)
+    if current_length >= width:
+        return value
+    string pad_unit = string.char_at(pad, 0) handle:
+        default " "
+    string padding = string.repeat(pad_unit, width - current_length)
+    return "{padding}{value}"
+export function pad_start(value: string, width: int64, pad: string) returns string:
+    return string.pad_left(value, width, pad)
+export function pad_end(value: string, width: int64, pad: string) returns string:
+    int64 current_length = string.char_count(value)
+    if current_length >= width:
+        return value
+    string pad_unit = string.char_at(pad, 0) handle:
+        default " "
+    string padding = string.repeat(pad_unit, width - current_length)
+    return "{value}{padding}"
+export function slugify(value: string) returns string:
+    return string.__slugify(value)
+export function truncate(value: string, max_length: int64, suffix: string) returns string:
+    mutable int64 limit = max_length
+    if limit < 0:
+        limit = 0
+    if string.char_count(value) <= limit:
+        return value
+    string kept = string.take_chars(value, limit)
+    return "{kept}{suffix}"
+export function words(value: string) returns list[string]:
+    return string.__words(value)
+export function lines(value: string) returns list[string]:
+    return string.__lines(value)
+export function to_upper_first(value: string) returns string:
+    return string.__to_upper_first(value)
+export function to_lower_first(value: string) returns string:
+    return string.__to_lower_first(value)
+export function center(value: string, width: int64) returns string:
+    int64 current_length = string.char_count(value)
+    if current_length >= width:
+        return value
+    int64 total_padding = width - current_length
+    int64 left_count = total_padding / 2
+    string left_padding = string.repeat(" ", left_count)
+    string right_padding = string.repeat(" ", total_padding - left_count)
+    return "{left_padding}{value}{right_padding}"
+export function ljust(value: string, width: int64) returns string:
+    return string.pad_end(value, width, " ")
+export function rjust(value: string, width: int64) returns string:
+    return string.pad_left(value, width, " ")
+export function remove_prefix(value: string, prefix: string) returns string:
+    if not string.starts_with(value, prefix):
+        return value
+    return string.slice(value, string.char_count(prefix), string.char_count(value))
+export function remove_suffix(value: string, suffix: string) returns string:
+    if not string.ends_with(value, suffix):
+        return value
+    return string.slice(value, 0, string.char_count(value) - string.char_count(suffix))
+export function zfill(value: string, width: int64) returns string:
+    int64 current_length = string.char_count(value)
+    if current_length >= width:
+        return value
+    string zeros = string.repeat("0", width - current_length)
+    if string.starts_with(value, "-"):
+        string digits = string.remove_prefix(value, "-")
+        return "-{zeros}{digits}"
+    if string.starts_with(value, "+"):
+        string digits = string.remove_prefix(value, "+")
+        return "+{zeros}{digits}"
+    return "{zeros}{value}"
+export function is_numeric(value: string) returns bool:
+    return string.__is_numeric(value)
+export function is_alpha(value: string) returns bool:
+    return string.__is_alpha(value)

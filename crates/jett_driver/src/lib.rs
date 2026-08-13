@@ -4001,6 +4001,76 @@ mod tests {
     }
 
     #[test]
+    fn query_signature_reports_source_owned_string_surface() {
+        let functions = [
+            "from_int64",
+            "from_uint64",
+            "from_float64",
+            "from_bool",
+            "char_count",
+            "length",
+            "is_empty",
+            "is_not_empty",
+            "chars",
+            "slice",
+            "index_of",
+            "count",
+            "contains",
+            "starts_with",
+            "ends_with",
+            "take_chars",
+            "take_last_chars",
+            "drop_chars",
+            "char_at",
+            "trim",
+            "trim_start",
+            "trim_end",
+            "upper",
+            "lower",
+            "replace",
+            "split",
+            "join",
+            "repeat",
+            "reverse",
+            "after",
+            "before",
+            "between",
+            "pad_left",
+            "pad_start",
+            "pad_end",
+            "slugify",
+            "truncate",
+            "words",
+            "lines",
+            "to_upper_first",
+            "to_lower_first",
+            "center",
+            "ljust",
+            "rjust",
+            "remove_prefix",
+            "remove_suffix",
+            "zfill",
+            "is_numeric",
+            "is_alpha",
+        ];
+
+        for function in functions {
+            let name = format!("string.{function}");
+            let result = query_signature(Path::new("."), &name)
+                .expect("string signature query should succeed")
+                .unwrap_or_else(|| panic!("{name} signature should be found"));
+            assert!(
+                result
+                    .file_path
+                    .replace('\\', "/")
+                    .ends_with("/stdlib/string.jett"),
+                "{name} should resolve to compiler-shipped source, got {}",
+                result.file_path
+            );
+        }
+    }
+
+    #[test]
     fn query_signature_reports_extracted_list_helper_source() {
         let result = query_signature(Path::new("."), "list.first")
             .expect("signature query should succeed")

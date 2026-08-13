@@ -1355,13 +1355,12 @@ regular `.jett` files in the target architecture and use the same language
 features as user code. The compiler discovers them via the namespace system
 (they declare namespaces like `namespace string`, `namespace math`, etc.).
 
-`string.is_not_empty`, `string.reverse`, `string.after`, `string.before`, and
-`string.between` are ordinary source-defined functions in
-`stdlib/string.jett`. The complete public `string.*` API ultimately belongs in
-compiler-shipped `.jett` source. Its Unicode- and grapheme-sensitive operations
-may delegate to private trusted runtime kernels; the remaining hardcoded public
-signatures and Rust dispatch cases are transitional bootstrap debt to remove in
-follow-up extraction slices.
+The complete public `string.*` API is defined in `stdlib/string.jett` and
+resolved from source declarations like ordinary namespaced code. Compositional
+operations have Jett bodies. Private trusted runtime kernels are limited to
+primitive conversions and Unicode-, grapheme-, search-, or text-sensitive work
+that Jett cannot yet express safely; their checker and interpreter entry points
+reject project calls.
 
 The public map namespace is defined in `stdlib/map.jett`. Every public map
 operation resolves through an exported source declaration, including
