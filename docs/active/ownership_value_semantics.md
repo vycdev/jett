@@ -91,6 +91,16 @@ sender can no longer use it. Implicitly copyable values are copied instead and
 remain usable by the sender. Views cannot be sent to actors. A scoped task may
 borrow a view only until that task is joined or cancelled.
 
-## Still Undecided
+### Local mutation
 
-- exact mutation rules.
+`mutable` permits explicit rebinding within the current scope; it does not create
+mutable references. Functions transform caller-owned data by consuming it and
+returning a replacement. Views are always read-only. The compiler may reuse
+uniquely owned storage in place, but that optimization does not change these
+observable semantics.
+
+## Open Decisions
+
+No unresolved items remain from this decision pass. Any newly identified
+ownership question must first be checked against the established design and
+architecture rules.

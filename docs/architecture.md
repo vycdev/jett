@@ -496,7 +496,8 @@ This sub-phase tracks the ownership state of every variable through the control 
 - Using a `Consumed` variable is a compile error.
 - `view` parameters can read but not consume.
 - `view` values cannot be returned, stored in structs, or sent to actors.
-- `clone` creates an owned copy from an owned or viewed value.
+- For types that support duplication, `clone` creates an owned duplicate from
+  an owned or viewed value. Clone support is type-specific rather than universal.
 - `mutable` variables can be rebound after their value is consumed.
 - **For loops:** `for item in items` consumes `items`; `for item in view items` borrows `items`.
 - **Run/join:** `run` marks a value as pending; it cannot be used until `join`ed.
