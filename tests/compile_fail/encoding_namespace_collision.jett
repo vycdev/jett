@@ -1,0 +1,4 @@
+# ERROR: E0204
+namespace encoding
+function local_encoding_helper() returns nothing:
+    return nothing

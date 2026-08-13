@@ -485,22 +485,6 @@ fn math_mod_reports_overflow() {
 }
 
 #[test]
-fn encoding_hex_decode_rejects_non_ascii_without_panicking() {
-    assert_runtime_fail(
-        "encoding_hex_decode_non_ascii.jett",
-        "runtime error: encoding.hex_decode: invalid hex characters",
-    );
-}
-
-#[test]
-fn base64_decode_rejects_invalid_padding() {
-    assert_runtime_fail(
-        "base64_invalid_padding.jett",
-        "runtime error: encoding.base64_decode: invalid base64 padding",
-    );
-}
-
-#[test]
 fn run_file_capture_stdout_captures_json_runtime_output() {
     assert_run_stdout(
         "json_tree_parse_runtime.jett",
@@ -1283,6 +1267,28 @@ compile_fail_fixture!(
     compile_fail_builtin_type_arg_arity,
     "builtin_type_arg_arity.jett"
 );
+compile_fail_fixture!(
+    compile_fail_encoding_argument_types,
+    "encoding_argument_types.jett"
+);
+compile_fail_fixture!(
+    compile_fail_encoding_decoders_require_handle,
+    "encoding_decoders_require_handle.jett"
+);
+compile_fail_fixture!(
+    compile_fail_encoding_namespace_collision,
+    "encoding_namespace_collision.jett"
+);
+
+#[test]
+fn compile_fail_encoding_argument_type_count() {
+    assert_compile_fail_error_count("encoding_argument_types.jett", 304, 3);
+}
+
+#[test]
+fn compile_fail_encoding_decoder_handle_count() {
+    assert_compile_fail_error_count("encoding_decoders_require_handle.jett", 341, 4);
+}
 
 #[test]
 fn compile_fail_builtin_type_arg_arity_count() {

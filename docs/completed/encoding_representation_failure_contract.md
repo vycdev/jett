@@ -1,7 +1,7 @@
 # Encoding Representation and Failure Contract
 
-Status: proposed decision for [#71](https://github.com/vycdev/jett/issues/71).
-Implementation and stdlib extraction remain pending.
+Status: implemented for the interpreter-backed compiler on 2026-08-13.
+Future native backends must carry the same contract forward.
 
 ## Context
 
@@ -22,17 +22,17 @@ separate URL-percent and form-component semantics. It does not implement the
 migration, redesign `bytes`, parse complete URLs or query maps, or add Base64URL,
 compression, or character-set conversion.
 
-## Proposed Public Surface
+## Public Surface
 
-The target declarations are:
+The declarations are:
 
 ```jett
 namespace encoding
 
-export function base64_encode(view data: bytes) returns string
+export function base64_encode(view bytes_value: bytes) returns string
 export function base64_decode(encoded: string) returns result[bytes, string]
 
-export function hex_encode(view data: bytes) returns string
+export function hex_encode(view bytes_value: bytes) returns string
 export function hex_decode(encoded: string) returns result[bytes, string]
 
 export function url_encode(value: string) returns string
@@ -43,7 +43,7 @@ export function form_decode(encoded: string) returns result[string, string]
 ```
 
 All eight operations are pure, deterministic, capability-free, and
-non-mutating. `view data` is borrowed and remains usable after the call.
+non-mutating. The viewed byte input is borrowed and remains usable after the call.
 Decoders return the complete decoded value or a `string` error; they never
 return partial output and never replace malformed input silently.
 
@@ -231,17 +231,17 @@ a codec provider. It does not prohibit an audited compiler/runtime dependency;
 any such dependency remains an implementation detail subject to the constraints
 above.
 
-## Implementation Slices
+## Implemented Slices and Backend Follow-up
 
-1. **Pin and correct runtime behavior**
+1. **Pin and correct interpreter runtime behavior — complete**
    - add known vectors and malformed-input regressions for the current kernels;
    - make percent decoding strict and separate URL `+` from form `+`;
    - make Base64 padding and unused-bit checks canonical.
-2. **Migrate binary representations and failures**
+2. **Migrate binary representations and failures — complete**
    - change Base64 and hex to byte-native encode/decode signatures;
    - return `result` from every decoder and migrate existing fixtures/callers;
    - add form component operations independently of URL component operations.
-3. **Extract public declarations**
+3. **Extract public declarations — complete**
    - add compiler-shipped `stdlib/encoding.jett` declarations and wrappers;
    - retain only private trusted byte kernels;
    - remove hardcoded public signature knowledge and reject project namespace

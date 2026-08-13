@@ -1,0 +1,9 @@
+# ERROR: E0304
+namespace app
+function base64_requires_bytes(value: string) returns string:
+    return encoding.base64_encode(value)
+function url_requires_text(value: bytes) returns string:
+    return encoding.url_encode(value)
+function hex_decoder_requires_text(value: bytes) returns bytes:
+    return encoding.hex_decode(value) handle error:
+        default bytes.new()

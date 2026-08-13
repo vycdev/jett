@@ -1,45 +1,80 @@
 namespace app
-
-function base64_encode_test() returns string:
-    return encoding.base64_encode("hello")
-
-verify base64_encode_test:
-    assert base64_encode_test() == "aGVsbG8="
-
-function base64_decode_test() returns string:
-    return encoding.base64_decode("aGVsbG8=")
-
-verify base64_decode_test:
-    assert base64_decode_test() == "hello"
-
-function base64_roundtrip_test() returns string:
-    string original = "Jett language"
-    string encoded = encoding.base64_encode(original)
-    return encoding.base64_decode(encoded)
-
-verify base64_roundtrip_test:
-    assert base64_roundtrip_test() == "Jett language"
-
-function hex_encode_test() returns string:
-    return encoding.hex_encode("hi")
-
-verify hex_encode_test:
-    assert hex_encode_test() == "6869"
-
-function hex_decode_test() returns string:
-    return encoding.hex_decode("6869")
-
-verify hex_decode_test:
-    assert hex_decode_test() == "hi"
-
-function url_encode_test() returns string:
-    return encoding.url_encode("hello world!")
-
-verify url_encode_test:
-    assert url_encode_test() == "hello%20world%21"
-
-function url_decode_test() returns string:
-    return encoding.url_decode("hello%20world%21")
-
-verify url_decode_test:
-    assert url_decode_test() == "hello world!"
+function base64_of(value: string) returns string:
+    bytes raw = bytes.from_string(value)
+    return encoding.base64_encode(view raw)
+function base64_decode_hex(value: string) returns string:
+    bytes decoded = encoding.base64_decode(value) handle error:
+        return error
+    return bytes.to_hex(view decoded)
+function base64_error(value: string) returns string:
+    bytes decoded = encoding.base64_decode(value) handle error:
+        return error
+    return bytes.to_hex(view decoded)
+verify base64_vectors:
+    assert base64_of("") == ""
+    assert base64_of("f") == "Zg=="
+    assert base64_of("fo") == "Zm8="
+    assert base64_of("foo") == "Zm9v"
+    assert base64_of("foob") == "Zm9vYg=="
+    assert base64_of("fooba") == "Zm9vYmE="
+    assert base64_of("foobar") == "Zm9vYmFy"
+verify base64_binary_roundtrip:
+    bytes raw = bytes.from_hex("0080ff") handle error:
+        return
+    string encoded = encoding.base64_encode(view raw)
+    assert encoded == "AID/"
+    assert bytes.to_hex(view raw) == "0080ff"
+    assert base64_decode_hex(encoded) == "0080ff"
+verify base64_rejections_and_precedence:
+    assert base64_error("!") == "encoding.base64_decode: invalid length"
+    assert base64_error("!===") == "encoding.base64_decode: invalid character"
+    assert base64_error("Zm 8") == "encoding.base64_decode: invalid character"
+    assert base64_error("Zm-=") == "encoding.base64_decode: invalid character"
+    assert base64_error("Zm_=") == "encoding.base64_decode: invalid character"
+    assert base64_error("A===") == "encoding.base64_decode: invalid padding"
+    assert base64_error("AA==AAAA") == "encoding.base64_decode: invalid padding"
+    assert base64_error("AB==") == "encoding.base64_decode: non-zero trailing bits"
+function hex_decode_value(value: string) returns bytes:
+    return encoding.hex_decode(value) handle error:
+        default bytes.new()
+function hex_error(value: string) returns string:
+    bytes decoded = encoding.hex_decode(value) handle error:
+        return error
+    return bytes.to_hex(view decoded)
+verify hex_contract:
+    bytes raw = bytes.from_hex("0080ff") handle error:
+        return
+    assert encoding.hex_encode(view raw) == "0080ff"
+    assert bytes.to_hex(view raw) == "0080ff"
+    assert bytes.to_hex(hex_decode_value("")) == ""
+    assert bytes.to_hex(hex_decode_value("00aBFF")) == "00abff"
+    assert hex_error("z") == "encoding.hex_decode: odd-length hex string"
+    assert hex_error("0x00") == "encoding.hex_decode: invalid hex characters"
+    assert hex_error("00 0") == "encoding.hex_decode: invalid hex characters"
+    assert hex_error("00zz") == "encoding.hex_decode: invalid hex characters"
+function url_decode_value(value: string) returns string:
+    return encoding.url_decode(value) handle error:
+        return error
+function form_decode_value(value: string) returns string:
+    return encoding.form_decode(value) handle error:
+        return error
+verify url_component_contract:
+    assert encoding.url_encode("AZaz09-._~") == "AZaz09-._~"
+    assert encoding.url_encode("a b+c") == "a%20b%2Bc"
+    assert url_decode_value("a%20b%2bc") == "a b+c"
+    assert url_decode_value("a+b") == "a+b"
+    assert encoding.url_encode("é 🎉") == "%C3%A9%20%F0%9F%8E%89"
+    assert url_decode_value("%C3%A9%20%f0%9f%8e%89") == "é 🎉"
+    assert url_decode_value("%") == "encoding.url_decode: malformed percent escape"
+    assert url_decode_value("%GG") == "encoding.url_decode: malformed percent escape"
+    assert url_decode_value("%FF") == "encoding.url_decode: decoded bytes are not valid UTF-8"
+    assert url_decode_value("%FF%GG") == "encoding.url_decode: malformed percent escape"
+verify form_component_contract:
+    assert encoding.form_encode("AZaz09*-._") == "AZaz09*-._"
+    assert encoding.form_encode("a b+c~") == "a+b%2Bc%7E"
+    assert form_decode_value("a+b%2bc") == "a b+c"
+    assert encoding.form_encode("é 🎉") == "%C3%A9+%F0%9F%8E%89"
+    assert form_decode_value("%c3%a9+%F0%9F%8E%89") == "é 🎉"
+    assert form_decode_value("%") == "encoding.form_decode: malformed percent escape"
+    assert form_decode_value("%GG") == "encoding.form_decode: malformed percent escape"
+    assert form_decode_value("%FF") == "encoding.form_decode: decoded bytes are not valid UTF-8"

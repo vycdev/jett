@@ -1,0 +1,7 @@
+# ERROR: E0341
+namespace app
+function ignore_decoder_results() returns nothing:
+    encoding.base64_decode("Zg==")
+    encoding.hex_decode("66")
+    encoding.url_decode("f")
+    encoding.form_decode("f")

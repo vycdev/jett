@@ -4244,6 +4244,40 @@ mod tests {
     }
 
     #[test]
+    fn query_signature_reports_source_owned_encoding_surface() {
+        let functions = [
+            ("base64_encode", true, "string"),
+            ("base64_decode", false, "result[bytes, string]"),
+            ("hex_encode", true, "string"),
+            ("hex_decode", false, "result[bytes, string]"),
+            ("url_encode", false, "string"),
+            ("url_decode", false, "result[string, string]"),
+            ("form_encode", false, "string"),
+            ("form_decode", false, "result[string, string]"),
+        ];
+
+        for (function, first_param_view, return_type) in functions {
+            let name = format!("encoding.{function}");
+            let result = query_signature(Path::new("."), &name)
+                .expect("encoding signature query should succeed")
+                .unwrap_or_else(|| panic!("{name} signature should be found"));
+            assert!(
+                result
+                    .file_path
+                    .replace('\\', "/")
+                    .ends_with("/stdlib/encoding.jett"),
+                "{name} should resolve to compiler-shipped source, got {}",
+                result.file_path
+            );
+            assert_eq!(
+                result.params[0].view, first_param_view,
+                "{name} view contract"
+            );
+            assert_eq!(result.return_type, return_type, "{name} return type");
+        }
+    }
+
+    #[test]
     fn query_signature_reports_source_owned_map_and_set_surfaces() {
         let map_functions = [
             "new",

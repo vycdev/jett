@@ -11,3 +11,5 @@ function math_kernel_is_private() returns float64:
     return math.__sqrt(4.0)
 function bytes_kernel_is_private() returns bytes:
     return bytes.__new()
+function encoding_kernel_is_private() returns string:
+    return encoding.__base64_encode(bytes.new())

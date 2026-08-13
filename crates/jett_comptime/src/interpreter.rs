@@ -8770,147 +8770,79 @@ impl Interpreter {
             }
 
             // -- Encoding operations (stdlib/encoding.jett) -------------------
-            "encoding.base64_encode" => {
+            "encoding.__base64_encode" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
-                    Value::String(s) => {
-                        let encoded = base64_encode(s.as_bytes());
+                    Value::Bytes(bytes) => {
+                        let encoded = base64_encode(bytes);
                         Some(Ok(Value::String(encoded)))
                     }
-                    _ => Some(Err(format!("{name} expects a string argument"))),
+                    _ => Some(Err(format!("{name} expects a bytes argument"))),
                 }
             }
 
-            "encoding.base64_decode" => {
+            "encoding.__base64_decode" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => match base64_decode(s) {
-                        Ok(bytes) => match String::from_utf8(bytes) {
-                            Ok(decoded) => Some(Ok(Value::String(decoded))),
-                            Err(_) => Some(Err(
-                                "encoding.base64_decode: decoded bytes are not valid UTF-8"
-                                    .to_string(),
-                            )),
-                        },
-                        Err(e) => Some(Err(format!("encoding.base64_decode: {e}"))),
+                        Ok(bytes) => Some(Ok(Value::ResultOk(Box::new(Value::Bytes(bytes))))),
+                        Err(error) => Some(Ok(Value::ResultFail(Box::new(Value::String(
+                            error.to_string(),
+                        ))))),
                     },
                     _ => Some(Err(format!("{name} expects a string argument"))),
                 }
             }
 
-            "encoding.hex_encode" => {
+            "encoding.__hex_decode" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
-                    Value::String(s) => {
-                        let hex: String = s.bytes().map(|b| format!("{b:02x}")).collect();
-                        Some(Ok(Value::String(hex)))
-                    }
+                    Value::String(s) => match encoding_hex_decode(s) {
+                        Ok(bytes) => Some(Ok(Value::ResultOk(Box::new(Value::Bytes(bytes))))),
+                        Err(error) => Some(Ok(Value::ResultFail(Box::new(Value::String(
+                            error.to_string(),
+                        ))))),
+                    },
                     _ => Some(Err(format!("{name} expects a string argument"))),
                 }
             }
 
-            "encoding.hex_decode" => {
+            "encoding.__url_encode" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
-                    Value::String(s) => {
-                        let raw = s.as_bytes();
-                        if raw.len() % 2 != 0 {
-                            return Some(Err(
-                                "encoding.hex_decode: odd-length hex string".to_string()
-                            ));
-                        }
-                        let bytes: Result<Vec<u8>, ()> = raw
-                            .chunks_exact(2)
-                            .map(|pair| {
-                                let high = match pair[0] {
-                                    b'0'..=b'9' => pair[0] - b'0',
-                                    b'a'..=b'f' => pair[0] - b'a' + 10,
-                                    b'A'..=b'F' => pair[0] - b'A' + 10,
-                                    _ => return Err(()),
-                                };
-                                let low = match pair[1] {
-                                    b'0'..=b'9' => pair[1] - b'0',
-                                    b'a'..=b'f' => pair[1] - b'a' + 10,
-                                    b'A'..=b'F' => pair[1] - b'A' + 10,
-                                    _ => return Err(()),
-                                };
-                                Ok((high << 4) | low)
-                            })
-                            .collect();
-                        match bytes {
-                            Ok(b) => match String::from_utf8(b) {
-                                Ok(decoded) => Some(Ok(Value::String(decoded))),
-                                Err(_) => {
-                                    Some(Err("encoding.hex_decode: bytes are not valid UTF-8"
-                                        .to_string()))
-                                }
-                            },
-                            Err(_) => Some(Err(
-                                "encoding.hex_decode: invalid hex characters".to_string()
-                            )),
-                        }
-                    }
+                    Value::String(s) => Some(Ok(Value::String(percent_encode(s, false)))),
                     _ => Some(Err(format!("{name} expects a string argument"))),
                 }
             }
 
-            "encoding.url_encode" => {
+            "encoding.__url_decode" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
-                    Value::String(s) => {
-                        let encoded: String = s
-                            .bytes()
-                            .flat_map(|b| {
-                                if b.is_ascii_alphanumeric()
-                                    || b == b'-'
-                                    || b == b'_'
-                                    || b == b'.'
-                                    || b == b'~'
-                                {
-                                    vec![b as char]
-                                } else {
-                                    format!("%{b:02X}").chars().collect()
-                                }
-                            })
-                            .collect();
-                        Some(Ok(Value::String(encoded)))
-                    }
+                    Value::String(s) => Some(Ok(percent_decode(s, false)
+                        .map(|decoded| Value::ResultOk(Box::new(Value::String(decoded))))
+                        .unwrap_or_else(|error| {
+                            Value::ResultFail(Box::new(Value::String(error.to_string())))
+                        }))),
                     _ => Some(Err(format!("{name} expects a string argument"))),
                 }
             }
 
-            "encoding.url_decode" => {
+            "encoding.__form_encode" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
-                    Value::String(s) => {
-                        let bytes = s.as_bytes();
-                        let mut result = Vec::new();
-                        let mut i = 0;
-                        while i < bytes.len() {
-                            if bytes[i] == b'%' && i + 2 < bytes.len() {
-                                if let Ok(b) = u8::from_str_radix(
-                                    std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""),
-                                    16,
-                                ) {
-                                    result.push(b);
-                                    i += 3;
-                                    continue;
-                                }
-                            } else if bytes[i] == b'+' {
-                                result.push(b' ');
-                                i += 1;
-                                continue;
-                            }
-                            result.push(bytes[i]);
-                            i += 1;
-                        }
-                        match String::from_utf8(result) {
-                            Ok(decoded) => Some(Ok(Value::String(decoded))),
-                            Err(_) => Some(Err(
-                                "encoding.url_decode: result is not valid UTF-8".to_string()
-                            )),
-                        }
-                    }
+                    Value::String(s) => Some(Ok(Value::String(percent_encode(s, true)))),
+                    _ => Some(Err(format!("{name} expects a string argument"))),
+                }
+            }
+
+            "encoding.__form_decode" if self.current_function_trusted_stdlib => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::String(s) => Some(Ok(percent_decode(s, true)
+                        .map(|decoded| Value::ResultOk(Box::new(Value::String(decoded))))
+                        .unwrap_or_else(|error| {
+                            Value::ResultFail(Box::new(Value::String(error.to_string())))
+                        }))),
                     _ => Some(Err(format!("{name} expects a string argument"))),
                 }
             }
@@ -16071,56 +16003,139 @@ fn md5_hash(data: &[u8]) -> String {
     out.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-fn base64_decode(s: &str) -> Result<Vec<u8>, String> {
-    fn char_val(c: u8) -> Result<u32, String> {
+fn base64_decode(s: &str) -> Result<Vec<u8>, &'static str> {
+    fn char_val(c: u8) -> u32 {
         match c {
-            b'A'..=b'Z' => Ok((c - b'A') as u32),
-            b'a'..=b'z' => Ok((c - b'a' + 26) as u32),
-            b'0'..=b'9' => Ok((c - b'0' + 52) as u32),
-            b'+' => Ok(62),
-            b'/' => Ok(63),
-            b'=' => Ok(0),
-            _ => Err(format!("invalid base64 character: {c:?}")),
+            b'A'..=b'Z' => (c - b'A') as u32,
+            b'a'..=b'z' => (c - b'a' + 26) as u32,
+            b'0'..=b'9' => (c - b'0' + 52) as u32,
+            b'+' => 62,
+            b'/' => 63,
+            b'=' => 0,
+            _ => unreachable!("alphabet was validated before decoding"),
         }
     }
+
     let bytes = s.as_bytes();
     if bytes.len() % 4 != 0 {
-        return Err("base64 string length must be a multiple of 4".to_string());
+        return Err("invalid length");
     }
-    let mut out = Vec::new();
-    for (chunk_index, chunk) in bytes.chunks_exact(4).enumerate() {
-        let is_last = chunk_index + 1 == bytes.len() / 4;
-        let padding = match (chunk[2], chunk[3]) {
-            (b'=', b'=') => 2,
-            (b'=', _) => return Err("invalid base64 padding".to_string()),
-            (_, b'=') => 1,
-            (_, _) => 0,
-        };
-        if chunk[0] == b'='
-            || chunk[1] == b'='
-            || (padding != 0 && !is_last)
-            || (padding == 0 && (chunk[2] == b'=' || chunk[3] == b'='))
-        {
-            return Err("invalid base64 padding".to_string());
-        }
+    if bytes.iter().any(|byte| {
+        !matches!(
+            byte,
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'+' | b'/' | b'='
+        )
+    }) {
+        return Err("invalid character");
+    }
 
-        let v0 = char_val(chunk[0])?;
-        let v1 = char_val(chunk[1])?;
-        let v2 = char_val(chunk[2])?;
-        let v3 = char_val(chunk[3])?;
-        if (padding == 2 && v1 & 0x0F != 0) || (padding == 1 && v2 & 0x03 != 0) {
-            return Err("invalid base64 padding".to_string());
+    let padding = bytes.iter().rev().take_while(|byte| **byte == b'=').count();
+    if padding > 2
+        || bytes[..bytes.len().saturating_sub(padding)].contains(&b'=')
+        || (padding > 0 && bytes.len() < 4)
+    {
+        return Err("invalid padding");
+    }
+
+    let mut out = Vec::new();
+    for chunk in bytes.chunks_exact(4) {
+        let chunk_padding = usize::from(chunk[3] == b'=') + usize::from(chunk[2] == b'=');
+        let v0 = char_val(chunk[0]);
+        let v1 = char_val(chunk[1]);
+        let v2 = char_val(chunk[2]);
+        let v3 = char_val(chunk[3]);
+        if (chunk_padding == 2 && v1 & 0x0F != 0) || (chunk_padding == 1 && v2 & 0x03 != 0) {
+            return Err("non-zero trailing bits");
         }
         let combined = (v0 << 18) | (v1 << 12) | (v2 << 6) | v3;
         out.push(((combined >> 16) & 0xFF) as u8);
-        if padding < 2 {
+        if chunk_padding < 2 {
             out.push(((combined >> 8) & 0xFF) as u8);
         }
-        if padding == 0 {
+        if chunk_padding == 0 {
             out.push((combined & 0xFF) as u8);
         }
     }
     Ok(out)
+}
+
+fn encoding_hex_decode(s: &str) -> Result<Vec<u8>, &'static str> {
+    fn nibble(byte: u8) -> Option<u8> {
+        match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            b'A'..=b'F' => Some(byte - b'A' + 10),
+            _ => None,
+        }
+    }
+
+    let raw = s.as_bytes();
+    if raw.len() % 2 != 0 {
+        return Err("odd-length hex string");
+    }
+    raw.chunks_exact(2)
+        .map(|pair| {
+            let high = nibble(pair[0]).ok_or("invalid hex characters")?;
+            let low = nibble(pair[1]).ok_or("invalid hex characters")?;
+            Ok((high << 4) | low)
+        })
+        .collect()
+}
+
+fn percent_encode(value: &str, form: bool) -> String {
+    let mut output = String::new();
+    for byte in value.bytes() {
+        let literal = byte.is_ascii_alphanumeric()
+            || if form {
+                matches!(byte, b'*' | b'-' | b'.' | b'_')
+            } else {
+                matches!(byte, b'-' | b'.' | b'_' | b'~')
+            };
+        if literal {
+            output.push(byte as char);
+        } else if form && byte == b' ' {
+            output.push('+');
+        } else {
+            output.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    output
+}
+
+fn percent_decode(value: &str, form: bool) -> Result<String, &'static str> {
+    fn nibble(byte: u8) -> Option<u8> {
+        match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            b'A'..=b'F' => Some(byte - b'A' + 10),
+            _ => None,
+        }
+    }
+
+    let malformed = "malformed percent escape";
+    let invalid_utf8 = "decoded bytes are not valid UTF-8";
+    let input = value.as_bytes();
+    let mut output = Vec::with_capacity(input.len());
+    let mut index = 0;
+    while index < input.len() {
+        if input[index] == b'%' {
+            if index + 2 >= input.len() {
+                return Err(malformed);
+            }
+            let high = nibble(input[index + 1]).ok_or(malformed)?;
+            let low = nibble(input[index + 2]).ok_or(malformed)?;
+            output.push((high << 4) | low);
+            index += 3;
+        } else {
+            output.push(if form && input[index] == b'+' {
+                b' '
+            } else {
+                input[index]
+            });
+            index += 1;
+        }
+    }
+    String::from_utf8(output).map_err(|_| invalid_utf8)
 }
 
 // ---------------------------------------------------------------------------
@@ -16388,6 +16403,49 @@ mod builtin_tests {
         assert_eq!(
             interp.eval_expr(&expr),
             Err("undefined function 'bytes.new'".to_string())
+        );
+    }
+
+    #[test]
+    fn private_encoding_kernels_preserve_binary_results() {
+        let mut interp = Interpreter::new();
+        interp.current_function_trusted_stdlib = true;
+
+        assert_eq!(
+            interp
+                .call_builtin(
+                    "encoding.__base64_encode",
+                    &[Value::Bytes(vec![0, 128, 255])],
+                )
+                .expect("private encoding kernel should be recognized")
+                .expect("private encoding kernel should succeed"),
+            Value::String("AID/".to_string())
+        );
+        assert_eq!(
+            interp
+                .call_builtin(
+                    "encoding.__base64_decode",
+                    &[Value::String("AID/".to_string())],
+                )
+                .expect("private encoding kernel should be recognized")
+                .expect("private encoding kernel should succeed"),
+            Value::ResultOk(Box::new(Value::Bytes(vec![0, 128, 255])))
+        );
+    }
+
+    #[test]
+    fn public_encoding_runtime_dispatch_is_absent_without_stdlib_source() {
+        let mut interp = Interpreter::new();
+        assert!(
+            interp
+                .call_builtin("encoding.__base64_encode", &[Value::Bytes(vec![])])
+                .is_none(),
+            "private encoding kernels must require trusted stdlib execution"
+        );
+        let expr = dotted_call("encoding", "base64_encode", vec![string("hello")]);
+        assert_eq!(
+            interp.eval_expr(&expr),
+            Err("undefined function 'encoding.base64_encode'".to_string())
         );
     }
 
@@ -16814,13 +16872,16 @@ mod builtin_tests {
     }
 
     #[test]
-    fn builtin_encoding_hex_decode_rejects_non_ascii_without_panicking() {
-        let mut interp = Interpreter::new();
-        let expr = dotted_call("encoding", "hex_decode", vec![string("aééa")]);
-        assert_eq!(
-            interp.eval_expr(&expr).unwrap_err(),
-            "encoding.hex_decode: invalid hex characters"
-        );
+    fn encoding_helpers_reject_non_ascii_hex_without_panicking() {
+        assert_eq!(encoding_hex_decode("aééa"), Err("invalid hex characters"));
+    }
+
+    #[test]
+    fn base64_decoder_uses_stable_validation_categories() {
+        assert_eq!(base64_decode("!"), Err("invalid length"));
+        assert_eq!(base64_decode("!==="), Err("invalid character"));
+        assert_eq!(base64_decode("A==="), Err("invalid padding"));
+        assert_eq!(base64_decode("AB=="), Err("non-zero trailing bits"));
     }
 
     #[test]

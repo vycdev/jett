@@ -2489,6 +2489,13 @@ impl<'a> TypeChecker<'a> {
                 | "bytes.__get"
                 | "bytes.__to_hex"
                 | "bytes.__from_hex"
+                | "encoding.__base64_encode"
+                | "encoding.__base64_decode"
+                | "encoding.__hex_decode"
+                | "encoding.__url_encode"
+                | "encoding.__url_decode"
+                | "encoding.__form_encode"
+                | "encoding.__form_decode"
         );
         if private_stdlib_kernel && !span.file.is_stdlib() {
             self.sink
@@ -3577,19 +3584,37 @@ impl<'a> TypeChecker<'a> {
                 vec![TypeInterner::STRING],
                 TypeInterner::BOOL,
             ),
-            // encoding module (all string → string)
-            "encoding.base64_encode"
-            | "encoding.base64_decode"
-            | "encoding.hex_encode"
-            | "encoding.hex_decode"
-            | "encoding.url_encode"
-            | "encoding.url_decode" => self.no_type_args_signature(
+            // Private encoding kernels; public signatures live in stdlib/encoding.jett.
+            "encoding.__base64_encode" => self.no_type_args_signature(
+                &name,
+                type_args,
+                span,
+                vec![TypeInterner::BYTES],
+                TypeInterner::STRING,
+            ),
+            "encoding.__base64_decode" | "encoding.__hex_decode" => {
+                self.expect_no_type_args(&name, type_args, span);
+                Some((
+                    vec![TypeInterner::STRING],
+                    self.interner
+                        .intern(Type::Result(TypeInterner::BYTES, TypeInterner::STRING)),
+                ))
+            }
+            "encoding.__url_encode" | "encoding.__form_encode" => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::STRING],
                 TypeInterner::STRING,
             ),
+            "encoding.__url_decode" | "encoding.__form_decode" => {
+                self.expect_no_type_args(&name, type_args, span);
+                Some((
+                    vec![TypeInterner::STRING],
+                    self.interner
+                        .intern(Type::Result(TypeInterner::STRING, TypeInterner::STRING)),
+                ))
+            }
             // crypto module (string → string)
             "crypto.sha256" | "crypto.md5" => self.no_type_args_signature(
                 &name,
@@ -9196,7 +9221,8 @@ impl<'a> TypeChecker<'a> {
                 && (function_name.starts_with("list.")
                     || function_name.starts_with("string.")
                     || function_name.starts_with("math.")
-                    || function_name.starts_with("bytes."))
+                    || function_name.starts_with("bytes.")
+                    || function_name.starts_with("encoding."))
             {
                 self.sink.emit(errors::unknown_type(
                     &format!("function `{function_name}`"),

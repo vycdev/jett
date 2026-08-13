@@ -1289,9 +1289,9 @@ flowchart LR
 > The proposed crypto text-digest API, algorithm classifications, secret policy,
 > and stdlib/runtime boundary are defined in the
 > [Crypto hashing and security contract](open_design/crypto_hashing_security_contract.md).
-> Encoding's proposed byte/string representations, strict failures, URL/form
+> Encoding's byte/string representations, strict failures, URL/form
 > distinction, and source/runtime boundary are defined in the
-> [Encoding representation and failure contract](open_design/encoding_representation_failure_contract.md).
+> [Encoding representation and failure contract](completed/encoding_representation_failure_contract.md).
 > The proposed public-source/private-kernel boundary for TCP sockets is recorded
 > in [`docs/open_design/net_socket_transport_contract.md`](open_design/net_socket_transport_contract.md)
 > for [#104](https://github.com/vycdev/jett/issues/104).
@@ -1427,13 +1427,12 @@ future HMAC processing. Exact UTF-8, hexadecimal, taint, and backend obligations
 are defined by the
 [Crypto hashing and security contract](open_design/crypto_hashing_security_contract.md).
 
-Encoding has not reached that end state. Its six current public signatures and
-dispatch arms are hardcoded, all use `string -> string`, and do not expose
-decoder failures. The target places byte-native Base64/hex and textual URL/form
-public declarations in trusted compiler-shipped `.jett` source. Only private
-trusted byte kernels may remain runtime-backed; strict acceptance, error, and
-backend obligations are defined by the
-[Encoding representation and failure contract](open_design/encoding_representation_failure_contract.md).
+Encoding has reached that boundary for the interpreter-backed compiler. All
+eight public byte-native Base64/hex and textual URL/form declarations live in
+`stdlib/encoding.jett`; every decoder is fallible, byte encoders borrow their
+input, and only private trusted kernels remain runtime-backed. Strict
+acceptance, stable errors, and future-backend obligations are defined by the
+[Encoding representation and failure contract](completed/encoding_representation_failure_contract.md).
 
 Random has not reached that end state. Its five public signatures and interpreter
 dispatch are hardcoded and currently read an ambient host RNG. The target places
@@ -1942,8 +1941,8 @@ Core stdlib (string, list, math, json) is implemented in Phase D. This phase com
   [Time and Clock capability contract](open_design/time_clock_capability_contract.md))
 - **Security:** `crypto`, `encoding`, `validate` (the crypto hashing contract is
   defined in the [crypto contract](open_design/crypto_hashing_security_contract.md), and encoding's
-  proposed byte-native codecs and strict failure policy are defined by the
-  [encoding contract](open_design/encoding_representation_failure_contract.md))
+  implemented byte-native codecs and strict failure policy are defined by the
+  [encoding contract](completed/encoding_representation_failure_contract.md))
 - **OS:** `Environment` for read-only launch environment variables and user arguments (the proposed capability, snapshot, Unicode-failure, compatibility, and source/runtime boundary is defined in the [Environment and argument contract](open_design/environment_argv_capability_contract.md)); process management remains a separate `Process` capability concern
 - **Utilities:** `regex`, `random` (the proposed explicit capability, entropy,
   deterministic injection, and source/runtime policy is defined in the

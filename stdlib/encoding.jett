@@ -1,0 +1,25 @@
+namespace encoding
+export function base64_encode(view bytes_value: bytes) returns string:
+    return encoding.__base64_encode(view bytes_value)
+export function base64_decode(encoded: string) returns result[bytes, string]:
+    bytes decoded = encoding.__base64_decode(encoded) handle error:
+        return fail("encoding.base64_decode: {error}")
+    return ok(decoded)
+export function hex_encode(view bytes_value: bytes) returns string:
+    return bytes.to_hex(view bytes_value)
+export function hex_decode(encoded: string) returns result[bytes, string]:
+    bytes decoded = encoding.__hex_decode(encoded) handle error:
+        return fail("encoding.hex_decode: {error}")
+    return ok(decoded)
+export function url_encode(value: string) returns string:
+    return encoding.__url_encode(value)
+export function url_decode(encoded: string) returns result[string, string]:
+    string decoded = encoding.__url_decode(encoded) handle error:
+        return fail("encoding.url_decode: {error}")
+    return ok(decoded)
+export function form_encode(value: string) returns string:
+    return encoding.__form_encode(value)
+export function form_decode(encoded: string) returns result[string, string]:
+    string decoded = encoding.__form_decode(encoded) handle error:
+        return fail("encoding.form_decode: {error}")
+    return ok(decoded)

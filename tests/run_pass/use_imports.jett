@@ -1,27 +1,23 @@
 namespace app
-
 # --- use statements inside functions ---
-
 function compute_sqrt() returns float64:
     use math
     return math.sqrt(16.0)
-
 verify compute_sqrt:
     assert compute_sqrt() == 4.0
-
 function encode_and_decode() returns string:
     use encoding
-    string encoded = encoding.hex_encode("hello")
-    return encoding.hex_decode(encoded)
-
+    bytes raw = bytes.from_string("hello")
+    string encoded = encoding.hex_encode(view raw)
+    bytes decoded = encoding.hex_decode(encoded) handle error:
+        return error
+    return bytes.to_string(view decoded) handle error:
+        default error
 verify encode_and_decode:
     assert encode_and_decode() == "hello"
-
 # --- dotted use paths ---
-
 function hash_test() returns int64:
     use crypto
     return string.length(crypto.md5("abc"))
-
 verify hash_test:
     assert hash_test() == 32

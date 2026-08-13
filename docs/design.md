@@ -1440,9 +1440,9 @@ gate, not public runtime dispatch or general overloading.
 > The proposed stable text-digest API, algorithm classifications, HMAC shape,
 > secret policy, and stdlib/runtime boundary are defined in the
 > [Crypto hashing and security contract](open_design/crypto_hashing_security_contract.md).
-> The proposed byte-native binary codecs, strict decoder failures, distinct URL
+> The byte-native binary codecs, strict decoder failures, distinct URL
 > and form-component policy, and stdlib/runtime boundary are defined in the
-> [Encoding representation and failure contract](open_design/encoding_representation_failure_contract.md).
+> [Encoding representation and failure contract](completed/encoding_representation_failure_contract.md).
 
 ```
 use crypto
@@ -1463,12 +1463,13 @@ compatibility and is not a secure digest. SHA-512 and key-first binary HMAC are
 planned additions, not currently supported declarations. None of these
 operations is a password-hashing API.
 
-The proposed encoding contract uses strict padded RFC 4648 Base64 and lowercase
+The encoding API uses strict padded RFC 4648 Base64 and lowercase
 hex over arbitrary `bytes`. Their decoders return `result[bytes, string]`.
 `url_encode` treats `+` literally and encodes spaces as `%20`; separate
 `form_encode` and `form_decode` operations own the form-style `+`/space rule.
-All public declarations ultimately live in compiler-shipped `.jett` source over
-private trusted byte kernels.
+All eight public declarations live in `stdlib/encoding.jett`; only private
+trusted byte kernels cross the runtime boundary, and project code cannot call
+them.
 
 **Validation — standard library refinement types:**
 
@@ -6779,8 +6780,8 @@ The standard library is intentionally massive and opinionated. The goal is to ma
   planned SHA-512/key-first HMAC; see the
   [crypto hashing and security contract](open_design/crypto_hashing_security_contract.md)
 - **encoding** — byte-native strict Base64/hex and separate URL/form component
-  codecs; see the proposed
-  [encoding representation and failure contract](open_design/encoding_representation_failure_contract.md)
+  codecs; see the implemented
+  [encoding representation and failure contract](completed/encoding_representation_failure_contract.md)
 - **validate** — standard refinement types for common formats: Email, URL, UUID, IPv4, IPv6. The type IS the validation — once assigned, the value is guaranteed valid.
 - **regex** — pattern matching and extraction (when string functions aren't enough)
 - **csv** — parsing and writing CSV data
