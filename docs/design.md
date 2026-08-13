@@ -6802,7 +6802,7 @@ The standard library is intentionally massive and opinionated. The goal is to ma
   codecs; see the implemented
   [encoding representation and failure contract](completed/encoding_representation_failure_contract.md)
 - **validate** — standard refinement types for common formats: Email, URL, UUID, IPv4, IPv6. The type IS the validation — once assigned, the value is guaranteed valid.
-- **regex** — pattern matching and extraction (when string functions aren't enough)
+- **regex** — pattern matching and extraction (when string functions aren't enough); the initial pattern, matching, extraction, Unicode, failure, resource, and source/runtime contract is [tracked by #140](https://github.com/vycdev/jett/issues/140)
 - **csv** — parsing and writing CSV data
 - **random** — capability-backed unbiased integer/unit-float/boolean sampling,
   random selection, and non-mutating shuffling; see the implemented

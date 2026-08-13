@@ -173,7 +173,7 @@
 | `net.http` | Not started (initial outbound client and `Network` capability contract [tracked by #101](https://github.com/vycdev/jett/issues/101)) |
 | `net.socket` | Not started (TCP-first transport contract proposed in [`docs/open_design/net_socket_transport_contract.md`](open_design/net_socket_transport_contract.md) for [#104](https://github.com/vycdev/jett/issues/104)) |
 | `csv` | Partial (interpreter builtins for `csv.parse`, `csv.stringify`, and `csv.parse_with_header`; quoted commas, quotes, and multiline fields are covered) |
-| `regex` | Not started |
+| `regex` | Not started (initial pattern, matching, extraction, Unicode, failure, resource, and source/runtime contract [tracked by #140](https://github.com/vycdev/jett/issues/140)) |
 | `log` | Not started |
 | `test.mock` | Not started |
 
