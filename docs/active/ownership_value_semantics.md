@@ -1,0 +1,47 @@
+# Ownership and Value Semantics
+
+Status: decisions in progress.
+
+This record contains only decisions explicitly accepted for initial Jett
+versions. Undecided value categories are not implied by these rules.
+
+## Confirmed Decisions
+
+### Numeric primitives and `bool`
+
+All signed and unsigned integer types, floating-point types, and `bool` are
+implicitly copyable. Using one in an assignment, argument, or return does not
+invalidate the original binding.
+
+### `nothing`
+
+`nothing` is implicitly copyable. It carries no data or ownership.
+
+### `string`
+
+`string` is immutable and implicitly copyable. Reassigning one binding never
+changes another binding copied from it:
+
+```jett
+string a = "hello"
+string b = a
+a = string.concat(a, "!")
+# a is "hello!" and b is "hello"
+```
+
+The runtime may share immutable string storage. Reference counting or another
+storage strategy is an implementation detail and must not change observable
+value semantics.
+
+### `bytes`
+
+`bytes` is move-only. Reading without transfer requires `view`; independent
+duplication requires explicit `clone`. This leaves room for efficient mutable
+byte buffers without implicit aliasing or hidden copy-on-write behavior.
+
+## Still Undecided
+
+- `list`, `map`, and `set`;
+- structs and enums, including whether copyability can be derived;
+- capability, actor, task, and other resource values;
+- exact `view`, mutation, closure-capture, and concurrency rules.

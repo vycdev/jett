@@ -17,6 +17,7 @@ canonical project overview:
 These notes describe live implementation and architecture staging:
 
 - [Frontend syntax tree staging](active/frontend_syntax_tree_staging.md)
+- [Ownership and value semantics](active/ownership_value_semantics.md)
 - [JsonValue to JsonTree transition](active/json_value_transition_plan.md)
 - [JSON stdlib extraction plan](active/stdlib_json_extraction_plan.md)
 - [Canonical reflection metadata plan](active/canonical_reflection_metadata_plan.md)
