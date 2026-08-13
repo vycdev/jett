@@ -39,9 +39,13 @@ value semantics.
 duplication requires explicit `clone`. This leaves room for efficient mutable
 byte buffers without implicit aliasing or hidden copy-on-write behavior.
 
+### Collections
+
+`list`, `map`, and `set` are move-only. Reading without transfer requires
+`view`; independent duplication requires explicit `clone`.
+
 ## Still Undecided
 
-- `list`, `map`, and `set`;
 - structs and enums, including whether copyability can be derived;
 - capability, actor, task, and other resource values;
 - exact `view`, mutation, closure-capture, and concurrency rules.
