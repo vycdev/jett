@@ -1290,6 +1290,20 @@ string extracted = string.between(html, "<title>", "</title>")
 
 No regex for simple operations. No manual index arithmetic. Each function does one thing, is named obviously, and handles edge cases internally.
 
+**Randomness — explicit capability:**
+
+```text
+function roll_die(view rng: Random) returns result[int64, string]:
+    return random.int64(view rng, 1, 7)
+```
+
+Every public `random.*` operation borrows `Random`; there is no ambient or
+source-constructible generator. Integer sampling uses half-open ranges,
+`choice` and `shuffle` borrow their input lists, and test runners can inject
+typed deterministic samples without exposing seeding to source code. This is a
+non-cryptographic API. The exact semantics and future-backend obligations are
+recorded in the [Random capability and entropy contract](completed/random_capability_entropy_contract.md).
+
 **Wall-clock time — explicit capability:**
 
 > The proposed time value and `Clock` capability contract is recorded in
@@ -2989,11 +3003,11 @@ secret[T] ──→ secret.compare() ALLOWED (constant-time comparison)
 
 ### Rule Set 16: Capability-Based I/O (Zero Hidden Side Effects)
 
-> The proposed random API requires every `random.*` operation to borrow an
+> The random API requires every `random.*` operation to borrow an
 > explicit `Random` capability. Production generator state is runtime-injected,
 > tests can inject scripted samples, and the API makes no cryptographic security
 > claim. See the
-> [Random capability and entropy contract](open_design/random_capability_entropy_contract.md).
+> [Random capability and entropy contract](completed/random_capability_entropy_contract.md).
 
 > The TCP-first `net.socket` resource and `Network.allow` policy is proposed in
 > [`docs/open_design/net_socket_transport_contract.md`](open_design/net_socket_transport_contract.md)
@@ -6791,8 +6805,8 @@ The standard library is intentionally massive and opinionated. The goal is to ma
 - **regex** — pattern matching and extraction (when string functions aren't enough)
 - **csv** — parsing and writing CSV data
 - **random** — capability-backed unbiased integer/unit-float/boolean sampling,
-  random selection, and non-mutating shuffling; see the proposed
-  [random capability and entropy contract](open_design/random_capability_entropy_contract.md)
+  random selection, and non-mutating shuffling; see the implemented
+  [random capability and entropy contract](completed/random_capability_entropy_contract.md)
 - **uuid** — UUID generation (generation and entropy contract [tracked by #73](https://github.com/vycdev/jett/issues/73))
 
 The complete public `string.*` API is ordinary Jett source in

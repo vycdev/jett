@@ -1,0 +1,6 @@
+namespace app
+function main(rng: Random) returns nothing:
+    bool value = random.bool(view rng)
+    if value:
+        return nothing
+    return nothing

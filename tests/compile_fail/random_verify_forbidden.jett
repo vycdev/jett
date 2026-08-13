@@ -1,0 +1,5 @@
+# ERROR: E0501
+# ERROR: E0303
+namespace app
+verify randomness_is_not_available:
+    random.bool()

@@ -62,7 +62,7 @@ Jett is experimental, but the compiler front half is substantial.
 - `jett build` currently validates and type-checks programs. Native LLVM code generation is planned but not implemented yet.
 - `jett run` executes programs through the tree-walking interpreter.
 - `jett test` runs `verify` and `property` blocks.
-- The standard library is partly Rust-backed and partly written in `.jett`; JSON now uses trusted `.jett` stdlib bodies behind compiler-owned policy gates.
+- The standard library is partly Rust-backed and partly written in `.jett`; JSON uses trusted `.jett` bodies behind compiler-owned policy gates, and the public random API is source-owned with explicit runtime-injected `Random` authority.
 - `json.parse[T]` is the lenient compatibility parser, while `json.parse_exact[T]` rejects unknown object fields for closed contracts such as config files, protocols, and tests.
 - Raw JSON uses `json.JsonTree`; bare `JsonValue` remains a legacy compatibility spelling during the transition.
 
@@ -157,6 +157,7 @@ editor/vscode/         VS Code extension
 - [Frontend syntax tree staging](docs/active/frontend_syntax_tree_staging.md)
 - [JsonValue to JsonTree transition](docs/active/json_value_transition_plan.md)
 - [JSON stdlib extraction plan](docs/active/stdlib_json_extraction_plan.md)
+- [Random capability and entropy contract](docs/completed/random_capability_entropy_contract.md)
 
 ## Development Notes
 

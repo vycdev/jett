@@ -41,7 +41,6 @@ enough pressure from real code:
 - [Print debug builtin policy](open_design/print_debug_builtin_policy.md)
 - [uint64 runtime value model](open_design/uint64_runtime_value_model.md)
 - [Initial `net.socket` transport contract](open_design/net_socket_transport_contract.md)
-- [Random capability and entropy contract](open_design/random_capability_entropy_contract.md)
 - [Time and Clock capability contract](open_design/time_clock_capability_contract.md)
 - [Environment and argument capability contract](open_design/environment_argv_capability_contract.md)
 
@@ -64,6 +63,7 @@ plans above for current work.
 - [JSON reflection plan](completed/json_reflection_plan.md)
 - [JsonTree decoder blocker](completed/json_tree_decoder_blocker.md)
 - [Math numeric overload boundary](completed/math_numeric_overload_boundary.md)
+- [Random capability and entropy contract](completed/random_capability_entropy_contract.md)
 - [Reflected construction staging](completed/reflected_construction_staging.md)
 - [Reflection predicate facts](completed/reflection_predicate_facts.md)
 - [Type kind design](completed/type_kind_design.md)

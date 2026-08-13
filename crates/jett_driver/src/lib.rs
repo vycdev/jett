@@ -1,4 +1,5 @@
 use jett_common::{FileId, STDLIB_FILE_ID_START, Span};
+pub use jett_comptime::RandomTestSample;
 use jett_comptime::value::Value;
 use jett_comptime::verify::{
     run_verify_blocks_detailed_with_metadata_and_expression_types,
@@ -308,10 +309,11 @@ pub struct SignatureQueryResult {
     pub file_path: String,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct RunOptions {
     capture_stdout: bool,
     emit_runtime_debug: bool,
+    random_test_samples: Option<Vec<RandomTestSample>>,
 }
 
 /// Run the full compilation pipeline on in-memory source text.
@@ -2507,6 +2509,7 @@ pub fn run_file(path: &Path) -> Result<(), String> {
         RunOptions {
             capture_stdout: false,
             emit_runtime_debug: true,
+            random_test_samples: None,
         },
     )
     .map(|_| ())
@@ -2520,6 +2523,7 @@ pub fn run_file_capture_stdout(path: &Path) -> Result<String, String> {
         RunOptions {
             capture_stdout: true,
             emit_runtime_debug: false,
+            random_test_samples: None,
         },
     )
     .map(|output| output.stdout)
@@ -2532,13 +2536,47 @@ pub fn run_file_capture_output(path: &Path) -> Result<RunOutput, String> {
         RunOptions {
             capture_stdout: true,
             emit_runtime_debug: false,
+            random_test_samples: None,
         },
     )
+}
+
+/// Run with a backend-neutral scripted Random provider for deterministic tests.
+pub fn run_file_with_random_test_samples(
+    path: &Path,
+    samples: Vec<RandomTestSample>,
+) -> Result<(), String> {
+    run_file_with_options(
+        path,
+        RunOptions {
+            capture_stdout: false,
+            emit_runtime_debug: false,
+            random_test_samples: Some(samples),
+        },
+    )
+    .map(|_| ())
+}
+
+/// Run with scripted Random samples and capture stdout for deterministic tests.
+pub fn run_file_capture_stdout_with_random_test_samples(
+    path: &Path,
+    samples: Vec<RandomTestSample>,
+) -> Result<String, String> {
+    run_file_with_options(
+        path,
+        RunOptions {
+            capture_stdout: true,
+            emit_runtime_debug: false,
+            random_test_samples: Some(samples),
+        },
+    )
+    .map(|output| output.stdout)
 }
 
 fn run_file_with_options(path: &Path, options: RunOptions) -> Result<RunOutput, String> {
     let thread_path = path.to_path_buf();
     let fallback_path = thread_path.clone();
+    let fallback_options = options.clone();
     match thread::Builder::new()
         .name("jett-runtime".to_string())
         .stack_size(RUNTIME_STACK_SIZE)
@@ -2548,7 +2586,7 @@ fn run_file_with_options(path: &Path, options: RunOptions) -> Result<RunOutput, 
             Ok(result) => result,
             Err(payload) => std::panic::resume_unwind(payload),
         },
-        Err(_) => run_file_inner(&fallback_path, options),
+        Err(_) => run_file_inner(&fallback_path, fallback_options),
     }
 }
 
@@ -2587,6 +2625,17 @@ fn run_file_inner(path: &Path, options: RunOptions) -> Result<RunOutput, String>
     } else {
         Interpreter::new()
     };
+    if main_func
+        .params
+        .iter()
+        .any(|param| type_expr_name(&param.ty) == "Random")
+    {
+        if let Some(samples) = options.random_test_samples.clone() {
+            interp.set_random_test_samples(samples);
+        } else {
+            interp.initialize_random_provider()?;
+        }
+    }
     if let Some(metadata) = build.reflection_metadata.clone() {
         interp.set_reflection_metadata(metadata);
     }
@@ -4367,6 +4416,37 @@ mod tests {
                     .file_path
                     .replace('\\', "/")
                     .ends_with("/stdlib/set.jett"),
+                "{name} should resolve to compiler-shipped source, got {}",
+                result.file_path
+            );
+        }
+    }
+
+    #[test]
+    fn query_signature_reports_source_owned_random_surface() {
+        let expected = [
+            ("int64", 3, "result[int64, string]", false),
+            ("float64", 1, "float64", false),
+            ("bool", 1, "bool", false),
+            ("choice", 2, "optional[T]", true),
+            ("shuffle", 2, "list[T]", true),
+        ];
+        for (function, param_count, return_type, generic) in expected {
+            let name = format!("random.{function}");
+            let result = query_signature(Path::new("."), &name)
+                .expect("random signature query should succeed")
+                .unwrap_or_else(|| panic!("{name} signature should be found"));
+            assert_eq!(result.params.len(), param_count);
+            assert_eq!(result.params[0].name, "rng");
+            assert_eq!(result.params[0].type_name, "Random");
+            assert!(result.params[0].view);
+            assert_eq!(result.type_params, if generic { vec!["T"] } else { vec![] });
+            assert_eq!(result.return_type, return_type);
+            assert!(
+                result
+                    .file_path
+                    .replace('\\', "/")
+                    .ends_with("/stdlib/random.jett"),
                 "{name} should resolve to compiler-shipped source, got {}",
                 result.file_path
             );

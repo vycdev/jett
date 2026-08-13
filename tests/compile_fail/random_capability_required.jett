@@ -1,0 +1,5 @@
+# ERROR: E0500
+# ERROR: E0303
+namespace app
+function ambient_randomness_is_forbidden() returns bool:
+    return random.bool()

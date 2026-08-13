@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
-use rand::Rng;
+use rand::{RngCore, SeedableRng, rngs::StdRng};
 use subtle::ConstantTimeEq;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -272,6 +272,31 @@ pub struct Interpreter {
     emit_runtime_debug: bool,
     /// Optional captured stdout for driver tests.
     stdout_capture: Option<String>,
+    /// Per-runtime random provider. Compile-time interpreters leave this absent.
+    random_provider: Option<RandomProvider>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RandomTestSample {
+    Bounded(u64),
+    Unit53(u64),
+    Boolean(bool),
+}
+
+enum RandomProvider {
+    Production(StdRng),
+    Scripted(std::collections::VecDeque<RandomTestSample>),
+}
+
+fn unbiased_bounded_offset(width: u64, mut next_word: impl FnMut() -> u64) -> u64 {
+    debug_assert!(width > 0);
+    let rejection_threshold = width.wrapping_neg() % width;
+    loop {
+        let word = next_word();
+        if word >= rejection_threshold {
+            return word % width;
+        }
+    }
 }
 
 /// Runtime state of a spawned actor instance.
@@ -315,6 +340,7 @@ impl Interpreter {
             debug_output: Vec::new(),
             emit_runtime_debug: false,
             stdout_capture: None,
+            random_provider: None,
         }
     }
 
@@ -323,6 +349,28 @@ impl Interpreter {
         let mut interp = Self::new();
         interp.emit_runtime_debug = true;
         interp
+    }
+
+    /// Initialize one production generator for this runtime context.
+    pub fn initialize_random_provider(&mut self) -> Result<(), String> {
+        let mut seed = <StdRng as SeedableRng>::Seed::default();
+        rand::rngs::OsRng
+            .try_fill_bytes(seed.as_mut())
+            .map_err(|_| "Random: entropy unavailable".to_string())?;
+        self.random_provider = Some(RandomProvider::Production(StdRng::from_seed(seed)));
+        Ok(())
+    }
+
+    /// Install deterministic normalized samples for runtime conformance tests.
+    pub fn set_random_test_samples(&mut self, samples: Vec<RandomTestSample>) {
+        self.random_provider = Some(RandomProvider::Scripted(samples.into()));
+    }
+
+    pub fn random_test_samples_remaining(&self) -> Option<usize> {
+        match &self.random_provider {
+            Some(RandomProvider::Scripted(samples)) => Some(samples.len()),
+            _ => None,
+        }
     }
 
     /// Attach checked reflection metadata produced by the typechecker.
@@ -7669,6 +7717,60 @@ impl Interpreter {
     //   exists these should migrate to actual Jett source files.
     // =========================================================================
 
+    fn random_bounded_offset(&mut self, width: u64) -> Result<u64, String> {
+        debug_assert!(width > 0);
+        let Some(provider) = self.random_provider.as_mut() else {
+            return Err("Random: entropy unavailable".to_string());
+        };
+        match provider {
+            RandomProvider::Production(rng) => {
+                Ok(unbiased_bounded_offset(width, || rng.next_u64()))
+            }
+            RandomProvider::Scripted(samples) => match samples.front().copied() {
+                None => Err("Random: test provider exhausted".to_string()),
+                Some(RandomTestSample::Bounded(offset)) if offset < width => {
+                    samples.pop_front();
+                    Ok(offset)
+                }
+                Some(_) => Err("Random: invalid test sample".to_string()),
+            },
+        }
+    }
+
+    fn random_unit53(&mut self) -> Result<u64, String> {
+        let Some(provider) = self.random_provider.as_mut() else {
+            return Err("Random: entropy unavailable".to_string());
+        };
+        match provider {
+            RandomProvider::Production(rng) => Ok(rng.next_u64() >> 11),
+            RandomProvider::Scripted(samples) => match samples.front().copied() {
+                None => Err("Random: test provider exhausted".to_string()),
+                Some(RandomTestSample::Unit53(bits)) if bits < (1_u64 << 53) => {
+                    samples.pop_front();
+                    Ok(bits)
+                }
+                Some(_) => Err("Random: invalid test sample".to_string()),
+            },
+        }
+    }
+
+    fn random_boolean(&mut self) -> Result<bool, String> {
+        let Some(provider) = self.random_provider.as_mut() else {
+            return Err("Random: entropy unavailable".to_string());
+        };
+        match provider {
+            RandomProvider::Production(rng) => Ok(rng.next_u32() & 1 == 1),
+            RandomProvider::Scripted(samples) => match samples.front().copied() {
+                None => Err("Random: test provider exhausted".to_string()),
+                Some(RandomTestSample::Boolean(value)) => {
+                    samples.pop_front();
+                    Ok(value)
+                }
+                Some(_) => Err("Random: invalid test sample".to_string()),
+            },
+        }
+    }
+
     fn call_builtin(&mut self, name: &str, args: &[Value]) -> Option<Result<Value, String>> {
         if let Some(result) = self.call_bitfield_builtin(name, args) {
             return Some(result);
@@ -7718,59 +7820,48 @@ impl Interpreter {
             }
 
             // -- Random operations (stdlib/random.jett) -----------------------
-            "random.int64" => {
-                require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
-                    (Value::Int64(lo), Value::Int64(hi)) => {
-                        if lo >= hi {
-                            Some(Err(format!(
-                                "random.int64: lo ({lo}) must be less than hi ({hi})"
-                            )))
-                        } else {
-                            let n = rand::thread_rng().gen_range(*lo..*hi);
-                            Some(Ok(Value::Int64(n)))
+            "random.__bounded" if self.current_function_trusted_stdlib => {
+                require_args!(name, 3, args);
+                match (&args[0], &args[1], &args[2]) {
+                    (Value::Nothing, Value::Int64(lower), Value::Int64(upper)) => {
+                        if lower >= upper {
+                            return Some(Err(
+                                "random.__bounded received invalid bounds".to_string()
+                            ));
                         }
+                        let width = (*upper as i128 - *lower as i128) as u64;
+                        let offset = match self.random_bounded_offset(width) {
+                            Ok(offset) => offset,
+                            Err(error) => return Some(Err(error)),
+                        };
+                        let sampled = (*lower as i128 + offset as i128) as i64;
+                        Some(Ok(Value::Int64(sampled)))
                     }
-                    _ => Some(Err(format!("{name} expects two int64 arguments"))),
+                    _ => Some(Err(format!(
+                        "{name} expects Random and two int64 arguments"
+                    ))),
                 }
             }
 
-            "random.float64" => {
-                require_args!(name, 0, args);
-                let f: f64 = rand::thread_rng().gen_range(0.0f64..1.0f64);
-                Some(Ok(Value::Float64(f)))
-            }
-
-            "random.bool" => {
-                require_args!(name, 0, args);
-                Some(Ok(Value::Bool(rand::thread_rng().gen_bool(0.5))))
-            }
-
-            "random.choice" => {
+            "random.__unit_float64" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
-                    Value::List(items) => {
-                        if items.is_empty() {
-                            Some(Ok(Value::OptionalNone))
-                        } else {
-                            let idx = rand::thread_rng().gen_range(0..items.len());
-                            Some(Ok(Value::OptionalSome(Box::new(items[idx].clone()))))
-                        }
-                    }
-                    _ => Some(Err(format!("{name} expects a list argument"))),
+                if !matches!(args[0], Value::Nothing) {
+                    return Some(Err(format!("{name} expects Random")));
+                }
+                match self.random_unit53() {
+                    Ok(bits) => Some(Ok(Value::Float64(bits as f64 / 9_007_199_254_740_992.0))),
+                    Err(error) => Some(Err(error)),
                 }
             }
 
-            "random.shuffle" => {
+            "random.__bool" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
-                    Value::List(items) => {
-                        use rand::seq::SliceRandom;
-                        let mut shuffled = items.clone();
-                        shuffled.shuffle(&mut rand::thread_rng());
-                        Some(Ok(Value::List(shuffled)))
-                    }
-                    _ => Some(Err(format!("{name} expects a list argument"))),
+                if !matches!(args[0], Value::Nothing) {
+                    return Some(Err(format!("{name} expects Random")));
+                }
+                match self.random_boolean() {
+                    Ok(value) => Some(Ok(Value::Bool(value))),
+                    Err(error) => Some(Err(error)),
                 }
             }
 
@@ -16335,6 +16426,130 @@ mod builtin_tests {
 
         assert_eq!(interp.take_stdout_output(), "hello score 7true\n");
         assert_eq!(interp.take_stdout_output(), "");
+    }
+
+    #[test]
+    fn bounded_random_sampling_retries_rejected_words() {
+        let mut words = [0, 1].into_iter();
+        let mut consumed = 0;
+        let offset = unbiased_bounded_offset(u64::MAX, || {
+            consumed += 1;
+            words.next().expect("controlled words should be sufficient")
+        });
+        assert_eq!(offset, 1);
+        assert_eq!(consumed, 2);
+    }
+
+    #[test]
+    fn scripted_random_kernels_preserve_edges_and_sample_types() {
+        let mut interp = Interpreter::new();
+        interp.current_function_trusted_stdlib = true;
+        interp.set_random_test_samples(vec![
+            RandomTestSample::Bounded(0),
+            RandomTestSample::Bounded(u64::MAX - 1),
+            RandomTestSample::Unit53(0),
+            RandomTestSample::Unit53((1_u64 << 53) - 1),
+            RandomTestSample::Boolean(false),
+            RandomTestSample::Boolean(true),
+        ]);
+
+        let widest = [
+            Value::Nothing,
+            Value::Int64(i64::MIN),
+            Value::Int64(i64::MAX),
+        ];
+        assert_eq!(
+            interp
+                .call_builtin("random.__bounded", &widest)
+                .unwrap()
+                .unwrap(),
+            Value::Int64(i64::MIN)
+        );
+        assert_eq!(
+            interp
+                .call_builtin("random.__bounded", &widest)
+                .unwrap()
+                .unwrap(),
+            Value::Int64(i64::MAX - 1)
+        );
+        assert_eq!(
+            interp
+                .call_builtin("random.__unit_float64", &[Value::Nothing])
+                .unwrap()
+                .unwrap(),
+            Value::Float64(0.0)
+        );
+        assert_eq!(
+            interp
+                .call_builtin("random.__unit_float64", &[Value::Nothing])
+                .unwrap()
+                .unwrap(),
+            Value::Float64(((1_u64 << 53) - 1) as f64 / (1_u64 << 53) as f64)
+        );
+        for expected in [false, true] {
+            assert_eq!(
+                interp
+                    .call_builtin("random.__bool", &[Value::Nothing])
+                    .unwrap()
+                    .unwrap(),
+                Value::Bool(expected)
+            );
+        }
+        assert_eq!(interp.random_test_samples_remaining(), Some(0));
+    }
+
+    #[test]
+    fn invalid_scripted_random_sample_does_not_advance() {
+        let mut interp = Interpreter::new();
+        interp.current_function_trusted_stdlib = true;
+        interp.set_random_test_samples(vec![RandomTestSample::Bounded(4)]);
+        let result = interp
+            .call_builtin(
+                "random.__bounded",
+                &[Value::Nothing, Value::Int64(0), Value::Int64(4)],
+            )
+            .unwrap();
+        assert_eq!(result, Err("Random: invalid test sample".to_string()));
+        assert_eq!(interp.random_test_samples_remaining(), Some(1));
+    }
+
+    #[test]
+    fn random_state_is_isolated_between_interpreters() {
+        let mut first = Interpreter::new();
+        let mut second = Interpreter::new();
+        first.current_function_trusted_stdlib = true;
+        second.current_function_trusted_stdlib = true;
+        first.set_random_test_samples(vec![RandomTestSample::Boolean(true)]);
+
+        assert_eq!(
+            first
+                .call_builtin("random.__bool", &[Value::Nothing])
+                .unwrap()
+                .unwrap(),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            second
+                .call_builtin("random.__bool", &[Value::Nothing])
+                .unwrap(),
+            Err("Random: entropy unavailable".to_string())
+        );
+    }
+
+    #[test]
+    fn public_random_dispatch_is_absent_and_private_kernels_require_trust() {
+        let mut interp = Interpreter::new();
+        interp.set_random_test_samples(vec![RandomTestSample::Boolean(true)]);
+        assert!(
+            interp
+                .call_builtin("random.__bool", &[Value::Nothing])
+                .is_none()
+        );
+        assert!(
+            interp
+                .call_builtin("random.bool", &[Value::Nothing])
+                .is_none()
+        );
     }
 
     #[test]

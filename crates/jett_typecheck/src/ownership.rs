@@ -682,12 +682,7 @@ impl<'a> OwnershipChecker<'a> {
 
     fn first_argument_is_implicit_view(&self, callee: &Expr) -> bool {
         // Source-owned stdlib views are collected from their declarations.
-        let collection_view_builtins: &[&str] = &[
-            "random.choice",
-            "random.shuffle",
-            "math.average",
-            "math.median",
-        ];
+        let collection_view_builtins: &[&str] = &["math.average", "math.median"];
         Self::dotted_name_str(callee)
             .as_deref()
             .map(|n| {

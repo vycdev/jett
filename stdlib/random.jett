@@ -1,0 +1,23 @@
+namespace random
+export function int64(view rng: Random, lower: int64, upper: int64) returns result[int64, string]:
+    if lower >= upper:
+        return fail("random.int64: lower bound must be less than upper bound")
+    return ok(random.__bounded(view rng, lower, upper))
+export function float64(view rng: Random) returns float64:
+    return random.__unit_float64(view rng)
+export function bool(view rng: Random) returns bool:
+    return random.__bool(view rng)
+export function choice[T](view rng: Random, view items: list[T]) returns optional[T]:
+    int64 item_count = list.length[T](view items)
+    if item_count == 0:
+        return none
+    int64 index = random.__bounded(view rng, 0, item_count)
+    return list.get[T](view items, index)
+export function shuffle[T](view rng: Random, view items: list[T]) returns list[T]:
+    mutable list[T] output = clone items
+    mutable int64 remaining = list.length[T](view output)
+    while remaining > 1:
+        int64 swap_index = random.__bounded(view rng, 0, remaining)
+        output = list.swap[T](output, remaining - 1, swap_index)
+        remaining = remaining - 1
+    return output

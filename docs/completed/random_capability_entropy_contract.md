@@ -1,11 +1,11 @@
 # Random Capability and Entropy Contract
 
-Status: proposed decision for [#67](https://github.com/vycdev/jett/issues/67).
-Implementation and stdlib extraction remain pending.
+Status: accepted and implemented for the interpreter-backed compiler.
+Future backend and concurrent-runtime obligations remain as handoff work.
 
 ## Context
 
-Jett currently exposes five hardcoded `random.*` operations without a visible
+Jett previously exposed five hardcoded `random.*` operations without a visible
 `Random` capability:
 
 ```text
@@ -16,11 +16,10 @@ random.choice[T](list[T]) returns optional[T]
 random.shuffle[T](list[T]) returns list[T]
 ```
 
-The checker therefore treats calls as pure, even though the interpreter draws
-from Rust `rand::thread_rng()` on every call. There is no injected generator,
-seed/state model, deterministic test path, or documented security guarantee.
-This conflicts with Rule Set 16: a function with no capability parameter must
-not use randomness.
+That legacy surface treated calls as pure and drew from an ambient host RNG.
+The implemented surface replaces it with an injected `Random` capability,
+source-owned public declarations, deterministic test-provider injection, and
+the non-cryptographic contract below.
 
 Current runtime details are useful compatibility input, but they are not yet a
 stable API. `random.int64` samples a half-open range and aborts when its lower
@@ -34,7 +33,7 @@ source declarations from private generator kernels. It does not implement a new
 RNG, expose probability distributions, redesign property testing, or select a
 native runtime ABI.
 
-## Proposed Public Surface
+## Public Surface
 
 The five existing qualified names remain canonical. In signature notation (not
 complete Jett declarations or bodies), every operation visibly borrows the
@@ -65,8 +64,8 @@ Ordinary functions receive only `view Random`. Sampling mutates opaque generator
 state inside the capability, but does not consume or replace the source-level
 capability value. A caller may reuse the capability after any operation.
 
-The old capability-free signatures are transitional technical debt and are
-removed when this surface lands. They cannot remain as overloads or wrappers:
+The old capability-free signatures were removed with this surface. They cannot
+remain as overloads or wrappers:
 zero-argument ambient randomness would preserve the hidden effect this contract
 is intended to eliminate.
 
@@ -324,10 +323,10 @@ wide arithmetic and bit conversion. `choice`, `shuffle`, empty/trivial input
 handling, public errors, and other compositional policy belong in real `.jett`
 bodies.
 
-Trusted hook dispatch must depend on compiler-shipped origin, not on matching a
+Trusted hook dispatch depends on compiler-shipped origin, not only on matching a
 qualified name. Project code cannot claim `namespace random`, replace public
-wrappers, or spoof private kernels. The current hardcoded public signatures and
-`rand::thread_rng()` interpreter arms are transitional technical debt.
+wrappers, or spoof private kernels. Hardcoded public signatures and ambient
+`rand::thread_rng()` interpreter arms have been removed.
 
 ## Future Backend Handoff
 
@@ -351,28 +350,29 @@ Future lowering follows the HIR and MIR boundaries tracked by
 [#22](https://github.com/vycdev/jett/issues/22), but those phases do not block
 the interpreter-facing capability and injection work.
 
-## Implementation Slices
+## Implementation Status
 
-1. **Pin current value semantics**
+1. **Interpreter surface — complete**
    - add focused tests for half-open integer ranges, invalid bounds, float
      interval, both booleans, empty/non-empty choice, and shuffle permutation
      preservation;
    - add ownership tests that reuse lists after `choice` and `shuffle`.
-2. **Add capability enforcement and deterministic injection**
+2. **Capability enforcement and deterministic injection — complete**
    - add the explicit `view Random` signatures and runtime-provided `main`
      capability;
    - classify random calls as effects and reject them from pure, verify, and
      comptime contexts;
    - inject production and scripted providers into each runtime context;
-   - add cancellation and provider-failure tests, including cancellation
-     between shuffle draws and the resulting provider position.
-3. **Extract the public declarations**
+   - provider-failure tests are complete; cancellation checkpoints remain part
+     of the concurrent-runtime handoff because the sequential interpreter has
+     no externally cancellable primitive draw.
+3. **Public declaration extraction — complete**
    - add compiler-shipped `stdlib/random.jett` wrappers;
    - make invalid integer ranges an explicit stable `result` failure;
    - implement choice and shuffle compositionally over private sampling kernels;
    - remove hardcoded public signature knowledge and ambient `thread_rng()`
      dispatch.
-4. **Preserve the contract in later backends**
+4. **Later backend and concurrent runtime handoff — pending**
    - carry the capability and operation through HIR/MIR;
    - share deterministic conformance scenarios across interpreter, bytecode, and
      native runners;

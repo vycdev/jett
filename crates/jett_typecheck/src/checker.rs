@@ -2498,6 +2498,9 @@ impl<'a> TypeChecker<'a> {
                 | "encoding.__form_decode"
                 | "crypto.__sha256"
                 | "crypto.__md5"
+                | "random.__bounded"
+                | "random.__unit_float64"
+                | "random.__bool"
         );
         if private_stdlib_kernel && !span.file.is_stdlib() {
             self.sink
@@ -3435,30 +3438,32 @@ impl<'a> TypeChecker<'a> {
                 let list_str = self.interner.intern(Type::List(TypeInterner::STRING));
                 Some((vec![TypeInterner::STRING], list_str))
             }
-            // random builtins
-            "random.int64" => self.no_type_args_signature(
+            // Private random kernels; public signatures live in stdlib/random.jett.
+            "random.__bounded" => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
-                vec![TypeInterner::INT64, TypeInterner::INT64],
+                vec![
+                    TypeInterner::ERROR,
+                    TypeInterner::INT64,
+                    TypeInterner::INT64,
+                ],
                 TypeInterner::INT64,
             ),
-            "random.float64" => {
-                self.no_type_args_signature(&name, type_args, span, vec![], TypeInterner::FLOAT64)
-            }
-            "random.bool" => {
-                self.no_type_args_signature(&name, type_args, span, vec![], TypeInterner::BOOL)
-            }
-            "random.choice" => {
-                let inner = self.optional_type_arg(&name, type_args, span);
-                let list_ty = self.interner.intern(Type::List(inner));
-                Some((vec![list_ty], self.interner.intern(Type::Optional(inner))))
-            }
-            "random.shuffle" => {
-                let inner = self.optional_type_arg(&name, type_args, span);
-                let list_ty = self.interner.intern(Type::List(inner));
-                Some((vec![list_ty], list_ty))
-            }
+            "random.__unit_float64" => self.no_type_args_signature(
+                &name,
+                type_args,
+                span,
+                vec![TypeInterner::ERROR],
+                TypeInterner::FLOAT64,
+            ),
+            "random.__bool" => self.no_type_args_signature(
+                &name,
+                type_args,
+                span,
+                vec![TypeInterner::ERROR],
+                TypeInterner::BOOL,
+            ),
             "string.__repeat" => self.no_type_args_signature(
                 &name,
                 type_args,
@@ -8978,6 +8983,19 @@ impl<'a> TypeChecker<'a> {
             .unwrap_or(false);
         let builtin_signature = self.builtin_signature(callee, type_args, span);
 
+        if let Some(name) = callee_name.as_deref()
+            && capability::is_capability_type(name)
+        {
+            self.sink.emit(errors::not_callable(
+                &format!("capability type `{name}`"),
+                span,
+            ));
+            for arg in args {
+                self.check_expr(&arg.value);
+            }
+            return TypeInterner::ERROR;
+        }
+
         // -- Capability / purity check --
         // Extract the callee name so we can look it up in the purity map.
         if let Some(callee_name) = callee_name.as_deref() {
@@ -9042,6 +9060,19 @@ impl<'a> TypeChecker<'a> {
                         .iter()
                         .map(|a| self.resolve_type_expr(a))
                         .collect();
+
+                    if matches!(function_name, "random.choice" | "random.shuffle")
+                        && type_args.iter().any(capability::type_expr_is_capability)
+                    {
+                        self.sink.emit(errors::random_capability_element(
+                            function_name,
+                            type_args[0].span(),
+                        ));
+                        for arg in args {
+                            self.check_expr(&arg.value);
+                        }
+                        return TypeInterner::ERROR;
+                    }
 
                     if template.type_params.len() != concrete_args.len() {
                         self.sink.emit(errors::unknown_type(
@@ -9225,7 +9256,8 @@ impl<'a> TypeChecker<'a> {
                     || function_name.starts_with("math.")
                     || function_name.starts_with("bytes.")
                     || function_name.starts_with("encoding.")
-                    || function_name.starts_with("crypto."))
+                    || function_name.starts_with("crypto.")
+                    || function_name.starts_with("random."))
             {
                 self.sink.emit(errors::unknown_type(
                     &format!("function `{function_name}`"),
@@ -9417,6 +9449,17 @@ impl<'a> TypeChecker<'a> {
             self.emit_cannot_infer_generic(function_name, &template, span);
             return TypeInterner::ERROR;
         };
+
+        if matches!(function_name, "random.choice" | "random.shuffle")
+            && inferred
+                .concrete_args
+                .iter()
+                .any(|&ty| ty == TypeInterner::ERROR)
+        {
+            self.sink
+                .emit(errors::random_capability_element(function_name, span));
+            return TypeInterner::ERROR;
+        }
 
         let mut arguments_match = true;
         for (arg, &expected) in args.iter().zip(&inferred.param_types) {

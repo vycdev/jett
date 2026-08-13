@@ -420,7 +420,7 @@ Walk all type declarations and build the type registry:
 - **Built-in generic types:** `list[T]`, `map[K, V]`, `set[T]`, `optional[T]`, `result[T, E]`.
 - **User-defined types:** structs, enums, machines, actors, bitfields, interfaces, type aliases (including refinement types).
 - **Function types:** `function(T) returns U`.
-- **Capability types:** `Filesystem`, `Network`, `Stdout`, `Stderr`, `Stdin`, `Clock`, `Random`, `Process`, `Environment`, `Foreign`. Random sampling uses the proposed explicit `view Random` API, injected per-runtime generator state, and non-cryptographic contract defined in the [Random capability and entropy contract](open_design/random_capability_entropy_contract.md). The proposed [`Environment` contract](open_design/environment_argv_capability_contract.md) replaces ambient `os.env`/`os.args` with capability-backed reads from one immutable launch snapshot. `Foreign` guards the generated native C boundary specified by the [C FFI contract](open_design/c_ffi_binding_contract.md).
+- **Capability types:** `Filesystem`, `Network`, `Stdout`, `Stderr`, `Stdin`, `Clock`, `Random`, `Process`, `Environment`, `Foreign`. Random sampling uses the explicit `view Random` API, injected per-runtime generator state, and non-cryptographic contract defined in the [Random capability and entropy contract](completed/random_capability_entropy_contract.md). The proposed [`Environment` contract](open_design/environment_argv_capability_contract.md) replaces ambient `os.env`/`os.args` with capability-backed reads from one immutable launch snapshot. `Foreign` guards the generated native C boundary specified by the [C FFI contract](open_design/c_ffi_binding_contract.md).
 - **Secret wrapper:** `secret[T]`.
 - **State-qualified types:** `Machine at state`.
 - **Task-control failures:** `CancelledError` terminates a cancelled pending task
@@ -538,13 +538,13 @@ Track which capabilities flow through the program:
 - **Only `main()` owns capabilities.** Every other function must borrow them via `view`. A non-`main` function declaring an owned (non-view) capability parameter is a compile error.
 - Actors receive capabilities at spawn time via `clone` (since passing would consume the caller's capability).
 - **Verify blocks** can only call pure functions (no capabilities).
-- **Target random sampling is a capability operation.** The proposed public
-  `random.*` functions borrow `view Random`; capability-free compatibility
-  signatures are to be removed.
+- **Random sampling is a capability operation.** The public `random.*`
+  functions borrow `view Random`; there are no capability-free compatibility
+  signatures.
   The runner injects generator state so production uses platform entropy while
   tests use scripted deterministic samples. Verify and comptime evaluation
   cannot sample randomness. See the
-  [Random capability and entropy contract](open_design/random_capability_entropy_contract.md).
+  [Random capability and entropy contract](completed/random_capability_entropy_contract.md).
 - **Clock reads are capability operations.** The canonical operation is
   `Clock.now(view clock) -> time.Timestamp`; zero-argument `time.now_ms` and
   `time.now_s` are transitional ambient effects to remove. Verify and comptime
@@ -1435,13 +1435,12 @@ input, and only private trusted kernels remain runtime-backed. Strict
 acceptance, stable errors, and future-backend obligations are defined by the
 [Encoding representation and failure contract](completed/encoding_representation_failure_contract.md).
 
-Random has not reached that end state. Its five public signatures and interpreter
-dispatch are hardcoded and currently read an ambient host RNG. The target places
-capability-visible public declarations, range validation, choice, and shuffle in
-trusted compiler-shipped `.jett` source. Only private unbiased generator kernels
-remain runtime-backed, with deterministic injection and backend obligations
-defined by the
-[Random capability and entropy contract](open_design/random_capability_entropy_contract.md).
+Random has reached that boundary for the interpreter-backed compiler. Its five
+public declarations, range validation, choice, and shuffle live in trusted
+`stdlib/random.jett`; only opaque generator access and primitive sampling remain
+in private trusted kernels. The runner injects isolated production state or a
+typed deterministic test provider. Later backends and concurrent cancellation
+must preserve the [Random capability and entropy contract](completed/random_capability_entropy_contract.md).
 
 The complete public `math.*` API is defined in `stdlib/math.jett`. Compositional
 helpers have Jett bodies, including the consuming `math.sum(list[int64])`, which
@@ -1462,7 +1461,7 @@ calls. These exist as `.jett` signature stubs in `stdlib/` with bodies that call
 split: public `random.*` wrappers visibly borrow `Random`, while opaque generator
 state and unbiased primitive sampling stay behind trusted kernels. The exact
 capability, deterministic-test, distribution, and security rules are defined in
-the [Random capability and entropy contract](open_design/random_capability_entropy_contract.md).
+the [Random capability and entropy contract](completed/random_capability_entropy_contract.md).
 For time, only injected wall-clock sampling is a
 runtime kernel; public timestamp/duration conversions, comparisons, and checked
 arithmetic belong in compiler-shipped `.jett` source. The exact value,
@@ -1945,9 +1944,9 @@ Core stdlib (string, list, math, json) is implemented in Phase D. This phase com
   implemented byte-native codecs and strict failure policy are defined by the
   [encoding contract](completed/encoding_representation_failure_contract.md))
 - **OS:** `Environment` for read-only launch environment variables and user arguments (the proposed capability, snapshot, Unicode-failure, compatibility, and source/runtime boundary is defined in the [Environment and argument contract](open_design/environment_argv_capability_contract.md)); process management remains a separate `Process` capability concern
-- **Utilities:** `regex`, `random` (the proposed explicit capability, entropy,
+- **Utilities:** `regex`, `random` (the explicit capability, entropy,
   deterministic injection, and source/runtime policy is defined in the
-  [random contract](open_design/random_capability_entropy_contract.md)), `uuid`
+  [random contract](completed/random_capability_entropy_contract.md)), `uuid`
   (generation and entropy contract [tracked by #73](https://github.com/vycdev/jett/issues/73)), `log`, `format`
 - **Testing:** `test.mock` (mock capabilities for property-based testing)
 

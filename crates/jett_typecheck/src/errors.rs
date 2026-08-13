@@ -716,6 +716,15 @@ pub fn reflection_metadata_constructor(type_name: &str, span: Span) -> Diagnosti
     )
 }
 
+/// E0355: Random collection operations cannot clone capability authority.
+pub fn random_capability_element(operation: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        355,
+        format!("`{operation}` does not accept capability elements"),
+        span,
+    )
+}
+
 // Diagnostic codes E0800-E0899 are reserved for function complexity limits.
 
 /// E0800: Function body exceeds the statement count limit.

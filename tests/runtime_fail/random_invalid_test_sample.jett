@@ -1,0 +1,6 @@
+namespace app
+function main(rng: Random) returns nothing:
+    float64 value = random.float64(view rng)
+    if value >= 0.0:
+        return nothing
+    return nothing

@@ -1,0 +1,15 @@
+namespace app
+function sample(view rng: Random) returns result[int64, string]:
+    return random.int64(view rng, -10, 10)
+function main(rng: Random) returns nothing:
+    int64 integer = sample(view rng) handle error:
+        return nothing
+    float64 unit = random.float64(view rng)
+    bool coin = random.bool(view rng)
+    if integer < -10 or integer >= 10:
+        return nothing
+    if unit < 0.0 or unit >= 1.0:
+        return nothing
+    if coin:
+        return nothing
+    return nothing

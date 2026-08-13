@@ -4,8 +4,9 @@ use std::path::{Path, PathBuf};
 use jett_common::FileId;
 use jett_diagnostics::Severity;
 use jett_driver::{
-    build_file, build_source, completions, completions_at, hover_type, run_file,
-    run_file_capture_output, run_file_capture_stdout, test_file,
+    RandomTestSample, build_file, build_source, completions, completions_at, hover_type, run_file,
+    run_file_capture_output, run_file_capture_stdout,
+    run_file_capture_stdout_with_random_test_samples, run_file_with_random_test_samples, test_file,
 };
 use jett_parser::ast::Item;
 use jett_parser::parse;
@@ -308,6 +309,7 @@ run_pass_fixture!(run_pass_fibonacci, "fibonacci.jett");
 run_pass_fixture!(run_pass_hello_print, "hello_print.jett");
 run_pass_fixture!(run_pass_string_interpolation, "string_interpolation.jett");
 run_pass_fixture!(run_pass_stdlib_loading, "stdlib_loading.jett");
+run_pass_fixture!(run_pass_random_production, "random_production.jett");
 run_pass_fixture!(run_pass_verify_test, "verify_test.jett");
 run_pass_fixture!(run_pass_multi_verify, "multi_verify.jett");
 run_pass_fixture!(
@@ -1224,6 +1226,37 @@ compile_fail_fixture!(
     "collection_private_kernels.jett"
 );
 compile_fail_fixture!(
+    compile_fail_random_capability_required,
+    "random_capability_required.jett"
+);
+compile_fail_fixture!(
+    compile_fail_random_capability_not_constructible,
+    "random_capability_not_constructible.jett"
+);
+compile_fail_fixture!(
+    compile_fail_random_namespace_collision,
+    "random_namespace_collision.jett"
+);
+compile_fail_fixture!(
+    compile_fail_random_capability_elements,
+    "random_capability_elements.jett"
+);
+compile_fail_fixture!(
+    compile_fail_random_verify_forbidden,
+    "random_verify_forbidden.jett"
+);
+
+#[test]
+fn compile_fail_random_capability_required_counts() {
+    assert_compile_fail_error_count("random_capability_required.jett", 500, 1);
+    assert_compile_fail_error_count("random_capability_required.jett", 303, 1);
+}
+
+#[test]
+fn compile_fail_random_capability_element_count() {
+    assert_compile_fail_error_count("random_capability_elements.jett", 355, 4);
+}
+compile_fail_fixture!(
     compile_fail_collection_transform_consumes,
     "collection_transform_consumes.jett"
 );
@@ -1235,6 +1268,54 @@ compile_fail_fixture!(
 #[test]
 fn compile_fail_bytes_concat_consumes_both_inputs() {
     assert_compile_fail_error_count("bytes_concat_consumes_inputs.jett", 400, 2);
+}
+
+#[test]
+fn run_pass_random_scripted_contract() {
+    let path = fixture_path("run_pass", "random_scripted.jett");
+    let output = run_file_capture_stdout_with_random_test_samples(
+        &path,
+        vec![
+            RandomTestSample::Bounded(0),
+            RandomTestSample::Bounded(u64::MAX - 1),
+            RandomTestSample::Unit53(0),
+            RandomTestSample::Unit53((1_u64 << 53) - 1),
+            RandomTestSample::Boolean(false),
+            RandomTestSample::Boolean(true),
+            RandomTestSample::Bounded(0),
+            RandomTestSample::Bounded(2),
+            RandomTestSample::Bounded(0),
+            RandomTestSample::Bounded(1),
+            RandomTestSample::Bounded(0),
+        ],
+    )
+    .unwrap_or_else(|err| panic!("expected {} to run successfully: {err}", path.display()));
+    assert_eq!(
+        output,
+        concat!(
+            "5:random.int64: lower bound must be less than upper bound:-1:1:0:9\n",
+            "-9223372036854775808:9223372036854775806:0:0.9999999999999999:false:true\n",
+            "first:last:3:3421:1\n"
+        )
+    );
+}
+
+#[test]
+fn runtime_fail_random_script_provider_exhausted() {
+    let path = fixture_path("runtime_fail", "random_provider_exhausted.jett");
+    assert_eq!(
+        run_file_with_random_test_samples(&path, vec![]).unwrap_err(),
+        "runtime error: Random: test provider exhausted"
+    );
+}
+
+#[test]
+fn runtime_fail_random_invalid_test_sample() {
+    let path = fixture_path("runtime_fail", "random_invalid_test_sample.jett");
+    assert_eq!(
+        run_file_with_random_test_samples(&path, vec![RandomTestSample::Bounded(0)]).unwrap_err(),
+        "runtime error: Random: invalid test sample"
+    );
 }
 
 #[test]

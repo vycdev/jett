@@ -437,7 +437,14 @@ impl<'src> Parser<'src> {
     }
 
     fn parse_function_decl_rest(&mut self, start_span: Span, exported: bool) -> FunctionDecl {
-        let name = self.parse_ident();
+        let name = if matches!(
+            self.peek(),
+            TokenKind::Int64 | TokenKind::Float64 | TokenKind::Bool_
+        ) {
+            self.parse_type_ident()
+        } else {
+            self.parse_ident()
+        };
 
         // Optional generic type parameters: `[T, U, ...]`
         let type_params = if self.peek() == TokenKind::LBracket {
@@ -474,6 +481,17 @@ impl<'src> Parser<'src> {
             params,
             return_type,
             exported,
+        }
+    }
+
+    fn parse_member_ident(&mut self) -> Ident {
+        if matches!(
+            self.peek(),
+            TokenKind::Int64 | TokenKind::Float64 | TokenKind::Bool_
+        ) {
+            self.parse_type_ident()
+        } else {
+            self.parse_ident()
         }
     }
 
@@ -1925,7 +1943,7 @@ impl<'src> Parser<'src> {
 
         while self.peek() == TokenKind::Dot {
             self.advance(); // consume `.`
-            let field = self.parse_ident();
+            let field = self.parse_member_ident();
             let span = expr.span().merge(field.span);
             expr = Expr::FieldAccess(Box::new(expr), field, span);
             if self.peek() == TokenKind::LBracket && self.looks_like_generic_args() {
@@ -1951,7 +1969,7 @@ impl<'src> Parser<'src> {
                         break;
                     }
                     self.advance(); // consume `.`
-                    let field = self.parse_ident();
+                    let field = self.parse_member_ident();
                     let span = lhs.span().merge(field.span);
                     lhs = Expr::FieldAccess(Box::new(lhs), field, span);
                     // Check for generic/method call: `expr.method[T](args)` / `expr.method(args)`
@@ -2738,6 +2756,31 @@ function entries(items: list[map.Entry[string, int64]]) returns nothing:
             panic!("list element should be a generic map entry")
         };
         assert_eq!(owner.name, "map.Entry");
+    }
+
+    #[test]
+    fn parse_primitive_keyword_function_and_member_names() {
+        let src = "\
+namespace random
+export function int64(view rng: Random, lower: int64, upper: int64) returns int64:
+    return lower
+export function float64(view rng: Random) returns float64:
+    return 0.0
+export function bool(view rng: Random) returns bool:
+    return false
+namespace app
+function sample(view rng: Random) returns bool:
+    int64 value = random.int64(view rng, 0, 1)
+    float64 unit = random.float64(view rng)
+    return random.bool(view rng)
+";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        for expected in ["int64", "float64", "bool"] {
+            assert!(result.module.items.iter().any(
+                |item| matches!(item, Item::Function(function) if function.name.name == expected)
+            ));
+        }
     }
 
     #[test]

@@ -1,0 +1,47 @@
+namespace app
+function test_non_advancing_cases(view rng: Random) returns nothing:
+    mutable string invalid_error = "missing"
+    int64 invalid = random.int64(view rng, 5, 5) handle error:
+        invalid_error = error
+        default 5
+    list[int64] empty = list()
+    int64 missing = random.choice[int64](view rng, view empty) handle:
+        default -1
+    list[int64] singleton = list(9)
+    list[int64] singleton_copy = random.shuffle[int64](view rng, view singleton)
+    int64 singleton_value = list.get[int64](view singleton, 0) handle:
+        default -1
+    println("{invalid}:{invalid_error}:{missing}:{list.length[int64](view singleton_copy)}:{list.length[int64](view empty)}:{singleton_value}")
+function test_scalar_edges(view rng: Random) returns nothing:
+    int64 minimum = random.int64(view rng, -9223372036854775808, 9223372036854775807) handle error:
+        return nothing
+    int64 maximum_minus_one = random.int64(view rng, -9223372036854775808, 9223372036854775807) handle error:
+        return nothing
+    float64 zero = random.float64(view rng)
+    float64 below_one = random.float64(view rng)
+    bool false_value = random.bool(view rng)
+    bool true_value = random.bool(view rng)
+    println("{minimum}:{maximum_minus_one}:{zero}:{below_one}:{false_value}:{true_value}")
+function test_collections(view rng: Random) returns nothing:
+    list[string] choices = list("first", "middle", "last")
+    string first = random.choice[string](view rng, view choices) handle:
+        default "missing"
+    string last = random.choice[string](view rng, view choices) handle:
+        default "missing"
+    list[int64] original = list(1, 2, 3, 4)
+    list[int64] shuffled = random.shuffle[int64](view rng, view original)
+    int64 shuffled_zero = list.get[int64](view shuffled, 0) handle:
+        default -1
+    int64 shuffled_one = list.get[int64](view shuffled, 1) handle:
+        default -1
+    int64 shuffled_two = list.get[int64](view shuffled, 2) handle:
+        default -1
+    int64 shuffled_three = list.get[int64](view shuffled, 3) handle:
+        default -1
+    int64 original_zero = list.get[int64](view original, 0) handle:
+        default -1
+    println("{first}:{last}:{list.length[string](view choices)}:{shuffled_zero}{shuffled_one}{shuffled_two}{shuffled_three}:{original_zero}")
+function main(rng: Random) returns nothing:
+    test_non_advancing_cases(view rng)
+    test_scalar_edges(view rng)
+    test_collections(view rng)

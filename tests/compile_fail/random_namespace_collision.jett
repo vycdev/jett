@@ -1,0 +1,4 @@
+# ERROR: E0204
+namespace random
+function local_random_helper() returns nothing:
+    return nothing
