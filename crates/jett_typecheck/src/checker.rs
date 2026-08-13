@@ -2420,6 +2420,29 @@ impl<'a> TypeChecker<'a> {
                 | "list.__sum"
                 | "list.__sort_by"
                 | "list.__group_by"
+                | "math.__abs"
+                | "math.__min"
+                | "math.__max"
+                | "math.__sqrt"
+                | "math.__pow"
+                | "math.__floor"
+                | "math.__ceil"
+                | "math.__round"
+                | "math.__clamp"
+                | "math.__log"
+                | "math.__log2"
+                | "math.__log10"
+                | "math.__average"
+                | "math.__median"
+                | "math.__pi"
+                | "math.__e"
+                | "math.__sin"
+                | "math.__cos"
+                | "math.__tan"
+                | "math.__mod"
+                | "math.__gcd"
+                | "math.__lcm"
+                | "math.__factorial"
                 | "string.__from_int64"
                 | "string.__from_uint64"
                 | "string.__from_float64"
@@ -3269,29 +3292,56 @@ impl<'a> TypeChecker<'a> {
                 let list_ty = self.interner.intern(Type::List(inner));
                 Some((vec![list_ty], inner))
             }
-            // math builtins
-            "math.sqrt" | "math.log" | "math.log2" | "math.log10" => self.no_type_args_signature(
-                &name,
-                type_args,
-                span,
-                vec![TypeInterner::FLOAT64],
-                TypeInterner::FLOAT64,
-            ),
-            "math.pow" => self.no_type_args_signature(
+            // Private math kernels
+            "math.__abs" => {
+                let inner = self.optional_type_arg(&name, type_args, span);
+                if inner != TypeInterner::ERROR
+                    && !matches!(inner, TypeInterner::INT64 | TypeInterner::FLOAT64)
+                {
+                    self.sink.emit(errors::type_mismatch(
+                        "int64 or float64",
+                        &self.type_name(inner),
+                        span,
+                    ));
+                }
+                Some((vec![inner], inner))
+            }
+            "math.__min" | "math.__max" => {
+                let inner = self.optional_type_arg(&name, type_args, span);
+                if inner != TypeInterner::ERROR
+                    && !matches!(inner, TypeInterner::INT64 | TypeInterner::FLOAT64)
+                {
+                    self.sink.emit(errors::type_mismatch(
+                        "int64 or float64",
+                        &self.type_name(inner),
+                        span,
+                    ));
+                }
+                Some((vec![inner, inner], inner))
+            }
+            "math.__sqrt" | "math.__log" | "math.__log2" | "math.__log10" => self
+                .no_type_args_signature(
+                    &name,
+                    type_args,
+                    span,
+                    vec![TypeInterner::FLOAT64],
+                    TypeInterner::FLOAT64,
+                ),
+            "math.__pow" => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::FLOAT64, TypeInterner::FLOAT64],
                 TypeInterner::FLOAT64,
             ),
-            "math.floor" | "math.ceil" | "math.round" => self.no_type_args_signature(
+            "math.__floor" | "math.__ceil" | "math.__round" => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::FLOAT64],
                 TypeInterner::FLOAT64,
             ),
-            "math.clamp" => self.no_type_args_signature(
+            "math.__clamp" => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
@@ -3302,7 +3352,7 @@ impl<'a> TypeChecker<'a> {
                 ],
                 TypeInterner::FLOAT64,
             ),
-            "math.average" | "math.median" => {
+            "math.__average" | "math.__median" => {
                 let inner = match type_args.len() {
                     0 => TypeInterner::FLOAT64,
                     1 => {
@@ -3329,24 +3379,24 @@ impl<'a> TypeChecker<'a> {
                 let list_ty = self.interner.intern(Type::List(inner));
                 Some((vec![list_ty], TypeInterner::FLOAT64))
             }
-            "math.pi" | "math.e" => {
+            "math.__pi" | "math.__e" => {
                 self.no_type_args_signature(&name, type_args, span, vec![], TypeInterner::FLOAT64)
             }
-            "math.sin" | "math.cos" | "math.tan" => self.no_type_args_signature(
+            "math.__sin" | "math.__cos" | "math.__tan" => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::FLOAT64],
                 TypeInterner::FLOAT64,
             ),
-            "math.mod" | "math.gcd" | "math.lcm" => self.no_type_args_signature(
+            "math.__mod" | "math.__gcd" | "math.__lcm" => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::INT64, TypeInterner::INT64],
                 TypeInterner::INT64,
             ),
-            "math.factorial" => self.no_type_args_signature(
+            "math.__factorial" => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
@@ -8656,8 +8706,11 @@ impl<'a> TypeChecker<'a> {
             return TypeInterner::ERROR;
         }
 
-        match self.math_numeric_builtin_base(current_ty) {
-            Some((base, tainted)) => self.maybe_wrap_secret(base, tainted),
+        match self.math_numeric_policy_base(current_ty) {
+            Some((base, tainted)) => {
+                self.check_math_source_facade_instantiation(name, base);
+                self.maybe_wrap_secret(base, tainted)
+            }
             None => {
                 self.sink.emit(errors::argument_type_mismatch(
                     "#1",
@@ -8697,7 +8750,7 @@ impl<'a> TypeChecker<'a> {
             return TypeInterner::ERROR;
         }
 
-        let Some((base, left_tainted)) = self.math_numeric_builtin_base(current_ty) else {
+        let Some((base, left_tainted)) = self.math_numeric_policy_base(current_ty) else {
             self.sink.emit(errors::argument_type_mismatch(
                 "#1",
                 "int64 or float64",
@@ -8714,7 +8767,7 @@ impl<'a> TypeChecker<'a> {
             return TypeInterner::ERROR;
         }
 
-        let Some((right_base, right_tainted)) = self.math_numeric_builtin_base(right_ty) else {
+        let Some((right_base, right_tainted)) = self.math_numeric_policy_base(right_ty) else {
             self.sink.emit(errors::argument_type_mismatch(
                 "#2",
                 &self.type_name(base),
@@ -8734,10 +8787,11 @@ impl<'a> TypeChecker<'a> {
             return TypeInterner::ERROR;
         }
 
+        self.check_math_source_facade_instantiation(name, base);
         self.maybe_wrap_secret(base, left_tainted || right_tainted)
     }
 
-    fn math_numeric_builtin_base(&self, ty: TypeId) -> Option<(TypeId, bool)> {
+    fn math_numeric_policy_base(&self, ty: TypeId) -> Option<(TypeId, bool)> {
         let (base, tainted) = self.strip_secret_type(ty);
         if self.types_compatible(TypeInterner::INT64, base) {
             Some((TypeInterner::INT64, tainted))
@@ -8748,7 +8802,25 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
-    fn check_math_abs_builtin_call(
+    fn check_math_source_facade_instantiation(&mut self, name: &str, concrete: TypeId) {
+        let Some(template) = self.generic_function_templates.get(name).cloned() else {
+            return;
+        };
+        let Some(type_param) = template.type_params.first() else {
+            return;
+        };
+        let subst = HashMap::from([(type_param.name.clone(), concrete)]);
+        self.check_generic_function_instantiation(
+            name,
+            &template,
+            &[concrete],
+            subst,
+            HashMap::new(),
+            ReflectionParamFacts::default(),
+        );
+    }
+
+    fn check_math_abs_call_policy(
         &mut self,
         name: &str,
         type_args: &[TypeExpr],
@@ -8770,8 +8842,11 @@ impl<'a> TypeChecker<'a> {
             return TypeInterner::ERROR;
         }
 
-        match self.math_numeric_builtin_base(arg_ty) {
-            Some((base, tainted)) => self.maybe_wrap_secret(base, tainted),
+        match self.math_numeric_policy_base(arg_ty) {
+            Some((base, tainted)) => {
+                self.check_math_source_facade_instantiation(name, base);
+                self.maybe_wrap_secret(base, tainted)
+            }
             None => {
                 self.sink.emit(errors::argument_type_mismatch(
                     "value",
@@ -8784,7 +8859,7 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
-    fn check_math_min_max_builtin_call(
+    fn check_math_min_max_call_policy(
         &mut self,
         name: &str,
         type_args: &[TypeExpr],
@@ -8807,7 +8882,7 @@ impl<'a> TypeChecker<'a> {
             return TypeInterner::ERROR;
         }
 
-        let Some((base, left_tainted)) = self.math_numeric_builtin_base(left_ty) else {
+        let Some((base, left_tainted)) = self.math_numeric_policy_base(left_ty) else {
             self.sink.emit(errors::argument_type_mismatch(
                 "left",
                 "int64 or float64",
@@ -8823,7 +8898,7 @@ impl<'a> TypeChecker<'a> {
             return TypeInterner::ERROR;
         }
 
-        let Some((right_base, right_tainted)) = self.math_numeric_builtin_base(right_ty) else {
+        let Some((right_base, right_tainted)) = self.math_numeric_policy_base(right_ty) else {
             self.sink.emit(errors::argument_type_mismatch(
                 "right",
                 &self.type_name(base),
@@ -8843,6 +8918,7 @@ impl<'a> TypeChecker<'a> {
             return TypeInterner::ERROR;
         }
 
+        self.check_math_source_facade_instantiation(name, base);
         self.maybe_wrap_secret(base, left_tainted || right_tainted)
     }
 
@@ -8899,10 +8975,10 @@ impl<'a> TypeChecker<'a> {
                     return self.check_print_builtin_call(builtin_name, type_args, args, span);
                 }
                 "math.abs" => {
-                    return self.check_math_abs_builtin_call(builtin_name, type_args, args, span);
+                    return self.check_math_abs_call_policy(builtin_name, type_args, args, span);
                 }
                 "math.min" | "math.max" => {
-                    return self.check_math_min_max_builtin_call(
+                    return self.check_math_min_max_call_policy(
                         builtin_name,
                         type_args,
                         args,
@@ -9108,7 +9184,9 @@ impl<'a> TypeChecker<'a> {
             signature
         } else {
             if let Some(function_name) = callee_name.as_deref()
-                && (function_name.starts_with("list.") || function_name.starts_with("string."))
+                && (function_name.starts_with("list.")
+                    || function_name.starts_with("string.")
+                    || function_name.starts_with("math."))
             {
                 self.sink.emit(errors::unknown_type(
                     &format!("function `{function_name}`"),

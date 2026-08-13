@@ -8214,21 +8214,21 @@ impl Interpreter {
                 }
             }
 
-            // -- Math operations (stdlib/math.jett) ---------------------------
-            "math.abs" => {
+            // -- Private math kernels (stdlib/math.jett) ----------------------
+            "math.__abs" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Int64(n) => Some(
                         n.checked_abs()
                             .map(Value::Int64)
-                            .ok_or_else(|| format!("{name}: integer overflow: abs({n})")),
+                            .ok_or_else(|| format!("math.abs: integer overflow: abs({n})")),
                     ),
                     Value::Float64(n) => Some(Ok(Value::Float64(n.abs()))),
                     _ => Some(Err(format!("{name} expects a numeric argument"))),
                 }
             }
 
-            "math.min" => {
+            "math.__min" if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::Int64(a), Value::Int64(b)) => Some(Ok(Value::Int64(*a.min(b)))),
@@ -8239,7 +8239,7 @@ impl Interpreter {
                 }
             }
 
-            "math.max" => {
+            "math.__max" if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::Int64(a), Value::Int64(b)) => Some(Ok(Value::Int64(*a.max(b)))),
@@ -8250,7 +8250,7 @@ impl Interpreter {
                 }
             }
 
-            "math.sqrt" => {
+            "math.__sqrt" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Float64(n) => Some(Ok(Value::Float64(n.sqrt()))),
@@ -8259,7 +8259,7 @@ impl Interpreter {
                 }
             }
 
-            "math.pow" => {
+            "math.__pow" if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::Float64(base), Value::Float64(exp)) => {
@@ -8268,11 +8268,13 @@ impl Interpreter {
                     (Value::Int64(base), Value::Int64(exp)) => {
                         let exp_u = match u32::try_from((*exp).max(0)) {
                             Ok(exp_u) => exp_u,
-                            Err(_) => return Some(Err(format!("{name}: exponent out of range"))),
+                            Err(_) => {
+                                return Some(Err("math.pow: exponent out of range".to_string()));
+                            }
                         };
                         match base.checked_pow(exp_u) {
                             Some(value) => Some(Ok(Value::Int64(value))),
-                            None => Some(Err(format!("{name}: integer overflow"))),
+                            None => Some(Err("math.pow: integer overflow".to_string())),
                         }
                     }
                     (Value::Float64(base), Value::Int64(exp)) => {
@@ -8282,7 +8284,7 @@ impl Interpreter {
                 }
             }
 
-            "math.floor" => {
+            "math.__floor" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Float64(n) => Some(Ok(Value::Float64(n.floor()))),
@@ -8291,7 +8293,7 @@ impl Interpreter {
                 }
             }
 
-            "math.ceil" => {
+            "math.__ceil" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Float64(n) => Some(Ok(Value::Float64(n.ceil()))),
@@ -8300,7 +8302,7 @@ impl Interpreter {
                 }
             }
 
-            "math.round" => {
+            "math.__round" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Float64(n) => Some(Ok(Value::Float64(n.round()))),
@@ -8309,7 +8311,7 @@ impl Interpreter {
                 }
             }
 
-            "math.clamp" => {
+            "math.__clamp" if self.current_function_trusted_stdlib => {
                 require_args!(name, 3, args);
                 match (&args[0], &args[1], &args[2]) {
                     (Value::Int64(v), Value::Int64(lo), Value::Int64(hi)) => {
@@ -8317,9 +8319,11 @@ impl Interpreter {
                     }
                     (Value::Float64(v), Value::Float64(lo), Value::Float64(hi)) => {
                         if lo.is_nan() || hi.is_nan() {
-                            Some(Err(format!("{name} bounds must not be NaN")))
+                            Some(Err("math.clamp bounds must not be NaN".to_string()))
                         } else if lo > hi {
-                            Some(Err(format!("{name} requires lower bound <= upper bound")))
+                            Some(Err(
+                                "math.clamp requires lower bound <= upper bound".to_string()
+                            ))
                         } else {
                             Some(Ok(Value::Float64(v.clamp(*lo, *hi))))
                         }
@@ -8330,7 +8334,7 @@ impl Interpreter {
                 }
             }
 
-            "math.log" => {
+            "math.__log" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Float64(n) => Some(Ok(Value::Float64(n.ln()))),
@@ -8339,7 +8343,7 @@ impl Interpreter {
                 }
             }
 
-            "math.log2" => {
+            "math.__log2" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Float64(n) => Some(Ok(Value::Float64(n.log2()))),
@@ -8348,7 +8352,7 @@ impl Interpreter {
                 }
             }
 
-            "math.log10" => {
+            "math.__log10" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Float64(n) => Some(Ok(Value::Float64(n.log10()))),
@@ -8357,7 +8361,7 @@ impl Interpreter {
                 }
             }
 
-            "math.average" => {
+            "math.__average" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::List(items) if !items.is_empty() => {
@@ -8365,7 +8369,7 @@ impl Interpreter {
                             Value::Int64(n) => Ok(sum + *n as f64),
                             Value::Uint64(n) => Ok(sum + *n as f64),
                             Value::Float64(n) => Ok(sum + *n),
-                            _ => Err(format!("{name} expects a list of numeric values")),
+                            _ => Err("math.average expects a list of numeric values".to_string()),
                         });
                         Some(sum.map(|sum| Value::Float64(sum / items.len() as f64)))
                     }
@@ -8374,7 +8378,7 @@ impl Interpreter {
                 }
             }
 
-            "math.median" => {
+            "math.__median" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::List(items) if !items.is_empty() => {
@@ -8384,7 +8388,9 @@ impl Interpreter {
                                 Value::Int64(n) => Ok(*n as f64),
                                 Value::Uint64(n) => Ok(*n as f64),
                                 Value::Float64(n) => Ok(*n),
-                                _ => Err(format!("{name} expects a list of numeric values")),
+                                _ => {
+                                    Err("math.median expects a list of numeric values".to_string())
+                                }
                             })
                             .collect();
                         Some(nums.map(|mut nums| {
@@ -8406,15 +8412,15 @@ impl Interpreter {
             }
 
             // -- Math constants and extras -----------------------------------------
-            "math.pi" => {
+            "math.__pi" if self.current_function_trusted_stdlib => {
                 require_args!(name, 0, args);
                 Some(Ok(Value::Float64(std::f64::consts::PI)))
             }
-            "math.e" => {
+            "math.__e" if self.current_function_trusted_stdlib => {
                 require_args!(name, 0, args);
                 Some(Ok(Value::Float64(std::f64::consts::E)))
             }
-            "math.sin" => {
+            "math.__sin" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Float64(n) => Some(Ok(Value::Float64(n.sin()))),
@@ -8422,7 +8428,7 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects a numeric argument"))),
                 }
             }
-            "math.cos" => {
+            "math.__cos" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Float64(n) => Some(Ok(Value::Float64(n.cos()))),
@@ -8430,7 +8436,7 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects a numeric argument"))),
                 }
             }
-            "math.tan" => {
+            "math.__tan" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Float64(n) => Some(Ok(Value::Float64(n.tan()))),
@@ -8438,7 +8444,7 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects a numeric argument"))),
                 }
             }
-            "math.mod" => {
+            "math.__mod" if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::Int64(a), Value::Int64(b)) => {
@@ -8455,7 +8461,7 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects two int64 arguments"))),
                 }
             }
-            "math.gcd" => {
+            "math.__gcd" if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::Int64(a), Value::Int64(b)) => {
@@ -8472,7 +8478,7 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects two int64 arguments"))),
                 }
             }
-            "math.lcm" => {
+            "math.__lcm" if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::Int64(a), Value::Int64(b)) => {
@@ -8500,7 +8506,7 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects two int64 arguments"))),
                 }
             }
-            "math.factorial" => {
+            "math.__factorial" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Int64(n) => {
@@ -16434,23 +16440,36 @@ mod builtin_tests {
     }
 
     #[test]
-    fn builtin_math_abs_positive() {
+    fn public_math_runtime_dispatch_is_absent_without_stdlib_source() {
         let mut interp = Interpreter::new();
-        let expr = dotted_call("math", "abs", vec![int(5)]);
+        let expr = dotted_call("math", "sqrt", vec![float(4.0)]);
+        assert_eq!(
+            interp.eval_expr(&expr),
+            Err("undefined function 'math.sqrt'".to_string())
+        );
+    }
+
+    #[test]
+    fn private_math_abs_positive() {
+        let mut interp = Interpreter::new();
+        interp.current_function_trusted_stdlib = true;
+        let expr = dotted_call("math", "__abs", vec![int(5)]);
         assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(5));
     }
 
     #[test]
-    fn builtin_math_abs_negative() {
+    fn private_math_abs_negative() {
         let mut interp = Interpreter::new();
-        let expr = dotted_call("math", "abs", vec![int(-7)]);
+        interp.current_function_trusted_stdlib = true;
+        let expr = dotted_call("math", "__abs", vec![int(-7)]);
         assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(7));
     }
 
     #[test]
-    fn builtin_math_abs_int64_min_reports_overflow() {
+    fn private_math_abs_int64_min_reports_overflow() {
         let mut interp = Interpreter::new();
-        let expr = dotted_call("math", "abs", vec![int(i64::MIN)]);
+        interp.current_function_trusted_stdlib = true;
+        let expr = dotted_call("math", "__abs", vec![int(i64::MIN)]);
         assert_eq!(
             interp.eval_expr(&expr).unwrap_err(),
             "math.abs: integer overflow: abs(-9223372036854775808)"
@@ -16458,44 +16477,50 @@ mod builtin_tests {
     }
 
     #[test]
-    fn builtin_math_abs_float() {
+    fn private_math_abs_float() {
         let mut interp = Interpreter::new();
-        let expr = dotted_call("math", "abs", vec![float(-3.5)]);
+        interp.current_function_trusted_stdlib = true;
+        let expr = dotted_call("math", "__abs", vec![float(-3.5)]);
         assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Float64(3.5));
     }
 
     #[test]
-    fn builtin_math_min_int() {
+    fn private_math_min_int() {
         let mut interp = Interpreter::new();
-        let expr = dotted_call("math", "min", vec![int(3), int(7)]);
+        interp.current_function_trusted_stdlib = true;
+        let expr = dotted_call("math", "__min", vec![int(3), int(7)]);
         assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(3));
     }
 
     #[test]
-    fn builtin_math_max_int() {
+    fn private_math_max_int() {
         let mut interp = Interpreter::new();
-        let expr = dotted_call("math", "max", vec![int(3), int(7)]);
+        interp.current_function_trusted_stdlib = true;
+        let expr = dotted_call("math", "__max", vec![int(3), int(7)]);
         assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(7));
     }
 
     #[test]
-    fn builtin_math_min_float() {
+    fn private_math_min_float() {
         let mut interp = Interpreter::new();
-        let expr = dotted_call("math", "min", vec![float(1.5), float(2.5)]);
+        interp.current_function_trusted_stdlib = true;
+        let expr = dotted_call("math", "__min", vec![float(1.5), float(2.5)]);
         assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Float64(1.5));
     }
 
     #[test]
-    fn builtin_math_max_float() {
+    fn private_math_max_float() {
         let mut interp = Interpreter::new();
-        let expr = dotted_call("math", "max", vec![float(1.5), float(2.5)]);
+        interp.current_function_trusted_stdlib = true;
+        let expr = dotted_call("math", "__max", vec![float(1.5), float(2.5)]);
         assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Float64(2.5));
     }
 
     #[test]
-    fn builtin_math_pow_int_overflow_returns_error() {
+    fn private_math_pow_int_overflow_returns_error() {
         let mut interp = Interpreter::new();
-        let expr = dotted_call("math", "pow", vec![int(2), int(63)]);
+        interp.current_function_trusted_stdlib = true;
+        let expr = dotted_call("math", "__pow", vec![int(2), int(63)]);
         assert_eq!(
             interp.eval_expr(&expr),
             Err("math.pow: integer overflow".to_string())
@@ -16503,23 +16528,26 @@ mod builtin_tests {
     }
 
     #[test]
-    fn builtin_math_pow_int_preserves_valid_values() {
+    fn private_math_pow_int_preserves_valid_values() {
         let mut interp = Interpreter::new();
-        let expr = dotted_call("math", "pow", vec![int(-2), int(3)]);
+        interp.current_function_trusted_stdlib = true;
+        let expr = dotted_call("math", "__pow", vec![int(-2), int(3)]);
         assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(-8));
     }
 
     #[test]
-    fn builtin_math_gcd_handles_int64_min_with_fitting_result() {
+    fn private_math_gcd_handles_int64_min_with_fitting_result() {
         let mut interp = Interpreter::new();
-        let expr = dotted_call("math", "gcd", vec![int(i64::MIN), int(6)]);
+        interp.current_function_trusted_stdlib = true;
+        let expr = dotted_call("math", "__gcd", vec![int(i64::MIN), int(6)]);
         assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(2));
     }
 
     #[test]
-    fn builtin_math_gcd_reports_unrepresentable_result() {
+    fn private_math_gcd_reports_unrepresentable_result() {
         let mut interp = Interpreter::new();
-        let expr = dotted_call("math", "gcd", vec![int(i64::MIN), int(0)]);
+        interp.current_function_trusted_stdlib = true;
+        let expr = dotted_call("math", "__gcd", vec![int(i64::MIN), int(0)]);
         let err = interp.eval_expr(&expr).unwrap_err();
         assert_eq!(
             err,
@@ -16528,9 +16556,14 @@ mod builtin_tests {
     }
 
     #[test]
-    fn builtin_math_lcm_avoids_intermediate_overflow() {
+    fn private_math_lcm_avoids_intermediate_overflow() {
         let mut interp = Interpreter::new();
-        let expr = dotted_call("math", "lcm", vec![int(3_037_000_500), int(3_037_000_500)]);
+        interp.current_function_trusted_stdlib = true;
+        let expr = dotted_call(
+            "math",
+            "__lcm",
+            vec![int(3_037_000_500), int(3_037_000_500)],
+        );
         assert_eq!(
             interp.eval_expr(&expr).unwrap(),
             Value::Int64(3_037_000_500)
@@ -16538,9 +16571,10 @@ mod builtin_tests {
     }
 
     #[test]
-    fn builtin_math_lcm_zero_with_int64_min_is_zero() {
+    fn private_math_lcm_zero_with_int64_min_is_zero() {
         let mut interp = Interpreter::new();
-        let expr = dotted_call("math", "lcm", vec![int(0), int(i64::MIN)]);
+        interp.current_function_trusted_stdlib = true;
+        let expr = dotted_call("math", "__lcm", vec![int(0), int(i64::MIN)]);
         assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(0));
     }
 
@@ -16661,15 +16695,22 @@ mod builtin_tests {
     #[test]
     fn math_average_and_median_validate_numeric_values() {
         let mut interp = Interpreter::new();
+        interp.current_function_trusted_stdlib = true;
         let non_numeric = [Value::List(vec![Value::String("not a number".to_string())])];
         let unsigned = [Value::List(vec![Value::Uint64(2), Value::Uint64(4)])];
 
-        for name in ["math.average", "math.median"] {
+        for (name, public_name) in [
+            ("math.__average", "math.average"),
+            ("math.__median", "math.median"),
+        ] {
             let error = interp
                 .call_builtin(name, &non_numeric)
                 .expect("math builtin should be recognized")
                 .expect_err("non-numeric values should fail");
-            assert_eq!(error, format!("{name} expects a list of numeric values"));
+            assert_eq!(
+                error,
+                format!("{public_name} expects a list of numeric values")
+            );
 
             let result = interp
                 .call_builtin(name, &unsigned)

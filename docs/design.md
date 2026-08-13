@@ -931,10 +931,11 @@ Having `process(string)` and `process(int64)` in the same codebase splits the LL
 
 Jett bans function overloading entirely. **Every function has a unique name.**
 
-Compiler-owned numeric intrinsics such as `math.abs`, `math.min`, and
-`math.max` may dispatch on the checked primitive argument type, but user code
-cannot define overload sets. These intrinsics are a closed compiler table, not a
-general name-resolution rule.
+The source-defined `math.abs`, `math.min`, and `math.max` facades use a closed
+compiler-owned call policy to select their checked `int64` or `float64` shape,
+but user code cannot define overload sets. This table controls type policy only;
+execution goes through the stdlib source declarations and private kernels. It is
+not a general name-resolution rule.
 
 **What the compiler rejects:**
 
@@ -1417,16 +1418,15 @@ float64 ceiled = math.ceil(3.2)
 float64 power = math.pow(base, exponent)
 ```
 
-Compositional math helpers should be ordinary Jett source when the language can
-express them without losing numeric semantics. `math.is_even`, `math.is_odd`,
-`math.sign`, `math.to_radians`, `math.to_degrees`, and the consuming
-`math.sum(list[int64])` helper are therefore defined in `stdlib/math.jett` and
-resolved like user functions. `math.sum` uses ordinary checked source addition,
-so overflow reports the same deterministic arithmetic error as other Jett
-`int64` expressions. `math.mod` and `math.pi` remain compiler-owned Rust
-primitive kernels used by those definitions. Exact numeric overloads such as
-`math.abs`, `math.min`, and `math.max`, along with the other supported math
-builtins, remain Rust-backed until they are separately extracted.
+The complete public `math.*` API is ordinary source in `stdlib/math.jett` and
+resolves like user code. Compositional helpers have Jett bodies; `math.sum` uses
+ordinary checked source addition, so overflow reports the same deterministic
+arithmetic error as other `int64` expressions. Private trusted kernels preserve
+floating-point primitives and constants, numeric-list aggregation, and integer
+operations whose exact domain and overflow failures cannot yet be raised from
+source. Project code cannot call those kernels. `math.abs`, `math.min`, and
+`math.max` retain only their narrow compiler-owned `int64`/`float64` type-policy
+gate, not public runtime dispatch or general overloading.
 
 **Hashing and encoding — no application dependencies:**
 

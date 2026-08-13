@@ -3981,6 +3981,56 @@ mod tests {
     }
 
     #[test]
+    fn query_signature_reports_source_owned_math_surface() {
+        let functions = [
+            "abs",
+            "min",
+            "max",
+            "sqrt",
+            "pow",
+            "floor",
+            "ceil",
+            "round",
+            "clamp",
+            "log",
+            "log2",
+            "log10",
+            "average",
+            "median",
+            "pi",
+            "e",
+            "sin",
+            "cos",
+            "tan",
+            "mod",
+            "gcd",
+            "lcm",
+            "factorial",
+            "is_even",
+            "is_odd",
+            "sign",
+            "to_radians",
+            "to_degrees",
+            "sum",
+        ];
+
+        for function in functions {
+            let name = format!("math.{function}");
+            let result = query_signature(Path::new("."), &name)
+                .expect("math signature query should succeed")
+                .unwrap_or_else(|| panic!("{name} signature should be found"));
+            assert!(
+                result
+                    .file_path
+                    .replace('\\', "/")
+                    .ends_with("/stdlib/math.jett"),
+                "{name} should resolve to compiler-shipped source, got {}",
+                result.file_path
+            );
+        }
+    }
+
+    #[test]
     fn query_signature_reports_extracted_string_helper_source() {
         let result = query_signature(Path::new("."), "string.reverse")
             .expect("signature query should succeed")

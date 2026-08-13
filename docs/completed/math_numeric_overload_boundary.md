@@ -7,15 +7,15 @@ remain deferred until the language has a general model for them.
 
 ## Current Boundary
 
-The interpreter currently accepts both `int64` and `float64` values for a few
+The source-owned public API accepts both `int64` and `float64` values for three
 numeric math helpers:
 
 - `math.abs`
 - `math.min`
 - `math.max`
 
-The typechecker does not expose a general overload model. These helpers are
-instead checked as a closed compiler-owned numeric intrinsic table:
+The typechecker does not expose a general overload model. These source facades
+are checked by a closed compiler-owned numeric call-policy table:
 
 - `math.abs(int64) returns int64`
 - `math.abs(float64) returns float64`
@@ -25,8 +25,9 @@ instead checked as a closed compiler-owned numeric intrinsic table:
 - `math.max(float64, float64) returns float64`
 
 Mixed numeric arguments are rejected rather than coerced. Secret arguments lift
-through the pure intrinsic and taint the return type, matching ordinary pure
-builtin calls.
+through the pure call and taint the return type, matching ordinary pure calls.
+Execution resolves through the declarations in `stdlib/math.jett`; only private
+trusted kernels perform the primitive numeric operation.
 
 ## Architectural Preference
 

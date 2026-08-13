@@ -7,3 +7,5 @@ function list_kernel_is_private() returns list[int64]:
     return list.__new[int64]()
 function string_kernel_is_private() returns int64:
     return string.__char_count("x")
+function math_kernel_is_private() returns float64:
+    return math.__sqrt(4.0)

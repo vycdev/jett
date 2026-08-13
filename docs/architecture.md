@@ -462,7 +462,7 @@ Bottom-up type checking of every expression:
 - **Literal inference:** `42` → `int64`, `3.14` → `float64`, `"hello"` → `string`, `true`/`false` → `bool`.
 - **Variable references:** look up the type from the variable's declaration.
 - **Function calls:** verify argument types match parameter types, verify generic type-argument arity exactly for user functions and builtins, verify generic constraints, verify return type.
-- **Compiler-owned numeric intrinsics:** `math.abs`, `math.min`, and `math.max` are checked through a small exact `int64`/`float64` dispatch table. This keeps their return types precise without adding user-defined overloads.
+- **Compiler-owned numeric call policy:** the source-defined `math.abs`, `math.min`, and `math.max` facades are checked through a small exact `int64`/`float64` table. This keeps their return types precise without adding user-defined overloads; execution still resolves through `stdlib/math.jett` and private trusted kernels.
 - **No implicit conversions** — `int64` is not `float64`. Every mismatch is an error with a hint.
 - **Expected-type expression facts:** when context determines a more specific
   primitive type, such as a small integer literal inside a `uint64` argument or
@@ -1432,14 +1432,15 @@ remain runtime-backed, with deterministic injection and backend obligations
 defined by the
 [Random capability and entropy contract](open_design/random_capability_entropy_contract.md).
 
-The current math extraction is intentionally narrower than that end state.
-`math.is_even`, `math.is_odd`, `math.sign`, `math.to_radians`, and
-`math.to_degrees` are ordinary source-defined functions in `stdlib/math.jett`.
-The consuming `math.sum(list[int64])` helper is source-defined there as well and
-accumulates with checked Jett `int64` addition. The primitive dependencies
-`math.mod` and `math.pi` remain compiler-owned Rust kernels. Exact numeric
-overloads such as `math.abs`, `math.min`, and `math.max`, and the other supported
-math builtins remain Rust-backed pending separate extraction work.
+The complete public `math.*` API is defined in `stdlib/math.jett`. Compositional
+helpers have Jett bodies, including the consuming `math.sum(list[int64])`, which
+uses checked source addition. Private trusted kernels preserve floating-point
+primitives and constants, numeric-list aggregation, and integer operations whose
+exact domain and overflow failures cannot yet be raised from Jett source. Their
+checker and interpreter entry points reject project calls. The source-defined
+`math.abs`, `math.min`, and `math.max` facades retain one narrow compiler-owned
+type-policy gate for exact `int64`/`float64` dispatch; this is not general
+function overloading.
 
 **3. Runtime-backed stdlib** — Jett functions that call into the runtime:
 

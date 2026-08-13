@@ -1,4 +1,52 @@
 namespace math
+# The compiler binds T to exactly int64 or float64 for these three facades.
+# Explicit type arguments remain disallowed; this is not general overloading.
+export function abs[T](value: T) returns T:
+    return math.__abs[T](value)
+export function min[T](first: T, second: T) returns T:
+    return math.__min[T](first, second)
+export function max[T](first: T, second: T) returns T:
+    return math.__max[T](first, second)
+export function sqrt(value: float64) returns float64:
+    return math.__sqrt(value)
+export function pow(base: float64, exponent: float64) returns float64:
+    return math.__pow(base, exponent)
+export function floor(value: float64) returns float64:
+    return math.__floor(value)
+export function ceil(value: float64) returns float64:
+    return math.__ceil(value)
+export function round(value: float64) returns float64:
+    return math.__round(value)
+export function clamp(value: float64, lower: float64, upper: float64) returns float64:
+    return math.__clamp(value, lower, upper)
+export function log(value: float64) returns float64:
+    return math.__log(value)
+export function log2(value: float64) returns float64:
+    return math.__log2(value)
+export function log10(value: float64) returns float64:
+    return math.__log10(value)
+export function average[T](values: list[T]) returns float64:
+    return math.__average[T](values)
+export function median[T](values: list[T]) returns float64:
+    return math.__median[T](values)
+export function pi() returns float64:
+    return math.__pi()
+export function e() returns float64:
+    return math.__e()
+export function sin(value: float64) returns float64:
+    return math.__sin(value)
+export function cos(value: float64) returns float64:
+    return math.__cos(value)
+export function tan(value: float64) returns float64:
+    return math.__tan(value)
+export function mod(first: int64, second: int64) returns int64:
+    return math.__mod(first, second)
+export function gcd(first: int64, second: int64) returns int64:
+    return math.__gcd(first, second)
+export function lcm(first: int64, second: int64) returns int64:
+    return math.__lcm(first, second)
+export function factorial(value: int64) returns int64:
+    return math.__factorial(value)
 export function is_even(value: int64) returns bool:
     return math.mod(value, 2) == 0
 export function is_odd(value: int64) returns bool:
