@@ -496,7 +496,8 @@ This sub-phase tracks the ownership state of every variable through the control 
 - Using a `Consumed` variable is a compile error.
 - `view` parameters can read but not consume.
 - `view` values cannot be returned, stored in structs, or sent to actors.
-- `clone` creates an owned copy from an owned or viewed value.
+- For types that support duplication, `clone` creates an owned duplicate from
+  an owned or viewed value. Clone support is type-specific rather than universal.
 - `mutable` variables can be rebound after their value is consumed.
 - **For loops:** `for item in items` consumes `items`; `for item in view items` borrows `items`.
 - **Run/join:** `run` marks a value as pending; it cannot be used until `join`ed.
@@ -508,7 +509,7 @@ This sub-phase tracks the ownership state of every variable through the control 
   task handle remains live and must still be `join`ed; `join` exposes the
   task-control failure independently of the function's declared result error.
 - **View propagation:** Views propagate through field access and collection element access. `view list[T]` element access yields `view T`, not an owned copy. `clone` is required to get an owned value from a view.
-- **Closure capture analysis:** Anonymous functions can capture **immutable** values from the enclosing scope. Captured values are implicitly viewed — they are not consumed by the closure. Closures over **mutable** state are a compile error. The ownership analyzer verifies that all captured variables are either immutable bindings or primitives.
+- **Closure capture analysis:** Anonymous functions may capture only implicitly copyable values from the enclosing scope. Each capture is copied into the closure. Capturing a move-only value is a compile error; it must be passed explicitly as a parameter.
 
 **Implementation strategy:** Abstract interpretation over the control flow graph. At each program point, maintain a mapping from variable → ownership state. At control flow joins (if/else merge points, loop entries), states must be compatible:
 
@@ -1275,7 +1276,7 @@ flowchart LR
 
 **Actor lifecycle:** An actor runs until its message queue is empty and all `ActorRef` handles to it have been dropped (no more possible senders). The thread pool detects this and deallocates the actor's state. If `main()` returns while actors are still running, the runtime drops all `ActorRef` handles and waits for actors to drain their queues before exiting.
 
-**Linear type safety across actors:** When a value is `send`/`ask`'d to an actor, ownership is transferred into the message queue. For small values (primitives, small structs), this is a bitwise copy into the queue slot. For heap-allocated values (lists, maps, large structs), the pointer is moved — the sender's handle becomes invalid (enforced by the linear type checker at compile time). No deep copy is needed because single ownership guarantees no aliasing. This is the key advantage of linear types for actor message passing — zero-copy transfer with compile-time safety.
+**Linear type safety across actors:** When a move-only value is `send`/`ask`'d to an actor, ownership is transferred into the message queue and the sender's handle becomes invalid. The runtime may transfer a small value's bits or move a heap allocation's pointer; neither operation duplicates semantic ownership. Implicitly copyable values are copied into the queue and remain usable by the sender. No deep copy of move-only heap data is needed because single ownership guarantees no aliasing. This is the key advantage of linear types for actor message passing — zero-copy transfer with compile-time safety.
 
 ---
 
