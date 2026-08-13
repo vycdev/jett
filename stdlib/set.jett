@@ -1,0 +1,35 @@
+namespace set
+export function new[T]() returns set[T]:
+    return set.__new[T]()
+export function add[T](items: set[T], value: T) returns set[T]:
+    return set.__add[T](items, value)
+export function remove[T](items: set[T], view value: T) returns set[T]:
+    return set.__remove[T](items, view value)
+export function contains[T](view items: set[T], view value: T) returns bool:
+    return set.__contains[T](view items, view value)
+export function length[T](view items: set[T]) returns int64:
+    return set.__length[T](view items)
+export function is_empty[T](view items: set[T]) returns bool:
+    return set.length[T](view items) == 0
+export function to_list[T](items: set[T]) returns list[T]:
+    mutable list[T] output = list.new[T]()
+    for item in items:
+        output = list.append[T](output, item)
+    return output
+export function union[T](first_set: set[T], second_set: set[T]) returns set[T]:
+    mutable set[T] output = first_set
+    for item in second_set:
+        output = set.add[T](output, item)
+    return output
+export function intersection[T](first_set: set[T], second_set: set[T]) returns set[T]:
+    mutable set[T] output = set.new[T]()
+    for item in first_set:
+        if set.contains[T](view second_set, view item):
+            output = set.add[T](output, item)
+    return output
+export function difference[T](first_set: set[T], second_set: set[T]) returns set[T]:
+    mutable set[T] output = set.new[T]()
+    for item in first_set:
+        if not set.contains[T](view second_set, view item):
+            output = set.add[T](output, item)
+    return output

@@ -1,0 +1,9 @@
+namespace app
+function map_transform_consumes() returns int64:
+    map[string, int64] original = map("a": 1)
+    map[string, int64] updated = map.insert[string, int64](original, "b", 2)
+    return map.length[string, int64](view original)
+function set_transform_consumes() returns int64:
+    set[int64] original = set.add[int64](set.new[int64](), 1)
+    set[int64] updated = set.add[int64](original, 2)
+    return set.length[int64](view original)

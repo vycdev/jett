@@ -2355,75 +2355,11 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
-    /// Extract (A, B, C) from an optional three-argument builtin type list.
-    /// Uses ERROR as a wildcard when type args are absent.
-    fn optional_three_type_args(
-        &mut self,
-        builtin_name: &str,
-        type_args: &[TypeExpr],
-        span: Span,
-    ) -> (TypeId, TypeId, TypeId) {
-        match type_args.len() {
-            0 => (
-                TypeInterner::ERROR,
-                TypeInterner::ERROR,
-                TypeInterner::ERROR,
-            ),
-            3 => (
-                self.resolve_type_expr(&type_args[0]),
-                self.resolve_type_expr(&type_args[1]),
-                self.resolve_type_expr(&type_args[2]),
-            ),
-            got => {
-                self.sink.emit(errors::unknown_type(
-                    &format!("{builtin_name} (expected 0 or 3 type arguments, got {got})"),
-                    span,
-                ));
-                (
-                    TypeInterner::ERROR,
-                    TypeInterner::ERROR,
-                    TypeInterner::ERROR,
-                )
-            }
-        }
-    }
-
     fn function_type(&mut self, params: Vec<TypeId>, return_type: TypeId) -> TypeId {
         self.interner.intern(Type::Function {
             params,
             return_type,
         })
-    }
-
-    fn map_values_type_args(
-        &mut self,
-        builtin_name: &str,
-        type_args: &[TypeExpr],
-        span: Span,
-    ) -> (TypeId, TypeId, TypeId) {
-        match type_args.len() {
-            0 => (
-                TypeInterner::ERROR,
-                TypeInterner::ERROR,
-                TypeInterner::ERROR,
-            ),
-            2 => {
-                let (key, value) = self.optional_two_type_args(builtin_name, type_args, span);
-                (key, value, value)
-            }
-            3 => self.optional_three_type_args(builtin_name, type_args, span),
-            got => {
-                self.sink.emit(errors::unknown_type(
-                    &format!("{builtin_name} (expected 0, 2, or 3 type arguments, got {got})"),
-                    span,
-                ));
-                (
-                    TypeInterner::ERROR,
-                    TypeInterner::ERROR,
-                    TypeInterner::ERROR,
-                )
-            }
-        }
     }
 
     /// Extract (key_type, value_type) from map builtin type args.
@@ -2469,6 +2405,25 @@ impl<'a> TypeChecker<'a> {
         span: Span,
     ) -> Option<(Vec<TypeId>, TypeId)> {
         let name = self.resolved_expr_name(callee)?;
+        let private_collection_kernel = matches!(
+            name.as_str(),
+            "map.__new"
+                | "map.__length"
+                | "map.__has"
+                | "map.__get"
+                | "map.__insert"
+                | "map.__remove"
+                | "map.__from_lists"
+                | "set.__new"
+                | "set.__add"
+                | "set.__remove"
+                | "set.__contains"
+                | "set.__length"
+        );
+        if private_collection_kernel && !span.file.is_stdlib() {
+            self.sink
+                .emit(errors::not_callable("private stdlib kernel", span));
+        }
         if let Some((type_name, method_name)) = name.rsplit_once('.') {
             if let Some(&type_id) = self.named_types.get(type_name) {
                 if matches!(self.interner.resolve(type_id), Type::Bitfield(_)) {
@@ -3501,84 +3456,61 @@ impl<'a> TypeChecker<'a> {
                 ],
                 TypeInterner::STRING,
             ),
-            "map.new" => {
+            "map.__new" => {
                 let (k, v) = self.map_type_args(&name, type_args, span);
                 let map_ty = self.interner.intern(Type::Map(k, v));
                 Some((vec![], map_ty))
             }
-            "map.length" => {
+            "map.__length" => {
                 let (k, v) = self.map_type_args(&name, type_args, span);
                 let map_ty = self.interner.intern(Type::Map(k, v));
                 Some((vec![map_ty], TypeInterner::INT64))
             }
-            "map.is_empty" => {
-                let (k, v) = self.map_type_args(&name, type_args, span);
-                let map_ty = self.interner.intern(Type::Map(k, v));
-                Some((vec![map_ty], TypeInterner::BOOL))
-            }
-            "map.has" => {
+            "map.__has" => {
                 let (k, v) = self.map_type_args(&name, type_args, span);
                 let map_ty = self.interner.intern(Type::Map(k, v));
                 Some((vec![map_ty, k], TypeInterner::BOOL))
             }
-            "map.get" => {
+            "map.__get" => {
                 let (k, v) = self.map_type_args(&name, type_args, span);
                 let map_ty = self.interner.intern(Type::Map(k, v));
                 Some((vec![map_ty, k], self.interner.intern(Type::Optional(v))))
             }
-            "map.insert" => {
+            "map.__insert" => {
                 let (k, v) = self.map_type_args(&name, type_args, span);
                 let map_ty = self.interner.intern(Type::Map(k, v));
                 Some((vec![map_ty, k, v], map_ty))
             }
-            "map.remove" => {
+            "map.__remove" => {
                 let (k, v) = self.map_type_args(&name, type_args, span);
                 let map_ty = self.interner.intern(Type::Map(k, v));
                 Some((vec![map_ty, k], map_ty))
             }
-            "map.keys" => {
+            "map.__from_lists" => {
                 let (k, v) = self.map_type_args(&name, type_args, span);
+                let keys_ty = self.interner.intern(Type::List(k));
+                let values_ty = self.interner.intern(Type::List(v));
                 let map_ty = self.interner.intern(Type::Map(k, v));
-                Some((vec![map_ty], self.interner.intern(Type::List(k))))
+                Some((vec![keys_ty, values_ty], map_ty))
             }
-            "map.values" => {
-                let (k, v) = self.map_type_args(&name, type_args, span);
-                let map_ty = self.interner.intern(Type::Map(k, v));
-                Some((vec![map_ty], self.interner.intern(Type::List(v))))
-            }
-            "set.new" => {
+            "set.__new" => {
                 let inner = self.set_type_arg(&name, type_args, span);
                 Some((vec![], self.interner.intern(Type::Set(inner))))
             }
-            "set.add" | "set.remove" => {
+            "set.__add" | "set.__remove" => {
                 let inner = self.set_type_arg(&name, type_args, span);
                 let set_ty = self.interner.intern(Type::Set(inner));
                 Some((vec![set_ty, inner], set_ty))
             }
-            "set.contains" => {
+            "set.__contains" => {
                 let inner = self.set_type_arg(&name, type_args, span);
                 let set_ty = self.interner.intern(Type::Set(inner));
                 Some((vec![set_ty, inner], TypeInterner::BOOL))
             }
-            "set.length" => {
+            "set.__length" => {
                 let inner = self.set_type_arg(&name, type_args, span);
                 let set_ty = self.interner.intern(Type::Set(inner));
                 Some((vec![set_ty], TypeInterner::INT64))
-            }
-            "set.is_empty" => {
-                let inner = self.set_type_arg(&name, type_args, span);
-                let set_ty = self.interner.intern(Type::Set(inner));
-                Some((vec![set_ty], TypeInterner::BOOL))
-            }
-            "set.to_list" => {
-                let inner = self.set_type_arg(&name, type_args, span);
-                let set_ty = self.interner.intern(Type::Set(inner));
-                Some((vec![set_ty], self.interner.intern(Type::List(inner))))
-            }
-            "set.union" | "set.intersection" | "set.difference" => {
-                let inner = self.set_type_arg(&name, type_args, span);
-                let set_ty = self.interner.intern(Type::Set(inner));
-                Some((vec![set_ty, set_ty], set_ty))
             }
 
             // higher-order: list.filter[T](list, fn) -> list[T]
@@ -3724,62 +3656,6 @@ impl<'a> TypeChecker<'a> {
                 let list_u = self.interner.intern(Type::List(inner_u));
                 let mapper_ty = self.function_type(vec![inner_t], list_u);
                 Some((vec![list_t, mapper_ty], list_u))
-            }
-            // map extras
-            "map.set" => {
-                // alias for map.insert
-                let (k, v) = self.map_type_args(&name, type_args, span);
-                let map_ty = self.interner.intern(Type::Map(k, v));
-                Some((vec![map_ty, k, v], map_ty))
-            }
-            "map.get_or" => {
-                let (k, v) = self.map_type_args(&name, type_args, span);
-                let map_ty = self.interner.intern(Type::Map(k, v));
-                Some((vec![map_ty, k, v], v))
-            }
-            "map.merge" => {
-                let (k, v) = self.map_type_args(&name, type_args, span);
-                let map_ty = self.interner.intern(Type::Map(k, v));
-                Some((vec![map_ty, map_ty], map_ty))
-            }
-            "map.contains_key" => {
-                // alias for map.has
-                let (k, v) = self.map_type_args(&name, type_args, span);
-                let map_ty = self.interner.intern(Type::Map(k, v));
-                Some((vec![map_ty, k], TypeInterner::BOOL))
-            }
-            "map.from_lists" => {
-                let (k, v) = self.map_type_args(&name, type_args, span);
-                let keys_ty = self.interner.intern(Type::List(k));
-                let values_ty = self.interner.intern(Type::List(v));
-                let map_ty = self.interner.intern(Type::Map(k, v));
-                Some((vec![keys_ty, values_ty], map_ty))
-            }
-            "map.entries" => {
-                let (k, v) = self.map_type_args(&name, type_args, span);
-                let map_ty = self.interner.intern(Type::Map(k, v));
-                let pair_ty = self.interner.intern(Type::List(TypeInterner::ERROR));
-                let entries_ty = self.interner.intern(Type::List(pair_ty));
-                Some((vec![map_ty], entries_ty))
-            }
-            "map.filter" => {
-                let (k, v) = self.map_type_args(&name, type_args, span);
-                let map_ty = self.interner.intern(Type::Map(k, v));
-                let predicate_ty = self.function_type(vec![k, v], TypeInterner::BOOL);
-                Some((vec![map_ty, predicate_ty], map_ty))
-            }
-            "map.map_values" => {
-                let (k, v, u) = self.map_values_type_args(&name, type_args, span);
-                let map_ty = self.interner.intern(Type::Map(k, v));
-                let out_ty = self.interner.intern(Type::Map(k, u));
-                let mapper_ty = self.function_type(vec![v], u);
-                Some((vec![map_ty, mapper_ty], out_ty))
-            }
-            "map.for_each" => {
-                let (k, v) = self.map_type_args(&name, type_args, span);
-                let map_ty = self.interner.intern(Type::Map(k, v));
-                let callback_ty = self.function_type(vec![k, v], TypeInterner::ERROR);
-                Some((vec![map_ty, callback_ty], TypeInterner::NOTHING))
             }
             "uuid.new" => {
                 self.no_type_args_signature(&name, type_args, span, vec![], TypeInterner::STRING)

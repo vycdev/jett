@@ -1228,32 +1228,25 @@ map[string, list[User]] by_role = list.group_by(users, function(u: User) returns
 
 An LLM calling `list.filter` cannot produce an off-by-one error. It cannot forget to handle an empty list. It cannot accidentally mutate the original. The standard library handles all of this.
 
-The current compiler-backed public map surface is transitional technical debt.
-Every public `map.*` declaration must ultimately live in compiler-shipped
-`.jett` source, with compositional helpers implemented as real Jett bodies and
-no public names or signatures hardcoded in the compiler. Low-level storage,
-key-equality, lookup/update, and iteration behavior may remain behind private
-trusted runtime kernels, but those kernels are not public API.
+The complete public map and set surfaces are compiler-shipped source APIs in
+`stdlib/map.jett` and `stdlib/set.jett`. Their names, generic signatures, view
+parameters, and compositional behavior are ordinary `.jett` declarations; the
+compiler has no hardcoded public map or set signatures or dispatch cases.
+Private trusted kernels provide only allocation, storage, equality, lookup,
+update, cardinality, and parallel list conversion.
 
-[#61](https://github.com/vycdev/jett/issues/61) starts that transition with
-`map.is_empty`, `map.contains_key`, `map.set`, `map.get_or`, and `map.merge`.
-Follow-up work must provide source-owned wrappers or bodies for the remaining
-public constructors, accessors, mutations, conversions, iteration helpers, and
-higher-order operations, then remove their hardcoded public signatures and
-dispatch paths.
+Collection ownership stays uniform. `map.length`, `map.is_empty`, `map.has`,
+and `map.contains_key` observe a view. `set.length`, `set.is_empty`, and
+`set.contains` do the same. Operations that produce owned elements or a new
+collection consume their collection inputs; callers that need both values must
+write `clone` explicitly. This includes `map.get`, transformations, key/value
+and entry conversion, and set conversion or algebra. Higher-order map bodies
+are real Jett loops, and `map.filter` visibly clones the key and value passed to
+its predicate before moving the originals into the output.
 
-The current compiler-backed public set surface is transitional technical debt.
-Every public `set.*` declaration must ultimately be compiler-shipped `.jett`
-source; compositional helpers have real Jett bodies, while only private trusted
-kernels may provide equality, storage, cardinality, iteration, or conversion.
-Those kernels are implementation details, so the compiler does not retain
-hardcoded public set names or signatures as the final architecture.
-
-The first extraction slice, [tracked by
-#59](https://github.com/vycdev/jett/issues/59), moves `set.is_empty`,
-`set.union`, `set.intersection`, and `set.difference` into source. Follow-up is
-required for public `new`, `add`, `remove`, `contains`, `length`, and `to_list`
-declarations that front the trusted kernels.
+`map.entries[K, V]` returns `list[map.Entry[K, V]]`, where each entry has typed
+`key: K` and `value: V` fields. This replaces the old compiler wildcard pair
+shape with a statically expressible public value.
 
 The current compiler-backed public list surface is transitional technical debt.
 Every public `list.*` declaration must ultimately be compiler-shipped `.jett`

@@ -681,17 +681,10 @@ impl<'a> OwnershipChecker<'a> {
     }
 
     fn first_argument_is_implicit_view(&self, callee: &Expr) -> bool {
-        // Map and list builtins that operate on a collection without consuming it.
+        // Compiler-backed list operations that do not consume their collection.
+        // Source-owned stdlib views are collected from their declarations.
         // The first argument (the collection) is implicitly viewed.
         let collection_view_builtins: &[&str] = &[
-            "map.length",
-            "map.has",
-            "map.get",
-            "map.insert",
-            "map.remove",
-            "map.keys",
-            "map.values",
-            "map.is_empty",
             "list.length",
             "list.get",
             "list.append",
@@ -723,10 +716,6 @@ impl<'a> OwnershipChecker<'a> {
             "list.sort_by_index",
             "list.is_sorted",
             "list.all_elements_in",
-            "map.get_or",
-            "map.merge",
-            "map.contains_key",
-            "map.set",
         ];
         Self::dotted_name_str(callee)
             .as_deref()

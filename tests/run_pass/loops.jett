@@ -87,7 +87,7 @@ function sum_map_values(m: map[string, int64]) returns int64:
     return total
 
 function test_sum_map() returns int64:
-    map[string, int64] scores = map.new[string, int64]()
+    mutable map[string, int64] scores = map.new[string, int64]()
     scores = map.insert[string, int64](scores, "alice", 90)
     scores = map.insert[string, int64](scores, "bob", 85)
     scores = map.insert[string, int64](scores, "carol", 95)

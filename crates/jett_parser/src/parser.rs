@@ -1150,10 +1150,21 @@ impl<'src> Parser<'src> {
             | TokenKind::Optional
             | TokenKind::Secret => {
                 self.advance();
-                Ident {
+                let mut ident = Ident {
                     name: self.token_text(&tok).to_string(),
                     span: tok.span,
+                };
+                while self.peek() == TokenKind::Dot {
+                    self.advance();
+                    let part = self.parse_ident();
+                    if part.name == "<error>" {
+                        break;
+                    }
+                    ident.span = ident.span.merge(part.span);
+                    ident.name.push('.');
+                    ident.name.push_str(&part.name);
                 }
+                ident
             }
             TokenKind::Ident => self.parse_qualified_ident(),
             _ => {
@@ -2318,8 +2329,11 @@ impl<'src> Parser<'src> {
             }
             // Type keywords that can also appear as expressions (for Type.method calls)
             kind if self.is_type_start(kind) => {
-                let ident = self.parse_type_ident();
-                Expr::Ident(ident)
+                self.advance();
+                Expr::Ident(Ident {
+                    name: self.token_text(&tok).to_string(),
+                    span: tok.span,
+                })
             }
             _ => {
                 self.error(
@@ -2486,6 +2500,7 @@ impl<'src> Parser<'src> {
                 | TokenKind::States
                 | TokenKind::Map_
                 | TokenKind::List_
+                | TokenKind::Set_
         )
     }
 }
@@ -2681,6 +2696,44 @@ function greet(view stdout: Stdout, name: string) returns nothing:
             }
             other => panic!("expected Function, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn parse_keyword_namespace_function_and_qualified_type() {
+        let src = "\
+namespace map
+export struct Entry[K, V]:
+    key: K
+    value: V
+export function set[K, V](items: map[K, V], key: K, value: V) returns map[K, V]:
+    return items
+namespace app
+function entries(items: list[map.Entry[string, int64]]) returns nothing:
+    return nothing
+";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        assert!(
+            result.module.items.iter().any(
+                |item| matches!(item, Item::Function(function) if function.name.name == "set")
+            )
+        );
+        let entries = result
+            .module
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Function(function) if function.name.name == "entries" => Some(function),
+                _ => None,
+            })
+            .expect("entries function should parse");
+        let TypeExpr::Generic(_, list_args, _) = &entries.params[0].ty else {
+            panic!("entries parameter should be a list")
+        };
+        let TypeExpr::Generic(owner, _, _) = &list_args[0] else {
+            panic!("list element should be a generic map entry")
+        };
+        assert_eq!(owner.name, "map.Entry");
     }
 
     #[test]

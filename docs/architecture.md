@@ -1363,41 +1363,28 @@ may delegate to private trusted runtime kernels; the remaining hardcoded public
 signatures and Rust dispatch cases are transitional bootstrap debt to remove in
 follow-up extraction slices.
 
-The compiler-backed public map namespace is transitional technical debt. Its
-target boundary is an exported compiler-shipped `.jett` declaration for every
-public `map.*` operation, with compositional helpers implemented by real Jett
-bodies and no hardcoded compiler knowledge of public map names or signatures.
-Storage, key equality, lookup/update, and iteration may delegate to private
-trusted runtime kernels; those kernels are implementation details, not public
-compiler-owned functions.
+The public map namespace is defined in `stdlib/map.jett`. Every public map
+operation resolves through an exported source declaration, including
+construction, lookup/update, conversions, merging, and higher-order traversal.
+Compositional and higher-order operations have Jett bodies. The runtime boundary
+contains only private trusted kernels for allocation, storage, equality,
+lookup/update, cardinality, and parallel-list conversion. Their checker and
+interpreter entry points reject project calls.
 
-[#61](https://github.com/vycdev/jett/issues/61) is a bounded first slice that
-moves `map.is_empty`, `map.contains_key`, `map.set`, `map.get_or`, and
-`map.merge`. Follow-up work must add source-owned public declarations for
-`new`, `length`, `has`, `get`, `insert`, `remove`, `keys`, `values`,
-`from_lists`, `entries`, `filter`, `map_values`, and `for_each`, replacing each
-remaining hardcoded public signature and runtime dispatch arm. Only private
-storage, key-equality, lookup/update, and iteration kernels may remain behind
-those source declarations.
+`map.entries[K, V]` uses the exported `map.Entry[K, V]` struct rather than a
+heterogeneous compiler wildcard. Operations that produce owned values consume
+their collection inputs; only the source-declared observer parameters are
+views. This keeps map ownership aligned with the move-only collection rule.
 
 At the target boundary, the compiler does not have hardcoded knowledge of
 public stdlib function names or signatures. Source-defined public functions are
 resolved through their declarations like ordinary namespaced code.
 
-The current compiler-backed public `set.*` surface is transitional technical
-debt, not a namespace exception. Every public set declaration and signature
-must ultimately live in compiler-shipped `.jett` source, and compositional
-helpers must have real Jett bodies. Public source functions may delegate to
-private trusted runtime kernels for equality, storage, cardinality, iteration,
-or conversion, but those kernels are implementation details: the compiler must
-not retain hardcoded knowledge of public set names or signatures.
-
-The first extraction slice is
-[tracked by #59](https://github.com/vycdev/jett/issues/59). It moves
-`set.is_empty`, `set.union`, `set.intersection`, and `set.difference` to real
-Jett bodies while preserving existing behavior. Follow-up extraction remains
-required for the public `set.new`, `set.add`, `set.remove`, `set.contains`,
-`set.length`, and `set.to_list` declarations that front the trusted kernels.
+The public set namespace is defined in `stdlib/set.jett`. Every public set
+operation has a source signature; conversion and set algebra use real Jett
+loops, while private trusted kernels cover only allocation, equality, storage,
+and cardinality. Set transformations consume their inputs, observer parameters
+are views, and iteration-derived output order remains insertion-derived.
 
 The current compiler-backed public `list.*` surface is transitional technical
 debt, not a namespace exception. Every public list declaration and signature
@@ -1487,7 +1474,7 @@ capability, determinism, and compatibility rules are defined in the
 
 ### How the Compiler Locates the Stdlib
 
-The stdlib is a set of `.jett` files bundled with the compiler installation. At build time, the compiler adds the stdlib directory to the set of source files before discovery. Stdlib namespaces (e.g., `namespace string`, `namespace math`) mostly resolve like user namespaces, but compiler-shipped stdlib files may use namespace fragments so a large module such as `json` can live in several implementation files while exposing one namespace. Project files and vendored dependencies cannot use this exception or reopen stdlib namespaces.
+The stdlib is a set of `.jett` files bundled with the compiler installation. At build time, the compiler adds the stdlib directory to the set of source files before discovery. Foundational files at the stdlib root are ordered before nested namespace fragments; files at the same depth remain lexical, so numbered fragments such as `json/10_*.jett` keep deterministic top-to-bottom declaration order. Stdlib namespaces (e.g., `namespace string`, `namespace math`) mostly resolve like user namespaces, but compiler-shipped stdlib files may use namespace fragments so a large module such as `json` can live in several implementation files while exposing one namespace. Project files and vendored dependencies cannot use this exception or reopen stdlib namespaces.
 
 ---
 

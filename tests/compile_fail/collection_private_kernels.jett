@@ -1,0 +1,5 @@
+namespace app
+function map_kernel_is_private() returns map[string, int64]:
+    return map.__new[string, int64]()
+function set_kernel_is_private() returns set[int64]:
+    return set.__new[int64]()

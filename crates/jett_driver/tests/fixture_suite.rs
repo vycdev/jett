@@ -880,6 +880,10 @@ run_pass_fixture!(run_pass_csv_operations, "csv_operations.jett");
 run_pass_fixture!(run_pass_string_format, "string_format.jett");
 run_pass_fixture!(run_pass_list_extras, "list_extras.jett");
 run_pass_fixture!(run_pass_map_advanced, "map_advanced.jett");
+run_pass_fixture!(
+    run_pass_map_set_source_surface,
+    "map_set_source_surface.jett"
+);
 run_pass_fixture!(run_pass_bytes_operations, "bytes_operations.jett");
 run_pass_fixture!(
     run_pass_secret_compare_boundary,
@@ -1226,6 +1230,19 @@ compile_fail_fixture!(
     compile_fail_collection_builtin_type_arg_arity,
     "collection_builtin_type_arg_arity.jett"
 );
+compile_fail_fixture!(
+    compile_fail_collection_private_kernels,
+    "collection_private_kernels.jett"
+);
+compile_fail_fixture!(
+    compile_fail_collection_transform_consumes,
+    "collection_transform_consumes.jett"
+);
+
+#[test]
+fn compile_fail_collection_transform_consumes_count() {
+    assert_compile_fail_error_count("collection_transform_consumes.jett", 400, 2);
+}
 
 #[test]
 fn compile_fail_collection_builtin_type_arg_arity_count() {
@@ -1249,7 +1266,8 @@ compile_fail_fixture!(
 
 #[test]
 fn compile_fail_higher_order_builtin_callback_types_count() {
-    assert_compile_fail_error_count("higher_order_builtin_callback_types.jett", 304, 8);
+    assert_compile_fail_error_count("higher_order_builtin_callback_types.jett", 304, 6);
+    assert_compile_fail_error_count("higher_order_builtin_callback_types.jett", 300, 2);
 }
 
 compile_fail_fixture!(

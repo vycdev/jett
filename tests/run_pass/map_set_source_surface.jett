@@ -1,0 +1,57 @@
+namespace app
+function map_source_surface() returns string:
+    mutable map[string, int64] scores = map.new[string, int64]()
+    bool was_empty = map.is_empty[string, int64](view scores)
+    scores = map.set[string, int64](scores, "alice", 10)
+    scores = map.insert[string, int64](scores, "bob", 20)
+    bool has_alice = map.has[string, int64](view scores, "alice")
+    bool contains_bob = map.contains_key[string, int64](view scores, "bob")
+    optional[int64] alice = map.get[string, int64](clone scores, "alice")
+    int64 alice_score = alice handle:
+        default 0
+    list[string] keys = map.keys[string, int64](clone scores)
+    list[int64] values = map.values[string, int64](clone scores)
+    map[string, int64] without_bob = map.remove[string, int64](clone scores, "bob")
+    list[map.Entry[string, int64]] pairs = map.entries[string, int64](scores)
+    map.Entry[string, int64] first = list.first[map.Entry[string, int64]](pairs) handle:
+        default map.Entry[string, int64](key: "missing", value: 0)
+    return "{was_empty}:{has_alice}:{contains_bob}:{alice_score}:{list.length[string](keys)}:{list.length[int64](values)}:{map.length[string, int64](view without_bob)}:{first.key}:{first.value}"
+verify map_source_surface:
+    assert map_source_surface() == "true:true:true:10:2:2:1:alice:10"
+function map_merge_preserves_order() returns string:
+    map[string, int64] first = map("a": 1, "b": 2)
+    map[string, int64] second = map("b": 20, "c": 3)
+    map[string, int64] merged = map.merge[string, int64](first, second)
+    list[string] keys = map.keys[string, int64](clone merged)
+    string first_key = list.get[string](view keys, 0) handle:
+        default "missing"
+    string second_key = list.get[string](view keys, 1) handle:
+        default "missing"
+    string third_key = list.get[string](view keys, 2) handle:
+        default "missing"
+    int64 updated = map.get_or[string, int64](merged, "b", 0)
+    return "{first_key}:{second_key}:{third_key}:{updated}"
+verify map_merge_preserves_order:
+    assert map_merge_preserves_order() == "a:b:c:20"
+function set_source_surface() returns string:
+    mutable set[int64] first = set.new[int64]()
+    first = set.add[int64](first, 1)
+    first = set.add[int64](first, 2)
+    mutable set[int64] second = set.new[int64]()
+    second = set.add[int64](second, 2)
+    second = set.add[int64](second, 3)
+    bool has_two = set.contains[int64](view first, 2)
+    set[int64] united = set.union[int64](clone first, clone second)
+    set[int64] common = set.intersection[int64](clone first, clone second)
+    set[int64] remaining = set.difference[int64](clone first, clone second)
+    set[int64] removed = set.remove[int64](clone first, 2)
+    list[int64] ordered = set.to_list[int64](united)
+    int64 first_item = list.get[int64](view ordered, 0) handle:
+        default 0
+    int64 second_item = list.get[int64](view ordered, 1) handle:
+        default 0
+    int64 third_item = list.get[int64](view ordered, 2) handle:
+        default 0
+    return "{has_two}:{set.length[int64](view common)}:{set.length[int64](view remaining)}:{set.is_empty[int64](view removed)}:{first_item}:{second_item}:{third_item}"
+verify set_source_surface:
+    assert set_source_surface() == "true:1:1:false:1:2:3"

@@ -247,6 +247,8 @@ pub struct Interpreter {
     type_arg_scopes: Vec<HashMap<String, TypeExpr>>,
     /// Namespace of the qualified function body currently executing.
     current_namespace: Option<String>,
+    /// Whether the current function body came from compiler-shipped stdlib source.
+    current_function_trusted_stdlib: bool,
     /// Trusted field metadata currently produced by direct `type.fields[T]()` loops.
     reflected_field_scopes: Vec<HashMap<String, ReflectedFieldBinding>>,
     /// Trusted TypeInfo metadata currently produced by direct reflected `args` loops.
@@ -301,6 +303,7 @@ impl Interpreter {
             actor_defs: HashMap::new(),
             type_arg_scopes: Vec::new(),
             current_namespace: None,
+            current_function_trusted_stdlib: false,
             reflected_field_scopes: Vec::new(),
             reflected_type_info_scopes: Vec::new(),
             reflected_variant_scopes: Vec::new(),
@@ -1506,6 +1509,16 @@ impl Interpreter {
     fn call_argument_type(&self, expression: &Expr) -> Option<TypeExpr> {
         match expression {
             Expr::Ident(argument) => self.get_variable_type(&argument.name).cloned(),
+            Expr::InlineFn(params, return_type, _, span) => Some(TypeExpr::Function(
+                params.iter().map(|param| param.ty.clone()).collect(),
+                Box::new(return_type.clone().unwrap_or_else(|| {
+                    TypeExpr::Named(Ident {
+                        name: "nothing".to_string(),
+                        span: *span,
+                    })
+                })),
+                *span,
+            )),
             _ => self
                 .checked_expression_types
                 .as_ref()
@@ -1543,6 +1556,15 @@ impl Interpreter {
             }
             (expected, TypeExpr::View(actual, _)) => {
                 Self::infer_type_arguments(expected, actual, type_params, inferred);
+            }
+            (
+                TypeExpr::Function(expected_params, expected_return, _),
+                TypeExpr::Function(actual_params, actual_return, _),
+            ) => {
+                for (expected, actual) in expected_params.iter().zip(actual_params) {
+                    Self::infer_type_arguments(expected, actual, type_params, inferred);
+                }
+                Self::infer_type_arguments(expected_return, actual_return, type_params, inferred);
             }
             _ => {}
         }
@@ -8239,16 +8261,16 @@ impl Interpreter {
                 }
             }
 
-            // -- Map operations (stdlib/map.jett) -----------------------------
-            "map.new" => Some(Ok(Value::Map(Vec::new()))),
-            "map.length" => {
+            // -- Private map kernels (stdlib/map.jett) ------------------------
+            "map.__new" if self.current_function_trusted_stdlib => Some(Ok(Value::Map(Vec::new()))),
+            "map.__length" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Map(entries) => Some(Ok(Value::Int64(entries.len() as i64))),
                     _ => Some(Err(format!("{name} expects a map argument"))),
                 }
             }
-            "map.has" => {
+            "map.__has" if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match &args[0] {
                     Value::Map(entries) => {
@@ -8258,7 +8280,7 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects a map as first argument"))),
                 }
             }
-            "map.get" => {
+            "map.__get" if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match &args[0] {
                     Value::Map(entries) => {
@@ -8274,7 +8296,7 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects a map as first argument"))),
                 }
             }
-            "map.insert" => {
+            "map.__insert" if self.current_function_trusted_stdlib => {
                 require_args!(name, 3, args);
                 match args[0].clone() {
                     Value::Map(mut entries) => {
@@ -8290,7 +8312,7 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects a map as first argument"))),
                 }
             }
-            "map.remove" => {
+            "map.__remove" if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match args[0].clone() {
                     Value::Map(mut entries) => {
@@ -8300,77 +8322,7 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects a map as first argument"))),
                 }
             }
-            "map.keys" => {
-                require_args!(name, 1, args);
-                match &args[0] {
-                    Value::Map(entries) => {
-                        let keys = entries.iter().map(|(k, _)| k.clone()).collect();
-                        Some(Ok(Value::List(keys)))
-                    }
-                    _ => Some(Err(format!("{name} expects a map argument"))),
-                }
-            }
-            "map.values" => {
-                require_args!(name, 1, args);
-                match &args[0] {
-                    Value::Map(entries) => {
-                        let vals = entries.iter().map(|(_, v)| v.clone()).collect();
-                        Some(Ok(Value::List(vals)))
-                    }
-                    _ => Some(Err(format!("{name} expects a map argument"))),
-                }
-            }
-            "map.is_empty" => {
-                require_args!(name, 1, args);
-                match &args[0] {
-                    Value::Map(entries) => Some(Ok(Value::Bool(entries.is_empty()))),
-                    _ => Some(Err(format!("{name} expects a map argument"))),
-                }
-            }
-
-            // map.set is the canonical name (design doc); insert is an alias
-            "map.set" => self.call_builtin("map.insert", args),
-
-            "map.get_or" => {
-                if args.len() != 3 {
-                    return Some(Err(format!("{name} expects 3 arguments")));
-                }
-                match &args[0] {
-                    Value::Map(entries) => {
-                        let key = &args[1];
-                        let default = args[2].clone();
-                        let found = entries
-                            .iter()
-                            .find(|(k, _)| k == key)
-                            .map(|(_, v)| v.clone())
-                            .unwrap_or(default);
-                        Some(Ok(found))
-                    }
-                    _ => Some(Err(format!("{name} expects a map argument"))),
-                }
-            }
-
-            "map.merge" => {
-                require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
-                    (Value::Map(a), Value::Map(b)) => {
-                        let mut merged = a.clone();
-                        for (k, v) in b {
-                            if let Some(pos) = merged.iter().position(|(mk, _)| mk == k) {
-                                merged[pos].1 = v.clone();
-                            } else {
-                                merged.push((k.clone(), v.clone()));
-                            }
-                        }
-                        Some(Ok(Value::Map(merged)))
-                    }
-                    _ => Some(Err(format!("{name} expects two map arguments"))),
-                }
-            }
-
-            "map.contains_key" => self.call_builtin("map.has", args),
-
-            "map.from_lists" => {
+            "map.__from_lists" if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::List(keys), Value::List(values)) => {
@@ -8385,23 +8337,9 @@ impl Interpreter {
                 }
             }
 
-            "map.entries" => {
-                require_args!(name, 1, args);
-                match &args[0] {
-                    Value::Map(entries) => {
-                        let pairs = entries
-                            .iter()
-                            .map(|(k, v)| Value::List(vec![k.clone(), v.clone()]))
-                            .collect();
-                        Some(Ok(Value::List(pairs)))
-                    }
-                    _ => Some(Err(format!("{name} expects a map argument"))),
-                }
-            }
-
-            // -- Set operations (stdlib/set.jett) -----------------------------
-            "set.new" => Some(Ok(Value::Set(Vec::new()))),
-            "set.add" => {
+            // -- Private set kernels (stdlib/set.jett) ------------------------
+            "set.__new" if self.current_function_trusted_stdlib => Some(Ok(Value::Set(Vec::new()))),
+            "set.__add" if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match args[0].clone() {
                     Value::Set(mut items) => {
@@ -8414,7 +8352,7 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects a set as first argument"))),
                 }
             }
-            "set.remove" => {
+            "set.__remove" if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match args[0].clone() {
                     Value::Set(mut items) => {
@@ -8424,69 +8362,18 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects a set as first argument"))),
                 }
             }
-            "set.contains" => {
+            "set.__contains" if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match &args[0] {
                     Value::Set(items) => Some(Ok(Value::Bool(items.contains(&args[1])))),
                     _ => Some(Err(format!("{name} expects a set as first argument"))),
                 }
             }
-            "set.length" => {
+            "set.__length" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Set(items) => Some(Ok(Value::Int64(items.len() as i64))),
                     _ => Some(Err(format!("{name} expects a set argument"))),
-                }
-            }
-            "set.is_empty" => {
-                require_args!(name, 1, args);
-                match &args[0] {
-                    Value::Set(items) => Some(Ok(Value::Bool(items.is_empty()))),
-                    _ => Some(Err(format!("{name} expects a set argument"))),
-                }
-            }
-            "set.to_list" => {
-                require_args!(name, 1, args);
-                match &args[0] {
-                    Value::Set(items) => Some(Ok(Value::List(items.clone()))),
-                    _ => Some(Err(format!("{name} expects a set argument"))),
-                }
-            }
-            "set.union" => {
-                require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
-                    (Value::Set(a), Value::Set(b)) => {
-                        let mut result = a.clone();
-                        for item in b {
-                            if !result.contains(item) {
-                                result.push(item.clone());
-                            }
-                        }
-                        Some(Ok(Value::Set(result)))
-                    }
-                    _ => Some(Err(format!("{name} expects two set arguments"))),
-                }
-            }
-            "set.intersection" => {
-                require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
-                    (Value::Set(a), Value::Set(b)) => {
-                        let result: Vec<Value> =
-                            a.iter().filter(|v| b.contains(v)).cloned().collect();
-                        Some(Ok(Value::Set(result)))
-                    }
-                    _ => Some(Err(format!("{name} expects two set arguments"))),
-                }
-            }
-            "set.difference" => {
-                require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
-                    (Value::Set(a), Value::Set(b)) => {
-                        let result: Vec<Value> =
-                            a.iter().filter(|v| !b.contains(v)).cloned().collect();
-                        Some(Ok(Value::Set(result)))
-                    }
-                    _ => Some(Err(format!("{name} expects two set arguments"))),
                 }
             }
 
@@ -9884,7 +9771,10 @@ impl Interpreter {
         self.type_arg_scopes.push(type_scope);
 
         let saved_namespace = self.current_namespace.clone();
+        let saved_trusted_stdlib = self.current_function_trusted_stdlib;
         self.current_namespace = Self::function_namespace(&resolved_name);
+        self.current_function_trusted_stdlib =
+            self.trusted_stdlib_functions.contains(&resolved_name);
 
         self.push_scope();
         let call_result = (|| {
@@ -9917,6 +9807,7 @@ impl Interpreter {
         self.pop_scope();
         self.type_arg_scopes.pop();
         self.current_namespace = saved_namespace;
+        self.current_function_trusted_stdlib = saved_trusted_stdlib;
         call_result
     }
 
@@ -10270,76 +10161,6 @@ impl Interpreter {
                 Some(Ok(Value::List(result)))
             }
 
-            // -- Map higher-order builtins ------------------------------------
-            "map.filter" => {
-                if args.len() != 2 {
-                    return Some(Err(format!(
-                        "map.filter expects 2 arguments, got {}",
-                        args.len()
-                    )));
-                }
-                let entries = match &args[0] {
-                    Value::Map(v) => v.clone(),
-                    _ => return Some(Err("map.filter: first argument must be a map".into())),
-                };
-                let fn_val = args[1].clone();
-                let mut result = Vec::new();
-                for (k, v) in entries {
-                    match self.call_fn_value(fn_val.clone(), vec![k.clone(), v.clone()]) {
-                        Ok(Value::Bool(true)) => result.push((k, v)),
-                        Ok(Value::Bool(false)) => {}
-                        Ok(other) => {
-                            return Some(Err(format!(
-                                "map.filter: predicate returned {other}, expected bool"
-                            )));
-                        }
-                        Err(e) => return Some(Err(e)),
-                    }
-                }
-                Some(Ok(Value::Map(result)))
-            }
-            "map.map_values" => {
-                if args.len() != 2 {
-                    return Some(Err(format!(
-                        "map.map_values expects 2 arguments, got {}",
-                        args.len()
-                    )));
-                }
-                let entries = match &args[0] {
-                    Value::Map(v) => v.clone(),
-                    _ => return Some(Err("map.map_values: first argument must be a map".into())),
-                };
-                let fn_val = args[1].clone();
-                let mut result = Vec::new();
-                for (k, v) in entries {
-                    match self.call_fn_value(fn_val.clone(), vec![v]) {
-                        Ok(new_v) => result.push((k, new_v)),
-                        Err(e) => return Some(Err(e)),
-                    }
-                }
-                Some(Ok(Value::Map(result)))
-            }
-            "map.for_each" => {
-                if args.len() != 2 {
-                    return Some(Err(format!(
-                        "map.for_each expects 2 arguments, got {}",
-                        args.len()
-                    )));
-                }
-                let entries = match &args[0] {
-                    Value::Map(v) => v.clone(),
-                    _ => return Some(Err("map.for_each: first argument must be a map".into())),
-                };
-                let fn_val = args[1].clone();
-                for (k, v) in entries {
-                    match self.call_fn_value(fn_val.clone(), vec![k, v]) {
-                        Ok(_) => {}
-                        Err(e) => return Some(Err(e)),
-                    }
-                }
-                Some(Ok(Value::Nothing))
-            }
-
             _ => None,
         }
     }
@@ -10375,9 +10196,13 @@ impl Interpreter {
                     let param_ty = self.substitute_type_expr(&param.ty);
                     self.set_variable_with_type(&param.name.name, arg, param_ty);
                 }
-                let result = self.exec_block_inner(&body)?;
+                let saved_trusted_stdlib = self.current_function_trusted_stdlib;
+                self.current_function_trusted_stdlib = false;
+                let result = self.exec_block_inner(&body);
+                self.current_function_trusted_stdlib = saved_trusted_stdlib;
                 self.pop_scope(); // params
                 self.pop_scope(); // captures
+                let result = result?;
                 Ok(match result {
                     Some(Signal::Return(v)) => v,
                     _ => Value::Nothing,

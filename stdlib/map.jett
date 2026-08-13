@@ -1,0 +1,64 @@
+namespace map
+export struct Entry[K, V]:
+    key: K
+    value: V
+export function new[K, V]() returns map[K, V]:
+    return map.__new[K, V]()
+export function length[K, V](view items: map[K, V]) returns int64:
+    return map.__length[K, V](view items)
+export function is_empty[K, V](view items: map[K, V]) returns bool:
+    return map.length[K, V](view items) == 0
+export function has[K, V](view items: map[K, V], view key: K) returns bool:
+    return map.__has[K, V](view items, view key)
+export function contains_key[K, V](view items: map[K, V], view key: K) returns bool:
+    return map.has[K, V](view items, view key)
+export function get[K, V](items: map[K, V], view key: K) returns optional[V]:
+    return map.__get[K, V](items, view key)
+export function insert[K, V](items: map[K, V], key: K, value: V) returns map[K, V]:
+    return map.__insert[K, V](items, key, value)
+export function set[K, V](items: map[K, V], key: K, value: V) returns map[K, V]:
+    return map.insert[K, V](items, key, value)
+export function remove[K, V](items: map[K, V], view key: K) returns map[K, V]:
+    return map.__remove[K, V](items, view key)
+export function get_or[K, V](items: map[K, V], view key: K, default_value: V) returns V:
+    optional[V] found = map.get[K, V](items, view key)
+    return found handle:
+        default default_value
+export function merge[K, V](first_map: map[K, V], second_map: map[K, V]) returns map[K, V]:
+    mutable map[K, V] output = first_map
+    for key, value in second_map:
+        output = map.insert[K, V](output, key, value)
+    return output
+export function keys[K, V](items: map[K, V]) returns list[K]:
+    mutable list[K] output = list.new[K]()
+    for key, value in items:
+        output = list.append[K](output, key)
+    return output
+export function values[K, V](items: map[K, V]) returns list[V]:
+    mutable list[V] output = list.new[V]()
+    for key, value in items:
+        output = list.append[V](output, value)
+    return output
+export function from_lists[K, V](keys: list[K], values: list[V]) returns map[K, V]:
+    return map.__from_lists[K, V](keys, values)
+export function entries[K, V](items: map[K, V]) returns list[Entry[K, V]]:
+    mutable list[Entry[K, V]] output = list.new[Entry[K, V]]()
+    for key, value in items:
+        Entry[K, V] entry = Entry[K, V](key: key, value: value)
+        output = list.append[Entry[K, V]](output, entry)
+    return output
+export function filter[K, V](items: map[K, V], predicate: function(K, V) returns bool) returns map[K, V]:
+    mutable map[K, V] output = map.new[K, V]()
+    for key, value in items:
+        if predicate(clone key, clone value):
+            output = map.insert[K, V](output, key, value)
+    return output
+export function map_values[K, V, U](items: map[K, V], mapper: function(V) returns U) returns map[K, U]:
+    mutable map[K, U] output = map.new[K, U]()
+    for key, value in items:
+        U mapped = mapper(value)
+        output = map.insert[K, U](output, key, mapped)
+    return output
+export function for_each[K, V, U](items: map[K, V], callback: function(K, V) returns U) returns nothing:
+    for key, value in items:
+        callback(key, value)

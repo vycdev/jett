@@ -16,12 +16,12 @@ function parse_top_level_set_dedupes() returns string:
 function parse_top_level_map_optional_bytes() returns string:
     map[string, optional[bytes]] entries = json.parse[map[string, optional[bytes]]]("{{\"blob\":\"0x4869\",\"missing\":null}}") handle error:
         return error
-    optional[optional[bytes]] maybe_blob_entry = map.get[string, optional[bytes]](entries, "blob")
+    optional[optional[bytes]] maybe_blob_entry = map.get[string, optional[bytes]](clone entries, "blob")
     optional[bytes] maybe_blob = maybe_blob_entry handle:
         return "missing blob"
     bytes blob = maybe_blob handle:
         return "none blob"
-    optional[optional[bytes]] maybe_missing_entry = map.get[string, optional[bytes]](entries, "missing")
+    optional[optional[bytes]] maybe_missing_entry = map.get[string, optional[bytes]](clone entries, "missing")
     optional[bytes] maybe_missing = maybe_missing_entry handle:
         return "missing key"
     bool has_missing = map.has[string, optional[bytes]](entries, "missing")

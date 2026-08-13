@@ -2426,7 +2426,21 @@ fn discover_modules_in_dir(
             sources: HashMap::new(),
         };
     }
-    files.sort();
+    if module_kind == "stdlib" {
+        // Foundational root modules must be declared before nested namespace
+        // fragments (notably json/), while fragments keep lexical order.
+        files.sort_by(|left, right| {
+            let left_depth = left
+                .strip_prefix(root)
+                .map_or(usize::MAX, |path| path.components().count());
+            let right_depth = right
+                .strip_prefix(root)
+                .map_or(usize::MAX, |path| path.components().count());
+            left_depth.cmp(&right_depth).then_with(|| left.cmp(right))
+        });
+    } else {
+        files.sort();
+    }
 
     let mut modules = Vec::new();
     let mut diagnostics = Vec::new();
@@ -4008,6 +4022,71 @@ mod tests {
     }
 
     #[test]
+    fn query_signature_reports_source_owned_map_and_set_surfaces() {
+        let map_functions = [
+            "new",
+            "length",
+            "is_empty",
+            "has",
+            "get",
+            "insert",
+            "remove",
+            "keys",
+            "values",
+            "set",
+            "get_or",
+            "merge",
+            "contains_key",
+            "from_lists",
+            "entries",
+            "filter",
+            "map_values",
+            "for_each",
+        ];
+        for function in map_functions {
+            let name = format!("map.{function}");
+            let result = query_signature(Path::new("."), &name)
+                .expect("map signature query should succeed")
+                .unwrap_or_else(|| panic!("{name} signature should be found"));
+            assert!(
+                result
+                    .file_path
+                    .replace('\\', "/")
+                    .ends_with("/stdlib/map.jett"),
+                "{name} should resolve to compiler-shipped source, got {}",
+                result.file_path
+            );
+        }
+
+        let set_functions = [
+            "new",
+            "add",
+            "remove",
+            "contains",
+            "length",
+            "is_empty",
+            "to_list",
+            "union",
+            "intersection",
+            "difference",
+        ];
+        for function in set_functions {
+            let name = format!("set.{function}");
+            let result = query_signature(Path::new("."), &name)
+                .expect("set signature query should succeed")
+                .unwrap_or_else(|| panic!("{name} signature should be found"));
+            assert!(
+                result
+                    .file_path
+                    .replace('\\', "/")
+                    .ends_with("/stdlib/set.jett"),
+                "{name} should resolve to compiler-shipped source, got {}",
+                result.file_path
+            );
+        }
+    }
+
+    #[test]
     fn bundle_project_writes_validated_single_file() {
         let root = temp_test_dir("jett_driver_bundle_project");
         fs::create_dir_all(root.join("src")).expect("temp bundle dir should be created");
@@ -4155,9 +4234,12 @@ mod tests {
             .expect("namespace boundary failure should retain structured diagnostics");
         assert_eq!(diagnostics.diagnostics.len(), 1);
         assert!(
-            diagnostics.diagnostics[0].message.contains(
-                "root-namespace declarations in src/main.jett after namespace `provider`"
-            )
+            diagnostics.diagnostics[0]
+                .message
+                .replace('\\', "/")
+                .contains(
+                    "root-namespace declarations in src/main.jett after namespace `provider`"
+                )
         );
         assert_eq!(preserved, "existing bundle\n");
     }
@@ -4237,6 +4319,7 @@ mod tests {
         assert!(
             diagnostics.diagnostics[0]
                 .message
+                .replace('\\', "/")
                 .contains("src/alpha.jett, src/beta.jett")
         );
         assert!(!diagnostics.diagnostics[0].message.contains("gamma.jett"));

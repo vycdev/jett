@@ -96,7 +96,8 @@
 | `string.index_of`, `string.count`, `string.to_upper_first`, `string.to_lower_first` | Done (search/count results are grapheme-boundary aware) |
 | `list.reduce`, `list.flat_map`, `list.chunk`, `list.sort_by_index`, `list.is_sorted`, `list.all_elements_in` | Done (higher-order callback return types are checked for explicit typed calls) |
 | `list.enumerate` | Done |
-| `map.get_or`, `map.merge`, `map.set`, `map.contains_key` | Done |
+| Complete source-owned `map` API and typed `map.Entry[K, V]` | Done |
+| Complete source-owned `set` API | Done |
 | `encoding` module: `base64_encode`, `base64_decode`, `hex_encode`, `hex_decode`, `url_encode`, `url_decode` | Done |
 | Byte-native hex helpers (`bytes.to_hex`, `bytes.from_hex`) | Done |
 | Closure captures (inline functions capture immutable enclosing scope) | Done |
