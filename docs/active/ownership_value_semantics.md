@@ -49,8 +49,13 @@ byte buffers without implicit aliasing or hidden copy-on-write behavior.
 All structs are move-only, regardless of whether their fields are copyable.
 Independent duplication requires explicit `clone`.
 
+### Enums
+
+All enums are move-only, including enums whose variants have no payload fields.
+Copyability is not inferred from the current variant shapes, so adding a payload
+cannot silently change the ownership semantics of an existing enum.
+
 ## Still Undecided
 
-- enums, including whether copyability can be derived;
 - capability, actor, task, and other resource values;
 - exact `view`, mutation, closure-capture, and concurrency rules.
