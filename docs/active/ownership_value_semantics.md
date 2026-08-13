@@ -69,7 +69,12 @@ so duplicating access to an actor is visible in source.
 Task handles are move-only. A task handle has one owner responsible for awaiting
 or cancelling the task.
 
+### Resource handles
+
+Resource handles, including files and sockets, are move-only. A resource may
+offer a resource-specific explicit duplication operation when that operation is
+valid, but resource handles are never duplicated implicitly.
+
 ## Still Undecided
 
-- other resource values;
 - exact `view`, mutation, closure-capture, and concurrency rules.
