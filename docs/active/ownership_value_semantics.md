@@ -44,8 +44,13 @@ byte buffers without implicit aliasing or hidden copy-on-write behavior.
 `list`, `map`, and `set` are move-only. Reading without transfer requires
 `view`; independent duplication requires explicit `clone`.
 
+### Structs
+
+All structs are move-only, regardless of whether their fields are copyable.
+Independent duplication requires explicit `clone`.
+
 ## Still Undecided
 
-- structs and enums, including whether copyability can be derived;
+- enums, including whether copyability can be derived;
 - capability, actor, task, and other resource values;
 - exact `view`, mutation, closure-capture, and concurrency rules.
