@@ -871,6 +871,10 @@ run_pass_fixture!(run_pass_logical_ops, "logical_ops.jett");
 run_pass_fixture!(run_pass_trace_basic, "trace_basic.jett");
 run_pass_fixture!(run_pass_breakpoint_basic, "breakpoint_basic.jett");
 run_pass_fixture!(run_pass_closures_advanced, "closures_advanced.jett");
+compile_fail_fixture!(
+    compile_fail_closure_capture_move_only,
+    "closure_capture_move_only.jett"
+);
 run_pass_fixture!(run_pass_math_advanced, "math_advanced.jett");
 run_pass_fixture!(run_pass_csv_operations, "csv_operations.jett");
 run_pass_fixture!(run_pass_string_format, "string_format.jett");

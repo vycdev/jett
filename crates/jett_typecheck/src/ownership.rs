@@ -63,6 +63,35 @@ fn cannot_consume_view(name: &str, span: Span) -> Diagnostic {
     )
 }
 
+/// E0402: Closures may capture only implicitly copyable values.
+pub(crate) fn cannot_capture_move_only(name: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        402,
+        format!("closure cannot capture move-only value `{name}`"),
+        span,
+    )
+}
+
+pub(crate) fn is_implicitly_copyable(interner: &TypeInterner, type_id: TypeId) -> bool {
+    matches!(
+        interner.resolve(type_id),
+        Type::Int8
+            | Type::Int16
+            | Type::Int32
+            | Type::Int64
+            | Type::Uint8
+            | Type::Uint16
+            | Type::Uint32
+            | Type::Uint64
+            | Type::Float32
+            | Type::Float64
+            | Type::String
+            | Type::Bool
+            | Type::Nothing
+            | Type::Error
+    )
+}
+
 // ---------------------------------------------------------------------------
 // Ownership checker
 // ---------------------------------------------------------------------------
@@ -165,23 +194,7 @@ impl<'a> OwnershipChecker<'a> {
     /// Returns `true` if the type is a primitive that is implicitly copyable
     /// and therefore not subject to linear consumption rules.
     fn is_copyable(&self, type_id: TypeId) -> bool {
-        matches!(
-            self.interner.resolve(type_id),
-            Type::Int8
-                | Type::Int16
-                | Type::Int32
-                | Type::Int64
-                | Type::Uint8
-                | Type::Uint16
-                | Type::Uint32
-                | Type::Uint64
-                | Type::Float32
-                | Type::Float64
-                | Type::String
-                | Type::Bool
-                | Type::Nothing
-                | Type::Error
-        )
+        is_implicitly_copyable(self.interner, type_id)
     }
 
     // ------------------------------------------------------------------
@@ -583,11 +596,28 @@ impl<'a> OwnershipChecker<'a> {
             | Expr::Cancel(inner, _) => {
                 self.check_expr_ownership(inner);
             }
-            Expr::InlineFn(_, _, body, _) => {
-                // The inline function body is checked in its own scope; it
-                // captures variables by reference (view), so we just check the
-                // body without consuming any outer variables.
+            Expr::InlineFn(params, _, body, _) => {
+                let saved = std::mem::take(&mut self.states);
+
+                for param in params {
+                    let type_id = self.resolve_type_for_ownership(&param.ty);
+                    self.states.insert(
+                        param.name.name.clone(),
+                        VarInfo {
+                            state: if param.view {
+                                OwnershipState::Viewed
+                            } else {
+                                OwnershipState::Owned
+                            },
+                            mutable: param.mutable,
+                            type_id,
+                            consumed_span: None,
+                        },
+                    );
+                }
+
                 self.check_block(body);
+                self.states = saved;
             }
             // Literals and other leaves have no ownership effects.
             Expr::IntLiteral(_, _)
