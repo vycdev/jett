@@ -59,7 +59,12 @@ cannot silently change the ownership semantics of an existing enum.
 
 Capability values are move-only. Authority cannot be duplicated implicitly.
 
+### Actor handles
+
+Actor handles are move-only. Creating another sender requires explicit `clone`,
+so duplicating access to an actor is visible in source.
+
 ## Still Undecided
 
-- actor, task, and other resource values;
+- task and other resource values;
 - exact `view`, mutation, closure-capture, and concurrency rules.
