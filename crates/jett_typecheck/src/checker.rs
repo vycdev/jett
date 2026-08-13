@@ -2407,7 +2407,20 @@ impl<'a> TypeChecker<'a> {
         let name = self.resolved_expr_name(callee)?;
         let private_collection_kernel = matches!(
             name.as_str(),
-            "map.__new"
+            "list.__new"
+                | "list.__append"
+                | "list.__length"
+                | "list.__get_clone"
+                | "list.__sort"
+                | "list.__insert_at"
+                | "list.__remove_at"
+                | "list.__swap"
+                | "list.__sort_by_index"
+                | "list.__is_sorted"
+                | "list.__sum"
+                | "list.__sort_by"
+                | "list.__group_by"
+                | "map.__new"
                 | "map.__length"
                 | "map.__has"
                 | "map.__get"
@@ -3177,106 +3190,67 @@ impl<'a> TypeChecker<'a> {
                         .intern(Type::Result(TypeInterner::BYTES, TypeInterner::STRING)),
                 ))
             }
-            "list.new" => {
-                if type_args.len() != 1 {
-                    self.sink.emit(errors::unknown_type(
-                        &format!(
-                            "list.new (expected 1 type argument, got {})",
-                            type_args.len()
-                        ),
-                        span,
-                    ));
-                    return Some((vec![], TypeInterner::ERROR));
-                }
-                let inner = self.resolve_type_expr(&type_args[0]);
+            "list.__new" => {
+                let inner = self.optional_type_arg(&name, type_args, span);
                 Some((vec![], self.interner.intern(Type::List(inner))))
             }
-            "list.append" => {
-                if type_args.len() != 1 {
-                    self.sink.emit(errors::unknown_type(
-                        &format!(
-                            "list.append (expected 1 type argument, got {})",
-                            type_args.len()
-                        ),
-                        span,
-                    ));
-                    return Some((
-                        vec![TypeInterner::ERROR, TypeInterner::ERROR],
-                        TypeInterner::ERROR,
-                    ));
-                }
-                let inner = self.resolve_type_expr(&type_args[0]);
+            "list.__append" => {
+                let inner = self.optional_type_arg(&name, type_args, span);
                 let list_ty = self.interner.intern(Type::List(inner));
                 Some((vec![list_ty, inner], list_ty))
             }
-            "list.length" => {
+            "list.__length" => {
                 let inner = self.optional_type_arg(&name, type_args, span);
                 Some((
                     vec![self.interner.intern(Type::List(inner))],
                     TypeInterner::INT64,
                 ))
             }
-            "list.get" => {
-                if type_args.len() != 1 {
-                    self.sink.emit(errors::unknown_type(
-                        &format!(
-                            "list.get (expected 1 type argument, got {})",
-                            type_args.len()
-                        ),
-                        span,
-                    ));
-                    return Some((
-                        vec![TypeInterner::ERROR, TypeInterner::INT64],
-                        TypeInterner::ERROR,
-                    ));
-                }
-                let inner = self.resolve_type_expr(&type_args[0]);
+            "list.__get_clone" => {
+                let inner = self.optional_type_arg(&name, type_args, span);
                 Some((
                     vec![self.interner.intern(Type::List(inner)), TypeInterner::INT64],
                     self.interner.intern(Type::Optional(inner)),
                 ))
             }
-            // list builtins that transform a list → list
-            "list.reverse" | "list.sort" | "list.unique" | "list.flatten" => {
+            "list.__sort" => {
                 let inner = self.optional_type_arg(&name, type_args, span);
                 let list_ty = self.interner.intern(Type::List(inner));
                 Some((vec![list_ty], list_ty))
             }
-            "list.skip" | "list.take" => {
+            "list.__insert_at" => {
+                let inner = self.optional_type_arg(&name, type_args, span);
+                let list_ty = self.interner.intern(Type::List(inner));
+                Some((vec![list_ty, TypeInterner::INT64, inner], list_ty))
+            }
+            "list.__remove_at" => {
                 let inner = self.optional_type_arg(&name, type_args, span);
                 let list_ty = self.interner.intern(Type::List(inner));
                 Some((vec![list_ty, TypeInterner::INT64], list_ty))
             }
-            "list.contains" => {
-                let inner = self.optional_type_arg(&name, type_args, span);
-                let list_ty = self.interner.intern(Type::List(inner));
-                Some((vec![list_ty, inner], TypeInterner::BOOL))
-            }
-            "list.index_of" => {
+            "list.__swap" => {
                 let inner = self.optional_type_arg(&name, type_args, span);
                 let list_ty = self.interner.intern(Type::List(inner));
                 Some((
-                    vec![list_ty, inner],
-                    self.interner.intern(Type::Optional(TypeInterner::INT64)),
+                    vec![list_ty, TypeInterner::INT64, TypeInterner::INT64],
+                    list_ty,
                 ))
             }
-            "list.remove" => {
+            "list.__sort_by_index" => {
+                let inner = self.optional_type_arg(&name, type_args, span);
+                let row_ty = self.interner.intern(Type::List(inner));
+                let rows_ty = self.interner.intern(Type::List(row_ty));
+                Some((vec![rows_ty, TypeInterner::INT64], rows_ty))
+            }
+            "list.__is_sorted" => {
                 let inner = self.optional_type_arg(&name, type_args, span);
                 let list_ty = self.interner.intern(Type::List(inner));
-                Some((vec![list_ty, TypeInterner::INT64], list_ty))
+                Some((vec![list_ty], TypeInterner::BOOL))
             }
-            "list.concat" => {
+            "list.__sum" => {
                 let inner = self.optional_type_arg(&name, type_args, span);
                 let list_ty = self.interner.intern(Type::List(inner));
-                Some((vec![list_ty, list_ty], list_ty))
-            }
-            "list.zip" => {
-                let (inner_a, inner_b) = self.optional_two_type_args(&name, type_args, span);
-                let list_a = self.interner.intern(Type::List(inner_a));
-                let list_b = self.interner.intern(Type::List(inner_b));
-                let result_inner = self.interner.intern(Type::List(TypeInterner::ERROR));
-                let result_ty = self.interner.intern(Type::List(result_inner));
-                Some((vec![list_a, list_b], result_ty))
+                Some((vec![list_ty], inner))
             }
             // math builtins
             "math.sqrt" | "math.log" | "math.log2" | "math.log10" => self.no_type_args_signature(
@@ -3513,60 +3487,13 @@ impl<'a> TypeChecker<'a> {
                 Some((vec![set_ty], TypeInterner::INT64))
             }
 
-            // higher-order: list.filter[T](list, fn) -> list[T]
-            "list.filter" => {
-                let inner = self.optional_type_arg(&name, type_args, span);
-                let list_ty = self.interner.intern(Type::List(inner));
-                let predicate_ty = self.function_type(vec![inner], TypeInterner::BOOL);
-                Some((vec![list_ty, predicate_ty], list_ty))
-            }
-            // higher-order: list.map[T, U](list, fn) -> list[U]
-            "list.map" => {
-                let (inner_t, inner_u) = self.optional_two_type_args(&name, type_args, span);
-                let list_t = self.interner.intern(Type::List(inner_t));
-                let list_u = self.interner.intern(Type::List(inner_u));
-                let mapper_ty = self.function_type(vec![inner_t], inner_u);
-                Some((vec![list_t, mapper_ty], list_u))
-            }
-            // higher-order: list.find[T](list, fn) -> optional[T]
-            "list.find" => {
-                let inner = self.optional_type_arg(&name, type_args, span);
-                let list_ty = self.interner.intern(Type::List(inner));
-                let predicate_ty = self.function_type(vec![inner], TypeInterner::BOOL);
-                Some((
-                    vec![list_ty, predicate_ty],
-                    self.interner.intern(Type::Optional(inner)),
-                ))
-            }
-            // higher-order: list.sort_by[T](list, fn) -> list[T]
-            "list.sort_by" => {
+            "list.__sort_by" => {
                 let inner = self.optional_type_arg(&name, type_args, span);
                 let list_ty = self.interner.intern(Type::List(inner));
                 let key_fn_ty = self.function_type(vec![inner], TypeInterner::INT64);
                 Some((vec![list_ty, key_fn_ty], list_ty))
             }
-            // higher-order: list.all / list.any [T](list, fn) -> bool
-            "list.all" | "list.any" => {
-                let inner = self.optional_type_arg(&name, type_args, span);
-                let list_ty = self.interner.intern(Type::List(inner));
-                let predicate_ty = self.function_type(vec![inner], TypeInterner::BOOL);
-                Some((vec![list_ty, predicate_ty], TypeInterner::BOOL))
-            }
-            // higher-order: list.count[T](list, fn) -> int64
-            "list.count" => {
-                let inner = self.optional_type_arg(&name, type_args, span);
-                let list_ty = self.interner.intern(Type::List(inner));
-                let predicate_ty = self.function_type(vec![inner], TypeInterner::BOOL);
-                Some((vec![list_ty, predicate_ty], TypeInterner::INT64))
-            }
-            // list.sum[T](list) -> T (numeric)
-            "list.sum" => {
-                let inner = self.optional_type_arg(&name, type_args, span);
-                let list_ty = self.interner.intern(Type::List(inner));
-                Some((vec![list_ty], inner))
-            }
-            // list.group_by[T](list, fn) -> map[string, list[T]]
-            "list.group_by" => {
+            "list.__group_by" => {
                 let inner = self.optional_type_arg(&name, type_args, span);
                 let list_ty = self.interner.intern(Type::List(inner));
                 let group_map_ty = self
@@ -3574,88 +3501,6 @@ impl<'a> TypeChecker<'a> {
                     .intern(Type::Map(TypeInterner::STRING, list_ty));
                 let key_fn_ty = self.function_type(vec![inner], TypeInterner::STRING);
                 Some((vec![list_ty, key_fn_ty], group_map_ty))
-            }
-            // list.reduce[T, U](list, initial, fn) -> U
-            "list.reduce" => {
-                let (inner, accumulator) = self.optional_two_type_args(&name, type_args, span);
-                let list_ty = self.interner.intern(Type::List(inner));
-                let reducer_ty = self.function_type(vec![accumulator, inner], accumulator);
-                Some((vec![list_ty, accumulator, reducer_ty], accumulator))
-            }
-            // list.chunk[T](list, size) -> list[list[T]]
-            "list.chunk" => {
-                let inner = self.optional_type_arg(&name, type_args, span);
-                let list_ty = self.interner.intern(Type::List(inner));
-                let list_of_list = self.interner.intern(Type::List(list_ty));
-                Some((vec![list_ty, TypeInterner::INT64], list_of_list))
-            }
-            // list.sort_by_index[T](list[T], index) -> list[T]
-            // where T is the element type (e.g., list[string])
-            "list.sort_by_index" => {
-                let elem = self.optional_type_arg(&name, type_args, span);
-                let list_ty = self.interner.intern(Type::List(elem));
-                Some((vec![list_ty, TypeInterner::INT64], list_ty))
-            }
-            "list.is_sorted" => {
-                let inner = self.optional_type_arg(&name, type_args, span);
-                let list_ty = self.interner.intern(Type::List(inner));
-                Some((vec![list_ty], TypeInterner::BOOL))
-            }
-            "list.all_elements_in" => {
-                let inner = self.optional_type_arg(&name, type_args, span);
-                let list_ty = self.interner.intern(Type::List(inner));
-                Some((vec![list_ty, list_ty], TypeInterner::BOOL))
-            }
-            "list.enumerate" => {
-                let inner = self.optional_type_arg(&name, type_args, span);
-                let list_ty = self.interner.intern(Type::List(inner));
-                let pair_ty = self.interner.intern(Type::List(TypeInterner::ERROR));
-                let pairs_ty = self.interner.intern(Type::List(pair_ty));
-                Some((vec![list_ty], pairs_ty))
-            }
-            "list.from_set" => {
-                let inner = self.optional_type_arg(&name, type_args, span);
-                let set_ty = self.interner.intern(Type::Set(inner));
-                let list_ty = self.interner.intern(Type::List(inner));
-                Some((vec![set_ty], list_ty))
-            }
-            "list.repeat" => {
-                let inner = self.optional_type_arg(&name, type_args, span);
-                let list_ty = self.interner.intern(Type::List(inner));
-                Some((vec![inner, TypeInterner::INT64], list_ty))
-            }
-            "list.last_index_of" => {
-                let inner = self.optional_type_arg(&name, type_args, span);
-                let list_ty = self.interner.intern(Type::List(inner));
-                Some((
-                    vec![list_ty, inner],
-                    self.interner.intern(Type::Optional(TypeInterner::INT64)),
-                ))
-            }
-            "list.insert_at" => {
-                let inner = self.optional_type_arg(&name, type_args, span);
-                let list_ty = self.interner.intern(Type::List(inner));
-                Some((vec![list_ty, TypeInterner::INT64, inner], list_ty))
-            }
-            "list.remove_at" => {
-                let inner = self.optional_type_arg(&name, type_args, span);
-                let list_ty = self.interner.intern(Type::List(inner));
-                Some((vec![list_ty, TypeInterner::INT64], list_ty))
-            }
-            "list.swap" => {
-                let inner = self.optional_type_arg(&name, type_args, span);
-                let list_ty = self.interner.intern(Type::List(inner));
-                Some((
-                    vec![list_ty, TypeInterner::INT64, TypeInterner::INT64],
-                    list_ty,
-                ))
-            }
-            "list.flat_map" => {
-                let (inner_t, inner_u) = self.optional_two_type_args(&name, type_args, span);
-                let list_t = self.interner.intern(Type::List(inner_t));
-                let list_u = self.interner.intern(Type::List(inner_u));
-                let mapper_ty = self.function_type(vec![inner_t], list_u);
-                Some((vec![list_t, mapper_ty], list_u))
             }
             "uuid.new" => {
                 self.no_type_args_signature(&name, type_args, span, vec![], TypeInterner::STRING)
@@ -9089,7 +8934,7 @@ impl<'a> TypeChecker<'a> {
 
         if let Some(builtin_name) = callee_name.as_deref() {
             match builtin_name {
-                "range" | "list.range" => {
+                "range" => {
                     return self.check_range_builtin_call(builtin_name, type_args, args, span);
                 }
                 "print" | "println" => {
@@ -9304,6 +9149,18 @@ impl<'a> TypeChecker<'a> {
         } else if let Some(signature) = user_function_signature {
             signature
         } else {
+            if let Some(function_name) = callee_name.as_deref()
+                && function_name.starts_with("list.")
+            {
+                self.sink.emit(errors::unknown_type(
+                    &format!("function `{function_name}`"),
+                    span,
+                ));
+                for arg in args {
+                    self.check_expr(&arg.value);
+                }
+                return TypeInterner::ERROR;
+            }
             let callee_ty = self.check_expr(callee);
 
             if callee_ty == TypeInterner::ERROR {
@@ -11481,7 +11338,7 @@ mod tests {
     #[test]
     fn inferred_generic_calls_record_concrete_direct_and_pipeline_types() {
         let source = r#"function first[T](view items: list[T]) returns optional[T]:
-    return list.get[T](view items, 0)
+    return none
 function direct() returns optional[int64]:
     list[int64] items = list(1)
     return first(items)

@@ -38,7 +38,7 @@ function bound_generic_field_type_name() returns string:
     return found
 
 function bound_reflected_field_types_for[T](view value: T) returns string:
-    list[string] parts = list.new[string]()
+    mutable list[string] parts = list.new[string]()
     for field in type.fields[T]():
         comptime type Field = field.type_info:
             Field field_value = type.field_value[T, Field](view value, view field)
@@ -105,7 +105,7 @@ function bound_field_arg_type() returns string:
             comptime type Arg = arg:
                 list[Arg] values = type.field_value[ListBox, list[Arg]](view box, view field)
                 string type_name = type.name[Arg]()
-                int64 length = list.length(values)
+                int64 length = list.length[Arg](values)
                 found = "{type_name}:{length}"
     return found
 

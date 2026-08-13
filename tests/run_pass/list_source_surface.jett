@@ -1,0 +1,35 @@
+namespace app
+function parity(value: int64) returns string:
+    if value modulo 2 == 0:
+        return "even"
+    return "odd"
+function zip_summary() returns string:
+    list[list.Pair[int64, string]] pairs = list.zip[int64, string](list(1, 2), list("a", "b", "c"))
+    list.Pair[int64, string] first = list.first[list.Pair[int64, string]](view pairs) handle:
+        default list.Pair[int64, string](first: 0, second: "missing")
+    return "{first.first}:{first.second}:{list.length[list.Pair[int64, string]](view pairs)}"
+function enumerate_summary() returns string:
+    list[list.Indexed[string]] indexed = list.enumerate[string](list("a", "b"))
+    list.Indexed[string] second = list.get[list.Indexed[string]](view indexed, 1) handle:
+        default list.Indexed[string](index: -1, value: "missing")
+    return "{second.index}:{second.value}"
+function flatten_sum() returns int64:
+    list[int64] flat = list.flatten[int64](list(list(1, 2), list(3)))
+    return list.sum[int64](view flat)
+function sorted_row_value() returns string:
+    list[list[string]] rows = list.sort_by_index[string](list(list("b", "2"), list("a", "1")), 0)
+    list[string] first_row = list.first[list[string]](view rows) handle:
+        default list()
+    return list.first[string](view first_row) handle:
+        default "missing"
+function grouped_even_count() returns int64:
+    map[string, list[int64]] groups = list.group_by[int64](list(1, 2, 3, 4), parity)
+    list[int64] evens = map.get[string, list[int64]](groups, "even") handle:
+        default list()
+    return list.length[int64](view evens)
+verify list_source_surface:
+    assert zip_summary() == "1:a:2"
+    assert enumerate_summary() == "1:b"
+    assert flatten_sum() == 6
+    assert sorted_row_value() == "a"
+    assert grouped_even_count() == 2

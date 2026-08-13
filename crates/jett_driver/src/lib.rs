@@ -4022,6 +4022,73 @@ mod tests {
     }
 
     #[test]
+    fn query_signature_reports_source_owned_list_surface() {
+        let functions = [
+            "new",
+            "append",
+            "length",
+            "get",
+            "is_empty",
+            "first",
+            "last",
+            "insert_at",
+            "remove_at",
+            "remove",
+            "swap",
+            "skip",
+            "take",
+            "reverse",
+            "sort",
+            "contains",
+            "index_of",
+            "last_index_of",
+            "concat",
+            "flatten",
+            "unique",
+            "zip",
+            "filter",
+            "map",
+            "flat_map",
+            "find",
+            "sort_by",
+            "all",
+            "any",
+            "count",
+            "sum",
+            "group_by",
+            "reduce",
+            "chunk",
+            "sort_by_index",
+            "is_sorted",
+            "all_elements_in",
+            "enumerate",
+            "from_set",
+            "repeat",
+        ];
+        for function in functions {
+            let name = format!("list.{function}");
+            let result = query_signature(Path::new("."), &name)
+                .expect("list signature query should succeed")
+                .unwrap_or_else(|| panic!("{name} signature should be found"));
+            assert!(
+                result
+                    .file_path
+                    .replace('\\', "/")
+                    .ends_with("/stdlib/list.jett"),
+                "{name} should resolve to compiler-shipped source, got {}",
+                result.file_path
+            );
+        }
+
+        assert!(
+            query_signature(Path::new("."), "list.range")
+                .expect("removed list.range query should succeed")
+                .is_none(),
+            "global range is canonical; list.range must not remain public"
+        );
+    }
+
+    #[test]
     fn query_signature_reports_source_owned_map_and_set_surfaces() {
         let map_functions = [
             "new",

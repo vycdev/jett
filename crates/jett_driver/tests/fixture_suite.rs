@@ -434,7 +434,7 @@ fn math_sum_reports_overflow() {
 fn list_sum_reports_overflow() {
     assert_runtime_fail(
         "list_sum_overflow.jett",
-        "runtime error: list.sum: integer overflow: 9223372036854775807 + 1",
+        "runtime error: list.__sum: integer overflow: 9223372036854775807 + 1",
     );
 }
 
@@ -879,6 +879,7 @@ run_pass_fixture!(run_pass_math_advanced, "math_advanced.jett");
 run_pass_fixture!(run_pass_csv_operations, "csv_operations.jett");
 run_pass_fixture!(run_pass_string_format, "string_format.jett");
 run_pass_fixture!(run_pass_list_extras, "list_extras.jett");
+run_pass_fixture!(run_pass_list_source_surface, "list_source_surface.jett");
 run_pass_fixture!(run_pass_map_advanced, "map_advanced.jett");
 run_pass_fixture!(
     run_pass_map_set_source_surface,
@@ -1241,7 +1242,7 @@ compile_fail_fixture!(
 
 #[test]
 fn compile_fail_collection_transform_consumes_count() {
-    assert_compile_fail_error_count("collection_transform_consumes.jett", 400, 2);
+    assert_compile_fail_error_count("collection_transform_consumes.jett", 400, 3);
 }
 
 #[test]
@@ -1266,8 +1267,7 @@ compile_fail_fixture!(
 
 #[test]
 fn compile_fail_higher_order_builtin_callback_types_count() {
-    assert_compile_fail_error_count("higher_order_builtin_callback_types.jett", 304, 6);
-    assert_compile_fail_error_count("higher_order_builtin_callback_types.jett", 300, 2);
+    assert_compile_fail_error_count("higher_order_builtin_callback_types.jett", 300, 8);
 }
 
 compile_fail_fixture!(
@@ -1349,7 +1349,8 @@ compile_fail_fixture!(
 
 #[test]
 fn compile_fail_variable_arity_builtin_return_types_count() {
-    assert_compile_fail_error_count("variable_arity_builtin_return_types.jett", 311, 4);
+    assert_compile_fail_error_count("variable_arity_builtin_return_types.jett", 311, 3);
+    assert_compile_fail_error_count("variable_arity_builtin_return_types.jett", 309, 1);
 }
 
 compile_fail_fixture!(
@@ -1359,9 +1360,9 @@ compile_fail_fixture!(
 
 #[test]
 fn compile_fail_variable_arity_builtin_argument_shape_counts() {
-    assert_compile_fail_error_count("variable_arity_builtin_argument_shapes.jett", 303, 4);
-    assert_compile_fail_error_count("variable_arity_builtin_argument_shapes.jett", 304, 2);
-    assert_compile_fail_error_count("variable_arity_builtin_argument_shapes.jett", 309, 4);
+    assert_compile_fail_error_count("variable_arity_builtin_argument_shapes.jett", 303, 2);
+    assert_compile_fail_error_count("variable_arity_builtin_argument_shapes.jett", 304, 1);
+    assert_compile_fail_error_count("variable_arity_builtin_argument_shapes.jett", 309, 7);
 }
 
 #[test]

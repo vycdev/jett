@@ -7,3 +7,7 @@ function set_transform_consumes() returns int64:
     set[int64] original = set.add[int64](set.new[int64](), 1)
     set[int64] updated = set.add[int64](original, 2)
     return set.length[int64](view original)
+function list_transform_consumes() returns int64:
+    list[int64] original = list(1, 2, 3)
+    list[int64] updated = list.reverse[int64](original)
+    return list.length[int64](view original)

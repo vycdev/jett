@@ -1,10 +1,204 @@
 namespace list
+export struct Pair[A, B]:
+    first: A
+    second: B
+export struct Indexed[T]:
+    index: int64
+    value: T
+export function new[T]() returns list[T]:
+    return list.__new[T]()
+export function append[T](items: list[T], value: T) returns list[T]:
+    return list.__append[T](items, value)
+export function length[T](view items: list[T]) returns int64:
+    return list.__length[T](view items)
+export function get[T](view items: list[T], index: int64) returns optional[T]:
+    return list.__get_clone[T](view items, index)
 export function is_empty[T](view items: list[T]) returns bool:
-    return list.length(view items) == 0
+    return list.length[T](view items) == 0
 export function first[T](view items: list[T]) returns optional[T]:
     return list.get[T](view items, 0)
 export function last[T](view items: list[T]) returns optional[T]:
-    int64 length = list.length(view items)
-    if length == 0:
+    int64 item_count = list.length[T](view items)
+    if item_count == 0:
         return none
-    return list.get[T](view items, length - 1)
+    return list.get[T](view items, item_count - 1)
+export function insert_at[T](items: list[T], index: int64, value: T) returns list[T]:
+    return list.__insert_at[T](items, index, value)
+export function remove_at[T](items: list[T], index: int64) returns list[T]:
+    return list.__remove_at[T](items, index)
+export function remove[T](items: list[T], index: int64) returns list[T]:
+    return list.remove_at[T](items, index)
+export function swap[T](items: list[T], first_index: int64, second_index: int64) returns list[T]:
+    return list.__swap[T](items, first_index, second_index)
+export function skip[T](items: list[T], count: int64) returns list[T]:
+    mutable int64 index = 0
+    mutable list[T] output = list.new[T]()
+    for item in items:
+        if index >= count:
+            output = list.append[T](output, item)
+        index = index + 1
+    return output
+export function take[T](items: list[T], count: int64) returns list[T]:
+    mutable int64 index = 0
+    mutable list[T] output = list.new[T]()
+    for item in items:
+        if index < count:
+            output = list.append[T](output, item)
+        index = index + 1
+    return output
+export function reverse[T](items: list[T]) returns list[T]:
+    mutable int64 index = list.length[T](view items)
+    mutable list[T] output = list.new[T]()
+    while index > 0:
+        T item = list.get[T](view items, index - 1) handle:
+            return output
+        output = list.append[T](output, item)
+        index = index - 1
+    return output
+export function sort[T](items: list[T]) returns list[T]:
+    return list.__sort[T](items)
+export function contains[T](view items: list[T], view value: T) returns bool:
+    for item in view items:
+        if item == value:
+            return true
+    return false
+export function index_of[T](view items: list[T], view value: T) returns optional[int64]:
+    mutable int64 index = 0
+    for item in view items:
+        if item == value:
+            return some(index)
+        index = index + 1
+    return none
+export function last_index_of[T](view items: list[T], view value: T) returns optional[int64]:
+    mutable int64 index = 0
+    mutable optional[int64] found = none
+    for item in view items:
+        if item == value:
+            found = some(index)
+        index = index + 1
+    return found
+export function concat[T](first_list: list[T], second_list: list[T]) returns list[T]:
+    mutable list[T] output = first_list
+    for item in second_list:
+        output = list.append[T](output, item)
+    return output
+export function flatten[T](items: list[list[T]]) returns list[T]:
+    mutable list[T] output = list.new[T]()
+    for inner in items:
+        for item in inner:
+            output = list.append[T](output, item)
+    return output
+export function unique[T](items: list[T]) returns list[T]:
+    mutable list[T] output = list.new[T]()
+    for item in items:
+        if not list.contains[T](view output, view item):
+            output = list.append[T](output, item)
+    return output
+export function zip[A, B](first_list: list[A], second_list: list[B]) returns list[Pair[A, B]]:
+    mutable int64 pair_count = list.length[A](view first_list)
+    int64 second_count = list.length[B](view second_list)
+    if second_count < pair_count:
+        pair_count = second_count
+    mutable int64 index = 0
+    mutable list[Pair[A, B]] output = list.new[Pair[A, B]]()
+    while index < pair_count:
+        A first_value = list.get[A](view first_list, index) handle:
+            return output
+        B second_value = list.get[B](view second_list, index) handle:
+            return output
+        Pair[A, B] pair = Pair[A, B](first: first_value, second: second_value)
+        output = list.append[Pair[A, B]](output, pair)
+        index = index + 1
+    return output
+export function filter[T](items: list[T], predicate: function(T) returns bool) returns list[T]:
+    mutable list[T] output = list.new[T]()
+    for item in items:
+        if predicate(clone item):
+            output = list.append[T](output, item)
+    return output
+export function map[T, U](items: list[T], mapper: function(T) returns U) returns list[U]:
+    mutable list[U] output = list.new[U]()
+    for item in items:
+        output = list.append[U](output, mapper(item))
+    return output
+export function flat_map[T, U](items: list[T], mapper: function(T) returns list[U]) returns list[U]:
+    mutable list[U] output = list.new[U]()
+    for item in items:
+        list[U] mapped = mapper(item)
+        output = list.concat[U](output, mapped)
+    return output
+export function find[T](view items: list[T], predicate: function(T) returns bool) returns optional[T]:
+    for item in view items:
+        if predicate(clone item):
+            return some(clone item)
+    return none
+export function sort_by[T](items: list[T], key_function: function(T) returns int64) returns list[T]:
+    return list.__sort_by[T](items, key_function)
+export function all[T](view items: list[T], predicate: function(T) returns bool) returns bool:
+    for item in view items:
+        if not predicate(clone item):
+            return false
+    return true
+export function any[T](view items: list[T], predicate: function(T) returns bool) returns bool:
+    for item in view items:
+        if predicate(clone item):
+            return true
+    return false
+export function count[T](view items: list[T], predicate: function(T) returns bool) returns int64:
+    mutable int64 matches = 0
+    for item in view items:
+        if predicate(clone item):
+            matches = matches + 1
+    return matches
+export function sum[T](view items: list[T]) returns T:
+    return list.__sum[T](view items)
+export function group_by[T](items: list[T], key_function: function(T) returns string) returns map[string, list[T]]:
+    return list.__group_by[T](items, key_function)
+export function reduce[T, U](items: list[T], initial: U, reducer: function(U, T) returns U) returns U:
+    mutable U accumulator = initial
+    for item in items:
+        accumulator = reducer(accumulator, item)
+    return accumulator
+export function chunk[T](items: list[T], size: int64) returns list[list[T]]:
+    mutable int64 chunk_size = size
+    if chunk_size < 1:
+        chunk_size = 1
+    mutable list[list[T]] output = list.new[list[T]]()
+    mutable list[T] current = list.new[T]()
+    for item in items:
+        current = list.append[T](current, item)
+        if list.length[T](view current) == chunk_size:
+            output = list.append[list[T]](output, current)
+            current = list.new[T]()
+    if not list.is_empty[T](view current):
+        output = list.append[list[T]](output, current)
+    return output
+export function sort_by_index[T](items: list[list[T]], index: int64) returns list[list[T]]:
+    return list.__sort_by_index[T](items, index)
+export function is_sorted[T](view items: list[T]) returns bool:
+    return list.__is_sorted[T](view items)
+export function all_elements_in[T](view items: list[T], view pool: list[T]) returns bool:
+    for item in view items:
+        if not list.contains[T](view pool, view item):
+            return false
+    return true
+export function enumerate[T](items: list[T]) returns list[Indexed[T]]:
+    mutable int64 index = 0
+    mutable list[Indexed[T]] output = list.new[Indexed[T]]()
+    for item in items:
+        Indexed[T] indexed = Indexed[T](index: index, value: item)
+        output = list.append[Indexed[T]](output, indexed)
+        index = index + 1
+    return output
+export function from_set[T](items: set[T]) returns list[T]:
+    mutable list[T] output = list.new[T]()
+    for item in items:
+        output = list.append[T](output, item)
+    return output
+export function repeat[T](value: T, count: int64) returns list[T]:
+    mutable int64 index = 0
+    mutable list[T] output = list.new[T]()
+    while index < count:
+        output = list.append[T](output, clone value)
+        index = index + 1
+    return output

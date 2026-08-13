@@ -681,41 +681,12 @@ impl<'a> OwnershipChecker<'a> {
     }
 
     fn first_argument_is_implicit_view(&self, callee: &Expr) -> bool {
-        // Compiler-backed list operations that do not consume their collection.
         // Source-owned stdlib views are collected from their declarations.
-        // The first argument (the collection) is implicitly viewed.
         let collection_view_builtins: &[&str] = &[
-            "list.length",
-            "list.get",
-            "list.append",
-            "list.skip",
-            "list.take",
-            "list.reverse",
-            "list.sort",
-            "list.contains",
-            "list.index_of",
-            "list.remove",
-            "list.concat",
-            "list.flatten",
-            "list.unique",
-            "list.zip",
-            "list.filter",
-            "list.map",
-            "list.find",
-            "list.sort_by",
-            "list.all",
-            "list.any",
-            "list.count",
-            "list.sum",
-            "list.group_by",
             "random.choice",
             "random.shuffle",
             "math.average",
             "math.median",
-            "list.chunk",
-            "list.sort_by_index",
-            "list.is_sorted",
-            "list.all_elements_in",
         ];
         Self::dotted_name_str(callee)
             .as_deref()

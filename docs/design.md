@@ -1220,7 +1220,7 @@ list[Item] unique = list.unique(items)
 list[list[Item]] batches = list.chunk(items, 100)
 
 # Instead of writing zip logic:
-list[tuple[string, int64]] pairs = list.zip(names, scores)
+list[list.Pair[string, int64]] pairs = list.zip(names, scores)
 
 # Group by a field:
 map[string, list[User]] by_role = list.group_by(users, function(u: User) returns string: return u.role)
@@ -1248,21 +1248,20 @@ its predicate before moving the originals into the output.
 `key: K` and `value: V` fields. This replaces the old compiler wildcard pair
 shape with a statically expressible public value.
 
-The current compiler-backed public list surface is transitional technical debt.
-Every public `list.*` declaration must ultimately be compiler-shipped `.jett`
-source; compositional helpers have real Jett bodies, while only private trusted
-kernels may provide allocation, indexing, mutation, sorting, or callback
-execution. Those kernels are implementation details, so the compiler does not
-retain hardcoded public list names or signatures as the final architecture.
+The complete public list surface is compiler-shipped source in
+`stdlib/list.jett`. Observers declare views; transformations consume their
+inputs under the same move-only rule as map and set. Rust retains only private,
+trusted kernels for allocation, cloned indexing, mutation, sorting, numeric
+sum, and callback-driven sorting/grouping. Project code cannot call those
+kernels, and the checker/runtime contain no public list signatures or dispatch
+cases. `range` is the single canonical range API; there is no `list.range`
+alias.
 
-The first extraction slice, [tracked by
-#57](https://github.com/vycdev/jett/issues/57), defines `list.is_empty`,
-`list.first`, and `list.last` as generic functions in `stdlib/list.jett` whose
-parameter is `view items: list[T]`. That view spelling is part of the contract:
-ownership regressions call each helper and then reuse the original list. These
-functions compose over the transitional public length and indexing kernels;
-all remaining public list operations still require follow-up source
-declarations.
+`list.zip[A, B]` returns `list[list.Pair[A, B]]`, and `list.enumerate[T]`
+returns `list[list.Indexed[T]]`. These named structs replace the old
+heterogeneous wildcard-list results. `list.flatten[T]` accepts
+`list[list[T]]`, and `list.sort_by_index[T]` accepts and returns
+`list[list[T]]`, so their source signatures state their actual shapes.
 
 **String operations — no manual parsing:**
 
@@ -6652,11 +6651,13 @@ string name = "jett"
 
 Generics use `[T]` (square brackets) rather than `<T>` — avoids ambiguity with comparison operators and is more reliably tokenized. Square brackets **only** mean generics in Jett — there is no `[]` indexing operator. List access uses `list.get[T](items, index)` (which returns `optional[T]`, forcing bounds checking), and string indexing does not exist (see Rule Set 12). This makes `[]` completely unambiguous: it always means a type parameter.
 
-**Generic type parameters on user functions are explicit at call sites.** The compiler does not infer user-function type parameters — the caller must specify them. This keeps types visible everywhere, especially in pipes and nested calls where there is no variable declaration to show the type. Compiler-owned collection helpers may omit type arguments only when the value argument already carries the local element/key/value type, such as `list.length(items)`. When type arguments are written on any function or builtin call, their count must exactly match that callable's generic arity.
+Generic type parameters may be inferred when argument types uniquely determine every parameter, including direct and pipeline calls to source-owned stdlib functions such as `list.length(items)`. Calls with no inferable value argument, an ambiguous result-only parameter, or an explicit reflection target write the type arguments. When type arguments are written, their count must exactly match the callable's generic arity.
 
 ```
-# Always explicit — no inference
-string result = add[string]("hello", " world")
+# Inferred from value arguments
+string result = add("hello", " world")
+
+# Explicit because construction has no value argument
 list[int64] items = list.new[int64]()
 
 # In pipes — types stay visible without needing variable declarations
@@ -6921,7 +6922,6 @@ The narrower static-folding possibility remains a separate
 - **Mutual struct composition** — two structs cannot contain each other (composition is physical containment, so circular inclusion would be infinitely sized). The `mutual` block exists for functions but not for structs. Need to determine how recursive data structures (trees, linked lists, graphs) are expressed in Jett — possibly via indices or some form of indirection.
 - **Fixed-size vs dynamic lists** — `list[T]` is currently used as a dynamic/growable collection throughout the design. For performance-critical code (bitfield payloads, buffer management, numerical computing), a fixed-size array type may be needed. Options: a separate `array[T, N]` type with compile-time-known size, or a refinement type like `type FixedBuffer = list[uint8] where list.length(value) == 1024`. A separate type gives the compiler more optimization opportunities (stack allocation, no bounds growth), but adds another collection type for the LLM to choose between.
 - **Struct equality and hashing** — `set[T]` and `map[K, V]` require elements/keys to implement `Hashable` and `Equatable`. Currently only primitives implement these. How do user-defined structs become usable in sets and as map keys? Options: auto-derive `Hashable`/`Equatable` when all fields implement them, require manual `implement` blocks, or some hybrid. This also affects `==` on structs — is structural equality automatic, or must it be explicitly implemented?
-- **Generic structs and tuple types** — generics are currently supported on functions (`function sort[T](...)`) and refinement types (`type NonEmpty[T] = list[T]`), but not on user-defined structs. Should Jett allow `struct Pair[T, U]: first: T, second: U`? Built-in types like `result[T, E]`, `optional[T]`, and `list[T]` are already generic, so the concept exists — the question is whether user-defined structs can also be parameterized. This also raises: can generic variables exist (`Pair[int64, string] p = ...`)? How do generic structs interact with interfaces? Related: `list.zip` uses a `tuple[T, U]` type that is not yet defined — this depends on generic structs being resolved.
 - **Type naming convention** — the design currently mixes lowercase for built-in types (`int64`, `string`, `list[T]`, `optional[T]`, `result[T, E]`) and PascalCase for user-defined types and capabilities (`User`, `Config`, `Stdout`, `Filesystem`). Is this distinction intentional and worth keeping, or should all types use a single convention? Lowercase is more token-efficient and consistent with Jett's keyword style. PascalCase visually distinguishes types from variables and functions. A unified convention reduces rules the LLM must learn, but the current split may help LLMs distinguish built-in vs user-defined types.
 
 ---

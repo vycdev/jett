@@ -79,7 +79,7 @@ function type_info_arg_primitive_tag_is[T](target: int64, expected: TypePrimitiv
     return found
 function type_info_arg_count[T]() returns int64:
     TypeInfo info = type.info[T]()
-    return list.length(info.args)
+    return list.length[TypeInfo](info.args)
 function type_info_arg_kind[T](target: int64) returns string:
     TypeInfo info = type.info[T]()
     string found = "missing"
@@ -129,11 +129,11 @@ function complex_field_arg_count(field_name: string) returns int64:
     int64 found = -1
     for field in fields:
         if field.name == field_name:
-            found = list.length(field.type_info.args)
+            found = list.length[TypeInfo](field.type_info.args)
     return found
 function field_count[T]() returns int64:
     list[TypeField] fields = type.fields[T]()
-    return list.length(fields)
+    return list.length[TypeField](fields)
 function field_kind[T](field_name: string) returns string:
     list[TypeField] fields = type.fields[T]()
     string found = "missing"
@@ -213,10 +213,10 @@ function header_version_by_reflection() returns int64:
     return found
 function bitfield_field_count[T]() returns int64:
     list[TypeBitfieldField] fields = type.bitfield_fields[T]()
-    return list.length(fields)
+    return list.length[TypeField](fields)
 function bitfield_metadata_field_count[T]() returns int64:
     TypeBitfield info = type.bitfield_layout[T]()
-    return list.length(info.fields)
+    return list.length[TypeField](info.fields)
 function bitfield_metadata_network_order[T]() returns bool:
     TypeBitfield info = type.bitfield_layout[T]()
     return info.network_order
@@ -266,16 +266,16 @@ function bitfield_field_enum_kind[T](field_name: string) returns string:
     return found
 function machine_layout_state_count[T]() returns int64:
     TypeMachine info = type.machine_layout[T]()
-    return list.length(info.states)
+    return list.length[TypeMachineState](info.states)
 function machine_state_count[T]() returns int64:
     list[TypeMachineState] states = type.machine_states[T]()
-    return list.length(states)
+    return list.length[TypeMachineState](states)
 function machine_state_field_count[T](state_name: string) returns int64:
     list[TypeMachineState] states = type.machine_states[T]()
     int64 found = -1
     for state in states:
         if state.name == state_name:
-            found = list.length(state.fields)
+            found = list.length[TypeField](state.fields)
     return found
 function machine_state_field_type_name[T](state_name: string, target: int64) returns string:
     list[TypeMachineState] states = type.machine_states[T]()
@@ -297,7 +297,7 @@ function machine_state_has_secret[T](state_name: string) returns bool:
     return found
 function machine_transition_count[T]() returns int64:
     list[TypeMachineTransition] edges = type.machine_transitions[T]()
-    return list.length(edges)
+    return list.length[TypeMachineTransition](edges)
 function machine_transition_target[T](source_name: string) returns string:
     list[TypeMachineTransition] edges = type.machine_transitions[T]()
     string found = "missing"
@@ -314,10 +314,10 @@ function machine_transition_source_index[T](source_name: string) returns int64:
     return found
 function active_machine_state_summary(view session: Session) returns string:
     TypeMachineState state = type.machine_state_value[Session](view session)
-    return "{state.index}:{state.name}:{list.length(state.fields)}:{state.has_secret}"
+    return "{state.index}:{state.name}:{list.length[TypeField](state.fields)}:{state.has_secret}"
 function active_machine_state_summary_precise(view session: Session at logged_in) returns string:
     TypeMachineState state = type.machine_state_value[Session at logged_in](view session)
-    return "{state.index}:{state.name}:{list.length(state.fields)}:{state.has_secret}"
+    return "{state.index}:{state.name}:{list.length[TypeField](state.fields)}:{state.has_secret}"
 function active_machine_logged_in_user_id(view session: Session at logged_in) returns string:
     TypeMachineState state = type.machine_state_value[Session at logged_in](view session)
     string found = "missing"
@@ -346,13 +346,13 @@ function reflected_logged_in_user_id_direct_loop() returns string:
     return active_machine_logged_in_user_id_direct_loop(view session)
 function variant_count[T]() returns int64:
     list[TypeVariant] variants = type.variants[T]()
-    return list.length(variants)
+    return list.length[TypeVariant](variants)
 function variant_field_count[T](variant_name: string) returns int64:
     list[TypeVariant] variants = type.variants[T]()
     int64 found = -1
     for variant in variants:
         if variant.name == variant_name:
-            found = list.length(variant.fields)
+            found = list.length[TypeField](variant.fields)
     return found
 function variant_discriminant[T](variant_name: string) returns int64:
     list[TypeVariant] variants = type.variants[T]()

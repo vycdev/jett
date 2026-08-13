@@ -8,7 +8,7 @@ struct FlatUser:
 
 function serialize_flat_public[T](view value: T) returns string:
     list[TypeField] fields = type.fields[T]()
-    list[string] parts = list.new[string]()
+    mutable list[string] parts = list.new[string]()
     string quote = "\""
     for field in fields:
         if field.has_secret == false:

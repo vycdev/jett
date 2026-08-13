@@ -44,10 +44,10 @@ byte buffers without implicit aliasing or hidden copy-on-write behavior.
 `list`, `map`, and `set` are move-only. Reading without transfer requires
 `view`; independent duplication requires explicit `clone`.
 
-The source-owned map and set APIs enforce this boundary: observers declare
+The source-owned list, map, and set APIs enforce this boundary: observers declare
 views, while operations returning owned elements or transformed collections
 consume their inputs. Reusing an input requires an explicit `clone` at the call
-site; map and set runtime kernels do not create a public ownership exception.
+site; private collection runtime kernels do not create a public ownership exception.
 
 ### Structs
 

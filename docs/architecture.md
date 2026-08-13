@@ -1386,31 +1386,17 @@ loops, while private trusted kernels cover only allocation, equality, storage,
 and cardinality. Set transformations consume their inputs, observer parameters
 are views, and iteration-derived output order remains insertion-derived.
 
-The current compiler-backed public `list.*` surface is transitional technical
-debt, not a namespace exception. Every public list declaration and signature
-must ultimately live in compiler-shipped `.jett` source, and compositional
-helpers must have real Jett bodies. Public source functions may delegate to
-private trusted runtime kernels for allocation, indexing, mutation, sorting,
-or callback execution, but those kernels are implementation details: the
-compiler must not retain hardcoded knowledge of public list names or
-signatures.
+The public list namespace is fully defined in `stdlib/list.jett`. Every public
+signature resolves from source, and compositional operations use Jett bodies.
+Only private trusted kernels cross into Rust for allocation, cloned indexing,
+mutation, sorting, numeric sum, and callback-driven sorting/grouping. Kernel
+entry points are rejected outside compiler-shipped stdlib code.
 
-The first extraction slice is
-[tracked by #57](https://github.com/vycdev/jett/issues/57). The three
-collection-view helpers are now ordinary functions in `stdlib/list.jett` with
-source signatures equivalent to:
-
-```jett
-export function is_empty[T](view items: list[T]) returns bool
-export function first[T](view items: list[T]) returns optional[T]
-export function last[T](view items: list[T]) returns optional[T]
-```
-
-Their Jett bodies compose over indexing and length kernels during the
-transition. The signatures preserve the current borrow/view behavior, with
-regressions that call each helper and then successfully reuse the original
-list. Follow-up extraction remains required for every other public `list.*`
-operation, including the public declarations that front foundational kernels.
+List observers declare views; transformations consume their inputs. Typed
+`list.Pair[A, B]` and `list.Indexed[T]` records carry the results of `zip` and
+`enumerate`. `flatten` and `sort_by_index` expose nested-list input shapes
+directly. The global variable-arity `range` builtin is canonical, and the old
+`list.range` alias is intentionally absent.
 
 Public APIs such as `list.filter`, `string.trim`, `math.sqrt`, `time.format`,
 and `crypto.sha256` are intended to be regular `.jett` functions. The compiler

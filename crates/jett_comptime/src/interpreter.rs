@@ -811,11 +811,17 @@ impl Interpreter {
             .registry_name(&self.type_aliases, type_name)
             .unwrap_or_else(|| type_name.to_string());
 
-        if let Some(base_ty) = self.type_alias_bases.get(&type_name).cloned() {
-            let namespace =
-                Self::type_name_namespace(&type_name).or(self.current_namespace.as_deref());
-            let base_type_name =
-                type_expr_name(&self.substitute_type_expr_in_namespace(&base_ty, namespace));
+        let constraint_value_ty = self
+            .type_alias_bases
+            .get(&type_name)
+            .cloned()
+            .map(|base_ty| {
+                let namespace =
+                    Self::type_name_namespace(&type_name).or(self.current_namespace.as_deref());
+                self.substitute_type_expr_in_namespace(&base_ty, namespace)
+            });
+        if let Some(base_ty) = &constraint_value_ty {
+            let base_type_name = type_expr_name(base_ty);
             self.check_refinement(&base_type_name, value)?;
         }
 
@@ -826,7 +832,11 @@ impl Interpreter {
         };
 
         self.push_scope();
-        self.set_variable("value", value.clone());
+        if let Some(base_ty) = constraint_value_ty {
+            self.set_variable_with_type("value", value.clone(), base_ty);
+        } else {
+            self.set_variable("value", value.clone());
+        }
         let result = self.eval_expr(&def.constraint);
         self.pop_scope();
 
@@ -1497,13 +1507,36 @@ impl Interpreter {
 
         let mut inferred = HashMap::new();
         for (param, actual) in function.params.iter().zip(actual_types) {
-            Self::infer_type_arguments(&param.ty, actual, &function.type_params, &mut inferred);
+            let actual = self.inference_base_type(actual);
+            Self::infer_type_arguments(&param.ty, &actual, &function.type_params, &mut inferred);
         }
         function
             .type_params
             .iter()
             .map(|param| inferred.get(&param.name).cloned())
             .collect()
+    }
+
+    fn inference_base_type(&self, ty: &TypeExpr) -> TypeExpr {
+        let mut current = self.substitute_type_expr(ty);
+        let mut seen = HashSet::new();
+        loop {
+            let TypeExpr::Named(ident) = &current else {
+                return current;
+            };
+            let Some(alias_name) = self.registry_name(&self.type_alias_bases, &ident.name) else {
+                return current;
+            };
+            if !seen.insert(alias_name.clone()) {
+                return current;
+            }
+            let Some(base) = self.type_alias_bases.get(&alias_name) else {
+                return current;
+            };
+            let namespace =
+                Self::type_name_namespace(&alias_name).or(self.current_namespace.as_deref());
+            current = self.substitute_type_expr_in_namespace(base, namespace);
+        }
     }
 
     fn call_argument_type(&self, expression: &Expr) -> Option<TypeExpr> {
@@ -8063,13 +8096,13 @@ impl Interpreter {
                 Some(Ok(Value::Nothing))
             }
 
-            // -- List operations (stdlib/list.jett) ---------------------------
-            "list.new" => {
+            // -- Private list kernels (stdlib/list.jett) ----------------------
+            "list.__new" if self.current_function_trusted_stdlib => {
                 require_args!(name, 0, args);
                 Some(Ok(Value::List(vec![])))
             }
 
-            "list.length" => {
+            "list.__length" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::List(items) => Some(Ok(Value::Int64(items.len() as i64))),
@@ -8077,7 +8110,7 @@ impl Interpreter {
                 }
             }
 
-            "list.append" => {
+            "list.__append" if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match &args[0] {
                     Value::List(items) => {
@@ -8089,7 +8122,7 @@ impl Interpreter {
                 }
             }
 
-            "list.get" => {
+            "list.__get_clone" if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::List(items), Value::Int64(index)) => {
@@ -8106,41 +8139,7 @@ impl Interpreter {
                 }
             }
 
-            "list.skip" => {
-                require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
-                    (Value::List(items), Value::Int64(n)) => {
-                        let n = nonnegative_usize(*n);
-                        Some(Ok(Value::List(items[n.min(items.len())..].to_vec())))
-                    }
-                    _ => Some(Err(format!("{name} expects a list and an int64"))),
-                }
-            }
-
-            "list.take" => {
-                require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
-                    (Value::List(items), Value::Int64(n)) => {
-                        let n = nonnegative_usize(*n);
-                        Some(Ok(Value::List(items[..n.min(items.len())].to_vec())))
-                    }
-                    _ => Some(Err(format!("{name} expects a list and an int64"))),
-                }
-            }
-
-            "list.reverse" => {
-                require_args!(name, 1, args);
-                match &args[0] {
-                    Value::List(items) => {
-                        let mut reversed = items.clone();
-                        reversed.reverse();
-                        Some(Ok(Value::List(reversed)))
-                    }
-                    _ => Some(Err(format!("{name} expects a list argument"))),
-                }
-            }
-
-            "list.sort" => {
+            "list.__sort" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::List(items) => {
@@ -8157,107 +8156,6 @@ impl Interpreter {
                         Some(Ok(Value::List(sorted)))
                     }
                     _ => Some(Err(format!("{name} expects a list argument"))),
-                }
-            }
-
-            "list.contains" => {
-                require_args!(name, 2, args);
-                match &args[0] {
-                    Value::List(items) => Some(Ok(Value::Bool(items.contains(&args[1])))),
-                    _ => Some(Err(format!("{name} expects a list as first argument"))),
-                }
-            }
-
-            "list.index_of" => {
-                require_args!(name, 2, args);
-                match &args[0] {
-                    Value::List(items) => {
-                        let idx = items.iter().position(|v| v == &args[1]);
-                        Some(Ok(match idx {
-                            Some(i) => Value::OptionalSome(Box::new(Value::Int64(i as i64))),
-                            None => Value::OptionalNone,
-                        }))
-                    }
-                    _ => Some(Err(format!("{name} expects a list as first argument"))),
-                }
-            }
-
-            "list.remove" => {
-                require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
-                    (Value::List(items), Value::Int64(index)) => {
-                        let Some(idx) = usize::try_from(*index).ok() else {
-                            return Some(Err(format!("{name}: index {index} out of bounds")));
-                        };
-                        if idx < items.len() {
-                            let mut new_list = items.clone();
-                            new_list.remove(idx);
-                            Some(Ok(Value::List(new_list)))
-                        } else {
-                            Some(Err(format!("{name}: index {index} out of bounds")))
-                        }
-                    }
-                    _ => Some(Err(format!("{name} expects a list and an int64 index"))),
-                }
-            }
-
-            "list.concat" => {
-                require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
-                    (Value::List(a), Value::List(b)) => {
-                        let mut result = a.clone();
-                        result.extend(b.iter().cloned());
-                        Some(Ok(Value::List(result)))
-                    }
-                    _ => Some(Err(format!("{name} expects two list arguments"))),
-                }
-            }
-
-            "list.flatten" => {
-                require_args!(name, 1, args);
-                match &args[0] {
-                    Value::List(items) => {
-                        let mut flat = Vec::new();
-                        for item in items {
-                            match item {
-                                Value::List(inner) => flat.extend(inner.iter().cloned()),
-                                other => flat.push(other.clone()),
-                            }
-                        }
-                        Some(Ok(Value::List(flat)))
-                    }
-                    _ => Some(Err(format!("{name} expects a list argument"))),
-                }
-            }
-
-            "list.unique" => {
-                require_args!(name, 1, args);
-                match &args[0] {
-                    Value::List(items) => {
-                        let mut seen = Vec::new();
-                        for item in items {
-                            if !seen.contains(item) {
-                                seen.push(item.clone());
-                            }
-                        }
-                        Some(Ok(Value::List(seen)))
-                    }
-                    _ => Some(Err(format!("{name} expects a list argument"))),
-                }
-            }
-
-            "list.zip" => {
-                require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
-                    (Value::List(a), Value::List(b)) => {
-                        let pairs: Vec<Value> = a
-                            .iter()
-                            .zip(b.iter())
-                            .map(|(x, y)| Value::List(vec![x.clone(), y.clone()]))
-                            .collect();
-                        Some(Ok(Value::List(pairs)))
-                    }
-                    _ => Some(Err(format!("{name} expects two list arguments"))),
                 }
             }
 
@@ -8377,25 +8275,7 @@ impl Interpreter {
                 }
             }
 
-            // -- Additional list operations ------------------------------------
-            "list.chunk" => {
-                require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
-                    (Value::List(items), Value::Int64(size)) => {
-                        let size = usize::try_from((*size).max(1)).unwrap_or(usize::MAX);
-                        let chunks: Vec<Value> = items
-                            .chunks(size)
-                            .map(|c| Value::List(c.to_vec()))
-                            .collect();
-                        Some(Ok(Value::List(chunks)))
-                    }
-                    _ => Some(Err(format!(
-                        "{name} expects a list and an int64 chunk size"
-                    ))),
-                }
-            }
-
-            "list.sort_by_index" => {
+            "list.__sort_by_index" if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::List(items), Value::Int64(idx)) => {
@@ -8424,7 +8304,7 @@ impl Interpreter {
                 }
             }
 
-            "list.is_sorted" => {
+            "list.__is_sorted" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::List(items) => {
@@ -8437,17 +8317,6 @@ impl Interpreter {
                         Some(Ok(Value::Bool(sorted)))
                     }
                     _ => Some(Err(format!("{name} expects a list argument"))),
-                }
-            }
-
-            "list.all_elements_in" => {
-                require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
-                    (Value::List(items), Value::List(pool)) => {
-                        let all_in = items.iter().all(|item| pool.contains(item));
-                        Some(Ok(Value::Bool(all_in)))
-                    }
-                    _ => Some(Err(format!("{name} expects two list arguments"))),
                 }
             }
 
@@ -8761,59 +8630,7 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects an int64 argument"))),
                 }
             }
-            // -- list.enumerate (returns list of [index, value] pairs) ----------
-            "list.enumerate" => {
-                require_args!(name, 1, args);
-                match &args[0] {
-                    Value::List(items) => {
-                        let enumerated: Vec<Value> = items
-                            .iter()
-                            .enumerate()
-                            .map(|(i, v)| Value::List(vec![Value::Int64(i as i64), v.clone()]))
-                            .collect();
-                        Some(Ok(Value::List(enumerated)))
-                    }
-                    _ => Some(Err(format!("{name} expects a list argument"))),
-                }
-            }
-
-            // -- list.from_set (convert set to list) ----------------------------
-            "list.from_set" => {
-                require_args!(name, 1, args);
-                match &args[0] {
-                    Value::Set(items) => Some(Ok(Value::List(items.clone()))),
-                    _ => Some(Err(format!("{name} expects a set argument"))),
-                }
-            }
-
-            // -- list.repeat, list.range, list.last_index_of, list.insert_at, list.remove_at, list.swap
-            "list.repeat" => {
-                require_args!(name, 2, args);
-                match &args[1] {
-                    Value::Int64(count) => {
-                        let n = nonnegative_usize(*count);
-                        let items: Vec<Value> =
-                            std::iter::repeat(args[0].clone()).take(n).collect();
-                        Some(Ok(Value::List(items)))
-                    }
-                    _ => Some(Err(format!("{name} expects a value and an int64 count"))),
-                }
-            }
-            "list.range" => self.call_builtin("range", args),
-            "list.last_index_of" => {
-                require_args!(name, 2, args);
-                match &args[0] {
-                    Value::List(items) => {
-                        let idx = items.iter().rposition(|v| v == &args[1]);
-                        Some(Ok(match idx {
-                            Some(i) => Value::OptionalSome(Box::new(Value::Int64(i as i64))),
-                            None => Value::OptionalNone,
-                        }))
-                    }
-                    _ => Some(Err(format!("{name} expects a list as first argument"))),
-                }
-            }
-            "list.insert_at" => {
+            "list.__insert_at" if self.current_function_trusted_stdlib => {
                 require_args!(name, 3, args);
                 match (&args[0], &args[1]) {
                     (Value::List(items), Value::Int64(index)) => {
@@ -8833,7 +8650,7 @@ impl Interpreter {
                     ))),
                 }
             }
-            "list.remove_at" => {
+            "list.__remove_at" if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::List(items), Value::Int64(index)) => {
@@ -8851,7 +8668,7 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects a list and an int64 index"))),
                 }
             }
-            "list.swap" => {
+            "list.__swap" if self.current_function_trusted_stdlib => {
                 require_args!(name, 3, args);
                 match (&args[0], &args[1], &args[2]) {
                     (Value::List(items), Value::Int64(i), Value::Int64(j)) => {
@@ -9850,92 +9667,16 @@ impl Interpreter {
         args: Vec<Value>,
     ) -> Option<Result<Value, String>> {
         match name {
-            "list.filter" => {
+            "list.__sort_by" if self.current_function_trusted_stdlib => {
                 if args.len() != 2 {
                     return Some(Err(format!(
-                        "list.filter expects 2 arguments, got {}",
+                        "list.__sort_by expects 2 arguments, got {}",
                         args.len()
                     )));
                 }
                 let items = match &args[0] {
                     Value::List(v) => v.clone(),
-                    _ => return Some(Err("list.filter: first argument must be a list".into())),
-                };
-                let fn_val = args[1].clone();
-                let mut result = Vec::new();
-                for item in items {
-                    match self.call_fn_value(fn_val.clone(), vec![item.clone()]) {
-                        Ok(Value::Bool(true)) => result.push(item),
-                        Ok(Value::Bool(false)) => {}
-                        Ok(other) => {
-                            return Some(Err(format!(
-                                "list.filter: predicate returned {other}, expected bool"
-                            )));
-                        }
-                        Err(e) => return Some(Err(e)),
-                    }
-                }
-                Some(Ok(Value::List(result)))
-            }
-            "list.map" => {
-                if args.len() != 2 {
-                    return Some(Err(format!(
-                        "list.map expects 2 arguments, got {}",
-                        args.len()
-                    )));
-                }
-                let items = match &args[0] {
-                    Value::List(v) => v.clone(),
-                    _ => return Some(Err("list.map: first argument must be a list".into())),
-                };
-                let fn_val = args[1].clone();
-                let mut result = Vec::new();
-                for item in items {
-                    match self.call_fn_value(fn_val.clone(), vec![item]) {
-                        Ok(v) => result.push(v),
-                        Err(e) => return Some(Err(e)),
-                    }
-                }
-                Some(Ok(Value::List(result)))
-            }
-            "list.find" => {
-                if args.len() != 2 {
-                    return Some(Err(format!(
-                        "list.find expects 2 arguments, got {}",
-                        args.len()
-                    )));
-                }
-                let items = match &args[0] {
-                    Value::List(v) => v.clone(),
-                    _ => return Some(Err("list.find: first argument must be a list".into())),
-                };
-                let fn_val = args[1].clone();
-                for item in items {
-                    match self.call_fn_value(fn_val.clone(), vec![item.clone()]) {
-                        Ok(Value::Bool(true)) => {
-                            return Some(Ok(Value::OptionalSome(Box::new(item))));
-                        }
-                        Ok(Value::Bool(false)) => {}
-                        Ok(other) => {
-                            return Some(Err(format!(
-                                "list.find: predicate returned {other}, expected bool"
-                            )));
-                        }
-                        Err(e) => return Some(Err(e)),
-                    }
-                }
-                Some(Ok(Value::OptionalNone))
-            }
-            "list.sort_by" => {
-                if args.len() != 2 {
-                    return Some(Err(format!(
-                        "list.sort_by expects 2 arguments, got {}",
-                        args.len()
-                    )));
-                }
-                let items = match &args[0] {
-                    Value::List(v) => v.clone(),
-                    _ => return Some(Err("list.sort_by: first argument must be a list".into())),
+                    _ => return Some(Err("list.__sort_by: first argument must be a list".into())),
                 };
                 let fn_val = args[1].clone();
                 // Compute keys for each item.
@@ -9945,7 +9686,7 @@ impl Interpreter {
                         Ok(Value::Int64(k)) => keyed.push((k, item)),
                         Ok(other) => {
                             return Some(Err(format!(
-                                "list.sort_by: key function returned {other}, expected int64"
+                                "list.__sort_by: key function returned {other}, expected int64"
                             )));
                         }
                         Err(e) => return Some(Err(e)),
@@ -9954,89 +9695,10 @@ impl Interpreter {
                 keyed.sort_by_key(|(k, _)| *k);
                 Some(Ok(Value::List(keyed.into_iter().map(|(_, v)| v).collect())))
             }
-            "list.all" => {
-                if args.len() != 2 {
-                    return Some(Err(format!(
-                        "list.all expects 2 arguments, got {}",
-                        args.len()
-                    )));
-                }
-                let items = match &args[0] {
-                    Value::List(v) => v.clone(),
-                    _ => return Some(Err("list.all: first argument must be a list".into())),
-                };
-                let fn_val = args[1].clone();
-                for item in items {
-                    match self.call_fn_value(fn_val.clone(), vec![item]) {
-                        Ok(Value::Bool(false)) => return Some(Ok(Value::Bool(false))),
-                        Ok(Value::Bool(true)) => {}
-                        Ok(other) => {
-                            return Some(Err(format!(
-                                "list.all: predicate returned {other}, expected bool"
-                            )));
-                        }
-                        Err(e) => return Some(Err(e)),
-                    }
-                }
-                Some(Ok(Value::Bool(true)))
-            }
-            "list.any" => {
-                if args.len() != 2 {
-                    return Some(Err(format!(
-                        "list.any expects 2 arguments, got {}",
-                        args.len()
-                    )));
-                }
-                let items = match &args[0] {
-                    Value::List(v) => v.clone(),
-                    _ => return Some(Err("list.any: first argument must be a list".into())),
-                };
-                let fn_val = args[1].clone();
-                for item in items {
-                    match self.call_fn_value(fn_val.clone(), vec![item]) {
-                        Ok(Value::Bool(true)) => return Some(Ok(Value::Bool(true))),
-                        Ok(Value::Bool(false)) => {}
-                        Ok(other) => {
-                            return Some(Err(format!(
-                                "list.any: predicate returned {other}, expected bool"
-                            )));
-                        }
-                        Err(e) => return Some(Err(e)),
-                    }
-                }
-                Some(Ok(Value::Bool(false)))
-            }
-            "list.count" => {
-                if args.len() != 2 {
-                    return Some(Err(format!(
-                        "list.count expects 2 arguments, got {}",
-                        args.len()
-                    )));
-                }
-                let items = match &args[0] {
-                    Value::List(v) => v.clone(),
-                    _ => return Some(Err("list.count: first argument must be a list".into())),
-                };
-                let fn_val = args[1].clone();
-                let mut count = 0i64;
-                for item in items {
-                    match self.call_fn_value(fn_val.clone(), vec![item]) {
-                        Ok(Value::Bool(true)) => count += 1,
-                        Ok(Value::Bool(false)) => {}
-                        Ok(other) => {
-                            return Some(Err(format!(
-                                "list.count: predicate returned {other}, expected bool"
-                            )));
-                        }
-                        Err(e) => return Some(Err(e)),
-                    }
-                }
-                Some(Ok(Value::Int64(count)))
-            }
-            "list.sum" => {
+            "list.__sum" if self.current_function_trusted_stdlib => {
                 if args.len() != 1 {
                     return Some(Err(format!(
-                        "list.sum expects 1 argument, got {}",
+                        "{name} expects 1 argument, got {}",
                         args.len()
                     )));
                 }
@@ -10054,12 +9716,12 @@ impl Interpreter {
                                         Value::Int64(n) => {
                                             let Some(next_total) = total.checked_add(*n) else {
                                                 return Some(Err(format!(
-                                                    "list.sum: integer overflow: {total} + {n}"
+                                                    "{name}: integer overflow: {total} + {n}"
                                                 )));
                                             };
                                             total = next_total;
                                         }
-                                        _ => return Some(Err("list.sum: mixed types".into())),
+                                        _ => return Some(Err(format!("{name}: mixed types"))),
                                     }
                                 }
                                 Some(Ok(Value::Int64(total)))
@@ -10069,29 +9731,29 @@ impl Interpreter {
                                 for item in items {
                                     match item {
                                         Value::Float64(n) => total += n,
-                                        _ => return Some(Err("list.sum: mixed types".into())),
+                                        _ => return Some(Err(format!("{name}: mixed types"))),
                                     }
                                 }
                                 Some(Ok(Value::Float64(total)))
                             }
-                            _ => Some(Err(
-                                "list.sum: list elements must be int64 or float64".into()
-                            )),
+                            _ => Some(Err(format!(
+                                "{name}: list elements must be int64 or float64"
+                            ))),
                         }
                     }
-                    _ => Some(Err("list.sum: argument must be a list".into())),
+                    _ => Some(Err(format!("{name}: argument must be a list"))),
                 }
             }
-            "list.group_by" => {
+            "list.__group_by" if self.current_function_trusted_stdlib => {
                 if args.len() != 2 {
                     return Some(Err(format!(
-                        "list.group_by expects 2 arguments, got {}",
+                        "{name} expects 2 arguments, got {}",
                         args.len()
                     )));
                 }
                 let items = match &args[0] {
                     Value::List(v) => v.clone(),
-                    _ => return Some(Err("list.group_by: first argument must be a list".into())),
+                    _ => return Some(Err(format!("{name}: first argument must be a list"))),
                 };
                 let fn_val = args[1].clone();
                 let mut groups: Vec<(Value, Value)> = Vec::new();
@@ -10109,56 +9771,6 @@ impl Interpreter {
                     }
                 }
                 Some(Ok(Value::Map(groups)))
-            }
-
-            // list.reduce[T, U](list, initial, fn(acc, item) -> acc)
-            "list.reduce" => {
-                if args.len() != 3 {
-                    return Some(Err(format!(
-                        "list.reduce expects 3 arguments (list, initial, fn), got {}",
-                        args.len()
-                    )));
-                }
-                let items = match &args[0] {
-                    Value::List(v) => v.clone(),
-                    _ => return Some(Err("list.reduce: first argument must be a list".into())),
-                };
-                let mut acc = args[1].clone();
-                let fn_val = args[2].clone();
-                for item in items {
-                    acc = match self.call_fn_value(fn_val.clone(), vec![acc, item]) {
-                        Ok(v) => v,
-                        Err(e) => return Some(Err(e)),
-                    };
-                }
-                Some(Ok(acc))
-            }
-
-            "list.flat_map" => {
-                if args.len() != 2 {
-                    return Some(Err(format!(
-                        "list.flat_map expects 2 arguments, got {}",
-                        args.len()
-                    )));
-                }
-                let items = match &args[0] {
-                    Value::List(v) => v.clone(),
-                    _ => return Some(Err("list.flat_map: first argument must be a list".into())),
-                };
-                let fn_val = args[1].clone();
-                let mut result = Vec::new();
-                for item in items {
-                    match self.call_fn_value(fn_val.clone(), vec![item]) {
-                        Ok(Value::List(inner)) => result.extend(inner),
-                        Ok(other) => {
-                            return Some(Err(format!(
-                                "list.flat_map: function returned {other}, expected a list"
-                            )));
-                        }
-                        Err(e) => return Some(Err(e)),
-                    }
-                }
-                Some(Ok(Value::List(result)))
             }
 
             _ => None,
@@ -17176,18 +16788,20 @@ mod builtin_tests {
     }
 
     #[test]
-    fn builtin_list_length() {
+    fn private_list_length_kernel() {
         let mut interp = Interpreter::new();
+        interp.current_function_trusted_stdlib = true;
         let list_expr = Expr::ListConstruct(vec![int(1), int(2), int(3)], sp());
-        let expr = dotted_call("list", "length", vec![list_expr]);
+        let expr = dotted_call("list", "__length", vec![list_expr]);
         assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(3));
     }
 
     #[test]
-    fn builtin_list_append() {
+    fn private_list_append_kernel() {
         let mut interp = Interpreter::new();
+        interp.current_function_trusted_stdlib = true;
         let list_expr = Expr::ListConstruct(vec![int(1), int(2)], sp());
-        let expr = dotted_call("list", "append", vec![list_expr, int(3)]);
+        let expr = dotted_call("list", "__append", vec![list_expr, int(3)]);
         assert_eq!(
             interp.eval_expr(&expr).unwrap(),
             Value::List(vec![Value::Int64(1), Value::Int64(2), Value::Int64(3)])
@@ -17195,10 +16809,11 @@ mod builtin_tests {
     }
 
     #[test]
-    fn builtin_list_get() {
+    fn private_list_get_clone_kernel() {
         let mut interp = Interpreter::new();
+        interp.current_function_trusted_stdlib = true;
         let list_expr = Expr::ListConstruct(vec![int(10), int(20), int(30)], sp());
-        let expr = dotted_call("list", "get", vec![list_expr, int(1)]);
+        let expr = dotted_call("list", "__get_clone", vec![list_expr, int(1)]);
         assert_eq!(
             interp.eval_expr(&expr).unwrap(),
             Value::OptionalSome(Box::new(Value::Int64(20)))
@@ -17206,23 +16821,43 @@ mod builtin_tests {
     }
 
     #[test]
-    fn builtin_list_get_out_of_bounds() {
+    fn private_list_get_clone_kernel_out_of_bounds() {
         let mut interp = Interpreter::new();
+        interp.current_function_trusted_stdlib = true;
         let list_expr = Expr::ListConstruct(vec![int(10)], sp());
-        let expr = dotted_call("list", "get", vec![list_expr, int(5)]);
+        let expr = dotted_call("list", "__get_clone", vec![list_expr, int(5)]);
         assert_eq!(interp.eval_expr(&expr).unwrap(), Value::OptionalNone);
     }
 
     #[test]
-    fn builtin_list_new() {
+    fn private_list_new_kernel() {
         let mut interp = Interpreter::new();
+        interp.current_function_trusted_stdlib = true;
         let expr = Expr::GenericCall(
-            Box::new(Expr::FieldAccess(Box::new(var("list")), ident("new"), sp())),
+            Box::new(Expr::FieldAccess(
+                Box::new(var("list")),
+                ident("__new"),
+                sp(),
+            )),
             vec![TypeExpr::Named(ident("int64"))],
             vec![],
             sp(),
         );
         assert_eq!(interp.eval_expr(&expr).unwrap(), Value::List(vec![]));
+    }
+
+    #[test]
+    fn public_list_runtime_dispatch_is_absent_without_stdlib_source() {
+        let mut interp = Interpreter::new();
+        let expr = dotted_call(
+            "list",
+            "length",
+            vec![Expr::ListConstruct(vec![int(1)], sp())],
+        );
+        assert_eq!(
+            interp.eval_expr(&expr),
+            Err("undefined function 'list.length'".to_string())
+        );
     }
 
     #[test]
