@@ -24,7 +24,8 @@ The construction primitive is not JSON-specific. JSON happened to be the first
 pressure point, but the same primitive should serve:
 
 - `json.parse[T]`,
-- `csv.parse_rows[T]`,
+- `csv.parse_rows[T]` (typed-row follow-up remains separate from the raw CSV
+  format and failure contract [tracked by #137](https://github.com/vycdev/jett/issues/137)),
 - `T.from_bytes` for structs and bitfields,
 - schema-driven config loaders,
 - generators used by `property` tests.
