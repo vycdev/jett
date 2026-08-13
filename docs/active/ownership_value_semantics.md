@@ -64,7 +64,12 @@ Capability values are move-only. Authority cannot be duplicated implicitly.
 Actor handles are move-only. Creating another sender requires explicit `clone`,
 so duplicating access to an actor is visible in source.
 
+### Task handles
+
+Task handles are move-only. A task handle has one owner responsible for awaiting
+or cancelling the task.
+
 ## Still Undecided
 
-- task and other resource values;
+- other resource values;
 - exact `view`, mutation, closure-capture, and concurrency rules.
