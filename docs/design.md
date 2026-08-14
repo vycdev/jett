@@ -6793,7 +6793,9 @@ The standard library is intentionally massive and opinionated. The goal is to ma
   capability; filesystem operations remain under `Filesystem`, and no
   `os.process` namespace is implied
 - **test** — mock infrastructure for property-based testing (`test.mock` for mock filesystems, networks, etc.)
-- **log** — structured logging with levels
+- **log** — structured logging with levels (initial event, capability, secret,
+  sink, and deterministic-test contract
+  [tracked by #143](https://github.com/vycdev/jett/issues/143))
 - **format** — number formatting, padding, and text alignment
 - **crypto** — stable UTF-8-to-lowercase-hex SHA-256, legacy-only MD5, and
   planned SHA-512/key-first HMAC; see the
