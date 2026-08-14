@@ -175,7 +175,7 @@
 | `csv` | Partial (interpreter builtins for `csv.parse`, `csv.stringify`, and `csv.parse_with_header`; quoted commas, quotes, and multiline fields are covered) |
 | `regex` | Not started |
 | `log` | Not started |
-| `test.mock` | Not started |
+| `test.mock` | Not started (capability mocking and deterministic test-harness contract [tracked by #145](https://github.com/vycdev/jett/issues/145)) |
 
 ### Phase L: Incremental Compilation — NOT STARTED
 
