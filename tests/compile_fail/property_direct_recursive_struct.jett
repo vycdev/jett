@@ -1,4 +1,4 @@
-# ERROR: E9000
+# ERROR: E0357
 struct Loop:
     next: Loop
 property direct_recursive_struct_is_unsupported:

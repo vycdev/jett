@@ -350,6 +350,10 @@ run_pass_fixture!(
     run_pass_property_recursive_structs,
     "property_recursive_structs.jett"
 );
+run_pass_fixture!(
+    run_pass_recursive_owned_values,
+    "recursive_owned_values.jett"
+);
 
 #[test]
 fn run_file_capture_stdout_captures_capability_writes() {
@@ -1786,6 +1790,22 @@ compile_fail_fixture!(
 compile_fail_fixture!(
     compile_fail_property_direct_recursive_struct,
     "property_direct_recursive_struct.jett"
+);
+compile_fail_fixture!(
+    compile_fail_recursive_struct_without_base,
+    "recursive_struct_without_base.jett"
+);
+compile_fail_fixture!(
+    compile_fail_recursive_enum_without_base,
+    "recursive_enum_without_base.jett"
+);
+compile_fail_fixture!(
+    compile_fail_recursive_result_without_base,
+    "recursive_result_without_base.jett"
+);
+compile_fail_fixture!(
+    compile_fail_recursive_generic_changes_arguments,
+    "recursive_generic_changes_arguments.jett"
 );
 compile_fail_fixture!(
     compile_fail_json_private_tree_parse_scalar,

@@ -1977,6 +1977,40 @@ submit_order(items)
 
 The LLM never writes allocation code, never calls `free()`, never chooses an allocation strategy. The compiler does all of it.
 
+**Recursive owned values use the same rule.** A self-recursive struct or enum
+names itself directly in its source type; Jett does not expose a `box[T]`, raw
+pointer, or allocation annotation:
+
+```jett
+struct Node:
+    value: int64
+    next: optional[Node]
+
+enum IntList:
+    empty
+    item(value: int64, next: IntList)
+```
+
+The compiler inserts representation indirection wherever the recursive edge
+requires it. This is not a fourth ownership mode: recursive values still move,
+view, and clone exactly like every other struct or enum.
+
+Every recursive declaration must have a finite base value. `optional[T]` and
+the empty collection value of `list[T]`, `map[K, V]`, or `set[T]` terminate a
+recursive field. A `result[T, E]` terminates when either branch can terminate,
+and a recursive enum must have at least one finitely constructible variant.
+Direct containment such as `struct Loop: next: Loop`, or an enum whose every
+variant requires another value of itself, is a compile error. A recursive
+generic reference must preserve its declared arguments exactly: `Node[T]` may
+contain `Node[T]`, but not `Node[list[T]]`.
+
+Only self-recursive named types receive this exception to top-to-bottom
+declaration order. Jett does not add `mutual` type declarations. Trees and
+owned linked shapes use self-recursion; graphs with shared nodes, parent links,
+or cycles use explicit node IDs stored in collections. That distinction keeps
+ownership and aliasing visible in source while leaving storage placement to the
+compiler.
+
 #### 2. Multithreading: Strict Actor Model (Zero Shared Memory)
 
 Shared mutable state — multiple threads modifying the same variable using locks or mutexes — is a disaster for LLMs. An LLM will reliably lock a mutex on line 5 and completely forget to unlock it on line 50 when an early return happens, causing a fatal deadlock.
@@ -6986,7 +7020,6 @@ the completed [reflection predicate fact contract](completed/reflection_predicat
 - **Hot reloading** — can code be swapped in a running program without restarting? Important for web servers, long-lived processes, and rapid iteration. Open questions: how does it interact with actors holding state? What happens to in-flight messages? Does it require recompile + process restart, or true in-place code swap? How do linear types and capabilities interact with swapped functions?
 - **C FFI extensions** — the initial binding-file syntax, `Foreign` capability, opaque handles, explicit policy boundary, supported C subset, and implementation stages are specified by the [C FFI binding contract](open_design/c_ffi_binding_contract.md). Additional calling conventions, by-value records, writable buffers, borrowed returns, callbacks, dynamic loading, and C++ remain open follow-up work.
 - **Self-hosting timeline** — at what point is Jett mature enough to rewrite the compiler from Rust into Jett?
-- **Mutual struct composition** — two structs cannot contain each other (composition is physical containment, so circular inclusion would be infinitely sized). The `mutual` block exists for functions but not for structs. Need to determine how recursive data structures (trees, linked lists, graphs) are expressed in Jett — possibly via indices or some form of indirection.
 - **Fixed-size vs dynamic lists** — `list[T]` is currently used as a dynamic/growable collection throughout the design. For performance-critical code (bitfield payloads, buffer management, numerical computing), a fixed-size array type may be needed. Options: a separate `array[T, N]` type with compile-time-known size, or a refinement type like `type FixedBuffer = list[uint8] where list.length(value) == 1024`. A separate type gives the compiler more optimization opportunities (stack allocation, no bounds growth), but adds another collection type for the LLM to choose between.
 - **Struct equality and hashing** — `set[T]` and `map[K, V]` require elements/keys to implement `Hashable` and `Equatable`. Currently only primitives implement these. How do user-defined structs become usable in sets and as map keys? Options: auto-derive `Hashable`/`Equatable` when all fields implement them, require manual `implement` blocks, or some hybrid. This also affects `==` on structs — is structural equality automatic, or must it be explicitly implemented?
 - **Type naming convention** — the design currently mixes lowercase for built-in types (`int64`, `string`, `list[T]`, `optional[T]`, `result[T, E]`) and PascalCase for user-defined types and capabilities (`User`, `Config`, `Stdout`, `Filesystem`). Is this distinction intentional and worth keeping, or should all types use a single convention? Lowercase is more token-efficient and consistent with Jett's keyword style. PascalCase visually distinguishes types from variables and functions. A unified convention reduces rules the LLM must learn, but the current split may help LLMs distinguish built-in vs user-defined types.

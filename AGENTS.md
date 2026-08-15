@@ -16,6 +16,10 @@ effects, small bounded functions, and compiler-enforced policy.
   and `docs/completed/` is historical handoff material.
 - Jett has strict top-to-bottom declaration rules. Forward references are
   allowed only through `mutual:`.
+- A named struct or enum may refer to itself when it has a finite base value;
+  this is compiler-managed indirection, not a forward-reference exception for
+  another type. Do not add `box[T]` or `mutual` type declarations. Model shared
+  or cyclic graphs with explicit IDs and collections.
 - Namespaced declarations are private by default. Mark only the intended public
   API with `export`.
 - Project and dependency namespaces must remain unique. Only compiler-shipped

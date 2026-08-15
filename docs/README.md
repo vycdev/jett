@@ -66,6 +66,7 @@ plans above for current work.
 - [JsonValue primitive tag retirement](completed/json_value_primitive_tag_retirement.md)
 - [JsonValue to JsonTree transition](completed/json_value_transition_plan.md)
 - [Root alias policy](completed/root_alias_policy.md)
+- [Recursive owned values](completed/recursive_owned_values.md)
 - [Type kind design](completed/type_kind_design.md)
 
 ## Compatibility Stubs

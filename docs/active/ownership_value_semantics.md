@@ -66,6 +66,20 @@ All enums are move-only, including enums whose variants have no payload fields.
 Copyability is not inferred from the current variant shapes, so adding a payload
 cannot silently change the ownership semantics of an existing enum.
 
+### Recursive owned values
+
+Self-recursive structs and enums use ordinary named source types. The compiler
+chooses any representation indirection; there is no public `box[T]` and no
+additional ownership mode. Recursive values remain move-only, read through
+`view`, and independently duplicated through explicit deep `clone`.
+
+A recursive declaration must have a finite base value. Optionals and empty
+collections provide a base directly, either `result` branch may provide one,
+and a recursive enum requires at least one finitely constructible variant.
+Recursive generic references preserve the original type arguments exactly.
+Mutually recursive named types are not introduced. Shared or cyclic graphs are
+modeled with explicit IDs and collections so aliasing stays visible.
+
 ### Capabilities
 
 Capability values are move-only. Authority cannot be duplicated implicitly.

@@ -476,6 +476,15 @@ Bottom-up type checking of every expression:
 - **`is` expressions:** In comptime context, `T is int64` checks if a generic type parameter matches a concrete type (resolved at compile time). In runtime context, `value is Variant` checks enum discriminant (compiled to integer comparison).
 - **`at` expressions:** `machine_var at state_name` checks if a state machine is in a specific state. Compiled to state tag comparison.
 - **Valued enums:** Enums with explicit integer values (e.g., `tcp = 6`) use the specified integers as discriminants instead of auto-assigned values. These integrate with bitfield `as EnumType` annotations — the codegen maps between the integer value in the bitfield and the enum variant.
+- **Recursive owned types:** A struct or enum may refer to itself without a
+  source-level pointer type when the declaration has a finite base value.
+  Struct fields must terminate through `optional`, an empty collection, a
+  finite `result` branch, or a non-recursive shape; recursive enums require at
+  least one finitely constructible variant. Recursive generic references must
+  preserve their declared arguments exactly. Invalid declarations report
+  E0357 before construction, property generation, or backend layout. Mutual
+  named-type declarations remain unavailable; shared and cyclic graphs use
+  explicit IDs and collections.
 - **Return value consumption:** A function call that returns anything other than `nothing` cannot appear as a standalone `ExprStmt`. The return value must be bound to a variable. This is enforced here for all types (not just linear ones — even `int64` returns must be consumed).
 - **Generic monomorphization:** record all concrete type parameter instantiations for later HIR generation.
 
@@ -1081,6 +1090,7 @@ Uses the `inkwell` crate for safe Rust bindings to the LLVM C API.
 |---|---|
 | Structs | LLVM struct types with fields sorted by alignment (descending) to minimize padding. Source-level field order preserved in debug info. |
 | Enums | Tagged union: i8 discriminant + union of variant payloads |
+| Recursive owned edge | Compiler-inserted uniquely owned pointer at the required recursive layout boundary; no source-level `box[T]` |
 | State machines | Same as enums (state tag + state-specific data) |
 | `list[T]` | Pointer to heap-allocated `{ length: i64, capacity: i64, data: T* }` |
 | `map[K, V]` | Pointer to heap-allocated hash table |
@@ -1338,6 +1348,7 @@ The boundary between compiler-generated code and stdlib-implemented code is a cr
 | `T.to_bytes()` / `T.from_bytes()` | Binary serialization | Field-by-field binary packing/unpacking |
 | `Displayable.display()` for structs | Struct implementing `Displayable` | Field-by-field string representation |
 | `clone` for structs | `clone value` on a struct | Field-by-field recursive deep copy |
+| Recursive structs/enums | Ordinary move-only values | Compiler-managed indirection; generated drop and clone follow the finite owned shape |
 | Refinement type constraint functions | `type Port = int64 where ...` | Synthesized boolean check function |
 
 Shape-specific aggregate reflection APIs are total probes: for non-matching

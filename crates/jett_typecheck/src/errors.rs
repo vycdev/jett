@@ -758,6 +758,15 @@ pub fn removed_ambient_time_builtin(name: &str, replacement: &str, span: Span) -
     )
 }
 
+/// E0357: A recursive owned type has no finite base value.
+pub fn recursive_type_without_base(type_name: &str, reason: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        357,
+        format!("recursive type `{type_name}` is invalid: {reason}"),
+        span,
+    )
+}
+
 // Diagnostic codes E0800-E0899 are reserved for function complexity limits.
 
 /// E0800: Function body exceeds the statement count limit.

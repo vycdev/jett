@@ -1,0 +1,3 @@
+# ERROR: E0357
+struct Loop:
+    next: result[Loop, Loop]

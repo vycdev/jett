@@ -187,6 +187,8 @@ struct TypeChecker<'a> {
     generic_struct_templates: HashMap<String, ast::StructDef>,
     /// Cache of monomorphized generic struct instances: (name, concrete type args) → TypeId.
     monomorphized_structs: HashMap<(String, Vec<TypeId>), TypeId>,
+    /// Generic struct templates rejected by recursive-shape validation.
+    invalid_recursive_generic_structs: HashSet<String>,
     /// Checked reflection field snapshots keyed by the canonical owner TypeId.
     reflection_fields_by_id: HashMap<TypeId, (String, Vec<ReflectionFieldInfo>)>,
     /// Checked bitfield layout snapshots keyed by the canonical owner TypeId.
@@ -273,6 +275,7 @@ impl<'a> TypeChecker<'a> {
             closure_capture_scopes: Vec::new(),
             generic_struct_templates: HashMap::new(),
             monomorphized_structs: HashMap::new(),
+            invalid_recursive_generic_structs: HashSet::new(),
             reflection_fields_by_id: HashMap::new(),
             reflection_bitfields_by_id: HashMap::new(),
             reflection_machines_by_id: HashMap::new(),
@@ -4227,6 +4230,11 @@ impl<'a> TypeChecker<'a> {
         self.check_struct_json_serialize_names(def, namespace);
         if !def.type_params.is_empty() {
             // Generic struct — store the template for later monomorphization.
+            let canonical_name = Self::canonical_name(namespace, &def.name.name);
+            if !self.validate_recursive_struct_shape(def, namespace) {
+                self.invalid_recursive_generic_structs
+                    .insert(canonical_name.clone());
+            }
             self.register_generic_struct_template(namespace, &def.name.name, def.clone());
             return;
         }
@@ -4292,6 +4300,8 @@ impl<'a> TypeChecker<'a> {
         let Type::Struct(sid) = *self.interner.resolve(ty) else {
             return;
         };
+
+        self.validate_recursive_struct_shape(def, namespace);
 
         let fields: Vec<(String, TypeId)> = def
             .fields
@@ -4513,6 +4523,8 @@ impl<'a> TypeChecker<'a> {
         let Type::Enum(eid) = *self.interner.resolve(ty) else {
             return;
         };
+
+        self.validate_recursive_enum_shape(def, namespace);
 
         let mut next_discriminant = 0_i64;
         let mut seen_discriminants = HashMap::new();
@@ -11063,6 +11075,10 @@ impl<'a> TypeChecker<'a> {
     /// `StructId` on first use and caching it for subsequent calls with the
     /// same `(name, type_args)` key.
     fn monomorphize_struct(&mut self, name: &str, type_args: &[TypeId], span: Span) -> TypeId {
+        if self.invalid_recursive_generic_structs.contains(name) {
+            return TypeInterner::ERROR;
+        }
+
         // Check the cache first.
         let cache_key = (name.to_string(), type_args.to_vec());
         if let Some(&cached) = self.monomorphized_structs.get(&cache_key) {
@@ -11086,6 +11102,19 @@ impl<'a> TypeChecker<'a> {
             ));
             return TypeInterner::ERROR;
         }
+
+        // Build a mangled name, e.g. "Pair[int64, string]". Install a
+        // placeholder before resolving fields so canonical self-recursion,
+        // such as `optional[Node[T]]`, reuses this instance.
+        let type_arg_names: Vec<String> = type_args.iter().map(|&ty| self.type_name(ty)).collect();
+        let mono_name = format!("{}[{}]", name, type_arg_names.join(", "));
+        let sid = self.interner.add_struct(TypeStructDef {
+            name: mono_name.clone(),
+            fields: Vec::new(),
+            methods: Vec::new(),
+        });
+        let ty = self.interner.intern(Type::Struct(sid));
+        self.monomorphized_structs.insert(cache_key, ty);
 
         // Build substitution map: type param name → concrete TypeId.
         let substitution: HashMap<String, TypeId> = template
@@ -11115,22 +11144,187 @@ impl<'a> TypeChecker<'a> {
 
         self.type_var_subst = old_subst;
 
-        // Build a mangled name, e.g. "Pair[int64, string]".
-        let type_arg_names: Vec<String> = type_args.iter().map(|&ty| self.type_name(ty)).collect();
-        let mono_name = format!("{}[{}]", name, type_arg_names.join(", "));
         let reflection_fields = self.reflection_fields_for_resolved_struct(&template, &fields);
 
-        let sid = self.interner.add_struct(TypeStructDef {
-            name: mono_name.clone(),
-            fields,
-            methods,
-        });
-        let ty = self.interner.intern(Type::Struct(sid));
+        self.interner.update_struct(
+            sid,
+            TypeStructDef {
+                name: mono_name.clone(),
+                fields,
+                methods,
+            },
+        );
 
         self.reflection_fields_by_id
             .insert(ty, (mono_name, reflection_fields));
-        self.monomorphized_structs.insert(cache_key, ty);
         ty
+    }
+
+    /// Recursive owned values remain ordinary source-level values. The
+    /// compiler may represent recursive edges indirectly, but every declared
+    /// type must still have at least one finite source value.
+    fn validate_recursive_struct_shape(
+        &mut self,
+        def: &ast::StructDef,
+        namespace: Option<&str>,
+    ) -> bool {
+        let canonical_name = Self::canonical_name(namespace, &def.name.name);
+        let canonical_args = self.recursive_generic_arguments_are_canonical(def, &canonical_name);
+        let finite = def.fields.iter().all(|field| {
+            self.type_expr_has_finite_base(&field.ty, &def.name.name, &canonical_name)
+        });
+
+        if !canonical_args {
+            self.sink.emit(errors::recursive_type_without_base(
+                &canonical_name,
+                "recursive generic references must preserve the declared type arguments exactly",
+                def.name.span,
+            ));
+        } else if !finite {
+            self.sink.emit(errors::recursive_type_without_base(
+                &canonical_name,
+                "every field must terminate through `optional`, an empty collection, a finite `result` branch, or another non-recursive shape",
+                def.name.span,
+            ));
+        }
+
+        canonical_args && finite
+    }
+
+    fn validate_recursive_enum_shape(
+        &mut self,
+        def: &ast::EnumDef,
+        namespace: Option<&str>,
+    ) -> bool {
+        let canonical_name = Self::canonical_name(namespace, &def.name.name);
+        let recursive = def.variants.iter().any(|variant| {
+            variant.fields.iter().any(|field| {
+                Self::type_expr_references_owner(&field.ty, &def.name.name, &canonical_name)
+            })
+        });
+        let finite = !recursive
+            || def.variants.iter().any(|variant| {
+                variant.fields.iter().all(|field| {
+                    self.type_expr_has_finite_base(&field.ty, &def.name.name, &canonical_name)
+                })
+            });
+
+        if !finite {
+            self.sink.emit(errors::recursive_type_without_base(
+                &canonical_name,
+                "at least one variant must be constructible without another value of the enum",
+                def.name.span,
+            ));
+        }
+        finite
+    }
+
+    fn type_expr_references_owner(
+        ty: &ast::TypeExpr,
+        local_name: &str,
+        canonical_name: &str,
+    ) -> bool {
+        match ty {
+            ast::TypeExpr::Named(name) => name.name == local_name || name.name == canonical_name,
+            ast::TypeExpr::Generic(name, args, _) => {
+                name.name == local_name
+                    || name.name == canonical_name
+                    || args.iter().any(|arg| {
+                        Self::type_expr_references_owner(arg, local_name, canonical_name)
+                    })
+            }
+            ast::TypeExpr::View(inner, _) | ast::TypeExpr::StateQualified(inner, _, _) => {
+                Self::type_expr_references_owner(inner, local_name, canonical_name)
+            }
+            ast::TypeExpr::Function(params, return_ty, _) => {
+                params.iter().any(|param| {
+                    Self::type_expr_references_owner(param, local_name, canonical_name)
+                }) || Self::type_expr_references_owner(return_ty, local_name, canonical_name)
+            }
+        }
+    }
+
+    fn recursive_generic_arguments_are_canonical(
+        &self,
+        def: &ast::StructDef,
+        canonical_name: &str,
+    ) -> bool {
+        fn visit(
+            ty: &ast::TypeExpr,
+            local_name: &str,
+            canonical_name: &str,
+            params: &[ast::Ident],
+        ) -> bool {
+            match ty {
+                ast::TypeExpr::Named(name) => {
+                    params.is_empty() || (name.name != local_name && name.name != canonical_name)
+                }
+                ast::TypeExpr::Generic(name, args, _) => {
+                    let is_owner = name.name == local_name || name.name == canonical_name;
+                    let owner_is_canonical = !is_owner
+                        || (args.len() == params.len()
+                            && args.iter().zip(params).all(|(arg, param)| {
+                                matches!(arg, ast::TypeExpr::Named(name) if name.name == param.name)
+                            }));
+                    owner_is_canonical
+                        && args
+                            .iter()
+                            .all(|arg| visit(arg, local_name, canonical_name, params))
+                }
+                ast::TypeExpr::View(inner, _) | ast::TypeExpr::StateQualified(inner, _, _) => {
+                    visit(inner, local_name, canonical_name, params)
+                }
+                ast::TypeExpr::Function(params_ty, return_ty, _) => {
+                    params_ty
+                        .iter()
+                        .all(|ty| visit(ty, local_name, canonical_name, params))
+                        && visit(return_ty, local_name, canonical_name, params)
+                }
+            }
+        }
+
+        def.fields
+            .iter()
+            .all(|field| visit(&field.ty, &def.name.name, canonical_name, &def.type_params))
+    }
+
+    fn type_expr_has_finite_base(
+        &self,
+        ty: &ast::TypeExpr,
+        local_name: &str,
+        canonical_name: &str,
+    ) -> bool {
+        match ty {
+            ast::TypeExpr::Named(name) => name.name != local_name && name.name != canonical_name,
+            ast::TypeExpr::Generic(name, args, _) => {
+                if name.name == local_name || name.name == canonical_name {
+                    return false;
+                }
+                match name.name.as_str() {
+                    // These wrappers always have a finite empty value.
+                    "optional" | "list" | "map" | "set" => true,
+                    // Either branch can provide the finite value.
+                    "result" => args
+                        .iter()
+                        .any(|arg| self.type_expr_has_finite_base(arg, local_name, canonical_name)),
+                    // Secret changes visibility, not shape.
+                    "secret" => args.first().is_none_or(|arg| {
+                        self.type_expr_has_finite_base(arg, local_name, canonical_name)
+                    }),
+                    // User-defined wrappers are conservative: every type
+                    // argument must itself have a finite base.
+                    _ => args
+                        .iter()
+                        .all(|arg| self.type_expr_has_finite_base(arg, local_name, canonical_name)),
+                }
+            }
+            ast::TypeExpr::View(inner, _) | ast::TypeExpr::StateQualified(inner, _, _) => {
+                self.type_expr_has_finite_base(inner, local_name, canonical_name)
+            }
+            // A function stores behavior, not values of its parameter or
+            // return types, so its signature does not force recursion.
+            ast::TypeExpr::Function(_, _, _) => true,
+        }
     }
 
     // ------------------------------------------------------------------

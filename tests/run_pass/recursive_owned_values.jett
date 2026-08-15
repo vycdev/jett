@@ -1,0 +1,51 @@
+namespace test
+struct Node:
+    value: int64
+    next: optional[Node]
+struct Chain[T]:
+    value: T
+    next: optional[Chain[T]]
+enum IntList:
+    empty
+    item(value: int64, next: IntList)
+function node_value(view node: Node) returns int64:
+    return node.value
+function list_total(values: IntList) returns int64:
+    match values:
+        empty:
+            return 0
+        item(value, next):
+            return value + list_total(next)
+function recursive_structs_are_ordinary_owned_values() returns bool:
+    Node tail = Node(value: 1, next: none)
+    Node original = Node(value: 2, next: some(tail))
+    Node copied = clone original
+    return node_value(original) == 2 && node_value(copied) == 2
+function recursive_generic_structs_reuse_the_same_instance() returns bool:
+    Chain[int64] tail = Chain[int64](value: 1, next: none)
+    Chain[int64] head = Chain[int64](value: 2, next: some(tail))
+    return head.value == 2
+function recursive_enum_has_a_finite_base() returns bool:
+    IntList values = IntList.item(1, IntList.item(2, IntList.empty))
+    return list_total(values) == 3
+function recursive_struct_reflection_is_finite() returns bool:
+    int64 count = 0
+    bool found_next = false
+    for field in type.fields[Node]():
+        count = count + 1
+        if field.name == "next":
+            found_next = field.type_info.kind_tag == TypeKind.optional_type
+    return count == 2 && found_next
+function recursive_struct_json_roundtrip() returns bool:
+    Node tail = Node(value: 1, next: none)
+    Node original = Node(value: 2, next: some(tail))
+    string encoded = json.serialize[Node](view original)
+    Node decoded = json.parse[Node](encoded) handle error:
+        return false
+    return decoded.value == 2
+verify recursive_owned_values:
+    assert recursive_structs_are_ordinary_owned_values()
+    assert recursive_generic_structs_reuse_the_same_instance()
+    assert recursive_enum_has_a_finite_base()
+    assert recursive_struct_reflection_is_finite()
+    assert recursive_struct_json_roundtrip()
