@@ -21,8 +21,8 @@ boundary, but it should not become a source-level trust feature.
   use the same namespace and function names.
 - Re-registering a hook name from untrusted source clears trusted dispatch for
   that name instead of inheriting trust.
-- Root aliases such as bare `JsonValue` are compatibility visibility entries;
-  they do not make any implementation trusted.
+- Type aliases such as `json.JsonValue` are visibility entries; they do not
+  make any implementation trusted. Root aliases are rejected.
 
 ## Backend Requirement
 
@@ -69,8 +69,8 @@ shape:
   checks pass,
 - untrusted re-registration clears trust for the affected symbol instead of
   inheriting the original stdlib identity,
-- raw JSON compatibility names such as `json.JsonValue` and bare `JsonValue`
-  are source aliases only; they do not make an implementation trusted.
+- raw JSON compatibility names such as `json.JsonValue` are source aliases
+  only; they do not make an implementation trusted.
 
 Future bytecode or native backends should preserve the same identity checks at
 their lowering boundary rather than matching source names directly.
@@ -94,8 +94,8 @@ Future backend work should mirror the existing interpreter/typechecker boundary:
 - untrusted hook registration does not satisfy public bridge dispatch,
 - public `json.parse`, `json.parse_exact`, `json.serialize`, and
   `json.serialize_public` still enforce compiler-owned policy gates,
-- `json.JsonTree`, `json.JsonValue`, and bare `JsonValue` keep the staged
-  alias compatibility without trusting user-defined lookalike types.
+- `json.JsonTree` and `json.JsonValue` keep namespaced alias compatibility
+  without trusting user-defined lookalike types; bare `JsonValue` is rejected.
 
 ## Open Questions
 

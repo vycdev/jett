@@ -289,7 +289,7 @@ impl Resolver {
                 }
                 Item::TypeAlias(ta) => {
                     if ta.root_exported {
-                        self.declare_root_type_alias(ta, index);
+                        self.reject_root_type_alias(ta);
                     } else {
                         self.declare_namespaced_top_level(
                             &ta.name.name,
@@ -334,47 +334,11 @@ impl Resolver {
         );
     }
 
-    fn declare_root_type_alias(&mut self, alias: &TypeAlias, order: usize) -> Option<DefId> {
-        if !alias.name.span.file.is_stdlib() {
-            self.sink.emit(errors::invalid_root_export(
-                "`export root type` is only allowed in compiler-shipped stdlib files",
-                alias.name.span,
-            ));
-            return None;
-        }
-        if alias.constraint.is_some() {
-            self.sink.emit(errors::invalid_root_export(
-                "`export root type` does not support refinements in this stage",
-                alias.name.span,
-            ));
-            return None;
-        }
-        if alias.name.name != "JsonValue" {
-            self.sink.emit(errors::invalid_root_export(
-                format!(
-                    "unsupported root export `{}`; only `JsonValue` is allowed in this stage",
-                    alias.name.name
-                ),
-                alias.name.span,
-            ));
-            return None;
-        }
-        if !matches!(&alias.base_type, TypeExpr::Named(ident) if ident.name == "json.JsonTree") {
-            self.sink.emit(errors::invalid_root_export(
-                "`export root type JsonValue` must alias `json.JsonTree` in this stage",
-                alias.base_type.span(),
-            ));
-            return None;
-        }
-
-        self.declare_top_level_with_metadata(
-            &alias.name.name,
-            DefKind::Type,
+    fn reject_root_type_alias(&mut self, alias: &TypeAlias) {
+        self.sink.emit(errors::invalid_root_export(
+            "root type aliases are not supported; keep the canonical qualified type name",
             alias.name.span,
-            order,
-            None,
-            DefVisibility::Public,
-        )
+        ));
     }
 
     /// Register a top-level name. Returns `Some(DefId)` on success, `None` if
@@ -1627,7 +1591,6 @@ fn is_builtin_type(name: &str) -> bool {
             | "secret"
             | "set"
             | "bytes"
-            | "JsonValue"
             | "TypeConstruction"
             | "TypeInfo"
             | "TypeKind"
@@ -1948,7 +1911,7 @@ function same_helper() returns nothing:
     }
 
     #[test]
-    fn stdlib_root_json_value_alias_declares_root_public_name() {
+    fn root_type_alias_is_rejected_even_in_stdlib() {
         let module = parse_module_with_file(
             r#"
 namespace json
@@ -1966,13 +1929,10 @@ export root type JsonValue = json.JsonTree
         let errors: Vec<_> = result
             .diagnostics
             .iter()
-            .filter(|d| d.severity == Severity::Error)
+            .filter(|d| d.severity == Severity::Error && d.code.code() == 209)
             .collect();
-        assert!(errors.is_empty(), "expected no errors, got: {errors:#?}");
-
-        let root_alias = def_by_name(&result, "JsonValue");
-        assert_eq!(root_alias.namespace, None);
-        assert_eq!(root_alias.visibility, crate::scope::DefVisibility::Public);
+        assert_eq!(errors.len(), 1, "expected root export error");
+        assert!(errors[0].message.contains("not supported"));
 
         let namespaced_alias = def_by_name(&result, "json.JsonValue");
         assert_eq!(namespaced_alias.namespace.as_deref(), Some("json"));
@@ -1982,71 +1942,11 @@ export root type JsonValue = json.JsonTree
         );
 
         let root = ScopeId::new(0);
-        assert_eq!(
-            result.scope_table.lookup(root, "JsonValue"),
-            Some(root_alias.id)
-        );
+        assert_eq!(result.scope_table.lookup(root, "JsonValue"), None);
         assert_eq!(
             result.scope_table.lookup(root, "json.JsonValue"),
             Some(namespaced_alias.id)
         );
-    }
-
-    #[test]
-    fn stdlib_root_export_rejects_non_json_value_alias() {
-        let module = parse_module_with_file(
-            r#"
-export root type OtherRaw = int64
-"#,
-            FileId::new(STDLIB_FILE_ID_START),
-        );
-
-        let result = resolve(&module);
-        let errors: Vec<_> = result
-            .diagnostics
-            .iter()
-            .filter(|d| d.severity == Severity::Error && d.code.code() == 209)
-            .collect();
-        assert_eq!(errors.len(), 1, "expected root export error");
-        assert!(errors[0].message.contains("only `JsonValue` is allowed"));
-    }
-
-    #[test]
-    fn stdlib_root_export_rejects_refinement_alias() {
-        let module = parse_module_with_file(
-            r#"
-export root type JsonValue = int64 where value > 0
-"#,
-            FileId::new(STDLIB_FILE_ID_START),
-        );
-
-        let result = resolve(&module);
-        let errors: Vec<_> = result
-            .diagnostics
-            .iter()
-            .filter(|d| d.severity == Severity::Error && d.code.code() == 209)
-            .collect();
-        assert_eq!(errors.len(), 1, "expected root export error");
-        assert!(errors[0].message.contains("does not support refinements"));
-    }
-
-    #[test]
-    fn stdlib_root_export_rejects_non_json_tree_target() {
-        let module = parse_module_with_file(
-            r#"
-export root type JsonValue = int64
-"#,
-            FileId::new(STDLIB_FILE_ID_START),
-        );
-
-        let result = resolve(&module);
-        let errors: Vec<_> = result
-            .diagnostics
-            .iter()
-            .filter(|d| d.severity == Severity::Error && d.code.code() == 209)
-            .collect();
-        assert_eq!(errors.len(), 1, "expected root export error");
-        assert!(errors[0].message.contains("must alias `json.JsonTree`"));
     }
 
     #[test]

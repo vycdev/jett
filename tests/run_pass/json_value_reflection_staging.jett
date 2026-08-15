@@ -7,16 +7,14 @@ struct LocalRawEnvelope:
     items: list[LocalRaw]
     maybe: optional[LocalRawAlias]
 function bare_json_value_reflection_summary() returns string:
-    TypeInfo info = type.info[JsonValue]()
+    TypeInfo info = type.info[json.JsonTree]()
     TypePrimitive primitive = info.primitive_tag handle:
         int64 arg_count = list.length[TypeInfo](info.args)
-        TypeInfo base = list.get[TypeInfo](info.args, 0) handle:
-            return "missing base"
-        bool alias_kind = info.kind_tag == TypeKind.alias_type
-        TypePrimitive direct_primitive = type.primitive_tag[JsonValue]() handle:
+        bool enum_kind = info.kind_tag == TypeKind.enum_type
+        TypePrimitive direct_primitive = type.primitive_tag[json.JsonTree]() handle:
             default TypePrimitive.unknown_type
         bool direct_is_unknown = direct_primitive == TypePrimitive.unknown_type
-        return "{info.kind}:{info.type_name}:{alias_kind}:{base.kind}:{base.type_name}:{arg_count}:{direct_is_unknown}"
+        return "{info.kind}:{info.type_name}:{enum_kind}:{arg_count}:{direct_is_unknown}"
     return "unexpected primitive"
 function alias_json_value_reflection_summary() returns string:
     TypeInfo info = type.info[json.JsonValue]()
@@ -28,12 +26,12 @@ function alias_json_value_reflection_summary() returns string:
         return "{info.kind}:{info.type_name}:{alias_kind}:{base.kind}:{base.type_name}:{arg_count}"
     return "unexpected primitive"
 function bare_json_value_raw_behavior() returns string:
-    JsonValue parsed = json.parse[JsonValue]("{{\"name\":\"Ada\",\"score\":5}}") handle error:
+    json.JsonTree parsed = json.parse[json.JsonTree]("{{\"name\":\"Ada\",\"score\":5}}") handle error:
         return error
-    JsonValue exact = json.parse_exact[JsonValue]("{{\"name\":\"Grace\",\"score\":7}}") handle error:
+    json.JsonTree exact = json.parse_exact[json.JsonTree]("{{\"name\":\"Grace\",\"score\":7}}") handle error:
         return error
-    string serialized = json.serialize[JsonValue](view parsed)
-    string public = json.serialize_public[JsonValue](view exact)
+    string serialized = json.serialize[json.JsonTree](view parsed)
+    string public = json.serialize_public[json.JsonTree](view exact)
     bool serialized_name = string.contains(serialized, "\"name\":\"Ada\"")
     bool public_score = string.contains(public, "\"score\":7")
     return "{json.kind(parsed)}:{serialized_name}:{public_score}"
@@ -74,7 +72,7 @@ function local_raw_alias_container_behavior() returns string:
     bool maybe_open = string.contains(json.serialize_public[LocalRawAlias](view maybe), "\"name\":\"Ada\"")
     return "{payload_open}:{item_open}:{maybe_open}"
 verify json_value_reflection_staging:
-    assert bare_json_value_reflection_summary() == "alias:JsonValue:true:enum:json.JsonTree:1:true"
+    assert bare_json_value_reflection_summary() == "enum:json.JsonTree:true:0:true"
     assert alias_json_value_reflection_summary() == "alias:json.JsonValue:true:enum:json.JsonTree:1"
     assert bare_json_value_raw_behavior() == "object:true:true"
     assert alias_json_value_raw_behavior() == "object:true:true"

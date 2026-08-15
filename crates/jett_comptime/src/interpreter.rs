@@ -715,11 +715,7 @@ impl Interpreter {
                     self.register_function_in_namespace(current_namespace.as_deref(), func)
                 }
                 Item::TypeAlias(alias) => {
-                    if alias.root_exported {
-                        self.register_type_alias(alias);
-                    } else {
-                        self.register_type_alias_in_namespace(current_namespace.as_deref(), alias);
-                    }
+                    self.register_type_alias_in_namespace(current_namespace.as_deref(), alias);
                 }
                 Item::Interface(interface) => self.register_interface(interface),
                 Item::Implement(block) => self.register_implement_block(block),
@@ -11150,12 +11146,12 @@ mod tests {
     }
 
     #[test]
-    fn direct_json_value_reflection_prefers_registered_alias_fallback() {
+    fn direct_alias_reflection_prefers_registered_alias() {
         let mut interp = Interpreter::new();
         interp.register_enum(&enum_def_with_values("json.JsonTree", vec![("null", 0)]));
-        interp.register_type_alias(&type_alias("JsonValue", "json.JsonTree", None));
+        interp.register_type_alias(&type_alias("RawAlias", "json.JsonTree", None));
 
-        let ty = type_named("JsonValue");
+        let ty = type_named("RawAlias");
         let kind = interp
             .call_builtin_with_type_args("type.kind", std::slice::from_ref(&ty), &[])
             .expect("type.kind should be a typed builtin")
@@ -11220,9 +11216,9 @@ mod tests {
     }
 
     #[test]
-    fn direct_json_value_reflection_requires_registered_alias() {
+    fn unknown_direct_type_has_no_alias_reflection() {
         let mut interp = Interpreter::new();
-        let ty = type_named("JsonValue");
+        let ty = type_named("UnknownRaw");
 
         let kind = interp
             .call_builtin_with_type_args("type.kind", std::slice::from_ref(&ty), &[])

@@ -1,35 +1,27 @@
 # ERROR: E0311
 namespace test
-
 enum JsonTree:
     fake
-
 type LocalRaw = JsonTree
-
-function bad_user_json_tree_bridge() returns JsonValue:
+function bad_user_json_tree_bridge() returns json.JsonTree:
     JsonTree tree = JsonTree.fake
-    JsonValue raw = tree
+    json.JsonTree raw = tree
     return raw
-
-function bad_user_json_tree_alias_bridge() returns JsonValue:
+function bad_user_json_tree_alias_bridge() returns json.JsonTree:
     LocalRaw tree = JsonTree.fake
-    JsonValue raw = tree
+    json.JsonTree raw = tree
     return raw
-
 function bad_user_json_tree_builtin() returns string:
     JsonTree tree = JsonTree.fake
     return json.kind(tree)
-
 function bad_user_json_tree_alias_builtin() returns string:
     LocalRaw tree = JsonTree.fake
     return json.kind(tree)
-
-function bad_user_json_tree_container() returns list[JsonValue]:
+function bad_user_json_tree_container() returns list[json.JsonTree]:
     list[JsonTree] trees = list(JsonTree.fake)
-    list[JsonValue] raws = trees
+    list[json.JsonTree] raws = trees
     return raws
-
-function bad_user_json_tree_alias_container() returns list[JsonValue]:
+function bad_user_json_tree_alias_container() returns list[json.JsonTree]:
     list[LocalRaw] trees = list(JsonTree.fake)
-    list[JsonValue] raws = trees
+    list[json.JsonTree] raws = trees
     return raws

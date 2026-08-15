@@ -8,7 +8,7 @@ function raw_parse_json(raw: string) returns string:
         return "error:{error}"
     return json.serialize_raw(view tree)
 function typed_json_value_json(raw: string) returns string:
-    JsonValue value = json.parse[JsonValue](raw) handle error:
+    json.JsonTree value = json.parse[json.JsonTree](raw) handle error:
         return "error:{error}"
     return json.serialize_raw(view value)
 function typed_json_value_alias_json(raw: string) returns string:
@@ -20,7 +20,7 @@ function typed_json_tree_json(raw: string) returns string:
         return "error:{error}"
     return json.serialize_raw(view value)
 function exact_json_value_json(raw: string) returns string:
-    JsonValue value = json.parse_exact[JsonValue](raw) handle error:
+    json.JsonTree value = json.parse_exact[json.JsonTree](raw) handle error:
         return "error:{error}"
     return json.serialize_raw(view value)
 function exact_json_value_alias_json(raw: string) returns string:

@@ -3871,11 +3871,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn type_alias_canonical_name(alias: &ast::TypeAlias, namespace: Option<&str>) -> String {
-        if alias.root_exported {
-            alias.name.name.clone()
-        } else {
-            Self::canonical_name(namespace, &alias.name.name)
-        }
+        Self::canonical_name(namespace, &alias.name.name)
     }
 
     /// Returns true if a function has no capability-type parameters (i.e. is pure).
@@ -3891,10 +3887,6 @@ impl<'a> TypeChecker<'a> {
 
     fn check_type_alias(&mut self, alias: &ast::TypeAlias, namespace: Option<&str>) {
         let alias_name = Self::type_alias_canonical_name(alias, namespace);
-        if alias.root_exported {
-            let _ = self.resolve_type_alias(&alias_name, alias.name.span);
-            return;
-        }
         let Some(constraint) = &alias.constraint else {
             let _ = self.resolve_type_alias(&alias_name, alias.name.span);
             return;
@@ -14255,16 +14247,15 @@ function main() returns int64:
     }
 
     #[test]
-    fn stdlib_root_json_value_alias_wins_over_legacy_primitive_type() {
+    fn namespaced_json_value_alias_resolves_to_json_tree() {
         let file_id = FileId::new(STDLIB_FILE_ID_START);
         let source = "\
 namespace json
 export enum JsonTree:
     null = 0
 export type JsonValue = JsonTree
-export root type JsonValue = json.JsonTree
 namespace app
-function main() returns JsonValue:
+function main() returns json.JsonValue:
     return json.JsonTree.null
 ";
         let parse_result = parse(source, file_id);
@@ -14301,14 +14292,14 @@ function main() returns JsonValue:
         );
 
         let span = Span::new(file_id, 0, 0);
-        let bare_ty = checker.resolve_named_type("JsonValue", span);
+        let alias_ty = checker.resolve_named_type("json.JsonValue", span);
         let tree_ty = checker.resolve_named_type("json.JsonTree", span);
-        assert_eq!(bare_ty, tree_ty);
+        assert_eq!(alias_ty, tree_ty);
 
         let metadata = checker.build_reflection_metadata();
         let info = metadata
-            .get_type_info("JsonValue")
-            .expect("root JsonValue alias should have reflection metadata");
+            .get_type_info("json.JsonValue")
+            .expect("namespaced JsonValue alias should have reflection metadata");
         assert_eq!(info.kind, "alias");
         assert_eq!(info.primitive_tag, None);
         assert_eq!(info.args.len(), 1);
@@ -14317,7 +14308,7 @@ function main() returns JsonValue:
     }
 
     #[test]
-    fn bare_json_value_requires_stdlib_root_alias() {
+    fn bare_json_value_is_unknown() {
         let errors = check_source_errors(
             "\
 function main() returns JsonValue:
@@ -14329,7 +14320,7 @@ function main() returns JsonValue:
             errors
                 .iter()
                 .any(|diag| diag.code.code() == 309 && diag.message.contains("JsonValue")),
-            "expected JsonValue to be unknown without the stdlib root alias, got {errors:?}"
+            "expected bare JsonValue to be unknown, got {errors:?}"
         );
     }
 

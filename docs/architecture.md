@@ -282,8 +282,8 @@ EnumDef         → ('export')? 'enum' Name ':' VariantList      // Variants may
 MachineDef      → ('export')? 'machine' Name ':' StatesBlock TransitionsBlock
 ActorDef        → ('export')? 'actor' Name '(' ParamList ')' ':' (ReceiveHandler)*
 BitfieldDef     → ('export')? ('network')? 'bitfield' Name ':' BitfieldList  // Fields: 'name: N bits' (1..63 => int64, 64 => uint64), 'name: N bits as EnumType', or 'payload: list[uint8]'
-TypeAlias       → ('export' ('root')?)? 'type' Name GenericParams? '=' Type ('where' Expr)?
-                # 'export root type' is stdlib-only and currently restricted to JsonValue = json.JsonTree.
+TypeAlias       → ('export')? 'type' Name GenericParams? '=' Type ('where' Expr)?
+                # Root aliases are rejected; exported types retain canonical namespace ownership.
 VerifyBlock     → 'verify' Name ':' Block
 PropertyBlock   → 'property' Name ':' GivenDecls Block
 InterfaceDef    → ('export')? 'interface' Name ':' FunctionSignature*

@@ -84,7 +84,7 @@ pub fn namespace_qualifier_required(
     .with_label(def_span, "namespaced declaration defined here")
 }
 
-/// E0209: Root exports are restricted to compiler-shipped stdlib aliases.
+/// E0209: Root type aliases are not supported.
 pub fn invalid_root_export(message: impl Into<String>, span: Span) -> Diagnostic {
     Diagnostic::error(209, message, span)
 }

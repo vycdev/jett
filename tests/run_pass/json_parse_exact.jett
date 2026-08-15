@@ -26,7 +26,7 @@ struct RawTreeEnvelope:
     payload: json.JsonTree
 struct RawLegacyEnvelope:
     id: string
-    payload: JsonValue
+    payload: json.JsonTree
 struct RawAliasEnvelope:
     id: string
     payload: json.JsonValue
@@ -159,9 +159,9 @@ function parse_exact_accepts_json_tree_payload() returns string:
     return "{value}:{json.is_object(view tree)}"
 function parse_exact_accepts_legacy_json_value_payload() returns string:
     string raw = "{{\"answer\":43,\"extra\":{{\"nested\":true}}}}"
-    JsonValue tree = json.parse_exact[JsonValue](raw) handle error:
+    json.JsonTree tree = json.parse_exact[json.JsonTree](raw) handle error:
         return error
-    JsonValue answer = json.field(tree, "answer") handle:
+    json.JsonTree answer = json.field(tree, "answer") handle:
         return "missing"
     int64 value = json.as_int64(answer) handle error:
         return error
@@ -188,7 +188,7 @@ function parse_exact_accepts_legacy_json_value_field_payload() returns string:
     string raw = "{{\"id\":\"doc\",\"payload\":{{\"answer\":46,\"extra\":{{\"nested\":true}}}}}}"
     RawLegacyEnvelope envelope = json.parse_exact[RawLegacyEnvelope](raw) handle error:
         return error
-    JsonValue answer = json.require_field(view envelope.payload, "answer") handle error:
+    json.JsonTree answer = json.require_field(view envelope.payload, "answer") handle error:
         return error
     int64 value = json.as_int64(view answer) handle error:
         return error
@@ -236,11 +236,11 @@ function parse_exact_accepts_json_value_set_payload_extras() returns string:
         return "{length}:{value}"
     return "missing"
 function parse_exact_accepts_legacy_json_value_optional_payload_extras() returns string:
-    optional[JsonValue] maybe_payload = json.parse_exact[optional[JsonValue]]("{{\"extra\":\"kept\"}}") handle error:
+    optional[json.JsonTree] maybe_payload = json.parse_exact[optional[json.JsonTree]]("{{\"extra\":\"kept\"}}") handle error:
         return error
-    JsonValue payload = maybe_payload handle:
+    json.JsonTree payload = maybe_payload handle:
         return "none"
-    JsonValue extra = json.require_field(view payload, "extra") handle error:
+    json.JsonTree extra = json.require_field(view payload, "extra") handle error:
         return error
     return json.as_string(view extra) handle error:
         default error

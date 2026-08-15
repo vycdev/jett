@@ -2833,7 +2833,7 @@ export actor Worker:
     }
 
     #[test]
-    fn parse_export_root_type_alias() {
+    fn parse_retired_export_root_type_alias_for_resolver_diagnostic() {
         let src = "\
 export root type JsonValue = json.JsonTree
 ";

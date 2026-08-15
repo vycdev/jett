@@ -1,17 +1,13 @@
 namespace test
-
 type LocalRaw = json.JsonTree
-
 function raw_tree_facade_root() returns json.JsonTree:
     return json.parse_raw("{{\"name\":\"Ada\",\"scores\":[3,5],\"active\":true,\"ratio\":2.5,\"missing\":null}}") handle error:
         default json.JsonTree.string_value(error)
-
 function raw_tree_facade_name(view root: json.JsonTree) returns string:
     json.JsonTree name = json.field(root, "name") handle:
         return "missing name"
     return json.as_string(name) handle error:
         default error
-
 function raw_tree_facade_scores(view root: json.JsonTree) returns string:
     json.JsonTree scores = json.field(root, "scores") handle:
         return "missing scores"
@@ -22,7 +18,6 @@ function raw_tree_facade_scores(view root: json.JsonTree) returns string:
     int64 second_score = json.as_int64(second) handle error:
         return error
     return "{json.is_array(scores)}:{score_count}:{second_score}:{json.is_number(second)}"
-
 function raw_tree_facade_scalars(view root: json.JsonTree) returns string:
     json.JsonTree active = json.field(root, "active") handle:
         return "missing active"
@@ -35,7 +30,6 @@ function raw_tree_facade_scalars(view root: json.JsonTree) returns string:
     json.JsonTree missing = json.field(root, "missing") handle:
         return "missing null"
     return "{active_value}:{json.is_bool(active)}:{ratio_value}:{json.is_null(missing)}"
-
 function raw_tree_facade_root_summary(view root: json.JsonTree) returns string:
     string root_kind = json.kind(root)
     bool root_is_object = json.is_object(root)
@@ -45,7 +39,6 @@ function raw_tree_facade_root_summary(view root: json.JsonTree) returns string:
     string root_kind_after_reads = json.kind(root)
     bool raw_mentions_name = string.contains(raw, "Ada")
     return "{root_kind}:{root_is_object}:{list.length[string](view keys)}:{raw_mentions_name}:{root_kind_after_reads}"
-
 function raw_tree_facade_summary() returns string:
     json.JsonTree root = raw_tree_facade_root()
     string name = raw_tree_facade_name(view root)
@@ -53,13 +46,11 @@ function raw_tree_facade_summary() returns string:
     string scalars = raw_tree_facade_scalars(view root)
     string root_summary = raw_tree_facade_root_summary(view root)
     return "{root_summary}:{name}:{scores}:{scalars}"
-
 function raw_tree_facade_still_accepts_legacy_value() returns string:
-    JsonValue raw = json.parse_raw("\"Grace\"") handle error:
+    json.JsonTree raw = json.parse_raw("\"Grace\"") handle error:
         return error
     return json.as_string(raw) handle error:
         default error
-
 function raw_tree_facade_accepts_local_alias() returns string:
     LocalRaw root = json.parse_raw("{{\"name\":\"Ada\"}}") handle error:
         return error
@@ -70,7 +61,6 @@ function raw_tree_facade_accepts_local_alias() returns string:
         return error
     bool mentions_name = string.contains(encoded, "Ada")
     return "{json.kind(view root)}:{text}:{mentions_name}"
-
 verify json_raw_facade_tree_surface:
     assert raw_tree_facade_summary() == "object:true:5:true:object:Ada:true:2:5:true:true:true:2.5:true"
     assert raw_tree_facade_still_accepts_legacy_value() == "Grace"

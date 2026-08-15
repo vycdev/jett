@@ -1580,10 +1580,7 @@ fn append_file_symbol_query_entries(
                 file_symbol_name(&alias.name.name, current_namespace.as_deref()),
                 "type",
                 current_namespace.clone(),
-                file_symbol_visibility(
-                    current_namespace.as_deref(),
-                    alias.exported || alias.root_exported,
-                ),
+                file_symbol_visibility(current_namespace.as_deref(), alias.exported),
                 None,
                 alias.name.span,
                 source,
@@ -1790,17 +1787,6 @@ fn append_module_query_definitions(
                 file_paths,
             ),
             Item::TypeAlias(alias) => {
-                if alias.root_exported {
-                    push_query_definition(
-                        definitions,
-                        alias.name.name.clone(),
-                        DefKind::Type,
-                        None,
-                        alias.name.span,
-                        current_source,
-                        file_paths,
-                    );
-                }
                 push_exported_query_definition(
                     definitions,
                     &alias.name.name,

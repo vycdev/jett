@@ -1230,6 +1230,10 @@ compile_fail_fixture!(
     "prelude_json_value_unavailable.jett"
 );
 compile_fail_fixture!(
+    compile_fail_json_value_bare_removed,
+    "json_value_bare_removed.jett"
+);
+compile_fail_fixture!(
     compile_fail_map_literal_key_type_mismatch,
     "map_literal_key_type_mismatch.jett"
 );
@@ -2462,10 +2466,8 @@ fn completions_hide_private_stdlib_json_hooks() {
     let candidates = completions(source);
 
     assert!(
-        candidates.iter().any(|(name, kind)| {
-            name == "JsonValue" && *kind == jett_resolve::scope::DefKind::Type
-        }),
-        "expected completions to include root stdlib JsonValue alias"
+        !candidates.iter().any(|(name, _)| name == "JsonValue"),
+        "bare JsonValue must not appear in completions"
     );
     for expected in [
         "json.JsonTree",

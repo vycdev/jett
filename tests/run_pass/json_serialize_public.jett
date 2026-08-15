@@ -45,9 +45,9 @@ function public_json_value_alias_json() returns string:
         return error
     return json.serialize_public[json.JsonValue](view raw)
 function public_bare_json_value_json() returns string:
-    JsonValue raw = json.parse[JsonValue]("{{\"visible\":true,\"score\":8}}") handle error:
+    json.JsonTree raw = json.parse[json.JsonTree]("{{\"visible\":true,\"score\":8}}") handle error:
         return error
-    return json.serialize_public[JsonValue](view raw)
+    return json.serialize_public[json.JsonTree](view raw)
 function public_unit_enum_json() returns string:
     PublicEvent event = PublicEvent.idle
     return json.serialize_public[PublicEvent](view event)

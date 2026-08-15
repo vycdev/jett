@@ -111,9 +111,9 @@ function strict_index_scalar_wrong_shape() returns string:
         return "absent"
     return json.kind(view item)
 function strict_accessors_accept_legacy_value() returns string:
-    JsonValue root = json.parse_raw("{{\"name\":\"Grace\"}}") handle error:
+    json.JsonTree root = json.parse_raw("{{\"name\":\"Grace\"}}") handle error:
         return error
-    JsonValue name = json.require_field(view root, "name") handle error:
+    json.JsonTree name = json.require_field(view root, "name") handle error:
         return error
     return json.as_string(name) handle error:
         default error

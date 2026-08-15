@@ -35,8 +35,6 @@ enough pressure from real code:
 - [State machine type model](open_design/state_machine_type_model.md)
 - [JSON unknown field policy](open_design/json_unknown_field_policy.md)
 - [JSON trusted hooks across backends](open_design/json_trusted_hooks_across_backends.md)
-- [JsonValue primitive tag retirement](open_design/json_value_primitive_tag_retirement.md)
-- [Prelude and root aliases](open_design/prelude_root_aliases.md)
 - [Print debug builtin policy](open_design/print_debug_builtin_policy.md)
 - [uint64 runtime value model](open_design/uint64_runtime_value_model.md)
 - [Initial `net.socket` transport contract](open_design/net_socket_transport_contract.md)
@@ -66,6 +64,8 @@ plans above for current work.
 - [Time and Clock capability contract](completed/time_clock_capability_contract.md)
 - [Reflected construction staging](completed/reflected_construction_staging.md)
 - [Reflection predicate facts](completed/reflection_predicate_facts.md)
+- [JsonValue primitive tag retirement](completed/json_value_primitive_tag_retirement.md)
+- [Root alias policy](completed/root_alias_policy.md)
 - [Type kind design](completed/type_kind_design.md)
 
 ## Compatibility Stubs

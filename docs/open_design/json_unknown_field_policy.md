@@ -100,7 +100,7 @@ boundary validation. `tests/run_pass/json_parse_machine_envelope.jett` pins the
 same policy for state-machine envelopes: exact parsing rejects unknown envelope
 keys and unknown payload keys, while lenient `json.parse[Machine]` keeps the
 forward-compatible behavior. The fixtures also pin raw-target exact parsing for
-`json.JsonTree`, bare `JsonValue`, and `json.JsonValue`; exact unknown-field
+`json.JsonTree` and `json.JsonValue`; exact unknown-field
 validation does not inspect inside raw tree targets. The current
 `json.parse[T]` behavior remains lenient and is still pinned by
 `tests/run_pass/json_unknown_fields.jett`. Current docs describe `parse` as the

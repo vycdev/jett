@@ -64,7 +64,7 @@ Jett is experimental, but the compiler front half is substantial.
 - `jett test` runs `verify` and `property` blocks.
 - The standard library is partly Rust-backed and partly written in `.jett`; JSON uses trusted `.jett` bodies behind compiler-owned policy gates, while random and wall-clock effects use source-owned APIs with runtime-injected capabilities.
 - `json.parse[T]` is the lenient compatibility parser, while `json.parse_exact[T]` rejects unknown object fields for closed contracts such as config files, protocols, and tests.
-- Raw JSON uses `json.JsonTree`; bare `JsonValue` remains a legacy compatibility spelling during the transition.
+- Raw JSON uses the canonical `json.JsonTree` spelling. Bare `JsonValue` is no longer supported; `json.JsonValue` remains a namespaced compatibility alias for now.
 
 See [docs/progress.md](docs/progress.md) for the detailed implementation matrix.
 

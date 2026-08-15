@@ -1,9 +1,9 @@
 # ERROR: E0344
 namespace test
 function bad_json_value_serialize_view() returns string:
-    JsonValue raw = json.parse_raw("{{\"name\":\"Ada\"}}") handle error:
+    json.JsonTree raw = json.parse_raw("{{\"name\":\"Ada\"}}") handle error:
         return error
-    return json.serialize[JsonValue](raw)
+    return json.serialize[json.JsonTree](raw)
 function bad_namespaced_json_value_serialize_view() returns string:
     json.JsonValue raw = json.parse_raw("{{\"name\":\"Lin\"}}") handle error:
         return error

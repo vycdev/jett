@@ -83,7 +83,7 @@ remain compiler-owned while the implementation body is readable `.jett` code.
 
 - Decide when the remaining bootstrap/no-stdlib `JsonValue` primitive fallback
   and `TypePrimitive.json_value_type` tag can retire. See
-  `docs/open_design/json_value_primitive_tag_retirement.md`.
+  `docs/completed/json_value_primitive_tag_retirement.md`.
 - Decide whether future codegen should use the same trusted hook table as the
   interpreter or lower public JSON calls through another backend-specific path.
 - Keep tightening `JsonTree` parser diagnostics and malformed-input parity as
