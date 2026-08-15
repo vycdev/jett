@@ -776,6 +776,22 @@ pub fn equality_requires_equatable(type_name: &str, op: &str, span: Span) -> Dia
     )
 }
 
+/// E0359: A map key or set element requires unsupported custom hashing.
+pub fn collection_type_requires_primitive_hash(
+    collection: &str,
+    role: &str,
+    type_name: &str,
+    span: Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        359,
+        format!(
+            "{collection} {role} type `{type_name}` is not hashable; use an integer, `string`, `bool`, or a refinement of one"
+        ),
+        span,
+    )
+}
+
 // Diagnostic codes E0800-E0899 are reserved for function complexity limits.
 
 /// E0800: Function body exceeds the statement count limit.

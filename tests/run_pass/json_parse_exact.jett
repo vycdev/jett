@@ -224,10 +224,10 @@ function parse_exact_accepts_json_value_map_payload_extras() returns string:
     string value = json.as_string(view extra) handle error:
         return error
     return "{map.length[string, json.JsonTree](view entries)}:{value}"
-function parse_exact_accepts_json_value_set_payload_extras() returns string:
-    set[json.JsonTree] items = json.parse_exact[set[json.JsonTree]]("[{{\"extra\":\"kept\"}}]") handle error:
+function parse_exact_accepts_json_value_list_payload_extras() returns string:
+    list[json.JsonTree] items = json.parse_exact[list[json.JsonTree]]("[{{\"extra\":\"kept\"}}]") handle error:
         return error
-    int64 length = set.length[json.JsonTree](view items)
+    int64 length = list.length[json.JsonTree](view items)
     for item in items:
         json.JsonTree extra = json.require_field(view item, "extra") handle error:
             return error
@@ -306,7 +306,7 @@ verify json_parse_exact:
     assert parse_exact_accepts_namespaced_json_value_field_payload() == "doc:47:true"
     assert parse_exact_accepts_json_tree_list_payload_extras() == "2:48:true"
     assert parse_exact_accepts_json_value_map_payload_extras() == "1:kept"
-    assert parse_exact_accepts_json_value_set_payload_extras() == "1:kept"
+    assert parse_exact_accepts_json_value_list_payload_extras() == "1:kept"
     assert parse_exact_accepts_legacy_json_value_optional_payload_extras() == "kept"
     assert parse_exact_accepts_json_tree_result_payload_extras() == "kept"
     assert parse_exact_result_keeps_reflected_fail_payload_closed() == "fail: unknown field 'extra' for test.Profile"

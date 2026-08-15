@@ -417,7 +417,7 @@ uses the expression map for hover/tooling and for interpreter runtime facts.
 Walk all type declarations and build the type registry:
 
 - **Primitive types:** `int8`..`int64`, `uint8`..`uint64`, `float32`, `float64`, `string`, `bool`, `bytes`, `nothing`. (`bytes` is a raw byte buffer with no UTF-8 guarantee, distinct from `string`.)
-- **Built-in generic types:** `list[T]`, `map[K, V]`, `set[T]`, `optional[T]`, `result[T, E]`.
+- **Built-in generic types:** `list[T]`, `map[K, V]`, `set[T]`, `optional[T]`, `result[T, E]`. Map keys and set elements are limited to integer, `string`, `bool`, or primitive-backed refinement types.
 - **User-defined types:** structs, enums, machines, actors, bitfields, interfaces, type aliases (including refinement types).
 - **Function types:** `function(T) returns U`.
 - **Capability types:** `Filesystem`, `Network`, `Stdout`, `Stderr`, `Stdin`, `Clock`, `Random`, `Process`, `Environment`, `Foreign`. Random sampling uses the explicit `view Random` API, injected per-runtime generator state, and non-cryptographic contract defined in the [Random capability and entropy contract](completed/random_capability_entropy_contract.md). The proposed [`Environment` contract](open_design/environment_argv_capability_contract.md) replaces ambient `os.env`/`os.args` with capability-backed reads from one immutable launch snapshot. `Foreign` guards the generated native C boundary specified by the [C FFI contract](open_design/c_ffi_binding_contract.md).
@@ -439,7 +439,6 @@ Types are interned for O(1) comparison: each unique type gets a `TypeId`. The ty
 | `Equatable` | numeric primitives, `string`, `bool`, explicit user structs | `==`, `!=` |
 | `Orderable` | `int64`, `float64`, `string` | `<`, `>`, `<=`, `>=` |
 | `Displayable` | `int64`, `float64`, `string`, `bool` | String interpolation `{expr}` (compiler-stdlib coupling) |
-| `Hashable` | `int64`, `string`, `bool` | `map` keys, `set` elements |
 | `Serializable` | JSON-data primitives, structs, enums, bitfields, serializable machine values, and raw JSON tree aliases | `json.serialize[T]()`, `json.parse[T]()`, `json.parse_exact[T]()` |
 
 These are ordinary `implement` blocks in the standard library, but the compiler has hardcoded knowledge of `Displayable` for string interpolation and JSON policy gates for parse/serialization. The JSON bodies are stdlib-reflected in normal builds; the compiler-owned part is the policy boundary, not format-specific field walking.
@@ -482,7 +481,14 @@ Bottom-up type checking of every expression:
   interface-typed parameters substitute the concrete owner during
   implementation validation. `!=` negates `equals` rather than adding a second
   customization point. Missing implementations report E0358. Enums retain
-  variant-and-payload equality, and `Hashable` remains a separate contract.
+  variant-and-payload equality.
+- **Primitive collection hashing boundary:** Type formation for `map[K, V]`
+  and `set[T]` accepts signed/unsigned integers, `string`, `bool`, and
+  refinements backed by those types. Other types report E0359 before
+  construction, JSON, reflection, or collection operations. There is no
+  public `Hashable` interface or custom hash return representation. Structured
+  values use explicit primitive IDs as keys/elements; cryptographic hashing is
+  a separate stdlib contract.
 - **Recursive owned types:** A struct or enum may refer to itself without a
   source-level pointer type when the declaration has a finite base value.
   Struct fields must terminate through `optional`, an empty collection, a

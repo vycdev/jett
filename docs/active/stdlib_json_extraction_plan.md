@@ -122,7 +122,7 @@ Together they cover the shapes that the current stdlib module must preserve:
 - bridge checks that keep the reflected prototypes aligned with the public JSON
   facade for representative full serialization, public serialization, and
   typed parse.
-- focused external shape fixtures for bytes, floats, sets, maps, enum payloads,
+- focused external shape fixtures for bytes, floats, primitive sets, maps, enum payloads,
   bitfields, optionals, results, refinements, and public secret omission across
   `serialize`, `serialize_public`, `parse`, and `parse_exact`.
 - malformed-input parity across `json.json_tree_parse`, `json.parse_raw`,
@@ -394,7 +394,7 @@ an explicit deprecation mechanism and a separate compatibility decision.
 - Should unknown object fields be ignored, rejected, or configurable? See
   `docs/open_design/json_unknown_field_policy.md` for the staged
   `parse_exact` path, now implemented while keeping `json.parse[T]` lenient.
-- Representative shape is pinned for bytes, `float32`/`float64`, sets, maps,
+- Representative shape is pinned for bytes, `float32`/`float64`, primitive sets, maps,
   optionals/results, unit and payload enums, bitfields, aliases/refinements,
   serialize names, and nested matrix combinations. The remaining shape
   questions are narrower: whether map/set ordering should ever become a

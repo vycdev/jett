@@ -358,6 +358,10 @@ run_pass_fixture!(
     run_pass_explicit_struct_equality,
     "explicit_struct_equality.jett"
 );
+run_pass_fixture!(
+    run_pass_primitive_collection_hash_types,
+    "primitive_collection_hash_types.jett"
+);
 
 #[test]
 fn run_file_capture_stdout_captures_capability_writes() {
@@ -1818,6 +1822,14 @@ compile_fail_fixture!(
 compile_fail_fixture!(
     compile_fail_equatable_signature_is_exact,
     "equatable_signature_is_exact.jett"
+);
+compile_fail_fixture!(
+    compile_fail_collection_struct_hashing_is_unsupported,
+    "collection_struct_hashing_is_unsupported.jett"
+);
+compile_fail_fixture!(
+    compile_fail_collection_nonprimitive_hash_types,
+    "collection_nonprimitive_hash_types.jett"
 );
 compile_fail_fixture!(
     compile_fail_json_private_tree_parse_scalar,

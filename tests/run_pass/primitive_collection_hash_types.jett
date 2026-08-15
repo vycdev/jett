@@ -1,0 +1,14 @@
+namespace test
+type UserId = string where string.char_count(value) > 0
+function primitive_hash_types_are_supported() returns bool:
+    mutable map[uint64, string] by_number = map.new[uint64, string]()
+    by_number = map.insert[uint64, string](by_number, 7, "seven")
+    mutable set[bool] flags = set.new[bool]()
+    flags = set.add[bool](flags, true)
+    UserId user_id = "u1" handle error:
+        return false
+    mutable set[UserId] ids = set.new[UserId]()
+    ids = set.add[UserId](ids, user_id)
+    return map.has[uint64, string](view by_number, 7) && set.contains[bool](view flags, true) && set.length[UserId](view ids) == 1
+verify primitive_collection_hash_types:
+    assert primitive_hash_types_are_supported()

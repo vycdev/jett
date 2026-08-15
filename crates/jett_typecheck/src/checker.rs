@@ -189,6 +189,8 @@ struct TypeChecker<'a> {
     monomorphized_structs: HashMap<(String, Vec<TypeId>), TypeId>,
     /// Generic struct templates rejected by recursive-shape validation.
     invalid_recursive_generic_structs: HashSet<String>,
+    /// Collection type spans already diagnosed by the primitive hashing rule.
+    invalid_hash_collection_spans: HashSet<Span>,
     /// Checked reflection field snapshots keyed by the canonical owner TypeId.
     reflection_fields_by_id: HashMap<TypeId, (String, Vec<ReflectionFieldInfo>)>,
     /// Checked bitfield layout snapshots keyed by the canonical owner TypeId.
@@ -276,6 +278,7 @@ impl<'a> TypeChecker<'a> {
             generic_struct_templates: HashMap::new(),
             monomorphized_structs: HashMap::new(),
             invalid_recursive_generic_structs: HashSet::new(),
+            invalid_hash_collection_spans: HashSet::new(),
             reflection_fields_by_id: HashMap::new(),
             reflection_bitfields_by_id: HashMap::new(),
             reflection_machines_by_id: HashMap::new(),
@@ -8534,6 +8537,44 @@ impl<'a> TypeChecker<'a> {
             || self.type_implements_named_interface(ty, "Equatable")
     }
 
+    fn is_primitive_hashable_type(&self, ty: TypeId) -> bool {
+        match self.interner.resolve(ty) {
+            Type::Int8
+            | Type::Int16
+            | Type::Int32
+            | Type::Int64
+            | Type::Uint8
+            | Type::Uint16
+            | Type::Uint32
+            | Type::Uint64
+            | Type::String
+            | Type::Bool => true,
+            Type::Refinement { base, .. } => self.is_primitive_hashable_type(*base),
+            _ => false,
+        }
+    }
+
+    fn check_primitive_hashable_collection_type(
+        &mut self,
+        collection: &str,
+        role: &str,
+        ty: TypeId,
+        span: Span,
+    ) {
+        if ty != TypeInterner::ERROR
+            && !self.is_primitive_hashable_type(ty)
+            && self.invalid_hash_collection_spans.insert(span)
+        {
+            self.sink
+                .emit(errors::collection_type_requires_primitive_hash(
+                    collection,
+                    role,
+                    &self.type_name(ty),
+                    span,
+                ));
+        }
+    }
+
     fn check_binary(&mut self, lhs: &Expr, op: BinOp, rhs: &Expr, span: Span) -> TypeId {
         let (lhs_ty, rhs_ty) = if Self::is_numeric_literal(lhs) && !Self::is_numeric_literal(rhs) {
             let rhs_ty = self.check_expr(rhs);
@@ -11030,6 +11071,12 @@ impl<'a> TypeChecker<'a> {
                 if args.len() == 2 {
                     let key = self.resolve_type_expr(&args[0]);
                     let val = self.resolve_type_expr(&args[1]);
+                    self.check_primitive_hashable_collection_type(
+                        "map",
+                        "key",
+                        key,
+                        args[0].span(),
+                    );
                     self.interner.intern(Type::Map(key, val))
                 } else {
                     self.sink.emit(errors::unknown_type(
@@ -11042,6 +11089,12 @@ impl<'a> TypeChecker<'a> {
             "set" => {
                 if args.len() == 1 {
                     let inner = self.resolve_type_expr(&args[0]);
+                    self.check_primitive_hashable_collection_type(
+                        "set",
+                        "element",
+                        inner,
+                        args[0].span(),
+                    );
                     self.interner.intern(Type::Set(inner))
                 } else {
                     self.sink.emit(errors::unknown_type(

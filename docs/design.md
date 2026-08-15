@@ -1995,9 +1995,9 @@ The compiler inserts representation indirection wherever the recursive edge
 requires it. This is not a fourth ownership mode: recursive values still move,
 view, and clone exactly like every other struct or enum.
 
-Every recursive declaration must have a finite base value. `optional[T]` and
-the empty collection value of `list[T]`, `map[K, V]`, or `set[T]` terminate a
-recursive field. A `result[T, E]` terminates when either branch can terminate,
+Every recursive declaration must have a finite base value. `optional[T]`, an
+empty `list[T]`, or an empty `map[K, V]` with a primitive-hashable key terminate
+a recursive field. A `result[T, E]` terminates when either branch can terminate,
 and a recursive enum must have at least one finitely constructible variant.
 Direct containment such as `struct Loop: next: Loop`, or an enum whose every
 variant requires another value of itself, is a compile error. A recursive
@@ -6663,9 +6663,27 @@ field-based fallback. This makes identity choices visible at the type rather
 than silently changing when a field is added. A struct without an explicit,
 exact `Equatable` implementation gets a compile error for either operator.
 
-Enums retain their existing variant-and-payload equality. Whether a struct may
-be a map key or set element is the separate `Hashable` contract; equality does
-not imply hashing automatically.
+Enums retain their existing variant-and-payload equality. Equality does not
+grant collection-key eligibility.
+
+**Collection hashing stays primitive-only.** Jett does not expose a custom
+`Hashable` interface yet. `map[K, V]` accepts only integer, `string`, or `bool`
+keys, and `set[T]` accepts only those same element types. A refinement whose
+base is one of those types is also accepted. Floats are excluded because NaN
+and signed-zero semantics make key equality surprising; secrets, enums,
+containers, functions, and user aggregates are excluded because they would
+require an unsettled custom-hash contract.
+
+Programs use explicit primitive identity for structured collections:
+
+```jett
+map[string, User] users_by_id
+set[string] selected_user_ids
+```
+
+This is a deliberate conservative boundary, not automatic structural hashing.
+Cryptographic digests in the `crypto` module remain byte/string-oriented
+security operations and are unrelated to hash-table bucket selection.
 
 ### Capabilities Use `view`
 
@@ -6701,7 +6719,7 @@ No special compiler rules for capabilities. They follow the same `view` semantic
 | `bytes` | Raw byte buffer (no UTF-8 guarantee). Used for binary I/O (`Filesystem.read_bytes`, `Filesystem.write_bytes`). |
 | `list[T]` | Ordered collection |
 | `map[K, V]` | Key-value collection |
-| `set[T]` | Unique collection |
+| `set[T]` | Unique collection of integer, `string`, `bool`, or primitive-backed refinement values |
 | `optional[T]` | Either a `T` or `none` |
 | `result[T, E]` | Either `ok(T)` or `fail(E)` |
 | `nothing` | Unit type with exactly one value, also called `nothing`. Used in `result[nothing, string]` for functions that can fail but return no value on success. `ok(nothing)` is the canonical form for wrapping success in `result[nothing, E]`. |
@@ -6801,7 +6819,7 @@ function display_sorted[T implements Orderable and Displayable](items: list[T], 
         Stdout.write(view stdout, displayed)
 
 # Multiple type parameters — comma separates parameters, and separates interfaces:
-function merge[T implements Orderable and Hashable, U implements Displayable](a: T, b: U) returns string:
+function merge[T implements Orderable and Equatable, U implements Displayable](a: T, b: U) returns string:
     ...
 ```
 
@@ -6839,7 +6857,6 @@ Primitive types (`int64`, `float64`, `string`, `bool`) implement standard interf
 | `Equatable` | numeric primitives, `string`, `bool`, and explicitly implementing structs | `==`, `!=` |
 | `Orderable` | `int64`, `float64`, `string` | `<`, `>`, `<=`, `>=` |
 | `Displayable` | `int64`, `float64`, `string`, `bool` | string representation (used by string interpolation) |
-| `Hashable` | `int64`, `string`, `bool` | can be used as `map` keys and `set` elements |
 | `Serializable` | JSON-data structs and primitives | `json.serialize[T]()`, `json.parse[T]()`, `json.parse_exact[T]()` |
 
 Primitive interface implementations are ordinary `implement` blocks, not compiler magic. `Equatable` and its primitive implementations live in compiler-shipped Jett source; user structs implement the same interface explicitly. JSON compatibility is structural for data-shaped types: the compiler enforces the public policy boundary, and the trusted stdlib uses reflection to walk fields and construct values without user-written parser/serializer code.
@@ -7046,7 +7063,6 @@ the completed [reflection predicate fact contract](completed/reflection_predicat
 - **C FFI extensions** — the initial binding-file syntax, `Foreign` capability, opaque handles, explicit policy boundary, supported C subset, and implementation stages are specified by the [C FFI binding contract](open_design/c_ffi_binding_contract.md). Additional calling conventions, by-value records, writable buffers, borrowed returns, callbacks, dynamic loading, and C++ remain open follow-up work.
 - **Self-hosting timeline** — at what point is Jett mature enough to rewrite the compiler from Rust into Jett?
 - **Fixed-size vs dynamic lists** — `list[T]` is currently used as a dynamic/growable collection throughout the design. For performance-critical code (bitfield payloads, buffer management, numerical computing), a fixed-size array type may be needed. Options: a separate `array[T, N]` type with compile-time-known size, or a refinement type like `type FixedBuffer = list[uint8] where list.length(value) == 1024`. A separate type gives the compiler more optimization opportunities (stack allocation, no bounds growth), but adds another collection type for the LLM to choose between.
-- **Struct hashing** — struct equality is now explicitly implemented through `Equatable`, with no structural derivation. `set[T]` elements and `map[K, V]` keys still need a matching explicit `Hashable` contract. The hash return type, collision contract, consistency requirement with `Equatable`, and interpreter/native lowering remain to be settled; equality alone never grants hashability.
 - **Type naming convention** — the design currently mixes lowercase for built-in types (`int64`, `string`, `list[T]`, `optional[T]`, `result[T, E]`) and PascalCase for user-defined types and capabilities (`User`, `Config`, `Stdout`, `Filesystem`). Is this distinction intentional and worth keeping, or should all types use a single convention? Lowercase is more token-efficient and consistent with Jett's keyword style. PascalCase visually distinguishes types from variables and functions. A unified convention reduces rules the LLM must learn, but the current split may help LLMs distinguish built-in vs user-defined types.
 
 ---

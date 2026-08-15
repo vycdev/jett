@@ -50,6 +50,10 @@ in-place mutation or mutable aliasing API.
 `list`, `map`, and `set` are move-only. Reading without transfer requires
 `view`; independent duplication requires explicit `clone`.
 
+Map keys and set elements are restricted to integer, `string`, `bool`, and
+primitive-backed refinement values. Structured values use explicit primitive
+IDs instead of implicit or user-defined hashing.
+
 The source-owned list, map, and set APIs enforce this boundary: observers declare
 views, while operations returning owned elements or transformed collections
 consume their inputs. Reusing an input requires an explicit `clone` at the call

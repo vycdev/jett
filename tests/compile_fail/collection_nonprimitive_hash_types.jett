@@ -1,0 +1,11 @@
+# ERROR: E0359
+# ERROR: E0359
+# ERROR: E0359
+enum Status:
+    active
+    disabled
+function unsupported_hash_types() returns nothing:
+    set[float64] ratios = set.new[float64]()
+    set[Status] statuses = set.new[Status]()
+    map[list[int64], string] labels = map.new[list[int64], string]()
+    return nothing

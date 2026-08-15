@@ -90,7 +90,7 @@ decoder as `json_decode_tree_reflected[T](view raw: JsonTree)`, plus
 self-hosted `JsonTree` parser and reflected decoder. It recursively handles core
 primitives (`string`, `int64`, `float64`, `bool`,
 `bytes` as hex strings, and JSON null as `nothing`), nested structs, lists,
-sets, maps with string keys, optionals, results, aliases/refinements, and
+sets of primitive-hashable values, maps with string keys, optionals, results, aliases/refinements, and
 `serialize_name` by walking raw `JsonTree` and finishing structs, bitfields,
 and enums with `TypeConstruction`.
 It treats absent optional fields as `none`, validates top-level refinements

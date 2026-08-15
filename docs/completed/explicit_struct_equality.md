@@ -43,7 +43,7 @@ signature is rejected.
 
 ## Deliberate Boundary
 
-Enums retain their established variant-and-payload equality. `Hashable` is a
-separate unresolved contract for map keys and set elements: implementing
-`Equatable` does not make a struct hashable, and this decision does not invent
-a hash return type or collision policy.
+Enums retain their established variant-and-payload equality. Implementing
+`Equatable` does not make a struct usable as a map key or set element. That
+surface remains primitive-only, as recorded in the completed
+[collection hashing boundary](primitive_collection_hash_boundary.md).

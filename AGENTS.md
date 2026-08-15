@@ -24,6 +24,10 @@ effects, small bounded functions, and compiler-enforced policy.
   and `!=` require an explicit, exact `Equatable.equals` implementation with
   two view parameters; `!=` is the negation of that method. Do not add derive
   syntax, a field-based fallback, or a separate inequality hook.
+- Do not introduce a public `Hashable` interface yet. Map keys and set elements
+  are limited to integer, `string`, `bool`, and primitive-backed refinements;
+  structured collections use explicit primitive IDs. Keep this distinct from
+  cryptographic hashing APIs.
 - Namespaced declarations are private by default. Mark only the intended public
   API with `export`.
 - Project and dependency namespaces must remain unique. Only compiler-shipped

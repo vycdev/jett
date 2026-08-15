@@ -27,8 +27,8 @@ it.
 
 Every recursive declaration must admit a finite value:
 
-- `optional[T]`, `list[T]`, `map[K, V]`, and `set[T]` can terminate with
-  `none` or an empty collection.
+- `optional[T]`, `list[T]`, and `map[K, V]` with a primitive-hashable key can
+  terminate with `none` or an empty collection.
 - `result[T, E]` is finite when either branch is finite.
 - `secret[T]` changes visibility rather than shape, so its inner value must be
   finite.

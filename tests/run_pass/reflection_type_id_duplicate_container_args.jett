@@ -28,9 +28,9 @@ function direct_map_value_arg() returns string:
     comptime type Value = type.arg[map[string, accounts.User]](1):
         TypeInfo info = type.info[Value]()
         return "{info.kind}:{info.type_name}"
-function direct_set_item_arg() returns string:
+function direct_optional_item_arg() returns string:
     use audit
-    comptime type Item = type.arg[set[audit.User]](0):
+    comptime type Item = type.arg[optional[audit.User]](0):
         return type.name[Item]()
 function direct_result_args() returns string:
     use accounts
@@ -81,7 +81,7 @@ verify reflection_type_id_duplicate_container_args:
     assert map_type_info_value_arg() == "struct:accounts.User"
     assert list_type_info_item_arg() == "struct:accounts.User"
     assert direct_map_value_arg() == "struct:accounts.User"
-    assert direct_set_item_arg() == "audit.User"
+    assert direct_optional_item_arg() == "audit.User"
     assert direct_result_args() == "accounts.User:audit.User"
     assert envelope_field_arg_summary("by_id", 1) == "map[string, accounts.User]:struct:accounts.User"
     assert envelope_field_arg_summary("audit_by_id", 1) == "map[string, audit.User]:struct:audit.User"
