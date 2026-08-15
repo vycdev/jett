@@ -1718,6 +1718,9 @@ work.
 
 Fast recompilation is critical for the LLM compile-fix loop (Footnote 5). The architecture uses a **salsa-style demand-driven query system** where every compiler operation is a memoized pure function from inputs to outputs.
 
+> The initial query and invalidation boundary for the current direct-AST
+> frontend is tracked by [#147](https://github.com/vycdev/jett/issues/147).
+
 ### Core Principle: Separate Signatures from Bodies
 
 This is the single most impactful decision for incremental performance. When a function body changes but its signature doesn't, callers of that function do not need to be re-checked.

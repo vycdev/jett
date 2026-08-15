@@ -49,3 +49,7 @@ should connect those layers rather than treating the CST as runtime metadata.
    it.
 4. Lower CST to the existing AST and migrate formatter/LSP features
    incrementally.
+
+The initial Salsa query and invalidation boundary must work with the direct AST
+without pulling the deferred CST forward; that work is tracked by
+[#147](https://github.com/vycdev/jett/issues/147).
