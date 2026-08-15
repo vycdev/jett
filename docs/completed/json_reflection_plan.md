@@ -2,7 +2,7 @@
 
 > Status: historical record. The main reflection and JSON bridge stages in this
 > note have been implemented; current work lives in
-> `/docs/active/json_value_transition_plan.md` and
+> `/docs/completed/json_value_transition_plan.md` and
 > `/docs/active/stdlib_json_extraction_plan.md`.
 
 This note tracks the remaining design work for moving JSON serialization and
@@ -138,8 +138,8 @@ guard before delegation. See
 `/docs/active/stdlib_json_extraction_plan.md` and
 `/docs/completed/json_public_bridge_handoff.md`.
 
-`json.parse_raw(raw)` now exposes the stdlib `json.JsonTree` representation,
-with compatibility assignment to bare `JsonValue`. Explicit raw accessors cover
+`json.parse_raw(raw)` now exposes the stdlib `json.JsonTree` representation.
+Explicit raw accessors cover
 kind checks, object fields, array indexes, scalar casts, object keys, array
 length, null checks, and compact raw serialization. This gives the `.jett`
 decoder a safe raw input representation without adding an unchecked `any` lane.
@@ -192,8 +192,8 @@ parsed field values, it builds `T` in declaration order while validating missing
 fields, `serialize` names, secret wrappers, optionals, results, refinements, and
 nested structs. The same `TypeConstruction` path builds structs, bitfields, and
 enums with primitive, list/set/map, optional, result, alias, and refinement
-fields. Raw `JsonValue` parsing/access now executes on native `JsonTree` values
-through trusted stdlib facades.
+fields. Raw parsing and access execute on native `JsonTree` values through
+trusted stdlib facades; the former `JsonValue` spellings are retired.
 
 Refinement fields are validated at `construct_finish`; direct top-level
 refinement targets validate through the decoder's refinement branch.

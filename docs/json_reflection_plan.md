@@ -5,5 +5,5 @@ This historical planning note moved to
 
 Current JSON work is tracked in:
 
-- [JsonValue to JsonTree transition](active/json_value_transition_plan.md)
+- [JsonValue to JsonTree transition](completed/json_value_transition_plan.md)
 - [JSON stdlib extraction plan](active/stdlib_json_extraction_plan.md)

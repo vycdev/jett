@@ -3,11 +3,6 @@ export struct User:
     id: string serialize "userId"
 export struct Box[T]:
     value: T serialize "item"
-export struct RawHolder:
-    bare: json.JsonTree
-    alias: json.JsonValue
-    bare_list: list[json.JsonTree]
-    alias_list: list[json.JsonValue]
 namespace app
 function runtime_reflection_metadata_summary() returns string:
     use models as m
@@ -20,55 +15,22 @@ function runtime_reflection_metadata_summary() returns string:
     m.Box[m.User] decoded = json.parse[m.Box[m.User]](raw) handle error:
         return error
     return "{info.type_name}:{field.type_name}:{field.serialize_name}:{raw}:{decoded.value.id}"
-function runtime_raw_alias_reflection_summary() returns string:
+function runtime_json_tree_reflection_summary() returns string:
     TypeInfo tree = type.info[json.JsonTree]()
-    TypeInfo alias = type.info[json.JsonValue]()
-    TypeInfo alias_base = list.get[TypeInfo](alias.args, 0) handle:
-        return "missing alias base"
     json.JsonTree parsed = json.parse[json.JsonTree]("{{\"name\":\"Ada\"}}") handle error:
         return error
-    json.JsonValue exact = json.parse_exact[json.JsonValue]("{{\"name\":\"Grace\"}}") handle error:
+    json.JsonTree exact = json.parse_exact[json.JsonTree]("{{\"name\":\"Grace\"}}") handle error:
         return error
     string parsed_raw = json.serialize[json.JsonTree](view parsed)
-    string exact_raw = json.serialize_public[json.JsonValue](view exact)
+    string exact_raw = json.serialize_public[json.JsonTree](view exact)
     bool parsed_name = string.contains(parsed_raw, "\"name\":\"Ada\"")
     bool exact_name = string.contains(exact_raw, "\"name\":\"Grace\"")
-    return "{tree.kind}:{tree.type_name}:{alias.kind}:{alias_base.type_name}:{json.kind(parsed)}:{json.kind(view exact)}:{parsed_name}:{exact_name}"
-function runtime_raw_alias_direct_field_metadata_summary() returns string:
-    use models as m
-    list[TypeField] fields = type.fields[m.RawHolder]()
-    TypeField tree = list.get[TypeField](fields, 0) handle:
-        return "missing tree"
-    TypeField alias = list.get[TypeField](fields, 1) handle:
-        return "missing alias"
-    TypeInfo alias_base = list.get[TypeInfo](alias.type_info.args, 0) handle:
-        return "missing alias base"
-    return "{tree.type_info.kind}:{tree.type_info.type_name}:{alias.type_info.kind}:{alias.type_info.type_name}:{alias_base.type_name}"
-function runtime_raw_alias_list_field_metadata_summary() returns string:
-    use models as m
-    list[TypeField] fields = type.fields[m.RawHolder]()
-    TypeField tree_list = list.get[TypeField](fields, 2) handle:
-        return "missing tree list"
-    TypeField alias_list = list.get[TypeField](fields, 3) handle:
-        return "missing alias list"
-    TypeInfo tree_list_arg = list.get[TypeInfo](tree_list.type_info.args, 0) handle:
-        return "missing tree list arg"
-    TypeInfo alias_list_arg = list.get[TypeInfo](alias_list.type_info.args, 0) handle:
-        return "missing alias list arg"
-    TypeInfo alias_list_base = list.get[TypeInfo](alias_list_arg.args, 0) handle:
-        return "missing alias list base"
-    return "{tree_list.type_info.kind}:{tree_list_arg.kind}:{tree_list_arg.type_name}:{alias_list.type_info.kind}:{alias_list_arg.kind}:{alias_list_arg.type_name}:{alias_list_base.type_name}"
+    return "{tree.kind}:{tree.type_name}:{json.kind(parsed)}:{json.kind(view exact)}:{parsed_name}:{exact_name}"
 function main() returns nothing:
     string summary = runtime_reflection_metadata_summary()
     if summary != "models.Box[models.User]:models.User:item:{{\"item\":{{\"userId\":\"u1\"}}}}:u1":
         int64 fail = 1 / 0
-    string raw_summary = runtime_raw_alias_reflection_summary()
-    if raw_summary != "enum:json.JsonTree:alias:json.JsonTree:object:object:true:true":
-        int64 fail = 1 / 0
-    string direct_field_summary = runtime_raw_alias_direct_field_metadata_summary()
-    if direct_field_summary != "enum:json.JsonTree:alias:json.JsonValue:json.JsonTree":
-        int64 fail = 1 / 0
-    string list_field_summary = runtime_raw_alias_list_field_metadata_summary()
-    if list_field_summary != "list:enum:json.JsonTree:list:alias:json.JsonValue:json.JsonTree":
+    string raw_summary = runtime_json_tree_reflection_summary()
+    if raw_summary != "enum:json.JsonTree:object:object:true:true":
         int64 fail = 1 / 0
     return nothing

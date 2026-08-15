@@ -8,7 +8,7 @@ struct SecretBox[T]:
     label: string serialize "displayLabel"
 struct RawPayload:
     tree: json.JsonTree
-    alias: json.JsonValue
+    alias: json.JsonTree
 enum PublicEvent:
     idle
     created(id: string, count: int64)
@@ -40,14 +40,6 @@ function public_tree_json() returns string:
     json.JsonTree tree = json.json_tree_parse("[1,true,null]") handle error:
         return error
     return json.serialize_public[json.JsonTree](view tree)
-function public_json_value_alias_json() returns string:
-    json.JsonValue raw = json.parse[json.JsonValue]("{{\"visible\":true,\"score\":7}}") handle error:
-        return error
-    return json.serialize_public[json.JsonValue](view raw)
-function public_bare_json_value_json() returns string:
-    json.JsonTree raw = json.parse[json.JsonTree]("{{\"visible\":true,\"score\":8}}") handle error:
-        return error
-    return json.serialize_public[json.JsonTree](view raw)
 function public_unit_enum_json() returns string:
     PublicEvent event = PublicEvent.idle
     return json.serialize_public[PublicEvent](view event)
@@ -62,7 +54,7 @@ function utf8_fixture_text() returns string:
 function public_raw_payload_utf8_json() returns string:
     string text = utf8_fixture_text()
     json.JsonTree tree = json.JsonTree.string_value(text)
-    json.JsonValue alias = json.JsonTree.string_value(text)
+    json.JsonTree alias = json.JsonTree.string_value(text)
     RawPayload payload = RawPayload(tree: tree, alias: alias)
     string raw = json.serialize_public[RawPayload](view payload)
     json.JsonTree parsed = json.parse_raw(raw) handle error:
@@ -103,14 +95,6 @@ verify serialize_public_allows_sized_primitives:
     assert public_sized_primitive_json() == "255:18446744073709551615:2.5:\"0x4869\""
 verify serialize_public_treats_json_tree_as_raw:
     assert public_tree_json() == "[1,true,null]"
-verify serialize_public_treats_json_value_alias_as_raw:
-    string raw = public_json_value_alias_json()
-    assert string.contains(raw, "\"visible\":true") == true
-    assert string.contains(raw, "\"score\":7") == true
-verify serialize_public_treats_bare_json_value_as_raw:
-    string raw = public_bare_json_value_json()
-    assert string.contains(raw, "\"visible\":true") == true
-    assert string.contains(raw, "\"score\":8") == true
 verify serialize_public_handles_top_level_enums:
     assert public_unit_enum_json() == "\"idle\""
     assert public_payload_enum_json() == "{{\"created\":[\"e1\",2]}}"

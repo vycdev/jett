@@ -54,10 +54,8 @@ decoder now passes fixture coverage.
 
 The raw bridge is no longer Rust-backed in `jett_comptime`: `json.parse_raw`
 delegates to `json_tree_parse`, raw accessors dispatch native `JsonTree` values
-through trusted stdlib hooks, and `JsonValue` is source-compatible with the
-stdlib `json.JsonTree` enum. In stdlib-loaded code that compatibility now flows
-through a root source alias; only bootstrap/no-stdlib fallback still uses the
-legacy primitive.
+through trusted stdlib hooks, and `json.JsonTree` is the sole raw type. The
+former source aliases and bootstrap/no-stdlib primitive have since retired.
 
 The stable boundary is now:
 
@@ -68,5 +66,5 @@ The stable boundary is now:
 - public `json.parse[JsonValue]` and `json.parse_raw` preserve the `JsonValue`
   spelling but execute on native `JsonTree` values.
 
-Long term, `JsonValue` should become a compatibility spelling for the native
-`JsonTree` representation. See `/docs/active/json_value_transition_plan.md`.
+Both former `JsonValue` compatibility spellings have since been retired. See
+`/docs/completed/json_value_transition_plan.md`.

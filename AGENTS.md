@@ -30,9 +30,8 @@ effects, small bounded functions, and compiler-enforced policy.
 - Public `json.parse`, `json.parse_exact`, `json.serialize`, and
   `json.serialize_public` still carry compiler-owned policy gates; trusted
   stdlib hooks provide their implementation bodies.
-- `json.JsonTree` is the canonical native raw JSON representation. Bare
-  `JsonValue` and root type aliases are rejected; `json.JsonValue` remains a
-  namespaced compatibility alias for now.
+- `json.JsonTree` is the sole native raw JSON representation. Bare
+  `JsonValue`, `json.JsonValue`, and root type aliases are rejected.
 
 ## Verification
 

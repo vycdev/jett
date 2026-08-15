@@ -4594,7 +4594,7 @@ Root type aliases are not part of Jett. `export root type` is rejected in
 project, dependency, and compiler-shipped standard library source. Public types
 remain under their canonical namespace, so raw JSON is spelled
 `json.JsonTree`. The former bare `JsonValue` compatibility alias has been
-removed; `json.JsonValue` remains an ordinary namespaced alias for now.
+removed, as has the namespaced `json.JsonValue` alias.
 
 Inside a `mutual` block, each public function signature is exported
 individually. This allows one recursive group to expose a small public entry

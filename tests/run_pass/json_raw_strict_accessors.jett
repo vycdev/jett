@@ -118,13 +118,13 @@ function strict_accessors_accept_legacy_value() returns string:
     return json.as_string(name) handle error:
         default error
 function strict_accessors_accept_namespaced_value() returns string:
-    json.JsonValue root = json.parse_raw("{{\"name\":\"Lin\",\"scores\":[3,5]}}") handle error:
+    json.JsonTree root = json.parse_raw("{{\"name\":\"Lin\",\"scores\":[3,5]}}") handle error:
         return error
-    json.JsonValue name = json.require_field(view root, "name") handle error:
+    json.JsonTree name = json.require_field(view root, "name") handle error:
         return error
-    json.JsonValue scores = json.require_field(view root, "scores") handle error:
+    json.JsonTree scores = json.require_field(view root, "scores") handle error:
         return error
-    json.JsonValue second = json.require_index(view scores, 1) handle error:
+    json.JsonTree second = json.require_index(view scores, 1) handle error:
         return error
     string name_text = json.as_string(view name) handle error:
         return error
@@ -132,17 +132,17 @@ function strict_accessors_accept_namespaced_value() returns string:
         default -1
     return "{name_text}:{score}"
 function strict_optional_accessors_accept_namespaced_value() returns string:
-    json.JsonValue root = json.parse_raw("{{\"scores\":[3,5]}}") handle error:
+    json.JsonTree root = json.parse_raw("{{\"scores\":[3,5]}}") handle error:
         return error
-    optional[json.JsonValue] missing_field = json.object_field(view root, "absent") handle error:
+    optional[json.JsonTree] missing_field = json.object_field(view root, "absent") handle error:
         return error
-    json.JsonValue field = missing_field handle:
+    json.JsonTree field = missing_field handle:
         default json.JsonTree.string_value("field absent")
-    json.JsonValue scores = json.require_field(view root, "scores") handle error:
+    json.JsonTree scores = json.require_field(view root, "scores") handle error:
         return error
-    optional[json.JsonValue] missing_index = json.array_index(view scores, 9) handle error:
+    optional[json.JsonTree] missing_index = json.array_index(view scores, 9) handle error:
         return error
-    json.JsonValue item = missing_index handle:
+    json.JsonTree item = missing_index handle:
         default json.JsonTree.string_value("index absent")
     string field_text = json.as_string(view field) handle error:
         return error

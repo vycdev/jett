@@ -722,10 +722,6 @@ run_pass_fixture!(
     "json_raw_facade_tree_surface.jett"
 );
 run_pass_fixture!(
-    run_pass_json_raw_alias_facade_surface,
-    "json_raw_alias_facade_surface.jett"
-);
-run_pass_fixture!(
     run_pass_json_raw_value_access_edges,
     "json_raw_value_access_edges.jett"
 );
@@ -734,18 +730,6 @@ run_pass_fixture!(
     "json_raw_strict_accessors.jett"
 );
 run_pass_fixture!(run_pass_json_raw_tree_parity, "json_raw_tree_parity.jett");
-run_pass_fixture!(
-    run_pass_json_value_tree_compatibility,
-    "json_value_tree_compatibility.jett"
-);
-run_pass_fixture!(
-    run_pass_json_value_reflection_staging,
-    "json_value_reflection_staging.jett"
-);
-run_pass_fixture!(
-    run_pass_json_value_reflection_container_metadata,
-    "json_value_reflection_container_metadata.jett"
-);
 run_pass_fixture!(run_pass_json_enum_shapes, "json_enum_shapes.jett");
 run_pass_fixture!(run_pass_json_bitfield_shapes, "json_bitfield_shapes.jett");
 run_pass_fixture!(
@@ -1232,6 +1216,10 @@ compile_fail_fixture!(
 compile_fail_fixture!(
     compile_fail_json_value_bare_removed,
     "json_value_bare_removed.jett"
+);
+compile_fail_fixture!(
+    compile_fail_json_value_namespaced_removed,
+    "json_value_namespaced_removed.jett"
 );
 compile_fail_fixture!(
     compile_fail_map_literal_key_type_mismatch,
@@ -1846,7 +1834,7 @@ compile_fail_fixture!(
 );
 #[test]
 fn compile_fail_json_serialize_secret_container_blocked_count() {
-    assert_compile_fail_error_count("json_serialize_secret_container_blocked.jett", 603, 10);
+    assert_compile_fail_error_count("json_serialize_secret_container_blocked.jett", 603, 9);
 }
 compile_fail_fixture!(
     compile_fail_json_serialize_map_key_must_be_string,
@@ -1869,24 +1857,20 @@ compile_fail_fixture!(
     "json_serialize_public_requires_view.jett"
 );
 compile_fail_fixture!(
-    compile_fail_json_serialize_json_value_requires_view,
-    "json_serialize_json_value_requires_view.jett"
+    compile_fail_json_serialize_json_tree_requires_view,
+    "json_serialize_json_tree_requires_view.jett"
 );
 #[test]
-fn compile_fail_json_serialize_json_value_requires_view_count() {
-    assert_compile_fail_error_count("json_serialize_json_value_requires_view.jett", 344, 3);
+fn compile_fail_json_serialize_json_tree_requires_view_count() {
+    assert_compile_fail_error_count("json_serialize_json_tree_requires_view.jett", 344, 1);
 }
 compile_fail_fixture!(
-    compile_fail_json_serialize_public_json_value_requires_view,
-    "json_serialize_public_json_value_requires_view.jett"
+    compile_fail_json_serialize_public_json_tree_requires_view,
+    "json_serialize_public_json_tree_requires_view.jett"
 );
 #[test]
-fn compile_fail_json_serialize_public_json_value_requires_view_count() {
-    assert_compile_fail_error_count(
-        "json_serialize_public_json_value_requires_view.jett",
-        344,
-        3,
-    );
+fn compile_fail_json_serialize_public_json_tree_requires_view_count() {
+    assert_compile_fail_error_count("json_serialize_public_json_tree_requires_view.jett", 344, 1);
 }
 compile_fail_fixture!(
     compile_fail_json_serialize_public_top_level_secret_blocked,
@@ -1897,7 +1881,7 @@ fn compile_fail_json_serialize_public_top_level_secret_blocked_covers_records() 
     assert_compile_fail_error_count(
         "json_serialize_public_top_level_secret_blocked.jett",
         600,
-        4,
+        3,
     );
 }
 compile_fail_fixture!(
@@ -2469,9 +2453,12 @@ fn completions_hide_private_stdlib_json_hooks() {
         !candidates.iter().any(|(name, _)| name == "JsonValue"),
         "bare JsonValue must not appear in completions"
     );
+    assert!(
+        !candidates.iter().any(|(name, _)| name == "json.JsonValue"),
+        "namespaced json.JsonValue must not appear in completions"
+    );
     for expected in [
         "json.JsonTree",
-        "json.JsonValue",
         "json.parse",
         "json.parse_exact",
         "json.parse_raw",

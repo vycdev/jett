@@ -10,8 +10,8 @@ Reflection can now read fields, construct structs/bitfields/enums, inspect type
 arguments, use structured kind and primitive tags, and walk native `JsonTree`
 values. `json.JsonTree` is the canonical raw type. The legacy compiler-owned
 `JsonValue` primitive, bootstrap fallback, and bare root alias have been
-removed; bare `JsonValue` is always unknown. The remaining boundary is the
-module and namespace path that
+removed; both bare `JsonValue` and `json.JsonValue` are always unknown. The
+remaining boundary is the module and namespace path that
 would let ordinary `.jett` stdlib code carry the compiler-owned policy behind
 the public `json.*` API.
 
@@ -77,7 +77,6 @@ namespace. Prefixed hook names hold the trusted implementation bodies:
 
 - `stdlib/json/` fragments
 - `JsonTree` as a first self-hosted raw JSON tree representation
-- `json.JsonValue` as an exported namespaced alias for `JsonTree`
 - `json_tree_serialize(value: JsonTree)`
 - `json_tree_parse(raw: string)` for staged scalar, array, and object parsing
 - `json_tree_*` traversal helpers for kind checks, field/index lookup, lengths,
@@ -127,8 +126,7 @@ Together they cover the shapes that the current stdlib module must preserve:
   bitfields, optionals, results, refinements, and public secret omission across
   `serialize`, `serialize_public`, `parse`, and `parse_exact`.
 - malformed-input parity across `json.json_tree_parse`, `json.parse_raw`,
-  `json.parse[json.JsonTree]`, `json.parse[json.JsonValue]`, and the exact raw-tree
-  targets.
+  `json.parse[json.JsonTree]`, and the exact raw-tree target.
 - dedicated shape coverage now lives in `json_shape_matrix`,
   `json_parse_collection_edges`, `json_parse_exact*`,
   `json_enum_bitfield_exact_edges`, `json_refinement_exact_serialize_edges`,
@@ -153,7 +151,7 @@ ordinary undefined functions instead of hidden Rust-backed JSON semantics.
 bridge backed by trusted stdlib hooks. It rejects unknown object fields
 recursively for reflected closed-shape targets: structs, bitfields, enum
 payloads, aliases/refinements over those shapes, and containers containing
-them. Raw `json.JsonTree` / `json.JsonValue` targets remain arbitrary JSON payloads.
+them. Raw `json.JsonTree` targets remain arbitrary JSON payloads.
 The existing `json.parse[T]` behavior remains lenient.
 
 ## Remaining Boundaries
@@ -265,8 +263,7 @@ for current JSON hooks; future backends need the same identity boundary.
    - The old private raw-value decoder wrapper and the
      duplicate raw decoder helper family have been removed.
    - `json_parse_reflected[T](raw: string)` now routes typed targets through the
-     self-hosted `JsonTree` parser/decoder. The namespaced alias compatibility
-     branch also parses through `json_tree_parse` directly.
+     self-hosted `JsonTree` parser/decoder.
    - Public raw facade wrappers now exist in `stdlib/json/` for
      `parse_raw`, `serialize_raw`, tree kind/predicates, lookup, length/key
      helpers, and scalar casts.
@@ -293,7 +290,7 @@ for current JSON hooks; future backends need the same identity boundary.
    parse/serialize target types, and handled results.
 5. Keep broad bridge/parity tests around removed Rust-backed fallback paths and
    the current trusted-wrapper/error paths. Done for typed public
-   parse/serialize and raw `json.JsonTree` / `json.JsonValue` execution in
+   parse/serialize and raw `json.JsonTree` execution in
    `jett_comptime`, and runtime `main()` reflection metadata handoff for
    namespaced generic JSON. Public policy coverage now also pins unsupported
    `parse`/`parse_exact` and `serialize`/`serialize_public` targets through
@@ -312,9 +309,7 @@ for current JSON hooks; future backends need the same identity boundary.
    Valid JSON escapes now include quote, backslash, slash, backspace, form feed,
    newline, carriage return, tab, and unicode escapes. Public entrypoint parity
    for those parser errors is pinned across
-   `json.json_tree_parse`, `json.parse_raw`, `json.parse[json.JsonTree]`,
-   `json.parse[json.JsonValue]`,
-   `json.parse_exact[json.JsonValue]`, and
+   `json.json_tree_parse`, `json.parse_raw`, `json.parse[json.JsonTree]`, and
    `json.parse_exact[json.JsonTree]`; success parity covers representative
    null, bool, number, string, empty-container, and nested compound roots across
    the same public raw entrypoints. Container parsing now recurses through
@@ -325,14 +320,11 @@ for current JSON hooks; future backends need the same identity boundary.
    number scalar dispatch is also byte-span based, materializing a string only
    for the raw number spelling stored in `JsonTree.number_value`. The strict
    raw lookup helpers are shared at the private `JsonTree` layer by public
-   wrappers, reflected decoding, and exact validation. The remaining question
-   is whether the remaining namespaced `json.JsonValue` alias should be retired.
-7. Keep the staged alias migration narrow. The current implementation exposes
-   `json.JsonValue` as an exported namespaced source alias. Bare `JsonValue`,
-   root type aliases, and the compiler-owned primitive have been removed. See
-   `/docs/active/json_value_transition_plan.md` and
-   `/docs/completed/root_alias_policy.md`. The remaining design decision is how
-   long the namespaced compatibility alias should remain.
+   wrappers, reflected decoding, and exact validation.
+7. Keep the completed alias retirement pinned. Bare `JsonValue`,
+   `json.JsonValue`, root type aliases, and the compiler-owned primitive have
+   been removed. See `/docs/completed/json_value_transition_plan.md` and
+   `/docs/completed/root_alias_policy.md`.
 8. Keep reflection-specialized generic helpers staged carefully. The typechecker
    now checks ordinary generic function bodies per concrete instantiation, and
    it can specialize the narrow direct-branch form

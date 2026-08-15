@@ -1,0 +1,6 @@
+# ERROR: E0344
+namespace test
+function bad_public_json_tree_serialize_view() returns string:
+    json.JsonTree raw = json.parse_raw("{{\"name\":\"Grace\"}}") handle error:
+        return json.JsonTree.string_value(error)
+    return json.serialize_public[json.JsonTree](raw)

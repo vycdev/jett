@@ -14247,67 +14247,6 @@ function main() returns int64:
     }
 
     #[test]
-    fn namespaced_json_value_alias_resolves_to_json_tree() {
-        let file_id = FileId::new(STDLIB_FILE_ID_START);
-        let source = "\
-namespace json
-export enum JsonTree:
-    null = 0
-export type JsonValue = JsonTree
-namespace app
-function main() returns json.JsonValue:
-    return json.JsonTree.null
-";
-        let parse_result = parse(source, file_id);
-        assert!(
-            parse_result.errors.is_empty(),
-            "unexpected parse errors: {:?}",
-            parse_result.errors
-        );
-
-        let resolve_result = jett_resolve::resolve(&parse_result.module);
-        let resolve_errors: Vec<_> = resolve_result
-            .diagnostics
-            .iter()
-            .filter(|d| d.severity == jett_diagnostics::Severity::Error)
-            .collect();
-        assert!(
-            resolve_errors.is_empty(),
-            "unexpected resolve errors: {:?}",
-            resolve_result.diagnostics
-        );
-
-        let mut checker = TypeChecker::new(&resolve_result);
-        checker.check_module(&parse_result.module);
-        let typecheck_errors: Vec<_> = checker
-            .sink
-            .diagnostics()
-            .iter()
-            .filter(|d| d.severity == jett_diagnostics::Severity::Error)
-            .collect();
-        assert!(
-            typecheck_errors.is_empty(),
-            "unexpected type errors: {:?}",
-            checker.sink.diagnostics()
-        );
-
-        let span = Span::new(file_id, 0, 0);
-        let alias_ty = checker.resolve_named_type("json.JsonValue", span);
-        let tree_ty = checker.resolve_named_type("json.JsonTree", span);
-        assert_eq!(alias_ty, tree_ty);
-
-        let metadata = checker.build_reflection_metadata();
-        let info = metadata
-            .get_type_info("json.JsonValue")
-            .expect("namespaced JsonValue alias should have reflection metadata");
-        assert_eq!(info.kind, "alias");
-        assert_eq!(info.primitive_tag, None);
-        assert_eq!(info.args.len(), 1);
-        assert_eq!(info.args[0].type_name, "json.JsonTree");
-        assert_eq!(info.args[0].kind, "enum");
-    }
-
-    #[test]
     fn bare_json_value_is_unknown() {
         let errors = check_source_errors(
             "\

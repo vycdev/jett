@@ -399,11 +399,6 @@ verify type_info_reflection:
     assert type_info_kind[json.JsonTree]() == "enum"
     assert type_info_kind_tag_is[json.JsonTree](TypeKind.enum_type) == true
     assert type_info_has_no_primitive_tag[json.JsonTree]() == true
-    assert type_info_kind[json.JsonValue]() == "alias"
-    assert type_info_kind_tag_is[json.JsonValue](TypeKind.alias_type) == true
-    assert type_info_has_no_primitive_tag[json.JsonValue]() == true
-    assert type_info_arg_kind[json.JsonValue](0) == "enum"
-    assert type_info_arg_type_name[json.JsonValue](0) == "json.JsonTree"
     assert type_info_kind[NonEmpty]() == "refinement"
     assert type_info_kind_tag_is[NonEmpty](TypeKind.refinement_type) == true
     assert type_info_has_no_primitive_tag[NonEmpty]() == true

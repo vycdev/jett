@@ -1,0 +1,3 @@
+# ERROR: E0309
+function retired_namespaced_raw_type() returns json.JsonValue:
+    return nothing

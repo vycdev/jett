@@ -13,7 +13,7 @@ struct User:
     failed: result[int64, string]
 struct RawPayload:
     tree: json.JsonTree
-    alias: json.JsonValue
+    alias: json.JsonTree
 enum Protocol:
     tcp = 6
     udp = 17
@@ -60,14 +60,6 @@ function json_tree_test() returns string:
     return json.serialize[json.JsonTree](view tree)
 verify json_tree_test:
     assert json_tree_test() == "[1,true,null]"
-function json_value_alias_test() returns string:
-    json.JsonValue raw = json.parse[json.JsonValue]("{{\"name\":\"Grace\",\"score\":7}}") handle error:
-        return error
-    return json.serialize[json.JsonValue](view raw)
-verify json_value_alias_test:
-    string raw = json_value_alias_test()
-    assert string.contains(raw, "\"name\":\"Grace\"") == true
-    assert string.contains(raw, "\"score\":7") == true
 function utf8_fixture_text() returns string:
     bytes raw = bytes.from_hex("c3a9e282acf09f9880") handle error:
         return error
@@ -76,7 +68,7 @@ function utf8_fixture_text() returns string:
 function json_tree_field_test() returns string:
     json.JsonTree tree = json.json_tree_parse("[1,true]") handle error:
         return error
-    json.JsonValue alias = json.parse[json.JsonValue]("{{\"ok\":true}}") handle error:
+    json.JsonTree alias = json.parse[json.JsonTree]("{{\"ok\":true}}") handle error:
         return error
     RawPayload payload = RawPayload(tree: tree, alias: alias)
     return json.serialize[RawPayload](view payload)
@@ -85,7 +77,7 @@ verify json_tree_field_test:
 function json_tree_utf8_field_test() returns string:
     string text = utf8_fixture_text()
     json.JsonTree tree = json.JsonTree.string_value(text)
-    json.JsonValue alias = json.JsonTree.string_value(text)
+    json.JsonTree alias = json.JsonTree.string_value(text)
     RawPayload payload = RawPayload(tree: tree, alias: alias)
     string raw = json.serialize[RawPayload](view payload)
     json.JsonTree parsed = json.parse_raw(raw) handle error:

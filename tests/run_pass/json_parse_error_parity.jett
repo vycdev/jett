@@ -7,24 +7,8 @@ function raw_parse_error(raw: string) returns string:
     json.JsonTree tree = json.parse_raw(raw) handle error:
         return error
     return json.serialize_raw(view tree)
-function typed_json_value_error(raw: string) returns string:
-    json.JsonTree value = json.parse[json.JsonTree](raw) handle error:
-        return error
-    return json.serialize_raw(view value)
-function typed_json_value_alias_error(raw: string) returns string:
-    json.JsonValue value = json.parse[json.JsonValue](raw) handle error:
-        return error
-    return json.serialize_raw(view value)
 function typed_json_tree_error(raw: string) returns string:
     json.JsonTree value = json.parse[json.JsonTree](raw) handle error:
-        return error
-    return json.serialize_raw(view value)
-function exact_json_value_error(raw: string) returns string:
-    json.JsonTree value = json.parse_exact[json.JsonTree](raw) handle error:
-        return error
-    return json.serialize_raw(view value)
-function exact_json_value_alias_error(raw: string) returns string:
-    json.JsonValue value = json.parse_exact[json.JsonValue](raw) handle error:
         return error
     return json.serialize_raw(view value)
 function exact_json_tree_error(raw: string) returns string:
@@ -34,23 +18,11 @@ function exact_json_tree_error(raw: string) returns string:
 function parse_errors_match(raw: string) returns bool:
     string tree_error = tree_parse_error(raw)
     string raw_error = raw_parse_error(raw)
-    string legacy_typed_error = typed_json_value_error(raw)
-    string alias_typed_error = typed_json_value_alias_error(raw)
     string tree_typed_error = typed_json_tree_error(raw)
-    string legacy_exact_error = exact_json_value_error(raw)
-    string alias_exact_error = exact_json_value_alias_error(raw)
     string tree_exact_error = exact_json_tree_error(raw)
     if tree_error != raw_error:
         return false
-    if tree_error != legacy_typed_error:
-        return false
-    if tree_error != alias_typed_error:
-        return false
     if tree_error != tree_typed_error:
-        return false
-    if tree_error != legacy_exact_error:
-        return false
-    if tree_error != alias_exact_error:
         return false
     if tree_error != tree_exact_error:
         return false

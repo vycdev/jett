@@ -4,23 +4,19 @@ This note records the first raw JSON surface in Jett. It began as an opaque
 `JsonValue` bridge toward stdlib `json.parse[T]`; the active implementation now
 executes that surface through the self-hosted `json.JsonTree` representation.
 
-Bare `JsonValue` is now a compatibility spelling for the native `JsonTree`
-representation in stdlib-loaded code. The compiler still keeps a legacy
-fallback for bootstrap/no-stdlib paths. See
-`/docs/active/json_value_transition_plan.md`.
+Both former `JsonValue` spellings and the bootstrap/no-stdlib primitive
+fallback have since been retired. See
+`/docs/completed/json_value_transition_plan.md`.
 
 ## Current Compatibility Surface
 
-`json.JsonTree` is the stdlib-owned raw JSON tree. `json.JsonValue` is an
-exported namespaced alias for that tree, while bare `JsonValue` is a root
-compatibility alias when the bundled stdlib is loaded. It is not an `any` type:
+`json.JsonTree` is the sole stdlib-owned raw JSON tree. It is not an `any` type:
 user code can only inspect raw JSON through explicit `json.*` accessors, and
 typed conversion still returns `result[T, string]`.
 
 Implemented accessors:
 
-- `json.parse_raw(raw: string)` returns `result[json.JsonTree, string]`, with
-  compatibility assignment to bare `JsonValue`.
+- `json.parse_raw(raw: string)` returns `result[json.JsonTree, string]`.
 - `json.serialize_raw(view value: json.JsonTree)` returns a compact JSON
   string.
 - `json.kind(view value: json.JsonTree)` returns `null`, `bool`, `number`, `string`,
@@ -64,8 +60,8 @@ target.
 
 This was intentionally staged alongside the opaque `JsonValue` primitive first.
 The current implementation now routes `json.parse_raw`, raw accessors, and
-typed public `json.parse[T]` through `JsonTree`; bare `JsonValue` remains only a
-compatibility spelling. The parser now has pinned diagnostics for common
+typed public `json.parse[T]` through `JsonTree`; both compatibility aliases are
+retired. The parser now has pinned diagnostics for common
 malformed inputs such as unterminated strings/arrays/objects, trailing
 characters, mismatched delimiters, bad number forms, bad literals, and invalid
 escapes. Unicode escapes including BMP values such as `\u0041`, `\u00e9`,
@@ -120,10 +116,10 @@ coverage now lives in the JSON run-pass and driver tests.
 
 - Should object traversal grow a typed entry iterator, or are
   `json.object_keys` plus `json.field` enough?
-- Should `json.field` and `json.index` return `result[optional[JsonValue],
+- Should `json.field` and `json.index` return `result[optional[json.JsonTree],
   string]` to distinguish wrong-shape access from ordinary absence?
-- Resolved during the `JsonTree` transition: `JsonValue` is a non-copy
-  compatibility spelling, while raw accessors keep ergonomics by reading their
+- Resolved during the `JsonTree` transition: both `JsonValue` compatibility
+  spellings were retired, while raw accessors keep ergonomics by reading their
   first argument as an implicit `view`.
 - Should `JsonTree.number_value` keep raw number text for round-tripping, or
   split into integer/float variants once numeric parsing is self-hosted?

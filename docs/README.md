@@ -18,7 +18,6 @@ These notes describe live implementation and architecture staging:
 
 - [Frontend syntax tree staging](active/frontend_syntax_tree_staging.md)
 - [Ownership and value semantics](active/ownership_value_semantics.md)
-- [JsonValue to JsonTree transition](active/json_value_transition_plan.md)
 - [JSON stdlib extraction plan](active/stdlib_json_extraction_plan.md)
 - [Canonical reflection metadata plan](active/canonical_reflection_metadata_plan.md)
 - [Stdlib visibility design](active/stdlib_visibility_design.md)
@@ -65,6 +64,7 @@ plans above for current work.
 - [Reflected construction staging](completed/reflected_construction_staging.md)
 - [Reflection predicate facts](completed/reflection_predicate_facts.md)
 - [JsonValue primitive tag retirement](completed/json_value_primitive_tag_retirement.md)
+- [JsonValue to JsonTree transition](completed/json_value_transition_plan.md)
 - [Root alias policy](completed/root_alias_policy.md)
 - [Type kind design](completed/type_kind_design.md)
 

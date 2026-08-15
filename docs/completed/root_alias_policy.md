@@ -27,8 +27,8 @@ export root type JsonValue = json.JsonTree
 
 That declaration and its compiler allowlist have been removed. Bare
 `JsonValue` is now unknown in all source contexts. Existing code must migrate to
-`json.JsonTree`; the ordinary namespaced `json.JsonValue` alias remains a
-separate compatibility surface for now.
+`json.JsonTree`; the namespaced `json.JsonValue` compatibility alias has also
+been removed.
 
 Conformance coverage pins that root exports fail with `E0209`, bare
 `JsonValue` stays out of completions, and `json.JsonTree` remains the canonical

@@ -13,14 +13,11 @@ alias have both been retired.
   `JsonValue`.
 - Bare `JsonValue` is unknown even when the bundled standard library is loaded.
 - Root type aliases are rejected with `E0209` and never enter compiler state.
-- `json.JsonValue` remains an ordinary exported namespaced alias to
-  `json.JsonTree` for now; it has alias reflection metadata, not primitive
-  identity.
+- `json.JsonValue` is also retired; `json.JsonTree` is the sole spelling.
 
 Typed JSON parsing, raw access, serialization, reflection, and construction all
 operate on the normal `json.JsonTree` enum carrier. There is no compiler-owned
 compatibility table or hidden runtime representation for the retired name.
 
-The remaining question—whether the namespaced `json.JsonValue` alias should
-also be removed—is tracked in the active JsonTree transition record and does
-not reopen the primitive or root-alias decisions.
+The completed JsonTree transition records the removal of both source aliases;
+it does not reopen the primitive or root-alias decisions.

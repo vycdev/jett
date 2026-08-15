@@ -64,7 +64,7 @@ Jett is experimental, but the compiler front half is substantial.
 - `jett test` runs `verify` and `property` blocks.
 - The standard library is partly Rust-backed and partly written in `.jett`; JSON uses trusted `.jett` bodies behind compiler-owned policy gates, while random and wall-clock effects use source-owned APIs with runtime-injected capabilities.
 - `json.parse[T]` is the lenient compatibility parser, while `json.parse_exact[T]` rejects unknown object fields for closed contracts such as config files, protocols, and tests.
-- Raw JSON uses the canonical `json.JsonTree` spelling. Bare `JsonValue` is no longer supported; `json.JsonValue` remains a namespaced compatibility alias for now.
+- Raw JSON uses the sole canonical `json.JsonTree` spelling. The former bare and namespaced `JsonValue` aliases are no longer supported.
 
 See [docs/progress.md](docs/progress.md) for the detailed implementation matrix.
 
@@ -155,7 +155,7 @@ editor/vscode/         VS Code extension
 - [Compiler architecture](docs/architecture.md)
 - [Implementation progress](docs/progress.md)
 - [Frontend syntax tree staging](docs/active/frontend_syntax_tree_staging.md)
-- [JsonValue to JsonTree transition](docs/active/json_value_transition_plan.md)
+- [JsonValue to JsonTree transition](docs/completed/json_value_transition_plan.md)
 - [JSON stdlib extraction plan](docs/active/stdlib_json_extraction_plan.md)
 - [Random capability and entropy contract](docs/completed/random_capability_entropy_contract.md)
 - [Time and Clock capability contract](docs/completed/time_clock_capability_contract.md)

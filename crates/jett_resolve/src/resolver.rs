@@ -1919,7 +1919,6 @@ namespace json
 export enum JsonTree:
     null
 
-export type JsonValue = JsonTree
 export root type JsonValue = json.JsonTree
 "#,
             FileId::new(STDLIB_FILE_ID_START),
@@ -1934,19 +1933,9 @@ export root type JsonValue = json.JsonTree
         assert_eq!(errors.len(), 1, "expected root export error");
         assert!(errors[0].message.contains("not supported"));
 
-        let namespaced_alias = def_by_name(&result, "json.JsonValue");
-        assert_eq!(namespaced_alias.namespace.as_deref(), Some("json"));
-        assert_eq!(
-            namespaced_alias.visibility,
-            crate::scope::DefVisibility::Public
-        );
-
         let root = ScopeId::new(0);
         assert_eq!(result.scope_table.lookup(root, "JsonValue"), None);
-        assert_eq!(
-            result.scope_table.lookup(root, "json.JsonValue"),
-            Some(namespaced_alias.id)
-        );
+        assert_eq!(result.scope_table.lookup(root, "json.JsonValue"), None);
     }
 
     #[test]

@@ -203,10 +203,9 @@ Implemented:
 - The public raw/tree helper surface in `stdlib/json/` fragments is explicitly
   exported while parser span scanners, reflected decoders, serializers, and
   bridge hooks stay private.
-- The stdlib JSON module exports `json.JsonValue = JsonTree` only as a
-  namespaced source-level compatibility alias. Bare `JsonValue`, root type
-  aliases, the legacy compiler primitive, and
-  `TypePrimitive.json_value_type` have been removed.
+- The stdlib JSON module exports only `json.JsonTree` as its raw type. Bare
+  `JsonValue`, `json.JsonValue`, root type aliases, the legacy compiler
+  primitive, and `TypePrimitive.json_value_type` have been removed.
 - Driver-level `build_source` coverage now verifies that in-memory/LSP-style
   validation sees the exported `json.JsonTree` raw facade surface, not only the
   marker stdlib module.
@@ -217,7 +216,7 @@ Implemented:
   casts, predicates, key/length helpers, and raw serialization.
 - Driver completion coverage now filters out private namespaced stdlib JSON
   bridge hooks while still exposing the exported `json.JsonTree`,
-  `json.JsonValue`, parse/serialize wrappers, and raw facade surface. The
+  parse/serialize wrappers, and raw facade surface. The
   exported JSON surface remains namespaced in source and completions.
 - LSP completions are now cursor-position aware for namespace visibility:
   private helpers are offered inside their own namespace but hidden from
@@ -264,7 +263,7 @@ Still staged:
   runtime lookup does not silently reuse an unrelated root leaf.
 - Stdlib JSON exports follow the same rule: `json.parse_raw` and
   `json.JsonTree` are available, while flat `parse_raw` and `JsonTree` are
-  rejected. Bare `JsonValue` is also rejected.
+  rejected. Bare `JsonValue` and `json.JsonValue` are also rejected.
 - Public JSON policy remains compiler-owned: `view`, secret, map-key,
   unsupported parse/serialize target, and handled-result rules still fire even
   if public wrapper declarations exist.

@@ -24,10 +24,9 @@ functions own the runtime implementation body.
   `json.json_tree_parse`, `json.json_tree_serialize`, `json.json_tree_field`,
   `json.json_tree_index`, and scalar-cast helpers by way of exported public raw
   facade wrappers.
-- `json.JsonTree` is the self-hosted raw JSON representation. `json.JsonValue`
-  is an exported namespaced alias for `JsonTree`; bare `JsonValue` is a narrow
-  stdlib root alias in stdlib-loaded code, with a legacy compiler-owned
-  fallback only for bootstrap/no-stdlib paths.
+- `json.JsonTree` is the self-hosted raw JSON representation. The former bare
+  and namespaced `JsonValue` aliases and legacy compiler-owned fallback have
+  since been retired.
 - The old typed Rust parse/serialize fallback has been removed from public JSON
   calls. Raw JSON execution in `jett_comptime` now uses native `JsonTree`
   values and trusted stdlib facade hooks rather than a separate Rust JSON
@@ -75,14 +74,14 @@ remain compiler-owned while the implementation body is readable `.jett` code.
 10. Switched interpreter bridge execution to trusted exported public wrappers
     while still requiring the trusted private hook table.
 11. Added run-pass and driver coverage for typed parse, exact parse, full
-    serialization, public serialization, raw facade delegation, `JsonValue`
-    compatibility, `json.JsonValue`, completions, hover, and trusted-hook
-    spoofing protections.
+    serialization, public serialization, raw facade delegation, completions,
+    hover, and trusted-hook spoofing protections. Transitional `JsonValue`
+    compatibility coverage was removed when the aliases retired.
 
 ## Remaining Follow-Up
 
-- Decide when the remaining bootstrap/no-stdlib `JsonValue` primitive fallback
-  and `TypePrimitive.json_value_type` tag can retire. See
+- The bootstrap/no-stdlib `JsonValue` primitive fallback and
+  `TypePrimitive.json_value_type` tag are retired. See
   `docs/completed/json_value_primitive_tag_retirement.md`.
 - Decide whether future codegen should use the same trusted hook table as the
   interpreter or lower public JSON calls through another backend-specific path.

@@ -33,7 +33,7 @@ struct Credential:
 struct RawEnvelope:
     name: string
     payload: json.JsonTree
-    alias_payload: json.JsonValue
+    alias_payload: json.JsonTree
     tree: json.JsonTree
 function parse_user_id() returns string:
     string raw = "{{\"id\":\"u1\",\"profileData\":{{\"displayName\":\"Alice\",\"note\":\"ok\"}},\"tags\":[\"admin\",\"beta\"],\"scores\":{{\"wins\":3}},\"nickname\":\"ally\"}}"
@@ -188,9 +188,9 @@ function parse_json_tree_field() returns string:
     return json.as_string(view name_raw) handle error:
         default error
 function parse_json_value_alias_field() returns string:
-    json.JsonValue root = json.parse[json.JsonValue]("{{\"name\":\"Grace\",\"score\":7}}") handle error:
+    json.JsonTree root = json.parse[json.JsonTree]("{{\"name\":\"Grace\",\"score\":7}}") handle error:
         return error
-    json.JsonValue name_raw = json.field(view root, "name") handle:
+    json.JsonTree name_raw = json.field(view root, "name") handle:
         return "missing name"
     return json.as_string(view name_raw) handle error:
         default error
@@ -201,7 +201,7 @@ function parse_json_value_struct_field() returns string:
         return "missing score"
     int64 score = json.as_int64(view score_raw) handle error:
         return error
-    json.JsonValue alias_score_raw = json.field(view envelope.alias_payload, "score") handle:
+    json.JsonTree alias_score_raw = json.field(view envelope.alias_payload, "score") handle:
         return "missing alias score"
     int64 alias_score = json.as_int64(view alias_score_raw) handle error:
         return error
