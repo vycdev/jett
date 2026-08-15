@@ -11055,6 +11055,15 @@ impl<'a> TypeChecker<'a> {
     fn resolve_generic_type(&mut self, name: &str, args: &[TypeExpr], span: Span) -> TypeId {
         let lookup_name = self.resolved_or_expanded_name(name, span);
         match name {
+            // `list[T]` is Jett's sole sequence type. Keep `array[T, N]`
+            // explicit here so attempts to reintroduce a parallel fixed-size
+            // sequence receive the settled design diagnostic rather than a
+            // generic unknown-type error.
+            "array" => {
+                self.sink
+                    .emit(errors::fixed_size_array_is_unsupported(span));
+                TypeInterner::ERROR
+            }
             "list" => {
                 if args.len() == 1 {
                     let inner = self.resolve_type_expr(&args[0]);

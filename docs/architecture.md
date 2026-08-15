@@ -423,7 +423,7 @@ uses the expression map for hover/tooling and for interpreter runtime facts.
 Walk all type declarations and build the type registry:
 
 - **Primitive types:** `int8`..`int64`, `uint8`..`uint64`, `float32`, `float64`, `string`, `bool`, `bytes`, `nothing`. (`bytes` is a raw byte buffer with no UTF-8 guarantee, distinct from `string`.)
-- **Built-in generic types:** `list[T]`, `map[K, V]`, `set[T]`, `optional[T]`, `result[T, E]`. Map keys and set elements are limited to integer, `string`, `bool`, or primitive-backed refinement types.
+- **Built-in generic types:** `list[T]`, `map[K, V]`, `set[T]`, `optional[T]`, `result[T, E]`. `list[T]` is the sole sequence type; fixed-length invariants use refinements and do not change runtime layout. `array[T, N]` is rejected with E0360. Map keys and set elements are limited to integer, `string`, `bool`, or primitive-backed refinement types.
 - **User-defined types:** structs, enums, machines, actors, bitfields, interfaces, type aliases (including refinement types).
 - **Function types:** `function(T) returns U`.
 - **Capability types:** `Filesystem`, `Network`, `Stdout`, `Stderr`, `Stdin`, `Clock`, `Random`, `Process`, `Environment`, `Foreign`. Random sampling uses the explicit `view Random` API, injected per-runtime generator state, and non-cryptographic contract defined in the [Random capability and entropy contract](completed/random_capability_entropy_contract.md). The proposed [`Environment` contract](open_design/environment_argv_capability_contract.md) replaces ambient `os.env`/`os.args` with capability-backed reads from one immutable launch snapshot. `Foreign` guards the generated native C boundary specified by the [C FFI contract](open_design/c_ffi_binding_contract.md).
@@ -2049,7 +2049,7 @@ call, type, and handle diagnostics instead of getting a parallel error family.
 |---|---|
 | E0000 | Driver and file/project discovery errors |
 | E0200–E0212 | Name resolution errors and warnings (undefined, duplicate, namespace visibility, `export root`, type naming) |
-| E0300–E0354 | Type and language policy errors: calls, generic arity, handles, interfaces, refinements, bitfields, JSON policy, state machines, reflection metadata, and pipeline boundaries |
+| E0300–E0360 | Type and language policy errors: calls, generic arity, handles, interfaces, refinements, bitfields, JSON policy, state machines, reflection metadata, pipeline boundaries, collection hashing, and sequence policy |
 | E0400–E0401 | Ownership errors (use-after-move, consuming a view) |
 | E0500–E0503 | Capability and purity errors (impure calls and capability-parameter ownership) |
 | E0600–E0603 | Secret errors (secret exposure, invalid declassification/helper use, secret-containing output) |

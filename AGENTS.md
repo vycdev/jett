@@ -32,6 +32,9 @@ effects, small bounded functions, and compiler-enforced policy.
   first letter followed only by ASCII letters or digits. This applies to
   structs, enums, interfaces, machines, actors, bitfields, aliases, and
   refinements. Built-in primitive and generic type names remain lowercase.
+- `list[T]` is Jett's sole sequence type. Do not add `array[T, N]` or another
+  fixed-size sequence. Express a length invariant with a refinement of
+  `list[T]`; that constrains values but does not promise fixed runtime layout.
 - Namespaced declarations are private by default. Mark only the intended public
   API with `export`.
 - Project and dependency namespaces must remain unique. Only compiler-shipped

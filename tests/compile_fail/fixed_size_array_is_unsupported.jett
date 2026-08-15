@@ -1,0 +1,3 @@
+# ERROR: E0360
+struct Packet:
+    payload: array[uint8, uint64]

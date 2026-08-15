@@ -210,6 +210,10 @@ compile_pass_fixture!(
 compile_pass_fixture!(compile_pass_handle_refinement, "handle_refinement.jett");
 compile_pass_fixture!(compile_pass_generic_struct, "generic_struct.jett");
 compile_pass_fixture!(
+    compile_pass_fixed_length_list_refinement,
+    "fixed_length_list_refinement.jett"
+);
+compile_pass_fixture!(
     compile_pass_json_parse_struct_handle,
     "json_parse_struct_handle.jett"
 );
@@ -905,6 +909,15 @@ compile_fail_fixture!(
 compile_fail_fixture!(compile_fail_unhandled_optional, "unhandled_optional.jett");
 compile_fail_fixture!(compile_fail_trace_unknown, "trace_unknown.jett");
 compile_fail_fixture!(compile_fail_unknown_type, "unknown_type.jett");
+compile_fail_fixture!(
+    compile_fail_fixed_size_array_is_unsupported,
+    "fixed_size_array_is_unsupported.jett"
+);
+
+#[test]
+fn compile_fail_fixed_size_array_is_unsupported_counts() {
+    assert_compile_fail_error_count("fixed_size_array_is_unsupported.jett", 360, 1);
+}
 compile_fail_fixture!(
     compile_fail_state_machine_duplicate_state,
     "state_machine_duplicate_state.jett"

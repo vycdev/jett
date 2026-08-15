@@ -71,6 +71,7 @@ plans above for current work.
 - [Recursive owned values](completed/recursive_owned_values.md)
 - [Type kind design](completed/type_kind_design.md)
 - [User-defined type naming](completed/user_type_naming.md)
+- [List-only sequence policy](completed/list_only_sequence_policy.md)
 
 ## Compatibility Stubs
 

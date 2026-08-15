@@ -6475,6 +6475,20 @@ map[string, int64] scores = map("alice": 10, "bob": 20)
 
 Collections are constructed with explicit keywords. No `[]` literal for lists, no `{}` for maps. The constructor keyword *is* the type — AST-native.
 
+`list[T]` is the sole sequence type. Jett does not provide a parallel
+`array[T, N]` fixed-size type. When exact length is a correctness constraint,
+use a refinement:
+
+```jett
+type EncryptionBlock = list[uint8] where list.length(value) == 16
+```
+
+This validates the value's length; it does not promise inline storage, stack
+allocation, a fixed ABI layout, or removal of bounds checks. Native codegen and
+C bindings must optimize or marshal lists without exposing a second source
+sequence type. The compiler reports E0360 for `array[...]` so the rejected form
+cannot silently return as an ordinary generic type.
+
 ### Structs
 
 ```
@@ -6717,7 +6731,7 @@ No special compiler rules for capabilities. They follow the same `view` semantic
 | `string` | UTF-8 string (full word, not `str`) |
 | `bool` | `true` or `false` |
 | `bytes` | Raw byte buffer (no UTF-8 guarantee). Used for binary I/O (`Filesystem.read_bytes`, `Filesystem.write_bytes`). |
-| `list[T]` | Ordered collection |
+| `list[T]` | Dynamic ordered collection and Jett's sole sequence type; fixed-length value constraints use refinements |
 | `map[K, V]` | Key-value collection |
 | `set[T]` | Unique collection of integer, `string`, `bool`, or primitive-backed refinement values |
 | `optional[T]` | Either a `T` or `none` |
@@ -7082,7 +7096,7 @@ the completed [reflection predicate fact contract](completed/reflection_predicat
 - **Hot reloading** — can code be swapped in a running program without restarting? Important for web servers, long-lived processes, and rapid iteration. Open questions: how does it interact with actors holding state? What happens to in-flight messages? Does it require recompile + process restart, or true in-place code swap? How do linear types and capabilities interact with swapped functions?
 - **C FFI extensions** — the initial binding-file syntax, `Foreign` capability, opaque handles, explicit policy boundary, supported C subset, and implementation stages are specified by the [C FFI binding contract](open_design/c_ffi_binding_contract.md). Additional calling conventions, by-value records, writable buffers, borrowed returns, callbacks, dynamic loading, and C++ remain open follow-up work.
 - **Self-hosting timeline** — at what point is Jett mature enough to rewrite the compiler from Rust into Jett?
-- **Fixed-size vs dynamic lists** — `list[T]` is currently used as a dynamic/growable collection throughout the design. For performance-critical code (bitfield payloads, buffer management, numerical computing), a fixed-size array type may be needed. Options: a separate `array[T, N]` type with compile-time-known size, or a refinement type like `type FixedBuffer = list[uint8] where list.length(value) == 1024`. A separate type gives the compiler more optimization opportunities (stack allocation, no bounds growth), but adds another collection type for the LLM to choose between.
+
 ---
 
 ## Footnotes

@@ -792,6 +792,15 @@ pub fn collection_type_requires_primitive_hash(
     )
 }
 
+/// E0360: Fixed-size arrays are intentionally not part of Jett's type system.
+pub fn fixed_size_array_is_unsupported(span: Span) -> Diagnostic {
+    Diagnostic::error(
+        360,
+        "`array[T, N]` is not supported; use `list[T]` and a refinement when length is a value constraint",
+        span,
+    )
+}
+
 // Diagnostic codes E0800-E0899 are reserved for function complexity limits.
 
 /// E0800: Function body exceeds the statement count limit.
