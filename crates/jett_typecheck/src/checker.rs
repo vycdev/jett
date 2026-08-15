@@ -5599,9 +5599,9 @@ impl<'a> TypeChecker<'a> {
                     !equal
                 })
             }
-            // Calls and detached bool locals permanently remain outside the
-            // reflection-fact model. Never turn their result into proof about
-            // a generic type, even when the helper happens to be pure.
+            // Calls and detached bool locals permanently remain outside
+            // generic branch specialization. Both branches must typecheck;
+            // later optimization may fold a value but cannot accept new code.
             _ => None,
         }
     }

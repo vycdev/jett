@@ -1,7 +1,7 @@
 # Reflection Predicate Facts
 
-Status: completed. The conservative reflection-fact policy is selected and
-pinned by conformance fixtures.
+Status: completed. The conservative reflection-fact and generic branch-checking
+policies are selected and pinned by conformance fixtures.
 
 ## Decision
 
@@ -31,6 +31,18 @@ Small same-carrier classifiers remain useful for organizing runtime logic, but
 their result does not authorize a generic cast. Code that needs a cast must use
 a visible direct fact or `match` arm. This is a deliberate language and checker
 contract, not merely an implementation gap.
+
+## Branch Checking
+
+A helper call or detached boolean also cannot make the checker skip a generic
+branch. Both branches must typecheck, even when a pure helper could be evaluated
+for the concrete instantiation. This keeps source validity independent from
+optimizer sophistication and prevents helper implementation details from
+silencing diagnostics.
+
+A later optimization pass may fold a known helper result and remove unreachable
+runtime code only after checking succeeds. Such folding does not carry a type
+fact and cannot change whether the source program is accepted.
 
 ## Conformance Boundaries
 
@@ -63,14 +75,8 @@ primitive shares one safe cast target, such as the int64-backed path for signed
 integers and narrower unsigned integers. The classifier result still does not
 authorize a generic cast.
 
-## Follow-up
-
-The possibility of statically folding narrow predicate calls for branch
-reachability only remains unresolved and is intentionally separate from this
-completed contract. Such folding must never authorize a generic cast. See
-[Reflection predicate static folding](../open_design/reflection_predicate_static_folding.md).
-
 This record resolves the policy decision requested by
-[#6](https://github.com/vycdev/jett/issues/6). It does not pre-approve static
-folding, trusted predicate annotations, or general flow-sensitive boolean
-refinement.
+[#6](https://github.com/vycdev/jett/issues/6). It rejects trusted predicate
+annotations and general flow-sensitive boolean refinement as type-proof or
+branch-checking mechanisms; ordinary post-check optimization remains an
+implementation detail.

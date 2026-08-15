@@ -37,7 +37,6 @@ enough pressure from real code:
 - [JSON trusted hooks across backends](open_design/json_trusted_hooks_across_backends.md)
 - [JsonValue primitive tag retirement](open_design/json_value_primitive_tag_retirement.md)
 - [Prelude and root aliases](open_design/prelude_root_aliases.md)
-- [Reflection predicate static folding](open_design/reflection_predicate_static_folding.md)
 - [Print debug builtin policy](open_design/print_debug_builtin_policy.md)
 - [uint64 runtime value model](open_design/uint64_runtime_value_model.md)
 - [Initial `net.socket` transport contract](open_design/net_socket_transport_contract.md)

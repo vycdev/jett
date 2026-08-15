@@ -6980,12 +6980,11 @@ classifiers from hiding incompatible runtime carriers. Same-carrier classifier
 helpers may organize ordinary runtime logic, but code that performs a generic
 cast must retain a visible direct fact or match arm. Predicate calls and
 detached booleans are permanently excluded from type proofs; no future static
-folding or trusted annotation may let them authorize a generic cast.
-Reachability-only evaluation remains a separate possible optimization. The
-decision and its pinned compile-fail boundaries are recorded in the completed
-[reflection predicate fact contract](completed/reflection_predicate_facts.md).
-That narrower reachability-only possibility remains a separate
-[open-design follow-up](open_design/reflection_predicate_static_folding.md).
+folding or trusted annotation may let them authorize a generic cast or skip
+typechecking a branch. Both branches must typecheck. A later optimizer may fold
+the boolean after checking, but optimization cannot change which programs Jett
+accepts. The decision and its pinned compile-fail boundaries are recorded in
+the completed [reflection predicate fact contract](completed/reflection_predicate_facts.md).
 
 ---
 

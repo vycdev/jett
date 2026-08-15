@@ -822,11 +822,10 @@ mixed runtime carriers behind a classifier; it is pinned by the
 `generic_reflection_predicate_fact_boundary.jett` and
 `generic_reflection_boolean_fact_boundary.jett` compile-fail fixtures. Static
 predicate folding or trusted annotations must never promote calls or detached
-booleans into type proofs; only reachability-only evaluation remains possible
-future design work. The settled boundary is recorded in the completed
-[reflection predicate fact contract](completed/reflection_predicate_facts.md),
-while possible reachability-only folding remains an
-[open-design follow-up](open_design/reflection_predicate_static_folding.md).
+booleans into type proofs or generic branch specialization. Both branches are
+checked before any later optimization, so folding cannot change source
+validity. The settled boundary is recorded in the completed
+[reflection predicate fact contract](completed/reflection_predicate_facts.md).
 
 ### Capability Restriction
 
