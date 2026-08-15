@@ -174,7 +174,7 @@
 | `net.socket` | Not started (TCP-first transport contract proposed in [`docs/open_design/net_socket_transport_contract.md`](open_design/net_socket_transport_contract.md) for [#104](https://github.com/vycdev/jett/issues/104)) |
 | `csv` | Partial (interpreter builtins for `csv.parse`, `csv.stringify`, and `csv.parse_with_header`; quoted commas, quotes, multiline fields, and CRLF records are covered, while the CSV dialect, malformed-input failures, header/row-shape rules, and source/runtime boundary are [tracked by #137](https://github.com/vycdev/jett/issues/137)) |
 | `regex` | Not started (initial pattern, matching, extraction, Unicode, failure, resource, and source/runtime contract [tracked by #140](https://github.com/vycdev/jett/issues/140)) |
-| `log` | Not started |
+| `log` | Not started (initial structured event, level/filter, capability, secret-safety, sink, deterministic-test, and source/runtime contract [tracked by #143](https://github.com/vycdev/jett/issues/143)) |
 | `test.mock` | Not started |
 
 ### Phase L: Incremental Compilation — NOT STARTED
