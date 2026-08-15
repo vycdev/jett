@@ -950,6 +950,10 @@ compile_fail_fixture!(
     "state_machine_transition_bare_source.jett"
 );
 compile_fail_fixture!(
+    compile_fail_state_machine_generated_transition_function,
+    "state_machine_generated_transition_function.jett"
+);
+compile_fail_fixture!(
     compile_fail_state_machine_bare_to_state_parameter,
     "state_machine_bare_to_state_parameter.jett"
 );

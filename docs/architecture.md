@@ -604,6 +604,9 @@ For each `machine` type:
   - The source state matches the machine's current state type.
   - The transition is declared in the machine's `transitions` block.
   - All state-specific data fields are provided.
+- `Machine.transition(source, target, ...)` is the sole transition call surface;
+  the compiler does not synthesize target-specific functions such as
+  `Machine.to_target(...)`.
 - Function parameters with `Machine at state` are only callable when the machine is in that state.
 - State-qualified type annotations are accepted anywhere ordinary type
   annotations are accepted, including local variable declarations, so local

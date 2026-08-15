@@ -10485,6 +10485,9 @@ impl<'a> TypeChecker<'a> {
         let Expr::FieldAccess(base, field, _) = callee else {
             return None;
         };
+        // `Machine.transition(...)` is the one canonical transition surface.
+        // State-specific helpers such as `Machine.to_logged_in(...)` are not
+        // synthesized; they fall through to ordinary unknown-member checking.
         if field.name != "transition" {
             return None;
         }

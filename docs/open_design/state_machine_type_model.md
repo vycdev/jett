@@ -3,7 +3,8 @@
 Status: implemented for the checked type model, interpreter execution,
 reflection metadata, namespace-qualified use, branch narrowing, and JSON
 parse/serialize. Exact-state-only, local-variable-only branch narrowing is
-established; other future policy questions remain open.
+established, and `Machine.transition(...)` is the sole transition spelling;
+other future policy questions remain open.
 
 Jett's design treats state machines as a core language feature. This note now
 records the implemented model and the remaining policy boundaries so future
@@ -28,6 +29,8 @@ Implemented:
   arity/types, and return the corresponding `Machine at state` type.
 - Machine transition calls are checked for source owner/state, declared edge,
   target payload arity/types, and return the target `Machine at state` type.
+  The compiler recognizes only `Machine.transition(source, target, ...)`; it
+  does not generate target-specific transition functions.
 - `expr at state` is checked as a boolean state test on machine values, with
   diagnostics for non-machine values and states not declared on the machine.
 - A positive `if value at state:` check narrows a bare or state-qualified
@@ -231,14 +234,11 @@ to a known machine owner.
 - Should machine declarations eventually support explicit JSON policy
   annotations or state-rename migration metadata? The default envelope is now
   enabled for every machine whose payload fields are JSON-compatible.
-- Should transition effects eventually become generated stdlib-like functions,
-  or should the current compiler-checked static method surface remain the
-  canonical spelling?
-
 ## Recommendation
 
 Keep new machine features tied to checked machine owners rather than interpreter
 lookup rules. Branch facts remain a narrow state-machine guard feature. Expose
 only exact single-state facts that make payload fields locally unambiguous;
 broader flow-sensitive type work must not implicitly introduce multi-state set
-facts.
+facts. Keep `Machine.transition(...)` as the sole transition spelling rather
+than introducing generated state-specific functions.

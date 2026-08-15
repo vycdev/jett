@@ -1633,6 +1633,11 @@ function ban_user(session: UserAuth at logged_in) returns UserAuth at banned:
     return UserAuth.transition(session, banned, user_id: session.user_id)
 ```
 
+`Machine.transition(source, target, ...)` is the only transition spelling.
+Jett does not generate state-specific alternatives such as
+`UserAuth.to_logged_in(...)`; every transition call keeps the machine owner,
+source value, and declared target visible in one canonical form.
+
 If the LLM tries to write a function that transitions from `banned` to `logged_in`:
 
 ```
