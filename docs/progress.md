@@ -175,7 +175,7 @@
 | `csv` | Partial (interpreter builtins for `csv.parse`, `csv.stringify`, and `csv.parse_with_header`; quoted commas, quotes, multiline fields, and CRLF records are covered, while the CSV dialect, malformed-input failures, header/row-shape rules, and source/runtime boundary are [tracked by #137](https://github.com/vycdev/jett/issues/137)) |
 | `regex` | Not started (initial pattern, matching, extraction, Unicode, failure, resource, and source/runtime contract [tracked by #140](https://github.com/vycdev/jett/issues/140)) |
 | `log` | Not started (initial structured event, level/filter, capability, secret-safety, sink, deterministic-test, and source/runtime contract [tracked by #143](https://github.com/vycdev/jett/issues/143)) |
-| `test.mock` | Not started |
+| `test.mock` | Not started (capability mocking and deterministic test-harness contract [tracked by #145](https://github.com/vycdev/jett/issues/145)) |
 
 ### Phase L: Incremental Compilation — NOT STARTED
 
