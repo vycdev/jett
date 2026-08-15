@@ -392,6 +392,12 @@ ResolveResult {
 - **Inline-only imports** — `use` statements are only allowed inside functions/blocks, never at file level. Within a function or nested block, `use` must appear before any other code. Executable access to another project or vendored namespace requires an active local import; same-namespace access and canonical qualified types in declaration signatures do not. Compiler-provided standard namespaces remain implicitly available pending the broader prelude policy.
 - **Duplicate namespace detection** — two project/dependency files declaring the same namespace is an error. Compiler-shipped stdlib files have a narrow fragment exception so one stdlib namespace can be split across several implementation files; duplicate declarations inside that namespace still fail normally.
 - **Global constants** — registered as top-level declarations (global mutable variables are forbidden). Their initializers may use literals and same-namespace declarations, but project or vendored declarations from another namespace are rejected with `E0211`; compiler-provided standard declarations remain implicit pending the broader prelude policy.
+- **Canonical type names** — every struct, enum, interface, machine, actor,
+  bitfield, alias, and refinement declaration is validated before registration.
+  Names must begin with an ASCII uppercase letter and otherwise contain only
+  ASCII letters or digits. E0212 reports lowercase or underscore-separated
+  names and provides a PascalCase replacement while still registering the
+  declaration to avoid cascading undefined-name errors.
 - **No circular imports** — if namespace A uses namespace B and B uses A, it's a compile error.
 - **Import aliasing** — `use net.http as net_http` binds the alias in local scope. Conflicting last-segment names require `as`.
 - **Parent namespace aggregation** — `use net.http` imports all child namespaces (`net.http.server`, `net.http.client`) when `net.http` itself is not a declared namespace but its children are. Accessing child items uses the last segment: `server.listen(...)`, `client.get(...)`.
@@ -2042,7 +2048,7 @@ call, type, and handle diagnostics instead of getting a parallel error family.
 | Range | Category |
 |---|---|
 | E0000 | Driver and file/project discovery errors |
-| E0200–E0209 | Name resolution errors and warnings (undefined, duplicate, namespace visibility, `export root`) |
+| E0200–E0212 | Name resolution errors and warnings (undefined, duplicate, namespace visibility, `export root`, type naming) |
 | E0300–E0354 | Type and language policy errors: calls, generic arity, handles, interfaces, refinements, bitfields, JSON policy, state machines, reflection metadata, and pipeline boundaries |
 | E0400–E0401 | Ownership errors (use-after-move, consuming a view) |
 | E0500–E0503 | Capability and purity errors (impure calls and capability-parameter ownership) |

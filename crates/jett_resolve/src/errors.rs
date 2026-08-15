@@ -122,3 +122,14 @@ pub fn global_namespace_dependency(
     )
     .with_label(def_span, "external declaration defined here")
 }
+
+/// E0212: User-defined type names must use the canonical PascalCase form.
+pub fn type_name_must_be_pascal_case(name: &str, suggested_name: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        212,
+        format!(
+            "user-defined type name `{name}` must use PascalCase; rename it to `{suggested_name}`"
+        ),
+        span,
+    )
+}

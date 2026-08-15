@@ -1114,6 +1114,15 @@ compile_fail_fixture!(
     "global_namespace_dependency.jett"
 );
 compile_fail_fixture!(
+    compile_fail_user_type_names_require_pascal_case,
+    "user_type_names_require_pascal_case.jett"
+);
+
+#[test]
+fn compile_fail_user_type_names_require_pascal_case_counts() {
+    assert_compile_fail_error_count("user_type_names_require_pascal_case.jett", 212, 7);
+}
+compile_fail_fixture!(
     compile_fail_namespace_private_function,
     "namespace_private_function.jett"
 );

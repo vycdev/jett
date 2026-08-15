@@ -6935,7 +6935,27 @@ cannot yet express safely; project code cannot call those kernels.
 
 ### Consistent Naming Convention
 
-All standard library functions and types use `snake_case`. No exceptions, no mixed conventions.
+Names use one canonical form for each role. The declared-type rule is enforced
+by the compiler:
+
+- built-in primitive and generic type names are lowercase (`int64`, `string`,
+  `list[T]`, `optional[T]`);
+- every declared type uses PascalCase (`User`, `UserId`, `FilesystemPolicy`),
+  including structs, enums, interfaces, machines, actors, bitfields, aliases,
+  and refinements;
+- functions, variables, fields, enum variants, machine states, and ordinary
+  namespaces use `snake_case`.
+
+A declared type name must begin with an ASCII uppercase letter and contain only
+ASCII letters or digits. Underscores are not permitted. The resolver reports
+E0212 at the declaration and suggests a PascalCase spelling. Initialisms and
+digits remain valid, so `UserID` and `Utf8Value` are both accepted.
+
+The split is intentional. Lowercase built-ins preserve their compact keyword
+style, while PascalCase makes user-defined type roles visible when an agent
+scans unfamiliar code. This remains one canonical form because the role of the
+identifier determines exactly one spelling convention. Compiler-provided
+capability types such as `Stdout` and `Filesystem` follow the type form.
 
 ### No Semicolons, No Braces
 
@@ -7063,8 +7083,6 @@ the completed [reflection predicate fact contract](completed/reflection_predicat
 - **C FFI extensions** — the initial binding-file syntax, `Foreign` capability, opaque handles, explicit policy boundary, supported C subset, and implementation stages are specified by the [C FFI binding contract](open_design/c_ffi_binding_contract.md). Additional calling conventions, by-value records, writable buffers, borrowed returns, callbacks, dynamic loading, and C++ remain open follow-up work.
 - **Self-hosting timeline** — at what point is Jett mature enough to rewrite the compiler from Rust into Jett?
 - **Fixed-size vs dynamic lists** — `list[T]` is currently used as a dynamic/growable collection throughout the design. For performance-critical code (bitfield payloads, buffer management, numerical computing), a fixed-size array type may be needed. Options: a separate `array[T, N]` type with compile-time-known size, or a refinement type like `type FixedBuffer = list[uint8] where list.length(value) == 1024`. A separate type gives the compiler more optimization opportunities (stack allocation, no bounds growth), but adds another collection type for the LLM to choose between.
-- **Type naming convention** — the design currently mixes lowercase for built-in types (`int64`, `string`, `list[T]`, `optional[T]`, `result[T, E]`) and PascalCase for user-defined types and capabilities (`User`, `Config`, `Stdout`, `Filesystem`). Is this distinction intentional and worth keeping, or should all types use a single convention? Lowercase is more token-efficient and consistent with Jett's keyword style. PascalCase visually distinguishes types from variables and functions. A unified convention reduces rules the LLM must learn, but the current split may help LLMs distinguish built-in vs user-defined types.
-
 ---
 
 ## Footnotes

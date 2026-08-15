@@ -223,7 +223,7 @@ impl Resolver {
                     }
                 }
                 Item::Interface(interface) => {
-                    self.declare_namespaced_top_level(
+                    self.declare_namespaced_user_type(
                         &interface.name.name,
                         DefKind::Interface,
                         interface.name.span,
@@ -232,7 +232,7 @@ impl Resolver {
                     );
                 }
                 Item::Struct(s) => {
-                    self.declare_namespaced_top_level(
+                    self.declare_namespaced_user_type(
                         &s.name.name,
                         DefKind::Struct,
                         s.name.span,
@@ -241,7 +241,7 @@ impl Resolver {
                     );
                 }
                 Item::Bitfield(b) => {
-                    self.declare_namespaced_top_level(
+                    self.declare_namespaced_user_type(
                         &b.name.name,
                         DefKind::Bitfield,
                         b.name.span,
@@ -250,7 +250,7 @@ impl Resolver {
                     );
                 }
                 Item::Enum(e) => {
-                    self.declare_namespaced_top_level(
+                    self.declare_namespaced_user_type(
                         &e.name.name,
                         DefKind::Enum,
                         e.name.span,
@@ -271,7 +271,7 @@ impl Resolver {
                     }
                 }
                 Item::Machine(m) => {
-                    self.declare_namespaced_top_level(
+                    self.declare_namespaced_user_type(
                         &m.name.name,
                         DefKind::Machine,
                         m.name.span,
@@ -280,7 +280,7 @@ impl Resolver {
                     );
                 }
                 Item::Actor(a) => {
-                    self.declare_namespaced_top_level(
+                    self.declare_namespaced_user_type(
                         &a.name.name,
                         DefKind::Actor,
                         a.name.span,
@@ -290,9 +290,10 @@ impl Resolver {
                 }
                 Item::TypeAlias(ta) => {
                     if ta.root_exported {
+                        self.check_user_type_name(&ta.name.name, ta.name.span);
                         self.reject_root_type_alias(ta);
                     } else {
-                        self.declare_namespaced_top_level(
+                        self.declare_namespaced_user_type(
                             &ta.name.name,
                             DefKind::Type,
                             ta.name.span,
@@ -508,6 +509,28 @@ impl Resolver {
         )?;
 
         Some(def_id)
+    }
+
+    fn declare_namespaced_user_type(
+        &mut self,
+        name: &str,
+        kind: DefKind,
+        span: Span,
+        order: usize,
+        exported: bool,
+    ) -> Option<DefId> {
+        self.check_user_type_name(name, span);
+        self.declare_namespaced_top_level(name, kind, span, order, exported)
+    }
+
+    fn check_user_type_name(&mut self, name: &str, span: Span) {
+        if !is_pascal_case_type_name(name) {
+            self.sink.emit(errors::type_name_must_be_pascal_case(
+                name,
+                &pascal_case_type_name(name),
+                span,
+            ));
+        }
     }
 
     // ------------------------------------------------------------------
@@ -1657,6 +1680,33 @@ fn stmt_span(stmt: &Stmt) -> Span {
     }
 }
 
+fn is_pascal_case_type_name(name: &str) -> bool {
+    name.as_bytes().first().is_some_and(u8::is_ascii_uppercase)
+        && name.bytes().all(|byte| byte.is_ascii_alphanumeric())
+}
+
+fn pascal_case_type_name(name: &str) -> String {
+    let mut result = String::new();
+    let mut capitalize_next = true;
+
+    for byte in name.bytes() {
+        if byte == b'_' {
+            capitalize_next = true;
+        } else if capitalize_next {
+            result.push(char::from(byte.to_ascii_uppercase()));
+            capitalize_next = false;
+        } else {
+            result.push(char::from(byte));
+        }
+    }
+
+    if result.is_empty() {
+        "TypeName".to_string()
+    } else {
+        result
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -1667,6 +1717,20 @@ mod tests {
     use jett_common::{FileId, STDLIB_FILE_ID_START, Span};
     use jett_diagnostics::Severity;
     use jett_parser::ast::*;
+
+    #[test]
+    fn user_type_name_shape_is_strict_pascal_case() {
+        for name in ["User", "UserID", "Utf8Value", "X2"] {
+            assert!(is_pascal_case_type_name(name), "expected `{name}` to pass");
+        }
+        for name in ["user", "user_profile", "_User", "User_Profile"] {
+            assert!(!is_pascal_case_type_name(name), "expected `{name}` to fail");
+        }
+
+        assert_eq!(pascal_case_type_name("user_profile"), "UserProfile");
+        assert_eq!(pascal_case_type_name("userProfile"), "UserProfile");
+        assert_eq!(pascal_case_type_name("_user"), "User");
+    }
 
     /// Helper to create a span — all tests use file 0.
     fn sp(start: u32, end: u32) -> Span {

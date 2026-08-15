@@ -28,6 +28,10 @@ effects, small bounded functions, and compiler-enforced policy.
   are limited to integer, `string`, `bool`, and primitive-backed refinements;
   structured collections use explicit primitive IDs. Keep this distinct from
   cryptographic hashing APIs.
+- User-defined type declarations use strict PascalCase: an ASCII uppercase
+  first letter followed only by ASCII letters or digits. This applies to
+  structs, enums, interfaces, machines, actors, bitfields, aliases, and
+  refinements. Built-in primitive and generic type names remain lowercase.
 - Namespaced declarations are private by default. Mark only the intended public
   API with `export`.
 - Project and dependency namespaces must remain unique. Only compiler-shipped

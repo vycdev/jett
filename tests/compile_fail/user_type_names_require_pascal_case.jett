@@ -1,0 +1,24 @@
+# ERROR: E0212
+struct user_profile:
+    name: string
+# ERROR: E0212
+enum access_level:
+    basic
+# ERROR: E0212
+interface display_value:
+    function display(view self: display_value) returns string
+# ERROR: E0212
+machine upload_state:
+    states:
+        idle
+    transitions:
+        idle to idle
+# ERROR: E0212
+actor job_worker:
+    receive stop:
+        return nothing
+# ERROR: E0212
+bitfield packet_flags:
+    ready: 1 bits
+# ERROR: E0212
+type user_id = string

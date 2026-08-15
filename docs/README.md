@@ -70,6 +70,7 @@ plans above for current work.
 - [Root alias policy](completed/root_alias_policy.md)
 - [Recursive owned values](completed/recursive_owned_values.md)
 - [Type kind design](completed/type_kind_design.md)
+- [User-defined type naming](completed/user_type_naming.md)
 
 ## Compatibility Stubs
 
