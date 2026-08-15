@@ -1941,8 +1941,9 @@ Core stdlib (string, list, math, json) is implemented in Phase D. This phase com
   declarations are source-owned in `stdlib/csv.jett`, with only private trusted
   parse/stringify kernels remaining in the interpreter; `parse` and
   `parse_with_header` are strict and return `result[..., string]`; one leading
-  UTF-8 BOM is ignored, blank records are preserved as one empty field, and raw
-  parsing preserves ragged row widths. Malformed quoting, empty or duplicate
+  UTF-8 BOM is ignored, empty input contains zero records, a physical blank line
+  is preserved as one record with one empty field, and raw parsing preserves
+  ragged row widths. Malformed quoting, empty or duplicate
   headers, and header/data width mismatches fail explicitly. `stringify` emits
   deterministic LF-separated records with no final newline. The remaining
   dialect contract is [tracked by #137](https://github.com/vycdev/jett/issues/137))

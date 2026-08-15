@@ -6808,8 +6808,9 @@ The standard library is intentionally massive and opinionated. The goal is to ma
 - **csv** — strict parsing and writing of CSV data; public declarations are
   source-owned in `stdlib/csv.jett`, while private trusted interpreter kernels
   own parsing and quoting. `csv.parse` and `csv.parse_with_header` return
-  `result[..., string]`, ignore one leading UTF-8 BOM, and preserve blank
-  records as one empty field. Raw `csv.parse` preserves ragged row widths;
+  `result[..., string]` and ignore one leading UTF-8 BOM. Empty input contains
+  zero records, while a physical blank line is one record with one empty field.
+  Raw `csv.parse` preserves ragged row widths;
   header parsing requires every data row to match the header width. Malformed
   quote placement and empty or duplicate headers are explicit failures.
   `csv.stringify` emits LF between records and no final newline, independent of

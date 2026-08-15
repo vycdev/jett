@@ -16361,6 +16361,12 @@ enum CsvFieldState {
 /// must be followed by a delimiter, record terminator, or end of input.
 fn parse_csv_records(input: &str) -> Result<Vec<Vec<String>>, String> {
     let input = input.strip_prefix('\u{feff}').unwrap_or(input);
+    // Empty CSV contains no records. A physical line terminator is different:
+    // it is consumed below and preserves one explicitly empty record.
+    if input.is_empty() {
+        return Ok(Vec::new());
+    }
+
     let mut records = Vec::new();
     let mut row = Vec::new();
     let mut current = String::new();
@@ -16509,6 +16515,8 @@ fn parse_csv_records(input: &str) -> Result<Vec<Vec<String>>, String> {
         ));
     }
 
+    // A trailing record terminator has already preserved its record and must
+    // not add another empty record at end of input.
     push_csv_record(
         &mut records,
         &mut row,
