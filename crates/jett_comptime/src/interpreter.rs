@@ -16360,6 +16360,7 @@ enum CsvFieldState {
 /// doubled quotes escape a quote inside a quoted field, and a closing quote
 /// must be followed by a delimiter, record terminator, or end of input.
 fn parse_csv_records(input: &str) -> Result<Vec<Vec<String>>, String> {
+    let input = input.strip_prefix('\u{feff}').unwrap_or(input);
     let mut records = Vec::new();
     let mut row = Vec::new();
     let mut current = String::new();
@@ -17457,6 +17458,58 @@ mod builtin_tests {
         assert_eq!(base64_decode("!==="), Err("invalid character"));
         assert_eq!(base64_decode("A==="), Err("invalid padding"));
         assert_eq!(base64_decode("AB=="), Err("non-zero trailing bits"));
+    }
+
+    #[test]
+    fn csv_builtins_strip_only_one_initial_utf8_bom() {
+        let mut interp = Interpreter::new();
+
+        let parsed = interp
+            .call_builtin(
+                "csv.parse",
+                &[Value::String("\u{feff}name,age\nalice,30".to_string())],
+            )
+            .expect("csv.parse should be recognized")
+            .expect("csv.parse should return a result value");
+        assert_eq!(
+            parsed,
+            result_ok(Value::List(vec![
+                Value::List(vec![
+                    Value::String("name".to_string()),
+                    Value::String("age".to_string()),
+                ]),
+                Value::List(vec![
+                    Value::String("alice".to_string()),
+                    Value::String("30".to_string()),
+                ]),
+            ]))
+        );
+
+        let parsed_with_header = interp
+            .call_builtin(
+                "csv.parse_with_header",
+                &[Value::String("\u{feff}name,age\nalice,30".to_string())],
+            )
+            .expect("csv.parse_with_header should be recognized")
+            .expect("csv.parse_with_header should return a result value");
+        assert_eq!(
+            parsed_with_header,
+            result_ok(Value::List(vec![Value::Map(vec![
+                (
+                    Value::String("name".to_string()),
+                    Value::String("alice".to_string()),
+                ),
+                (
+                    Value::String("age".to_string()),
+                    Value::String("30".to_string()),
+                ),
+            ])]))
+        );
+
+        assert_eq!(
+            parse_csv_records("name,\u{feff}age"),
+            Ok(vec![vec!["name".to_string(), "\u{feff}age".to_string()]])
+        );
     }
 
     #[test]

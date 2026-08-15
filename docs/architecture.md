@@ -1939,9 +1939,10 @@ Core stdlib (string, list, math, json) is implemented in Phase D. This phase com
   [`docs/open_design/net_socket_transport_contract.md`](open_design/net_socket_transport_contract.md)
   for [#104](https://github.com/vycdev/jett/issues/104)), `csv` (the
   interpreter-backed `parse` and `parse_with_header` operations are strict and
-  return `result[..., string]`; malformed quoting, empty or duplicate headers,
-  and header/data width mismatches fail explicitly, while the remaining
-  dialect and source/runtime contract is [tracked by #137](https://github.com/vycdev/jett/issues/137))
+  return `result[..., string]`; one leading UTF-8 BOM is ignored, malformed
+  quoting, empty or duplicate headers, and header/data width mismatches fail
+  explicitly, while the remaining dialect and source/runtime contract is
+  [tracked by #137](https://github.com/vycdev/jett/issues/137))
 - **Time:** `time` (the implemented wall-clock value, capability, determinism, and
   source/runtime boundary is defined in the
   [Time and Clock capability contract](completed/time_clock_capability_contract.md))

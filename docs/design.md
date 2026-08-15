@@ -6806,9 +6806,10 @@ The standard library is intentionally massive and opinionated. The goal is to ma
 - **validate** — standard refinement types for common formats: Email, URL, UUID, IPv4, IPv6. The type IS the validation — once assigned, the value is guaranteed valid.
 - **regex** — pattern matching and extraction (when string functions aren't enough); the initial pattern, matching, extraction, Unicode, failure, resource, and source/runtime contract is [tracked by #140](https://github.com/vycdev/jett/issues/140)
 - **csv** — strict parsing and writing of CSV data; `csv.parse` and
-  `csv.parse_with_header` return `result[..., string]`, reject malformed quote
-  placement, and make empty or duplicate headers and header/data width
-  mismatches explicit failures. The remaining dialect and source/runtime contract is
+  `csv.parse_with_header` return `result[..., string]`, ignore one leading
+  UTF-8 BOM, reject malformed quote placement, and make empty or duplicate
+  headers and header/data width mismatches explicit failures. The remaining
+  dialect and source/runtime contract is
   [tracked by #137](https://github.com/vycdev/jett/issues/137), while future
   reflected `csv.parse_rows[T]` remains separate
 - **random** — capability-backed unbiased integer/unit-float/boolean sampling,
