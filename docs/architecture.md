@@ -1934,7 +1934,9 @@ Core stdlib (string, list, math, json) is implemented in Phase D. This phase com
 - **I/O:** `net.http` (initial outbound client and `Network` capability contract [tracked by #101](https://github.com/vycdev/jett/issues/101)), `net.socket` (TCP-first transport and runtime contract
   proposed in
   [`docs/open_design/net_socket_transport_contract.md`](open_design/net_socket_transport_contract.md)
-  for [#104](https://github.com/vycdev/jett/issues/104)), `csv`
+  for [#104](https://github.com/vycdev/jett/issues/104)), `csv` (dialect,
+  malformed-input failure, header/row-shape, and source/runtime contract
+  [tracked by #137](https://github.com/vycdev/jett/issues/137))
 - **Time:** `time` (the implemented wall-clock value, capability, determinism, and
   source/runtime boundary is defined in the
   [Time and Clock capability contract](completed/time_clock_capability_contract.md))
