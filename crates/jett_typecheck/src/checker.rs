@@ -3652,7 +3652,10 @@ impl<'a> TypeChecker<'a> {
                 self.expect_no_type_args(&name, type_args, span);
                 let list_string = self.interner.intern(Type::List(TypeInterner::STRING));
                 let rows_ty = self.interner.intern(Type::List(list_string));
-                Some((vec![TypeInterner::STRING], rows_ty))
+                let result_ty = self
+                    .interner
+                    .intern(Type::Result(rows_ty, TypeInterner::STRING));
+                Some((vec![TypeInterner::STRING], result_ty))
             }
             "csv.stringify" => {
                 self.expect_no_type_args(&name, type_args, span);
@@ -3666,7 +3669,10 @@ impl<'a> TypeChecker<'a> {
                     .interner
                     .intern(Type::Map(TypeInterner::STRING, TypeInterner::STRING));
                 let rows_ty = self.interner.intern(Type::List(row_ty));
-                Some((vec![TypeInterner::STRING], rows_ty))
+                let result_ty = self
+                    .interner
+                    .intern(Type::Result(rows_ty, TypeInterner::STRING));
+                Some((vec![TypeInterner::STRING], result_ty))
             }
             _ => None,
         }

@@ -9077,13 +9077,18 @@ impl Interpreter {
             "csv.parse" => {
                 require_args!(name, 1, args);
                 match &args[0] {
-                    Value::String(s) => {
-                        let rows: Vec<Value> = parse_csv_records(s)
-                            .into_iter()
-                            .map(|row| Value::List(row.into_iter().map(Value::String).collect()))
-                            .collect();
-                        Some(Ok(Value::List(rows)))
-                    }
+                    Value::String(s) => match parse_csv_records(s) {
+                        Ok(records) => {
+                            let rows: Vec<Value> = records
+                                .into_iter()
+                                .map(|row| {
+                                    Value::List(row.into_iter().map(Value::String).collect())
+                                })
+                                .collect();
+                            Some(Ok(result_ok(Value::List(rows))))
+                        }
+                        Err(message) => Some(Ok(result_fail(message))),
+                    },
                     _ => Some(Err(format!("{name} expects a string argument"))),
                 }
             }
@@ -9119,24 +9124,49 @@ impl Interpreter {
             "csv.parse_with_header" => {
                 require_args!(name, 1, args);
                 match &args[0] {
-                    Value::String(s) => {
-                        let mut records = parse_csv_records(s).into_iter();
-                        let headers: Vec<String> = match records.next() {
-                            Some(header_row) => header_row,
-                            None => return Some(Ok(Value::List(Vec::new()))),
-                        };
-                        let rows: Vec<Value> = records
-                            .map(|cols| {
+                    Value::String(s) => match parse_csv_records(s) {
+                        Ok(records) => {
+                            let mut records = records.into_iter();
+                            let headers: Vec<String> = match records.next() {
+                                Some(header_row) => header_row,
+                                None => {
+                                    return Some(Ok(result_ok(Value::List(Vec::new()))));
+                                }
+                            };
+
+                            let mut seen_headers = HashSet::new();
+                            for (index, header) in headers.iter().enumerate() {
+                                if !seen_headers.insert(header.as_str()) {
+                                    return Some(Ok(result_fail(format!(
+                                        "CSV header error at field {}: duplicate header '{}'",
+                                        index + 1,
+                                        header
+                                    ))));
+                                }
+                            }
+
+                            let mut rows = Vec::new();
+                            for (index, cols) in records.enumerate() {
+                                if cols.len() != headers.len() {
+                                    return Some(Ok(result_fail(format!(
+                                        "CSV header error at record {}: expected {} fields, got {}",
+                                        index + 2,
+                                        headers.len(),
+                                        cols.len()
+                                    ))));
+                                }
+
                                 let entries: Vec<(Value, Value)> = headers
                                     .iter()
                                     .zip(cols.into_iter())
                                     .map(|(h, c)| (Value::String(h.clone()), Value::String(c)))
                                     .collect();
-                                Value::Map(entries)
-                            })
-                            .collect();
-                        Some(Ok(Value::List(rows)))
-                    }
+                                rows.push(Value::Map(entries));
+                            }
+                            Some(Ok(result_ok(Value::List(rows))))
+                        }
+                        Err(message) => Some(Ok(result_fail(message))),
+                    },
                     _ => Some(Err(format!("{name} expects a string argument"))),
                 }
             }
@@ -16312,50 +16342,136 @@ fn percent_decode(value: &str, form: bool) -> Result<String, &'static str> {
 // CSV helpers
 // ---------------------------------------------------------------------------
 
-/// Parse CSV records, handling quoted fields with embedded commas, quotes
-/// (escaped as `""`), and newlines.
-fn parse_csv_records(input: &str) -> Vec<Vec<String>> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CsvFieldState {
+    Start,
+    Unquoted,
+    Quoted,
+    AfterQuote,
+}
+
+/// Parse strict CSV records. Quotes may only open at the start of a field,
+/// doubled quotes escape a quote inside a quoted field, and a closing quote
+/// must be followed by a delimiter, record terminator, or end of input.
+fn parse_csv_records(input: &str) -> Result<Vec<Vec<String>>, String> {
     let mut records = Vec::new();
     let mut row = Vec::new();
     let mut current = String::new();
-    let mut in_quotes = false;
+    let mut state = CsvFieldState::Start;
     let mut has_record_data = false;
+    let mut record_number = 1usize;
     let mut chars = input.chars().peekable();
 
     while let Some(ch) = chars.next() {
-        if in_quotes {
-            if ch == '"' {
-                // Check for escaped quote ""
-                if chars.peek() == Some(&'"') {
-                    current.push('"');
-                    chars.next();
-                } else {
-                    in_quotes = false;
+        match state {
+            CsvFieldState::Start => match ch {
+                '"' => {
+                    has_record_data = true;
+                    state = CsvFieldState::Quoted;
                 }
-            } else {
-                current.push(ch);
+                ',' => {
+                    has_record_data = true;
+                    row.push(std::mem::take(&mut current));
+                }
+                '\n' => {
+                    push_csv_record(&mut records, &mut row, &mut current, &mut has_record_data);
+                    record_number += 1;
+                }
+                '\r' => {
+                    if chars.peek() == Some(&'\n') {
+                        chars.next();
+                    }
+                    push_csv_record(&mut records, &mut row, &mut current, &mut has_record_data);
+                    record_number += 1;
+                }
+                _ => {
+                    has_record_data = true;
+                    current.push(ch);
+                    state = CsvFieldState::Unquoted;
+                }
+            },
+            CsvFieldState::Unquoted => match ch {
+                '"' => {
+                    return Err(csv_parse_error(
+                        record_number,
+                        row.len() + 1,
+                        "unexpected quote in unquoted field",
+                    ));
+                }
+                ',' => {
+                    row.push(std::mem::take(&mut current));
+                    state = CsvFieldState::Start;
+                }
+                '\n' => {
+                    push_csv_record(&mut records, &mut row, &mut current, &mut has_record_data);
+                    state = CsvFieldState::Start;
+                    record_number += 1;
+                }
+                '\r' => {
+                    if chars.peek() == Some(&'\n') {
+                        chars.next();
+                    }
+                    push_csv_record(&mut records, &mut row, &mut current, &mut has_record_data);
+                    state = CsvFieldState::Start;
+                    record_number += 1;
+                }
+                _ => current.push(ch),
+            },
+            CsvFieldState::Quoted => {
+                if ch == '"' {
+                    if chars.peek() == Some(&'"') {
+                        current.push('"');
+                        chars.next();
+                    } else {
+                        state = CsvFieldState::AfterQuote;
+                    }
+                } else {
+                    current.push(ch);
+                }
             }
-        } else if ch == '"' {
-            has_record_data = true;
-            in_quotes = true;
-        } else if ch == ',' {
-            has_record_data = true;
-            row.push(std::mem::take(&mut current));
-        } else if ch == '\n' {
-            push_csv_record(&mut records, &mut row, &mut current, &mut has_record_data);
-        } else if ch == '\r' {
-            if chars.peek() == Some(&'\n') {
-                chars.next();
-            }
-            push_csv_record(&mut records, &mut row, &mut current, &mut has_record_data);
-        } else {
-            has_record_data = true;
-            current.push(ch);
+            CsvFieldState::AfterQuote => match ch {
+                ',' => {
+                    row.push(std::mem::take(&mut current));
+                    state = CsvFieldState::Start;
+                }
+                '\n' => {
+                    push_csv_record(&mut records, &mut row, &mut current, &mut has_record_data);
+                    state = CsvFieldState::Start;
+                    record_number += 1;
+                }
+                '\r' => {
+                    if chars.peek() == Some(&'\n') {
+                        chars.next();
+                    }
+                    push_csv_record(&mut records, &mut row, &mut current, &mut has_record_data);
+                    state = CsvFieldState::Start;
+                    record_number += 1;
+                }
+                _ => {
+                    return Err(csv_parse_error(
+                        record_number,
+                        row.len() + 1,
+                        "unexpected character after closing quote",
+                    ));
+                }
+            },
         }
     }
 
+    if state == CsvFieldState::Quoted {
+        return Err(csv_parse_error(
+            record_number,
+            row.len() + 1,
+            "unterminated quoted field",
+        ));
+    }
+
     push_csv_record(&mut records, &mut row, &mut current, &mut has_record_data);
-    records
+    Ok(records)
+}
+
+fn csv_parse_error(record: usize, field: usize, message: &str) -> String {
+    format!("CSV parse error at record {record}, field {field}: {message}")
 }
 
 fn push_csv_record(

@@ -2,13 +2,15 @@ namespace test
 # --- csv.parse ---------------------------------------------------------
 function csv_parse_row_count_test() returns int64:
     string data = "name,age,city\nalice,30,new york\nbob,25,london"
-    list[list[string]] rows = csv.parse(data)
+    list[list[string]] rows = csv.parse(data) handle error:
+        return -1
     return list.length(rows)
 verify csv_parse_row_count_test:
     assert csv_parse_row_count_test() == 3
 function csv_parse_col_count_test() returns int64:
     string data = "a,b,c\n1,2,3"
-    list[list[string]] rows = csv.parse(data)
+    list[list[string]] rows = csv.parse(data) handle error:
+        return -1
     list[string] first_row = list.get[list[string]](rows, 0) handle:
         default list("err")
     return list.length(first_row)
@@ -16,7 +18,8 @@ verify csv_parse_col_count_test:
     assert csv_parse_col_count_test() == 3
 function csv_parse_cell_test() returns string:
     string data = "name,age\nalice,30"
-    list[list[string]] rows = csv.parse(data)
+    list[list[string]] rows = csv.parse(data) handle error:
+        return error
     list[string] second_row = list.get[list[string]](rows, 1) handle:
         default list("err")
     return list.get[string](second_row, 0) handle:
@@ -25,7 +28,8 @@ verify csv_parse_cell_test:
     assert csv_parse_cell_test() == "alice"
 function csv_parse_quoted_test() returns string:
     string data = "name,desc\nalice,\"hello, world\""
-    list[list[string]] rows = csv.parse(data)
+    list[list[string]] rows = csv.parse(data) handle error:
+        return error
     list[string] row = list.get[list[string]](rows, 1) handle:
         default list("err")
     return list.get[string](row, 1) handle:
@@ -34,7 +38,8 @@ verify csv_parse_quoted_test:
     assert csv_parse_quoted_test() == "hello, world"
 function csv_parse_quoted_newline_test() returns string:
     string data = "name,desc\nalice,\"hello\nworld\"\nbob,ok"
-    list[list[string]] rows = csv.parse(data)
+    list[list[string]] rows = csv.parse(data) handle error:
+        return error
     list[string] row = list.get[list[string]](rows, 1) handle:
         default list("err")
     return list.get[string](row, 1) handle:
@@ -43,7 +48,8 @@ verify csv_parse_quoted_newline_test:
     assert csv_parse_quoted_newline_test() == "hello\nworld"
 function csv_parse_empty_test() returns int64:
     string data = ""
-    list[list[string]] rows = csv.parse(data)
+    list[list[string]] rows = csv.parse(data) handle error:
+        return -1
     return list.length(rows)
 verify csv_parse_empty_test:
     assert csv_parse_empty_test() == 0
@@ -61,7 +67,8 @@ verify csv_stringify_quoting_test:
 function csv_stringify_newline_roundtrip_test() returns string:
     list[list[string]] rows = list(list("name", "desc"), list("alice", "hello\nworld"))
     string text = csv.stringify(rows)
-    list[list[string]] parsed = csv.parse(text)
+    list[list[string]] parsed = csv.parse(text) handle error:
+        return error
     list[string] row = list.get[list[string]](parsed, 1) handle:
         default list("err")
     return list.get[string](row, 1) handle:
@@ -71,13 +78,15 @@ verify csv_stringify_newline_roundtrip_test:
 # --- csv.parse_with_header ---------------------------------------------
 function csv_header_row_count_test() returns int64:
     string data = "name,age,city\nalice,30,new york\nbob,25,london"
-    list[map[string, string]] rows = csv.parse_with_header(data)
+    list[map[string, string]] rows = csv.parse_with_header(data) handle error:
+        return -1
     return list.length(rows)
 verify csv_header_row_count_test:
     assert csv_header_row_count_test() == 2
 function csv_header_get_name_test() returns string:
     string data = "name,age\nalice,30\nbob,25"
-    list[map[string, string]] rows = csv.parse_with_header(data)
+    list[map[string, string]] rows = csv.parse_with_header(data) handle error:
+        return error
     map[string, string] first = list.get[map[string, string]](rows, 0) handle:
         default map("err": "err")
     optional[string] val = map.get(first, "name")
@@ -87,7 +96,8 @@ verify csv_header_get_name_test:
     assert csv_header_get_name_test() == "alice"
 function csv_header_get_age_test() returns string:
     string data = "name,age\nalice,30\nbob,25"
-    list[map[string, string]] rows = csv.parse_with_header(data)
+    list[map[string, string]] rows = csv.parse_with_header(data) handle error:
+        return error
     map[string, string] second = list.get[map[string, string]](rows, 1) handle:
         default map("err": "err")
     optional[string] val = map.get(second, "age")
@@ -97,7 +107,8 @@ verify csv_header_get_age_test:
     assert csv_header_get_age_test() == "25"
 function csv_header_empty_test() returns int64:
     string data = ""
-    list[map[string, string]] rows = csv.parse_with_header(data)
+    list[map[string, string]] rows = csv.parse_with_header(data) handle error:
+        return -1
     return list.length(rows)
 verify csv_header_empty_test:
     assert csv_header_empty_test() == 0
@@ -105,7 +116,8 @@ verify csv_header_empty_test:
 function csv_roundtrip_test() returns string:
     list[list[string]] original = list(list("x", "y"), list("1", "2"))
     string text = csv.stringify(original)
-    list[list[string]] parsed = csv.parse(text)
+    list[list[string]] parsed = csv.parse(text) handle error:
+        return error
     list[string] row = list.get[list[string]](parsed, 1) handle:
         default list("err")
     return list.get[string](row, 1) handle:
@@ -114,7 +126,8 @@ verify csv_roundtrip_test:
     assert csv_roundtrip_test() == "2"
 function csv_parse_escaped_quote_test() returns string:
     string data = "name,desc\nalice,\"say \"\"hello\"\"\""
-    list[list[string]] rows = csv.parse(data)
+    list[list[string]] rows = csv.parse(data) handle error:
+        return error
     list[string] row = list.get[list[string]](rows, 1) handle:
         default list("err")
     return list.get[string](row, 1) handle:
@@ -123,10 +136,54 @@ verify csv_parse_escaped_quote_test:
     assert csv_parse_escaped_quote_test() == "say \"hello\""
 function csv_parse_crlf_test() returns string:
     string data = "name,age\r\nalice,30\r\n"
-    list[list[string]] rows = csv.parse(data)
+    list[list[string]] rows = csv.parse(data) handle error:
+        return error
     list[string] row = list.get[list[string]](rows, 1) handle:
         default list("err")
     return list.get[string](row, 1) handle:
         default "err"
 verify csv_parse_crlf_test:
     assert csv_parse_crlf_test() == "30"
+
+# --- strict failures ---------------------------------------------------
+function csv_unterminated_quote_error_test() returns string:
+    list[list[string]] rows = csv.parse("name,age\nalice,\"30") handle error:
+        return error
+    return "accepted {list.length[list[string]](rows)} rows"
+verify csv_unterminated_quote_error_test:
+    assert csv_unterminated_quote_error_test() == "CSV parse error at record 2, field 2: unterminated quoted field"
+
+function csv_quote_in_unquoted_field_error_test() returns string:
+    list[list[string]] rows = csv.parse("name\nal\"ice") handle error:
+        return error
+    return "accepted {list.length[list[string]](rows)} rows"
+verify csv_quote_in_unquoted_field_error_test:
+    assert csv_quote_in_unquoted_field_error_test() == "CSV parse error at record 2, field 1: unexpected quote in unquoted field"
+
+function csv_character_after_quote_error_test() returns string:
+    list[list[string]] rows = csv.parse("name\n\"alice\"x") handle error:
+        return error
+    return "accepted {list.length[list[string]](rows)} rows"
+verify csv_character_after_quote_error_test:
+    assert csv_character_after_quote_error_test() == "CSV parse error at record 2, field 1: unexpected character after closing quote"
+
+function csv_duplicate_header_error_test() returns string:
+    list[map[string, string]] rows = csv.parse_with_header("name,name\nalice,smith") handle error:
+        return error
+    return "accepted {list.length[map[string, string]](rows)} rows"
+verify csv_duplicate_header_error_test:
+    assert csv_duplicate_header_error_test() == "CSV header error at field 2: duplicate header 'name'"
+
+function csv_short_header_row_error_test() returns string:
+    list[map[string, string]] rows = csv.parse_with_header("name,age\nalice") handle error:
+        return error
+    return "accepted {list.length[map[string, string]](rows)} rows"
+verify csv_short_header_row_error_test:
+    assert csv_short_header_row_error_test() == "CSV header error at record 2: expected 2 fields, got 1"
+
+function csv_long_header_row_error_test() returns string:
+    list[map[string, string]] rows = csv.parse_with_header("name\nalice,30") handle error:
+        return error
+    return "accepted {list.length[map[string, string]](rows)} rows"
+verify csv_long_header_row_error_test:
+    assert csv_long_header_row_error_test() == "CSV header error at record 2: expected 1 fields, got 2"
