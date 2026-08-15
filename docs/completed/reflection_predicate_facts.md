@@ -20,7 +20,7 @@ An arbitrary tag supplied by a caller is not evidence about `T`. The checker may
 use valid facts to prove branch reachability and validate casts for the concrete
 generic instantiation.
 
-A function call that returns `bool` does not create a reflection fact, even when
+A function call that returns `bool` never creates a reflection fact, even when
 the function body is pure or compares only reflection tags. Copying a reflection
 comparison into an arbitrary `bool` local also discards the fact. This rule keeps
 type evidence local and inspectable: a boolean cannot be detached from the
@@ -65,8 +65,9 @@ authorize a generic cast.
 
 ## Follow-up
 
-The possibility of statically folding narrow predicate calls remains unresolved
-and is intentionally separate from this completed contract. See
+The possibility of statically folding narrow predicate calls for branch
+reachability only remains unresolved and is intentionally separate from this
+completed contract. Such folding must never authorize a generic cast. See
 [Reflection predicate static folding](../open_design/reflection_predicate_static_folding.md).
 
 This record resolves the policy decision requested by

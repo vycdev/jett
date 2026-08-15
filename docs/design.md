@@ -6978,12 +6978,13 @@ the evidence.
 This conservative rule keeps type proofs local for agents and prevents broad
 classifiers from hiding incompatible runtime carriers. Same-carrier classifier
 helpers may organize ordinary runtime logic, but code that performs a generic
-cast must retain a visible direct fact or match arm. Static predicate folding,
-trusted predicate annotations, and general flow-sensitive boolean refinement
-are deferred changes rather than part of the current policy. The decision and
-its pinned compile-fail boundaries are recorded in the completed
+cast must retain a visible direct fact or match arm. Predicate calls and
+detached booleans are permanently excluded from type proofs; no future static
+folding or trusted annotation may let them authorize a generic cast.
+Reachability-only evaluation remains a separate possible optimization. The
+decision and its pinned compile-fail boundaries are recorded in the completed
 [reflection predicate fact contract](completed/reflection_predicate_facts.md).
-The narrower static-folding possibility remains a separate
+That narrower reachability-only possibility remains a separate
 [open-design follow-up](open_design/reflection_predicate_static_folding.md).
 
 ---

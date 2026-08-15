@@ -821,11 +821,11 @@ prevents facts from being detached from their generic parameter or from hiding
 mixed runtime carriers behind a classifier; it is pinned by the
 `generic_reflection_predicate_fact_boundary.jett` and
 `generic_reflection_boolean_fact_boundary.jett` compile-fail fixtures. Static
-predicate folding, trusted predicate annotations, and general flow-sensitive
-boolean refinement remain separate future design work. The settled boundary is
-recorded in the completed
+predicate folding or trusted annotations must never promote calls or detached
+booleans into type proofs; only reachability-only evaluation remains possible
+future design work. The settled boundary is recorded in the completed
 [reflection predicate fact contract](completed/reflection_predicate_facts.md),
-while possible static folding remains an
+while possible reachability-only folding remains an
 [open-design follow-up](open_design/reflection_predicate_static_folding.md).
 
 ### Capability Restriction

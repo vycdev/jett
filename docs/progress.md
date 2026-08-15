@@ -107,6 +107,7 @@
 | Dotted `use` paths (`use net.http`) | Done |
 | Strict inline imports for project/vendored namespaces (`E0210`; same-namespace and declaration-signature type access remain direct; compiler stdlib remains implicit pending prelude policy) | Done |
 | Namespace-local global constant initializers (`E0211`; cross-namespace project/vendored dependencies are forbidden) | Done |
+| Conservative generic reflection facts (predicate calls and detached booleans never authorize casts; reachability-only folding remains separate) | Done |
 | Namespace-qualified user function calls (`helpers.f()`, `helpers.f[T]()`) | Done |
 | Namespace-private declarations with explicit `export` for public APIs, including `mutual` declarations and qualified-only external access | Done |
 | Multi-file compilation (project-aware build/run with `jett.proj`) | Done |

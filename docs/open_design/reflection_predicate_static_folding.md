@@ -1,7 +1,8 @@
 # Reflection Predicate Static Folding
 
-Status: open design. No predicate-call extension to the completed reflection-fact
-policy has been selected.
+Status: narrowed open design. Predicate calls and detached booleans permanently
+cannot carry type facts or authorize generic casts. Only reachability-only
+static evaluation remains unresolved.
 
 ## Context
 
@@ -25,10 +26,20 @@ function json_type_primitive_is_integer(primitive: TypePrimitive) returns bool:
             return false
 ```
 
-Such evaluation might answer whether a branch is reachable for one concrete
-instantiation without treating an arbitrary runtime boolean as a reusable type
-proof. It could reduce repeated primitive-family matches in generic stdlib code,
-but it would still change which predicate-shaped code typechecks.
+Such evaluation could only answer whether a branch is reachable for one
+concrete instantiation. It cannot turn an arbitrary runtime boolean into a
+reusable type proof or authorize a cast. It could reduce repeated
+primitive-family matches in generic code, but it would still change which
+predicate-shaped branches are checked as reachable.
+
+## Settled Type-Proof Boundary
+
+- Helper calls returning `bool` never carry reflection facts.
+- Copying a reflection comparison into a `bool` local permanently discards the
+  fact.
+- Purity, compiler ownership, annotations, or successful static evaluation do
+  not let either form authorize a generic cast.
+- Casts continue to require a visible direct reflection fact or `match` arm.
 
 ## Unresolved Questions
 
@@ -36,21 +47,20 @@ but it would still change which predicate-shaped code typechecks.
   evaluation?
 - Must an eligible helper be compiler-recognized, compiler-shipped, explicitly
   annotated, or merely pure and statically evaluable?
-- Does the result affect only branch reachability, or can it carry a fact that
-  authorizes a generic cast?
 - How are mixed-carrier classifiers rejected when one predicate branch groups
   values with different runtime representations?
 - What diagnostic distinguishes an ineligible predicate from an eligible helper
   that could not be evaluated?
-- Do copied boolean locals remain outside the fact model?
 
 ## Required Design Work
 
-Before implementation, a separate decision must specify eligibility, purity or
-trust, static evaluation, reachability, diagnostics, and conformance coverage.
-Tests must include sound same-carrier cases, mixed-carrier rejection, detached
-booleans, caller-supplied tags, and behavior for an unavailable static result.
+Before reachability-only implementation, a separate decision must specify
+eligibility, purity or trust, static evaluation, diagnostics, and conformance
+coverage. Tests must include same-carrier cases, mixed-carrier rejection,
+caller-supplied tags, and behavior for an unavailable static result. Existing
+predicate-call and detached-boolean compile-fail fixtures remain permanent cast
+boundaries.
 
-Until that decision is accepted, helper calls and detached booleans do not carry
-reflection facts. JSON code must retain visible direct facts or `match` arms
-where a generic cast depends on the primitive carrier.
+Whether or not reachability-only folding is later accepted, helper calls and
+detached booleans do not carry reflection facts. Generic code must retain visible
+direct facts or `match` arms where a cast depends on the primitive carrier.
