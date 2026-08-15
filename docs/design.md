@@ -6810,7 +6810,9 @@ The standard library is intentionally massive and opinionated. The goal is to ma
   UTF-8 BOM, and preserve blank records as one empty field. Raw `csv.parse`
   preserves ragged row widths; header parsing requires every data row to match
   the header width. Malformed quote placement and empty or duplicate headers
-  are explicit failures. The remaining dialect and source/runtime contract is
+  are explicit failures. `csv.stringify` emits LF between records and no final
+  newline, independent of the host platform. The remaining dialect and
+  source/runtime contract is
   [tracked by #137](https://github.com/vycdev/jett/issues/137), while future
   reflected `csv.parse_rows[T]` remains separate
 - **random** — capability-backed unbiased integer/unit-float/boolean sampling,

@@ -1942,8 +1942,8 @@ Core stdlib (string, list, math, json) is implemented in Phase D. This phase com
   return `result[..., string]`; one leading UTF-8 BOM is ignored, blank records
   are preserved as one empty field, and raw parsing preserves ragged row
   widths. Malformed quoting, empty or duplicate headers, and header/data width
-  mismatches fail explicitly, while the remaining dialect and source/runtime
-  contract is
+  mismatches fail explicitly. `stringify` emits deterministic LF-separated
+  records with no final newline. The remaining dialect and source/runtime contract is
   [tracked by #137](https://github.com/vycdev/jett/issues/137))
 - **Time:** `time` (the implemented wall-clock value, capability, determinism, and
   source/runtime boundary is defined in the
