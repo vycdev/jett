@@ -64,6 +64,17 @@ function csv_parse_blank_record_test() returns string:
     return "{list.length[list[string]](rows)}:{list.length[string](blank)}:{value}"
 verify csv_parse_blank_record_test:
     assert csv_parse_blank_record_test() == "3:1:"
+
+function csv_parse_ragged_rows_test() returns string:
+    list[list[string]] rows = csv.parse("a,b\n1\n2,3,4") handle error:
+        return error
+    list[string] short = list.get[list[string]](rows, 1) handle:
+        return "missing short row"
+    list[string] long = list.get[list[string]](rows, 2) handle:
+        return "missing long row"
+    return "{list.length[list[string]](rows)}:{list.length[string](short)}:{list.length[string](long)}"
+verify csv_parse_ragged_rows_test:
+    assert csv_parse_ragged_rows_test() == "3:1:3"
 # --- csv.stringify -----------------------------------------------------
 function csv_stringify_basic_test() returns string:
     list[list[string]] rows = list(list("name", "age"), list("alice", "30"))
