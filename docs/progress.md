@@ -181,7 +181,7 @@
 
 | Component | Status |
 |---|---|
-| Salsa integration | Not started |
+| Salsa integration | Not started (initial query and invalidation boundary [tracked by #147](https://github.com/vycdev/jett/issues/147)) |
 | Parallel compilation | Not started |
 | Content-addressed caching | Not started |
 
