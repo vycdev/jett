@@ -16358,7 +16358,8 @@ enum CsvFieldState {
 
 /// Parse strict CSV records. Quotes may only open at the start of a field,
 /// doubled quotes escape a quote inside a quoted field, and a closing quote
-/// must be followed by a delimiter, record terminator, or end of input.
+/// must be followed by a delimiter, record terminator, or end of input. Record
+/// terminators are LF or CRLF; a bare CR is rejected outside quoted fields.
 fn parse_csv_records(input: &str) -> Result<Vec<Vec<String>>, String> {
     let input = input.strip_prefix('\u{feff}').unwrap_or(input);
     // Empty CSV contains no records. A physical line terminator is different:
@@ -16397,9 +16398,14 @@ fn parse_csv_records(input: &str) -> Result<Vec<Vec<String>>, String> {
                     record_number += 1;
                 }
                 '\r' => {
-                    if chars.peek() == Some(&'\n') {
-                        chars.next();
+                    if chars.peek() != Some(&'\n') {
+                        return Err(csv_parse_error(
+                            record_number,
+                            row.len() + 1,
+                            "bare carriage return; use LF or CRLF record endings",
+                        ));
                     }
+                    chars.next();
                     push_csv_record(
                         &mut records,
                         &mut row,
@@ -16439,9 +16445,14 @@ fn parse_csv_records(input: &str) -> Result<Vec<Vec<String>>, String> {
                     record_number += 1;
                 }
                 '\r' => {
-                    if chars.peek() == Some(&'\n') {
-                        chars.next();
+                    if chars.peek() != Some(&'\n') {
+                        return Err(csv_parse_error(
+                            record_number,
+                            row.len() + 1,
+                            "bare carriage return; use LF or CRLF record endings",
+                        ));
                     }
+                    chars.next();
                     push_csv_record(
                         &mut records,
                         &mut row,
@@ -16483,9 +16494,14 @@ fn parse_csv_records(input: &str) -> Result<Vec<Vec<String>>, String> {
                     record_number += 1;
                 }
                 '\r' => {
-                    if chars.peek() == Some(&'\n') {
-                        chars.next();
+                    if chars.peek() != Some(&'\n') {
+                        return Err(csv_parse_error(
+                            record_number,
+                            row.len() + 1,
+                            "bare carriage return; use LF or CRLF record endings",
+                        ));
                     }
+                    chars.next();
                     push_csv_record(
                         &mut records,
                         &mut row,
@@ -17574,6 +17590,22 @@ mod builtin_tests {
         assert_eq!(
             parse_csv_records("name,\u{feff}age"),
             Ok(vec![vec!["name".to_string(), "\u{feff}age".to_string()]])
+        );
+    }
+
+    #[test]
+    fn csv_parser_rejects_bare_carriage_returns_outside_quoted_fields() {
+        let expected = Err(
+            "CSV parse error at record 1, field 1: bare carriage return; use LF or CRLF record endings"
+                .to_string(),
+        );
+        for input in ["a\rb", "\rb", "\"a\"\rb"] {
+            assert_eq!(parse_csv_records(input), expected, "input: {input:?}");
+        }
+
+        assert_eq!(
+            parse_csv_records("\"a\rb\""),
+            Ok(vec![vec!["a\rb".to_string()]])
         );
     }
 

@@ -180,7 +180,22 @@ function csv_parse_crlf_test() returns string:
         default "err"
 verify csv_parse_crlf_test:
     assert csv_parse_crlf_test() == "30"
+function csv_parse_quoted_carriage_return_test() returns string:
+    list[list[string]] rows = csv.parse("name,note\nalice,\"hello\rworld\"") handle error:
+        return error
+    list[string] row = list.get[list[string]](rows, 1) handle:
+        default list("err")
+    return list.get[string](row, 1) handle:
+        default "err"
+verify csv_parse_quoted_carriage_return_test:
+    assert csv_parse_quoted_carriage_return_test() == "hello\rworld"
 # --- strict failures ---------------------------------------------------
+function csv_bare_carriage_return_error_test() returns string:
+    list[list[string]] rows = csv.parse("name,age\ralice,30") handle error:
+        return error
+    return "accepted {list.length[list[string]](rows)} rows"
+verify csv_bare_carriage_return_error_test:
+    assert csv_bare_carriage_return_error_test() == "CSV parse error at record 1, field 2: bare carriage return; use LF or CRLF record endings"
 function csv_unterminated_quote_error_test() returns string:
     list[list[string]] rows = csv.parse("name,age\nalice,\"30") handle error:
         return error

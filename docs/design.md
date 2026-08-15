@@ -6810,6 +6810,7 @@ The standard library is intentionally massive and opinionated. The goal is to ma
   own parsing and quoting. `csv.parse` and `csv.parse_with_header` return
   `result[..., string]` and ignore one leading UTF-8 BOM. Empty input contains
   zero records, while a physical blank line is one record with one empty field.
+  LF and CRLF terminate records; a bare CR outside a quoted field is rejected.
   Raw `csv.parse` preserves ragged row widths;
   header parsing requires every data row to match the header width. Malformed
   quote placement and empty or duplicate headers are explicit failures.
