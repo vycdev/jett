@@ -63,7 +63,7 @@ jett/
 │   ├── jett_codegen_interp/    # Bytecode generation for interpreter mode
 │   ├── jett_interp/            # Bytecode interpreter for `jett run`
 │   ├── jett_fmt/               # Code formatter (`jett format`)
-│   ├── jett_query/             # Query engine for ASP/LSP (type-at, signature, completions)
+│   ├── jett_query/             # Planned Salsa owner; initial direct-AST query boundary
 │   ├── jett_lsp/               # Language Server Protocol implementation
 │   ├── jett_asp/               # Agent Server Protocol (TOON output formatting)
 │   ├── jett_mcp/               # MCP server wrapping ASP
@@ -332,11 +332,19 @@ source-node provenance.
 
 ### AST Design Principles
 
-- **Every node has a `Span`** for error reporting.
-- **Every node has a unique `NodeId`** for incremental compilation cache keys.
-- **The AST is immutable** once constructed. Subsequent phases annotate it via side-tables (HashMap<NodeId, T>), not by mutating AST nodes.
-- **Interned strings.** All identifiers are interned via salsa's `#[salsa::interned]` as `Symbol` (integer handle). Comparisons are O(1).
-- **Top-level items are salsa tracked structs.** Each function, struct, enum, etc. is a salsa tracked struct with identity fields. This enables item-level incremental recomputation. Function bodies are stored in local arenas within the tracked struct, not in a global arena.
+- **Every current node has a `Span`** for error reporting. Resolver and
+  typechecker side tables use spans where they need to associate facts with
+  direct-AST nodes.
+- **The parser-owned AST is treated as immutable** once constructed. One
+  parse result owns all nodes reachable from it.
+- **Current identifiers use the compiler's `SymbolInterner`.** They are not
+  Salsa interned values, and their numeric handles are not persistent cache
+  identities.
+- **Stable `NodeId` and tracked top-level items do not exist yet.** The first
+  incremental slice memoizes the whole direct AST by stable logical file key.
+  Declaration identity, signature/body splitting, and item-local arenas are
+  later stages of the
+  [initial query boundary](open_design/incremental_query_boundary.md).
 
 ---
 
@@ -1522,7 +1530,9 @@ Every error has a stable code (e.g., `E0601` for secret type exposure, `E0801` f
 > Agent-mode diagnostic preservation is tracked by
 > [#35](https://github.com/vycdev/jett/issues/35).
 
-The query engine powers both LSP and ASP interactive queries. It provides:
+The current driver provides the compiler facts used by both LSP and ASP
+interactive operations. The planned `jett_query` crate will become the sole
+Salsa database owner without changing these operation shapes:
 
 | Query | Description | Used by |
 |---|---|---|
@@ -1548,9 +1558,17 @@ tracked by #35.
 
 ### Demand-Driven Computation
 
-The query engine is built on **salsa** — the same demand-driven incremental framework used by rust-analyzer. Queries are pure functions that are memoized and automatically invalidated when their inputs change.
+No Salsa database is implemented yet. The current driver invokes parser,
+resolver, and typechecker operations directly. The selected first query slice
+adds an in-process `jett_query` database and memoizes
+`parse_file(FileKey) -> ParsedFile`; existing semantic passes initially remain
+whole-project computations over those parse results.
 
-The query engine does not "run phases in order." Instead, the caller asks for a result (e.g., "give me diagnostics for this file"), and salsa pulls through only the computations needed, reusing cached results wherever possible. See the Incremental Compilation Strategy section for details on granularity, arena strategy, and cancellation.
+The [initial query boundary](open_design/incremental_query_boundary.md) defines
+database ownership, ground-truth inputs, stable file identity, deterministic
+diagnostics, LSP/ASP snapshots, cancellation staging, and the later path to
+item-level signatures and bodies. Demand-driven semantic computation must not
+be claimed until its recomputation tests pass.
 
 ---
 
@@ -1565,7 +1583,10 @@ Standard LSP implementation using the `tower-lsp` crate. Provides:
 - Planned follow-ups: find all references, rename symbol, and code formatting
   (via `jett_fmt`).
 
-The LSP server wraps the query engine and reacts to `textDocument/didChange` events by incrementally recomputing affected queries.
+The LSP server currently stores full document text, invokes driver operations,
+and suppresses diagnostics from stale document versions. After `jett_query`
+lands, one database per workspace session will reuse unchanged parse results;
+version checks remain the final publish guard.
 
 ---
 
@@ -1608,7 +1629,9 @@ MCP is purely a transport layer — tools return the same TOON payloads as the A
 
 ## Formatter (`jett_fmt`)
 
-**Input:** CST.
+**Current input:** source text and the direct parser/token boundary. A future
+frontend may provide a lossless CST without changing canonical formatting
+policy.
 
 **Output:** Formatted source text.
 
@@ -1716,66 +1739,39 @@ work.
 
 ## Incremental Compilation Strategy
 
-Fast recompilation is critical for the LLM compile-fix loop (Footnote 5). The architecture uses a **salsa-style demand-driven query system** where every compiler operation is a memoized pure function from inputs to outputs.
+Fast recompilation is critical for the LLM compile-fix loop (Footnote 5), but
+the current compiler has no Salsa dependency or incremental database. The
+selected policy starts with a measured, correctness-preserving file boundary:
 
-> The initial query and invalidation boundary for the current direct-AST
-> frontend is tracked by [#147](https://github.com/vycdev/jett/issues/147).
+```text
+parse_file(file: FileKey) -> ParsedFile
+```
 
-### Core Principle: Separate Signatures from Bodies
+`FileKey` is an interned source-origin plus normalized logical path; current
+position-assigned `FileId` values are diagnostic handles, not cache identities.
+`ParsedFile` owns one immutable direct AST and its lexer/parser diagnostics.
+Unchanged files can reuse parsing, while resolver and typechecker work initially
+remains whole-project and is not described as item-incremental.
 
-This is the single most impactful decision for incremental performance. When a function body changes but its signature doesn't, callers of that function do not need to be re-checked.
+Later stages introduce tested declaration identities, ordered signature
+summaries, and body queries. They must preserve strict top-to-bottom visibility:
+editing or inserting an earlier declaration can invalidate later declarations,
+and a `mutual:` block forms one signature-collection unit. A body-only edit may
+reuse callers only after a recomputation observer proves that their unchanged
+signature boundary was reused.
 
-The compiler splits each file into two levels of granularity:
+Initial diagnostics remain owned query results rather than assumed Salsa
+accumulators. LSP cancellation begins with current document-version stale-result
+suppression; cooperative query cancellation is added only against the pinned
+Salsa API. AST/body allocations are owned by immutable query results and no
+arena index crosses a revision boundary.
 
-1. **Item-level signatures** — extracted from the parse tree as lightweight tracked structs (function name, parameter types, return type, capability parameters). These are the "public interface" of each item. Name resolution and cross-function type checking depend on signatures only.
-
-2. **Item-level bodies** — the full function body AST, lowered lazily (only when needed). Type checking a function's body depends on the signatures of functions it calls, not their bodies.
-
-**What this means in practice:**
-- Change a function body → only that function and its `verify` block are re-checked.
-- Change a function signature → all callers are re-checked (but only their type checking, not their bodies recursively).
-- Change a comment or whitespace → nothing is recomputed beyond re-lexing.
-- Add a new function at the end of a file → nothing above it is affected (strict top-to-bottom ordering).
-
-### Query Granularity
-
-| Query level | Memoization unit | Example |
-|---|---|---|
-| File-level | One result per file | `parse(file)` → CST |
-| Item-level | One result per top-level declaration | `type_of(function)` → Type, `check_body(function)` → Diagnostics |
-| Expression-level | Not memoized | Individual expression type inference runs within an item-level query |
-
-The sweet spot is **item-level granularity** for type checking and downstream phases. File-level is too coarse (a change to one function invalidates the entire file). Expression-level is too fine (the overhead of memoization exceeds the cost of recomputation).
-
-### Salsa Integration Details
-
-**Inputs (ground truth):**
-- Source file text — `#[salsa::input]` per file
-- Project configuration — separate input so config changes don't invalidate parsing
-
-**Tracked structs (intermediate identities):**
-- Each top-level declaration (function, struct, enum, machine, etc.) is a salsa tracked struct with identity fields (name, namespace)
-- When a file is re-parsed, salsa correlates new items with old ones by identity. If an item's fields haven't changed, downstream queries are not invalidated.
-
-**Derived queries (computed lazily):**
-- `parse(file)` → CST
-- `file_items(file)` → `Vec<TrackedItem>` (extracts top-level items with signatures)
-- `resolve_names(namespace)` → NamespaceScope
-- `type_of(item)` → TypeId (from signature only)
-- `check_body(item)` → Diagnostics (full body type checking)
-- `lower_to_mir(item)` → MirFunction
-
-**Accumulated diagnostics:** Diagnostics are collected via salsa accumulators — each phase pushes diagnostics as it encounters errors, and they're automatically aggregated. No need to thread `Vec<Diagnostic>` through return values.
-
-**Cycle handling:** Mutual recursion between type definitions (e.g., through `mutual` blocks) creates query cycles. Salsa detects these and invokes a recovery function that returns an "error" type, allowing compilation to continue and report the cycle.
-
-**Cancellation:** For LSP responsiveness, when the user types a new character, in-progress salsa computations are cancelled cooperatively. The LSP server applies the new input and re-invokes queries, which restart from the point of divergence.
-
-### Arena Strategy
-
-**Salsa is the top-level arena.** Top-level items (functions, structs, types) are salsa tracked structs. Salsa manages their lifetime and identity across revisions. There is no separate global AST arena.
-
-**Local arenas for bodies.** Function bodies are allocated into a local arena owned by the query result. The body is stored as `Body { arena: Arena, root: ExprIdx }` and memoized as a unit. Arena indices are only valid within that single Body — they never cross query boundaries.
+The complete ground-truth input list, invalidation matrix, diagnostic ordering,
+cycle policy, ASP/LSP behavior, CST/HIR/MIR compatibility, bounded migration
+sequence, and cache-observability test matrix are defined in the
+[initial incremental query and invalidation boundary](open_design/incremental_query_boundary.md),
+tracked by [#147](https://github.com/vycdev/jett/issues/147). Parallel execution
+and persistent/content-addressed caching remain separate follow-up stages.
 
 ---
 
@@ -1897,7 +1893,9 @@ The compiler should be built incrementally, with each phase producing a usable (
 **Goal:** Full ASP, LSP, MCP support.
 
 1. `jett_asp` — TOON output formatting for all commands.
-2. `jett_query` — Query engine with demand-driven caching.
+2. Driver-backed agent query interfaces for symbols, types, signatures,
+   definitions, references, namespaces, and completion. The future
+   `jett_query` Salsa database belongs to Phase L.
 3. `jett_lsp` — LSP server.
 4. `jett_mcp` — MCP server.
 5. `jett_cli` — `--agent` flag on all commands.
@@ -1968,7 +1966,8 @@ Core stdlib (string, list, math, json) is implemented in Phase D. This phase com
 
 **Goal:** Sub-second recompilation, production readiness.
 
-1. Demand-driven query system with caching and invalidation (salsa integration).
+1. `jett_query` demand-driven database with the selected direct-AST parse
+   boundary, then measured declaration/body query stages (Salsa integration).
 2. Parallel compilation of independent namespaces.
 3. Content-addressed caching of compilation artifacts.
 4. Comprehensive test suite.
@@ -1984,8 +1983,8 @@ Core stdlib (string, list, math, json) is implemented in Phase D. This phase com
 | `inkwell` | Safe LLVM bindings for code generation |
 | `ariadne` | Beautiful human-readable error rendering |
 | `logos` | Fast lexer generation (or hand-written for more control) |
-| `rowan` | Lossless CST representation (like rust-analyzer) |
-| `salsa` | Demand-driven incremental computation framework |
+| `rowan` (planned) | Candidate lossless CST representation for the deferred frontend stage |
+| `salsa` (planned) | Demand-driven incremental framework for the selected `jett_query` boundary |
 | `tower-lsp` | LSP server framework |
 | `clang-sys` | libclang bindings for C header parsing |
 | `insta` | Snapshot testing |

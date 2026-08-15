@@ -6904,6 +6904,20 @@ Jett compiles to native code via an **LLVM backend** (primary target) for perfor
 - **`jett test`** — run all `verify` and `property` blocks in the project. `verify` blocks execute at compile time for pure functions. `property` blocks run fuzz-based tests at test time (10,000 random inputs by default).
 - **`jett format`** — format source code (single canonical style, no configuration)
 
+### Incremental Compiler Policy
+
+Incremental compilation is compiler policy rather than a source-language
+semantic feature. The selected first slice memoizes each file's current direct,
+source-spanned AST under a stable logical file identity, while existing
+whole-project semantic passes remain conservative. It does not require the
+deferred lossless CST and does not yet claim item-level typechecking reuse.
+
+Strict top-to-bottom declaration visibility and `mutual:` semantics remain the
+source of truth for later signature and body dependencies. Human versus agent
+rendering never changes compiler-query facts. The full input, invalidation,
+diagnostic, client snapshot, and staged migration policy is recorded in the
+[initial incremental query boundary](open_design/incremental_query_boundary.md).
+
 ### Project Structure
 
 ```

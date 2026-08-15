@@ -42,6 +42,7 @@ enough pressure from real code:
 - [uint64 runtime value model](open_design/uint64_runtime_value_model.md)
 - [Initial `net.socket` transport contract](open_design/net_socket_transport_contract.md)
 - [Environment and argument capability contract](open_design/environment_argv_capability_contract.md)
+- [Initial incremental query and invalidation boundary](open_design/incremental_query_boundary.md)
 - [CSV format and failure contract](https://github.com/vycdev/jett/issues/137)
 
 ## Completed Records
