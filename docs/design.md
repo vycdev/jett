@@ -1722,10 +1722,13 @@ function display_name(session: UserAuth) returns string:
 The payload field `session.user_id` is only available inside the guarded branch;
 outside it, `session` is still a bare `UserAuth`. If an API erases state by
 accepting or returning bare `UserAuth`, the value must be guarded again before
-it can flow back into a `UserAuth at logged_in` parameter. Guards over arbitrary
-paths such as `holder.session at logged_in` are state tests only; narrowing is
-permanently limited to bare local variables, so paths do not narrow later field
-accesses.
+it can flow back into a `UserAuth at logged_in` parameter. This erasure is
+permanent and signature-directed: a function declared `returns UserAuth`
+returns a bare value even when its implementation returned `UserAuth at
+logged_in`; the compiler does not preserve hidden caller provenance. Guards
+over arbitrary paths such as `holder.session at logged_in` are state tests only;
+narrowing is permanently limited to bare local variables, so paths do not
+narrow later field accesses.
 A narrowed local keeps the exact state type for that branch; assigning a
 different state to the same local is rejected instead of silently widening the
 fact.

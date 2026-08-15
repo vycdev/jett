@@ -2278,6 +2278,9 @@ impl<'a> TypeChecker<'a> {
                         .all(|(expected, got)| self.types_compatible(*expected, *got))
                     && self.types_compatible(*expected_return, *got_return)
             }
+            // This compatibility is intentionally one-way. Crossing a bare
+            // machine boundary erases exact state; recovering it requires an
+            // explicit `at` guard rather than remembered caller provenance.
             (Type::Machine(expected_machine), Type::MachineState { machine, .. }) => {
                 expected_machine == machine
             }

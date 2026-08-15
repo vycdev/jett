@@ -4,7 +4,8 @@ Status: implemented for the checked type model, interpreter execution,
 reflection metadata, namespace-qualified use, branch narrowing, and JSON
 parse/serialize. Exact-state-only, local-variable-only branch narrowing is
 established, and `Machine.transition(...)` is the sole transition spelling;
-other future policy questions remain open.
+bare machine annotations also permanently erase exact state. Other future
+policy questions remain open.
 
 Jett's design treats state machines as a core language feature. This note now
 records the implemented model and the remaining policy boundaries so future
@@ -60,8 +61,9 @@ Implemented:
 - State-qualified values can flow into bare `Machine` expectations, which
   allows APIs to erase state and regain precision through explicit `at` guards.
   Bare `Machine` values do not flow back into `Machine at state` parameters
-  without a visible guard, even when their construction site was precise; this
-  keeps erasure explicit at API boundaries.
+  without a visible guard, even when their construction site was precise. Bare
+  parameter, return, and local annotations are authoritative erasure boundaries;
+  the compiler does not preserve hidden provenance across them.
 - `export machine` is parsed and feeds namespace visibility, so exported
   namespaced machines can be used through qualified names and function-local
   namespace aliases.
@@ -226,11 +228,6 @@ to a known machine owner.
 
 ## Open Questions
 
-- Which future standard APIs should intentionally erase state to bare
-  `Machine`, and which should preserve a precise `Machine at state` type? The
-  current source-level rule is explicit: signatures that mention bare `Machine`
-  erase state, and callers must use an `at` guard to pass the value back into an
-  exact-state parameter.
 - Should machine declarations eventually support explicit JSON policy
   annotations or state-rename migration metadata? The default envelope is now
   enabled for every machine whose payload fields are JSON-compatible.

@@ -958,6 +958,10 @@ compile_fail_fixture!(
     "state_machine_bare_to_state_parameter.jett"
 );
 compile_fail_fixture!(
+    compile_fail_state_machine_bare_return_erases_state,
+    "state_machine_bare_return_erases_state.jett"
+);
+compile_fail_fixture!(
     compile_fail_state_machine_at_non_machine,
     "state_machine_at_non_machine.jett"
 );

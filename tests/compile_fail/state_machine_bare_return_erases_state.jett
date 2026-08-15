@@ -1,0 +1,11 @@
+# ERROR: E0304
+machine Session:
+    states:
+        guest
+        logged_in(user_id: string)
+function erase_state(session: Session at logged_in) returns Session:
+    return session
+function user_id(session: Session at logged_in) returns string:
+    return session.user_id
+function caller() returns string:
+    return user_id(erase_state(Session(logged_in, "Ada")))

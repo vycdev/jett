@@ -612,8 +612,10 @@ For each `machine` type:
   annotations are accepted, including local variable declarations, so local
   temporaries can preserve precise state after construction or transition.
 - A value with type `Machine at state` can flow to a bare `Machine` expectation
-  when an API intentionally erases precise state. A positive
-  `if value at state:` guard narrows that local variable back to
+  when an API intentionally erases precise state. Parameter, return, and local
+  annotation boundaries are authoritative: once typed as bare `Machine`, exact
+  state is forgotten and is not recovered from construction or caller history.
+  A positive `if value at state:` guard narrows that local variable back to
   `Machine at state` for the guarded branch, exposing state payload fields and
   legal transitions there. A bare `Machine` value cannot satisfy a
   `Machine at state` parameter without such a visible guard, even when its
