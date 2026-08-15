@@ -1729,7 +1729,9 @@ the checked state for any machine. On a two-state bare machine, the guarded
 branch also narrows to the other declared state. For machines with three or more
 states, negative guarded branches stay opaque. A final `else` after a positive
 `if` / `else if` chain still narrows when the chain has excluded every state
-except one.
+except one. This exact-state-only rule is intentional: Jett does not create
+implicit union-state types such as `Session at {guest, banned}` from negative
+guards.
 
 Reflection exposes the same high-level distinction: `type.info[UserAuth]()`
 reports kind `machine`, while `type.info[UserAuth at logged_in]()` reports

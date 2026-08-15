@@ -626,7 +626,8 @@ For each `machine` type:
   remaining state. For `if not (value at state):`, the immediate `else` branch
   narrows to the checked state. On two-state bare machines, the guarded branch
   also narrows to the other state. Other multi-state negative branches stay
-  bare.
+  bare by design; the checker records exact state facts only and does not
+  synthesize union-state types.
 - Reflection distinguishes `Machine` and `Machine at state` through
   `TypeInfo.kind` (`machine` / `machine_state`) and structured `TypeKind`
   tags (`machine_type` / `machine_state_type`). `type.machine_layout[T]()`,

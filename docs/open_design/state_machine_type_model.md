@@ -2,7 +2,8 @@
 
 Status: implemented for the checked type model, interpreter execution,
 reflection metadata, namespace-qualified use, branch narrowing, and JSON
-parse/serialize. Future policy questions remain open.
+parse/serialize. Exact-state-only branch narrowing is established; other future
+policy questions remain open.
 
 Jett's design treats state machines as a core language feature. This note now
 records the implemented model and the remaining policy boundaries so future
@@ -48,7 +49,8 @@ Implemented:
 - For `if not (value at state):`, the immediate `else` branch narrows to the
   checked state. For bare two-state machines, the guarded branch also narrows
   to the other declared state. Multi-state negative guarded branches remain
-  opaque.
+  opaque. This is the permanent exact-state-only policy, not a staging gap:
+  negative guards do not create implicit union-state types.
 - State-specific payload field access is checked through ordinary field access
   on `Machine at state` values; bare `Machine` values do not expose payload
   fields.
@@ -226,8 +228,6 @@ to a known machine owner.
   current source-level rule is explicit: signatures that mention bare `Machine`
   erase state, and callers must use an `at` guard to pass the value back into an
   exact-state parameter.
-- Should negative branches eventually expose multi-state set facts, or should
-  narrowing stay limited to positive guards plus exact single-state complements?
 - Should `expr at state` eventually narrow fields/paths beyond bare local
   variables?
 - Should machine declarations eventually support explicit JSON policy
@@ -240,6 +240,7 @@ to a known machine owner.
 ## Recommendation
 
 Keep new machine features tied to checked machine owners rather than interpreter
-lookup rules. Branch facts should remain a narrow state-machine guard feature
-until there is a broader flow-sensitive type design; for now, expose only exact
-single-state facts that make payload fields locally unambiguous.
+lookup rules. Branch facts remain a narrow state-machine guard feature. Expose
+only exact single-state facts that make payload fields locally unambiguous;
+broader flow-sensitive type work must not implicitly introduce multi-state set
+facts.

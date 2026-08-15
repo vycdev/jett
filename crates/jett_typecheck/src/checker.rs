@@ -7099,6 +7099,9 @@ impl<'a> TypeChecker<'a> {
             }
             state
         } else {
+            // Jett intentionally records only exact machine-state facts. A
+            // complement containing multiple states stays at the bare machine
+            // type instead of introducing an implicit union-state type.
             if !can_narrow_by_complement || excluded_states.len() + 1 != state_count {
                 return None;
             }

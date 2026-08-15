@@ -67,7 +67,7 @@
 
 | Feature | Status |
 |---|---|
-| State machines (`machine`, transitions, `at`) | Done (checked state-qualified types, branch narrowing, namespaced machines, reflection metadata, reflected machine construction, and JSON parse/serialize through the explicit state/payload envelope) |
+| State machines (`machine`, transitions, `at`) | Done (checked state-qualified types, exact-state-only branch narrowing without implicit union-state facts, namespaced machines, reflection metadata, reflected machine construction, and JSON parse/serialize through the explicit state/payload envelope) |
 | Refinement types (`type X = T where ...`, `coarsen`) | Done |
 | User-defined structs (constructors, field access, methods) | Done |
 | Match statements with enum destructuring | Done |
