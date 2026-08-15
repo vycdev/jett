@@ -6805,14 +6805,15 @@ The standard library is intentionally massive and opinionated. The goal is to ma
   [encoding representation and failure contract](completed/encoding_representation_failure_contract.md)
 - **validate** — standard refinement types for common formats: Email, URL, UUID, IPv4, IPv6. The type IS the validation — once assigned, the value is guaranteed valid.
 - **regex** — pattern matching and extraction (when string functions aren't enough); the initial pattern, matching, extraction, Unicode, failure, resource, and source/runtime contract is [tracked by #140](https://github.com/vycdev/jett/issues/140)
-- **csv** — strict parsing and writing of CSV data; `csv.parse` and
-  `csv.parse_with_header` return `result[..., string]`, ignore one leading
-  UTF-8 BOM, and preserve blank records as one empty field. Raw `csv.parse`
-  preserves ragged row widths; header parsing requires every data row to match
-  the header width. Malformed quote placement and empty or duplicate headers
-  are explicit failures. `csv.stringify` emits LF between records and no final
-  newline, independent of the host platform. The remaining dialect and
-  source/runtime contract is
+- **csv** — strict parsing and writing of CSV data; public declarations are
+  source-owned in `stdlib/csv.jett`, while private trusted interpreter kernels
+  own parsing and quoting. `csv.parse` and `csv.parse_with_header` return
+  `result[..., string]`, ignore one leading UTF-8 BOM, and preserve blank
+  records as one empty field. Raw `csv.parse` preserves ragged row widths;
+  header parsing requires every data row to match the header width. Malformed
+  quote placement and empty or duplicate headers are explicit failures.
+  `csv.stringify` emits LF between records and no final newline, independent of
+  the host platform. The remaining dialect contract is
   [tracked by #137](https://github.com/vycdev/jett/issues/137), while future
   reflected `csv.parse_rows[T]` remains separate
 - **random** — capability-backed unbiased integer/unit-float/boolean sampling,

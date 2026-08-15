@@ -2498,6 +2498,9 @@ impl<'a> TypeChecker<'a> {
                 | "encoding.__form_decode"
                 | "crypto.__sha256"
                 | "crypto.__md5"
+                | "csv.__parse"
+                | "csv.__stringify"
+                | "csv.__parse_with_header"
                 | "random.__bounded"
                 | "random.__unit_float64"
                 | "random.__bool"
@@ -3648,7 +3651,8 @@ impl<'a> TypeChecker<'a> {
                 let opt_string = self.interner.intern(Type::Optional(TypeInterner::STRING));
                 Some((vec![TypeInterner::STRING], opt_string))
             }
-            "csv.parse" => {
+            // Private CSV kernels; public signatures live in stdlib/csv.jett.
+            "csv.__parse" => {
                 self.expect_no_type_args(&name, type_args, span);
                 let list_string = self.interner.intern(Type::List(TypeInterner::STRING));
                 let rows_ty = self.interner.intern(Type::List(list_string));
@@ -3657,13 +3661,13 @@ impl<'a> TypeChecker<'a> {
                     .intern(Type::Result(rows_ty, TypeInterner::STRING));
                 Some((vec![TypeInterner::STRING], result_ty))
             }
-            "csv.stringify" => {
+            "csv.__stringify" => {
                 self.expect_no_type_args(&name, type_args, span);
                 let list_string = self.interner.intern(Type::List(TypeInterner::STRING));
                 let rows_ty = self.interner.intern(Type::List(list_string));
                 Some((vec![rows_ty], TypeInterner::STRING))
             }
-            "csv.parse_with_header" => {
+            "csv.__parse_with_header" => {
                 self.expect_no_type_args(&name, type_args, span);
                 let row_ty = self
                     .interner

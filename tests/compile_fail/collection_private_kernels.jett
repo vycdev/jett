@@ -15,6 +15,12 @@ function encoding_kernel_is_private() returns string:
     return encoding.__base64_encode(bytes.new())
 function crypto_kernel_is_private() returns bytes:
     return crypto.__sha256(bytes.new())
+function csv_parse_kernel_is_private() returns result[list[list[string]], string]:
+    return csv.__parse("a,b")
+function csv_stringify_kernel_is_private() returns string:
+    return csv.__stringify(list(list("a", "b")))
+function csv_header_kernel_is_private() returns result[list[map[string, string]], string]:
+    return csv.__parse_with_header("a,b")
 function random_kernel_is_private(view rng: Random) returns bool:
     return random.__bool(view rng)
 function clock_kernel_is_private(view clock: Clock) returns int64:

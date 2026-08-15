@@ -4409,6 +4409,34 @@ mod tests {
     }
 
     #[test]
+    fn query_signature_reports_source_owned_csv_surface() {
+        let functions = [
+            ("parse", "result[list[list[string]], string]"),
+            ("stringify", "string"),
+            (
+                "parse_with_header",
+                "result[list[map[string, string]], string]",
+            ),
+        ];
+
+        for (function, return_type) in functions {
+            let name = format!("csv.{function}");
+            let result = query_signature(Path::new("."), &name)
+                .expect("CSV signature query should succeed")
+                .unwrap_or_else(|| panic!("{name} signature should be found"));
+            assert!(
+                result
+                    .file_path
+                    .replace('\\', "/")
+                    .ends_with("/stdlib/csv.jett"),
+                "{name} should resolve to compiler-shipped source, got {}",
+                result.file_path
+            );
+            assert_eq!(result.return_type, return_type, "{name} return type");
+        }
+    }
+
+    #[test]
     fn query_signature_reports_source_owned_map_and_set_surfaces() {
         let map_functions = [
             "new",

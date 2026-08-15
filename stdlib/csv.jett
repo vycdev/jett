@@ -1,0 +1,7 @@
+namespace csv
+export function parse(value: string) returns result[list[list[string]], string]:
+    return csv.__parse(value)
+export function stringify(rows: list[list[string]]) returns string:
+    return csv.__stringify(rows)
+export function parse_with_header(value: string) returns result[list[map[string, string]], string]:
+    return csv.__parse_with_header(value)

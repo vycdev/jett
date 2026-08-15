@@ -9073,8 +9073,8 @@ impl Interpreter {
                 Some(Ok(Value::List(args_list)))
             }
 
-            // -- CSV operations (stdlib/csv.jett) ---------------------------------
-            "csv.parse" => {
+            // -- CSV operations (stdlib/csv.jett) --------------------------
+            "csv.__parse" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => match parse_csv_records(s) {
@@ -9093,7 +9093,7 @@ impl Interpreter {
                 }
             }
 
-            "csv.stringify" => {
+            "csv.__stringify" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::List(rows) => {
@@ -9121,7 +9121,7 @@ impl Interpreter {
                 }
             }
 
-            "csv.parse_with_header" => {
+            "csv.__parse_with_header" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => match parse_csv_records(s) {
@@ -17504,16 +17504,30 @@ mod builtin_tests {
     }
 
     #[test]
-    fn csv_builtins_strip_only_one_initial_utf8_bom() {
+    fn private_csv_kernels_enforce_trust_and_strip_only_one_initial_utf8_bom() {
         let mut interp = Interpreter::new();
+        assert!(
+            interp
+                .call_builtin("csv.__parse", &[Value::String("a".to_string())])
+                .is_none(),
+            "private CSV kernels must require trusted stdlib execution"
+        );
+        assert!(
+            interp
+                .call_builtin("csv.parse", &[Value::String("a".to_string())])
+                .is_none(),
+            "public CSV dispatch must come from stdlib source"
+        );
+
+        interp.current_function_trusted_stdlib = true;
 
         let parsed = interp
             .call_builtin(
-                "csv.parse",
+                "csv.__parse",
                 &[Value::String("\u{feff}name,age\nalice,30".to_string())],
             )
-            .expect("csv.parse should be recognized")
-            .expect("csv.parse should return a result value");
+            .expect("csv.__parse should be recognized")
+            .expect("csv.__parse should return a result value");
         assert_eq!(
             parsed,
             result_ok(Value::List(vec![
@@ -17530,11 +17544,11 @@ mod builtin_tests {
 
         let parsed_with_header = interp
             .call_builtin(
-                "csv.parse_with_header",
+                "csv.__parse_with_header",
                 &[Value::String("\u{feff}name,age\nalice,30".to_string())],
             )
-            .expect("csv.parse_with_header should be recognized")
-            .expect("csv.parse_with_header should return a result value");
+            .expect("csv.__parse_with_header should be recognized")
+            .expect("csv.__parse_with_header should return a result value");
         assert_eq!(
             parsed_with_header,
             result_ok(Value::List(vec![Value::Map(vec![
