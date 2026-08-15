@@ -2230,12 +2230,13 @@ function bad_example(view net: Network) returns result[string, string]:
 
 High-performance languages need meta-programming to optimize code at compile time. C++ uses templates. Rust uses macros. Both introduce **entirely new secondary syntaxes** that behave differently from the main language. This confuses LLM token probabilities — the model has to learn two different ways to write logic.
 
-Jett borrows from Zig: there are **no macros**. Instead, there is a `comptime` keyword that marks normal Jett code to be executed at compile time.
+Jett borrows from Zig: there are **no macros**. Instead, the `comptime` keyword
+selects normal Jett code to be executed at compile time.
 
 **One syntax for everything:**
 
 ```
-comptime function generate_lookup_table(size: int64) returns list[int64]:
+function generate_lookup_table(size: int64) returns list[int64]:
     mutable list[int64] table = list.new[int64]()
     mutable int64 i = 0
     while i < size:
@@ -2247,15 +2248,27 @@ comptime function generate_lookup_table(size: int64) returns list[int64]:
 list[int64] squares = comptime generate_lookup_table(256)
 ```
 
-The LLM writes a normal function — same syntax, same rules, same keywords. The `comptime` keyword simply tells the compiler to run it during compilation rather than at runtime. The LLM does not need to learn a separate template language, a macro syntax, or a preprocessor. **One syntax, two execution times.**
+The LLM writes a normal function — same syntax, same rules, same keywords. The
+`comptime` evaluation site tells the compiler to run it during compilation
+rather than at runtime. There is no separate `comptime function` declaration,
+comptime-safe annotation, or function allowlist. **Every pure Jett function is
+eligible**, whether it comes from the project, a dependency, or the standard
+library. The LLM does not need to learn a separate template language, macro
+syntax, or preprocessor. **One function form, two execution times.**
+
+Purity is the complete eligibility boundary. A function that takes any
+capability cannot run at comptime, directly or transitively, because the
+compiler never supplies runtime `Filesystem`, `Network`, `Clock`, `Random`,
+`Environment`, `Process`, or other capability values during compilation.
+Comptime code therefore cannot perform I/O or observe ambient machine state.
 
 **Comptime for generic specialization:**
 
 ```
-comptime function type_name[T]() returns string:
+function type_name[T]() returns string:
     return T.name
 
-comptime function is_numeric[T]() returns bool:
+function is_numeric[T]() returns bool:
     return T is int64 or T is float64
 
 function print_value[T](view stdout: Stdout, val: T) returns nothing:
@@ -2654,7 +2667,12 @@ The binary is **never emitted** if a `verify` block fails. This means:
 
 **Comptime verification limitations:**
 
-`verify` blocks can only call **pure functions** (no capability parameters). This is enforced by the compiler. A function that takes a `Filesystem` or `Network` capability cannot be verified at compile time because it would require actual I/O during compilation. For impure functions, Jett provides `property` blocks that run during `jett test` (see Rule Set 25).
+`verify` blocks can call **any pure function**, including pure functions from
+dependencies and the standard library. There is no verify/comptime allowlist.
+A function with any capability parameter is rejected before interpretation,
+and a pure function cannot hide such a call because capability requirements
+propagate through the call graph. For impure functions, Jett provides
+`property` blocks that run during `jett test` (see Rule Set 25).
 
 #### 3. The Full Pattern: Function → Verify → Next Function
 
@@ -7091,7 +7109,6 @@ the completed [reflection predicate fact contract](completed/reflection_predicat
 
 ## Open Questions
 
-- **Comptime boundaries** — what standard library functions are available at comptime? All pure functions? Only a subset? File I/O at comptime (for code generation from schemas)?
 - **Comptime struct, enum, bitfield, and machine introspection** — the reflection surface now includes `type.name[T]()`, `type.kind[T]()`, `type.kind_tag[T]()`, `type.primitive_tag[T]()`, `type.has_secret[T]()`, `type.info[T]()`, `type.arg[T](index)`, `type.fields[T]()`, `type.bitfield_layout[T]()`, `type.bitfield_fields[T]()`, `type.machine_layout[T]()`, `type.machine_states[T]()`, `type.machine_transitions[T]()`, `type.machine_state_value[T](view value)`, `type.machine_field_value[T, U](view value, view field)`, `type.variants[T]()`, `type.variant_value[T](view value)`, checked `type.field_value[T, U](view value, view field)`, checked `type.variant_field_value[T, U](view value, view field)`, and reflected struct/bitfield/enum/machine construction through `type.construct_start[T]()`, `type.construct_variant_start[T](variant)`, `type.construct_machine_start[T](state)`, `type.construct_put[T, U](builder, field, value)`, and `type.construct_finish[T](builder)`. `type.info[T]()` returns recursive `TypeInfo`, including base metadata for aliases and refinements, structured `TypeKind` tags, and optional structured `TypePrimitive` tags for primitive types; `type.arg[T](index)` returns indexed wrapper/base metadata and direct literal-index calls can bind scoped comptime types; `type.fields[T]()` returns `list[TypeField]` for struct and bitfield fields, including `index`, `owner_type`, optional `owner_member`, `name`, `type_name`, `kind`, `serialize_name`, `has_secret`, and `type_info`; `type.bitfield_layout[T]()` returns `TypeBitfield` with byte-order metadata and field layout; `type.bitfield_fields[T]()` returns `list[TypeBitfieldField]` with bit widths, payload shape, semantic field type, and optional enum annotation metadata; `type.machine_layout[T]()` returns `TypeMachine` with ordered states and transition edges; `type.machine_states[T]()` returns `list[TypeMachineState]` with `owner_type`, state payload fields, and state-level `has_secret`; `type.machine_transitions[T]()` returns `list[TypeMachineTransition]` with source/target names and indexes; `type.machine_state_value[T](view value)` exposes the active state for a concrete machine value; `type.machine_field_value[T, U](view value, view field)` reads an active-state payload field through same-state reflected metadata; `type.variants[T]()` returns `list[TypeVariant]` with `owner_type`, discriminants, and enum payload fields represented as `TypeField` metadata, while `type.variant_value[T](view value)` exposes the active variant for a concrete enum value. Shape-specific aggregate reflection APIs are total probes: for non-matching top-level kinds they return empty metadata, while value-carrying and construction APIs remain checked. Reflection metadata records are compiler-produced values: user code may inspect and pass returned metadata, but direct source constructors for `TypeInfo`, `TypeField`, `TypeBitfield`, `TypeBitfieldField`, `TypeMachine`, `TypeMachineState`, `TypeMachineTransition`, and `TypeVariant` are rejected so metadata authority cannot be forged by lookalike values. Field-level `serialize "..."` names are carried into `serialize_name`, and normal JSON execution now uses trusted stdlib `.jett` wrappers for raw `JsonTree` parsing/access plus reflected typed parse/serialize, while compiler-owned public entrypoints still enforce policy for handled parse results, `view`, map keys, unsupported parse/serialize targets, and secret exposure. The explicit builder family is the sole canonical reflected-construction source form; a parallel `type.construct[T]: ... provide ...` block was rejected. Still open: finalizing which JSON policy gates can become ordinary stdlib constraints. See `docs/active/stdlib_json_extraction_plan.md`, `docs/active/canonical_reflection_metadata_plan.md`, and `docs/completed/type_construction_block_syntax.md`.
 - **Hot reloading** — can code be swapped in a running program without restarting? Important for web servers, long-lived processes, and rapid iteration. Open questions: how does it interact with actors holding state? What happens to in-flight messages? Does it require recompile + process restart, or true in-place code swap? How do linear types and capabilities interact with swapped functions?
 - **C FFI extensions** — the initial binding-file syntax, `Foreign` capability, opaque handles, explicit policy boundary, supported C subset, and implementation stages are specified by the [C FFI binding contract](open_design/c_ffi_binding_contract.md). Additional calling conventions, by-value records, writable buffers, borrowed returns, callbacks, dynamic loading, and C++ remain open follow-up work.

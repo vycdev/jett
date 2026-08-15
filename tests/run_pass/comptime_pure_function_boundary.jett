@@ -1,0 +1,8 @@
+namespace test
+function normalize_label(value: string) returns string:
+    return string.replace(string.lower(string.trim(value)), " ", "-")
+function build_label(value: string) returns string:
+    return "jett:{normalize_label(value)}"
+verify comptime_pure_function_boundary:
+    assert build_label("  PURE FUNCTIONS  ") == "jett:pure-functions"
+    assert string.char_count(build_label("ok")) == 7

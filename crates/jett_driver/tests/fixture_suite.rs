@@ -315,6 +315,10 @@ run_pass_fixture!(run_pass_fibonacci, "fibonacci.jett");
 run_pass_fixture!(run_pass_hello_print, "hello_print.jett");
 run_pass_fixture!(run_pass_string_interpolation, "string_interpolation.jett");
 run_pass_fixture!(run_pass_stdlib_loading, "stdlib_loading.jett");
+run_pass_fixture!(
+    run_pass_comptime_pure_function_boundary,
+    "comptime_pure_function_boundary.jett"
+);
 run_pass_fixture!(run_pass_random_production, "random_production.jett");
 run_pass_fixture!(run_pass_verify_test, "verify_test.jett");
 run_pass_fixture!(run_pass_multi_verify, "multi_verify.jett");

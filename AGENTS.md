@@ -35,6 +35,10 @@ effects, small bounded functions, and compiler-enforced policy.
 - `list[T]` is Jett's sole sequence type. Do not add `array[T, N]` or another
   fixed-size sequence. Express a length invariant with a refinement of
   `list[T]`; that constrains values but does not promise fixed runtime layout.
+- Every semantically pure Jett function is eligible in comptime contexts,
+  including project, dependency, and stdlib functions. Do not add a separate
+  comptime-safe marker or allowlist. Functions requiring any capability are
+  ineligible; comptime never receives runtime capabilities.
 - Namespaced declarations are private by default. Mark only the intended public
   API with `export`.
 - Project and dependency namespaces must remain unique. Only compiler-shipped

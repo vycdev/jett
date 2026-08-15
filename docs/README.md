@@ -49,6 +49,7 @@ plans above for current work.
 - [Bitfield reflection metadata](completed/bitfield_reflection_metadata.md)
 - [Bundle ordering contract](completed/bundle_ordering_contract.md)
 - [Comptime type bind](completed/comptime_type_bind.md)
+- [Pure-only comptime boundary](completed/comptime_pure_function_boundary.md)
 - [Crypto hashing and security contract](completed/crypto_hashing_security_contract.md)
 - [Encoding representation and failure contract](completed/encoding_representation_failure_contract.md)
 - [Explicit struct equality](completed/explicit_struct_equality.md)

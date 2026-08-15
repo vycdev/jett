@@ -24,7 +24,7 @@ flowchart TD
     P6["6. Type Check<br/><small>Full type checking, ownership analysis, capability tracking</small>"]
     P7["7. HIR<br/><small>Typed, ownership-annotated, monomorphized</small>"]
     P8["8. MIR<br/><small>Control flow graph, linear type verification</small>"]
-    P9["9. Comptime<br/><small>Execute verify blocks, comptime functions, evaluate constants</small>"]
+    P9["9. Comptime<br/><small>Execute verify blocks, pure calls, evaluate constants</small>"]
     P10["10. Optimization<br/><small>In-place reuse, view elision, move coalescing, etc.</small>"]
     P11["11. Codegen<br/><small>MIR → LLVM IR → native code (or interpreter bytecode)</small>"]
     BIN["Native Binary"]
@@ -779,7 +779,7 @@ The MIR phase performs a final, CFG-based ownership check to catch issues that t
 
 ## Phase 9: Comptime Evaluation (`jett_comptime`)
 
-**Input:** MIR (for comptime-marked functions and verify blocks).
+**Input:** MIR for explicit comptime evaluation sites and verify blocks.
 
 **Output:** Evaluated constant values, verify pass/fail results.
 
@@ -824,7 +824,9 @@ checked primitive range stop interpretation with a deterministic diagnostic.
 ### What Runs at Comptime
 
 1. **`verify` blocks** — All assertions are evaluated. Any failure stops compilation.
-2. **`comptime` functions** — Called from runtime code, results are baked into the binary as constants.
+2. **Explicit comptime calls** — the target and all transitive callees may be
+   any pure project, dependency, or stdlib function; results are baked into the
+   binary as constants. No declaration marker or allowlist grants eligibility.
 3. **`comptime` expressions** — `if comptime is_numeric[T]()` branches are resolved, dead branches are eliminated.
 4. **Refinement type constraints on literals** — `Port p = 80` validates `80 >= 1 && 80 <= 65535` at compile time.
 5. **Bitfield literal validation** — `ColorChannel(red: 300, ...)` catches the out-of-range value at compile time.
@@ -857,7 +859,15 @@ validity. The settled boundary is recorded in the completed
 
 ### Capability Restriction
 
-The comptime interpreter refuses to execute any function that takes capability parameters. If a `verify` block tries to call an impure function, it's a compile error. This is checked before interpretation begins.
+The comptime interpreter refuses to execute any function that takes capability
+parameters. Purity is the sole eligibility test: there is no independent
+comptime-safe annotation and no project/dependency/stdlib allowlist. Capability
+requirements propagate through ordinary type checking, so a nominally pure
+wrapper cannot hide an impure call. If a `verify` block or another comptime
+entrypoint calls an impure function, compilation fails before interpretation.
+The compiler never constructs runtime capability values for comptime; file,
+network, clock, randomness, environment, process, and foreign access are all
+excluded.
 
 ---
 

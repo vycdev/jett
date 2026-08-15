@@ -1037,6 +1037,12 @@ impl<'a> TypeChecker<'a> {
         )
     }
 
+    /// Comptime call eligibility is exactly semantic purity. There is no
+    /// separate project, dependency, or stdlib allowlist.
+    fn named_call_is_pure(&self, name: &str) -> bool {
+        !Self::is_impure_builtin(name) && self.purity_map.get(name).copied().unwrap_or(true)
+    }
+
     fn is_secret_safe_builtin(name: &str) -> bool {
         matches!(name, "secret.redact" | "secret.compare")
     }
@@ -7764,13 +7770,7 @@ impl<'a> TypeChecker<'a> {
         let callee_name = self.resolved_expr_name(function);
         let callee_is_pure = callee_name
             .as_deref()
-            .map(|name| {
-                if Self::is_impure_builtin(name) {
-                    false
-                } else {
-                    self.purity_map.get(name).copied().unwrap_or(true)
-                }
-            })
+            .map(|name| self.named_call_is_pure(name))
             .unwrap_or(false);
 
         if let Some(callee_name) = callee_name.as_deref()
@@ -9097,13 +9097,7 @@ impl<'a> TypeChecker<'a> {
         let callee_name = self.resolved_expr_name(callee);
         let callee_is_pure = callee_name
             .as_deref()
-            .map(|name| {
-                if Self::is_impure_builtin(name) {
-                    false
-                } else {
-                    self.purity_map.get(name).copied().unwrap_or(true)
-                }
-            })
+            .map(|name| self.named_call_is_pure(name))
             .unwrap_or(false);
         let builtin_signature = self.builtin_signature(callee, type_args, span);
 
@@ -9148,6 +9142,9 @@ impl<'a> TypeChecker<'a> {
                             .emit(errors::pure_calls_impure(caller_name, &callee_name, span));
                     }
                 }
+                // Verify blocks are the current value-level comptime entrypoint.
+                // Eligibility is exactly purity: do not add a second allowlist
+                // for user, dependency, or stdlib functions here.
                 // E0501: verify block calls impure function
                 if self.in_verify_block {
                     if let Some(verify_name) = &self.current_verify_name {
