@@ -436,7 +436,7 @@ Types are interned for O(1) comparison: each unique type gets a `TypeId`. The ty
 
 | Interface | Implemented by | Used for |
 |---|---|---|
-| `Equatable` | `int64`, `float64`, `string`, `bool` | `==`, `!=` |
+| `Equatable` | numeric primitives, `string`, `bool`, explicit user structs | `==`, `!=` |
 | `Orderable` | `int64`, `float64`, `string` | `<`, `>`, `<=`, `>=` |
 | `Displayable` | `int64`, `float64`, `string`, `bool` | String interpolation `{expr}` (compiler-stdlib coupling) |
 | `Hashable` | `int64`, `string`, `bool` | `map` keys, `set` elements |
@@ -476,6 +476,13 @@ Bottom-up type checking of every expression:
 - **`is` expressions:** In comptime context, `T is int64` checks if a generic type parameter matches a concrete type (resolved at compile time). In runtime context, `value is Variant` checks enum discriminant (compiled to integer comparison).
 - **`at` expressions:** `machine_var at state_name` checks if a state machine is in a specific state. Compiled to state tag comparison.
 - **Valued enums:** Enums with explicit integer values (e.g., `tcp = 6`) use the specified integers as discriminants instead of auto-assigned values. These integrate with bitfield `as EnumType` annotations — the codegen maps between the integer value in the bitfield and the enum variant.
+- **Explicit struct equality:** `==` and `!=` on a user-defined struct require
+  an exact `Equatable` implementation. The standard interface declares
+  `equals(view self: Equatable, view other: Equatable) returns bool`; both
+  interface-typed parameters substitute the concrete owner during
+  implementation validation. `!=` negates `equals` rather than adding a second
+  customization point. Missing implementations report E0358. Enums retain
+  variant-and-payload equality, and `Hashable` remains a separate contract.
 - **Recursive owned types:** A struct or enum may refer to itself without a
   source-level pointer type when the declaration has a finite base value.
   Struct fields must terminate through `optional`, an empty collection, a
@@ -1102,6 +1109,7 @@ Uses the `inkwell` crate for safe Rust bindings to the LLVM C API.
 | `secret[T]` | Same representation as `T` — security is compile-time only |
 | `view` | Raw pointer (no reference counting, safety is compile-time) |
 | `clone` | Deep copy via generated clone functions |
+| Struct `==` / `!=` | Dispatch to the explicit `Equatable.equals` implementation; `!=` negates the result |
 | Actors | OS threads with message queues |
 | `run`/`join` | Thread spawn + join (or task pool) |
 | `assert` | Condition check + halt with message (two forms: bare and with message string) |

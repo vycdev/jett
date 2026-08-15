@@ -718,7 +718,9 @@ impl Interpreter {
                     self.register_type_alias_in_namespace(current_namespace.as_deref(), alias);
                 }
                 Item::Interface(interface) => self.register_interface(interface),
-                Item::Implement(block) => self.register_implement_block(block),
+                Item::Implement(block) => {
+                    self.register_implement_block_in_namespace(current_namespace.as_deref(), block)
+                }
                 Item::Struct(strukt) => {
                     self.register_struct_in_namespace(current_namespace.as_deref(), strukt)
                 }
@@ -858,8 +860,21 @@ impl Interpreter {
     /// Register an `implement Interface for Type` block so interface-qualified
     /// calls can dispatch to the concrete method body at runtime.
     pub fn register_implement_block(&mut self, block: &ImplementBlock) {
+        self.register_implement_block_in_namespace(None, block);
+    }
+
+    fn register_implement_block_in_namespace(
+        &mut self,
+        namespace: Option<&str>,
+        block: &ImplementBlock,
+    ) {
         let interface_name = block.interface_name.name.clone();
-        let owner_name = type_expr_name(&block.for_type);
+        let local_owner_name = type_expr_name(&block.for_type);
+        let owner_name = namespace
+            .filter(|_| !local_owner_name.contains('.'))
+            .map(|namespace| format!("{namespace}.{local_owner_name}"))
+            .filter(|qualified| self.structs.contains_key(qualified))
+            .unwrap_or(local_owner_name);
 
         for method in &block.methods {
             let concrete_name = format!("{}.{}", owner_name, method.name.name);
@@ -1273,6 +1288,26 @@ impl Interpreter {
                     _ => {}
                 }
                 let right = value_or_signal!(self, rhs);
+                if matches!(op, BinOp::Eq | BinOp::NotEq)
+                    && matches!(
+                        (&left, &right),
+                        (Value::Struct { .. }, Value::Struct { .. })
+                    )
+                {
+                    let equal = self.call_function_with_type_args(
+                        "Equatable.equals",
+                        &[],
+                        vec![left, right],
+                    )?;
+                    let Value::Bool(equal) = equal else {
+                        return Err("Equatable.equals must return bool".to_string());
+                    };
+                    return Ok(ExprFlow::Value(Value::Bool(if matches!(op, BinOp::Eq) {
+                        equal
+                    } else {
+                        !equal
+                    })));
+                }
                 let value = eval_binary_op(&left, *op, &right).map_err(|error| {
                     self.checked_sized_integer_overflow(expr, &error)
                         .unwrap_or(error)

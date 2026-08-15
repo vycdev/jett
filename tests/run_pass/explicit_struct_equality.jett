@@ -1,0 +1,17 @@
+namespace test
+struct User:
+    id: string
+    display_name: string
+implement Equatable for User:
+    function equals(view self: User, view other: User) returns bool:
+        return self.id == other.id
+function equality_uses_the_explicit_contract() returns bool:
+    User ada = User(id: "u1", display_name: "Ada")
+    User renamed = User(id: "u1", display_name: "A. Lovelace")
+    User grace = User(id: "u2", display_name: "Grace")
+    bool same_identity = ada == renamed
+    bool different_identity = ada != grace
+    bool direct_contract = Equatable.equals(view ada, view renamed)
+    return same_identity && different_identity && direct_contract && ada.display_name == "Ada" && renamed.display_name == "A. Lovelace"
+verify explicit_struct_equality:
+    assert equality_uses_the_explicit_contract()

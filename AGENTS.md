@@ -20,6 +20,10 @@ effects, small bounded functions, and compiler-enforced policy.
   this is compiler-managed indirection, not a forward-reference exception for
   another type. Do not add `box[T]` or `mutual` type declarations. Model shared
   or cyclic graphs with explicit IDs and collections.
+- User-defined structs never receive structural equality automatically. `==`
+  and `!=` require an explicit, exact `Equatable.equals` implementation with
+  two view parameters; `!=` is the negation of that method. Do not add derive
+  syntax, a field-based fallback, or a separate inequality hook.
 - Namespaced declarations are private by default. Mark only the intended public
   API with `export`.
 - Project and dependency namespaces must remain unique. Only compiler-shipped

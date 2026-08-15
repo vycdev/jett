@@ -6642,6 +6642,31 @@ if balance >= 0.0:
     Stdout.write(view stdout, "solvent")
 ```
 
+**Struct equality is explicit.** User-defined struct fields never cause the
+compiler to synthesize `==`. A struct opts in through the standard
+`Equatable` interface and supplies the one canonical equality operation:
+
+```jett
+struct User:
+    id: string
+    display_name: string
+
+implement Equatable for User:
+    function equals(view self: User, view other: User) returns bool:
+        return self.id == other.id
+```
+
+Both operands are views, so comparison does not consume either value. `a == b`
+calls `Equatable.equals(view a, view b)`, and `a != b` is exactly the negation
+of that same method. There is no separate `not_equals` method and no derive or
+field-based fallback. This makes identity choices visible at the type rather
+than silently changing when a field is added. A struct without an explicit,
+exact `Equatable` implementation gets a compile error for either operator.
+
+Enums retain their existing variant-and-payload equality. Whether a struct may
+be a map key or set element is the separate `Hashable` contract; equality does
+not imply hashing automatically.
+
 ### Capabilities Use `view`
 
 `main()` owns all capabilities. Every other function borrows them via `view` — the same keyword used for any other non-owning parameter. Callers write `view` at call sites, just like any other view parameter.
@@ -6811,13 +6836,13 @@ Primitive types (`int64`, `float64`, `string`, `bool`) implement standard interf
 
 | Interface | Implemented by | Operations |
 |-----------|---------------|------------|
-| `Equatable` | `int64`, `float64`, `string`, `bool` | `==`, `!=` |
+| `Equatable` | numeric primitives, `string`, `bool`, and explicitly implementing structs | `==`, `!=` |
 | `Orderable` | `int64`, `float64`, `string` | `<`, `>`, `<=`, `>=` |
 | `Displayable` | `int64`, `float64`, `string`, `bool` | string representation (used by string interpolation) |
 | `Hashable` | `int64`, `string`, `bool` | can be used as `map` keys and `set` elements |
 | `Serializable` | JSON-data structs and primitives | `json.serialize[T]()`, `json.parse[T]()`, `json.parse_exact[T]()` |
 
-Primitive interface implementations are ordinary `implement` blocks, not compiler magic. JSON compatibility is structural for data-shaped types: the compiler enforces the public policy boundary, and the trusted stdlib uses reflection to walk fields and construct values without user-written parser/serializer code.
+Primitive interface implementations are ordinary `implement` blocks, not compiler magic. `Equatable` and its primitive implementations live in compiler-shipped Jett source; user structs implement the same interface explicitly. JSON compatibility is structural for data-shaped types: the compiler enforces the public policy boundary, and the trusted stdlib uses reflection to walk fields and construct values without user-written parser/serializer code.
 
 ---
 
@@ -7021,7 +7046,7 @@ the completed [reflection predicate fact contract](completed/reflection_predicat
 - **C FFI extensions** — the initial binding-file syntax, `Foreign` capability, opaque handles, explicit policy boundary, supported C subset, and implementation stages are specified by the [C FFI binding contract](open_design/c_ffi_binding_contract.md). Additional calling conventions, by-value records, writable buffers, borrowed returns, callbacks, dynamic loading, and C++ remain open follow-up work.
 - **Self-hosting timeline** — at what point is Jett mature enough to rewrite the compiler from Rust into Jett?
 - **Fixed-size vs dynamic lists** — `list[T]` is currently used as a dynamic/growable collection throughout the design. For performance-critical code (bitfield payloads, buffer management, numerical computing), a fixed-size array type may be needed. Options: a separate `array[T, N]` type with compile-time-known size, or a refinement type like `type FixedBuffer = list[uint8] where list.length(value) == 1024`. A separate type gives the compiler more optimization opportunities (stack allocation, no bounds growth), but adds another collection type for the LLM to choose between.
-- **Struct equality and hashing** — `set[T]` and `map[K, V]` require elements/keys to implement `Hashable` and `Equatable`. Currently only primitives implement these. How do user-defined structs become usable in sets and as map keys? Options: auto-derive `Hashable`/`Equatable` when all fields implement them, require manual `implement` blocks, or some hybrid. This also affects `==` on structs — is structural equality automatic, or must it be explicitly implemented?
+- **Struct hashing** — struct equality is now explicitly implemented through `Equatable`, with no structural derivation. `set[T]` elements and `map[K, V]` keys still need a matching explicit `Hashable` contract. The hash return type, collision contract, consistency requirement with `Equatable`, and interpreter/native lowering remain to be settled; equality alone never grants hashability.
 - **Type naming convention** — the design currently mixes lowercase for built-in types (`int64`, `string`, `list[T]`, `optional[T]`, `result[T, E]`) and PascalCase for user-defined types and capabilities (`User`, `Config`, `Stdout`, `Filesystem`). Is this distinction intentional and worth keeping, or should all types use a single convention? Lowercase is more token-efficient and consistent with Jett's keyword style. PascalCase visually distinguishes types from variables and functions. A unified convention reduces rules the LLM must learn, but the current split may help LLMs distinguish built-in vs user-defined types.
 
 ---

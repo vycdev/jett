@@ -1,0 +1,5 @@
+# ERROR: E0358
+struct User:
+    id: string
+function users_are_equal(view left: User, view right: User) returns bool:
+    return left == right

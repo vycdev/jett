@@ -51,6 +51,7 @@ plans above for current work.
 - [Comptime type bind](completed/comptime_type_bind.md)
 - [Crypto hashing and security contract](completed/crypto_hashing_security_contract.md)
 - [Encoding representation and failure contract](completed/encoding_representation_failure_contract.md)
+- [Explicit struct equality](completed/explicit_struct_equality.md)
 - [JSON public bridge handoff](completed/json_public_bridge_handoff.md)
 - [JSON public parse policy](completed/json_public_parse_policy.md)
 - [JSON raw access semantics](completed/json_raw_access_semantics.md)

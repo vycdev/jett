@@ -4259,11 +4259,16 @@ impl<'a> TypeChecker<'a> {
         let canonical_name = Self::canonical_name(namespace, &def.name.name);
         let trusted_name = canonical_name.clone();
         let iid = self.interner.add_interface(TypeInterfaceDef {
-            name: canonical_name,
+            name: canonical_name.clone(),
             methods: Vec::new(),
         });
         let ty = self.interner.intern(Type::Interface(iid));
         self.register_named_type(namespace, &def.name.name, ty);
+        // Standard interfaces are declared in compiler-shipped Jett source,
+        // while their unqualified names form the language prelude.
+        if def.name.span.file.is_stdlib() && canonical_name == "stdlib.Equatable" {
+            self.named_types.insert("Equatable".to_string(), ty);
+        }
         self.register_trusted_stdlib_named_type(&trusted_name, ty, def.name.span);
 
         if let Some(def_id) = self.declaration_def_id(def.name.span) {
@@ -4790,7 +4795,12 @@ impl<'a> TypeChecker<'a> {
                 let impl_sig = impl_methods
                     .get(&method.name.name)
                     .expect("impl method must exist");
-                if !self.implementation_matches_interface(owner_ty, impl_sig, &interface_method) {
+                if !self.implementation_matches_interface(
+                    interface_ty,
+                    owner_ty,
+                    impl_sig,
+                    &interface_method,
+                ) {
                     self.sink
                         .emit(errors::implemented_method_signature_mismatch(
                             &interface_def.name,
@@ -4816,6 +4826,7 @@ impl<'a> TypeChecker<'a> {
 
     fn implementation_matches_interface(
         &mut self,
+        interface_ty: TypeId,
         owner_ty: TypeId,
         impl_sig: &FunctionSig,
         interface_sig: &FunctionSig,
@@ -4824,21 +4835,14 @@ impl<'a> TypeChecker<'a> {
             return false;
         }
 
-        for (index, (impl_param, interface_param)) in impl_sig
-            .params
-            .iter()
-            .zip(interface_sig.params.iter())
-            .enumerate()
+        for (impl_param, interface_param) in impl_sig.params.iter().zip(interface_sig.params.iter())
         {
             if impl_param.0 != interface_param.0 || impl_param.2 != interface_param.2 {
                 return false;
             }
 
-            let expected_ty = if index == 0 {
-                match self.interner.resolve(interface_param.1) {
-                    Type::Interface(_) => owner_ty,
-                    _ => interface_param.1,
-                }
+            let expected_ty = if interface_param.1 == interface_ty {
+                owner_ty
             } else {
                 interface_param.1
             };
@@ -8525,6 +8529,11 @@ impl<'a> TypeChecker<'a> {
             && self.interface_impls.contains_key(&(interface_ty, ty))
     }
 
+    fn user_struct_has_explicit_equality(&self, ty: TypeId) -> bool {
+        !matches!(self.interner.resolve(ty), Type::Struct(_))
+            || self.type_implements_named_interface(ty, "Equatable")
+    }
+
     fn check_binary(&mut self, lhs: &Expr, op: BinOp, rhs: &Expr, span: Span) -> TypeId {
         let (lhs_ty, rhs_ty) = if Self::is_numeric_literal(lhs) && !Self::is_numeric_literal(rhs) {
             let rhs_ty = self.check_expr(rhs);
@@ -8573,8 +8582,31 @@ impl<'a> TypeChecker<'a> {
                 self.maybe_wrap_secret(lhs_base, tainted)
             }
 
-            // Comparison operators: both sides must be the same type, returns bool.
-            BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => {
+            // Equality requires an explicit Equatable implementation for
+            // user-defined structs. Other comparison categories retain their
+            // existing primitive/enum rules.
+            BinOp::Eq | BinOp::NotEq => {
+                if lhs_base != rhs_base {
+                    self.sink.emit(errors::binary_op_mismatch(
+                        Self::binop_str(op),
+                        &self.type_name(lhs_ty),
+                        &self.type_name(rhs_ty),
+                        span,
+                    ));
+                    return TypeInterner::ERROR;
+                }
+                if !self.user_struct_has_explicit_equality(lhs_base) {
+                    self.sink.emit(errors::equality_requires_equatable(
+                        &self.type_name(lhs_base),
+                        Self::binop_str(op),
+                        span,
+                    ));
+                    return TypeInterner::ERROR;
+                }
+                self.maybe_wrap_secret(TypeInterner::BOOL, tainted)
+            }
+
+            BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => {
                 if lhs_base != rhs_base {
                     self.sink.emit(errors::binary_op_mismatch(
                         Self::binop_str(op),

@@ -1,0 +1,6 @@
+# ERROR: E0330
+struct User:
+    id: string
+implement Equatable for User:
+    function equals(view self: User, other: User) returns bool:
+        return self.id == other.id

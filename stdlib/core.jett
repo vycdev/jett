@@ -1,4 +1,41 @@
 namespace stdlib
-
+export interface Equatable:
+    function equals(view self: Equatable, view other: Equatable) returns bool
+implement Equatable for int8:
+    function equals(view self: int8, view other: int8) returns bool:
+        return self == other
+implement Equatable for int16:
+    function equals(view self: int16, view other: int16) returns bool:
+        return self == other
+implement Equatable for int32:
+    function equals(view self: int32, view other: int32) returns bool:
+        return self == other
+implement Equatable for int64:
+    function equals(view self: int64, view other: int64) returns bool:
+        return self == other
+implement Equatable for uint8:
+    function equals(view self: uint8, view other: uint8) returns bool:
+        return self == other
+implement Equatable for uint16:
+    function equals(view self: uint16, view other: uint16) returns bool:
+        return self == other
+implement Equatable for uint32:
+    function equals(view self: uint32, view other: uint32) returns bool:
+        return self == other
+implement Equatable for uint64:
+    function equals(view self: uint64, view other: uint64) returns bool:
+        return self == other
+implement Equatable for float32:
+    function equals(view self: float32, view other: float32) returns bool:
+        return self == other
+implement Equatable for float64:
+    function equals(view self: float64, view other: float64) returns bool:
+        return self == other
+implement Equatable for string:
+    function equals(view self: string, view other: string) returns bool:
+        return self == other
+implement Equatable for bool:
+    function equals(view self: bool, view other: bool) returns bool:
+        return self == other
 export function jett_stdlib_loaded() returns bool:
     return true

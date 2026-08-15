@@ -354,6 +354,10 @@ run_pass_fixture!(
     run_pass_recursive_owned_values,
     "recursive_owned_values.jett"
 );
+run_pass_fixture!(
+    run_pass_explicit_struct_equality,
+    "explicit_struct_equality.jett"
+);
 
 #[test]
 fn run_file_capture_stdout_captures_capability_writes() {
@@ -1806,6 +1810,14 @@ compile_fail_fixture!(
 compile_fail_fixture!(
     compile_fail_recursive_generic_changes_arguments,
     "recursive_generic_changes_arguments.jett"
+);
+compile_fail_fixture!(
+    compile_fail_struct_equality_requires_equatable,
+    "struct_equality_requires_equatable.jett"
+);
+compile_fail_fixture!(
+    compile_fail_equatable_signature_is_exact,
+    "equatable_signature_is_exact.jett"
 );
 compile_fail_fixture!(
     compile_fail_json_private_tree_parse_scalar,

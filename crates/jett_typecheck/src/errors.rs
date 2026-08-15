@@ -767,6 +767,15 @@ pub fn recursive_type_without_base(type_name: &str, reason: &str, span: Span) ->
     )
 }
 
+/// E0358: A user-defined type uses equality without an explicit implementation.
+pub fn equality_requires_equatable(type_name: &str, op: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        358,
+        format!("operator `{op}` requires `{type_name}` to implement `Equatable` explicitly"),
+        span,
+    )
+}
+
 // Diagnostic codes E0800-E0899 are reserved for function complexity limits.
 
 /// E0800: Function body exceeds the statement count limit.

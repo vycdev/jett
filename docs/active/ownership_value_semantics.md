@@ -60,6 +60,11 @@ site; private collection runtime kernels do not create a public ownership except
 All structs are move-only, regardless of whether their fields are copyable.
 Independent duplication requires explicit `clone`.
 
+Struct equality does not consume either operand. It is available only through
+an explicit `Equatable` implementation whose `self` and `other` parameters are
+both views. `==` calls `equals`; `!=` negates the same result. No structural
+fallback or second inequality method exists.
+
 ### Enums
 
 All enums are move-only, including enums whose variants have no payload fields.
