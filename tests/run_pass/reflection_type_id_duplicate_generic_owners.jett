@@ -76,6 +76,8 @@ function audit_nested_box_reflection_summary() returns string:
                 return error
             return "{outer_info.type_name}:{outer_arg.type_name}:{outer_field.type_name}:{field_arg.type_name}:{inner_field.type_name}:{type.name[Leaf]()}:{decoded.value.value.attempts}"
 function mixed_nested_box_reflection_summary() returns string:
+    use accounts
+    use audit
     audit.User user = audit.User(attempts: 13)
     audit.Box[audit.User] inner = audit.Box[audit.User](value: user)
     accounts.Box[audit.Box[audit.User]] outer = accounts.Box[audit.Box[audit.User]](value: inner)

@@ -70,6 +70,9 @@ struct Resolver {
     /// Type parameter names that are currently in scope (e.g. `T`, `U` in a generic struct).
     /// Names in this set are suppressed from "undefined name" errors.
     active_type_params: HashSet<String>,
+    /// Whether executable source in the current walk must import external
+    /// project/dependency namespaces before using their declarations.
+    require_project_namespace_imports: bool,
 }
 
 impl Resolver {
@@ -160,6 +163,7 @@ impl Resolver {
             mutual_declarations: HashMap::new(),
             mutual_definitions: HashMap::new(),
             active_type_params: HashSet::new(),
+            require_project_namespace_imports: false,
         }
     }
 
@@ -594,7 +598,7 @@ impl Resolver {
                     self.resolve_expr(&v.value, index);
                 }
                 Item::Verify(verify) => {
-                    self.resolve_block(&verify.body, index);
+                    self.resolve_executable_block(&verify.body, index);
                 }
                 Item::Property(prop) => {
                     self.resolve_property(prop, index);
@@ -614,7 +618,7 @@ impl Resolver {
             self.resolve_type_expr(&given.ty, item_index);
             self.declare_local(&given.name.name, DefKind::Variable, given.name.span);
         }
-        self.resolve_block(&prop.body, item_index);
+        self.resolve_executable_block(&prop.body, item_index);
         self.pop_scope(scope);
     }
 
@@ -643,7 +647,7 @@ impl Resolver {
             if let Some(responds) = &handler.responds {
                 self.resolve_type_expr(responds, item_index);
             }
-            self.resolve_block(&handler.body, item_index);
+            self.resolve_executable_block(&handler.body, item_index);
             self.pop_scope(handler_scope);
         }
 
@@ -738,8 +742,12 @@ impl Resolver {
             self.declare_local(&param.name.name, DefKind::Param, param.name.span);
         }
 
-        // Resolve the function body, tracking `use` placement.
+        // Declaration signatures remain self-describing through canonical
+        // qualified type names. Executable bodies require local imports.
+        let previous_import_requirement = self.require_project_namespace_imports;
+        self.require_project_namespace_imports = true;
         self.resolve_block_with_use_check(&func.body, item_index);
+        self.require_project_namespace_imports = previous_import_requirement;
 
         for param in added_params {
             self.active_type_params.remove(&param);
@@ -768,10 +776,15 @@ impl Resolver {
 
     fn resolve_block(&mut self, block: &Block, item_index: usize) {
         let scope = self.push_scope();
-        for stmt in &block.stmts {
-            self.resolve_stmt(stmt, item_index);
-        }
+        self.resolve_block_with_use_check(block, item_index);
         self.pop_scope(scope);
+    }
+
+    fn resolve_executable_block(&mut self, block: &Block, item_index: usize) {
+        let previous_import_requirement = self.require_project_namespace_imports;
+        self.require_project_namespace_imports = true;
+        self.resolve_block(block, item_index);
+        self.require_project_namespace_imports = previous_import_requirement;
     }
 
     fn resolve_stmt(&mut self, stmt: &Stmt, item_index: usize) {
@@ -1140,7 +1153,7 @@ impl Resolver {
                 for param in params {
                     self.declare_local(&param.name.name, DefKind::Param, param.name.span);
                 }
-                self.resolve_block(body, item_index);
+                self.resolve_executable_block(body, item_index);
                 self.pop_scope(scope);
             }
             // Literals and nothing — no names to resolve.
@@ -1197,26 +1210,27 @@ impl Resolver {
         }
 
         if let Some(def_id) = self.lookup_local_non_root(name) {
-            self.record_resolution(name, span, item_index, def_id);
+            self.record_resolution(name, span, item_index, def_id, false);
             return;
         }
 
         if !name.contains('.') {
             if let Some(qualified) = self.current_qualified_name(name) {
                 if let Some(def_id) = self.scope_table.lookup(self.current_scope, &qualified) {
-                    self.record_resolution(&qualified, span, item_index, def_id);
+                    self.record_resolution(&qualified, span, item_index, def_id, false);
                     return;
                 }
             }
         }
 
         if let Some(def_id) = self.scope_table.lookup(self.current_scope, name) {
-            self.record_resolution(name, span, item_index, def_id);
+            let imported = self.direct_path_uses_import(name);
+            self.record_resolution(name, span, item_index, def_id, imported);
             return;
         }
 
         if let Some(def_id) = self.unique_external_namespaced_leaf(name) {
-            self.record_resolution(name, span, item_index, def_id);
+            self.record_resolution(name, span, item_index, def_id, false);
             return;
         }
 
@@ -1252,7 +1266,14 @@ impl Resolver {
         found
     }
 
-    fn record_resolution(&mut self, name: &str, span: Span, item_index: usize, def_id: DefId) {
+    fn record_resolution(
+        &mut self,
+        name: &str,
+        span: Span,
+        item_index: usize,
+        def_id: DefId,
+        imported: bool,
+    ) {
         if let Some((namespace, def_span)) = self.private_namespace_access(def_id) {
             self.sink
                 .emit(errors::private_definition(name, &namespace, span, def_span));
@@ -1268,6 +1289,14 @@ impl Resolver {
                 &qualified_name,
                 span,
                 def_span,
+            ));
+            return;
+        }
+
+        if let Some((namespace, def_span)) = self.missing_project_namespace_import(def_id, imported)
+        {
+            self.sink.emit(errors::namespace_import_required(
+                name, &namespace, span, def_span,
             ));
             return;
         }
@@ -1317,6 +1346,27 @@ impl Resolver {
         Some((namespace.clone(), def.name.clone(), def.span))
     }
 
+    fn missing_project_namespace_import(
+        &self,
+        def_id: DefId,
+        imported: bool,
+    ) -> Option<(String, Span)> {
+        if !self.require_project_namespace_imports || imported {
+            return None;
+        }
+
+        let def = self.scope_table.def(def_id);
+        if def.span.file.is_stdlib() {
+            return None;
+        }
+        let namespace = def.namespace.as_ref()?;
+        if self.current_namespace.as_deref() == Some(namespace.as_str()) {
+            return None;
+        }
+
+        Some((namespace.clone(), def.span))
+    }
+
     fn lookup_local_non_root(&self, name: &str) -> Option<DefId> {
         let mut scope = Some(self.current_scope);
         while let Some(scope_id) = scope {
@@ -1339,14 +1389,31 @@ impl Resolver {
         Some(format!("{target}.{suffix}"))
     }
 
+    fn direct_path_uses_import(&mut self, path: &str) -> bool {
+        let Some((prefix, _)) = path.split_once('.') else {
+            return false;
+        };
+        let Some(import_def) = self.lookup_local_non_root(prefix) else {
+            return false;
+        };
+        let Some(target) = self.namespace_aliases.get(&import_def) else {
+            return false;
+        };
+        if target != prefix {
+            return false;
+        }
+        self.used_defs.insert(import_def);
+        true
+    }
+
     fn resolve_namespace_prefix(&mut self, path: &str, span: Span, item_index: usize) -> bool {
         if let Some(expanded) = self.expand_namespace_alias_path(path) {
-            if self.resolve_namespace_prefix_candidate(&expanded, span, item_index) {
+            if self.resolve_namespace_prefix_candidate(&expanded, span, item_index, true) {
                 return true;
             }
         }
 
-        self.resolve_namespace_prefix_candidate(path, span, item_index)
+        self.resolve_namespace_prefix_candidate(path, span, item_index, false)
     }
 
     fn resolve_namespace_prefix_candidate(
@@ -1354,9 +1421,10 @@ impl Resolver {
         path: &str,
         span: Span,
         item_index: usize,
+        imported: bool,
     ) -> bool {
         if let Some(def_id) = self.scope_table.lookup(self.current_scope, path) {
-            self.record_resolution(path, span, item_index, def_id);
+            self.record_resolution(path, span, item_index, def_id, imported);
             return true;
         }
 
@@ -1371,7 +1439,7 @@ impl Resolver {
             };
             if self.scope_table.def(def_id).kind != DefKind::Namespace {
                 if prefix.contains('.') && self.scope_table.def(def_id).namespace.is_some() {
-                    self.record_resolution(prefix, span, item_index, def_id);
+                    self.record_resolution(prefix, span, item_index, def_id, imported);
                     return true;
                 }
                 continue;
@@ -2173,7 +2241,7 @@ function main() returns int64:
     }
 
     #[test]
-    fn exported_namespaced_function_allows_external_access() {
+    fn exported_namespaced_function_requires_inline_import_for_external_access() {
         let module = parse_module(
             r#"
 namespace api
@@ -2189,6 +2257,33 @@ function main() returns int64:
         );
 
         let result = resolve(&module);
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == Severity::Error && d.code.code() == 210)
+            .collect();
+        assert_eq!(errors.len(), 1, "expected missing import error");
+        assert!(errors[0].message.contains("use api"));
+    }
+
+    #[test]
+    fn exported_namespaced_function_allows_imported_qualified_access() {
+        let module = parse_module(
+            r#"
+namespace api
+
+export function helper() returns int64:
+    return 1
+
+namespace app
+
+function main() returns int64:
+    use api
+    return api.helper()
+"#,
+        );
+
+        let result = resolve(&module);
         assert!(
             !result
                 .diagnostics
@@ -2196,6 +2291,98 @@ function main() returns int64:
                 .any(|d| d.severity == Severity::Error),
             "expected no errors, got: {:#?}",
             result.diagnostics
+        );
+    }
+
+    #[test]
+    fn qualified_project_types_remain_valid_in_function_signatures() {
+        let module = parse_module(
+            r#"
+namespace api
+
+export struct User:
+    name: string
+
+namespace app
+
+function identity(user: api.User) returns api.User:
+    return user
+"#,
+        );
+
+        let result = resolve(&module);
+        assert!(
+            !result
+                .diagnostics
+                .iter()
+                .any(|d| d.severity == Severity::Error),
+            "expected no errors, got: {:#?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn project_namespace_imports_are_block_scoped() {
+        let module = parse_module(
+            r#"
+namespace api
+
+export function helper() returns int64:
+    return 1
+
+namespace app
+
+function main(flag: bool) returns int64:
+    if flag:
+        use api
+        return api.helper()
+    return api.helper()
+"#,
+        );
+
+        let result = resolve(&module);
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == Severity::Error && d.code.code() == 210)
+            .collect();
+        assert_eq!(
+            errors.len(),
+            1,
+            "only the access outside the import block should fail"
+        );
+    }
+
+    #[test]
+    fn nested_block_imports_must_precede_executable_statements() {
+        let module = parse_module(
+            r#"
+namespace api
+
+export function helper() returns int64:
+    return 1
+
+namespace app
+
+function main(flag: bool) returns int64:
+    if flag:
+        int64 value = 1
+        use api
+        return api.helper()
+    return 0
+"#,
+        );
+
+        let result = resolve(&module);
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == Severity::Error && d.code.code() == 206)
+            .collect();
+        assert_eq!(
+            errors.len(),
+            1,
+            "nested block should enforce import placement"
         );
     }
 
@@ -2332,6 +2519,7 @@ function private_helper() returns int64:
 namespace app
 
 function main() returns int64:
+    use api
     return api.public_helper()
 "#,
         );

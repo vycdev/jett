@@ -13540,6 +13540,7 @@ export function kind(view value: JsonTree) returns int64:
 namespace app
 
 function main() returns string:
+    use json
     json.JsonTree tree = json.JsonTree.null
     return json.kind(view tree)
 ",

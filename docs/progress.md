@@ -105,6 +105,7 @@
 | Closure captures (inline functions capture immutable enclosing scope) | Done |
 | Function type expressions (`function(T) returns U` in type annotations) | Done |
 | Dotted `use` paths (`use net.http`) | Done |
+| Strict inline imports for project/vendored namespaces (`E0210`; same-namespace and declaration-signature type access remain direct; compiler stdlib remains implicit pending prelude policy) | Done |
 | Namespace-qualified user function calls (`helpers.f()`, `helpers.f[T]()`) | Done |
 | Namespace-private declarations with explicit `export` for public APIs, including `mutual` declarations and qualified-only external access | Done |
 | Multi-file compilation (project-aware build/run with `jett.proj`) | Done |

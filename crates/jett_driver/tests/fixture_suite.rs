@@ -542,6 +542,10 @@ run_pass_fixture!(
 );
 run_pass_fixture!(run_pass_namespace_use_alias, "namespace_use_alias.jett");
 run_pass_fixture!(
+    run_pass_namespace_strict_imports,
+    "namespace_strict_imports.jett"
+);
+run_pass_fixture!(
     run_pass_namespace_comptime_reflection_aliases,
     "namespace_comptime_reflection_aliases.jett"
 );
@@ -1096,6 +1100,10 @@ compile_fail_fixture!(
 compile_fail_fixture!(
     compile_fail_namespace_use_alias_unknown_target,
     "namespace_use_alias_unknown_target.jett"
+);
+compile_fail_fixture!(
+    compile_fail_namespace_import_required,
+    "namespace_import_required.jett"
 );
 compile_fail_fixture!(
     compile_fail_namespace_private_function,

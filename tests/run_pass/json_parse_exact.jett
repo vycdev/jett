@@ -261,20 +261,22 @@ function parse_exact_result_keeps_reflected_fail_payload_closed() returns string
         return error.display_name
     return json.kind(view payload)
 function parse_exact_qualified_raw_boundary_accepts_payload_extras() returns string:
+    use external.models
     string raw = "{{\"id\":\"e1\",\"profile\":{{\"displayName\":\"Ada\",\"note\":\"ok\"}},\"payload\":{{\"extra\":\"kept\",\"nested\":{{\"unknown\":true}}}},\"token\":\"secret-token\"}}"
-    external.models.ExactEnvelope envelope = json.parse_exact[external.models.ExactEnvelope](raw) handle error:
+    models.ExactEnvelope envelope = json.parse_exact[models.ExactEnvelope](raw) handle error:
         return error
     json.JsonValue extra = json.require_field(view envelope.payload, "extra") handle error:
         return error
     string extra_text = json.as_string(view extra) handle error:
         return error
-    string public_raw = json.serialize_public[external.models.ExactEnvelope](view envelope)
+    string public_raw = json.serialize_public[models.ExactEnvelope](view envelope)
     bool public_has_token = string.contains(public_raw, "token")
     bool public_keeps_payload = string.contains(public_raw, "\"extra\":\"kept\"")
     return "{envelope.id}:{envelope.profile.display_name}:{extra_text}:{secret.redact(envelope.token)}:{public_has_token}:{public_keeps_payload}"
 function parse_exact_qualified_raw_boundary_rejects_profile_extras() returns string:
+    use external.models
     string raw = "{{\"id\":\"e1\",\"profile\":{{\"displayName\":\"Ada\",\"note\":\"ok\",\"extra\":\"nope\"}},\"payload\":{{\"extra\":\"kept\"}},\"token\":\"secret-token\"}}"
-    external.models.ExactEnvelope envelope = json.parse_exact[external.models.ExactEnvelope](raw) handle error:
+    models.ExactEnvelope envelope = json.parse_exact[models.ExactEnvelope](raw) handle error:
         return error
     return envelope.id
 verify json_parse_exact:

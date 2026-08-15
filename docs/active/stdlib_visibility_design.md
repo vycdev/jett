@@ -175,8 +175,11 @@ Implemented:
   declarations from outside their namespace.
 - Namespace-private `mutual` declarations are enforced for qualified, aliased,
   and old flat compatibility references.
-- External unqualified access to exported namespaced declarations is rejected;
-  users must write the qualified path or a namespace alias.
+- External unqualified access to exported namespaced declarations is rejected.
+  Executable project/dependency access also requires a local `use`; callers use
+  its bound namespace name or explicit alias. Canonical qualified project types
+  remain valid in declaration signatures, and compiler-provided stdlib
+  namespaces remain implicit pending the broader prelude policy.
 - The resolver no longer creates root-scope leaf bindings for namespaced
   declarations; same-namespace shorthand resolves through the canonical
   namespace path.

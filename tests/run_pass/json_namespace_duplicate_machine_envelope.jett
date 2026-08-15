@@ -18,8 +18,10 @@ struct Snapshot:
     audit: audit.Session at elevated
     history: list[accounts.Session]
 function account_login() returns accounts.Session at logged_in:
+    use accounts
     return accounts.Session.transition(accounts.Session(guest), logged_in, "acct-1")
 function audit_elevate() returns audit.Session at elevated:
+    use audit
     return audit.Session.transition(audit.Session(guest), elevated, 3)
 function account_user_id(session: accounts.Session at logged_in) returns string:
     return session.user_id
@@ -29,32 +31,38 @@ function alias_account_login() returns accounts.Session at logged_in:
     use accounts as a
     return a.Session.transition(a.Session(guest), logged_in, "acct-2")
 function account_json_roundtrip() returns string:
+    use accounts
     accounts.Session at logged_in session = account_login()
     string raw = json.serialize[accounts.Session at logged_in](view session)
     accounts.Session at logged_in decoded = json.parse_exact[accounts.Session at logged_in](raw) handle error:
         return error
     return "{type.name[accounts.Session]()}:{decoded.user_id}"
 function audit_json_parse() returns string:
+    use audit
     string raw = "{{\"state\":\"elevated\",\"payload\":{{\"level\":3}}}}"
     audit.Session at elevated decoded = json.parse[audit.Session at elevated](raw) handle error:
         return error
     return "{type.name[audit.Session]()}:{decoded.level}"
 function nested_duplicate_machine_parse_exact() returns string:
+    use accounts
     string raw = "{{\"account\":{{\"state\":\"logged_in\",\"payload\":{{\"userId\":\"acct-2\"}}}},\"audit\":{{\"state\":\"elevated\",\"payload\":{{\"level\":5}}}},\"history\":[{{\"state\":\"guest\",\"payload\":{{}}}},{{\"state\":\"logged_in\",\"payload\":{{\"userId\":\"acct-2\"}}}}]}}"
     Snapshot snapshot = json.parse_exact[Snapshot](raw) handle error:
         return error
     return "{snapshot.account.user_id}:{snapshot.audit.level}:{list.length[accounts.Session](snapshot.history)}"
 function account_unknown_payload_error() returns string:
+    use accounts
     string raw = "{{\"state\":\"logged_in\",\"payload\":{{\"userId\":\"acct-3\",\"level\":1}}}}"
     accounts.Session item = json.parse_exact[accounts.Session](raw) handle error:
         return error
     return "unexpected"
 function audit_unknown_payload_error() returns string:
+    use audit
     string raw = "{{\"state\":\"elevated\",\"payload\":{{\"level\":3,\"userId\":\"acct-3\"}}}}"
     audit.Session item = json.parse_exact[audit.Session](raw) handle error:
         return error
     return "unexpected"
 function account_state_mismatch_error() returns string:
+    use accounts
     string raw = "{{\"state\":\"guest\",\"payload\":{{}}}}"
     accounts.Session at logged_in item = json.parse[accounts.Session at logged_in](raw) handle error:
         return error

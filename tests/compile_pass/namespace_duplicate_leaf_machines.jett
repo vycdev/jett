@@ -1,37 +1,28 @@
 namespace accounts
-
 export machine Session:
     states:
         guest
         logged_in(user_id: string)
-
     transitions:
         guest to logged_in
-
 namespace audit
-
 export machine Session:
     states:
         guest
         elevated(level: int64)
-
     transitions:
         guest to elevated
-
 namespace app
-
 function account_login() returns accounts.Session at logged_in:
+    use accounts
     return accounts.Session.transition(accounts.Session(guest), logged_in, "acct-1")
-
 function audit_elevate() returns audit.Session at elevated:
+    use audit
     return audit.Session.transition(audit.Session(guest), elevated, 3)
-
 function account_user_id(session: accounts.Session at logged_in) returns string:
     return session.user_id
-
 function audit_level(session: audit.Session at elevated) returns int64:
     return session.level
-
 function alias_account_login() returns accounts.Session at logged_in:
     use accounts as a
     return a.Session.transition(a.Session(guest), logged_in, "acct-2")

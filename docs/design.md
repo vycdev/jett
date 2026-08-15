@@ -584,6 +584,13 @@ Traditional languages put all imports at the top of a file. By the time the LLM 
 
 Jett requires **all imports to be declared locally**, inside a function or block, right where they are used. File-level imports are banned. This keeps the relevant context exactly where the LLM's attention mechanism is focused.
 
+Executable code must import project and vendored dependency namespaces before
+using their declarations. Canonical qualified project types remain valid in
+declaration signatures, where no block-local import scope exists. Compiler-provided
+standard namespaces remain implicitly available as standard functionality;
+`use` may still bind or alias them locally, while the broader prelude policy is
+tracked separately.
+
 **What the compiler rejects:**
 
 ```
@@ -2721,7 +2728,11 @@ entry: src/main.jett
 
 That's it. No dependency lists (dependencies are vendored `.jett` files — git tracks them), no build configuration (the compiler has one mode), no scripts. The project file is small because the language eliminates the reasons other project files are large.
 
-When compiling any file in a project, the compiler automatically discovers and merges all sibling `.jett` files. Functions, structs, enums, and other definitions from any file in the project are visible to all other files — no explicit imports are required for project-local code.
+When compiling any file in a project, the compiler automatically discovers and
+merges all sibling `.jett` files into the namespace registry. Executable code
+must still declare a local `use` before accessing another project or vendored
+namespace. Same-namespace access stays implicit, and canonical qualified types
+may appear directly in declaration signatures.
 
 **Project structure (example):**
 
@@ -2738,9 +2749,12 @@ my_project/
 
 **Using a dependency:**
 
-```
-use json_extra
-use websocket
+```jett
+function connect() returns nothing:
+    use json_extra
+    use websocket
+    # dependency calls use json_extra.* and websocket.* here
+    return nothing
 ```
 
 The compiler scans all `.jett` files in the project (including `deps/`), reads their `namespace` declarations, and resolves `use json_extra` to whichever file declared `namespace json_extra`. The file path is irrelevant (Rule Set 22). No URL fetching, no hash checking, no registry lookup. The dependency is right there, readable by the LLM, tracked by git.

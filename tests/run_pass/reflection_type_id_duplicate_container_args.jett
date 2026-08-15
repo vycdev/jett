@@ -12,23 +12,29 @@ struct Envelope:
     outcome: result[accounts.User, audit.User]
     maybe_audit: optional[audit.User]
 function map_type_info_value_arg() returns string:
+    use accounts
     TypeInfo info = type.info[map[string, accounts.User]]()
     TypeInfo arg = list.get[TypeInfo](info.args, 1) handle:
         return "missing map arg"
     return "{arg.kind}:{arg.type_name}"
 function list_type_info_item_arg() returns string:
+    use accounts
     TypeInfo info = type.info[list[accounts.User]]()
     TypeInfo arg = list.get[TypeInfo](info.args, 0) handle:
         return "missing list arg"
     return "{arg.kind}:{arg.type_name}"
 function direct_map_value_arg() returns string:
+    use accounts
     comptime type Value = type.arg[map[string, accounts.User]](1):
         TypeInfo info = type.info[Value]()
         return "{info.kind}:{info.type_name}"
 function direct_set_item_arg() returns string:
+    use audit
     comptime type Item = type.arg[set[audit.User]](0):
         return type.name[Item]()
 function direct_result_args() returns string:
+    use accounts
+    use audit
     comptime type Ok = type.arg[result[accounts.User, audit.User]](0):
         comptime type Err = type.arg[result[accounts.User, audit.User]](1):
             return "{type.name[Ok]()}:{type.name[Err]()}"
@@ -41,6 +47,7 @@ function envelope_field_arg_summary(field_name: string, target: int64) returns s
         return "{field.type_info.type_name}:{arg.kind}:{arg.type_name}"
     return "missing field"
 function map_json_roundtrip() returns string:
+    use accounts
     accounts.User user = accounts.User(id: "acct-1")
     map[string, accounts.User] users = map("primary": user)
     string raw = json.serialize[map[string, accounts.User]](view users)
@@ -51,6 +58,8 @@ function map_json_roundtrip() returns string:
     bool raw_has_id = string.contains(raw, "\"id\":\"acct-1\"")
     return "{primary.id}:{raw_has_id}"
 function envelope_parse_exact_summary() returns string:
+    use accounts
+    use audit
     string raw = "{{\"by_id\":{{\"primary\":{{\"id\":\"acct-1\"}}}},\"audit_by_id\":{{\"svc\":{{\"service\":\"auth\",\"attempts\":3}}}},\"outcome\":{{\"fail\":{{\"service\":\"auth\",\"attempts\":5}}}},\"maybe_audit\":{{\"service\":\"batch\",\"attempts\":1}}}}"
     Envelope envelope = json.parse_exact[Envelope](raw) handle error:
         return error
@@ -63,6 +72,7 @@ function envelope_parse_exact_summary() returns string:
         return "{primary.id}:{failure.service}:{failure.attempts}:{maybe.service}:{maybe.attempts}"
     return ignored.id
 function envelope_parse_exact_accounts_extra_error() returns string:
+    use accounts
     string raw = "{{\"by_id\":{{\"primary\":{{\"id\":\"acct-1\",\"extra\":true}}}},\"audit_by_id\":{{}},\"outcome\":{{\"ok\":{{\"id\":\"ok\"}}}},\"maybe_audit\":null}}"
     Envelope envelope = json.parse_exact[Envelope](raw) handle error:
         return error

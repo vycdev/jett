@@ -1,22 +1,22 @@
 namespace app
-
 function main(stdout: Stdout) returns nothing:
+    use mathlib
+    use models
+    use enums
+    use validators
     # Call functions defined in mathlib.jett
     int64 a = mathlib.double(5)
     int64 b = mathlib.triple(3)
     int64 c = mathlib.square(4)
     Stdout.write(view stdout, "{a},{b},{c}")
-
     # Use struct from models.jett
     models.Point p = models.Point(x: 3, y: 4)
     int64 d = models.distance_sq(p)
     Stdout.write(view stdout, ",{d}")
-
     # Use enum and function from enums.jett
     enums.Color col = enums.Color.blue
     string name = enums.color_name(col)
     Stdout.write(view stdout, ",{name}")
-
     # Use functions from validators.jett
     bool pos = validators.is_positive(42)
     int64 clamped = validators.clamp_value(150, 0, 100)

@@ -88,3 +88,20 @@ pub fn namespace_qualifier_required(
 pub fn invalid_root_export(message: impl Into<String>, span: Span) -> Diagnostic {
     Diagnostic::error(209, message, span)
 }
+
+/// E0210: External project/dependency namespace used without a local import.
+pub fn namespace_import_required(
+    name: &str,
+    namespace: &str,
+    use_span: Span,
+    def_span: Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        210,
+        format!(
+            "namespace `{namespace}` must be imported before using `{name}`; add `use {namespace}` at the top of this block"
+        ),
+        use_span,
+    )
+    .with_label(def_span, "external declaration defined here")
+}

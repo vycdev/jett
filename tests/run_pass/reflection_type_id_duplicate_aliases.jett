@@ -12,6 +12,8 @@ export struct AliasHolder:
     record: RecordAlias serialize "recordData"
 namespace app
 function alias_reflection_summary() returns string:
+    use accounts
+    use audit
     TypeInfo account = type.info[accounts.RecordAlias]()
     TypeInfo account_base = list.get[TypeInfo](account.args, 0) handle:
         return "missing account base"
@@ -26,16 +28,19 @@ function alias_reflection_summary() returns string:
                 return "missing audit field"
             return "{account.kind}:{account.type_name}:{account_base.type_name}:{type.name[AccountBase]()}:{account_field.name}:{audit_info.kind}:{audit_info.type_name}:{audit_base.type_name}:{type.name[AuditBase]()}:{audit_field.name}"
 function account_alias_holder_exact_error() returns string:
+    use accounts
     string raw = "{{\"recordData\":{{\"accountId\":\"a2\",\"extra\":true}}}}"
     accounts.AliasHolder holder = json.parse_exact[accounts.AliasHolder](raw) handle error:
         return error
     return holder.record.id
 function audit_alias_holder_exact_error() returns string:
+    use audit
     string raw = "{{\"recordData\":{{\"attempts\":7,\"extra\":true}}}}"
     audit.AliasHolder holder = json.parse_exact[audit.AliasHolder](raw) handle error:
         return error
     return "{holder.record.attempts}"
 function account_alias_json_summary() returns string:
+    use accounts
     accounts.RecordAlias record = json.parse[accounts.RecordAlias]("{{\"accountId\":\"a1\"}}") handle error:
         return error
     string raw = json.serialize[accounts.RecordAlias](view record)
@@ -43,6 +48,7 @@ function account_alias_json_summary() returns string:
     string exact_error = account_alias_holder_exact_error()
     return "{record.id}:{has_id}:{exact_error}"
 function audit_alias_json_summary() returns string:
+    use audit
     audit.RecordAlias record = json.parse[audit.RecordAlias]("{{\"attempts\":5}}") handle error:
         return error
     string raw = json.serialize[audit.RecordAlias](view record)

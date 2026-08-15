@@ -3795,11 +3795,11 @@ mod tests {
         let file = root.join("main.jett");
         fs::write(
             &file,
-            "namespace app\n\nfunction make() returns models.User:\n    models.User user = models.User(id: 1)\n    return user\n",
+            "namespace app\n\nfunction make() returns models.User:\n    use models\n    models.User user = models.User(id: 1)\n    return user\n",
         )
         .expect("main fixture should be written");
 
-        let result = query_definition_at(&file, 4, 12).expect("definition query should succeed");
+        let result = query_definition_at(&file, 5, 12).expect("definition query should succeed");
 
         fs::remove_dir_all(&root).expect("temp query dir should be removed");
 
@@ -3837,11 +3837,11 @@ mod tests {
         let file = root.join("main.jett");
         fs::write(
             &file,
-            "namespace app\n\nfunction main() returns int64:\n    int64 a = util.helper(1)\n    int64 b = util.helper(2)\n    return a + b\n",
+            "namespace app\n\nfunction main() returns int64:\n    use util\n    int64 a = util.helper(1)\n    int64 b = util.helper(2)\n    return a + b\n",
         )
         .expect("main fixture should be written");
 
-        let result = query_references_at(&file, 4, 15).expect("references query should succeed");
+        let result = query_references_at(&file, 5, 15).expect("references query should succeed");
 
         fs::remove_dir_all(&root).expect("temp query dir should be removed");
 
@@ -3855,7 +3855,7 @@ mod tests {
                 reference.column,
                 reference.end_line,
                 reference.end_column
-            ) == (4, 15, 4, 26)),
+            ) == (5, 15, 5, 26)),
             "expected first call site in references, got {:?}",
             result.references
         );
@@ -3865,7 +3865,7 @@ mod tests {
                 reference.column,
                 reference.end_line,
                 reference.end_column
-            ) == (5, 15, 5, 26)),
+            ) == (6, 15, 6, 26)),
             "expected second call site in references, got {:?}",
             result.references
         );
@@ -4616,7 +4616,7 @@ mod tests {
             .expect("project marker should be written");
         fs::write(
             root.join("src/a_consumer.jett"),
-            "namespace app\n\nfunction main() returns int64:\n    return provider.value()\n",
+            "namespace app\n\nfunction main() returns int64:\n    use provider\n    return provider.value()\n",
         )
         .expect("consumer source should be written");
         fs::write(
@@ -4646,7 +4646,7 @@ mod tests {
         );
         assert_eq!(
             (result.files[1].start_line, result.files[1].end_line),
-            (11, 14)
+            (11, 15)
         );
     }
 
@@ -4658,7 +4658,7 @@ mod tests {
             .expect("project marker should be written");
         fs::write(
             root.join("src/a_consumer.jett"),
-            "namespace app\n\nfunction main() returns int64:\n    return provider.value()\n",
+            "namespace app\n\nfunction main() returns int64:\n    use provider\n    return provider.value()\n",
         )
         .expect("consumer source should be written");
         fs::write(
@@ -4705,7 +4705,7 @@ mod tests {
         .expect("provider source should be written");
         fs::write(
             root.join("src/main.jett"),
-            "function main() returns int64:\n    return provider.value()\n",
+            "function main() returns int64:\n    use provider\n    return provider.value()\n",
         )
         .expect("root source should be written");
         let output = root.join("dist/lib.jett");
@@ -4777,17 +4777,17 @@ mod tests {
             .expect("project marker should be written");
         fs::write(
             root.join("src/alpha.jett"),
-            "namespace alpha\n\nexport function value() returns int64:\n    return beta.value()\n",
+            "namespace alpha\n\nexport function value() returns int64:\n    use beta\n    return beta.value()\n",
         )
         .expect("alpha source should be written");
         fs::write(
             root.join("src/beta.jett"),
-            "namespace beta\n\nexport function value() returns int64:\n    return alpha.value()\n",
+            "namespace beta\n\nexport function value() returns int64:\n    use alpha\n    return alpha.value()\n",
         )
         .expect("beta source should be written");
         fs::write(
             root.join("src/gamma.jett"),
-            "namespace gamma\n\nexport function value() returns int64:\n    return alpha.value()\n",
+            "namespace gamma\n\nexport function value() returns int64:\n    use alpha\n    return alpha.value()\n",
         )
         .expect("cycle-dependent source should be written");
         let output = root.join("dist/lib.jett");

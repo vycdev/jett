@@ -389,13 +389,13 @@ ResolveResult {
 - **No variable shadowing** — a binding in an inner scope cannot reuse a name from an outer scope.
 - **No unused imports** — every `use` must be referenced.
 - **No unused variables** — every variable declaration must be referenced.
-- **Inline-only imports** — `use` statements are only allowed inside functions/blocks, never at file level. Within a function, `use` must appear before any other code.
+- **Inline-only imports** — `use` statements are only allowed inside functions/blocks, never at file level. Within a function or nested block, `use` must appear before any other code. Executable access to another project or vendored namespace requires an active local import; same-namespace access and canonical qualified types in declaration signatures do not. Compiler-provided standard namespaces remain implicitly available pending the broader prelude policy.
 - **Duplicate namespace detection** — two project/dependency files declaring the same namespace is an error. Compiler-shipped stdlib files have a narrow fragment exception so one stdlib namespace can be split across several implementation files; duplicate declarations inside that namespace still fail normally.
 - **Global constants** — registered as top-level declarations (global mutable variables are forbidden).
 - **No circular imports** — if namespace A uses namespace B and B uses A, it's a compile error.
 - **Import aliasing** — `use net.http as net_http` binds the alias in local scope. Conflicting last-segment names require `as`.
 - **Parent namespace aggregation** — `use net.http` imports all child namespaces (`net.http.server`, `net.http.client`) when `net.http` itself is not a declared namespace but its children are. Accessing child items uses the last segment: `server.listen(...)`, `client.get(...)`.
-- **Namespace exports** — namespaced declarations are private to their declaring namespace by default. `export` marks public API declarations, but outside code must still use `namespace.name` or a `use ... as ...` alias; exported names are not inserted into the global flat scope.
+- **Namespace exports** — namespaced declarations are private to their declaring namespace by default. `export` marks public API declarations, but executable code outside the namespace must first import it locally and then use the import's bound name or alias; exported names are not inserted into the global flat scope.
 
 ---
 

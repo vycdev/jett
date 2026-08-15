@@ -1,34 +1,25 @@
 namespace api
-
 export function answer() returns int64:
     return 42
-
 function helper() returns int64:
     return 1
-
 export type Port = int64
-
 export enum Color:
     red
     green
-
 export bitfield Flags:
     active: 1 bit
-
 export struct Box:
     value: int64
-
 export interface Named:
     function name(view self: Named) returns string
-
 namespace app
-
 function exported_syntax_summary() returns string:
+    use api
     api.Port port = 8080
     api.Box box = api.Box(value: api.answer())
     api.Color color = api.Color.green
     api.Flags flags = api.Flags(active: 1)
     return "{box.value}:{port == 8080}:{color == api.Color.green}:{flags.active == 1}"
-
 verify namespace_exports_syntax:
     assert exported_syntax_summary() == "42:true:true:true"

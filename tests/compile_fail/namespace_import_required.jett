@@ -1,0 +1,7 @@
+# ERROR: E0210
+namespace api
+export function helper() returns int64:
+    return 1
+namespace app
+function missing_import() returns int64:
+    return api.helper()

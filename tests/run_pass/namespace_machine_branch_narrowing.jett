@@ -18,6 +18,7 @@ function alias_construct_and_read() returns string:
         return session.user_id
     return "guest"
 verify namespace_machine_branch_narrowing:
+    use auth
     auth.Session at guest guest = auth.Session(guest)
     assert qualified_user_id_or_guest(guest) == "guest"
     auth.Session logged = auth.Session.transition(guest, logged_in, "Lin")

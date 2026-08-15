@@ -34,6 +34,8 @@ export function local_summary() returns string:
     return "{label(view record)}:{status == Status.active}"
 namespace app
 function duplicate_leaf_summary() returns string:
+    use accounts
+    use audit
     accounts.Record account = accounts.Record(id: "a1")
     audit.Record event = audit.Record(attempts: 3)
     accounts.Box[accounts.Record] wrapped = accounts.Box[accounts.Record](value: account)

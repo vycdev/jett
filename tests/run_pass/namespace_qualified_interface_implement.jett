@@ -9,6 +9,8 @@ implement contracts.Named for models.User:
         return self.name
 namespace app
 function describe_user() returns string:
+    use contracts
+    use models
     models.User user = models.User(name: "Ada")
     return contracts.Named.name(view user)
 function describe_user_with_aliases() returns string:

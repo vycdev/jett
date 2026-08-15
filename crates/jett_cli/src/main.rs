@@ -1520,12 +1520,12 @@ mod tests {
             .expect("project marker should be written");
         std::fs::write(
             root.join("src/alpha.jett"),
-            "namespace alpha\n\nexport function value() returns int64:\n    return beta.value()\n",
+            "namespace alpha\n\nexport function value() returns int64:\n    use beta\n    return beta.value()\n",
         )
         .expect("alpha source should be written");
         std::fs::write(
             root.join("src/beta.jett"),
-            "namespace beta\n\nexport function value() returns int64:\n    return alpha.value()\n",
+            "namespace beta\n\nexport function value() returns int64:\n    use alpha\n    return alpha.value()\n",
         )
         .expect("beta source should be written");
         let error = match jett_driver::bundle_project_detailed(&root, Path::new("dist/lib.jett")) {

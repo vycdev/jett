@@ -194,8 +194,9 @@ public API handoff:
 
 - the compiler-owned `json.parse`, `json.parse_exact`, `json.serialize`, and
   `json.serialize_public` paths still carry compiler-enforced policy checks,
-- `use` still resolves only a namespace-looking binding rather than importing a
-  real namespace registry,
+- `use` now gates executable access to project and vendored namespaces, but it
+  still resolves against the merged lexical scope rather than a real module
+  registry with backend-neutral identity and dependency metadata,
 - canonical qualified declarations and export visibility now exist, but the
   language still lacks a real module/import registry and dependency model.
 

@@ -1,0 +1,15 @@
+namespace api
+export struct User:
+    name: string
+export function user_name(view user: User) returns string:
+    return user.name
+namespace app
+function identity(user: api.User) returns api.User:
+    return user
+function imported_summary() returns string:
+    use api
+    api.User user = api.User(name: "Ada")
+    api.User same = identity(user)
+    return api.user_name(view same)
+verify namespace_strict_imports:
+    assert imported_summary() == "Ada"

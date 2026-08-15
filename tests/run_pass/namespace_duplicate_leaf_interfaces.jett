@@ -17,6 +17,9 @@ implement display.Named for models.Device:
         return self.label
 namespace app
 function duplicate_leaf_interface_summary() returns string:
+    use readable
+    use display
+    use models
     models.User user = models.User(name: "Ada")
     models.Device device = models.Device(label: "sensor")
     return "{readable.Named.name(view user)}:{display.Named.name(view device)}"
