@@ -9136,6 +9136,12 @@ impl Interpreter {
 
                             let mut seen_headers = HashSet::new();
                             for (index, header) in headers.iter().enumerate() {
+                                if header.is_empty() {
+                                    return Some(Ok(result_fail(format!(
+                                        "CSV header error at field {}: header must not be empty",
+                                        index + 1
+                                    ))));
+                                }
                                 if !seen_headers.insert(header.as_str()) {
                                     return Some(Ok(result_fail(format!(
                                         "CSV header error at field {}: duplicate header '{}'",
