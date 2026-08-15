@@ -16381,14 +16381,26 @@ fn parse_csv_records(input: &str) -> Result<Vec<Vec<String>>, String> {
                     row.push(std::mem::take(&mut current));
                 }
                 '\n' => {
-                    push_csv_record(&mut records, &mut row, &mut current, &mut has_record_data);
+                    push_csv_record(
+                        &mut records,
+                        &mut row,
+                        &mut current,
+                        &mut has_record_data,
+                        true,
+                    );
                     record_number += 1;
                 }
                 '\r' => {
                     if chars.peek() == Some(&'\n') {
                         chars.next();
                     }
-                    push_csv_record(&mut records, &mut row, &mut current, &mut has_record_data);
+                    push_csv_record(
+                        &mut records,
+                        &mut row,
+                        &mut current,
+                        &mut has_record_data,
+                        true,
+                    );
                     record_number += 1;
                 }
                 _ => {
@@ -16410,7 +16422,13 @@ fn parse_csv_records(input: &str) -> Result<Vec<Vec<String>>, String> {
                     state = CsvFieldState::Start;
                 }
                 '\n' => {
-                    push_csv_record(&mut records, &mut row, &mut current, &mut has_record_data);
+                    push_csv_record(
+                        &mut records,
+                        &mut row,
+                        &mut current,
+                        &mut has_record_data,
+                        true,
+                    );
                     state = CsvFieldState::Start;
                     record_number += 1;
                 }
@@ -16418,7 +16436,13 @@ fn parse_csv_records(input: &str) -> Result<Vec<Vec<String>>, String> {
                     if chars.peek() == Some(&'\n') {
                         chars.next();
                     }
-                    push_csv_record(&mut records, &mut row, &mut current, &mut has_record_data);
+                    push_csv_record(
+                        &mut records,
+                        &mut row,
+                        &mut current,
+                        &mut has_record_data,
+                        true,
+                    );
                     state = CsvFieldState::Start;
                     record_number += 1;
                 }
@@ -16442,7 +16466,13 @@ fn parse_csv_records(input: &str) -> Result<Vec<Vec<String>>, String> {
                     state = CsvFieldState::Start;
                 }
                 '\n' => {
-                    push_csv_record(&mut records, &mut row, &mut current, &mut has_record_data);
+                    push_csv_record(
+                        &mut records,
+                        &mut row,
+                        &mut current,
+                        &mut has_record_data,
+                        true,
+                    );
                     state = CsvFieldState::Start;
                     record_number += 1;
                 }
@@ -16450,7 +16480,13 @@ fn parse_csv_records(input: &str) -> Result<Vec<Vec<String>>, String> {
                     if chars.peek() == Some(&'\n') {
                         chars.next();
                     }
-                    push_csv_record(&mut records, &mut row, &mut current, &mut has_record_data);
+                    push_csv_record(
+                        &mut records,
+                        &mut row,
+                        &mut current,
+                        &mut has_record_data,
+                        true,
+                    );
                     state = CsvFieldState::Start;
                     record_number += 1;
                 }
@@ -16473,7 +16509,13 @@ fn parse_csv_records(input: &str) -> Result<Vec<Vec<String>>, String> {
         ));
     }
 
-    push_csv_record(&mut records, &mut row, &mut current, &mut has_record_data);
+    push_csv_record(
+        &mut records,
+        &mut row,
+        &mut current,
+        &mut has_record_data,
+        false,
+    );
     Ok(records)
 }
 
@@ -16486,8 +16528,9 @@ fn push_csv_record(
     row: &mut Vec<String>,
     current: &mut String,
     has_record_data: &mut bool,
+    preserve_empty: bool,
 ) {
-    if *has_record_data || !current.is_empty() || !row.is_empty() {
+    if preserve_empty || *has_record_data || !current.is_empty() || !row.is_empty() {
         row.push(std::mem::take(current));
         records.push(std::mem::take(row));
     } else {

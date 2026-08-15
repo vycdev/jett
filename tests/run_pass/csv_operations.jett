@@ -53,6 +53,17 @@ function csv_parse_empty_test() returns int64:
     return list.length(rows)
 verify csv_parse_empty_test:
     assert csv_parse_empty_test() == 0
+
+function csv_parse_blank_record_test() returns string:
+    list[list[string]] rows = csv.parse("first\n\nthird") handle error:
+        return error
+    list[string] blank = list.get[list[string]](rows, 1) handle:
+        return "missing blank record"
+    string value = list.get[string](blank, 0) handle:
+        return "missing empty field"
+    return "{list.length[list[string]](rows)}:{list.length[string](blank)}:{value}"
+verify csv_parse_blank_record_test:
+    assert csv_parse_blank_record_test() == "3:1:"
 # --- csv.stringify -----------------------------------------------------
 function csv_stringify_basic_test() returns string:
     list[list[string]] rows = list(list("name", "age"), list("alice", "30"))
@@ -194,3 +205,10 @@ function csv_long_header_row_error_test() returns string:
     return "accepted {list.length[map[string, string]](rows)} rows"
 verify csv_long_header_row_error_test:
     assert csv_long_header_row_error_test() == "CSV header error at record 2: expected 1 fields, got 2"
+
+function csv_blank_header_row_width_error_test() returns string:
+    list[map[string, string]] rows = csv.parse_with_header("name,age\n\nalice,30") handle error:
+        return error
+    return "accepted {list.length[map[string, string]](rows)} rows"
+verify csv_blank_header_row_width_error_test:
+    assert csv_blank_header_row_width_error_test() == "CSV header error at record 2: expected 2 fields, got 1"
