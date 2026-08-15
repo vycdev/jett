@@ -29,7 +29,6 @@ enough pressure from real code:
 
 - [Initial C FFI and generated binding contract](open_design/c_ffi_binding_contract.md)
 - [Type construction design](open_design/type_construction_design.md)
-- [Type construction block syntax](open_design/type_construction_block_syntax.md)
 - [Namespace-qualified type follow-up](open_design/namespace_qualified_types_followup.md)
 - [State machine type model](open_design/state_machine_type_model.md)
 - [JSON unknown field policy](open_design/json_unknown_field_policy.md)
@@ -62,6 +61,7 @@ plans above for current work.
 - [Random capability and entropy contract](completed/random_capability_entropy_contract.md)
 - [Time and Clock capability contract](completed/time_clock_capability_contract.md)
 - [Reflected construction staging](completed/reflected_construction_staging.md)
+- [Reflected construction syntax policy](completed/type_construction_block_syntax.md)
 - [Reflection predicate facts](completed/reflection_predicate_facts.md)
 - [JsonValue primitive tag retirement](completed/json_value_primitive_tag_retirement.md)
 - [JsonValue to JsonTree transition](completed/json_value_transition_plan.md)

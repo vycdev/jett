@@ -2794,6 +2794,9 @@ impl<'a> TypeChecker<'a> {
                     .unwrap_or(TypeInterner::ERROR);
                 Some((vec![TypeInterner::INT64], type_info_ty))
             }
+            // Reflected construction deliberately exposes one explicit builder
+            // lifecycle. Keep construct_start/put/finish canonical instead of
+            // adding a parallel hidden-builder block or callback spelling.
             "type.construct_start" => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(

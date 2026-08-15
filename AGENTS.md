@@ -32,6 +32,9 @@ effects, small bounded functions, and compiler-enforced policy.
   stdlib hooks provide their implementation bodies.
 - `json.JsonTree` is the sole native raw JSON representation. Bare
   `JsonValue`, `json.JsonValue`, and root type aliases are rejected.
+- Reflected construction has one canonical source form: the explicit
+  `TypeConstruction` builder lifecycle. Do not add a parallel construction
+  block, contextual `provide` statement, or callback spelling.
 
 ## Verification
 

@@ -132,12 +132,11 @@ The compiler would call the builder once per reflected field, with `Field`
 bound to that field's concrete type. It would collect the returned values and
 invoke the normal constructor path.
 
-This keeps field values statically typed and gives formats control over missing
-data and error messages. The cost is new generic-callback machinery, which Jett
-does not otherwise have yet.
+This keeps field values statically typed, but it creates a second reflected
+construction spelling and introduces generic-callback machinery solely to hide
+the explicit builder lifecycle.
 
-Verdict: promising, but probably after the `comptime type` binding mechanism is
-implemented and proven.
+Verdict: rejected as a public construction form.
 
 ### 3. Comptime Construction Block
 
@@ -148,22 +147,18 @@ result[T, string] built = type.construct[T]:
             provide field = json.decode_field[Field](view raw, field.serialize_name)
 ```
 
-The exact syntax is open, but the shape is deliberate: the block runs at
-compile time over trusted metadata, each `provide` expression is typechecked
-with the concrete field type, and the compiler lowers the result to a normal
-constructor call.
+This alternative would run at compile time over trusted metadata and lower to
+the existing builder. It was rejected because it introduces a second spelling
+for the same operation, relies on hidden compiler-managed builder state, and
+adds a contextual keyword used only by advanced reflection code.
 
-This is closest to Jett's principles. It is explicit, indentation-based,
-compile-time-specialized, and avoids opaque values. It also composes naturally
-with `/docs/completed/comptime_type_bind.md`.
+Verdict: rejected. The explicit builder is the sole canonical source form.
 
-Verdict: preferred direction, pending syntax.
-
-## Recommended Staging
+## Implemented Builder Sequence
 
 1. Implement the trusted `comptime type Name = info:` binding from
    `/docs/completed/comptime_type_bind.md`.
-2. Done for structs: prototype the no-syntax opaque builder described in
+2. Done for structs: implement the explicit opaque builder described in
    `/docs/completed/reflected_construction_staging.md`, with `construct_put` returning
    `result[TypeConstruction, string]` and `construct_finish` returning
    `result[T, string]`.
@@ -175,9 +170,9 @@ Verdict: preferred direction, pending syntax.
    match `T`, then reuse `construct_put` and `construct_finish` for
    variant-local payload fields whose `TypeField.owner_member` matches the
    selected variant.
-5. Done for JSON records/enums: public typed parse now routes through the stdlib `JsonTree`
-   parser/decoder. Remaining construction work is about hardening syntax and
-   reuse for future decoders, not replacing a Rust-backed `json.parse[T]`.
+5. Done for JSON records/enums: public typed parse now routes through the stdlib
+   `JsonTree` parser/decoder. Remaining construction work is about hardening the
+   canonical builder and reusing it for future decoders, not adding syntax.
 6. Done for machines: add an explicit machine starter that selects checked
    `TypeMachineState` metadata, require its `owner_type` to match the target
    machine, then reuse the existing typed put/finish path for fields whose
@@ -264,12 +259,6 @@ target owner; finishing it as another machine owner is a construction error.
 
 ## Open Questions
 
-- Should the eventual block syntax always return `result[T, string]`, matching
-  the builder, or should it mirror ordinary constructors and return plain `T`
-  when no validation can fail?
-- What exact syntax should bind a generated field value to a reflected
-  `TypeField`? `provide field = ...`, `field field = ...`, and a callback API
-  are all still candidates.
 - How should trusted provenance be represented internally: hidden flags on
   reflection values, dedicated internal value variants, or typed side tables?
 - Should construction accept only `TypeField` metadata, or should there be a
@@ -283,6 +272,6 @@ target owner; finishing it as another machine owner is a construction error.
   `json.parse[Machine]` should not, because JSON snapshots do not carry
   history.
 
-See `/docs/completed/reflected_construction_staging.md` for the current builder surface and
-`/docs/open_design/type_construction_block_syntax.md` for the recommended long-term block
-syntax direction.
+See `/docs/completed/reflected_construction_staging.md` for the builder surface
+and `/docs/completed/type_construction_block_syntax.md` for the decision to keep
+it as the sole canonical source form.
