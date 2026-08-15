@@ -615,9 +615,10 @@ For each `machine` type:
   legal transitions there. A bare `Machine` value cannot satisfy a
   `Machine at state` parameter without such a visible guard, even when its
   construction site was precise.
-- State narrowing is intentionally local-variable scoped in the current checker.
+- State narrowing is intentionally and permanently local-variable scoped.
   Guards over field paths or other arbitrary expressions are still boolean
-  state tests, but they do not narrow subsequent path accesses.
+  state tests, but they do not narrow subsequent path accesses; the checker
+  does not preserve path facts across possible mutation or aliasing.
 - A narrowed local keeps the exact state type for the guarded branch. Assigning
   a different state to that same local is rejected rather than silently widening
   the branch fact in place.

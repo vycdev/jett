@@ -7165,6 +7165,9 @@ impl<'a> TypeChecker<'a> {
         match expr {
             Expr::Ident(ident) => Some(ident),
             Expr::Paren(inner, _) => Self::narrowable_ident_expr(inner),
+            // State facts are deliberately attached only to local bindings.
+            // Field/index paths remain runtime tests because preserving facts
+            // across path mutation or aliasing would require a broader model.
             _ => None,
         }
     }

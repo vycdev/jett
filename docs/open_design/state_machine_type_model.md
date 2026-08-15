@@ -2,8 +2,8 @@
 
 Status: implemented for the checked type model, interpreter execution,
 reflection metadata, namespace-qualified use, branch narrowing, and JSON
-parse/serialize. Exact-state-only branch narrowing is established; other future
-policy questions remain open.
+parse/serialize. Exact-state-only, local-variable-only branch narrowing is
+established; other future policy questions remain open.
 
 Jett's design treats state machines as a core language feature. This note now
 records the implemented model and the remaining policy boundaries so future
@@ -32,9 +32,9 @@ Implemented:
   diagnostics for non-machine values and states not declared on the machine.
 - A positive `if value at state:` check narrows a bare or state-qualified
   machine variable to `Machine at state` for that branch, so state payload
-  fields and transitions are available only under a visible guard. The current
-  narrowing target is a bare local variable only; guards over field paths such
-  as `holder.current at logged_in` do not narrow the later field access.
+  fields and transitions are available only under a visible guard. Narrowing is
+  permanently limited to a bare local variable; guards over field paths such as
+  `holder.current at logged_in` do not narrow the later field access.
   Reassigning that narrowed local to another state inside the branch is rejected
   rather than widening the local in place; `state_machine_narrowed_assignment_to_other_state.jett`
   pins this conservative fact lifetime.
@@ -228,8 +228,6 @@ to a known machine owner.
   current source-level rule is explicit: signatures that mention bare `Machine`
   erase state, and callers must use an `at` guard to pass the value back into an
   exact-state parameter.
-- Should `expr at state` eventually narrow fields/paths beyond bare local
-  variables?
 - Should machine declarations eventually support explicit JSON policy
   annotations or state-rename migration metadata? The default envelope is now
   enabled for every machine whose payload fields are JSON-compatible.
