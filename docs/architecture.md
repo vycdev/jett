@@ -1945,7 +1945,8 @@ Core stdlib (string, list, math, json) is implemented in Phase D. This phase com
   implemented byte-native codecs and strict failure policy are defined by the
   [encoding contract](completed/encoding_representation_failure_contract.md))
 - **OS:** `Environment` for read-only launch environment variables and user arguments (the proposed capability, snapshot, Unicode-failure, compatibility, and source/runtime boundary is defined in the [Environment and argument contract](open_design/environment_argv_capability_contract.md)); process management remains a separate `Process` capability concern
-- **Utilities:** `regex`, `random` (the explicit capability, entropy,
+- **Utilities:** `regex` (initial matching, extraction, Unicode, failure,
+  resource, and source/runtime contract [tracked by #140](https://github.com/vycdev/jett/issues/140)), `random` (the explicit capability, entropy,
   deterministic injection, and source/runtime policy is defined in the
   [random contract](completed/random_capability_entropy_contract.md)), `uuid`
   (generation and entropy contract [tracked by #73](https://github.com/vycdev/jett/issues/73)), `log`, `format`
