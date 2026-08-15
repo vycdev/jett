@@ -83,6 +83,12 @@ function csv_parse_ragged_rows_test() returns string:
     return "{list.length[list[string]](rows)}:{list.length[string](short)}:{list.length[string](long)}"
 verify csv_parse_ragged_rows_test:
     assert csv_parse_ragged_rows_test() == "3:1:3"
+function csv_unquoted_whitespace_roundtrip_test() returns string:
+    list[list[string]] rows = csv.parse(" left , right ") handle error:
+        return error
+    return csv.stringify(rows)
+verify csv_unquoted_whitespace_roundtrip_test:
+    assert csv_unquoted_whitespace_roundtrip_test() == " left , right "
 # --- csv.stringify -----------------------------------------------------
 function csv_stringify_basic_test() returns string:
     list[list[string]] rows = list(list("name", "age"), list("alice", "30"))

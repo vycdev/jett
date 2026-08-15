@@ -1944,7 +1944,8 @@ Core stdlib (string, list, math, json) is implemented in Phase D. This phase com
   UTF-8 BOM is ignored, empty input contains zero records, a physical blank line
   is preserved as one record with one empty field, and raw parsing preserves
   ragged row widths. LF and CRLF terminate records; a bare CR outside a quoted
-  field is rejected. Malformed quoting, empty or duplicate
+  field is rejected. Leading and trailing whitespace in unquoted fields is
+  preserved as data rather than trimmed. Malformed quoting, empty or duplicate
   headers, and header/data width mismatches fail explicitly. `stringify` emits
   deterministic LF-separated records with no final newline. The remaining
   dialect contract is [tracked by #137](https://github.com/vycdev/jett/issues/137))

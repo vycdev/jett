@@ -16360,6 +16360,8 @@ enum CsvFieldState {
 /// doubled quotes escape a quote inside a quoted field, and a closing quote
 /// must be followed by a delimiter, record terminator, or end of input. Record
 /// terminators are LF or CRLF; a bare CR is rejected outside quoted fields.
+/// Leading and trailing whitespace in unquoted fields is data and is never
+/// trimmed implicitly.
 fn parse_csv_records(input: &str) -> Result<Vec<Vec<String>>, String> {
     let input = input.strip_prefix('\u{feff}').unwrap_or(input);
     // Empty CSV contains no records. A physical line terminator is different:
