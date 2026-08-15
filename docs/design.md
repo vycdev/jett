@@ -6793,7 +6793,9 @@ The standard library is intentionally massive and opinionated. The goal is to ma
   capability; filesystem operations remain under `Filesystem`, and no
   `os.process` namespace is implied
 - **test** — mock infrastructure for property-based testing (`test.mock` for mock filesystems, networks, etc.; capability-mocking and deterministic harness contract [tracked by #145](https://github.com/vycdev/jett/issues/145))
-- **log** — structured logging with levels
+- **log** — structured logging with levels (initial event, capability, secret,
+  sink, and deterministic-test contract
+  [tracked by #143](https://github.com/vycdev/jett/issues/143))
 - **format** — number formatting, padding, and text alignment
 - **crypto** — stable UTF-8-to-lowercase-hex SHA-256, legacy-only MD5, and
   planned SHA-512/key-first HMAC; see the
@@ -6802,8 +6804,11 @@ The standard library is intentionally massive and opinionated. The goal is to ma
   codecs; see the implemented
   [encoding representation and failure contract](completed/encoding_representation_failure_contract.md)
 - **validate** — standard refinement types for common formats: Email, URL, UUID, IPv4, IPv6. The type IS the validation — once assigned, the value is guaranteed valid.
-- **regex** — pattern matching and extraction (when string functions aren't enough)
-- **csv** — parsing and writing CSV data
+- **regex** — pattern matching and extraction (when string functions aren't enough); the initial pattern, matching, extraction, Unicode, failure, resource, and source/runtime contract is [tracked by #140](https://github.com/vycdev/jett/issues/140)
+- **csv** — parsing and writing CSV data; the dialect, malformed-input failure,
+  header/row-shape, and source/runtime contract is
+  [tracked by #137](https://github.com/vycdev/jett/issues/137), while future
+  reflected `csv.parse_rows[T]` remains separate
 - **random** — capability-backed unbiased integer/unit-float/boolean sampling,
   random selection, and non-mutating shuffling; see the implemented
   [random capability and entropy contract](completed/random_capability_entropy_contract.md)

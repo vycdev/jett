@@ -172,9 +172,9 @@
 | `Environment` / `os` | Partial (transitional capability-free `os.env` and `os.args` builtins read ambient host state; the proposed contract replaces them with `Environment.get(view env, key)` and `Environment.args(view env)` over an immutable injected launch snapshot, with distinct missing/invalid-text behavior and source-owned public declarations; see [#94](https://github.com/vycdev/jett/issues/94) and the [Environment and argument contract](open_design/environment_argv_capability_contract.md)) |
 | `net.http` | Not started (initial outbound client and `Network` capability contract [tracked by #101](https://github.com/vycdev/jett/issues/101)) |
 | `net.socket` | Not started (TCP-first transport contract proposed in [`docs/open_design/net_socket_transport_contract.md`](open_design/net_socket_transport_contract.md) for [#104](https://github.com/vycdev/jett/issues/104)) |
-| `csv` | Partial (interpreter builtins for `csv.parse`, `csv.stringify`, and `csv.parse_with_header`; quoted commas, quotes, and multiline fields are covered) |
-| `regex` | Not started |
-| `log` | Not started |
+| `csv` | Partial (interpreter builtins for `csv.parse`, `csv.stringify`, and `csv.parse_with_header`; quoted commas, quotes, multiline fields, and CRLF records are covered, while the CSV dialect, malformed-input failures, header/row-shape rules, and source/runtime boundary are [tracked by #137](https://github.com/vycdev/jett/issues/137)) |
+| `regex` | Not started (initial pattern, matching, extraction, Unicode, failure, resource, and source/runtime contract [tracked by #140](https://github.com/vycdev/jett/issues/140)) |
+| `log` | Not started (initial structured event, level/filter, capability, secret-safety, sink, deterministic-test, and source/runtime contract [tracked by #143](https://github.com/vycdev/jett/issues/143)) |
 | `test.mock` | Not started (capability mocking and deterministic test-harness contract [tracked by #145](https://github.com/vycdev/jett/issues/145)) |
 
 ### Phase L: Incremental Compilation — NOT STARTED
