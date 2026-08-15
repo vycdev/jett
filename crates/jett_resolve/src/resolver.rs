@@ -70,9 +70,19 @@ struct Resolver {
     /// Type parameter names that are currently in scope (e.g. `T`, `U` in a generic struct).
     /// Names in this set are suppressed from "undefined name" errors.
     active_type_params: HashSet<String>,
-    /// Whether executable source in the current walk must import external
-    /// project/dependency namespaces before using their declarations.
-    require_project_namespace_imports: bool,
+    /// Policy for accessing external project/dependency namespaces in the
+    /// source currently being resolved.
+    project_namespace_policy: ProjectNamespacePolicy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProjectNamespacePolicy {
+    /// Declaration signatures may use canonical qualified names directly.
+    Allow,
+    /// Executable blocks require a block-local import.
+    RequireImport,
+    /// Global constant initializers cannot create cross-namespace dependencies.
+    Forbid,
 }
 
 impl Resolver {
@@ -163,7 +173,7 @@ impl Resolver {
             mutual_declarations: HashMap::new(),
             mutual_definitions: HashMap::new(),
             active_type_params: HashSet::new(),
-            require_project_namespace_imports: false,
+            project_namespace_policy: ProjectNamespacePolicy::Allow,
         }
     }
 
@@ -595,7 +605,7 @@ impl Resolver {
                     self.resolve_enum(enm, index);
                 }
                 Item::VarDecl(v) => {
-                    self.resolve_expr(&v.value, index);
+                    self.resolve_global_constant_initializer(v, index);
                 }
                 Item::Verify(verify) => {
                     self.resolve_executable_block(&verify.body, index);
@@ -620,6 +630,13 @@ impl Resolver {
         }
         self.resolve_executable_block(&prop.body, item_index);
         self.pop_scope(scope);
+    }
+
+    fn resolve_global_constant_initializer(&mut self, decl: &VarDecl, item_index: usize) {
+        let previous_policy = self.project_namespace_policy;
+        self.project_namespace_policy = ProjectNamespacePolicy::Forbid;
+        self.resolve_expr(&decl.value, item_index);
+        self.project_namespace_policy = previous_policy;
     }
 
     fn resolve_actor(&mut self, actor: &ActorDef, item_index: usize) {
@@ -744,10 +761,10 @@ impl Resolver {
 
         // Declaration signatures remain self-describing through canonical
         // qualified type names. Executable bodies require local imports.
-        let previous_import_requirement = self.require_project_namespace_imports;
-        self.require_project_namespace_imports = true;
+        let previous_policy = self.project_namespace_policy;
+        self.project_namespace_policy = ProjectNamespacePolicy::RequireImport;
         self.resolve_block_with_use_check(&func.body, item_index);
-        self.require_project_namespace_imports = previous_import_requirement;
+        self.project_namespace_policy = previous_policy;
 
         for param in added_params {
             self.active_type_params.remove(&param);
@@ -781,10 +798,10 @@ impl Resolver {
     }
 
     fn resolve_executable_block(&mut self, block: &Block, item_index: usize) {
-        let previous_import_requirement = self.require_project_namespace_imports;
-        self.require_project_namespace_imports = true;
+        let previous_policy = self.project_namespace_policy;
+        self.project_namespace_policy = ProjectNamespacePolicy::RequireImport;
         self.resolve_block(block, item_index);
-        self.require_project_namespace_imports = previous_import_requirement;
+        self.project_namespace_policy = previous_policy;
     }
 
     fn resolve_stmt(&mut self, stmt: &Stmt, item_index: usize) {
@@ -1293,12 +1310,23 @@ impl Resolver {
             return;
         }
 
-        if let Some((namespace, def_span)) = self.missing_project_namespace_import(def_id, imported)
-        {
-            self.sink.emit(errors::namespace_import_required(
-                name, &namespace, span, def_span,
-            ));
-            return;
+        if let Some((namespace, def_span)) = self.external_project_namespace_access(def_id) {
+            match self.project_namespace_policy {
+                ProjectNamespacePolicy::Allow => {}
+                ProjectNamespacePolicy::RequireImport if imported => {}
+                ProjectNamespacePolicy::RequireImport => {
+                    self.sink.emit(errors::namespace_import_required(
+                        name, &namespace, span, def_span,
+                    ));
+                    return;
+                }
+                ProjectNamespacePolicy::Forbid => {
+                    self.sink.emit(errors::global_namespace_dependency(
+                        name, &namespace, span, def_span,
+                    ));
+                    return;
+                }
+            }
         }
 
         // Check for forward reference to a top-level item.
@@ -1346,15 +1374,7 @@ impl Resolver {
         Some((namespace.clone(), def.name.clone(), def.span))
     }
 
-    fn missing_project_namespace_import(
-        &self,
-        def_id: DefId,
-        imported: bool,
-    ) -> Option<(String, Span)> {
-        if !self.require_project_namespace_imports || imported {
-            return None;
-        }
-
+    fn external_project_namespace_access(&self, def_id: DefId) -> Option<(String, Span)> {
         let def = self.scope_table.def(def_id);
         if def.span.file.is_stdlib() {
             return None;
@@ -2307,6 +2327,59 @@ namespace app
 
 function identity(user: api.User) returns api.User:
     return user
+"#,
+        );
+
+        let result = resolve(&module);
+        assert!(
+            !result
+                .diagnostics
+                .iter()
+                .any(|d| d.severity == Severity::Error),
+            "expected no errors, got: {:#?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn global_constant_initializer_rejects_external_project_namespace() {
+        let module = parse_module(
+            r#"
+namespace config
+
+export function default_port() returns int64:
+    return 8080
+
+namespace app
+
+int64 PORT = config.default_port()
+"#,
+        );
+
+        let result = resolve(&module);
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == Severity::Error && d.code.code() == 211)
+            .collect();
+        assert_eq!(
+            errors.len(),
+            1,
+            "expected global namespace dependency error"
+        );
+        assert!(errors[0].message.contains("global constant initializer"));
+    }
+
+    #[test]
+    fn global_constant_initializer_allows_same_namespace_declaration() {
+        let module = parse_module(
+            r#"
+namespace config
+
+function default_port() returns int64:
+    return 8080
+
+int64 PORT = default_port()
 "#,
         );
 

@@ -105,3 +105,20 @@ pub fn namespace_import_required(
     )
     .with_label(def_span, "external declaration defined here")
 }
+
+/// E0211: Global constant initializer depends on another project namespace.
+pub fn global_namespace_dependency(
+    name: &str,
+    namespace: &str,
+    use_span: Span,
+    def_span: Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        211,
+        format!(
+            "global constant initializer cannot use `{name}` from project namespace `{namespace}`; project constants cannot depend on another project or vendored namespace"
+        ),
+        use_span,
+    )
+    .with_label(def_span, "external declaration defined here")
+}

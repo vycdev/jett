@@ -1,0 +1,6 @@
+# ERROR: E0211
+namespace config
+export function default_port() returns int64:
+    return 8080
+namespace app
+int64 PORT = config.default_port()

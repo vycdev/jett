@@ -6378,6 +6378,13 @@ float64 PI = 3.14159265358979
 
 Global mutable variables are forbidden (Rule Set 2). Global constants are allowed because they never change — they are baked into the binary at compile time.
 
+Global constant initializers are namespace-local: they may use literals and
+declarations from their own namespace, but they cannot reference project or
+vendored declarations from another namespace. File-level `use` is forbidden,
+and global constants cannot create an implicit cross-namespace dependency.
+Compiler-provided standard declarations retain their normal implicit
+availability pending the broader prelude policy.
+
 ### Functions
 
 ```

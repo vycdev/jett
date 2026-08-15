@@ -1106,6 +1106,10 @@ compile_fail_fixture!(
     "namespace_import_required.jett"
 );
 compile_fail_fixture!(
+    compile_fail_global_namespace_dependency,
+    "global_namespace_dependency.jett"
+);
+compile_fail_fixture!(
     compile_fail_namespace_private_function,
     "namespace_private_function.jett"
 );
