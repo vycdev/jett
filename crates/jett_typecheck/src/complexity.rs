@@ -195,6 +195,7 @@ impl ComplexityChecker {
             Expr::Unary(_, inner, _)
             | Expr::Paren(inner, _)
             | Expr::View(inner, _)
+            | Expr::Comptime(inner, _)
             | Expr::Ok(inner, _)
             | Expr::Fail(inner, _)
             | Expr::Some(inner, _)

@@ -528,6 +528,9 @@ impl<'a> OwnershipChecker<'a> {
                 // `view expr` — just check the inner expression, no consumption.
                 self.check_expr_ownership(inner);
             }
+            Expr::Comptime(inner, _) => {
+                self.check_expr_ownership(inner);
+            }
             Expr::FieldAccess(base, _, _) => {
                 // Field access is an implicit view — does not consume the base.
                 self.check_expr_ownership(base);

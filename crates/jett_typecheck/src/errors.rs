@@ -464,6 +464,18 @@ pub fn verify_calls_impure(verify_name: &str, callee: &str, span: Span) -> Diagn
     )
 }
 
+/// E0504: Explicit comptime expression calls an impure function.
+pub fn comptime_calls_impure(callee: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        504,
+        format!(
+            "`comptime` expression cannot call impure function `{callee}`; \
+             comptime expressions may only call pure functions"
+        ),
+        span,
+    )
+}
+
 /// E0502: Only main may own a capability parameter.
 pub fn owned_capability_outside_main(
     function_name: &str,

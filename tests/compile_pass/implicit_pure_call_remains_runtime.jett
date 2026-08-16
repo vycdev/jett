@@ -1,0 +1,5 @@
+namespace app
+function divide_by_zero_when_called() returns int64:
+    return 1 / 0
+function unused_runtime_call() returns int64:
+    return divide_by_zero_when_called()

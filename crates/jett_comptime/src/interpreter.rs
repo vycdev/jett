@@ -262,6 +262,8 @@ pub struct Interpreter {
     /// Checked expression type names keyed by source span, when supplied by
     /// the driver after type checking.
     checked_expression_types: Option<Arc<HashMap<Span, String>>>,
+    /// Values produced for explicit `comptime` expressions by the build.
+    explicit_comptime_values: Option<Arc<HashMap<Span, Value>>>,
     /// Live actor instances keyed by unique ID.
     actor_instances: HashMap<u64, ActorInstance>,
     /// Next actor instance ID.
@@ -383,6 +385,7 @@ impl Interpreter {
             reflected_machine_state_scopes: Vec::new(),
             reflection_metadata: None,
             checked_expression_types: None,
+            explicit_comptime_values: None,
             actor_instances: HashMap::new(),
             next_actor_id: 0,
             debug_output: Vec::new(),
@@ -447,6 +450,11 @@ impl Interpreter {
     /// Attach checked expression type names produced by the typechecker.
     pub fn set_checked_expression_types(&mut self, types: Arc<HashMap<Span, String>>) {
         self.checked_expression_types = Some(types);
+    }
+
+    /// Attach values produced for explicit `comptime` expressions by the build.
+    pub fn set_explicit_comptime_values(&mut self, values: Arc<HashMap<Span, Value>>) {
+        self.explicit_comptime_values = Some(values);
     }
 
     /// Drain any debug lines recorded so far.
@@ -1172,6 +1180,19 @@ impl Interpreter {
         }
     }
 
+    /// Evaluate an expression with unqualified names resolved in `namespace`.
+    pub fn eval_expr_in_namespace(
+        &mut self,
+        namespace: Option<&str>,
+        expr: &Expr,
+    ) -> Result<Value, String> {
+        let saved_namespace = self.current_namespace.clone();
+        self.current_namespace = namespace.map(str::to_string);
+        let result = self.eval_expr(expr);
+        self.current_namespace = saved_namespace;
+        result
+    }
+
     fn eval_expr_flow(&mut self, expr: &Expr) -> Result<ExprFlow, String> {
         let flow = self.eval_expr_flow_inner(expr)?;
         match flow {
@@ -1264,6 +1285,17 @@ impl Interpreter {
             // Parenthesized
             Expr::Paren(inner, _) => self.eval_expr_flow(inner),
             Expr::View(inner, _) => self.eval_expr_flow(inner),
+            Expr::Comptime(inner, span) => {
+                if let Some(value) = self
+                    .explicit_comptime_values
+                    .as_ref()
+                    .and_then(|values| values.get(span))
+                {
+                    Ok(ExprFlow::Value(value.clone()))
+                } else {
+                    self.eval_expr_flow(inner)
+                }
+            }
             Expr::Declassify(inner, _) => self.eval_expr_flow(inner),
 
             // Binary operations
@@ -10743,6 +10775,27 @@ mod tests {
     /// Helper: create a float literal expression.
     fn float(n: f64) -> Expr {
         Expr::FloatLiteral(n, sp())
+    }
+
+    #[test]
+    fn explicit_comptime_expression_uses_baked_value() {
+        let span = sp();
+        let expression = Expr::Comptime(
+            Box::new(Expr::Binary(
+                Box::new(int(1)),
+                BinOp::Div,
+                Box::new(int(0)),
+                span,
+            )),
+            span,
+        );
+        let mut values = HashMap::new();
+        values.insert(span, Value::Int64(42));
+
+        let mut interpreter = Interpreter::new();
+        interpreter.set_explicit_comptime_values(Arc::new(values));
+
+        assert_eq!(interpreter.eval_expr(&expression), Ok(Value::Int64(42)));
     }
 
     /// Helper: create a string literal expression.

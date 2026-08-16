@@ -39,6 +39,9 @@ effects, small bounded functions, and compiler-enforced policy.
   including project, dependency, and stdlib functions. Do not add a separate
   comptime-safe marker or allowlist. Functions requiring any capability are
   ineligible; comptime never receives runtime capabilities.
+- Required compile-time value evaluation is always selected explicitly with
+  `comptime expression`. The expression must be closed and pure. Optimizers may
+  fold ordinary pure calls, but folding must never change source validity.
 - Namespaced declarations are private by default. Mark only the intended public
   API with `export`.
 - Project and dependency namespaces must remain unique. Only compiler-shipped

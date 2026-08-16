@@ -1,0 +1,6 @@
+namespace app
+function double(value: int64) returns int64:
+    return value * 2
+function main(stdout: Stdout) returns nothing:
+    int64 baked = comptime double(21)
+    Stdout.write(view stdout, string.from_int64(baked))

@@ -1293,7 +1293,9 @@ impl<'src> Parser<'src> {
             TokenKind::Trace => Some(self.parse_trace_stmt()),
             TokenKind::Breakpoint => Some(self.parse_breakpoint_stmt()),
             TokenKind::Respond => Some(self.parse_respond_stmt()),
-            TokenKind::Comptime => Some(self.parse_comptime_type_bind_stmt()),
+            TokenKind::Comptime if self.peek_nth(1) == TokenKind::Type => {
+                Some(self.parse_comptime_type_bind_stmt())
+            }
             TokenKind::Break => {
                 let tok = self.advance();
                 Some(Stmt::Break(tok.span))
@@ -2173,6 +2175,12 @@ impl<'src> Parser<'src> {
                 let inner = self.parse_expr_bp(13);
                 let span = tok.span.merge(inner.span());
                 Expr::View(Box::new(inner), span)
+            }
+            TokenKind::Comptime => {
+                self.advance();
+                let inner = self.parse_expr_bp(13);
+                let span = tok.span.merge(inner.span());
+                Expr::Comptime(Box::new(inner), span)
             }
             TokenKind::Declassify => {
                 self.advance();
@@ -4485,6 +4493,30 @@ function f() returns string:
                 other => panic!("expected ComptimeTypeBind, got {:?}", other),
             },
             other => panic!("expected Function, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_explicit_comptime_expression() {
+        let src = "\
+function double(value: int64) returns int64:
+    return value * 2
+function answer() returns int64:
+    return comptime double(21)
+";
+        let result = parse_str(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        match &result.module.items[1] {
+            Item::Function(function) => match &function.body.stmts[0] {
+                Stmt::Return(statement) => match statement.value.as_ref() {
+                    Some(Expr::Comptime(inner, _)) => {
+                        assert!(matches!(inner.as_ref(), Expr::Call(_, _, _)));
+                    }
+                    other => panic!("expected Comptime expression, got {other:?}"),
+                },
+                other => panic!("expected Return, got {other:?}"),
+            },
+            other => panic!("expected Function, got {other:?}"),
         }
     }
 

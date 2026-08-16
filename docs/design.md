@@ -2256,6 +2256,14 @@ eligible**, whether it comes from the project, a dependency, or the standard
 library. The LLM does not need to learn a separate template language, macro
 syntax, or preprocessor. **One function form, two execution times.**
 
+Required compile-time value evaluation is always explicit and has the canonical
+form `comptime expression`. The expression must be closed: it may use literals,
+types, and pure functions, but it cannot depend on a runtime parameter or local.
+Compilation fails if the compiler cannot produce the value. An ordinary pure
+call remains a runtime call in source semantics. The optimizer may fold it when
+safe, but that invisible optimization cannot introduce diagnostics, suppress
+diagnostics, or otherwise change whether the source program is accepted.
+
 Purity is the complete eligibility boundary. A function that takes any
 capability cannot run at comptime, directly or transitively, because the
 compiler never supplies runtime `Filesystem`, `Network`, `Clock`, `Random`,

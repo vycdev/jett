@@ -1,7 +1,9 @@
+pub mod explicit;
 pub mod interpreter;
 pub mod value;
 pub mod verify;
 
+pub use explicit::evaluate_explicit_comptime_expressions;
 pub use interpreter::{ClockTestSample, Interpreter, RandomTestSample};
 pub use value::Value;
 pub use verify::{

@@ -1,4 +1,5 @@
 use jett_common::{FileId, STDLIB_FILE_ID_START, Span};
+use jett_comptime::evaluate_explicit_comptime_expressions;
 use jett_comptime::value::Value;
 use jett_comptime::verify::{
     run_verify_blocks_detailed_with_metadata_and_expression_types,
@@ -49,6 +50,8 @@ pub struct BuildResult {
     pub reflection_metadata: Option<Arc<ReflectionMetadata>>,
     /// Checked expression type names for runtime normalization at expression-only sites.
     pub checked_expression_types: Option<Arc<HashMap<Span, String>>>,
+    /// Values baked by explicit `comptime` expressions.
+    pub explicit_comptime_values: Option<Arc<HashMap<Span, Value>>>,
 }
 
 /// Captured output from running a Jett program.
@@ -336,6 +339,7 @@ pub fn build_source(source: &str, file_path: &str) -> BuildResult {
             file_path: file_path.to_string(),
             reflection_metadata: None,
             checked_expression_types: None,
+            explicit_comptime_values: None,
         };
     }
 
@@ -350,6 +354,7 @@ pub fn build_source(source: &str, file_path: &str) -> BuildResult {
             file_path: file_path.to_string(),
             reflection_metadata: None,
             checked_expression_types: None,
+            explicit_comptime_values: None,
         };
     }
     prepend_support_modules(&mut parse_result.module, support_modules.modules);
@@ -366,6 +371,7 @@ pub fn build_source(source: &str, file_path: &str) -> BuildResult {
             file_path: file_path.to_string(),
             reflection_metadata: None,
             checked_expression_types: None,
+            explicit_comptime_values: None,
         };
     }
 
@@ -382,12 +388,19 @@ pub fn build_source(source: &str, file_path: &str) -> BuildResult {
             file_path: file_path.to_string(),
             reflection_metadata: None,
             checked_expression_types: None,
+            explicit_comptime_values: None,
         };
     }
 
     // Phase 5: Execute verify blocks at compile time
     let reflection_metadata = check_result.reflection_metadata.clone();
     let checked_expression_types = Arc::new(expression_type_names(&check_result));
+    let (explicit_comptime_values, comptime_diagnostics) = evaluate_explicit_comptime_expressions(
+        &parse_result.module,
+        reflection_metadata.clone(),
+        checked_expression_types.clone(),
+    );
+    all_diagnostics.extend(comptime_diagnostics);
     let verify_diagnostics = run_verify_blocks_with_metadata_and_expression_types(
         &parse_result.module,
         check_result.reflection_metadata,
@@ -404,6 +417,7 @@ pub fn build_source(source: &str, file_path: &str) -> BuildResult {
         file_path: file_path.to_string(),
         reflection_metadata: Some(reflection_metadata),
         checked_expression_types: Some(checked_expression_types),
+        explicit_comptime_values: Some(Arc::new(explicit_comptime_values)),
     }
 }
 
@@ -2106,6 +2120,7 @@ fn build_file_inner(path: &Path, include_project: bool) -> BuildResult {
                 file_path: file_path_str,
                 reflection_metadata: None,
                 checked_expression_types: None,
+                explicit_comptime_values: None,
             };
         }
     };
@@ -2127,6 +2142,7 @@ fn build_file_inner(path: &Path, include_project: bool) -> BuildResult {
             file_path: file_path_str,
             reflection_metadata: None,
             checked_expression_types: None,
+            explicit_comptime_values: None,
         };
     }
 
@@ -2146,6 +2162,7 @@ fn build_file_inner(path: &Path, include_project: bool) -> BuildResult {
             file_path: file_path_str,
             reflection_metadata: None,
             checked_expression_types: None,
+            explicit_comptime_values: None,
         };
     }
     prepend_support_modules(&mut parse_result.module, support_modules.modules);
@@ -2163,6 +2180,7 @@ fn build_file_inner(path: &Path, include_project: bool) -> BuildResult {
             file_path: file_path_str,
             reflection_metadata: None,
             checked_expression_types: None,
+            explicit_comptime_values: None,
         };
     }
 
@@ -2179,12 +2197,19 @@ fn build_file_inner(path: &Path, include_project: bool) -> BuildResult {
             file_path: file_path_str,
             reflection_metadata: None,
             checked_expression_types: None,
+            explicit_comptime_values: None,
         };
     }
 
     // Phase 5: Execute verify blocks at compile time
     let reflection_metadata = check_result.reflection_metadata.clone();
     let checked_expression_types = Arc::new(expression_type_names(&check_result));
+    let (explicit_comptime_values, comptime_diagnostics) = evaluate_explicit_comptime_expressions(
+        &parse_result.module,
+        reflection_metadata.clone(),
+        checked_expression_types.clone(),
+    );
+    all_diagnostics.extend(comptime_diagnostics);
     let verify_diagnostics = run_verify_blocks_with_metadata_and_expression_types(
         &parse_result.module,
         check_result.reflection_metadata,
@@ -2201,6 +2226,7 @@ fn build_file_inner(path: &Path, include_project: bool) -> BuildResult {
         file_path: file_path_str,
         reflection_metadata: Some(reflection_metadata),
         checked_expression_types: Some(checked_expression_types),
+        explicit_comptime_values: Some(Arc::new(explicit_comptime_values)),
     }
 }
 
@@ -2678,6 +2704,9 @@ fn run_file_inner(path: &Path, options: RunOptions) -> Result<RunOutput, String>
     }
     if let Some(expression_types) = build.checked_expression_types.clone() {
         interp.set_checked_expression_types(expression_types);
+    }
+    if let Some(values) = build.explicit_comptime_values.clone() {
+        interp.set_explicit_comptime_values(values);
     }
     if options.capture_stdout {
         interp.enable_stdout_capture();
@@ -3264,6 +3293,7 @@ fn bundle_ordering_error(
             file_path,
             reflection_metadata: None,
             checked_expression_types: None,
+            explicit_comptime_values: None,
         })),
     }
 }

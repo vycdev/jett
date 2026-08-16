@@ -175,6 +175,8 @@ struct TypeChecker<'a> {
     in_verify_block: bool,
     /// Whether we are inside a property block.
     in_property_block: bool,
+    /// Nesting depth inside an explicit `comptime` expression.
+    comptime_expr_depth: usize,
     /// The name of the verify block currently being checked (for error messages).
     current_verify_name: Option<String>,
     /// Nesting depth inside a handle-block body. Used to validate `default`.
@@ -272,6 +274,7 @@ impl<'a> TypeChecker<'a> {
             current_function_pure: false,
             in_verify_block: false,
             in_property_block: false,
+            comptime_expr_depth: 0,
             current_verify_name: None,
             handle_body_depth: 0,
             closure_capture_scopes: Vec::new(),
@@ -5956,6 +5959,7 @@ impl<'a> TypeChecker<'a> {
             | Expr::FieldAccess(inner, _, _)
             | Expr::Paren(inner, _)
             | Expr::View(inner, _)
+            | Expr::Comptime(inner, _)
             | Expr::Ok(inner, _)
             | Expr::Fail(inner, _)
             | Expr::Some(inner, _)
@@ -7563,6 +7567,12 @@ impl<'a> TypeChecker<'a> {
             Expr::Paren(inner, _) => self.check_expr(inner),
             Expr::FieldAccess(base, field, span) => self.check_field_access(base, field, *span),
             Expr::View(inner, _) => self.check_expr(inner),
+            Expr::Comptime(inner, _) => {
+                self.comptime_expr_depth += 1;
+                let ty = self.check_expr(inner);
+                self.comptime_expr_depth -= 1;
+                ty
+            }
 
             Expr::ListConstruct(elems, _span) => self.check_list_construct(elems),
             Expr::MapConstruct(entries, _span) => self.check_map_construct(entries),
@@ -7793,6 +7803,10 @@ impl<'a> TypeChecker<'a> {
                     callee_name,
                     step.span,
                 ));
+            }
+            if self.comptime_expr_depth > 0 {
+                self.sink
+                    .emit(errors::comptime_calls_impure(callee_name, step.span));
             }
         }
 
@@ -9154,6 +9168,10 @@ impl<'a> TypeChecker<'a> {
                             span,
                         ));
                     }
+                }
+                if self.comptime_expr_depth > 0 {
+                    self.sink
+                        .emit(errors::comptime_calls_impure(callee_name, span));
                 }
             }
         }

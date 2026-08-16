@@ -202,6 +202,10 @@ macro_rules! run_pass_fixture {
 }
 
 compile_pass_fixture!(compile_pass_basic, "basic.jett");
+compile_pass_fixture!(
+    compile_pass_implicit_pure_call_remains_runtime,
+    "implicit_pure_call_remains_runtime.jett"
+);
 compile_pass_fixture!(compile_pass_hello, "hello.jett");
 compile_pass_fixture!(
     compile_pass_interface_displayable,
@@ -290,6 +294,14 @@ compile_fail_fixture!(compile_fail_type_mismatch, "type_mismatch.jett");
 compile_fail_fixture!(compile_fail_secret_stdout, "secret_stdout.jett");
 compile_fail_fixture!(compile_fail_secret_print, "secret_print.jett");
 compile_fail_fixture!(
+    compile_fail_comptime_expression_requires_closed_value,
+    "comptime_expression_requires_closed_value.jett"
+);
+compile_fail_fixture!(
+    compile_fail_comptime_expression_rejects_capability,
+    "comptime_expression_rejects_capability.jett"
+);
+compile_fail_fixture!(
     compile_fail_secret_compare_unsupported_payload,
     "secret_compare_unsupported_payload.jett"
 );
@@ -315,6 +327,10 @@ run_pass_fixture!(run_pass_fibonacci, "fibonacci.jett");
 run_pass_fixture!(run_pass_hello_print, "hello_print.jett");
 run_pass_fixture!(run_pass_string_interpolation, "string_interpolation.jett");
 run_pass_fixture!(run_pass_stdlib_loading, "stdlib_loading.jett");
+run_pass_fixture!(
+    run_pass_explicit_comptime_expression,
+    "explicit_comptime_expression.jett"
+);
 run_pass_fixture!(
     run_pass_comptime_pure_function_boundary,
     "comptime_pure_function_boundary.jett"
@@ -375,6 +391,7 @@ run_pass_fixture!(
 fn run_file_capture_stdout_captures_capability_writes() {
     assert_run_stdout("hello_print.jett", "Hello, Jett!42");
     assert_run_stdout("string_interpolation.jett", "Hello, World!2 + 3 = 5");
+    assert_run_stdout("explicit_comptime_expression.jett", "42");
     assert_run_stdout("uint64_checked_expression_runtime_main.jett", "uint64");
 }
 

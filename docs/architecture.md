@@ -820,13 +820,19 @@ primitive interface dispatch. The same normalization enforces the declared
 `int8`/`int16`/`int32` and `uint8`/`uint16`/`uint32` ranges after expressions
 and at typed assignment, parameter, and return boundaries; values outside the
 checked primitive range stop interpretation with a deterministic diagnostic.
+The driver additionally evaluates every explicit `comptime expression` after
+type checking and stores the resulting value by source span. Runtime
+interpretation consumes that stored value instead of evaluating the expression
+again. Explicit expressions are evaluated in an empty lexical environment, so
+runtime parameters and locals cannot leak into required compile-time work.
 
 ### What Runs at Comptime
 
 1. **`verify` blocks** — All assertions are evaluated. Any failure stops compilation.
 2. **Explicit comptime calls** — the target and all transitive callees may be
    any pure project, dependency, or stdlib function; results are baked into the
-   binary as constants. No declaration marker or allowlist grants eligibility.
+   binary as constants. The expression must be closed. No declaration marker
+   or allowlist grants eligibility.
 3. **`comptime` expressions** — `if comptime is_numeric[T]()` branches are resolved, dead branches are eliminated.
 4. **Refinement type constraints on literals** — `Port p = 80` validates `80 >= 1 && 80 <= 65535` at compile time.
 5. **Bitfield literal validation** — `ColorChannel(red: 300, ...)` catches the out-of-range value at compile time.
@@ -869,6 +875,10 @@ The compiler never constructs runtime capability values for comptime; file,
 network, clock, randomness, environment, process, and foreign access are all
 excluded.
 
+Only explicit `comptime expression` sites require build-time value evaluation.
+Ordinary pure calls may be constant-folded later, but that optimization cannot
+affect diagnostics or source acceptance.
+
 ---
 
 ## Phase 10: Optimization
@@ -907,7 +917,7 @@ Because the capability system provably identifies pure functions (Rule Set 2), t
 
 9. **Dead pure call elimination:** A pure function call whose result is never used can be eliminated entirely (it has no side effects, so removing it changes nothing). Note: this cannot apply to impure functions — even if the result is unused, the side effect must occur.
 
-10. **Constant propagation through pure functions:** If all arguments to a pure function are known at compile time, the call can be evaluated at compile time (folded into a constant). This extends the comptime engine's reach — even functions not explicitly marked `comptime` can be folded if their inputs are known.
+10. **Constant propagation through pure functions:** If all arguments to a pure function are known at compile time, the optimizer may fold the call into a constant. Without an explicit `comptime` expression this is invisible optimization only: evaluation failure cannot become a source diagnostic, and folding cannot change program acceptance.
 
 #### Control Flow Optimizations
 
