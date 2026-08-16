@@ -589,8 +589,8 @@ Track which capabilities flow through the program:
 - **`print` and `println` are compiler-owned debug builtins, not ordinary I/O.**
   They remain secret-output boundaries and require no `Stdout` capability. The
   current interpreter shares its stdout path with `Stdout.write`; a distinct
-  debug-event channel is pending. Once mode-aware checking exists, release
-  builds must reject them. Future backends must either route them through a
+  debug-event channel is pending. Mode-aware checking rejects them in release
+  builds with E0362. Future backends must either route them through a
   debug diagnostic channel or reject them; they must never silently lower to
   ambient process stdout. Verify/comptime entrypoints may allow them only when
   debug text is isolated from protocol output. See the
@@ -2069,7 +2069,7 @@ call, type, and handle diagnostics instead of getting a parallel error family.
 |---|---|
 | E0000 | Driver and file/project discovery errors |
 | E0200–E0212 | Name resolution errors and warnings (undefined, duplicate, namespace visibility, `export root`, type naming) |
-| E0300–E0360 | Type and language policy errors: calls, generic arity, handles, interfaces, refinements, bitfields, JSON policy, state machines, reflection metadata, pipeline boundaries, collection hashing, and sequence policy |
+| E0300–E0362 | Type and language policy errors: calls, generic arity, handles, interfaces, refinements, bitfields, JSON policy, state machines, reflection metadata, pipeline boundaries, collection hashing, sequence policy, arithmetic safety, and release debug-print policy |
 | E0400–E0401 | Ownership errors (use-after-move, consuming a view) |
 | E0500–E0503 | Capability and purity errors (impure calls and capability-parameter ownership) |
 | E0600–E0603 | Secret errors (secret exposure, invalid declassification/helper use, secret-containing output) |

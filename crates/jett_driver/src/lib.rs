@@ -11,7 +11,7 @@ use jett_fmt::{FormatResult, format_source};
 use jett_parser::ast::{FunctionDecl, FunctionDef, Item, Module, Param, TypeExpr};
 use jett_parser::parse;
 use jett_resolve::resolve;
-use jett_typecheck::{CheckResult, check};
+use jett_typecheck::{CheckOptions, CheckResult, check, check_with_options};
 use jett_types::ReflectionMetadata;
 use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -52,6 +52,13 @@ pub struct BuildResult {
     pub checked_expression_types: Option<Arc<HashMap<Span, String>>>,
     /// Values baked by explicit `comptime` expressions.
     pub explicit_comptime_values: Option<Arc<HashMap<Span, Value>>>,
+}
+
+/// Mode-specific options for a build.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct BuildOptions {
+    /// Apply release-only checker and backend policy.
+    pub release: bool,
 }
 
 /// Captured output from running a Jett program.
@@ -2100,10 +2107,15 @@ fn line_col_to_offset(source: &str, line: u32, col: u32) -> Option<u32> {
 /// Run the full compilation pipeline on a single file: lex → parse → resolve → typecheck.
 /// Does not produce executable output yet — just validates the source.
 pub fn build_file(path: &Path) -> BuildResult {
-    build_file_inner(path, true)
+    build_file_with_options(path, BuildOptions::default())
 }
 
-fn build_file_inner(path: &Path, include_project: bool) -> BuildResult {
+/// Run the full compilation pipeline with mode-specific build policy.
+pub fn build_file_with_options(path: &Path, options: BuildOptions) -> BuildResult {
+    build_file_inner(path, true, options)
+}
+
+fn build_file_inner(path: &Path, include_project: bool, options: BuildOptions) -> BuildResult {
     let file_path_str = path.display().to_string();
 
     let source = match fs::read_to_string(path) {
@@ -2185,7 +2197,13 @@ fn build_file_inner(path: &Path, include_project: bool) -> BuildResult {
     }
 
     // Phase 4: Type check
-    let check_result = check(&parse_result.module, &resolve_result);
+    let check_result = check_with_options(
+        &parse_result.module,
+        &resolve_result,
+        CheckOptions {
+            release: options.release,
+        },
+    );
     all_diagnostics.extend(check_result.diagnostics.clone());
 
     let has_typecheck_errors = has_error_diagnostics(&all_diagnostics);
