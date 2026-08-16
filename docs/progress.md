@@ -185,7 +185,7 @@
 | Component | Status |
 |---|---|
 | Salsa integration | Not started (initial query and invalidation boundary [tracked by #147](https://github.com/vycdev/jett/issues/147)) |
-| Parallel compilation | Not started |
+| Parallel compilation | Not started (deterministic namespace scheduling and parallel query boundary [tracked by #151](https://github.com/vycdev/jett/issues/151)) |
 | Content-addressed caching | Not started |
 
 ## VS Code Extension

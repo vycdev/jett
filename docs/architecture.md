@@ -1767,6 +1767,8 @@ Fast recompilation is critical for the LLM compile-fix loop (Footnote 5). The ar
 
 > The initial query and invalidation boundary for the current direct-AST
 > frontend is tracked by [#147](https://github.com/vycdev/jett/issues/147).
+> Deterministic parallel query execution and namespace scheduling are tracked
+> separately by [#151](https://github.com/vycdev/jett/issues/151).
 
 ### Core Principle: Separate Signatures from Bodies
 
@@ -2020,7 +2022,8 @@ Core stdlib (string, list, math, json) is implemented in Phase D. This phase com
 **Goal:** Sub-second recompilation, production readiness.
 
 1. Demand-driven query system with caching and invalidation (salsa integration).
-2. Parallel compilation of independent namespaces.
+2. Parallel compilation of independent namespaces (deterministic scheduling
+   and result-publication contract [tracked by #151](https://github.com/vycdev/jett/issues/151)).
 3. Content-addressed caching of compilation artifacts.
 4. Comprehensive test suite.
 
