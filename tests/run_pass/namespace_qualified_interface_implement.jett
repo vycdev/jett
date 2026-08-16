@@ -18,9 +18,8 @@ function describe_user_with_aliases() returns string:
     use models as m
     m.User user = m.User(name: "Grace")
     return c.Named.name(view user)
-function main() returns nothing:
-    if describe_user() != "Ada":
-        int64 fail = 1 / 0
-    if describe_user_with_aliases() != "Grace":
-        int64 fail = 1 / 0
+function main(stdout: Stdout) returns nothing:
+    string direct = describe_user()
+    string aliases = describe_user_with_aliases()
+    Stdout.write(view stdout, "{direct}|{aliases}")
     return nothing

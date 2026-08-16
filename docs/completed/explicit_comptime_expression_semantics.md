@@ -37,4 +37,4 @@ expression.
 Coverage pins parser disambiguation, a namespaced pure call baked to `42`,
 runtime consumption of the baked value, E9001 for a runtime-local dependency,
 E0504 for capability access, and successful compilation of an unused ordinary
-pure call that would fail if implicitly executed.
+pure call that would recurse indefinitely if implicitly executed.

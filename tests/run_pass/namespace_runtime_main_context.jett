@@ -1,14 +1,9 @@
 namespace alpha
-
 function helper() returns int64:
     return 1
-
-function main() returns nothing:
-    if helper() != 1:
-        int64 boom = 1 / 0
+function main(stdout: Stdout) returns nothing:
+    Stdout.write(view stdout, string.from_int64(helper()))
     return nothing
-
 namespace beta
-
 function helper() returns int64:
     return 2

@@ -1500,9 +1500,9 @@ must preserve the [Random capability and entropy contract](completed/random_capa
 
 The complete public `math.*` API is defined in `stdlib/math.jett`. Compositional
 helpers have Jett bodies, including the consuming `math.sum(list[int64])`, which
-uses checked source addition. Private trusted kernels preserve floating-point
-primitives and constants, numeric-list aggregation, and integer operations whose
-exact domain and overflow failures cannot yet be raised from Jett source. Their
+uses wrapping source addition. Private trusted kernels preserve floating-point
+primitives and constants, numeric-list aggregation, and operations whose
+remaining domain failures cannot yet be raised from Jett source. Their
 checker and interpreter entry points reject project calls. The source-defined
 `math.abs`, `math.min`, and `math.max` facades retain one narrow compiler-owned
 type-policy gate for exact `int64`/`float64` dispatch; this is not general

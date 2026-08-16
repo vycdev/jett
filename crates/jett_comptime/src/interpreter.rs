@@ -1089,22 +1089,29 @@ impl Interpreter {
         }
     }
 
-    fn checked_sized_integer_overflow(&self, expr: &Expr, error: &str) -> Option<String> {
-        let operation = error.strip_prefix("integer overflow: ")?;
-        let type_name = self.checked_expression_types.as_ref()?.get(&expr.span())?;
+    fn wrap_integer_value_for_type_name(
+        &self,
+        type_name: &str,
+        value: Value,
+    ) -> Result<Value, String> {
         let primitive_type_name = self.primitive_base_type_name(type_name);
-        let (min, max) = match primitive_type_name.as_str() {
-            "int8" => (i64::from(i8::MIN), i64::from(i8::MAX)),
-            "int16" => (i64::from(i16::MIN), i64::from(i16::MAX)),
-            "int32" => (i64::from(i32::MIN), i64::from(i32::MAX)),
-            "uint8" => (0, i64::from(u8::MAX)),
-            "uint16" => (0, i64::from(u16::MAX)),
-            "uint32" => (0, i64::from(u32::MAX)),
-            _ => return None,
+        let value = match value {
+            Value::Int64(value) => value as u64,
+            Value::Uint64(value) => value,
+            other => return self.normalize_value_for_type_name(type_name, other),
         };
-        Some(format!(
-            "{primitive_type_name} operation {operation} is outside range {min}..{max}"
-        ))
+        let wrapped = match primitive_type_name.as_str() {
+            "int8" => Value::Int64((value as i8) as i64),
+            "int16" => Value::Int64((value as i16) as i64),
+            "int32" => Value::Int64((value as i32) as i64),
+            "int64" => Value::Int64(value as i64),
+            "uint8" => Value::Int64((value as u8) as i64),
+            "uint16" => Value::Int64((value as u16) as i64),
+            "uint32" => Value::Int64((value as u32) as i64),
+            "uint64" => Value::Uint64(value),
+            _ => return self.normalize_value_for_type_name(type_name, Value::Uint64(value)),
+        };
+        Ok(wrapped)
     }
 
     fn normalize_sized_integer(
@@ -1211,7 +1218,19 @@ impl Interpreter {
         else {
             return Ok(value);
         };
-        self.normalize_value_for_type_name(type_name, value)
+        if matches!(
+            expr,
+            Expr::Binary(
+                _,
+                BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Modulo,
+                _,
+                _
+            ) | Expr::Unary(UnaryOp::Neg, _, _)
+        ) {
+            self.wrap_integer_value_for_type_name(type_name, value)
+        } else {
+            self.normalize_value_for_type_name(type_name, value)
+        }
     }
 
     fn eval_expr_flow_inner(&mut self, expr: &Expr) -> Result<ExprFlow, String> {
@@ -1340,10 +1359,7 @@ impl Interpreter {
                         !equal
                     })));
                 }
-                let value = eval_binary_op(&left, *op, &right).map_err(|error| {
-                    self.checked_sized_integer_overflow(expr, &error)
-                        .unwrap_or(error)
-                })?;
+                let value = eval_binary_op(&left, *op, &right)?;
                 Ok(ExprFlow::Value(value))
             }
 
@@ -1637,10 +1653,7 @@ impl Interpreter {
 
         let val = value_or_signal!(self, operand);
         match val {
-            Value::Int64(n) => n
-                .checked_neg()
-                .map(|value| ExprFlow::Value(Value::Int64(value)))
-                .ok_or_else(|| "integer negation overflow".to_string()),
+            Value::Int64(n) => Ok(ExprFlow::Value(Value::Int64(n.wrapping_neg()))),
             Value::Float64(n) => Ok(ExprFlow::Value(Value::Float64(-n))),
             _ => Err("unary '-' requires a numeric operand".to_string()),
         }
@@ -8458,11 +8471,7 @@ impl Interpreter {
             "math.__abs" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
-                    Value::Int64(n) => Some(
-                        n.checked_abs()
-                            .map(Value::Int64)
-                            .ok_or_else(|| format!("math.abs: integer overflow: abs({n})")),
-                    ),
+                    Value::Int64(n) => Some(Ok(Value::Int64(n.wrapping_abs()))),
                     Value::Float64(n) => Some(Ok(Value::Float64(n.abs()))),
                     _ => Some(Err(format!("{name} expects a numeric argument"))),
                 }
@@ -8512,10 +8521,7 @@ impl Interpreter {
                                 return Some(Err("math.pow: exponent out of range".to_string()));
                             }
                         };
-                        match base.checked_pow(exp_u) {
-                            Some(value) => Some(Ok(Value::Int64(value))),
-                            None => Some(Err("math.pow: integer overflow".to_string())),
-                        }
+                        Some(Ok(Value::Int64(base.wrapping_pow(exp_u))))
                     }
                     (Value::Float64(base), Value::Int64(exp)) => {
                         Some(Ok(Value::Float64(base.powi(*exp as i32))))
@@ -8691,11 +8697,7 @@ impl Interpreter {
                         if *b == 0 {
                             Some(Err("math.mod: division by zero".to_string()))
                         } else {
-                            Some(
-                                a.checked_rem(*b).map(Value::Int64).ok_or_else(|| {
-                                    format!("math.mod: integer overflow: {a} % {b}")
-                                }),
-                            )
+                            Some(Ok(Value::Int64(a.wrapping_rem(*b))))
                         }
                     }
                     _ => Some(Err(format!("{name} expects two int64 arguments"))),
@@ -8711,9 +8713,7 @@ impl Interpreter {
                             y = x % y;
                             x = t;
                         }
-                        Some(i64::try_from(x).map(Value::Int64).map_err(|_| {
-                            format!("math.gcd: integer overflow: result {x} does not fit int64")
-                        }))
+                        Some(Ok(Value::Int64(x as i64)))
                     }
                     _ => Some(Err(format!("{name} expects two int64 arguments"))),
                 }
@@ -8725,12 +8725,8 @@ impl Interpreter {
                         if *a == 0 || *b == 0 {
                             Some(Ok(Value::Int64(0)))
                         } else {
-                            let Some(left) = a.checked_abs() else {
-                                return Some(Err(format!("math.lcm: integer overflow: abs({a})")));
-                            };
-                            let Some(right) = b.checked_abs() else {
-                                return Some(Err(format!("math.lcm: integer overflow: abs({b})")));
-                            };
+                            let left = a.unsigned_abs();
+                            let right = b.unsigned_abs();
                             let (mut x, mut y) = (left, right);
                             while y != 0 {
                                 let t = y;
@@ -8738,9 +8734,7 @@ impl Interpreter {
                                 x = t;
                             }
                             let factor = left / x;
-                            Some(factor.checked_mul(right).map(Value::Int64).ok_or_else(|| {
-                                format!("math.lcm: integer overflow: {factor} * {right}")
-                            }))
+                            Some(Ok(Value::Int64(factor.wrapping_mul(right) as i64)))
                         }
                     }
                     _ => Some(Err(format!("{name} expects two int64 arguments"))),
@@ -8757,12 +8751,7 @@ impl Interpreter {
                         } else {
                             let mut result: i64 = 1;
                             for i in 2..=*n {
-                                let Some(next_result) = result.checked_mul(i) else {
-                                    return Some(Err(format!(
-                                        "math.factorial: integer overflow: {result} * {i}"
-                                    )));
-                                };
-                                result = next_result;
+                                result = result.wrapping_mul(i);
                             }
                             Some(Ok(Value::Int64(result)))
                         }
@@ -9645,12 +9634,7 @@ impl Interpreter {
                                 for item in items {
                                     match item {
                                         Value::Int64(n) => {
-                                            let Some(next_total) = total.checked_add(*n) else {
-                                                return Some(Err(format!(
-                                                    "{name}: integer overflow: {total} + {n}"
-                                                )));
-                                            };
-                                            total = next_total;
+                                            total = total.wrapping_add(*n);
                                         }
                                         _ => return Some(Err(format!("{name}: mixed types"))),
                                     }
@@ -10221,30 +10205,21 @@ fn uint64_arithmetic_operand(value: i64) -> Result<u64, String> {
 
 fn eval_uint64_arithmetic(left: u64, op: BinOp, right: u64) -> Result<Value, String> {
     match op {
-        BinOp::Add => left
-            .checked_add(right)
-            .map(Value::Uint64)
-            .ok_or_else(|| format!("uint64 overflow: {left} + {right}")),
-        BinOp::Sub => left
-            .checked_sub(right)
-            .map(Value::Uint64)
-            .ok_or_else(|| format!("uint64 overflow: {left} - {right}")),
-        BinOp::Mul => left
-            .checked_mul(right)
-            .map(Value::Uint64)
-            .ok_or_else(|| format!("uint64 overflow: {left} * {right}")),
+        BinOp::Add => Ok(Value::Uint64(left.wrapping_add(right))),
+        BinOp::Sub => Ok(Value::Uint64(left.wrapping_sub(right))),
+        BinOp::Mul => Ok(Value::Uint64(left.wrapping_mul(right))),
         BinOp::Div => {
             if right == 0 {
                 Err("division by zero".to_string())
             } else {
-                Ok(Value::Uint64(left / right))
+                Ok(Value::Uint64(left.wrapping_div(right)))
             }
         }
         BinOp::Modulo => {
             if right == 0 {
                 Err("modulo by zero".to_string())
             } else {
-                Ok(Value::Uint64(left % right))
+                Ok(Value::Uint64(left.wrapping_rem(right)))
             }
         }
         _ => Err("unsupported uint64 arithmetic operator".to_string()),
@@ -10299,34 +10274,21 @@ fn compare_i64_uint64(left: i64, op: BinOp, right: u64) -> Result<Value, String>
 fn eval_binary_op(left: &Value, op: BinOp, right: &Value) -> Result<Value, String> {
     match (left, op, right) {
         // -- Integer arithmetic -----------------------------------------------
-        (Value::Int64(a), BinOp::Add, Value::Int64(b)) => a
-            .checked_add(*b)
-            .map(Value::Int64)
-            .ok_or_else(|| format!("integer overflow: {a} + {b}")),
-        (Value::Int64(a), BinOp::Sub, Value::Int64(b)) => a
-            .checked_sub(*b)
-            .map(Value::Int64)
-            .ok_or_else(|| format!("integer overflow: {a} - {b}")),
-        (Value::Int64(a), BinOp::Mul, Value::Int64(b)) => a
-            .checked_mul(*b)
-            .map(Value::Int64)
-            .ok_or_else(|| format!("integer overflow: {a} * {b}")),
+        (Value::Int64(a), BinOp::Add, Value::Int64(b)) => Ok(Value::Int64(a.wrapping_add(*b))),
+        (Value::Int64(a), BinOp::Sub, Value::Int64(b)) => Ok(Value::Int64(a.wrapping_sub(*b))),
+        (Value::Int64(a), BinOp::Mul, Value::Int64(b)) => Ok(Value::Int64(a.wrapping_mul(*b))),
         (Value::Int64(a), BinOp::Div, Value::Int64(b)) => {
             if *b == 0 {
                 Err("division by zero".to_string())
             } else {
-                a.checked_div(*b)
-                    .map(Value::Int64)
-                    .ok_or_else(|| format!("integer overflow: {a} / {b}"))
+                Ok(Value::Int64(a.wrapping_div(*b)))
             }
         }
         (Value::Int64(a), BinOp::Modulo, Value::Int64(b)) => {
             if *b == 0 {
                 Err("modulo by zero".to_string())
             } else {
-                a.checked_rem(*b)
-                    .map(Value::Int64)
-                    .ok_or_else(|| format!("integer overflow: {a} % {b}"))
+                Ok(Value::Int64(a.wrapping_rem(*b)))
             }
         }
         (
@@ -13657,25 +13619,17 @@ mod tests {
     }
 
     #[test]
-    fn eval_integer_division_overflow_reports_error() {
+    fn eval_integer_division_wraps_overflow() {
         let mut interp = Interpreter::new();
         let expr = binary(int(i64::MIN), BinOp::Div, int(-1));
-        let err = interp.eval_expr(&expr).unwrap_err();
-        assert_eq!(
-            err,
-            "integer overflow: -9223372036854775808 / -1".to_string()
-        );
+        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(i64::MIN));
     }
 
     #[test]
-    fn eval_integer_modulo_overflow_reports_error() {
+    fn eval_integer_modulo_wraps_overflow() {
         let mut interp = Interpreter::new();
         let expr = binary(int(i64::MIN), BinOp::Modulo, int(-1));
-        let err = interp.eval_expr(&expr).unwrap_err();
-        assert_eq!(
-            err,
-            "integer overflow: -9223372036854775808 % -1".to_string()
-        );
+        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(0));
     }
 
     #[test]
@@ -17295,14 +17249,11 @@ mod builtin_tests {
     }
 
     #[test]
-    fn private_math_abs_int64_min_reports_overflow() {
+    fn private_math_abs_int64_min_wraps() {
         let mut interp = Interpreter::new();
         interp.current_function_trusted_stdlib = true;
         let expr = dotted_call("math", "__abs", vec![int(i64::MIN)]);
-        assert_eq!(
-            interp.eval_expr(&expr).unwrap_err(),
-            "math.abs: integer overflow: abs(-9223372036854775808)"
-        );
+        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(i64::MIN));
     }
 
     #[test]
@@ -17346,14 +17297,11 @@ mod builtin_tests {
     }
 
     #[test]
-    fn private_math_pow_int_overflow_returns_error() {
+    fn private_math_pow_int_overflow_wraps() {
         let mut interp = Interpreter::new();
         interp.current_function_trusted_stdlib = true;
         let expr = dotted_call("math", "__pow", vec![int(2), int(63)]);
-        assert_eq!(
-            interp.eval_expr(&expr),
-            Err("math.pow: integer overflow".to_string())
-        );
+        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(i64::MIN));
     }
 
     #[test]
@@ -17373,15 +17321,11 @@ mod builtin_tests {
     }
 
     #[test]
-    fn private_math_gcd_reports_unrepresentable_result() {
+    fn private_math_gcd_wraps_unrepresentable_result() {
         let mut interp = Interpreter::new();
         interp.current_function_trusted_stdlib = true;
         let expr = dotted_call("math", "__gcd", vec![int(i64::MIN), int(0)]);
-        let err = interp.eval_expr(&expr).unwrap_err();
-        assert_eq!(
-            err,
-            "math.gcd: integer overflow: result 9223372036854775808 does not fit int64".to_string()
-        );
+        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(i64::MIN));
     }
 
     #[test]

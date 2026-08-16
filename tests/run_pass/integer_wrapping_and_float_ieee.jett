@@ -1,0 +1,28 @@
+namespace test
+function add_int8(left: int8, right: int8) returns int8:
+    return left + right
+function subtract_int8(left: int8, right: int8) returns int8:
+    return left - right
+function multiply_uint32(left: uint32, right: uint32) returns uint32:
+    return left * right
+function add_int64(left: int64, right: int64) returns int64:
+    return left + right
+function add_uint64(left: uint64, right: uint64) returns uint64:
+    return left + right
+function divide_minimum_by_negative_one() returns int64:
+    int64 minimum = -9223372036854775808
+    return minimum / -1
+verify integer_wrapping_and_float_ieee:
+    int8 minimum_int8 = -128
+    int8 maximum_int8 = 127
+    int64 minimum_int64 = -9223372036854775808
+    assert add_int8(127, 1) == minimum_int8
+    assert subtract_int8(-128, 1) == maximum_int8
+    assert multiply_uint32(4294967295, 4294967295) == 1
+    assert add_int64(9223372036854775807, 1) == minimum_int64
+    assert add_uint64(18446744073709551615, 1) == 0
+    assert divide_minimum_by_negative_one() == minimum_int64
+    float64 infinity = 1.0 / 0.0
+    float64 not_a_number = 0.0 / 0.0
+    assert infinity > 1.0
+    assert not_a_number != not_a_number

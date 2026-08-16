@@ -1448,11 +1448,11 @@ float64 power = math.pow(base, exponent)
 
 The complete public `math.*` API is ordinary source in `stdlib/math.jett` and
 resolves like user code. Compositional helpers have Jett bodies; `math.sum` uses
-ordinary checked source addition, so overflow reports the same deterministic
-arithmetic error as other `int64` expressions. Private trusted kernels preserve
-floating-point primitives and constants, numeric-list aggregation, and integer
-operations whose exact domain and overflow failures cannot yet be raised from
-source. Project code cannot call those kernels. `math.abs`, `math.min`, and
+ordinary source addition, so integer overflow wraps exactly as it does in other
+`int64` expressions. Private trusted kernels preserve floating-point primitives
+and constants, numeric-list aggregation, and operations whose remaining domain
+failures cannot yet be raised from source. Project code cannot call those
+kernels. `math.abs`, `math.min`, and
 `math.max` retain only their narrow compiler-owned `int64`/`float64` type-policy
 gate, not public runtime dispatch or general overloading.
 
@@ -6771,10 +6771,15 @@ expression is checked in a `uint64` context, including nested contexts such as
 than guessing from the literal's small numeric value. Expression-only consumers,
 such as primitive interface dispatch, therefore see the checked carrier.
 The smaller fixed-width integer primitives use the `int64` runtime carrier, but
-the interpreter validates their declared ranges after checked expressions and
-at typed assignment, parameter, and return boundaries. Arithmetic that leaves
-the range of its checked primitive type is a deterministic runtime error rather
-than a widened value.
+arithmetic is normalized at the checked primitive width. Integer addition,
+subtraction, multiplication, negation, division, and modulo wrap modulo that
+width, including signed minimum divided by `-1`. Integer division and modulo
+are accepted only when the divisor is statically proven nonzero by its
+refinement, a nonzero literal or immutable binding, or a visible equality
+guard. Floating-point arithmetic follows IEEE behavior, including infinity and
+NaN for division by zero. Arithmetic therefore does not create runtime
+exceptions or handled errors. Refinement types remain the way to constrain an
+application to a mathematically non-overflowing domain.
 
 **Function types** describe the signature of a function value — its parameter types and return type. They reuse the existing `function` and `returns` keywords in type position:
 

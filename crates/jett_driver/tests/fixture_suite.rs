@@ -294,6 +294,10 @@ compile_fail_fixture!(compile_fail_type_mismatch, "type_mismatch.jett");
 compile_fail_fixture!(compile_fail_secret_stdout, "secret_stdout.jett");
 compile_fail_fixture!(compile_fail_secret_print, "secret_print.jett");
 compile_fail_fixture!(
+    compile_fail_integer_divisor_requires_nonzero_proof,
+    "integer_divisor_requires_nonzero_proof.jett"
+);
+compile_fail_fixture!(
     compile_fail_comptime_expression_requires_closed_value,
     "comptime_expression_requires_closed_value.jett"
 );
@@ -327,6 +331,15 @@ run_pass_fixture!(run_pass_fibonacci, "fibonacci.jett");
 run_pass_fixture!(run_pass_hello_print, "hello_print.jett");
 run_pass_fixture!(run_pass_string_interpolation, "string_interpolation.jett");
 run_pass_fixture!(run_pass_stdlib_loading, "stdlib_loading.jett");
+run_pass_fixture!(
+    run_pass_integer_wrapping_and_float_ieee,
+    "integer_wrapping_and_float_ieee.jett"
+);
+run_pass_fixture!(
+    run_pass_integer_nonzero_proofs,
+    "integer_nonzero_proofs.jett"
+);
+run_pass_fixture!(run_pass_math_integer_wrapping, "math_integer_wrapping.jett");
 run_pass_fixture!(
     run_pass_explicit_comptime_expression,
     "explicit_comptime_expression.jett"
@@ -396,99 +409,55 @@ fn run_file_capture_stdout_captures_capability_writes() {
 }
 
 #[test]
-fn sized_integer_runtime_bounds_reject_variable_arithmetic() {
+fn sized_integer_arithmetic_wraps_without_runtime_failure() {
     let cases = [
-        (
-            "int8_expression_underflow.jett",
-            "runtime error: int8 value -129 is outside range -128..127",
-        ),
-        (
-            "int16_return_overflow.jett",
-            "runtime error: int16 value 32768 is outside range -32768..32767",
-        ),
-        (
-            "int32_assignment_underflow.jett",
-            "runtime error: int32 value -2147483649 is outside range -2147483648..2147483647",
-        ),
-        (
-            "uint8_expression_overflow.jett",
-            "runtime error: uint8 value 256 is outside range 0..255",
-        ),
-        (
-            "secret_uint8_expression_overflow.jett",
-            "runtime error: uint8 value 256 is outside range 0..255",
-        ),
-        (
-            "secret_uint8_alias_expression_overflow.jett",
-            "runtime error: uint8 value 256 is outside range 0..255",
-        ),
-        (
-            "uint16_parameter_overflow.jett",
-            "runtime error: uint16 value 65536 is outside range 0..65535",
-        ),
-        (
-            "uint32_nested_expression_overflow.jett",
-            "runtime error: uint32 value 4294967296 is outside range 0..4294967295",
-        ),
-        (
-            "uint32_multiplication_overflow.jett",
-            "runtime error: uint32 operation 4294967295 * 4294967295 is outside range 0..4294967295",
-        ),
+        "int8_expression_underflow.jett",
+        "int16_return_overflow.jett",
+        "int32_assignment_underflow.jett",
+        "uint8_expression_overflow.jett",
+        "secret_uint8_expression_overflow.jett",
+        "secret_uint8_alias_expression_overflow.jett",
+        "uint16_parameter_overflow.jett",
+        "uint32_nested_expression_overflow.jett",
+        "uint32_multiplication_overflow.jett",
     ];
 
-    for (name, expected) in cases {
-        assert_runtime_fail(name, expected);
+    for name in cases {
+        let path = fixture_path("runtime_fail", name);
+        run_file(&path)
+            .unwrap_or_else(|error| panic!("expected {} to wrap: {error}", path.display()));
     }
 }
 
 #[test]
-fn math_gcd_reports_unrepresentable_result() {
-    assert_runtime_fail(
-        "math_gcd_int64_min.jett",
-        "runtime error: math.gcd: integer overflow: result 9223372036854775808 does not fit int64",
-    );
+fn math_gcd_wraps_unrepresentable_result() {
+    run_file(&fixture_path("runtime_fail", "math_gcd_int64_min.jett")).unwrap();
 }
 
 #[test]
-fn math_lcm_reports_overflow() {
-    let cases = [
-        (
-            "math_lcm_overflow.jett",
-            "runtime error: math.lcm: integer overflow: 3037000500 * 3037000501",
-        ),
-        (
-            "math_lcm_int64_min.jett",
-            "runtime error: math.lcm: integer overflow: abs(-9223372036854775808)",
-        ),
-    ];
-
-    for (name, expected) in cases {
-        assert_runtime_fail(name, expected);
+fn math_lcm_wraps_overflow() {
+    for name in ["math_lcm_overflow.jett", "math_lcm_int64_min.jett"] {
+        run_file(&fixture_path("runtime_fail", name)).unwrap();
     }
 }
 
 #[test]
-fn math_sum_reports_overflow() {
-    assert_runtime_fail(
-        "math_sum_overflow.jett",
-        "runtime error: integer overflow: 9223372036854775807 + 1",
-    );
+fn math_sum_wraps_overflow() {
+    run_file(&fixture_path("runtime_fail", "math_sum_overflow.jett")).unwrap();
 }
 
 #[test]
-fn list_sum_reports_overflow() {
-    assert_runtime_fail(
-        "list_sum_overflow.jett",
-        "runtime error: list.__sum: integer overflow: 9223372036854775807 + 1",
-    );
+fn list_sum_wraps_overflow() {
+    run_file(&fixture_path("runtime_fail", "list_sum_overflow.jett")).unwrap();
 }
 
 #[test]
-fn math_factorial_reports_overflow() {
-    assert_runtime_fail(
+fn math_factorial_wraps_overflow() {
+    run_file(&fixture_path(
+        "runtime_fail",
         "math_factorial_overflow.jett",
-        "runtime error: math.factorial: integer overflow: 2432902008176640000 * 21",
-    );
+    ))
+    .unwrap();
 }
 
 #[test]
@@ -514,19 +483,13 @@ fn math_clamp_rejects_invalid_bounds() {
 }
 
 #[test]
-fn math_abs_reports_overflow() {
-    assert_runtime_fail(
-        "math_abs_int64_min.jett",
-        "runtime error: math.abs: integer overflow: abs(-9223372036854775808)",
-    );
+fn math_abs_wraps_overflow() {
+    run_file(&fixture_path("runtime_fail", "math_abs_int64_min.jett")).unwrap();
 }
 
 #[test]
-fn math_mod_reports_overflow() {
-    assert_runtime_fail(
-        "math_mod_overflow.jett",
-        "runtime error: math.mod: integer overflow: -9223372036854775808 % -1",
-    );
+fn math_mod_wraps_overflow() {
+    run_file(&fixture_path("runtime_fail", "math_mod_overflow.jett")).unwrap();
 }
 
 #[test]
@@ -614,6 +577,16 @@ run_pass_fixture!(
     run_pass_namespace_runtime_main_context,
     "namespace_runtime_main_context.jett"
 );
+
+#[test]
+fn runtime_namespace_fixtures_report_their_resolved_values() {
+    assert_run_stdout("namespace_runtime_main_context.jett", "1");
+    assert_run_stdout("namespace_qualified_interface_implement.jett", "Ada|Grace");
+    assert_run_stdout(
+        "namespace_duplicate_leaf_interfaces.jett",
+        "Ada:sensor|Grace:meter",
+    );
+}
 run_pass_fixture!(
     run_pass_handle_result_optional,
     "handle_result_optional.jett"
@@ -833,6 +806,14 @@ run_pass_fixture!(
     run_pass_json_runtime_reflection_metadata,
     "json_runtime_reflection_metadata.jett"
 );
+
+#[test]
+fn runtime_json_reflection_fixture_reports_checked_metadata() {
+    assert_run_stdout(
+        "json_runtime_reflection_metadata.jett",
+        "models.Box[models.User]:models.User:item:{\"item\":{\"userId\":\"u1\"}}:u1|enum:json.JsonTree:object:object:true:true",
+    );
+}
 run_pass_fixture!(
     run_pass_json_tree_reflection_variant_metadata,
     "json_tree_reflection_variant_metadata.jett"

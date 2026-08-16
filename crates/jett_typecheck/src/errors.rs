@@ -813,6 +813,17 @@ pub fn fixed_size_array_is_unsupported(span: Span) -> Diagnostic {
     )
 }
 
+/// E0361: Integer division or modulo requires a proven nonzero divisor.
+pub fn integer_divisor_must_be_nonzero(operator: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        361,
+        format!(
+            "integer `{operator}` requires a divisor proven nonzero; use a nonzero refinement or a visible zero guard"
+        ),
+        span,
+    )
+}
+
 // Diagnostic codes E0800-E0899 are reserved for function complexity limits.
 
 /// E0800: Function body exceeds the statement count limit.
