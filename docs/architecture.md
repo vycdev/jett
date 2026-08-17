@@ -1777,6 +1777,8 @@ Fast recompilation is critical for the LLM compile-fix loop (Footnote 5). The ar
 
 > The initial query and invalidation boundary for the current direct-AST
 > frontend is tracked by [#147](https://github.com/vycdev/jett/issues/147).
+> Persistent compiler-result and artifact identity, serialization, and cache
+> safety are tracked separately by [#153](https://github.com/vycdev/jett/issues/153).
 
 ### Core Principle: Separate Signatures from Bodies
 
@@ -2031,7 +2033,8 @@ Core stdlib (string, list, math, json) is implemented in Phase D. This phase com
 
 1. Demand-driven query system with caching and invalidation (salsa integration).
 2. Parallel compilation of independent namespaces.
-3. Content-addressed caching of compilation artifacts.
+3. Content-addressed caching of compilation artifacts (identity,
+   serialization, trust, and lifecycle contract [tracked by #153](https://github.com/vycdev/jett/issues/153)).
 4. Comprehensive test suite.
 
 **Milestone:** Production-ready compiler with fast iteration cycles.

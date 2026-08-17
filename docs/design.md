@@ -39,7 +39,11 @@ Jett is optimized not just for LLM code generation, but also for how coding agen
 
 **New code can be added safely.** Jett's strict top-to-bottom ordering means an agent appending a new function at the end of a file cannot break existing code above it. Adding functionality is always additive.
 
-**Builds are deterministic.** Content-addressed dependencies with SHA-256 hashes mean builds are reproducible across environments. An agent will never encounter "works on my machine" issues.
+**Builds must be deterministic.** Vendored dependencies are pinned by Git,
+while a separate content-addressed compilation-cache contract is
+[tracked by #153](https://github.com/vycdev/jett/issues/153). That contract must
+preserve reproducibility across environments rather than introducing
+"works on my machine" drift.
 
 *Note: The `--agent` flag and the Agent Server Protocol (ASP) referenced above are defined in Rule Set 21. The ASP specifies how the compiler communicates structured TOON output to agents — including build errors, type queries, signature lookups, completions, and test results. The exact capabilities and query formats are still being refined and may evolve as the compiler is implemented. See Rule Set 21 for the current specification.*
 
@@ -2828,7 +2832,7 @@ function connect() returns nothing:
     return nothing
 ```
 
-The compiler scans all `.jett` files in the project (including `deps/`), reads their `namespace` declarations, and resolves `use json_extra` to whichever file declared `namespace json_extra`. The file path is irrelevant (Rule Set 22). No URL fetching, no hash checking, no registry lookup. The dependency is right there, readable by the LLM, tracked by git.
+The compiler scans all `.jett` files in the project (including `deps/`), reads their `namespace` declarations, and resolves `use json_extra` to whichever file declared `namespace json_extra`. The file path is irrelevant (Rule Set 22). No URL fetching, no dependency-integrity hash checking, no registry lookup. The dependency is right there, readable by the LLM, tracked by git. This dependency policy is distinct from the compiler-result and artifact cache [tracked by #153](https://github.com/vycdev/jett/issues/153).
 
 **What happens when an LLM hallucinates a dependency:**
 
