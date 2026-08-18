@@ -1,4 +1,7 @@
 # ERROR: E1000
+# ERROR: E1000
+# ERROR: E1000
+# ERROR: E1000
 namespace test
 
 struct User:

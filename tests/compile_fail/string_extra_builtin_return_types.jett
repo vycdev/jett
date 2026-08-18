@@ -1,4 +1,15 @@
 # ERROR: E0311
+# ERROR: E0311
+# ERROR: E0311
+# ERROR: E0311
+# ERROR: E0311
+# ERROR: E0311
+# ERROR: E0311
+# ERROR: E0311
+# ERROR: E0311
+# ERROR: E0311
+# ERROR: E0311
+# ERROR: E0311
 namespace test
 function bad_index_of() returns bool:
     bool value = string.index_of("hello", "e")

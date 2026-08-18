@@ -1,3 +1,5 @@
+# ERROR: E0304
+# ERROR: E0309
 # ERROR: E0345
 namespace test
 function bad() returns string:

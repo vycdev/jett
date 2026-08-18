@@ -1,3 +1,5 @@
+# ERROR: E0200
+# ERROR: E0208
 # ERROR: E0208
 namespace auth
 export machine Session:

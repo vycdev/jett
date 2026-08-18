@@ -1,3 +1,8 @@
+# ERROR: E0304
+# ERROR: E0304
+# ERROR: E0311
+# ERROR: E0311
+# ERROR: E0311
 # ERROR: E0311
 namespace test
 enum JsonTree:

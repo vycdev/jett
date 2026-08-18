@@ -1,6 +1,8 @@
 # ERROR: E0359
 # ERROR: E0359
 # ERROR: E0359
+# ERROR: E0359
+# ERROR: E0359
 enum Status:
     active
     disabled

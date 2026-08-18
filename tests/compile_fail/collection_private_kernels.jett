@@ -1,3 +1,16 @@
+# ERROR: E0313
+# ERROR: E0313
+# ERROR: E0313
+# ERROR: E0313
+# ERROR: E0313
+# ERROR: E0313
+# ERROR: E0313
+# ERROR: E0313
+# ERROR: E0313
+# ERROR: E0313
+# ERROR: E0313
+# ERROR: E0313
+# ERROR: E0313
 namespace app
 function map_kernel_is_private() returns map[string, int64]:
     return map.__new[string, int64]()

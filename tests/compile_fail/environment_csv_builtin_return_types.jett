@@ -1,4 +1,8 @@
 # ERROR: E0311
+# ERROR: E0311
+# ERROR: E0311
+# ERROR: E0311
+# ERROR: E0311
 namespace test
 function bad_os_args() returns bool:
     bool value = os.args()

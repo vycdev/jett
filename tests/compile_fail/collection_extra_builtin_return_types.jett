@@ -1,4 +1,16 @@
 # ERROR: E0311
+# ERROR: E0311
+# ERROR: E0311
+# ERROR: E0311
+# ERROR: E0311
+# ERROR: E0311
+# ERROR: E0311
+# ERROR: E0311
+# ERROR: E0311
+# ERROR: E0311
+# ERROR: E0311
+# ERROR: E0311
+# ERROR: E0317
 namespace test
 function bad_list_repeat() returns bool:
     bool value = list.repeat(0, 3)

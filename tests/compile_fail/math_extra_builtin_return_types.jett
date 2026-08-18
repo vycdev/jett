@@ -1,4 +1,18 @@
 # ERROR: E0311
+# ERROR: E0311
+# ERROR: E0311
+# ERROR: E0311
+# ERROR: E0311
+# ERROR: E0311
+# ERROR: E0311
+# ERROR: E0311
+# ERROR: E0311
+# ERROR: E0311
+# ERROR: E0311
+# ERROR: E0311
+# ERROR: E0311
+# ERROR: E0311
+# ERROR: E0311
 namespace test
 function bad_pi() returns bool:
     bool value = math.pi()

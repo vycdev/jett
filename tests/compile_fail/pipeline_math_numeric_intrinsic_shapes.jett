@@ -1,4 +1,7 @@
 # ERROR: E0303
+# ERROR: E0303
+# ERROR: E0304
+# ERROR: E0304
 # ERROR: E0304
 namespace app
 function bad_pipeline_math_abs_arg_count() returns int64:

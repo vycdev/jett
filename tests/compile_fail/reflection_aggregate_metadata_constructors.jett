@@ -1,4 +1,7 @@
 # ERROR: E0354
+# ERROR: E0354
+# ERROR: E0354
+# ERROR: E0354
 namespace test
 function forged_bitfield_field_metadata() returns TypeBitfieldField:
     TypeInfo field_type = type.info[int64]()

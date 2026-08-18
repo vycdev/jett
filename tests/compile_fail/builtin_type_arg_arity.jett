@@ -1,4 +1,8 @@
 # ERROR: E0309
+# ERROR: E0309
+# ERROR: E0309
+# ERROR: E0309
+# ERROR: E0309
 namespace test
 function bad_string_length(value: string) returns int64:
     return string.length[int64](value)

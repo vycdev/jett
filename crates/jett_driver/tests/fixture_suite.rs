@@ -58,6 +58,48 @@ fn expected_error_codes(source: &str) -> Vec<u32> {
         .collect()
 }
 
+fn validate_error_code_contract(
+    expected_codes: &[u32],
+    actual_codes: &[u32],
+) -> Result<(), String> {
+    if expected_codes.is_empty() {
+        return Err("fixture must declare at least one `# ERROR:` annotation".to_owned());
+    }
+
+    let mut expected_codes = expected_codes.to_vec();
+    let mut actual_codes = actual_codes.to_vec();
+    expected_codes.sort_unstable();
+    actual_codes.sort_unstable();
+
+    if expected_codes == actual_codes {
+        Ok(())
+    } else {
+        Err(format!(
+            "expected error-code multiset {expected_codes:?}, got {actual_codes:?}"
+        ))
+    }
+}
+
+#[test]
+fn error_code_contract_rejects_missing_annotations() {
+    assert!(validate_error_code_contract(&[], &[300]).is_err());
+}
+
+#[test]
+fn error_code_contract_rejects_unexpected_diagnostics() {
+    assert!(validate_error_code_contract(&[300], &[300, 400]).is_err());
+}
+
+#[test]
+fn error_code_contract_rejects_unexpected_duplicate_diagnostics() {
+    assert!(validate_error_code_contract(&[300], &[300, 300]).is_err());
+}
+
+#[test]
+fn error_code_contract_ignores_diagnostic_order() {
+    assert!(validate_error_code_contract(&[317, 316], &[316, 317]).is_ok());
+}
+
 fn error_messages(path: &Path, diagnostics: &[jett_diagnostics::Diagnostic]) -> String {
     diagnostics
         .iter()
@@ -108,12 +150,10 @@ fn assert_compile_fail(name: &str) {
         .map(|diag| u32::from(diag.code.code()))
         .collect();
 
-    for expected in expected_codes {
-        assert!(
-            actual_codes.contains(&expected),
-            "expected {} to report E{:04}, got:\n{}",
+    if let Err(error) = validate_error_code_contract(&expected_codes, &actual_codes) {
+        panic!(
+            "diagnostic contract failed for {}: {error}\n{}",
             path.display(),
-            expected,
             error_messages(&path, &result.diagnostics)
         );
     }

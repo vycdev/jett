@@ -1,4 +1,11 @@
 # ERROR: E0348
+# ERROR: E0348
+# ERROR: E0348
+# ERROR: E0348
+# ERROR: E0348
+# ERROR: E0348
+# ERROR: E0348
+# ERROR: E0348
 namespace test
 machine BuilderMachine:
     states:

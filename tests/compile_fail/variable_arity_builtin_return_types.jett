@@ -1,3 +1,6 @@
+# ERROR: E0309
+# ERROR: E0311
+# ERROR: E0311
 # ERROR: E0311
 namespace test
 function bad_range() returns bool:

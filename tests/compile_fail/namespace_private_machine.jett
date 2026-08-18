@@ -1,3 +1,5 @@
+# ERROR: E0200
+# ERROR: E0207
 # ERROR: E0207
 namespace auth
 machine Session:
