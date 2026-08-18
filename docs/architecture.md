@@ -1850,7 +1850,7 @@ Each crate has its own unit tests:
 ### Integration Tests (`tests/`)
 
 - **`compile_pass/`** — Jett programs that should compile without errors. Tests run `jett build` and assert exit code 0.
-- **`compile_fail/`** — Jett programs with intentional errors. Tests assert specific error codes and messages. Each test file has a comment annotation like `# ERROR: E0601 secret type exposure`.
+- **`compile_fail/`** — Jett programs with intentional errors. Tests assert specific error codes and messages. Each test file has a comment annotation like `# ERROR: E0601 secret type exposure`; exact diagnostic-contract hardening is [tracked by #155](https://github.com/vycdev/jett/issues/155).
 - **`run_pass/`** — Jett programs that should compile and execute successfully. Verify/property fixtures assert internally, and stdout-producing runtime fixtures can be pinned through the driver's captured-stdout test helper.
 - **`snapshots/`** — Snapshot tests for intermediate representations. Source → AST, source → HIR, source → MIR, source → LLVM IR. Uses `insta` for snapshot management.
 
@@ -2032,7 +2032,7 @@ Core stdlib (string, list, math, json) is implemented in Phase D. This phase com
 1. Demand-driven query system with caching and invalidation (salsa integration).
 2. Parallel compilation of independent namespaces.
 3. Content-addressed caching of compilation artifacts.
-4. Comprehensive test suite.
+4. Comprehensive test suite, split into bounded work: compile-fail diagnostic-contract hardening is [tracked by #155](https://github.com/vycdev/jett/issues/155), while representation-specific snapshots remain phase-gated.
 
 **Milestone:** Production-ready compiler with fast iteration cycles.
 
