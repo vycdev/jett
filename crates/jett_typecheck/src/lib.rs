@@ -6,4 +6,4 @@ pub mod complexity;
 pub mod errors;
 pub mod ownership;
 
-pub use checker::{CheckResult, check};
+pub use checker::{CheckOptions, CheckResult, check, check_with_options};

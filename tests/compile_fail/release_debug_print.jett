@@ -1,0 +1,7 @@
+# ERROR: E0362
+# ERROR: E0362
+# ERROR: E0301
+namespace test
+function debug_output() returns nothing:
+    print("value", 1)
+    println(1 + true)
