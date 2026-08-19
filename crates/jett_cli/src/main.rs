@@ -221,12 +221,13 @@ fn main() {
         }
         Command::Build {
             file,
-            release: _,
+            release,
             agent,
             target: _,
         } => {
             let path = Path::new(&file);
-            let result = jett_driver::build_file(path);
+            let result =
+                jett_driver::build_file_with_options(path, jett_driver::BuildOptions { release });
 
             if agent {
                 // TOON agent output mode

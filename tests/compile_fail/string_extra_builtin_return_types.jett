@@ -1,4 +1,4 @@
-# ERROR: E0311
+# ERROR: E0311 x12
 namespace test
 function bad_index_of() returns bool:
     bool value = string.index_of("hello", "e")

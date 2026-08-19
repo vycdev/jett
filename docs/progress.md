@@ -117,7 +117,7 @@
 | `and`/`or` keyword operators for logical expressions | Done |
 | Unhandled result/optional detection (E0341, E0342) | Done |
 | Set value type and 12 set builtins (`new`, `add`, `remove`, `contains`, `union`, `intersection`, `difference`) | Done |
-| `print`/`println` builtins | Partial (interpreter support and secret blocking are done; [debug-only capability policy](open_design/print_debug_builtin_policy.md) is decided, while debug-event isolation, release diagnostics, and future-backend conformance remain pending) |
+| `print`/`println` builtins | Partial (interpreter support, secret blocking, and E0362 release diagnostics are done; [debug-only capability policy](open_design/print_debug_builtin_policy.md) is decided, while debug-event isolation and future-backend conformance remain pending) |
 | Type conversions: `float64.from_string`, `string.from_float64`, `string.from_bool` | Done |
 | `time.now_ms`, `time.now_s` | Removed (replaced by explicit `Clock.now`) |
 | `os.env`, `os.args` | Legacy behavior done (transitional ambient builtins; capability-backed replacement specified by the [Environment and argument contract](open_design/environment_argv_capability_contract.md)) |
@@ -176,7 +176,7 @@
 | `Environment` / `os` | Partial (transitional capability-free `os.env` and `os.args` builtins read ambient host state; the proposed contract replaces them with `Environment.get(view env, key)` and `Environment.args(view env)` over an immutable injected launch snapshot, with distinct missing/invalid-text behavior and source-owned public declarations; see [#94](https://github.com/vycdev/jett/issues/94) and the [Environment and argument contract](open_design/environment_argv_capability_contract.md)) |
 | `net.http` | Not started (initial outbound client and `Network` capability contract [tracked by #101](https://github.com/vycdev/jett/issues/101)) |
 | `net.socket` | Not started (TCP-first transport contract proposed in [`docs/open_design/net_socket_transport_contract.md`](open_design/net_socket_transport_contract.md) for [#104](https://github.com/vycdev/jett/issues/104)) |
-| `csv` | Partial (all 3 public declarations are source-owned in `stdlib/csv.jett`, with only private trusted parse/stringify kernels in the interpreter; parsing returns `result[..., string]`, ignores one leading UTF-8 BOM, treats empty input as zero records, preserves a physical blank line as one record with one empty field, preserves leading and trailing whitespace in unquoted fields, accepts quoted commas, doubled quotes, multiline fields, LF and CRLF record endings, and preserves ragged row widths in raw parsing; a bare CR outside a quoted field, malformed quote placement, and empty or duplicate headers fail, while header parsing requires every data row to match the header width; `stringify` emits LF-separated records with no final newline; remaining dialect decisions are [tracked by #137](https://github.com/vycdev/jett/issues/137)) |
+| `csv` | Done for the interpreter-backed compiler (all 3 public declarations are source-owned in `stdlib/csv.jett`, with only private trusted parse/stringify kernels in the interpreter; parsing returns `result[..., string]`, ignores one leading UTF-8 BOM, treats empty input as zero records, preserves blank records, whitespace, quoted data, Unicode, LF/CRLF endings, and ragged raw rows; malformed quoting, bare CR record endings, invalid headers, and header/data width mismatches fail explicitly; `stringify` emits canonical LF-separated records with no final newline; future backends retain the [CSV format and failure contract](completed/csv_format_failure_contract.md)) |
 | `regex` | Not started (initial pattern, matching, extraction, Unicode, failure, resource, and source/runtime contract [tracked by #140](https://github.com/vycdev/jett/issues/140)) |
 | `log` | Not started (initial structured event, level/filter, capability, secret-safety, sink, deterministic-test, and source/runtime contract [tracked by #143](https://github.com/vycdev/jett/issues/143)) |
 | `test.mock` | Not started (capability mocking and deterministic test-harness contract [tracked by #145](https://github.com/vycdev/jett/issues/145)) |
@@ -185,9 +185,9 @@
 
 | Component | Status |
 |---|---|
-| Salsa integration | Not started (initial query and invalidation boundary [tracked by #147](https://github.com/vycdev/jett/issues/147)) |
-| Parallel compilation | Not started |
-| Content-addressed caching | Not started |
+| Salsa integration | Design selected, implementation not started (the first `jett_query` slice memoizes parser-owned direct ASTs by stable logical file identity; see the [initial query and invalidation boundary](open_design/incremental_query_boundary.md), tracked by [#147](https://github.com/vycdev/jett/issues/147)) |
+| Parallel compilation | Not started (deterministic namespace scheduling and parallel query boundary [tracked by #151](https://github.com/vycdev/jett/issues/151)) |
+| Content-addressed caching | Not started (compiler-result identity, serialization, trust, and lifecycle contract [tracked by #153](https://github.com/vycdev/jett/issues/153)) |
 
 ## VS Code Extension
 

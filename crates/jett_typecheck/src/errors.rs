@@ -824,6 +824,17 @@ pub fn integer_divisor_must_be_nonzero(operator: &str, span: Span) -> Diagnostic
     )
 }
 
+/// E0362: Compiler-owned debug printing is unavailable in release mode.
+pub fn release_debug_print_unavailable(name: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        362,
+        format!(
+            "`{name}` is unavailable in release mode; use `Stdout.write` for application output or `trace` / `breakpoint` for structured debugging"
+        ),
+        span,
+    )
+}
+
 // Diagnostic codes E0800-E0899 are reserved for function complexity limits.
 
 /// E0800: Function body exceeds the statement count limit.

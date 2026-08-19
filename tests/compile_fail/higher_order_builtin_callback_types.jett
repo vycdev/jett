@@ -1,3 +1,4 @@
+# ERROR: E0300 x8
 namespace app
 function bad_filter_return() returns list[int64]:
     return list.filter[int64](list(1), function(item: int64) returns int64: return item)

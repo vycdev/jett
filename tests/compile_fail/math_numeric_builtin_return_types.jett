@@ -1,4 +1,4 @@
-# ERROR: E0311
+# ERROR: E0311 x6
 namespace test
 function bad_abs_int_return() returns bool:
     bool value = math.abs(-5)

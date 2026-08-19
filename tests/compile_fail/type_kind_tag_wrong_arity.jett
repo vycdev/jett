@@ -1,3 +1,4 @@
+# ERROR: E0309
 namespace test
 
 function bad_type_kind_tag_arity() returns TypeKind:
