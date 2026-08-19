@@ -233,10 +233,10 @@ Incremental registries preserve the same language policy as a clean build:
   project/dependency source cannot reopen a compiler-shipped stdlib namespace;
 - only compiler-shipped stdlib files may contribute multiple fragments to one
   namespace, and duplicate declarations in that merged namespace still fail;
-- compiler-shipped provenance is checked before trusted hooks or the narrow
-  `export root type JsonValue = json.JsonTree` compatibility alias are honored;
-- removing or changing `export`, namespace ownership, trusted provenance, or a
-  root alias invalidates every lookup or policy query that consumed that fact.
+- compiler-shipped provenance is checked before private trusted hooks or
+  trusted exported stdlib wrappers are honored;
+- removing or changing `export`, namespace ownership, or trusted provenance
+  invalidates every lookup or policy query that consumed that fact.
 
 No cached namespace success may survive a file-set change that introduces a
 duplicate owner or declaration. These rules are also summarized in
@@ -422,7 +422,7 @@ The declaration and item stages additionally require fixtures for:
 - duplicate/malformed declarations and deterministic identity recovery;
 - private/exported namespace changes, duplicate project/dependency namespace
   owners, stdlib fragment merging, duplicate merged declarations, and trusted
-  root-alias provenance;
+  hook/wrapper provenance;
 - project configuration, file-set, and stdlib-fragment changes;
 - legal recursion versus a diagnosed illegal query/type cycle;
 - identical ASP/LSP compiler facts from the same revision.

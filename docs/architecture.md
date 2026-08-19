@@ -337,8 +337,9 @@ source-node provenance.
   direct-AST nodes.
 - **The parser-owned AST is treated as immutable** once constructed. One
   parse result owns all nodes reachable from it.
-- **Current identifiers use the compiler's `SymbolInterner`.** They are not
-  Salsa interned values, and their numeric handles are not persistent cache
+- **Current parser AST identifiers own `String` values.** The
+  `SymbolInterner` is used separately by project discovery for namespace
+  prescans; its numeric handles are not parser-node or persistent cache
   identities.
 - **Stable `NodeId` and tracked top-level items do not exist yet.** The first
   incremental slice memoizes the whole direct AST by stable logical file key.
