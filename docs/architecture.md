@@ -1805,6 +1805,9 @@ selected policy starts with a measured, correctness-preserving file boundary:
 parse_file(file: FileKey) -> ParsedFile
 ```
 
+Deterministic parallel query execution and namespace scheduling are tracked
+separately by [#151](https://github.com/vycdev/jett/issues/151).
+
 `FileKey` is an interned source-origin plus normalized logical path; current
 position-assigned `FileId` values are diagnostic handles, not cache identities.
 `ParsedFile` owns one immutable direct AST and its lexer/parser diagnostics.
@@ -2030,7 +2033,8 @@ Core stdlib (string, list, math, json) is implemented in Phase D. This phase com
 
 1. `jett_query` demand-driven database with the selected direct-AST parse
    boundary, then measured declaration/body query stages (Salsa integration).
-2. Parallel compilation of independent namespaces.
+2. Parallel compilation of independent namespaces (deterministic scheduling
+   and result-publication contract [tracked by #151](https://github.com/vycdev/jett/issues/151)).
 3. Content-addressed caching of compilation artifacts.
 4. Comprehensive test suite.
 
