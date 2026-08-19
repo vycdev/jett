@@ -185,7 +185,7 @@
 
 | Component | Status |
 |---|---|
-| Salsa integration | Not started (initial query and invalidation boundary [tracked by #147](https://github.com/vycdev/jett/issues/147)) |
+| Salsa integration | Design selected, implementation not started (the first `jett_query` slice memoizes parser-owned direct ASTs by stable logical file identity; see the [initial query and invalidation boundary](open_design/incremental_query_boundary.md), tracked by [#147](https://github.com/vycdev/jett/issues/147)) |
 | Parallel compilation | Not started |
 | Content-addressed caching | Not started |
 
