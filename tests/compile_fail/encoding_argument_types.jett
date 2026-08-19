@@ -1,4 +1,4 @@
-# ERROR: E0304
+# ERROR: E0304 x3
 namespace app
 function base64_requires_bytes(value: string) returns string:
     return encoding.base64_encode(value)

@@ -1,7 +1,4 @@
-# ERROR: E0355
-# ERROR: E0355
-# ERROR: E0355
-# ERROR: E0355
+# ERROR: E0355 x4
 namespace app
 function authority_selection_is_forbidden(view rng: Random, view items: list[Random]) returns nothing:
     random.choice[Random](view rng, view items) handle:

@@ -1,4 +1,4 @@
-# ERROR: E0341
+# ERROR: E0341 x4
 namespace app
 function ignore_decoder_results() returns nothing:
     encoding.base64_decode("Zg==")
