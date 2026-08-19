@@ -1,5 +1,4 @@
-# ERROR: E0362
-# ERROR: E0362
+# ERROR: E0362 x2
 # ERROR: E0301
 namespace test
 function debug_output() returns nothing:

@@ -1,4 +1,4 @@
-# ERROR: E0343
+# ERROR: E0343 x2
 namespace test
 machine Session:
     states:

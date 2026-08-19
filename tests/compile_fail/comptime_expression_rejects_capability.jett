@@ -1,3 +1,4 @@
+# ERROR: E0341
 # ERROR: E0504
 namespace app
 function main(fs: Filesystem) returns nothing:

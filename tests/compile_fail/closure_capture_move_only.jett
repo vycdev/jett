@@ -1,4 +1,4 @@
-# ERROR: E0402
+# ERROR: E0402 x2
 namespace app
 
 function make_counter(items: list[int64]) returns function() returns int64:

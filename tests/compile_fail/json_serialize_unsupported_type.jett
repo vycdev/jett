@@ -1,4 +1,5 @@
-# ERROR: E0347
+# ERROR: E0347 x22
+# ERROR: E0359 x4
 namespace test
 type Callback = function(int64) returns int64
 struct Handler:

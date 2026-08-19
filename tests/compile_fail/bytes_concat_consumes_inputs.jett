@@ -1,4 +1,4 @@
-# ERROR: E0400
+# ERROR: E0400 x2
 namespace app
 function concat_consumes_both_inputs() returns int64:
     bytes first = bytes.from_string("a")
