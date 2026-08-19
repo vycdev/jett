@@ -1807,6 +1807,8 @@ parse_file(file: FileKey) -> ParsedFile
 
 Deterministic parallel query execution and namespace scheduling are tracked
 separately by [#151](https://github.com/vycdev/jett/issues/151).
+Persistent compiler-result and artifact identity, serialization, and cache
+safety are tracked separately by [#153](https://github.com/vycdev/jett/issues/153).
 
 `FileKey` is an interned source-origin plus normalized logical path; current
 position-assigned `FileId` values are diagnostic handles, not cache identities.
@@ -2035,7 +2037,8 @@ Core stdlib (string, list, math, json) is implemented in Phase D. This phase com
    boundary, then measured declaration/body query stages (Salsa integration).
 2. Parallel compilation of independent namespaces (deterministic scheduling
    and result-publication contract [tracked by #151](https://github.com/vycdev/jett/issues/151)).
-3. Content-addressed caching of compilation artifacts.
+3. Content-addressed caching of compilation artifacts (identity,
+   serialization, trust, and lifecycle contract [tracked by #153](https://github.com/vycdev/jett/issues/153)).
 4. Comprehensive test suite.
 
 **Milestone:** Production-ready compiler with fast iteration cycles.
