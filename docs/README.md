@@ -37,7 +37,6 @@ enough pressure from real code:
 - [uint64 runtime value model](open_design/uint64_runtime_value_model.md)
 - [Initial `net.socket` transport contract](open_design/net_socket_transport_contract.md)
 - [Environment and argument capability contract](open_design/environment_argv_capability_contract.md)
-- [CSV format and failure contract](https://github.com/vycdev/jett/issues/137)
 
 ## Completed Records
 
@@ -52,6 +51,7 @@ plans above for current work.
 - [Explicit comptime expression semantics](completed/explicit_comptime_expression_semantics.md)
 - [Pure-only comptime boundary](completed/comptime_pure_function_boundary.md)
 - [Crypto hashing and security contract](completed/crypto_hashing_security_contract.md)
+- [CSV format and failure contract](completed/csv_format_failure_contract.md)
 - [Encoding representation and failure contract](completed/encoding_representation_failure_contract.md)
 - [Explicit struct equality](completed/explicit_struct_equality.md)
 - [JSON public bridge handoff](completed/json_public_bridge_handoff.md)

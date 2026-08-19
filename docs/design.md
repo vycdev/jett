@@ -6960,9 +6960,9 @@ The standard library is intentionally massive and opinionated. The goal is to ma
   header parsing requires every data row to match the header width. Malformed
   quote placement and empty or duplicate headers are explicit failures.
   `csv.stringify` emits LF between records and no final newline, independent of
-  the host platform. The remaining dialect contract is
-  [tracked by #137](https://github.com/vycdev/jett/issues/137), while future
-  reflected `csv.parse_rows[T]` remains separate
+  the host platform. These choices are fixed by the implemented
+  [CSV format and failure contract](completed/csv_format_failure_contract.md),
+  while future reflected `csv.parse_rows[T]` remains separate
 - **random** — capability-backed unbiased integer/unit-float/boolean sampling,
   random selection, and non-mutating shuffling; see the implemented
   [random capability and entropy contract](completed/random_capability_entropy_contract.md)

@@ -2004,8 +2004,8 @@ Core stdlib (string, list, math, json) is implemented in Phase D. This phase com
   field is rejected. Leading and trailing whitespace in unquoted fields is
   preserved as data rather than trimmed. Malformed quoting, empty or duplicate
   headers, and header/data width mismatches fail explicitly. `stringify` emits
-  deterministic LF-separated records with no final newline. The remaining
-  dialect contract is [tracked by #137](https://github.com/vycdev/jett/issues/137))
+  deterministic LF-separated records with no final newline. Future backends
+  retain the implemented [CSV format and failure contract](completed/csv_format_failure_contract.md))
 - **Time:** `time` (the implemented wall-clock value, capability, determinism, and
   source/runtime boundary is defined in the
   [Time and Clock capability contract](completed/time_clock_capability_contract.md))
