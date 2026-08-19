@@ -117,7 +117,7 @@
 | `and`/`or` keyword operators for logical expressions | Done |
 | Unhandled result/optional detection (E0341, E0342) | Done |
 | Set value type and 12 set builtins (`new`, `add`, `remove`, `contains`, `union`, `intersection`, `difference`) | Done |
-| `print`/`println` builtins | Partial (interpreter support and secret blocking are done; [debug-only capability policy](open_design/print_debug_builtin_policy.md) is decided, while debug-event isolation, release diagnostics, and future-backend conformance remain pending) |
+| `print`/`println` builtins | Partial (interpreter support, secret blocking, and E0362 release diagnostics are done; [debug-only capability policy](open_design/print_debug_builtin_policy.md) is decided, while debug-event isolation and future-backend conformance remain pending) |
 | Type conversions: `float64.from_string`, `string.from_float64`, `string.from_bool` | Done |
 | `time.now_ms`, `time.now_s` | Removed (replaced by explicit `Clock.now`) |
 | `os.env`, `os.args` | Legacy behavior done (transitional ambient builtins; capability-backed replacement specified by the [Environment and argument contract](open_design/environment_argv_capability_contract.md)) |
@@ -185,8 +185,8 @@
 
 | Component | Status |
 |---|---|
-| Salsa integration | Not started (initial query and invalidation boundary [tracked by #147](https://github.com/vycdev/jett/issues/147)) |
-| Parallel compilation | Not started |
+| Salsa integration | Design selected, implementation not started (the first `jett_query` slice memoizes parser-owned direct ASTs by stable logical file identity; see the [initial query and invalidation boundary](open_design/incremental_query_boundary.md), tracked by [#147](https://github.com/vycdev/jett/issues/147)) |
+| Parallel compilation | Not started (deterministic namespace scheduling and parallel query boundary [tracked by #151](https://github.com/vycdev/jett/issues/151)) |
 | Content-addressed caching | Not started (compiler-result identity, serialization, trust, and lifecycle contract [tracked by #153](https://github.com/vycdev/jett/issues/153)) |
 
 ## VS Code Extension

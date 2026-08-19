@@ -1,8 +1,8 @@
 # Print Debug Builtin Policy
 
 Status: decided by [#8](https://github.com/vycdev/jett/issues/8). The language
-policy is settled; mode diagnostics and backend conformance are not implemented
-yet.
+policy and release-mode diagnostics are implemented; dedicated debug-event
+isolation and backend conformance remain pending.
 
 `print` and `println` remain a stable compatibility surface as compiler-owned,
 debug-only builtins. There is no scheduled removal, but they are not ordinary
@@ -18,9 +18,10 @@ that path is either written directly to process stdout or captured into the
 combined run output.
 
 Those shared-channel details are transitional, not the stable contract.
-`--release` is currently parsed without a release-specific checker/backend
-policy, and verify execution does not yet isolate debug text from agent output.
-The requirements below apply when those mode and backend boundaries are added.
+`--release` now reaches the checker and rejects both builtins with E0362. Verify
+execution does not yet isolate debug text from agent output. The remaining
+requirements below apply when those debug-event and backend boundaries are
+added.
 
 ## Decision
 
@@ -94,8 +95,9 @@ The remaining policy coverage is:
    relative captured order.
 2. Add verify/comptime coverage once their debug events are isolated from plain
    and agent protocol output.
-3. Add release compile-fail fixtures for both names when `--release` reaches
-   the checker/backend policy boundary.
+3. Release compile-fail coverage for both names is implemented by
+   `tests/compile_fail/release_debug_print.jett`; it also proves rejected call
+   arguments are still typechecked.
 4. Add backend conformance tests proving that unsupported debug builds reject
    the calls and that supported debug builds use a diagnostic channel rather
    than application `Stdout`.

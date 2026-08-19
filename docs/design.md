@@ -203,7 +203,7 @@ Functions in Jett are **pure by default**. They take explicit inputs through the
 - A function without capability parameters is guaranteed free of semantic program effects by the compiler. Non-release tooling may still observe explicitly written compiler debug instrumentation.
 - Pure functions cannot call impure functions — the capability system propagates. A function that needs to call an I/O function must itself accept the required capability.
 - Pure functions can be tested with nothing but their inputs and outputs. No mocks, no setup, no teardown, no dependency injection frameworks.
-- Pure function results are safe to cache, parallelize, and reorder. A debug-enabled toolchain must separately preserve the relative order of requested debug events; the settled policy requires release builds to reject global debug printing once mode-aware checking exists.
+- Pure function results are safe to cache, parallelize, and reorder. A debug-enabled toolchain must separately preserve the relative order of requested debug events; mode-aware checking rejects global debug printing in release builds.
 
 **What this enables for LLMs:**
 
@@ -7077,6 +7077,20 @@ Jett compiles to native code via an **LLVM backend** (primary target) for perfor
 - **`jett build file.jett`** — compile to native binary. Runs `verify` blocks during compilation (they are compile-time checks). Does NOT run `property` blocks — those are test-time only.
 - **`jett test`** — run all `verify` and `property` blocks in the project. `verify` blocks execute at compile time for pure functions. `property` blocks run fuzz-based tests at test time (10,000 random inputs by default).
 - **`jett format`** — format source code (single canonical style, no configuration)
+
+### Incremental Compiler Policy
+
+Incremental compilation is compiler policy rather than a source-language
+semantic feature. The selected first slice memoizes each file's current direct,
+source-spanned AST under a stable logical file identity, while existing
+whole-project semantic passes remain conservative. It does not require the
+deferred lossless CST and does not yet claim item-level typechecking reuse.
+
+Strict top-to-bottom declaration visibility and `mutual:` semantics remain the
+source of truth for later signature and body dependencies. Human versus agent
+rendering never changes compiler-query facts. The full input, invalidation,
+diagnostic, client snapshot, and staged migration policy is recorded in the
+[initial incremental query boundary](open_design/incremental_query_boundary.md).
 
 ### Project Structure
 
