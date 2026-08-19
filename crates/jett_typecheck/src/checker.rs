@@ -36,9 +36,25 @@ pub struct CheckResult {
     pub reflection_metadata: Arc<ReflectionMetadata>,
 }
 
+/// Mode-specific policy applied while type checking.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CheckOptions {
+    /// Reject compiler-owned debug printing that cannot appear in release builds.
+    pub release: bool,
+}
+
 /// Type-check a resolved module.
 pub fn check(module: &Module, resolve: &ResolveResult) -> CheckResult {
-    let mut checker = TypeChecker::new(resolve);
+    check_with_options(module, resolve, CheckOptions::default())
+}
+
+/// Type-check a resolved module with mode-specific policy.
+pub fn check_with_options(
+    module: &Module,
+    resolve: &ResolveResult,
+    options: CheckOptions,
+) -> CheckResult {
+    let mut checker = TypeChecker::new(resolve, options);
     checker.check_module(module);
 
     let complexity_diagnostics = crate::complexity::check_complexity(module);
@@ -139,6 +155,7 @@ struct ClosureCaptureScope {
 struct TypeChecker<'a> {
     interner: TypeInterner,
     resolve: &'a ResolveResult,
+    options: CheckOptions,
     sink: DiagnosticSink,
     /// DefId → TypeId for variables, parameters, and functions.
     type_env: HashMap<DefId, TypeId>,
@@ -247,7 +264,7 @@ struct TypeChecker<'a> {
 }
 
 impl<'a> TypeChecker<'a> {
-    fn new(resolve: &'a ResolveResult) -> Self {
+    fn new(resolve: &'a ResolveResult, options: CheckOptions) -> Self {
         let decl_defs = resolve
             .scope_table
             .definitions
@@ -258,6 +275,7 @@ impl<'a> TypeChecker<'a> {
         let mut checker = Self {
             interner: TypeInterner::new(),
             resolve,
+            options,
             sink: DiagnosticSink::new(),
             type_env: HashMap::new(),
             decl_defs,
@@ -9130,6 +9148,10 @@ impl<'a> TypeChecker<'a> {
                 ));
             }
         }
+        if self.options.release {
+            self.sink
+                .emit(errors::release_debug_print_unavailable(name, span));
+        }
         TypeInterner::NOTHING
     }
 
@@ -13152,7 +13174,7 @@ function piped() returns optional[int64]:
         // Verify that type expressions like list[int64], result[string, int64] resolve correctly.
         let env = TestEnv::new();
         let resolve = env.into_resolve_result();
-        let mut checker = TypeChecker::new(&resolve);
+        let mut checker = TypeChecker::new(&resolve, CheckOptions::default());
 
         let list_int = checker.resolve_type_expr(&TypeExpr::Generic(
             ident("list", sp(0, 4)),
@@ -13460,7 +13482,7 @@ function piped() returns optional[int64]:
         };
 
         let resolve = env.into_resolve_result();
-        let mut checker = TypeChecker::new(&resolve);
+        let mut checker = TypeChecker::new(&resolve, CheckOptions::default());
         checker.check_module(&module);
 
         // The purity map should mark "printer" as impure.
@@ -13515,7 +13537,7 @@ function piped() returns optional[int64]:
         };
 
         let resolve = env.into_resolve_result();
-        let mut checker = TypeChecker::new(&resolve);
+        let mut checker = TypeChecker::new(&resolve, CheckOptions::default());
         checker.check_module(&module);
 
         assert_eq!(
@@ -14055,7 +14077,7 @@ function use_boxes() returns string:
                 .new_def("models.User".to_string(), DefKind::Struct, type_span);
         env.reference(type_span, namespaced_type);
         let resolve = env.into_resolve_result();
-        let mut checker = TypeChecker::new(&resolve);
+        let mut checker = TypeChecker::new(&resolve, CheckOptions::default());
         checker.register_named_type(None, "User", TypeInterner::INT64);
 
         assert_eq!(
@@ -14070,7 +14092,7 @@ function use_boxes() returns string:
                 .new_def("models.Box".to_string(), DefKind::Struct, generic_span);
         env.reference(generic_span, namespaced_generic);
         let resolve = env.into_resolve_result();
-        let mut checker = TypeChecker::new(&resolve);
+        let mut checker = TypeChecker::new(&resolve, CheckOptions::default());
         checker.generic_struct_templates.insert(
             "Box".to_string(),
             ast::StructDef {

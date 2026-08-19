@@ -4,9 +4,9 @@ use std::path::{Path, PathBuf};
 use jett_common::FileId;
 use jett_diagnostics::Severity;
 use jett_driver::{
-    ClockTestSample, RandomTestSample, build_file, build_source, completions, completions_at,
-    hover_type, run_file, run_file_capture_output, run_file_capture_stdout,
-    run_file_capture_stdout_with_clock_test_samples,
+    BuildOptions, ClockTestSample, RandomTestSample, build_file, build_file_with_options,
+    build_source, completions, completions_at, hover_type, run_file, run_file_capture_output,
+    run_file_capture_stdout, run_file_capture_stdout_with_clock_test_samples,
     run_file_capture_stdout_with_random_test_samples, run_file_with_clock_test_samples,
     run_file_with_random_test_samples, test_file,
 };
@@ -293,6 +293,36 @@ compile_pass_fixture!(
 compile_fail_fixture!(compile_fail_type_mismatch, "type_mismatch.jett");
 compile_fail_fixture!(compile_fail_secret_stdout, "secret_stdout.jett");
 compile_fail_fixture!(compile_fail_secret_print, "secret_print.jett");
+
+#[test]
+fn compile_fail_release_debug_print() {
+    let path = fixture_path("compile_fail", "release_debug_print.jett");
+    let source = fixture_source(&path);
+    let expected_codes = expected_error_codes(&source);
+    let result = build_file_with_options(&path, BuildOptions { release: true });
+
+    assert!(result.has_errors, "expected release debug printing to fail");
+    let actual_codes: Vec<u32> = result
+        .diagnostics
+        .iter()
+        .filter(|diag| diag.severity == Severity::Error)
+        .map(|diag| u32::from(diag.code.code()))
+        .collect();
+    for expected in expected_codes {
+        assert!(
+            actual_codes.contains(&expected),
+            "expected {} to report E{:04}, got:\n{}",
+            path.display(),
+            expected,
+            error_messages(&path, &result.diagnostics)
+        );
+    }
+    assert_eq!(actual_codes.iter().filter(|&&code| code == 362).count(), 2);
+    let messages = error_messages(&path, &result.diagnostics);
+    assert!(messages.contains("`Stdout.write` for application output"));
+    assert!(messages.contains("`trace` / `breakpoint` for structured debugging"));
+}
+
 compile_fail_fixture!(
     compile_fail_integer_divisor_requires_nonzero_proof,
     "integer_divisor_requires_nonzero_proof.jett"
