@@ -464,6 +464,18 @@ pub fn verify_calls_impure(verify_name: &str, callee: &str, span: Span) -> Diagn
     )
 }
 
+/// E0504: Explicit comptime expression calls an impure function.
+pub fn comptime_calls_impure(callee: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        504,
+        format!(
+            "`comptime` expression cannot call impure function `{callee}`; \
+             comptime expressions may only call pure functions"
+        ),
+        span,
+    )
+}
+
 /// E0502: Only main may own a capability parameter.
 pub fn owned_capability_outside_main(
     function_name: &str,
@@ -797,6 +809,28 @@ pub fn fixed_size_array_is_unsupported(span: Span) -> Diagnostic {
     Diagnostic::error(
         360,
         "`array[T, N]` is not supported; use `list[T]` and a refinement when length is a value constraint",
+        span,
+    )
+}
+
+/// E0361: Integer division or modulo requires a proven nonzero divisor.
+pub fn integer_divisor_must_be_nonzero(operator: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        361,
+        format!(
+            "integer `{operator}` requires a divisor proven nonzero; use a nonzero refinement or a visible zero guard"
+        ),
+        span,
+    )
+}
+
+/// E0362: Compiler-owned debug printing is unavailable in release mode.
+pub fn release_debug_print_unavailable(name: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        362,
+        format!(
+            "`{name}` is unavailable in release mode; use `Stdout.write` for application output or `trace` / `breakpoint` for structured debugging"
+        ),
         span,
     )
 }

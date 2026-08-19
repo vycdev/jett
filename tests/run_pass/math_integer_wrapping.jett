@@ -1,0 +1,13 @@
+namespace test
+verify math_integer_wrapping:
+    int64 minimum = -9223372036854775808
+    int64 maximum = 9223372036854775807
+    int64 negative_one = -1
+    assert math.abs(minimum) == minimum
+    assert math.gcd(minimum, 0) == minimum
+    assert math.lcm(minimum, 1) == minimum
+    assert math.lcm(3037000500, 3037000501) == -9223372033672301116
+    assert math.factorial(21) == -4249290049419214848
+    assert math.sum(list(maximum, 1)) == minimum
+    assert list.sum[int64](list(maximum, 1)) == minimum
+    assert math.mod(minimum, negative_one) == 0

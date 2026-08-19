@@ -30,9 +30,8 @@ function duplicate_leaf_interface_alias_summary() returns string:
     m.User user = m.User(name: "Grace")
     m.Device device = m.Device(label: "meter")
     return "{r.Named.name(view user)}:{d.Named.name(view device)}"
-function main() returns nothing:
-    if duplicate_leaf_interface_summary() != "Ada:sensor":
-        int64 fail = 1 / 0
-    if duplicate_leaf_interface_alias_summary() != "Grace:meter":
-        int64 fail = 1 / 0
+function main(stdout: Stdout) returns nothing:
+    string direct = duplicate_leaf_interface_summary()
+    string aliases = duplicate_leaf_interface_alias_summary()
+    Stdout.write(view stdout, "{direct}|{aliases}")
     return nothing

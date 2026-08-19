@@ -50,6 +50,9 @@ should connect those layers rather than treating the CST as runtime metadata.
 4. Lower CST to the existing AST and migrate formatter/LSP features
    incrementally.
 
-The initial Salsa query and invalidation boundary must work with the direct AST
-without pulling the deferred CST forward; that work is tracked by
-[#147](https://github.com/vycdev/jett/issues/147).
+The selected [initial incremental query boundary](../open_design/incremental_query_boundary.md)
+memoizes one whole-file direct AST and its parse diagnostics. It uses stable
+logical file identity without inventing AST `NodeId` values or pulling the
+deferred CST forward. Item-level declaration and body queries remain a later
+stage after their identities and invalidation behavior are tested; the design
+work is tracked by [#147](https://github.com/vycdev/jett/issues/147).

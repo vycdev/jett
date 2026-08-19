@@ -199,7 +199,7 @@ Functions in Jett are **pure by default**. They take explicit inputs through the
 - A function without capability parameters is guaranteed free of semantic program effects by the compiler. Non-release tooling may still observe explicitly written compiler debug instrumentation.
 - Pure functions cannot call impure functions — the capability system propagates. A function that needs to call an I/O function must itself accept the required capability.
 - Pure functions can be tested with nothing but their inputs and outputs. No mocks, no setup, no teardown, no dependency injection frameworks.
-- Pure function results are safe to cache, parallelize, and reorder. A debug-enabled toolchain must separately preserve the relative order of requested debug events; the settled policy requires release builds to reject global debug printing once mode-aware checking exists.
+- Pure function results are safe to cache, parallelize, and reorder. A debug-enabled toolchain must separately preserve the relative order of requested debug events; mode-aware checking rejects global debug printing in release builds.
 
 **What this enables for LLMs:**
 
@@ -1448,11 +1448,11 @@ float64 power = math.pow(base, exponent)
 
 The complete public `math.*` API is ordinary source in `stdlib/math.jett` and
 resolves like user code. Compositional helpers have Jett bodies; `math.sum` uses
-ordinary checked source addition, so overflow reports the same deterministic
-arithmetic error as other `int64` expressions. Private trusted kernels preserve
-floating-point primitives and constants, numeric-list aggregation, and integer
-operations whose exact domain and overflow failures cannot yet be raised from
-source. Project code cannot call those kernels. `math.abs`, `math.min`, and
+ordinary source addition, so integer overflow wraps exactly as it does in other
+`int64` expressions. Private trusted kernels preserve floating-point primitives
+and constants, numeric-list aggregation, and operations whose remaining domain
+failures cannot yet be raised from source. Project code cannot call those
+kernels. `math.abs`, `math.min`, and
 `math.max` retain only their narrow compiler-owned `int64`/`float64` type-policy
 gate, not public runtime dispatch or general overloading.
 
@@ -2255,6 +2255,14 @@ comptime-safe annotation, or function allowlist. **Every pure Jett function is
 eligible**, whether it comes from the project, a dependency, or the standard
 library. The LLM does not need to learn a separate template language, macro
 syntax, or preprocessor. **One function form, two execution times.**
+
+Required compile-time value evaluation is always explicit and has the canonical
+form `comptime expression`. The expression must be closed: it may use literals,
+types, and pure functions, but it cannot depend on a runtime parameter or local.
+Compilation fails if the compiler cannot produce the value. An ordinary pure
+call remains a runtime call in source semantics. The optimizer may fold it when
+safe, but that invisible optimization cannot introduce diagnostics, suppress
+diagnostics, or otherwise change whether the source program is accepted.
 
 Purity is the complete eligibility boundary. A function that takes any
 capability cannot run at comptime, directly or transitively, because the
@@ -6763,10 +6771,15 @@ expression is checked in a `uint64` context, including nested contexts such as
 than guessing from the literal's small numeric value. Expression-only consumers,
 such as primitive interface dispatch, therefore see the checked carrier.
 The smaller fixed-width integer primitives use the `int64` runtime carrier, but
-the interpreter validates their declared ranges after checked expressions and
-at typed assignment, parameter, and return boundaries. Arithmetic that leaves
-the range of its checked primitive type is a deterministic runtime error rather
-than a widened value.
+arithmetic is normalized at the checked primitive width. Integer addition,
+subtraction, multiplication, negation, division, and modulo wrap modulo that
+width, including signed minimum divided by `-1`. Integer division and modulo
+are accepted only when the divisor is statically proven nonzero by its
+refinement, a nonzero literal or immutable binding, or a visible equality
+guard. Floating-point arithmetic follows IEEE behavior, including infinity and
+NaN for division by zero. Arithmetic therefore does not create runtime
+exceptions or handled errors. Refinement types remain the way to constrain an
+application to a mathematically non-overflowing domain.
 
 **Function types** describe the signature of a function value — its parameter types and return type. They reuse the existing `function` and `returns` keywords in type position:
 
@@ -7060,6 +7073,20 @@ Jett compiles to native code via an **LLVM backend** (primary target) for perfor
 - **`jett build file.jett`** — compile to native binary. Runs `verify` blocks during compilation (they are compile-time checks). Does NOT run `property` blocks — those are test-time only.
 - **`jett test`** — run all `verify` and `property` blocks in the project. `verify` blocks execute at compile time for pure functions. `property` blocks run fuzz-based tests at test time (10,000 random inputs by default).
 - **`jett format`** — format source code (single canonical style, no configuration)
+
+### Incremental Compiler Policy
+
+Incremental compilation is compiler policy rather than a source-language
+semantic feature. The selected first slice memoizes each file's current direct,
+source-spanned AST under a stable logical file identity, while existing
+whole-project semantic passes remain conservative. It does not require the
+deferred lossless CST and does not yet claim item-level typechecking reuse.
+
+Strict top-to-bottom declaration visibility and `mutual:` semantics remain the
+source of truth for later signature and body dependencies. Human versus agent
+rendering never changes compiler-query facts. The full input, invalidation,
+diagnostic, client snapshot, and staged migration policy is recorded in the
+[initial incremental query boundary](open_design/incremental_query_boundary.md).
 
 ### Project Structure
 

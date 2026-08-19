@@ -1,0 +1,13 @@
+# ERROR: E0361
+# ERROR: E0361
+# ERROR: E0361
+# ERROR: E0361
+namespace test
+function literal_zero(value: int64) returns int64:
+    return value / 0
+function unknown_divisor(value: int64, divisor: int64) returns int64:
+    return value / divisor
+function unknown_modulo(value: int64, divisor: int64) returns int64:
+    return value modulo divisor
+function unknown_math_mod(value: int64, divisor: int64) returns int64:
+    return math.mod(value, divisor)

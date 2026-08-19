@@ -1074,7 +1074,7 @@ impl Resolver {
             Expr::Paren(inner, _) => {
                 self.resolve_expr(inner, item_index);
             }
-            Expr::View(inner, _) => {
+            Expr::View(inner, _) | Expr::Comptime(inner, _) => {
                 self.resolve_expr(inner, item_index);
             }
             Expr::ListConstruct(elems, _) => {

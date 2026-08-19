@@ -36,9 +36,25 @@ pub struct CheckResult {
     pub reflection_metadata: Arc<ReflectionMetadata>,
 }
 
+/// Mode-specific policy applied while type checking.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CheckOptions {
+    /// Reject compiler-owned debug printing that cannot appear in release builds.
+    pub release: bool,
+}
+
 /// Type-check a resolved module.
 pub fn check(module: &Module, resolve: &ResolveResult) -> CheckResult {
-    let mut checker = TypeChecker::new(resolve);
+    check_with_options(module, resolve, CheckOptions::default())
+}
+
+/// Type-check a resolved module with mode-specific policy.
+pub fn check_with_options(
+    module: &Module,
+    resolve: &ResolveResult,
+    options: CheckOptions,
+) -> CheckResult {
+    let mut checker = TypeChecker::new(resolve, options);
     checker.check_module(module);
 
     let complexity_diagnostics = crate::complexity::check_complexity(module);
@@ -139,6 +155,7 @@ struct ClosureCaptureScope {
 struct TypeChecker<'a> {
     interner: TypeInterner,
     resolve: &'a ResolveResult,
+    options: CheckOptions,
     sink: DiagnosticSink,
     /// DefId → TypeId for variables, parameters, and functions.
     type_env: HashMap<DefId, TypeId>,
@@ -175,6 +192,10 @@ struct TypeChecker<'a> {
     in_verify_block: bool,
     /// Whether we are inside a property block.
     in_property_block: bool,
+    /// Nesting depth inside an explicit `comptime` expression.
+    comptime_expr_depth: usize,
+    /// Lexically visible proofs that integer bindings are nonzero.
+    nonzero_fact_scopes: Vec<HashSet<DefId>>,
     /// The name of the verify block currently being checked (for error messages).
     current_verify_name: Option<String>,
     /// Nesting depth inside a handle-block body. Used to validate `default`.
@@ -243,7 +264,7 @@ struct TypeChecker<'a> {
 }
 
 impl<'a> TypeChecker<'a> {
-    fn new(resolve: &'a ResolveResult) -> Self {
+    fn new(resolve: &'a ResolveResult, options: CheckOptions) -> Self {
         let decl_defs = resolve
             .scope_table
             .definitions
@@ -254,6 +275,7 @@ impl<'a> TypeChecker<'a> {
         let mut checker = Self {
             interner: TypeInterner::new(),
             resolve,
+            options,
             sink: DiagnosticSink::new(),
             type_env: HashMap::new(),
             decl_defs,
@@ -272,6 +294,8 @@ impl<'a> TypeChecker<'a> {
             current_function_pure: false,
             in_verify_block: false,
             in_property_block: false,
+            comptime_expr_depth: 0,
+            nonzero_fact_scopes: Vec::new(),
             current_verify_name: None,
             handle_body_depth: 0,
             closure_capture_scopes: Vec::new(),
@@ -782,6 +806,125 @@ impl<'a> TypeChecker<'a> {
                 | Type::Float32
                 | Type::Float64
         )
+    }
+
+    fn is_integer(&self, id: TypeId) -> bool {
+        matches!(
+            self.interner.resolve(id),
+            Type::Int8
+                | Type::Int16
+                | Type::Int32
+                | Type::Int64
+                | Type::Uint8
+                | Type::Uint16
+                | Type::Uint32
+                | Type::Uint64
+        )
+    }
+
+    fn numeric_base_type(&self, id: TypeId) -> Option<(TypeId, bool)> {
+        let (unwrapped, secret) = self.strip_secret_type(id);
+        let base = self.fully_coarsened_type(unwrapped);
+        self.is_numeric(base).then_some((base, secret))
+    }
+
+    fn integer_type_excludes_zero(&self, id: TypeId) -> bool {
+        match self.interner.resolve(id) {
+            Type::Secret(inner) => self.integer_type_excludes_zero(*inner),
+            Type::Refinement { name, base } => {
+                self.type_aliases
+                    .get(name)
+                    .and_then(|alias| alias.constraint.as_ref())
+                    .and_then(|constraint| self.eval_refinement_bool_at_zero(constraint))
+                    .is_some_and(|allows_zero| !allows_zero)
+                    || self.integer_type_excludes_zero(*base)
+            }
+            _ => false,
+        }
+    }
+
+    fn eval_refinement_bool_at_zero(&self, expr: &Expr) -> Option<bool> {
+        match expr {
+            Expr::BoolLiteral(value, _) => Some(*value),
+            Expr::Unary(UnaryOp::Not, inner, _) => Some(!self.eval_refinement_bool_at_zero(inner)?),
+            Expr::Paren(inner, _) | Expr::Comptime(inner, _) => {
+                self.eval_refinement_bool_at_zero(inner)
+            }
+            Expr::Binary(lhs, BinOp::And, rhs, _) => Some(
+                self.eval_refinement_bool_at_zero(lhs)?
+                    && self.eval_refinement_bool_at_zero(rhs)?,
+            ),
+            Expr::Binary(lhs, BinOp::Or, rhs, _) => Some(
+                self.eval_refinement_bool_at_zero(lhs)?
+                    || self.eval_refinement_bool_at_zero(rhs)?,
+            ),
+            Expr::Binary(lhs, op, rhs, _)
+                if matches!(
+                    op,
+                    BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq
+                ) =>
+            {
+                let lhs = self.eval_refinement_int_at_zero(lhs)?;
+                let rhs = self.eval_refinement_int_at_zero(rhs)?;
+                Some(match op {
+                    BinOp::Eq => lhs == rhs,
+                    BinOp::NotEq => lhs != rhs,
+                    BinOp::Lt => lhs < rhs,
+                    BinOp::Gt => lhs > rhs,
+                    BinOp::LtEq => lhs <= rhs,
+                    BinOp::GtEq => lhs >= rhs,
+                    _ => unreachable!("comparison guard covers all cases"),
+                })
+            }
+            _ => None,
+        }
+    }
+
+    fn eval_refinement_int_at_zero(&self, expr: &Expr) -> Option<i128> {
+        match expr {
+            Expr::IntLiteral(value, _) => Some(*value),
+            Expr::Ident(ident) if ident.name == "value" => Some(0),
+            Expr::Unary(UnaryOp::Neg, inner, _) => {
+                self.eval_refinement_int_at_zero(inner)?.checked_neg()
+            }
+            Expr::Paren(inner, _) | Expr::Comptime(inner, _) => {
+                self.eval_refinement_int_at_zero(inner)
+            }
+            Expr::Binary(lhs, op, rhs, _) if matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul) => {
+                let lhs = self.eval_refinement_int_at_zero(lhs)?;
+                let rhs = self.eval_refinement_int_at_zero(rhs)?;
+                match op {
+                    BinOp::Add => lhs.checked_add(rhs),
+                    BinOp::Sub => lhs.checked_sub(rhs),
+                    BinOp::Mul => lhs.checked_mul(rhs),
+                    _ => unreachable!("arithmetic guard covers all cases"),
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn expression_is_proven_nonzero(&self, expr: &Expr, ty: TypeId) -> bool {
+        if self.integer_type_excludes_zero(ty) {
+            return true;
+        }
+        match expr {
+            Expr::IntLiteral(value, _) => *value != 0,
+            Expr::Unary(UnaryOp::Neg, inner, _)
+            | Expr::Paren(inner, _)
+            | Expr::Comptime(inner, _)
+            | Expr::Coarsen(inner, _) => {
+                let inner_ty = self.type_map.get(&inner.span()).copied().unwrap_or(ty);
+                self.expression_is_proven_nonzero(inner, inner_ty)
+            }
+            Expr::Ident(ident) => self.ident_def_id(ident).is_some_and(|def_id| {
+                self.nonzero_fact_scopes
+                    .iter()
+                    .rev()
+                    .any(|scope| scope.contains(&def_id))
+            }),
+            _ => false,
+        }
     }
 
     fn int_literal_fits_type(&self, value: i128, id: TypeId) -> bool {
@@ -5956,6 +6099,7 @@ impl<'a> TypeChecker<'a> {
             | Expr::FieldAccess(inner, _, _)
             | Expr::Paren(inner, _)
             | Expr::View(inner, _)
+            | Expr::Comptime(inner, _)
             | Expr::Ok(inner, _)
             | Expr::Fail(inner, _)
             | Expr::Some(inner, _)
@@ -6111,9 +6255,11 @@ impl<'a> TypeChecker<'a> {
 
     fn check_block(&mut self, block: &Block) {
         self.push_reflection_local_fact_scope();
+        self.nonzero_fact_scopes.push(HashSet::new());
         for stmt in &block.stmts {
             self.check_stmt(stmt);
         }
+        self.nonzero_fact_scopes.pop();
         self.pop_reflection_local_fact_scope();
     }
 
@@ -6887,6 +7033,11 @@ impl<'a> TypeChecker<'a> {
         if let Some(def_id) = self.declaration_def_id(decl.name.span) {
             self.type_env.insert(def_id, declared_type);
             self.record_closure_local(def_id);
+            if !decl.mutable && self.expression_is_proven_nonzero(&decl.value, init_type) {
+                if let Some(scope) = self.nonzero_fact_scopes.last_mut() {
+                    scope.insert(def_id);
+                }
+            }
         }
 
         // Check that the initializer type matches the declared type (skip if Error).
@@ -6906,6 +7057,9 @@ impl<'a> TypeChecker<'a> {
         if let Expr::Ident(ident) = &assign.target {
             if let Some(def_id) = self.ident_def_id(ident) {
                 self.clear_reflection_local_fact(def_id);
+                for scope in &mut self.nonzero_fact_scopes {
+                    scope.remove(&def_id);
+                }
             }
         }
 
@@ -7014,7 +7168,12 @@ impl<'a> TypeChecker<'a> {
         self.check_condition_expr(&if_stmt.condition);
         let narrowing =
             self.machine_state_narrowing_for_branch(Some(&if_stmt.condition), None::<&Expr>);
-        self.check_block_with_type_override(&if_stmt.then_block, narrowing);
+        let then_nonzero = self.nonzero_defs_from_conditions([(&if_stmt.condition, true)]);
+        self.check_block_with_type_override_and_nonzero(
+            &if_stmt.then_block,
+            narrowing,
+            then_nonzero,
+        );
 
         let mut prior_conditions = vec![&if_stmt.condition];
         for (else_if_cond, else_if_block) in &if_stmt.else_ifs {
@@ -7023,14 +7182,97 @@ impl<'a> TypeChecker<'a> {
                 Some(else_if_cond),
                 prior_conditions.iter().copied(),
             );
-            self.check_block_with_type_override(else_if_block, narrowing);
+            let nonzero = self.nonzero_defs_from_conditions(
+                prior_conditions
+                    .iter()
+                    .map(|condition| (*condition, false))
+                    .chain(std::iter::once((else_if_cond, true))),
+            );
+            self.check_block_with_type_override_and_nonzero(else_if_block, narrowing, nonzero);
             prior_conditions.push(else_if_cond);
         }
 
         if let Some(else_block) = &if_stmt.else_block {
-            let narrowing = self.machine_state_narrowing_for_branch(None, prior_conditions);
-            self.check_block_with_type_override(else_block, narrowing);
+            let narrowing =
+                self.machine_state_narrowing_for_branch(None, prior_conditions.iter().copied());
+            let nonzero = self.nonzero_defs_from_conditions(
+                prior_conditions.iter().map(|condition| (*condition, false)),
+            );
+            self.check_block_with_type_override_and_nonzero(else_block, narrowing, nonzero);
+        } else if if_stmt.else_ifs.is_empty() && Self::block_ends_with_return(&if_stmt.then_block) {
+            let facts = self.nonzero_defs_from_conditions([(&if_stmt.condition, false)]);
+            if let Some(scope) = self.nonzero_fact_scopes.last_mut() {
+                scope.extend(facts);
+            }
         }
+    }
+
+    fn block_ends_with_return(block: &Block) -> bool {
+        matches!(block.stmts.last(), Some(Stmt::Return(_)))
+    }
+
+    fn nonzero_defs_from_conditions<'b>(
+        &self,
+        conditions: impl IntoIterator<Item = (&'b Expr, bool)>,
+    ) -> HashSet<DefId> {
+        let mut facts = HashSet::new();
+        for (condition, truth) in conditions {
+            self.collect_nonzero_defs(condition, truth, &mut facts);
+        }
+        facts
+    }
+
+    fn collect_nonzero_defs(&self, condition: &Expr, truth: bool, facts: &mut HashSet<DefId>) {
+        match condition {
+            Expr::Paren(inner, _) => self.collect_nonzero_defs(inner, truth, facts),
+            Expr::Unary(UnaryOp::Not, inner, _) => self.collect_nonzero_defs(inner, !truth, facts),
+            Expr::Binary(lhs, BinOp::And, rhs, _) if truth => {
+                self.collect_nonzero_defs(lhs, true, facts);
+                self.collect_nonzero_defs(rhs, true, facts);
+            }
+            Expr::Binary(lhs, BinOp::Or, rhs, _) if !truth => {
+                self.collect_nonzero_defs(lhs, false, facts);
+                self.collect_nonzero_defs(rhs, false, facts);
+            }
+            Expr::Binary(lhs, op @ (BinOp::Eq | BinOp::NotEq), rhs, _) => {
+                let proves_nonzero = matches!(op, BinOp::NotEq) == truth;
+                if !proves_nonzero {
+                    return;
+                }
+                let ident = if Self::is_zero_integer_literal(rhs) {
+                    Self::narrowable_ident_expr(lhs)
+                } else if Self::is_zero_integer_literal(lhs) {
+                    Self::narrowable_ident_expr(rhs)
+                } else {
+                    None
+                };
+                if let Some(def_id) = ident.and_then(|ident| self.ident_def_id(ident)) {
+                    facts.insert(def_id);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn is_zero_integer_literal(expr: &Expr) -> bool {
+        match expr {
+            Expr::IntLiteral(value, _) => *value == 0,
+            Expr::Unary(UnaryOp::Neg, inner, _) | Expr::Paren(inner, _) => {
+                Self::is_zero_integer_literal(inner)
+            }
+            _ => false,
+        }
+    }
+
+    fn check_block_with_type_override_and_nonzero(
+        &mut self,
+        block: &Block,
+        override_ty: Option<(DefId, TypeId)>,
+        nonzero_defs: HashSet<DefId>,
+    ) {
+        self.nonzero_fact_scopes.push(nonzero_defs);
+        self.check_block_with_type_override(block, override_ty);
+        self.nonzero_fact_scopes.pop();
     }
 
     fn check_block_with_type_override(
@@ -7385,7 +7627,10 @@ impl<'a> TypeChecker<'a> {
                 while_stmt.condition.span(),
             ));
         }
+        let nonzero = self.nonzero_defs_from_conditions([(&while_stmt.condition, true)]);
+        self.nonzero_fact_scopes.push(nonzero);
         self.check_block(&while_stmt.body);
+        self.nonzero_fact_scopes.pop();
     }
 
     fn check_assert(&mut self, assert_stmt: &ast::AssertStmt) {
@@ -7563,6 +7808,12 @@ impl<'a> TypeChecker<'a> {
             Expr::Paren(inner, _) => self.check_expr(inner),
             Expr::FieldAccess(base, field, span) => self.check_field_access(base, field, *span),
             Expr::View(inner, _) => self.check_expr(inner),
+            Expr::Comptime(inner, _) => {
+                self.comptime_expr_depth += 1;
+                let ty = self.check_expr(inner);
+                self.comptime_expr_depth -= 1;
+                ty
+            }
 
             Expr::ListConstruct(elems, _span) => self.check_list_construct(elems),
             Expr::MapConstruct(entries, _span) => self.check_map_construct(entries),
@@ -7793,6 +8044,10 @@ impl<'a> TypeChecker<'a> {
                     callee_name,
                     step.span,
                 ));
+            }
+            if self.comptime_expr_depth > 0 {
+                self.sink
+                    .emit(errors::comptime_calls_impure(callee_name, step.span));
             }
         }
 
@@ -8610,8 +8865,25 @@ impl<'a> TypeChecker<'a> {
         match op {
             // Arithmetic operators: both sides must be the same numeric type.
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Modulo => {
-                if !self.is_numeric(lhs_base) || !self.is_numeric(rhs_base) || lhs_base != rhs_base
-                {
+                let Some((lhs_numeric, lhs_secret)) = self.numeric_base_type(lhs_ty) else {
+                    self.sink.emit(errors::binary_op_mismatch(
+                        Self::binop_str(op),
+                        &self.type_name(lhs_ty),
+                        &self.type_name(rhs_ty),
+                        span,
+                    ));
+                    return TypeInterner::ERROR;
+                };
+                let Some((rhs_numeric, rhs_secret)) = self.numeric_base_type(rhs_ty) else {
+                    self.sink.emit(errors::binary_op_mismatch(
+                        Self::binop_str(op),
+                        &self.type_name(lhs_ty),
+                        &self.type_name(rhs_ty),
+                        span,
+                    ));
+                    return TypeInterner::ERROR;
+                };
+                if lhs_numeric != rhs_numeric {
                     self.sink.emit(errors::binary_op_mismatch(
                         Self::binop_str(op),
                         &self.type_name(lhs_ty),
@@ -8620,7 +8892,16 @@ impl<'a> TypeChecker<'a> {
                     ));
                     return TypeInterner::ERROR;
                 }
-                self.maybe_wrap_secret(lhs_base, tainted)
+                if matches!(op, BinOp::Div | BinOp::Modulo)
+                    && self.is_integer(rhs_numeric)
+                    && !self.expression_is_proven_nonzero(rhs, rhs_ty)
+                {
+                    self.sink.emit(errors::integer_divisor_must_be_nonzero(
+                        Self::binop_str(op),
+                        rhs.span(),
+                    ));
+                }
+                self.maybe_wrap_secret(lhs_numeric, lhs_secret || rhs_secret)
             }
 
             // Equality requires an explicit Equatable implementation for
@@ -8691,9 +8972,7 @@ impl<'a> TypeChecker<'a> {
             return TypeInterner::ERROR;
         }
 
-        let (lhs_base, lhs_secret) = self.strip_secret_type(lhs_ty);
-        let (rhs_base, rhs_secret) = self.strip_secret_type(rhs_ty);
-        if !self.is_numeric(lhs_base) || !self.is_numeric(rhs_base) || lhs_base != rhs_base {
+        let Some((lhs_base, lhs_secret)) = self.numeric_base_type(lhs_ty) else {
             self.sink.emit(errors::binary_op_mismatch(
                 Self::binop_str(op),
                 &self.type_name(lhs_ty),
@@ -8701,6 +8980,33 @@ impl<'a> TypeChecker<'a> {
                 span,
             ));
             return TypeInterner::ERROR;
+        };
+        let Some((rhs_base, rhs_secret)) = self.numeric_base_type(rhs_ty) else {
+            self.sink.emit(errors::binary_op_mismatch(
+                Self::binop_str(op),
+                &self.type_name(lhs_ty),
+                &self.type_name(rhs_ty),
+                span,
+            ));
+            return TypeInterner::ERROR;
+        };
+        if lhs_base != rhs_base {
+            self.sink.emit(errors::binary_op_mismatch(
+                Self::binop_str(op),
+                &self.type_name(lhs_ty),
+                &self.type_name(rhs_ty),
+                span,
+            ));
+            return TypeInterner::ERROR;
+        }
+        if matches!(op, BinOp::Div | BinOp::Modulo)
+            && self.is_integer(rhs_base)
+            && !self.expression_is_proven_nonzero(rhs, rhs_ty)
+        {
+            self.sink.emit(errors::integer_divisor_must_be_nonzero(
+                Self::binop_str(op),
+                rhs.span(),
+            ));
         }
 
         self.maybe_wrap_secret(lhs_base, lhs_secret || rhs_secret)
@@ -8841,6 +9147,10 @@ impl<'a> TypeChecker<'a> {
                     arg.value.span(),
                 ));
             }
+        }
+        if self.options.release {
+            self.sink
+                .emit(errors::release_debug_print_unavailable(name, span));
         }
         TypeInterner::NOTHING
     }
@@ -9154,6 +9464,10 @@ impl<'a> TypeChecker<'a> {
                             span,
                         ));
                     }
+                }
+                if self.comptime_expr_depth > 0 {
+                    self.sink
+                        .emit(errors::comptime_calls_impure(callee_name, span));
                 }
             }
         }
@@ -9538,6 +9852,16 @@ impl<'a> TypeChecker<'a> {
         if matches!(callee_name.as_deref(), Some("secret.compare")) {
             let spans: Vec<_> = args.iter().map(|arg| arg.value.span()).collect();
             self.check_secret_compare_types(&checked_arg_types, &spans);
+        }
+
+        if matches!(callee_name.as_deref(), Some("math.mod"))
+            && let (Some(divisor), Some(&divisor_ty)) = (args.get(1), checked_arg_types.get(1))
+            && !self.expression_is_proven_nonzero(&divisor.value, divisor_ty)
+        {
+            self.sink.emit(errors::integer_divisor_must_be_nonzero(
+                "modulo",
+                divisor.value.span(),
+            ));
         }
 
         self.check_json_public_call_policy(
@@ -12850,7 +13174,7 @@ function piped() returns optional[int64]:
         // Verify that type expressions like list[int64], result[string, int64] resolve correctly.
         let env = TestEnv::new();
         let resolve = env.into_resolve_result();
-        let mut checker = TypeChecker::new(&resolve);
+        let mut checker = TypeChecker::new(&resolve, CheckOptions::default());
 
         let list_int = checker.resolve_type_expr(&TypeExpr::Generic(
             ident("list", sp(0, 4)),
@@ -13158,7 +13482,7 @@ function piped() returns optional[int64]:
         };
 
         let resolve = env.into_resolve_result();
-        let mut checker = TypeChecker::new(&resolve);
+        let mut checker = TypeChecker::new(&resolve, CheckOptions::default());
         checker.check_module(&module);
 
         // The purity map should mark "printer" as impure.
@@ -13213,7 +13537,7 @@ function piped() returns optional[int64]:
         };
 
         let resolve = env.into_resolve_result();
-        let mut checker = TypeChecker::new(&resolve);
+        let mut checker = TypeChecker::new(&resolve, CheckOptions::default());
         checker.check_module(&module);
 
         assert_eq!(
@@ -13753,7 +14077,7 @@ function use_boxes() returns string:
                 .new_def("models.User".to_string(), DefKind::Struct, type_span);
         env.reference(type_span, namespaced_type);
         let resolve = env.into_resolve_result();
-        let mut checker = TypeChecker::new(&resolve);
+        let mut checker = TypeChecker::new(&resolve, CheckOptions::default());
         checker.register_named_type(None, "User", TypeInterner::INT64);
 
         assert_eq!(
@@ -13768,7 +14092,7 @@ function use_boxes() returns string:
                 .new_def("models.Box".to_string(), DefKind::Struct, generic_span);
         env.reference(generic_span, namespaced_generic);
         let resolve = env.into_resolve_result();
-        let mut checker = TypeChecker::new(&resolve);
+        let mut checker = TypeChecker::new(&resolve, CheckOptions::default());
         checker.generic_struct_templates.insert(
             "Box".to_string(),
             ast::StructDef {

@@ -1,0 +1,5 @@
+namespace app
+function recurse_when_called() returns int64:
+    return recurse_when_called()
+function unused_runtime_call() returns int64:
+    return recurse_when_called()

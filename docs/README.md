@@ -37,6 +37,7 @@ enough pressure from real code:
 - [uint64 runtime value model](open_design/uint64_runtime_value_model.md)
 - [Initial `net.socket` transport contract](open_design/net_socket_transport_contract.md)
 - [Environment and argument capability contract](open_design/environment_argv_capability_contract.md)
+- [Initial incremental query and invalidation boundary](open_design/incremental_query_boundary.md)
 - [CSV format and failure contract](https://github.com/vycdev/jett/issues/137)
 
 ## Completed Records
@@ -49,6 +50,7 @@ plans above for current work.
 - [Bitfield reflection metadata](completed/bitfield_reflection_metadata.md)
 - [Bundle ordering contract](completed/bundle_ordering_contract.md)
 - [Comptime type bind](completed/comptime_type_bind.md)
+- [Explicit comptime expression semantics](completed/explicit_comptime_expression_semantics.md)
 - [Pure-only comptime boundary](completed/comptime_pure_function_boundary.md)
 - [Crypto hashing and security contract](completed/crypto_hashing_security_contract.md)
 - [Encoding representation and failure contract](completed/encoding_representation_failure_contract.md)
@@ -68,6 +70,7 @@ plans above for current work.
 - [Reflection predicate facts](completed/reflection_predicate_facts.md)
 - [JsonValue primitive tag retirement](completed/json_value_primitive_tag_retirement.md)
 - [JsonValue to JsonTree transition](completed/json_value_transition_plan.md)
+- [Integer arithmetic semantics](completed/integer_arithmetic_semantics.md)
 - [Root alias policy](completed/root_alias_policy.md)
 - [Recursive owned values](completed/recursive_owned_values.md)
 - [Type kind design](completed/type_kind_design.md)

@@ -1,0 +1,4 @@
+# ERROR: E0504
+namespace app
+function main(fs: Filesystem) returns nothing:
+    comptime Filesystem.write_file(view fs, "ignored", "ignored")

@@ -23,16 +23,18 @@ wrapper cannot conceal an impure operation from the comptime boundary.
 
 ## Current Enforcement
 
-`verify` blocks are the currently executable value-level comptime entrypoint.
-The type checker classifies every named call from its semantic capability
-signature. Pure calls proceed without any origin-based filtering; impure calls
-produce E0501 before the interpreter runs. The same check applies to pipeline
-steps. Existing E0500 propagation prevents transitive capability access.
+`verify` blocks and explicit `comptime expression` sites are executable
+value-level comptime entrypoints. The type checker classifies every named call
+from its semantic capability signature. Pure calls proceed without any
+origin-based filtering; impure calls produce E0501 in verify blocks or E0504 in
+explicit expressions before the interpreter runs. The same check applies to
+pipeline steps. Existing E0500 propagation prevents transitive capability
+access.
 
 The comptime interpreter registers the merged module, so eligible project,
 dependency, and source-defined stdlib functions use the same execution path.
-Future explicit comptime calls and branches must reuse this purity result rather
-than introduce a second eligibility table.
+Explicit comptime calls reuse this purity result rather than introducing a
+second eligibility table.
 
 ## Coverage
 
@@ -40,3 +42,6 @@ Integration coverage executes composed project helpers and ordinary string
 stdlib functions from a `verify` block. Type-checker coverage accepts user pure
 helpers and rejects a user function with a capability parameter. Clock and
 random verify fixtures pin capability-backed builtins as unavailable.
+Explicit-expression fixtures additionally pin closed-value evaluation,
+capability rejection, and the distinction between required comptime evaluation
+and optional optimizer folding.

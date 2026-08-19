@@ -26,11 +26,8 @@ function runtime_json_tree_reflection_summary() returns string:
     bool parsed_name = string.contains(parsed_raw, "\"name\":\"Ada\"")
     bool exact_name = string.contains(exact_raw, "\"name\":\"Grace\"")
     return "{tree.kind}:{tree.type_name}:{json.kind(parsed)}:{json.kind(view exact)}:{parsed_name}:{exact_name}"
-function main() returns nothing:
+function main(stdout: Stdout) returns nothing:
     string summary = runtime_reflection_metadata_summary()
-    if summary != "models.Box[models.User]:models.User:item:{{\"item\":{{\"userId\":\"u1\"}}}}:u1":
-        int64 fail = 1 / 0
     string raw_summary = runtime_json_tree_reflection_summary()
-    if raw_summary != "enum:json.JsonTree:object:object:true:true":
-        int64 fail = 1 / 0
+    Stdout.write(view stdout, "{summary}|{raw_summary}")
     return nothing

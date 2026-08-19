@@ -1,0 +1,26 @@
+namespace test
+type NonZeroInt = int64 where value != 0
+function divide_refined(value: int64, divisor: NonZeroInt) returns int64:
+    return value / divisor
+function divide_guarded(value: int64, divisor: int64) returns result[int64, string]:
+    if divisor == 0:
+        return fail("zero divisor")
+    return ok(value / divisor)
+function modulo_in_branch(value: int64, divisor: int64) returns result[int64, string]:
+    if divisor != 0:
+        return ok(value modulo divisor)
+    return fail("zero divisor")
+function divide_with_refined_value() returns result[int64, string]:
+    NonZeroInt divisor = 2 handle error:
+        return fail(error)
+    return ok(divide_refined(10, divisor))
+verify integer_nonzero_proofs:
+    int64 refined = divide_with_refined_value() handle error:
+        default 0
+    assert refined == 5
+    int64 guarded = divide_guarded(12, 3) handle error:
+        default 0
+    assert guarded == 4
+    int64 remainder = modulo_in_branch(13, 5) handle error:
+        default 0
+    assert remainder == 3

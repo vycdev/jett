@@ -485,6 +485,8 @@ pub enum Expr {
     Paren(Box<Expr>, Span),
     /// `view expr`
     View(Box<Expr>, Span),
+    /// `comptime expr` — require the expression to be evaluated during compilation
+    Comptime(Box<Expr>, Span),
     /// List construction: `list(a, b, c)`
     ListConstruct(Vec<Expr>, Span),
     /// Map construction: `map(key1: val1, key2: val2)`
@@ -548,6 +550,7 @@ impl Expr {
             | Expr::GenericCall(_, _, _, s)
             | Expr::Paren(_, s)
             | Expr::View(_, s)
+            | Expr::Comptime(_, s)
             | Expr::ListConstruct(_, s)
             | Expr::MapConstruct(_, s)
             | Expr::Handle(_, _, _, s)

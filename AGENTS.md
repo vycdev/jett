@@ -39,6 +39,14 @@ effects, small bounded functions, and compiler-enforced policy.
   including project, dependency, and stdlib functions. Do not add a separate
   comptime-safe marker or allowlist. Functions requiring any capability are
   ineligible; comptime never receives runtime capabilities.
+- Required compile-time value evaluation is always selected explicitly with
+  `comptime expression`. The expression must be closed and pure. Optimizers may
+  fold ordinary pure calls, but folding must never change source validity.
+- Fixed-width integer arithmetic wraps modulo the checked primitive width;
+  floating-point arithmetic follows IEEE infinity and NaN behavior. Integer
+  division and modulo require a statically proven nonzero divisor. Keep proofs
+  local: nonzero refinements, nonzero literals and immutable bindings, or a
+  visible equality guard. Do not add runtime arithmetic exceptions.
 - Namespaced declarations are private by default. Mark only the intended public
   API with `export`.
 - Project and dependency namespaces must remain unique. Only compiler-shipped
