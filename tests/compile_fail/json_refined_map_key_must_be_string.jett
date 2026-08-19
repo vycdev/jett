@@ -1,10 +1,4 @@
-# ERROR: E0343
-# ERROR: E0343
-# ERROR: E0343
-# ERROR: E0343
-# ERROR: E0343
-# ERROR: E0343
-# ERROR: E0343
+# ERROR: E0343 x7
 namespace test
 type NonEmpty = string where string.char_count(value) > 0
 struct Wrapped:

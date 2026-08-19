@@ -1,7 +1,4 @@
-# ERROR: E0361
-# ERROR: E0361
-# ERROR: E0361
-# ERROR: E0361
+# ERROR: E0361 x4
 namespace test
 function literal_zero(value: int64) returns int64:
     return value / 0

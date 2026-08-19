@@ -1,5 +1,4 @@
-# ERROR: E0208
-# ERROR: E0208
+# ERROR: E0208 x2
 namespace workers
 
 export actor Counter:

@@ -1,6 +1,4 @@
-# ERROR: E0400
-# ERROR: E0400
-# ERROR: E0400
+# ERROR: E0400 x3
 namespace app
 function map_transform_consumes() returns int64:
     map[string, int64] original = map("a": 1)

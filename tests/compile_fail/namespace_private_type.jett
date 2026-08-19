@@ -1,5 +1,4 @@
-# ERROR: E0207
-# ERROR: E0207
+# ERROR: E0207 x2
 namespace api
 
 struct SecretBox:

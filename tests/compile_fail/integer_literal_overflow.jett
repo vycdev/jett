@@ -1,5 +1,4 @@
-# ERROR: E0311
-# ERROR: E0311
+# ERROR: E0311 x2
 function bad_int64_overflow() returns nothing:
     int64 value = 9223372036854775808
     return nothing

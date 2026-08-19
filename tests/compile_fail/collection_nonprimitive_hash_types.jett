@@ -1,8 +1,4 @@
-# ERROR: E0359
-# ERROR: E0359
-# ERROR: E0359
-# ERROR: E0359
-# ERROR: E0359
+# ERROR: E0359 x5
 enum Status:
     active
     disabled

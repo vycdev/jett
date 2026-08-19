@@ -1,6 +1,5 @@
 # ERROR: E0200
-# ERROR: E0208
-# ERROR: E0208
+# ERROR: E0208 x2
 namespace auth
 export machine Session:
     states:

@@ -1,6 +1,4 @@
-# ERROR: E0309
-# ERROR: E0309
-# ERROR: E0309
+# ERROR: E0309 x3
 namespace test
 function bad_list_length(items: list[int64]) returns int64:
     return list.length[int64, string](items)

@@ -41,21 +41,46 @@ fn fixture_has_main(path: &Path) -> bool {
     })
 }
 
-fn expected_error_codes(source: &str) -> Vec<u32> {
-    source
-        .lines()
-        .filter_map(|line| {
-            let trimmed = line.trim_start();
-            let rest = trimmed.strip_prefix("# ERROR:")?.trim();
-            let digits = rest
-                .strip_prefix('E')
-                .unwrap_or(rest)
-                .chars()
-                .take_while(|ch| ch.is_ascii_digit())
-                .collect::<String>();
-            digits.parse::<u32>().ok()
-        })
-        .collect()
+fn expected_error_codes(source: &str) -> Result<Vec<u32>, String> {
+    let mut codes = Vec::new();
+    for (line_index, line) in source.lines().enumerate() {
+        let trimmed = line.trim_start();
+        let Some(rest) = trimmed.strip_prefix("# ERROR:") else {
+            continue;
+        };
+        let rest = rest.trim().strip_prefix('E').unwrap_or(rest.trim());
+        let digit_count = rest.chars().take_while(|ch| ch.is_ascii_digit()).count();
+        if digit_count != 4 {
+            return Err(format!(
+                "line {} must start with a four-digit error code",
+                line_index + 1
+            ));
+        }
+        let code = rest[..digit_count]
+            .parse::<u32>()
+            .map_err(|_| format!("line {} has an invalid error code", line_index + 1))?;
+        let suffix = rest[digit_count..].trim_start();
+        let count = match suffix.split_whitespace().next() {
+            Some(token) if token.starts_with('x') => {
+                let count = token[1..].parse::<usize>().map_err(|_| {
+                    format!(
+                        "line {} has an invalid diagnostic count `{token}`",
+                        line_index + 1
+                    )
+                })?;
+                if count == 0 {
+                    return Err(format!(
+                        "line {} diagnostic count must be positive",
+                        line_index + 1
+                    ));
+                }
+                count
+            }
+            _ => 1,
+        };
+        codes.extend(std::iter::repeat_n(code, count));
+    }
+    Ok(codes)
 }
 
 fn validate_error_code_contract(
@@ -83,6 +108,19 @@ fn validate_error_code_contract(
 #[test]
 fn error_code_contract_rejects_missing_annotations() {
     assert!(validate_error_code_contract(&[], &[300]).is_err());
+}
+
+#[test]
+fn error_code_annotations_expand_compact_counts() {
+    assert_eq!(
+        expected_error_codes("# ERROR: E0348 x3\n# ERROR: E0359").unwrap(),
+        vec![348, 348, 348, 359]
+    );
+}
+
+#[test]
+fn error_code_annotations_reject_zero_counts() {
+    assert!(expected_error_codes("# ERROR: E0348 x0").is_err());
 }
 
 #[test]
@@ -134,7 +172,12 @@ fn assert_compile_pass(name: &str) {
 fn assert_compile_fail(name: &str) {
     let path = fixture_path("compile_fail", name);
     let source = fixture_source(&path);
-    let expected_codes = expected_error_codes(&source);
+    let expected_codes = expected_error_codes(&source).unwrap_or_else(|error| {
+        panic!(
+            "invalid diagnostic annotations for {}: {error}",
+            path.display()
+        )
+    });
     let result = build_file(&path);
 
     assert!(
@@ -338,7 +381,12 @@ compile_fail_fixture!(compile_fail_secret_print, "secret_print.jett");
 fn compile_fail_release_debug_print() {
     let path = fixture_path("compile_fail", "release_debug_print.jett");
     let source = fixture_source(&path);
-    let expected_codes = expected_error_codes(&source);
+    let expected_codes = expected_error_codes(&source).unwrap_or_else(|error| {
+        panic!(
+            "invalid diagnostic annotations for {}: {error}",
+            path.display()
+        )
+    });
     let result = build_file_with_options(&path, BuildOptions { release: true });
 
     assert!(result.has_errors, "expected release debug printing to fail");
@@ -348,16 +396,13 @@ fn compile_fail_release_debug_print() {
         .filter(|diag| diag.severity == Severity::Error)
         .map(|diag| u32::from(diag.code.code()))
         .collect();
-    for expected in expected_codes {
-        assert!(
-            actual_codes.contains(&expected),
-            "expected {} to report E{:04}, got:\n{}",
+    if let Err(error) = validate_error_code_contract(&expected_codes, &actual_codes) {
+        panic!(
+            "diagnostic contract failed for {}: {error}\n{}",
             path.display(),
-            expected,
             error_messages(&path, &result.diagnostics)
         );
     }
-    assert_eq!(actual_codes.iter().filter(|&&code| code == 362).count(), 2);
     let messages = error_messages(&path, &result.diagnostics);
     assert!(messages.contains("`Stdout.write` for application output"));
     assert!(messages.contains("`trace` / `breakpoint` for structured debugging"));

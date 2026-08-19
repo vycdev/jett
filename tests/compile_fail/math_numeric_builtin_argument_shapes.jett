@@ -1,16 +1,6 @@
-# ERROR: E0303
-# ERROR: E0303
-# ERROR: E0303
-# ERROR: E0303
-# ERROR: E0303
-# ERROR: E0303
-# ERROR: E0304
-# ERROR: E0304
-# ERROR: E0304
-# ERROR: E0304
-# ERROR: E0309
-# ERROR: E0309
-# ERROR: E0309
+# ERROR: E0303 x6
+# ERROR: E0304 x4
+# ERROR: E0309 x3
 namespace test
 function bad_abs_no_args() returns int64:
     return math.abs()

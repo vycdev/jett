@@ -1,7 +1,5 @@
 # ERROR: E0309
-# ERROR: E0311
-# ERROR: E0311
-# ERROR: E0311
+# ERROR: E0311 x3
 namespace test
 function bad_range() returns bool:
     bool value = range(3)

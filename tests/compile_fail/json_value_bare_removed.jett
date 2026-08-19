@@ -1,5 +1,3 @@
-# ERROR: E0309
-# ERROR: E0309
-# ERROR: E0309
+# ERROR: E0309 x3
 function legacy_raw_type() returns JsonValue:
     return nothing

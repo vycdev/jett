@@ -1,6 +1,4 @@
-# ERROR: E0346
-# ERROR: E0346
-# ERROR: E0346
+# ERROR: E0346 x3
 namespace test
 struct ExplicitCollision:
     first: string serialize "id"

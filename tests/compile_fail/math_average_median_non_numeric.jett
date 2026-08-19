@@ -1,7 +1,4 @@
-# ERROR: E0300
-# ERROR: E0300
-# ERROR: E0300
-# ERROR: E0300
+# ERROR: E0300 x4
 namespace test
 
 function average_strings() returns float64:

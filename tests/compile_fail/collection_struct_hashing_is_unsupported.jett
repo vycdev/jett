@@ -1,7 +1,4 @@
-# ERROR: E0359
-# ERROR: E0359
-# ERROR: E0359
-# ERROR: E0359
+# ERROR: E0359 x4
 struct User:
     id: string
 function unsupported_struct_collections() returns nothing:

@@ -1,11 +1,4 @@
-# ERROR: E0304
-# ERROR: E0304
-# ERROR: E0304
-# ERROR: E0304
-# ERROR: E0304
-# ERROR: E0304
-# ERROR: E0304
-# ERROR: E0304
+# ERROR: E0304 x8
 namespace test
 
 function bad_object_field_value() returns string:
