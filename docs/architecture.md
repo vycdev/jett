@@ -1858,11 +1858,16 @@ Each crate has its own unit tests:
 
 ### Property-Based Compiler Tests
 
-The compiler itself is tested with property-based testing:
-- **Lexer properties:** tokenize(source) → detokenize(tokens) == source.
-- **Parser properties:** parse(lex(source)) never panics (even on random input). Randomized current-frontend safety coverage is [tracked by #159](https://github.com/vycdev/jett/issues/159).
-- **Type checker properties:** if type checking succeeds, codegen never encounters a type error.
-- **Round-trip properties:** source → CST → source is identity for formatted source.
+Property-based coverage is staged with the compiler pipeline:
+- **Current frontend:** deterministic randomized tests for lexer/parser termination,
+  panic safety, and valid source spans are
+  [tracked by #159](https://github.com/vycdev/jett/issues/159); they are not yet
+  implemented.
+- **Deferred until the lossless CST/trivia path exists:**
+  tokenize(source) → detokenize(tokens) == source, and source → CST → source is
+  identity for formatted source.
+- **Deferred until code generation exists:** if type checking succeeds, codegen
+  never encounters a type error.
 
 ---
 
