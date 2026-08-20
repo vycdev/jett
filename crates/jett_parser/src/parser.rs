@@ -48,7 +48,14 @@ impl<'src> Parser<'src> {
             kind: TokenKind::Eof,
             span: Span::new(jett_common::FileId::new(0), 0, 0),
         });
-        self.tokens.get(self.pos).unwrap_or(&EOF_TOKEN)
+        self.tokens
+            .get(self.pos)
+            .or_else(|| {
+                self.tokens
+                    .last()
+                    .filter(|token| token.kind == TokenKind::Eof)
+            })
+            .unwrap_or(&EOF_TOKEN)
     }
 
     fn peek_nth(&self, n: usize) -> TokenKind {
@@ -2665,6 +2672,16 @@ mod tests {
 
     fn parse_str(source: &str) -> ParseResult {
         parse(source, FileId::new(0))
+    }
+
+    #[test]
+    fn incomplete_declaration_preserves_nonzero_file_id_at_eof() {
+        let file = FileId::new(17);
+        let result = parse("function", file);
+
+        assert!(!result.errors.is_empty());
+        assert_eq!(result.module.span.file, file);
+        assert!(result.errors.iter().all(|error| error.span.file == file));
     }
 
     // -----------------------------------------------------------------------

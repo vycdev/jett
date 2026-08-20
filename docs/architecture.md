@@ -1844,7 +1844,7 @@ and persistent/content-addressed caching remain separate follow-up stages.
 
 Each crate has its own unit tests:
 - **Lexer:** token sequence tests for each language construct, error recovery tests.
-- **Parser:** CST structure tests, error recovery tests, round-trip tests (source → CST → source).
+- **Parser:** direct source-spanned AST structure tests and error recovery tests.
 - **Type checker:** type inference tests, error message tests, ownership analysis tests.
 - **Comptime:** interpreter correctness tests, verify block tests.
 - **Codegen:** LLVM IR snapshot tests.
@@ -1859,10 +1859,13 @@ Each crate has its own unit tests:
 ### Property-Based Compiler Tests
 
 Property-based coverage is staged with the compiler pipeline:
-- **Current frontend:** deterministic randomized tests for lexer/parser termination,
-  panic safety, and valid source spans are
-  [tracked by #159](https://github.com/vycdev/jett/issues/159); they are not yet
-  implemented.
+- **Current frontend:** a bounded integration test passes curated malformed input
+  and 1,024 deterministically generated arbitrary UTF-8 sources through the public
+  lexer and parser entrypoints. It checks panic safety and validates the file,
+  ordering, bounds, and UTF-8 boundaries of token, comment, and diagnostic spans.
+  Random failures report the fixed seed, case index, and escaped source so they can
+  be reproduced and reduced into focused regressions. This coverage is
+  [tracked by #159](https://github.com/vycdev/jett/issues/159).
 - **Deferred until the lossless CST/trivia path exists:**
   tokenize(source) → detokenize(tokens) == source, and source → CST → source is
   identity for formatted source.
