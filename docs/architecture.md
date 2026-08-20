@@ -1854,7 +1854,7 @@ Each crate has its own unit tests:
 - **`compile_pass/`** — Jett programs that should compile without errors. Tests run `jett build` and assert exit code 0.
 - **`compile_fail/`** — Jett programs with intentional errors. Each test file declares its expected error-code multiset with comment annotations such as `# ERROR: E0601`; repeated diagnostics use the compact form `# ERROR: E0601 x3`. The harness rejects missing or malformed annotations, unexpected codes, and incorrect duplicate counts without depending on diagnostic order. Message text is not currently contractual.
 - **`run_pass/`** — Jett programs that should compile and execute successfully. Verify/property fixtures assert internally, and stdout-producing runtime fixtures can be pinned through the driver's captured-stdout test helper.
-- **`snapshots/`** — Snapshot tests for intermediate representations. Source → AST, source → HIR, source → MIR, source → LLVM IR. Uses `insta` for snapshot management.
+- **`snapshots/`** — Source fixtures for the current direct AST snapshots tracked by [#162](https://github.com/vycdev/jett/issues/162); the committed `insta` outputs use the parser crate's conventional snapshot directory. HIR, MIR, and LLVM IR snapshots remain deferred until those representations exist.
 
 ### Property-Based Compiler Tests
 
