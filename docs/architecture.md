@@ -1620,7 +1620,8 @@ No Salsa database is implemented yet. The current driver invokes parser,
 resolver, and typechecker operations directly. The selected first query slice
 adds an in-process `jett_query` database and memoizes
 `parse_file(FileKey) -> ParsedFile`; existing semantic passes initially remain
-whole-project computations over those parse results.
+whole-project computations over those parse results. That bounded implementation
+is tracked by [#166](https://github.com/vycdev/jett/issues/166).
 
 The [initial query boundary](open_design/incremental_query_boundary.md) defines
 database ownership, ground-truth inputs, stable file identity, deterministic
@@ -1833,8 +1834,10 @@ The complete ground-truth input list, invalidation matrix, diagnostic ordering,
 cycle policy, ASP/LSP behavior, CST/HIR/MIR compatibility, bounded migration
 sequence, and cache-observability test matrix are defined in the
 [initial incremental query and invalidation boundary](open_design/incremental_query_boundary.md),
-tracked by [#147](https://github.com/vycdev/jett/issues/147). Parallel execution
-and persistent/content-addressed caching remain separate follow-up stages.
+selected by [#147](https://github.com/vycdev/jett/issues/147). The first
+database-and-parse-reuse implementation is tracked by
+[#166](https://github.com/vycdev/jett/issues/166). Parallel execution and
+persistent/content-addressed caching remain separate follow-up stages.
 
 ---
 
@@ -2039,7 +2042,8 @@ Core stdlib (string, list, math, json) is implemented in Phase D. This phase com
 **Goal:** Sub-second recompilation, production readiness.
 
 1. `jett_query` demand-driven database with the selected direct-AST parse
-   boundary, then measured declaration/body query stages (Salsa integration).
+   boundary ([tracked by #166](https://github.com/vycdev/jett/issues/166)),
+   then measured declaration/body query stages (Salsa integration).
 2. Parallel compilation of independent namespaces (deterministic scheduling
    and result-publication contract [tracked by #151](https://github.com/vycdev/jett/issues/151)).
 3. Content-addressed caching of compilation artifacts (identity,
