@@ -21,15 +21,30 @@ pub struct ParseResult {
 pub struct Parser<'src> {
     source: &'src str,
     tokens: Vec<Token>,
+    eof_token: Token,
     pos: usize,
     errors: Vec<Diagnostic>,
 }
 
 impl<'src> Parser<'src> {
     pub fn new(source: &'src str, tokens: Vec<Token>) -> Self {
+        let eof_span = tokens.last().map_or_else(
+            || {
+                Span::new(
+                    jett_common::FileId::new(0),
+                    source.len() as u32,
+                    source.len() as u32,
+                )
+            },
+            |token| Span::new(token.span.file, token.span.end, token.span.end),
+        );
         Self {
             source,
             tokens,
+            eof_token: Token {
+                kind: TokenKind::Eof,
+                span: eof_span,
+            },
             pos: 0,
             errors: Vec::new(),
         }
@@ -44,11 +59,7 @@ impl<'src> Parser<'src> {
     }
 
     fn peek_token(&self) -> &Token {
-        static EOF_TOKEN: std::sync::LazyLock<Token> = std::sync::LazyLock::new(|| Token {
-            kind: TokenKind::Eof,
-            span: Span::new(jett_common::FileId::new(0), 0, 0),
-        });
-        self.tokens.get(self.pos).unwrap_or(&EOF_TOKEN)
+        self.tokens.get(self.pos).unwrap_or(&self.eof_token)
     }
 
     fn peek_nth(&self, n: usize) -> TokenKind {

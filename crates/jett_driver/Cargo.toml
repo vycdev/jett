@@ -17,6 +17,7 @@ jett_types.workspace = true
 jett_typecheck.workspace = true
 jett_comptime.workspace = true
 jett_fmt.workspace = true
+jett_query.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 same-file = "1"
