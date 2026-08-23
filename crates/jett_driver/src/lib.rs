@@ -9,7 +9,8 @@ pub use jett_comptime::{ClockTestSample, RandomTestSample};
 use jett_diagnostics::Diagnostic;
 use jett_fmt::{FormatResult, format_source};
 use jett_parser::ast::{FunctionDecl, FunctionDef, Item, Module, Param, TypeExpr};
-use jett_parser::parse;
+use jett_parser::{ParseResult, parse};
+use jett_query::{QueryDatabase, SourceOrigin};
 use jett_resolve::resolve;
 use jett_typecheck::{CheckOptions, CheckResult, check, check_with_options};
 use jett_types::ReflectionMetadata;
@@ -327,14 +328,34 @@ struct RunOptions {
     clock_test_samples: Option<Vec<ClockTestSample>>,
 }
 
+fn parse_source_with_query(source: &str, file_path: &str) -> ParseResult {
+    let logical_path = Path::new(file_path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("main.jett");
+    let mut database = QueryDatabase::default();
+    let source_file = database
+        .upsert_source(
+            SourceOrigin::Project,
+            logical_path,
+            Arc::<str>::from(source),
+        )
+        .expect("a single file name is a valid logical source path");
+    let parsed = database.parse(source_file);
+    ParseResult {
+        module: parsed.module.clone(),
+        errors: parsed.diagnostics.clone(),
+    }
+}
+
 /// Run the full compilation pipeline on in-memory source text.
 /// Used by the LSP server to validate documents without touching the filesystem.
 pub fn build_source(source: &str, file_path: &str) -> BuildResult {
-    let file_id = FileId::new(0);
     let mut all_diagnostics = Vec::new();
 
     // Phase 1+2: Lex + Parse
-    let mut parse_result = parse(source, file_id);
+    let mut parse_result = parse_source_with_query(source, file_path);
     all_diagnostics.extend(parse_result.errors.clone());
 
     let has_parse_errors = has_error_diagnostics(&all_diagnostics);
@@ -2137,11 +2158,10 @@ fn build_file_inner(path: &Path, include_project: bool, options: BuildOptions) -
         }
     };
 
-    let file_id = FileId::new(0);
     let mut all_diagnostics = Vec::new();
 
     // Phase 1+2: Lex + Parse (parse internally calls tokenize)
-    let mut parse_result = parse(&source, file_id);
+    let mut parse_result = parse_source_with_query(&source, &file_path_str);
     all_diagnostics.extend(parse_result.errors.clone());
 
     // If there are parse errors, stop here — resolve/typecheck won't produce useful results

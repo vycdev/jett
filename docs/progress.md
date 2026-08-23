@@ -185,7 +185,7 @@
 
 | Component | Status |
 |---|---|
-| Salsa integration | Design selected, implementation not started (the first `jett_query` slice memoizes parser-owned direct ASTs by stable logical file identity; see the [initial query and invalidation boundary](open_design/incremental_query_boundary.md) from [#147](https://github.com/vycdev/jett/issues/147), with the bounded parse-reuse implementation [tracked by #166](https://github.com/vycdev/jett/issues/166)) |
+| Salsa integration | Initial whole-file parse-query slice implemented (the first `jett_query` boundary memoizes parser-owned direct ASTs by stable logical file identity; see the [initial query and invalidation boundary](open_design/incremental_query_boundary.md) from [#147](https://github.com/vycdev/jett/issues/147), with implementation tracked by [#166](https://github.com/vycdev/jett/issues/166)) |
 | Parallel compilation | Not started (deterministic namespace scheduling and parallel query boundary [tracked by #151](https://github.com/vycdev/jett/issues/151)) |
 | Content-addressed caching | Not started (compiler-result identity, serialization, trust, and lifecycle contract [tracked by #153](https://github.com/vycdev/jett/issues/153)) |
 
