@@ -1805,8 +1805,13 @@ selected policy starts with a measured, correctness-preserving file boundary:
 parse_file(file: FileKey) -> ParsedFile
 ```
 
-Deterministic parallel query execution and namespace scheduling are tracked
-separately by [#151](https://github.com/vycdev/jett/issues/151).
+The selected
+[deterministic parallel compilation boundary](open_design/parallel_compilation_boundary.md)
+starts with bounded concurrent requests for independent whole-file parse
+queries. Results are collected in canonical manifest order before the current
+sequential semantic passes run. Later namespace and body parallelism is gated
+on stable declaration identities, ordered signature summaries, immutable query
+ownership, and exact dependency facts; worker timing is never a compiler input.
 Persistent compiler-result and artifact identity, serialization, and cache
 safety are tracked separately by [#153](https://github.com/vycdev/jett/issues/153).
 
@@ -1833,8 +1838,10 @@ The complete ground-truth input list, invalidation matrix, diagnostic ordering,
 cycle policy, ASP/LSP behavior, CST/HIR/MIR compatibility, bounded migration
 sequence, and cache-observability test matrix are defined in the
 [initial incremental query and invalidation boundary](open_design/incremental_query_boundary.md),
-tracked by [#147](https://github.com/vycdev/jett/issues/147). Parallel execution
-and persistent/content-addressed caching remain separate follow-up stages.
+tracked by [#147](https://github.com/vycdev/jett/issues/147). The parallel
+contract separately defines deterministic planning, interner ownership,
+diagnostic merging, cancellation, worker limits, and atomic publication.
+Persistent/content-addressed caching remains a separate follow-up stage.
 
 ---
 
@@ -2040,8 +2047,10 @@ Core stdlib (string, list, math, json) is implemented in Phase D. This phase com
 
 1. `jett_query` demand-driven database with the selected direct-AST parse
    boundary, then measured declaration/body query stages (Salsa integration).
-2. Parallel compilation of independent namespaces (deterministic scheduling
-   and result-publication contract [tracked by #151](https://github.com/vycdev/jett/issues/151)).
+2. Parallel compilation starts with independent whole-file parses and later
+   admits ready namespace/body queries under the
+   [deterministic scheduling and publication contract](open_design/parallel_compilation_boundary.md)
+   selected for [#151](https://github.com/vycdev/jett/issues/151).
 3. Content-addressed caching of compilation artifacts (identity,
    serialization, trust, and lifecycle contract [tracked by #153](https://github.com/vycdev/jett/issues/153)).
 4. Comprehensive test suite.

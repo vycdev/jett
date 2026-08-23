@@ -43,7 +43,10 @@ Jett is optimized not just for LLM code generation, but also for how coding agen
 while a separate content-addressed compilation-cache contract is
 [tracked by #153](https://github.com/vycdev/jett/issues/153). That contract must
 preserve reproducibility across environments rather than introducing
-"works on my machine" drift.
+"works on my machine" drift. Compiler parallelism follows a
+[deterministic build-plan and atomic-publication contract](open_design/parallel_compilation_boundary.md):
+worker timing and worker count may change throughput, but never accepted source,
+diagnostic order, query identity, or published artifacts.
 
 *Note: The `--agent` flag and the Agent Server Protocol (ASP) referenced above are defined in Rule Set 21. The ASP specifies how the compiler communicates structured TOON output to agents — including build errors, type queries, signature lookups, completions, and test results. The exact capabilities and query formats are still being refined and may evolve as the compiler is implemented. See Rule Set 21 for the current specification.*
 
