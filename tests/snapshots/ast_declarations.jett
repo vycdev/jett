@@ -1,0 +1,10 @@
+namespace model
+export type Port = int64 where value >= 1 && value <= 65535
+export struct Pair[T]:
+    first: T
+    second: T
+export enum Status:
+    ready
+    failed
+export function select_first[T](pair: Pair[T]) returns T:
+    return pair.first
