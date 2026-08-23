@@ -593,7 +593,9 @@ Track which capabilities flow through the program:
   immutable runtime-injected launch snapshot. Capability-free `os.env` and
   `os.args` are transitional ambient effects to remove. Verify, property, and
   comptime evaluation cannot access process launch data. See the
-  [Environment and argument capability contract](open_design/environment_argv_capability_contract.md).
+  [Environment and argument capability contract](open_design/environment_argv_capability_contract.md);
+  interpreter-backed implementation is
+  [tracked by #170](https://github.com/vycdev/jett/issues/170).
 - **`trace` and `breakpoint` are capability-exempt** — they produce output/open connections without requiring a `Stdout` or `Network` capability. They are compiler keywords with special treatment, compiled out in release mode.
 - **`print` and `println` are compiler-owned debug builtins, not ordinary I/O.**
   They remain secret-output boundaries and require no `Stdout` capability. The

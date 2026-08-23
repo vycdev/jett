@@ -3111,7 +3111,9 @@ secret[T] ──→ secret.compare() ALLOWED (constant-time comparison)
 
 > The proposed `Environment` API, immutable launch snapshot, Unicode-failure
 > policy, and removal of ambient `os.env`/`os.args` are defined in the
-> [Environment and argument capability contract](open_design/environment_argv_capability_contract.md).
+> [Environment and argument capability contract](open_design/environment_argv_capability_contract.md),
+> with interpreter-backed implementation
+> [tracked by #170](https://github.com/vycdev/jett/issues/170).
 
 #### The Problem: Side Effects Hide in the Call Stack
 

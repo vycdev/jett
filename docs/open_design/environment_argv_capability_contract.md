@@ -1,6 +1,8 @@
 # Environment and Argument Capability Contract
 
-Status: proposed decision for [#94](https://github.com/vycdev/jett/issues/94).
+Status: selected design from [#94](https://github.com/vycdev/jett/issues/94);
+interpreter-backed implementation is tracked by
+[#170](https://github.com/vycdev/jett/issues/170).
 Implementation and stdlib extraction remain pending.
 
 ## Context
