@@ -1,7 +1,9 @@
 # Initial Incremental Query and Invalidation Boundary
 
 Status: selected design for issue
-[#147](https://github.com/vycdev/jett/issues/147); implementation not started.
+[#147](https://github.com/vycdev/jett/issues/147); the first bounded
+implementation slice is tracked by
+[#166](https://github.com/vycdev/jett/issues/166).
 
 ## Decision Summary
 
@@ -347,6 +349,11 @@ AST/body arena indices across revisions. HIR/MIR may introduce their own local
 arenas whose indices remain valid only within one owning query result.
 
 ## Bounded Implementation Sequence
+
+The database-and-parse-reuse slice in stage 1 is tracked by
+[#166](https://github.com/vycdev/jett/issues/166). Later stages require their
+own independently bounded implementation tracking after this first slice is
+measured.
 
 1. **Database and parse reuse**
    - add `jett_query`, pin Salsa `=0.28.2`, and define `ProjectKey`, `StdlibKey`,
