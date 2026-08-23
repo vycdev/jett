@@ -55,4 +55,6 @@ memoizes one whole-file direct AST and its parse diagnostics. It uses stable
 logical file identity without inventing AST `NodeId` values or pulling the
 deferred CST forward. Item-level declaration and body queries remain a later
 stage after their identities and invalidation behavior are tested; the design
-work is tracked by [#147](https://github.com/vycdev/jett/issues/147).
+work is recorded by [#147](https://github.com/vycdev/jett/issues/147), and the
+first whole-file parse-reuse implementation is tracked by
+[#166](https://github.com/vycdev/jett/issues/166).

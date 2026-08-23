@@ -144,8 +144,8 @@
 |---|---|
 | Property-based test runner | Done (basic: 100 generated iterations; all numeric primitives, bool/string/bytes/nothing, aliases/refinements, structs including generic structs, bitfields, enums, plus generic list/set/map/optional/result pools) |
 | Input shrinking on failure | Done (shrinking for int64, float64, string, bytes, list, set, map, optional, result, struct fields, enum payloads) |
-| CPU profiler (`--profile`) | Not started |
-| Memory profiler (`--profile-memory`) | Not started |
+| CPU profiler (`--profile`) | Not started (sampling, attribution, output, security, platform, and interpreter/future-runtime contract tracked by [#164](https://github.com/vycdev/jett/issues/164)) |
+| Memory profiler (`--profile-memory`) | Not started (allocation, retention, peak-memory, attribution, and shared reporting/runtime contract tracked by [#164](https://github.com/vycdev/jett/issues/164)) |
 | `trace` keyword | Partial (parses, typechecks, runtime type-tagged current-value output in `jett run`) |
 | `breakpoint` keyword | Partial (parses, typechecks, and emits conditional runtime debug snapshots with visible binding types in `jett run`; the pause/inspection protocol is [decided](completed/breakpoint_pause_inspection_protocol.md), while its interpreter and future native-runtime stages remain unimplemented) |
 
@@ -185,7 +185,7 @@
 
 | Component | Status |
 |---|---|
-| Salsa integration | Design selected, implementation not started (the first `jett_query` slice memoizes parser-owned direct ASTs by stable logical file identity; see the [initial query and invalidation boundary](open_design/incremental_query_boundary.md), tracked by [#147](https://github.com/vycdev/jett/issues/147)) |
+| Salsa integration | Initial whole-file parse-query slice implemented (the first `jett_query` boundary memoizes parser-owned direct ASTs by stable logical file identity; see the [initial query and invalidation boundary](open_design/incremental_query_boundary.md) from [#147](https://github.com/vycdev/jett/issues/147), with implementation tracked by [#166](https://github.com/vycdev/jett/issues/166)) |
 | Parallel compilation | Design selected, implementation not started (bounded parallel parsing first; namespace/body scheduling follows stable declaration facts; see the [deterministic parallel compilation boundary](open_design/parallel_compilation_boundary.md), tracked by [#151](https://github.com/vycdev/jett/issues/151)) |
 | Content-addressed caching | Not started (compiler-result identity, serialization, trust, and lifecycle contract [tracked by #153](https://github.com/vycdev/jett/issues/153)) |
 

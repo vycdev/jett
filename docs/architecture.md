@@ -86,6 +86,10 @@ jett/
     └── architecture.md
 ```
 
+The planned `jett_profiler` CPU/memory sampling, attribution, reporting,
+security, platform, and interpreter/future-runtime contract is tracked by
+[#164](https://github.com/vycdev/jett/issues/164).
+
 ### Crate Dependency Graph
 
 ```mermaid
@@ -1620,7 +1624,8 @@ No Salsa database is implemented yet. The current driver invokes parser,
 resolver, and typechecker operations directly. The selected first query slice
 adds an in-process `jett_query` database and memoizes
 `parse_file(FileKey) -> ParsedFile`; existing semantic passes initially remain
-whole-project computations over those parse results.
+whole-project computations over those parse results. That bounded implementation
+is tracked by [#166](https://github.com/vycdev/jett/issues/166).
 
 The [initial query boundary](open_design/incremental_query_boundary.md) defines
 database ownership, ground-truth inputs, stable file identity, deterministic
@@ -1838,9 +1843,11 @@ The complete ground-truth input list, invalidation matrix, diagnostic ordering,
 cycle policy, ASP/LSP behavior, CST/HIR/MIR compatibility, bounded migration
 sequence, and cache-observability test matrix are defined in the
 [initial incremental query and invalidation boundary](open_design/incremental_query_boundary.md),
-tracked by [#147](https://github.com/vycdev/jett/issues/147). The parallel
-contract separately defines deterministic planning, interner ownership,
-diagnostic merging, cancellation, worker limits, and atomic publication.
+selected by [#147](https://github.com/vycdev/jett/issues/147). The first
+database-and-parse-reuse implementation is tracked by
+[#166](https://github.com/vycdev/jett/issues/166). The parallel contract
+separately defines deterministic planning, interner ownership, diagnostic
+merging, cancellation, worker limits, and atomic publication.
 Persistent/content-addressed caching remains a separate follow-up stage.
 
 ---
@@ -1851,7 +1858,7 @@ Persistent/content-addressed caching remains a separate follow-up stage.
 
 Each crate has its own unit tests:
 - **Lexer:** token sequence tests for each language construct, error recovery tests.
-- **Parser:** CST structure tests, error recovery tests, round-trip tests (source → CST → source).
+- **Parser:** direct source-spanned AST structure tests and error recovery tests.
 - **Type checker:** type inference tests, error message tests, ownership analysis tests.
 - **Comptime:** interpreter correctness tests, verify block tests.
 - **Codegen:** LLVM IR snapshot tests.
@@ -1861,15 +1868,18 @@ Each crate has its own unit tests:
 - **`compile_pass/`** — Jett programs that should compile without errors. Tests run `jett build` and assert exit code 0.
 - **`compile_fail/`** — Jett programs with intentional errors. Each test file declares its expected error-code multiset with comment annotations such as `# ERROR: E0601`; repeated diagnostics use the compact form `# ERROR: E0601 x3`. The harness rejects missing or malformed annotations, unexpected codes, and incorrect duplicate counts without depending on diagnostic order. Message text is not currently contractual.
 - **`run_pass/`** — Jett programs that should compile and execute successfully. Verify/property fixtures assert internally, and stdout-producing runtime fixtures can be pinned through the driver's captured-stdout test helper.
-- **`snapshots/`** — Snapshot tests for intermediate representations. Source → AST, source → HIR, source → MIR, source → LLVM IR. Uses `insta` for snapshot management.
+- **`snapshots/`** — Source fixtures for the current direct AST snapshots tracked by [#162](https://github.com/vycdev/jett/issues/162); the committed `insta` outputs use the parser crate's conventional snapshot directory. HIR, MIR, and LLVM IR snapshots remain deferred until those representations exist.
 
 ### Property-Based Compiler Tests
 
 Property-based coverage is staged with the compiler pipeline:
-- **Current frontend:** deterministic randomized tests for lexer/parser termination,
-  panic safety, and valid source spans are
-  [tracked by #159](https://github.com/vycdev/jett/issues/159); they are not yet
-  implemented.
+- **Current frontend:** a bounded integration test passes curated malformed input
+  and 1,024 deterministically generated arbitrary UTF-8 sources through the public
+  lexer and parser entrypoints. It checks panic safety and validates the file,
+  ordering, bounds, and UTF-8 boundaries of token, comment, and diagnostic spans.
+  Random failures report the fixed seed, case index, and escaped source so they can
+  be reproduced and reduced into focused regressions. This coverage is
+  [tracked by #159](https://github.com/vycdev/jett/issues/159).
 - **Deferred until the lossless CST/trivia path exists:**
   tokenize(source) → detokenize(tokens) == source, and source → CST → source is
   identity for formatted source.
@@ -2046,7 +2056,8 @@ Core stdlib (string, list, math, json) is implemented in Phase D. This phase com
 **Goal:** Sub-second recompilation, production readiness.
 
 1. `jett_query` demand-driven database with the selected direct-AST parse
-   boundary, then measured declaration/body query stages (Salsa integration).
+   boundary ([tracked by #166](https://github.com/vycdev/jett/issues/166)),
+   then measured declaration/body query stages (Salsa integration).
 2. Parallel compilation starts with independent whole-file parses and later
    admits ready namespace/body queries under the
    [deterministic scheduling and publication contract](open_design/parallel_compilation_boundary.md)

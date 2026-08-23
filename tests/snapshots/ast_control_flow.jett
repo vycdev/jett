@@ -1,0 +1,8 @@
+function sum_positive(values: list[int64]) returns int64:
+    int64 total = 0
+    for value in view values:
+        if value > 0:
+            total = total + value
+        else:
+            continue
+    return total

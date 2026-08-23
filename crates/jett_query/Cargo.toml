@@ -1,6 +1,6 @@
 [package]
-name = "jett_parser"
-description = "Recursive descent parser producing a lossless CST"
+name = "jett_query"
+description = "Incremental compiler query database and stable source identity"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,7 +8,5 @@ license.workspace = true
 [dependencies]
 jett_common.workspace = true
 jett_diagnostics.workspace = true
-jett_lexer.workspace = true
-
-[dev-dependencies]
-insta = "1.48.0"
+jett_parser.workspace = true
+salsa.workspace = true
