@@ -2678,6 +2678,16 @@ mod tests {
         parse(source, FileId::new(0))
     }
 
+    #[test]
+    fn incomplete_declaration_preserves_nonzero_file_id_at_eof() {
+        let file = FileId::new(17);
+        let result = parse("function", file);
+
+        assert!(!result.errors.is_empty());
+        assert_eq!(result.module.span.file, file);
+        assert!(result.errors.iter().all(|error| error.span.file == file));
+    }
+
     // -----------------------------------------------------------------------
     // Parsing a simple function
     // -----------------------------------------------------------------------

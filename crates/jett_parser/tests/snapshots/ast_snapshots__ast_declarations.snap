@@ -1,0 +1,473 @@
+---
+source: crates/jett_parser/tests/ast_snapshots.rs
+expression: module
+---
+Module {
+    items: [
+        Namespace(
+            NamespaceDecl {
+                name: Ident {
+                    name: "model",
+                    span: Span {
+                        file: FileId(
+                            0,
+                        ),
+                        start: 10,
+                        end: 15,
+                    },
+                },
+                span: Span {
+                    file: FileId(
+                        0,
+                    ),
+                    start: 0,
+                    end: 15,
+                },
+            },
+        ),
+        TypeAlias(
+            TypeAlias {
+                name: Ident {
+                    name: "Port",
+                    span: Span {
+                        file: FileId(
+                            0,
+                        ),
+                        start: 28,
+                        end: 32,
+                    },
+                },
+                base_type: Named(
+                    Ident {
+                        name: "int64",
+                        span: Span {
+                            file: FileId(
+                                0,
+                            ),
+                            start: 35,
+                            end: 40,
+                        },
+                    },
+                ),
+                constraint: Some(
+                    Binary(
+                        Binary(
+                            Ident(
+                                Ident {
+                                    name: "value",
+                                    span: Span {
+                                        file: FileId(
+                                            0,
+                                        ),
+                                        start: 47,
+                                        end: 52,
+                                    },
+                                },
+                            ),
+                            GtEq,
+                            IntLiteral(
+                                1,
+                                Span {
+                                    file: FileId(
+                                        0,
+                                    ),
+                                    start: 56,
+                                    end: 57,
+                                },
+                            ),
+                            Span {
+                                file: FileId(
+                                    0,
+                                ),
+                                start: 47,
+                                end: 57,
+                            },
+                        ),
+                        And,
+                        Binary(
+                            Ident(
+                                Ident {
+                                    name: "value",
+                                    span: Span {
+                                        file: FileId(
+                                            0,
+                                        ),
+                                        start: 61,
+                                        end: 66,
+                                    },
+                                },
+                            ),
+                            LtEq,
+                            IntLiteral(
+                                65535,
+                                Span {
+                                    file: FileId(
+                                        0,
+                                    ),
+                                    start: 70,
+                                    end: 75,
+                                },
+                            ),
+                            Span {
+                                file: FileId(
+                                    0,
+                                ),
+                                start: 61,
+                                end: 75,
+                            },
+                        ),
+                        Span {
+                            file: FileId(
+                                0,
+                            ),
+                            start: 47,
+                            end: 75,
+                        },
+                    ),
+                ),
+                exported: true,
+                root_exported: false,
+                span: Span {
+                    file: FileId(
+                        0,
+                    ),
+                    start: 16,
+                    end: 75,
+                },
+            },
+        ),
+        Struct(
+            StructDef {
+                name: Ident {
+                    name: "Pair",
+                    span: Span {
+                        file: FileId(
+                            0,
+                        ),
+                        start: 90,
+                        end: 94,
+                    },
+                },
+                type_params: [
+                    Ident {
+                        name: "T",
+                        span: Span {
+                            file: FileId(
+                                0,
+                            ),
+                            start: 95,
+                            end: 96,
+                        },
+                    },
+                ],
+                fields: [
+                    FieldDef {
+                        name: Ident {
+                            name: "first",
+                            span: Span {
+                                file: FileId(
+                                    0,
+                                ),
+                                start: 103,
+                                end: 108,
+                            },
+                        },
+                        ty: Named(
+                            Ident {
+                                name: "T",
+                                span: Span {
+                                    file: FileId(
+                                        0,
+                                    ),
+                                    start: 110,
+                                    end: 111,
+                                },
+                            },
+                        ),
+                        serialize_name: None,
+                        span: Span {
+                            file: FileId(
+                                0,
+                            ),
+                            start: 103,
+                            end: 111,
+                        },
+                    },
+                    FieldDef {
+                        name: Ident {
+                            name: "second",
+                            span: Span {
+                                file: FileId(
+                                    0,
+                                ),
+                                start: 116,
+                                end: 122,
+                            },
+                        },
+                        ty: Named(
+                            Ident {
+                                name: "T",
+                                span: Span {
+                                    file: FileId(
+                                        0,
+                                    ),
+                                    start: 124,
+                                    end: 125,
+                                },
+                            },
+                        ),
+                        serialize_name: None,
+                        span: Span {
+                            file: FileId(
+                                0,
+                            ),
+                            start: 116,
+                            end: 125,
+                        },
+                    },
+                ],
+                methods: [],
+                exported: true,
+                span: Span {
+                    file: FileId(
+                        0,
+                    ),
+                    start: 76,
+                    end: 126,
+                },
+            },
+        ),
+        Enum(
+            EnumDef {
+                name: Ident {
+                    name: "Status",
+                    span: Span {
+                        file: FileId(
+                            0,
+                        ),
+                        start: 138,
+                        end: 144,
+                    },
+                },
+                variants: [
+                    Variant {
+                        name: Ident {
+                            name: "ready",
+                            span: Span {
+                                file: FileId(
+                                    0,
+                                ),
+                                start: 150,
+                                end: 155,
+                            },
+                        },
+                        fields: [],
+                        discriminant: None,
+                        span: Span {
+                            file: FileId(
+                                0,
+                            ),
+                            start: 150,
+                            end: 155,
+                        },
+                    },
+                    Variant {
+                        name: Ident {
+                            name: "failed",
+                            span: Span {
+                                file: FileId(
+                                    0,
+                                ),
+                                start: 160,
+                                end: 166,
+                            },
+                        },
+                        fields: [],
+                        discriminant: None,
+                        span: Span {
+                            file: FileId(
+                                0,
+                            ),
+                            start: 160,
+                            end: 166,
+                        },
+                    },
+                ],
+                exported: true,
+                span: Span {
+                    file: FileId(
+                        0,
+                    ),
+                    start: 126,
+                    end: 167,
+                },
+            },
+        ),
+        Function(
+            FunctionDef {
+                name: Ident {
+                    name: "select_first",
+                    span: Span {
+                        file: FileId(
+                            0,
+                        ),
+                        start: 183,
+                        end: 195,
+                    },
+                },
+                type_params: [
+                    Ident {
+                        name: "T",
+                        span: Span {
+                            file: FileId(
+                                0,
+                            ),
+                            start: 196,
+                            end: 197,
+                        },
+                    },
+                ],
+                params: [
+                    Param {
+                        view: false,
+                        mutable: false,
+                        name: Ident {
+                            name: "pair",
+                            span: Span {
+                                file: FileId(
+                                    0,
+                                ),
+                                start: 199,
+                                end: 203,
+                            },
+                        },
+                        ty: Generic(
+                            Ident {
+                                name: "Pair",
+                                span: Span {
+                                    file: FileId(
+                                        0,
+                                    ),
+                                    start: 205,
+                                    end: 209,
+                                },
+                            },
+                            [
+                                Named(
+                                    Ident {
+                                        name: "T",
+                                        span: Span {
+                                            file: FileId(
+                                                0,
+                                            ),
+                                            start: 210,
+                                            end: 211,
+                                        },
+                                    },
+                                ),
+                            ],
+                            Span {
+                                file: FileId(
+                                    0,
+                                ),
+                                start: 205,
+                                end: 212,
+                            },
+                        ),
+                        span: Span {
+                            file: FileId(
+                                0,
+                            ),
+                            start: 199,
+                            end: 212,
+                        },
+                    },
+                ],
+                return_type: Some(
+                    Named(
+                        Ident {
+                            name: "T",
+                            span: Span {
+                                file: FileId(
+                                    0,
+                                ),
+                                start: 222,
+                                end: 223,
+                            },
+                        },
+                    ),
+                ),
+                body: Block {
+                    stmts: [
+                        Return(
+                            ReturnStmt {
+                                value: Some(
+                                    FieldAccess(
+                                        Ident(
+                                            Ident {
+                                                name: "pair",
+                                                span: Span {
+                                                    file: FileId(
+                                                        0,
+                                                    ),
+                                                    start: 236,
+                                                    end: 240,
+                                                },
+                                            },
+                                        ),
+                                        Ident {
+                                            name: "first",
+                                            span: Span {
+                                                file: FileId(
+                                                    0,
+                                                ),
+                                                start: 241,
+                                                end: 246,
+                                            },
+                                        },
+                                        Span {
+                                            file: FileId(
+                                                0,
+                                            ),
+                                            start: 236,
+                                            end: 246,
+                                        },
+                                    ),
+                                ),
+                                span: Span {
+                                    file: FileId(
+                                        0,
+                                    ),
+                                    start: 229,
+                                    end: 246,
+                                },
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        file: FileId(
+                            0,
+                        ),
+                        start: 229,
+                        end: 247,
+                    },
+                },
+                exported: true,
+                span: Span {
+                    file: FileId(
+                        0,
+                    ),
+                    start: 167,
+                    end: 247,
+                },
+            },
+        ),
+    ],
+    span: Span {
+        file: FileId(
+            0,
+        ),
+        start: 0,
+        end: 247,
+    },
+}

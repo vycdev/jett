@@ -9,3 +9,6 @@ license.workspace = true
 jett_common.workspace = true
 jett_diagnostics.workspace = true
 jett_lexer.workspace = true
+
+[dev-dependencies]
+insta = "1.48.0"
