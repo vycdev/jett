@@ -6167,6 +6167,10 @@ The LLM doesn't have to step through 500 normal orders to reach the one that's b
 
 ### Rule Set 28: Profiling — Bottleneck Summaries over Visual Flamegraphs
 
+> The initial CPU/memory sampling, attribution, output, security, platform, and
+> interpreter/future-runtime contract is tracked by
+> [#164](https://github.com/vycdev/jett/issues/164).
+
 #### The Problem with Traditional Profiling
 
 When an LLM writes an application and it runs slowly, the developer (or the LLM itself) needs to understand *why*. Traditional profilers produce visual flamegraphs — interactive SVG or HTML graphics that a human navigates by hovering, zooming, and scanning colored bands. This is a bad way to communicate profiling data to an LLM:

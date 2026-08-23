@@ -86,6 +86,10 @@ jett/
     └── architecture.md
 ```
 
+The planned `jett_profiler` CPU/memory sampling, attribution, reporting,
+security, platform, and interpreter/future-runtime contract is tracked by
+[#164](https://github.com/vycdev/jett/issues/164).
+
 ### Crate Dependency Graph
 
 ```mermaid
