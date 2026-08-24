@@ -13,3 +13,6 @@ jett_types.workspace = true
 rand.workspace = true
 subtle.workspace = true
 unicode-segmentation.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Globalization"] }

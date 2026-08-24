@@ -30,6 +30,8 @@ pub enum Value {
     OptionalNone,
     /// The `nothing` value (Jett's unit type).
     Nothing,
+    /// An opaque runtime-provided capability handle.
+    Capability(String),
     /// An opaque reflected construction builder.
     TypeConstruction {
         type_name: String,
@@ -87,6 +89,7 @@ impl PartialEq for Value {
             (Value::OptionalSome(a), Value::OptionalSome(b)) => a == b,
             (Value::OptionalNone, Value::OptionalNone) => true,
             (Value::Nothing, Value::Nothing) => true,
+            (Value::Capability(a), Value::Capability(b)) => a == b,
             (
                 Value::TypeConstruction {
                     type_name: t1,
@@ -180,6 +183,7 @@ impl fmt::Display for Value {
             Value::OptionalSome(value) => write!(f, "some({value})"),
             Value::OptionalNone => write!(f, "none"),
             Value::Nothing => write!(f, "nothing"),
+            Value::Capability(name) => write!(f, "<{name} capability>"),
             Value::TypeConstruction {
                 type_name,
                 variant,

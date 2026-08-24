@@ -439,7 +439,7 @@ Walk all type declarations and build the type registry:
 - **Built-in generic types:** `list[T]`, `map[K, V]`, `set[T]`, `optional[T]`, `result[T, E]`. `list[T]` is the sole sequence type; fixed-length invariants use refinements and do not change runtime layout. `array[T, N]` is rejected with E0360. Map keys and set elements are limited to integer, `string`, `bool`, or primitive-backed refinement types.
 - **User-defined types:** structs, enums, machines, actors, bitfields, interfaces, type aliases (including refinement types).
 - **Function types:** `function(T) returns U`.
-- **Capability types:** `Filesystem`, `Network`, `Stdout`, `Stderr`, `Stdin`, `Clock`, `Random`, `Process`, `Environment`, `Foreign`. Random sampling uses the explicit `view Random` API, injected per-runtime generator state, and non-cryptographic contract defined in the [Random capability and entropy contract](completed/random_capability_entropy_contract.md). The proposed [`Environment` contract](open_design/environment_argv_capability_contract.md) replaces ambient `os.env`/`os.args` with capability-backed reads from one immutable launch snapshot. `Foreign` guards the generated native C boundary specified by the [C FFI contract](open_design/c_ffi_binding_contract.md).
+- **Capability types:** `Filesystem`, `Network`, `Stdout`, `Stderr`, `Stdin`, `Clock`, `Random`, `Process`, `Environment`, `Foreign`. Random sampling uses the explicit `view Random` API, injected per-runtime generator state, and non-cryptographic contract defined in the [Random capability and entropy contract](completed/random_capability_entropy_contract.md). The interpreter-backed [`Environment` contract](open_design/environment_argv_capability_contract.md) uses source-owned `Environment.get` and `Environment.args` over one immutable injected launch snapshot; ambient `os.env`/`os.args` are removed. `Foreign` guards the generated native C boundary specified by the [C FFI contract](open_design/c_ffi_binding_contract.md).
 - **Secret wrapper:** `secret[T]`.
 - **State-qualified types:** `Machine at state`.
 - **Task-control failures:** `CancelledError` terminates a cancelled pending task
@@ -592,14 +592,15 @@ Track which capabilities flow through the program:
   cannot read a clock. Runtime contexts receive an injected production or
   deterministic test clock. See the
   [Time and Clock capability contract](completed/time_clock_capability_contract.md).
-- **Launch inputs are capability operations.** The proposed
+- **Launch inputs are capability operations.** The source-owned
   `Environment.get(view env, key)` and `Environment.args(view env)` read one
-  immutable runtime-injected launch snapshot. Capability-free `os.env` and
-  `os.args` are transitional ambient effects to remove. Verify, property, and
-  comptime evaluation cannot access process launch data. See the
-  [Environment and argument capability contract](open_design/environment_argv_capability_contract.md);
-  interpreter-backed implementation is
-  [tracked by #170](https://github.com/vycdev/jett/issues/170).
+  immutable runtime-injected launch snapshot through private trusted kernels.
+  Capability-free `os.env` and `os.args` are removed with focused migration
+  diagnostics. Verify, property, and comptime evaluation cannot access process
+  launch data. Production captures native launch data before `main`; tests
+  inject isolated snapshots. See the
+  [Environment and argument capability contract](open_design/environment_argv_capability_contract.md)
+  and implementation issue [#170](https://github.com/vycdev/jett/issues/170).
 - **`trace` and `breakpoint` are capability-exempt** — they produce output/open connections without requiring a `Stdout` or `Network` capability. They are compiler keywords with special treatment, compiled out in release mode.
 - **`print` and `println` are compiler-owned debug builtins, not ordinary I/O.**
   They remain secret-output boundaries and require no `Stdout` capability. The

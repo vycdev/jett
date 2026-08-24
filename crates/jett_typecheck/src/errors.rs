@@ -835,6 +835,16 @@ pub fn release_debug_print_unavailable(name: &str, span: Span) -> Diagnostic {
     )
 }
 
+/// E0363: An ambient launch-data builtin was removed in favor of Environment authority.
+pub fn removed_ambient_environment_builtin(name: &str, span: Span) -> Diagnostic {
+    let guidance = if name == "os.env" {
+        "use `Environment.get(view env, key)`, which returns `result[optional[string], string]`"
+    } else {
+        "use `Environment.args(view env)`; the executable name is no longer included"
+    };
+    Diagnostic::error(363, format!("`{name}` was removed; {guidance}"), span)
+}
+
 // Diagnostic codes E0800-E0899 are reserved for function complexity limits.
 
 /// E0800: Function body exceeds the statement count limit.

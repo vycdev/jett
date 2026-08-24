@@ -278,6 +278,8 @@ pub struct Interpreter {
     random_provider: Option<RandomProvider>,
     /// Per-runtime wall-clock provider. Compile-time interpreters leave this absent.
     clock_provider: Option<ClockProvider>,
+    /// Immutable launch arguments and environment. Compile-time interpreters leave this absent.
+    launch_environment: Option<LaunchEnvironmentSnapshot>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -304,6 +306,152 @@ pub enum ClockTestSample {
 enum ClockProvider {
     Production,
     Scripted(std::collections::VecDeque<ClockTestSample>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EnvironmentTestText {
+    Unicode(String),
+    InvalidUnicode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnvironmentTestEntry {
+    pub name: EnvironmentTestText,
+    pub value: EnvironmentTestText,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnvironmentTestSnapshot {
+    pub arguments: Vec<EnvironmentTestText>,
+    pub entries: Vec<EnvironmentTestEntry>,
+}
+
+#[derive(Debug, Clone)]
+enum FrozenLaunchText {
+    Unicode(String),
+    InvalidUnicode,
+}
+
+#[derive(Debug, Clone)]
+struct FrozenEnvironmentEntry {
+    name: FrozenLaunchText,
+    value: FrozenLaunchText,
+}
+
+#[derive(Debug, Clone)]
+struct LaunchEnvironmentSnapshot {
+    arguments: Vec<String>,
+    entries: Vec<FrozenEnvironmentEntry>,
+}
+
+impl LaunchEnvironmentSnapshot {
+    fn production() -> Result<Self, String> {
+        let arguments = std::env::args_os()
+            .skip(1)
+            .map(frozen_launch_text_from_os)
+            .map(|argument| match argument {
+                FrozenLaunchText::Unicode(argument) => Ok(argument),
+                FrozenLaunchText::InvalidUnicode => {
+                    Err("Environment: argument is not valid Unicode".to_string())
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let entries = std::env::vars_os()
+            .map(|(name, value)| FrozenEnvironmentEntry {
+                name: frozen_launch_text_from_os(name),
+                value: frozen_launch_text_from_os(value),
+            })
+            .collect();
+        Ok(Self { arguments, entries })
+    }
+
+    fn injected(snapshot: EnvironmentTestSnapshot) -> Result<Self, String> {
+        let arguments = snapshot
+            .arguments
+            .into_iter()
+            .map(|argument| match argument {
+                EnvironmentTestText::Unicode(argument) => Ok(argument),
+                EnvironmentTestText::InvalidUnicode => {
+                    Err("Environment: argument is not valid Unicode".to_string())
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let entries = snapshot
+            .entries
+            .into_iter()
+            .map(|entry| FrozenEnvironmentEntry {
+                name: match entry.name {
+                    EnvironmentTestText::Unicode(name) => FrozenLaunchText::Unicode(name),
+                    EnvironmentTestText::InvalidUnicode => FrozenLaunchText::InvalidUnicode,
+                },
+                value: match entry.value {
+                    EnvironmentTestText::Unicode(value) => FrozenLaunchText::Unicode(value),
+                    EnvironmentTestText::InvalidUnicode => FrozenLaunchText::InvalidUnicode,
+                },
+            })
+            .collect();
+        Ok(Self { arguments, entries })
+    }
+
+    fn get(&self, key: &str) -> Result<Option<String>, String> {
+        if key.is_empty() || key.contains('=') || key.contains('\0') {
+            return Err("Environment.get: invalid variable name".to_string());
+        }
+        let matching_entry = self.entries.iter().find(|entry| match &entry.name {
+            FrozenLaunchText::Unicode(name) => environment_names_equal(name, key),
+            FrozenLaunchText::InvalidUnicode => false,
+        });
+        match matching_entry.map(|entry| &entry.value) {
+            None => Ok(None),
+            Some(FrozenLaunchText::Unicode(value)) => Ok(Some(value.clone())),
+            Some(FrozenLaunchText::InvalidUnicode) => {
+                Err("Environment.get: value is not valid Unicode".to_string())
+            }
+        }
+    }
+}
+
+fn frozen_launch_text_from_os(value: std::ffi::OsString) -> FrozenLaunchText {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        return match String::from_utf8(value.into_vec()) {
+            Ok(value) => FrozenLaunchText::Unicode(value),
+            Err(_) => FrozenLaunchText::InvalidUnicode,
+        };
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        return match String::from_utf16(&value.encode_wide().collect::<Vec<_>>()) {
+            Ok(value) => FrozenLaunchText::Unicode(value),
+            Err(_) => FrozenLaunchText::InvalidUnicode,
+        };
+    }
+}
+
+fn environment_names_equal(captured: &str, requested: &str) -> bool {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Globalization::{CSTR_EQUAL, CompareStringOrdinal};
+
+        let captured = captured.encode_utf16().collect::<Vec<_>>();
+        let requested = requested.encode_utf16().collect::<Vec<_>>();
+        let result = unsafe {
+            CompareStringOrdinal(
+                captured.as_ptr(),
+                captured.len() as i32,
+                requested.as_ptr(),
+                requested.len() as i32,
+                1,
+            )
+        };
+        result == CSTR_EQUAL
+    }
+    #[cfg(not(windows))]
+    {
+        captured == requested
+    }
 }
 
 fn unbiased_bounded_offset(width: u64, mut next_word: impl FnMut() -> u64) -> u64 {
@@ -393,6 +541,7 @@ impl Interpreter {
             stdout_capture: None,
             random_provider: None,
             clock_provider: None,
+            launch_environment: None,
         }
     }
 
@@ -440,6 +589,21 @@ impl Interpreter {
             Some(ClockProvider::Scripted(samples)) => Some(samples.len()),
             _ => None,
         }
+    }
+
+    /// Freeze this process's launch data for one runtime context.
+    pub fn initialize_environment_provider(&mut self) -> Result<(), String> {
+        self.launch_environment = Some(LaunchEnvironmentSnapshot::production()?);
+        Ok(())
+    }
+
+    /// Install an isolated launch snapshot for runtime conformance tests.
+    pub fn set_environment_test_snapshot(
+        &mut self,
+        snapshot: EnvironmentTestSnapshot,
+    ) -> Result<(), String> {
+        self.launch_environment = Some(LaunchEnvironmentSnapshot::injected(snapshot)?);
+        Ok(())
     }
 
     /// Attach checked reflection metadata produced by the typechecker.
@@ -9105,24 +9269,44 @@ impl Interpreter {
                 }
             }
 
-            // -- OS operations (stdlib/os.jett) ---------------------------------
-            "os.env" => {
-                require_args!(name, 1, args);
-                match &args[0] {
-                    Value::String(key) => {
-                        let result = match std::env::var(key) {
-                            Ok(val) => Value::OptionalSome(Box::new(Value::String(val))),
-                            Err(_) => Value::OptionalNone,
-                        };
-                        Some(Ok(result))
-                    }
-                    _ => Some(Err(format!("{name} expects a string argument"))),
+            // -- Launch environment operations (stdlib/environment.jett) -------
+            "Environment.__get" if self.current_function_trusted_stdlib => {
+                require_args!(name, 2, args);
+                if !matches!(&args[0], Value::Capability(capability) if capability == "Environment")
+                {
+                    return Some(Err(format!("{name} expects Environment")));
                 }
+                let Value::String(key) = &args[1] else {
+                    return Some(Err(format!("{name} expects a string key")));
+                };
+                let Some(environment) = &self.launch_environment else {
+                    return Some(Err("Environment: launch data unavailable".to_string()));
+                };
+                Some(Ok(match environment.get(key) {
+                    Ok(Some(value)) => Value::ResultOk(Box::new(Value::OptionalSome(Box::new(
+                        Value::String(value),
+                    )))),
+                    Ok(None) => Value::ResultOk(Box::new(Value::OptionalNone)),
+                    Err(error) => Value::ResultFail(Box::new(Value::String(error))),
+                }))
             }
-            "os.args" => {
-                require_args!(name, 0, args);
-                let args_list: Vec<Value> = std::env::args().map(Value::String).collect();
-                Some(Ok(Value::List(args_list)))
+            "Environment.__args" if self.current_function_trusted_stdlib => {
+                require_args!(name, 1, args);
+                if !matches!(&args[0], Value::Capability(capability) if capability == "Environment")
+                {
+                    return Some(Err(format!("{name} expects Environment")));
+                }
+                let Some(environment) = &self.launch_environment else {
+                    return Some(Err("Environment: launch data unavailable".to_string()));
+                };
+                Some(Ok(Value::List(
+                    environment
+                        .arguments
+                        .iter()
+                        .cloned()
+                        .map(Value::String)
+                        .collect(),
+                )))
             }
 
             // -- CSV operations (stdlib/csv.jett) --------------------------
@@ -10663,6 +10847,7 @@ fn runtime_type_name(value: &Value) -> Option<String> {
         Value::ResultOk(_) | Value::ResultFail(_) => Some("result".to_string()),
         Value::OptionalSome(_) | Value::OptionalNone => Some("optional".to_string()),
         Value::Nothing => Some("nothing".to_string()),
+        Value::Capability(name) => Some(name.clone()),
         Value::TypeConstruction { .. } => Some("TypeConstruction".to_string()),
         Value::Struct { type_name, .. }
         | Value::Enum { type_name, .. }

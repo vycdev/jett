@@ -1,0 +1,7 @@
+# ERROR: E0500
+# ERROR: E0303
+namespace app
+function read_args(view env: Environment) returns list[string]:
+    return Environment.args(view env)
+function ambient_read_is_forbidden() returns list[string]:
+    return read_args()

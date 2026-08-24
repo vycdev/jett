@@ -1,0 +1,23 @@
+namespace app
+function lookup(view env: Environment, key: string) returns string:
+    optional[string] value = Environment.get(view env, key) handle error:
+        return error
+    return value handle:
+        default "none"
+function main(env: Environment) returns nothing:
+    mutable list[string] first = Environment.args(view env)
+    first = list.append[string](first, "changed")
+    list[string] second = Environment.args(view env)
+    string first_arg = list.get[string](view second, 0) handle:
+        default "missing"
+    string empty_arg = list.get[string](view second, 1) handle:
+        default "missing"
+    string third_arg = list.get[string](view second, 2) handle:
+        default "missing"
+    string present = lookup(view env, "PRESENT")
+    string missing = lookup(view env, "MISSING")
+    string duplicate = lookup(view env, "DUPLICATE")
+    string broken = lookup(view env, "BROKEN")
+    string invalid_name = lookup(view env, "")
+    println("{list.length[string](view first)}:{list.length[string](view second)}:{first_arg}:[{empty_arg}]:{third_arg}")
+    println("{present}:{missing}:{duplicate}:{broken}:{invalid_name}")

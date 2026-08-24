@@ -1,0 +1,4 @@
+# ERROR: E0504
+namespace app
+function main(env: Environment) returns nothing:
+    comptime Environment.args(view env)

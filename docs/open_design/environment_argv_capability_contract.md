@@ -3,7 +3,10 @@
 Status: selected design from [#94](https://github.com/vycdev/jett/issues/94);
 interpreter-backed implementation is tracked by
 [#170](https://github.com/vycdev/jett/issues/170).
-Implementation and stdlib extraction remain pending.
+The interpreter-backed launch snapshot, capability enforcement, source-owned
+public surface, private kernels, deterministic injection, and ambient-builtin
+migration diagnostics are implemented. Later backend preservation in slice 4
+remains pending.
 
 ## Context
 

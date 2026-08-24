@@ -1,6 +1,9 @@
 namespace app
-function args_not_empty() returns bool:
-    list[string] arguments = os.args()
+function args_not_empty(view env: Environment) returns bool:
+    list[string] arguments = Environment.args(view env)
     return list.length[string](arguments) >= 0
-verify args_not_empty:
-    assert args_not_empty() == true
+function main(env: Environment) returns nothing:
+    bool available = args_not_empty(view env)
+    if available:
+        return nothing
+    return nothing
