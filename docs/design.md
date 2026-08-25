@@ -4032,7 +4032,9 @@ To use a pipeline, each step must be a function that takes an input and returns 
 
 > The initial syntax, safety boundary, supported C subset, and staged delivery
 > are specified in the [C FFI and generated binding contract](open_design/c_ffi_binding_contract.md),
-> tracked by [#53](https://github.com/vycdev/jett/issues/53).
+> tracked by [#53](https://github.com/vycdev/jett/issues/53). The first parser,
+> formatter, resolver, and checker implementation slice is tracked by
+> [#173](https://github.com/vycdev/jett/issues/173).
 
 #### The Problem: Manual Bindings Are a Hallucination Minefield
 
