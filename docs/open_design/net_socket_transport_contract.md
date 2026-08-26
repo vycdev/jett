@@ -1,10 +1,11 @@
 # Initial `net.socket` Transport Contract
 
 Status: TCP behavior contract completed by
-[#104](https://github.com/vycdev/jett/issues/104). The required opaque runtime
-resource representation is [tracked by #175](https://github.com/vycdev/jett/issues/175).
-No socket runtime or public API should land until that representation is
-accepted.
+[#104](https://github.com/vycdev/jett/issues/104). The opaque runtime resource
+representation is defined by the
+[completed resource contract](../completed/opaque_runtime_resource_contract.md)
+from [#175](https://github.com/vycdev/jett/issues/175). No socket runtime or
+public API should land until that compiler and runtime support is implemented.
 
 ## Decision Summary
 
@@ -43,8 +44,8 @@ sharing a useful public I/O shape beyond endpoint validation.
 ## Public Semantic Model
 
 The intended declaration order and signatures are shown below. They define the
-public contract, not a promise that the current compiler can already declare an
-opaque runtime-backed type with this exact source syntax.
+public contract. The `resource` declarations use the selected canonical source
+syntax, but the current compiler does not implement that syntax yet.
 
 ```jett
 namespace net.socket
@@ -88,8 +89,8 @@ export enum SocketRead:
     eof
 
 # Opaque, owned, linear runtime-backed resource types.
-export struct TcpStream
-export struct TcpListener
+export resource TcpStream
+export resource TcpListener
 
 export function endpoint(host: string, port: int64) returns result[SocketEndpoint, SocketError]
 export function connect(view net: Network, view endpoint: SocketEndpoint, view deadline: SocketDeadline) returns result[TcpStream, SocketError]
@@ -104,12 +105,12 @@ export function close_stream(view net: Network, stream: TcpStream) returns nothi
 export function close_listener(view net: Network, listener: TcpListener) returns nothing
 ```
 
-`TcpStream` and `TcpListener` need an opaque source declaration mechanism before
-implementation. Their fields and OS identifiers must not be constructible,
-inspectable, serializable, clonable, or comparable by user code. Resolving that
-representation is an [implementation prerequisite tracked by
-#175](https://github.com/vycdev/jett/issues/175), not permission to expose a
-public Rust builtin surface: the public names and signatures still belong in
+`TcpStream` and `TcpListener` follow the
+[opaque runtime resource contract](../completed/opaque_runtime_resource_contract.md).
+Their fields and OS identifiers are not constructible, inspectable,
+serializable, clonable, or comparable by user code. Implementing that
+representation is a prerequisite, not permission to expose a public Rust
+builtin surface: the public names and signatures still belong in
 compiler-shipped `.jett` source.
 
 The shown `SocketEndpoint` fields are its semantic data, but public code must
