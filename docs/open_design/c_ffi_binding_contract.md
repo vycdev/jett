@@ -445,6 +445,8 @@ must not leave a partial or newly truncated binding file. There is no default
 
 ### Slice 1: parser, formatter, resolver, and checker
 
+Tracked by [#173](https://github.com/vycdev/jett/issues/173).
+
 - reserve and parse `foreign`, `source`, `digest`, `target`, `abi`, `opaque`,
   `pointer`, `to`, and `links`;
 - add foreign block/type/function metadata to the AST and source ranges;

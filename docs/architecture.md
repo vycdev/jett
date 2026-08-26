@@ -1764,7 +1764,9 @@ Both profilers output via the diagnostics system in either human or TOON format.
 
 > The staged architecture is specified by the [initial C FFI and generated
 > binding contract](open_design/c_ffi_binding_contract.md), tracked by
-> [#53](https://github.com/vycdev/jett/issues/53).
+> [#53](https://github.com/vycdev/jett/issues/53). The initial foreign
+> declaration frontend slice is tracked by
+> [#173](https://github.com/vycdev/jett/issues/173).
 
 `jett bind "header.h" --policy binding-policy.toml --target x86_64-unknown-linux-gnu --output deps/binding.jett`
 
