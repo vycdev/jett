@@ -1176,7 +1176,13 @@ impl<'a> TypeChecker<'a> {
     fn is_impure_builtin(name: &str) -> bool {
         matches!(
             name,
-            "Stdout.write" | "Environment.args" | "Filesystem.read_file" | "Filesystem.write_file"
+            "Stdout.write"
+                | "Environment.get"
+                | "Environment.args"
+                | "Environment.__get"
+                | "Environment.__args"
+                | "Filesystem.read_file"
+                | "Filesystem.write_file"
         )
     }
 
@@ -2663,6 +2669,8 @@ impl<'a> TypeChecker<'a> {
                 | "random.__unit_float64"
                 | "random.__bool"
                 | "Clock.__now"
+                | "Environment.__get"
+                | "Environment.__args"
         );
         if private_stdlib_kernel && !span.file.is_stdlib() {
             self.sink
@@ -2800,13 +2808,6 @@ impl<'a> TypeChecker<'a> {
                 self.expect_no_type_args(&name, type_args, span);
                 let list_ty = self.interner.intern(Type::List(TypeInterner::STRING));
                 Some((vec![list_ty, TypeInterner::STRING], TypeInterner::STRING))
-            }
-            "Environment.args" => {
-                self.expect_no_type_args(&name, type_args, span);
-                Some((
-                    vec![TypeInterner::ERROR],
-                    self.interner.intern(Type::List(TypeInterner::STRING)),
-                ))
             }
             "Filesystem.read_file" => {
                 self.expect_no_type_args(&name, type_args, span);
@@ -3802,15 +3803,18 @@ impl<'a> TypeChecker<'a> {
                 vec![TypeInterner::ERROR],
                 TypeInterner::INT64,
             ),
-            "os.args" => {
+            "Environment.__get" => {
+                self.expect_no_type_args(&name, type_args, span);
+                let optional_string = self.interner.intern(Type::Optional(TypeInterner::STRING));
+                let result = self
+                    .interner
+                    .intern(Type::Result(optional_string, TypeInterner::STRING));
+                Some((vec![TypeInterner::ERROR, TypeInterner::STRING], result))
+            }
+            "Environment.__args" => {
                 self.expect_no_type_args(&name, type_args, span);
                 let list_string = self.interner.intern(Type::List(TypeInterner::STRING));
-                Some((vec![], list_string))
-            }
-            "os.env" => {
-                self.expect_no_type_args(&name, type_args, span);
-                let opt_string = self.interner.intern(Type::Optional(TypeInterner::STRING));
-                Some((vec![TypeInterner::STRING], opt_string))
+                Some((vec![TypeInterner::ERROR], list_string))
             }
             // Private CSV kernels; public signatures live in stdlib/csv.jett.
             "csv.__parse" => {
@@ -9422,6 +9426,15 @@ impl<'a> TypeChecker<'a> {
                 replacement,
                 span,
             ));
+            for arg in args {
+                self.check_expr(&arg.value);
+            }
+            return TypeInterner::ERROR;
+        }
+
+        if let Some(name @ ("os.env" | "os.args")) = callee_name.as_deref() {
+            self.sink
+                .emit(errors::removed_ambient_environment_builtin(name, span));
             for arg in args {
                 self.check_expr(&arg.value);
             }

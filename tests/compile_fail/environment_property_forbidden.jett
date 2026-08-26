@@ -1,0 +1,6 @@
+# ERROR: E0303
+namespace app
+property environment_is_not_available:
+    given value: int64
+    Environment.args()
+    assert value == value

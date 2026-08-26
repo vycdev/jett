@@ -4,11 +4,13 @@ use std::path::{Path, PathBuf};
 use jett_common::FileId;
 use jett_diagnostics::Severity;
 use jett_driver::{
-    BuildOptions, ClockTestSample, RandomTestSample, build_file, build_file_with_options,
-    build_source, completions, completions_at, hover_type, run_file, run_file_capture_output,
+    BuildOptions, ClockTestSample, EnvironmentTestEntry, EnvironmentTestSnapshot,
+    EnvironmentTestText, RandomTestSample, build_file, build_file_with_options, build_source,
+    completions, completions_at, hover_type, run_file, run_file_capture_output,
     run_file_capture_stdout, run_file_capture_stdout_with_clock_test_samples,
+    run_file_capture_stdout_with_environment_test_snapshot,
     run_file_capture_stdout_with_random_test_samples, run_file_with_clock_test_samples,
-    run_file_with_random_test_samples, test_file,
+    run_file_with_environment_test_snapshot, run_file_with_random_test_samples, test_file,
 };
 use jett_parser::ast::Item;
 use jett_parser::parse;
@@ -1633,6 +1635,89 @@ fn runtime_fail_clock_invalid_test_sample() {
 }
 
 #[test]
+fn run_pass_environment_injected_snapshot_contract() {
+    let path = fixture_path("run_pass", "environment_snapshot.jett");
+    let text = |value: &str| EnvironmentTestText::Unicode(value.to_string());
+    let output = run_file_capture_stdout_with_environment_test_snapshot(
+        &path,
+        EnvironmentTestSnapshot {
+            arguments: vec![text("first"), text(""), text("third")],
+            entries: vec![
+                EnvironmentTestEntry {
+                    name: text("PRESENT"),
+                    value: text("value"),
+                },
+                EnvironmentTestEntry {
+                    name: text("DUPLICATE"),
+                    value: text("first"),
+                },
+                EnvironmentTestEntry {
+                    name: text("DUPLICATE"),
+                    value: text("second"),
+                },
+                EnvironmentTestEntry {
+                    name: text("BROKEN"),
+                    value: EnvironmentTestText::InvalidUnicode,
+                },
+                EnvironmentTestEntry {
+                    name: EnvironmentTestText::InvalidUnicode,
+                    value: text("ignored"),
+                },
+            ],
+        },
+    )
+    .unwrap_or_else(|err| panic!("expected {} to run successfully: {err}", path.display()));
+    assert_eq!(
+        output,
+        concat!(
+            "4:3:first:[]:third\n",
+            "value:none:first:Environment.get: value is not valid Unicode:Environment.get: invalid variable name\n"
+        )
+    );
+}
+
+#[test]
+fn runtime_fail_environment_invalid_argument_text() {
+    let path = fixture_path("run_pass", "environment_snapshot.jett");
+    assert_eq!(
+        run_file_with_environment_test_snapshot(
+            &path,
+            EnvironmentTestSnapshot {
+                arguments: vec![EnvironmentTestText::InvalidUnicode],
+                entries: vec![],
+            },
+        )
+        .unwrap_err(),
+        "runtime error: Environment: argument is not valid Unicode"
+    );
+}
+
+compile_fail_fixture!(
+    compile_fail_environment_capability_required,
+    "environment_capability_required.jett"
+);
+compile_fail_fixture!(
+    compile_fail_environment_verify_forbidden,
+    "environment_verify_forbidden.jett"
+);
+compile_fail_fixture!(
+    compile_fail_environment_comptime_forbidden,
+    "environment_comptime_forbidden.jett"
+);
+compile_fail_fixture!(
+    compile_fail_environment_private_kernels,
+    "environment_private_kernels.jett"
+);
+compile_fail_fixture!(
+    compile_fail_environment_property_forbidden,
+    "environment_property_forbidden.jett"
+);
+compile_fail_fixture!(
+    compile_fail_environment_namespace_collision,
+    "environment_namespace_collision.jett"
+);
+
+#[test]
 fn compile_fail_collection_transform_consumes_count() {
     assert_compile_fail_error_count("collection_transform_consumes.jett", 400, 3);
 }
@@ -1777,7 +1862,7 @@ compile_fail_fixture!(
 
 #[test]
 fn compile_fail_environment_csv_builtin_return_types_count() {
-    assert_compile_fail_error_count("environment_csv_builtin_return_types.jett", 311, 5);
+    assert_compile_fail_error_count("environment_csv_builtin_return_types.jett", 311, 3);
 }
 
 compile_fail_fixture!(

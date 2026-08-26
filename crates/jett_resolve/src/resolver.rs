@@ -371,7 +371,7 @@ impl Resolver {
                 && ns.span.file.is_stdlib()
                 && matches!(
                     ns.name.name.as_str(),
-                    "string" | "bytes" | "list" | "map" | "set" | "Clock"
+                    "string" | "bytes" | "list" | "map" | "set" | "Clock" | "Environment"
                 )
             {
                 let def_id = self.scope_table.new_def_with_visibility(

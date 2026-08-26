@@ -1,0 +1,6 @@
+# ERROR: E0313 x2
+namespace app
+function private_get_is_forbidden(view env: Environment) returns result[optional[string], string]:
+    return Environment.__get(view env, "PATH")
+function private_args_is_forbidden(view env: Environment) returns list[string]:
+    return Environment.__args(view env)

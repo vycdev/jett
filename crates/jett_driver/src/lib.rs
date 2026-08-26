@@ -5,7 +5,10 @@ use jett_comptime::verify::{
     run_verify_blocks_detailed_with_metadata_and_expression_types,
     run_verify_blocks_with_metadata_and_expression_types,
 };
-pub use jett_comptime::{ClockTestSample, RandomTestSample};
+pub use jett_comptime::{
+    ClockTestSample, EnvironmentTestEntry, EnvironmentTestSnapshot, EnvironmentTestText,
+    RandomTestSample,
+};
 use jett_diagnostics::Diagnostic;
 use jett_fmt::{FormatResult, format_source};
 use jett_parser::ast::{FunctionDecl, FunctionDef, Item, Module, Param, TypeExpr};
@@ -326,6 +329,7 @@ struct RunOptions {
     emit_runtime_debug: bool,
     random_test_samples: Option<Vec<RandomTestSample>>,
     clock_test_samples: Option<Vec<ClockTestSample>>,
+    environment_test_snapshot: Option<EnvironmentTestSnapshot>,
 }
 
 fn parse_source_with_query(source: &str, file_path: &str) -> ParseResult {
@@ -2562,6 +2566,7 @@ pub fn run_file(path: &Path) -> Result<(), String> {
             emit_runtime_debug: true,
             random_test_samples: None,
             clock_test_samples: None,
+            environment_test_snapshot: None,
         },
     )
     .map(|_| ())
@@ -2577,6 +2582,7 @@ pub fn run_file_capture_stdout(path: &Path) -> Result<String, String> {
             emit_runtime_debug: false,
             random_test_samples: None,
             clock_test_samples: None,
+            environment_test_snapshot: None,
         },
     )
     .map(|output| output.stdout)
@@ -2591,6 +2597,7 @@ pub fn run_file_capture_output(path: &Path) -> Result<RunOutput, String> {
             emit_runtime_debug: false,
             random_test_samples: None,
             clock_test_samples: None,
+            environment_test_snapshot: None,
         },
     )
 }
@@ -2607,6 +2614,7 @@ pub fn run_file_with_random_test_samples(
             emit_runtime_debug: false,
             random_test_samples: Some(samples),
             clock_test_samples: None,
+            environment_test_snapshot: None,
         },
     )
     .map(|_| ())
@@ -2624,6 +2632,7 @@ pub fn run_file_capture_stdout_with_random_test_samples(
             emit_runtime_debug: false,
             random_test_samples: Some(samples),
             clock_test_samples: None,
+            environment_test_snapshot: None,
         },
     )
     .map(|output| output.stdout)
@@ -2641,6 +2650,7 @@ pub fn run_file_with_clock_test_samples(
             emit_runtime_debug: false,
             random_test_samples: None,
             clock_test_samples: Some(samples),
+            environment_test_snapshot: None,
         },
     )
     .map(|_| ())
@@ -2658,9 +2668,46 @@ pub fn run_file_capture_stdout_with_clock_test_samples(
             emit_runtime_debug: false,
             random_test_samples: None,
             clock_test_samples: Some(samples),
+            environment_test_snapshot: None,
         },
     )
     .map(|output| output.stdout)
+}
+
+/// Run with an isolated Environment launch snapshot and capture stdout.
+pub fn run_file_capture_stdout_with_environment_test_snapshot(
+    path: &Path,
+    snapshot: EnvironmentTestSnapshot,
+) -> Result<String, String> {
+    run_file_with_options(
+        path,
+        RunOptions {
+            capture_stdout: true,
+            emit_runtime_debug: false,
+            random_test_samples: None,
+            clock_test_samples: None,
+            environment_test_snapshot: Some(snapshot),
+        },
+    )
+    .map(|output| output.stdout)
+}
+
+/// Run with an isolated Environment launch snapshot.
+pub fn run_file_with_environment_test_snapshot(
+    path: &Path,
+    snapshot: EnvironmentTestSnapshot,
+) -> Result<(), String> {
+    run_file_with_options(
+        path,
+        RunOptions {
+            capture_stdout: false,
+            emit_runtime_debug: false,
+            random_test_samples: None,
+            clock_test_samples: None,
+            environment_test_snapshot: Some(snapshot),
+        },
+    )
+    .map(|_| ())
 }
 
 fn run_file_with_options(path: &Path, options: RunOptions) -> Result<RunOutput, String> {
@@ -2737,6 +2784,21 @@ fn run_file_inner(path: &Path, options: RunOptions) -> Result<RunOutput, String>
             interp.initialize_clock_provider();
         }
     }
+    if main_func
+        .params
+        .iter()
+        .any(|param| type_expr_name(&param.ty) == "Environment")
+    {
+        if let Some(snapshot) = options.environment_test_snapshot.clone() {
+            interp
+                .set_environment_test_snapshot(snapshot)
+                .map_err(|error| format!("runtime error: {error}"))?;
+        } else {
+            interp
+                .initialize_environment_provider()
+                .map_err(|error| format!("runtime error: {error}"))?;
+        }
+    }
     if let Some(metadata) = build.reflection_metadata.clone() {
         interp.set_reflection_metadata(metadata);
     }
@@ -2782,6 +2844,9 @@ fn default_runtime_args_for_main(main: &FunctionDef) -> Result<Vec<Value>, Strin
 }
 
 fn default_runtime_arg_for_param(param: &Param) -> Result<Value, String> {
+    if type_expr_name(&param.ty) == "Environment" {
+        return Ok(Value::Capability("Environment".to_string()));
+    }
     if type_expr_is_capability(&param.ty) {
         return Ok(Value::Nothing);
     }
@@ -4580,6 +4645,31 @@ mod tests {
                     .file_path
                     .replace('\\', "/")
                     .ends_with("/stdlib/random.jett"),
+                "{name} should resolve to compiler-shipped source, got {}",
+                result.file_path
+            );
+        }
+    }
+
+    #[test]
+    fn query_signature_reports_source_owned_environment_surface() {
+        for (name, parameter_count, return_type) in [
+            ("Environment.get", 2, "result[optional[string], string]"),
+            ("Environment.args", 1, "list[string]"),
+        ] {
+            let result = query_signature(Path::new("."), name)
+                .expect("Environment signature query should succeed")
+                .unwrap_or_else(|| panic!("{name} signature should be found"));
+            assert_eq!(result.params.len(), parameter_count);
+            assert_eq!(result.params[0].name, "env");
+            assert_eq!(result.params[0].type_name, "Environment");
+            assert!(result.params[0].view);
+            assert_eq!(result.return_type, return_type);
+            assert!(
+                result
+                    .file_path
+                    .replace('\\', "/")
+                    .ends_with("/stdlib/environment.jett"),
                 "{name} should resolve to compiler-shipped source, got {}",
                 result.file_path
             );

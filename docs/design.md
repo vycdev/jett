@@ -3116,11 +3116,10 @@ secret[T] ──→ secret.compare() ALLOWED (constant-time comparison)
 > The initial `net.http` client contract and its `Network` capability boundary
 > are separately [tracked by #101](https://github.com/vycdev/jett/issues/101).
 
-> The proposed `Environment` API, immutable launch snapshot, Unicode-failure
-> policy, and removal of ambient `os.env`/`os.args` are defined in the
+> The interpreter-backed `Environment` API, immutable launch snapshot,
+> Unicode-failure policy, and removal of ambient `os.env`/`os.args` are defined in the
 > [Environment and argument capability contract](open_design/environment_argv_capability_contract.md),
-> with interpreter-backed implementation
-> [tracked by #170](https://github.com/vycdev/jett/issues/170).
+> and implemented by [#170](https://github.com/vycdev/jett/issues/170).
 
 #### The Problem: Side Effects Hide in the Call Stack
 
@@ -3171,8 +3170,7 @@ deterministic compiler/driver tests inject the runtime provider instead.
 
 **Capabilities are a closed, built-in set.** Users cannot define custom capability types. Capabilities represent primitive OS-level side effects (file I/O, networking, stdout, etc.) or, for `Foreign`, explicit permission to cross a native boundary whose narrower effects cannot be proven from a C header. These are a finite, well-known set. Higher-level abstractions like database access or HTTP clients are built on top of primitive capabilities (e.g., a database module takes a `Network` parameter internally). This keeps the capability system simple: the compiler knows the full set, purity tracking is straightforward, and LLMs have a small, fixed list to learn rather than an open-ended set that varies per project. Capability types are not syntactically distinguished from other types in function signatures — they follow the same `view` pattern as any other borrowed parameter.
 
-**How `main()` receives capabilities (proposed target surface; the current
-interpreter still has transitional ambient builtins):**
+**How `main()` receives capabilities:**
 
 ```
 function main(stdout: Stdout, stderr: Stderr, fs: Filesystem, net: Network, env: Environment) returns nothing:

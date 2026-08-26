@@ -1,0 +1,5 @@
+namespace Environment
+export function get(view env: Environment, key: string) returns result[optional[string], string]:
+    return Environment.__get(view env, key)
+export function args(view env: Environment) returns list[string]:
+    return Environment.__args(view env)
