@@ -1382,7 +1382,9 @@ not use them as a substitute for the strict helpers.
 > separate TCP-first transport, ownership, deadline, and `Network.allow`
 > contract proposed in
 > [`docs/open_design/net_socket_transport_contract.md`](open_design/net_socket_transport_contract.md)
-> for [#104](https://github.com/vycdev/jett/issues/104).
+> for [#104](https://github.com/vycdev/jett/issues/104); its opaque runtime
+> resource representation prerequisite is
+> [tracked by #175](https://github.com/vycdev/jett/issues/175).
 
 The `net.http` module defines its own error type for HTTP operations:
 
@@ -3103,7 +3105,9 @@ secret[T] ──→ secret.compare() ALLOWED (constant-time comparison)
 
 > The TCP-first `net.socket` resource and `Network.allow` policy is proposed in
 > [`docs/open_design/net_socket_transport_contract.md`](open_design/net_socket_transport_contract.md)
-> for [#104](https://github.com/vycdev/jett/issues/104).
+> for [#104](https://github.com/vycdev/jett/issues/104). The required opaque
+> runtime resource representation is
+> [tracked by #175](https://github.com/vycdev/jett/issues/175).
 
 > The wall-clock API, value model, deterministic injection, and removal
 > of ambient `time.now_ms`/`time.now_s` are defined in the

@@ -1207,7 +1207,9 @@ The design document specifies a future secondary target: **transpilation to C**.
 > The TCP-first `net.socket` source/runtime boundary, opaque resource handles,
 > event-loop behavior, and capability provenance are proposed in
 > [`docs/open_design/net_socket_transport_contract.md`](open_design/net_socket_transport_contract.md)
-> for [#104](https://github.com/vycdev/jett/issues/104).
+> for [#104](https://github.com/vycdev/jett/issues/104); the prerequisite opaque
+> runtime resource representation is
+> [tracked by #175](https://github.com/vycdev/jett/issues/175).
 > The initial outbound `net.http` client, including its `Network` capability,
 > cancellation, HTTPS, and private runtime-hook boundary, is
 > [tracked by #101](https://github.com/vycdev/jett/issues/101).
@@ -2022,7 +2024,8 @@ Core stdlib (string, list, math, json) is implemented in Phase D. This phase com
 - **I/O:** `net.http` (initial outbound client and `Network` capability contract [tracked by #101](https://github.com/vycdev/jett/issues/101)), `net.socket` (TCP-first transport and runtime contract
   proposed in
   [`docs/open_design/net_socket_transport_contract.md`](open_design/net_socket_transport_contract.md)
-  for [#104](https://github.com/vycdev/jett/issues/104)), `csv` (public
+  for [#104](https://github.com/vycdev/jett/issues/104), with its opaque runtime
+  resource prerequisite [tracked by #175](https://github.com/vycdev/jett/issues/175)), `csv` (public
   declarations are source-owned in `stdlib/csv.jett`, with only private trusted
   parse/stringify kernels remaining in the interpreter; `parse` and
   `parse_with_header` are strict and return `result[..., string]`; one leading

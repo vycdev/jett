@@ -1,8 +1,10 @@
 # Initial `net.socket` Transport Contract
 
-Status: proposed for issue [#104](https://github.com/vycdev/jett/issues/104).
-No socket runtime or public API should land until this contract and the opaque
-resource representation it requires are accepted.
+Status: TCP behavior contract completed by
+[#104](https://github.com/vycdev/jett/issues/104). The required opaque runtime
+resource representation is [tracked by #175](https://github.com/vycdev/jett/issues/175).
+No socket runtime or public API should land until that representation is
+accepted.
 
 ## Decision Summary
 
@@ -105,7 +107,8 @@ export function close_listener(view net: Network, listener: TcpListener) returns
 `TcpStream` and `TcpListener` need an opaque source declaration mechanism before
 implementation. Their fields and OS identifiers must not be constructible,
 inspectable, serializable, clonable, or comparable by user code. Resolving that
-representation is an implementation prerequisite, not permission to expose a
+representation is an [implementation prerequisite tracked by
+#175](https://github.com/vycdev/jett/issues/175), not permission to expose a
 public Rust builtin surface: the public names and signatures still belong in
 compiler-shipped `.jett` source.
 
