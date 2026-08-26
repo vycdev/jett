@@ -438,6 +438,11 @@ Walk all type declarations and build the type registry:
 - **Primitive types:** `int8`..`int64`, `uint8`..`uint64`, `float32`, `float64`, `string`, `bool`, `bytes`, `nothing`. (`bytes` is a raw byte buffer with no UTF-8 guarantee, distinct from `string`.)
 - **Built-in generic types:** `list[T]`, `map[K, V]`, `set[T]`, `optional[T]`, `result[T, E]`. `list[T]` is the sole sequence type; fixed-length invariants use refinements and do not change runtime layout. `array[T, N]` is rejected with E0360. Map keys and set elements are limited to integer, `string`, `bool`, or primitive-backed refinement types.
 - **User-defined types:** structs, enums, machines, actors, bitfields, interfaces, type aliases (including refinement types).
+- **Compiler-shipped resource types:** nominal `resource Name` declarations with
+  no source representation or constructor. They are move-only, carry one
+  trusted cleanup obligation, and expose only name plus `resource_type` in
+  type-level reflection. See the
+  [opaque runtime resource contract](completed/opaque_runtime_resource_contract.md).
 - **Function types:** `function(T) returns U`.
 - **Capability types:** `Filesystem`, `Network`, `Stdout`, `Stderr`, `Stdin`, `Clock`, `Random`, `Process`, `Environment`, `Foreign`. Random sampling uses the explicit `view Random` API, injected per-runtime generator state, and non-cryptographic contract defined in the [Random capability and entropy contract](completed/random_capability_entropy_contract.md). The proposed [`Environment` contract](open_design/environment_argv_capability_contract.md) replaces ambient `os.env`/`os.args` with capability-backed reads from one immutable launch snapshot. `Foreign` guards the generated native C boundary specified by the [C FFI contract](open_design/c_ffi_binding_contract.md).
 - **Secret wrapper:** `secret[T]`.
@@ -1205,11 +1210,13 @@ The design document specifies a future secondary target: **transpilation to C**.
 ## Runtime Library (`jett_runtime`)
 
 > The TCP-first `net.socket` source/runtime boundary, opaque resource handles,
-> event-loop behavior, and capability provenance are proposed in
+> event-loop behavior, and capability provenance are defined in
 > [`docs/open_design/net_socket_transport_contract.md`](open_design/net_socket_transport_contract.md)
-> for [#104](https://github.com/vycdev/jett/issues/104); the prerequisite opaque
-> runtime resource representation is
-> [tracked by #175](https://github.com/vycdev/jett/issues/175).
+> for [#104](https://github.com/vycdev/jett/issues/104). The prerequisite
+> `resource Name` declaration, exactly-once cleanup, interpreter registry, and
+> backend handoff are defined by the
+> [opaque runtime resource contract](completed/opaque_runtime_resource_contract.md)
+> from [#175](https://github.com/vycdev/jett/issues/175).
 > The initial outbound `net.http` client, including its `Network` capability,
 > cancellation, HTTPS, and private runtime-hook boundary, is
 > [tracked by #101](https://github.com/vycdev/jett/issues/101).
@@ -1233,6 +1240,38 @@ The runtime sits between Rust (~2K lines, no scheduler) and Pony (~15-20K lines,
 | **Panic handler** | ~100 lines | For `assert` failures and unrecoverable errors. Prints the message and aborts. |
 | **Breakpoint control plane** | ~300 lines | Debug-only. A compiler-owned operation layer exposes pause, inspection, evaluation, and resume through an authenticated loopback HTTP adapter. The [decided protocol](completed/breakpoint_pause_inspection_protocol.md) is compiled out in release. |
 | **Entry point** | ~100 lines | `_jett_entry` initializes the runtime (thread pool, event loop), constructs capabilities, calls user's `main()`, and shuts down cleanly. |
+
+### Opaque Runtime Resources
+
+Compiler-shipped source declares a runtime-owned nominal type only as
+`resource Name`. Resource declarations have no body, fields, constructor,
+generic parameters, user destructor, or source-visible carrier. The checked
+program binds private trusted operations by stdlib-origin declaration identity,
+not by matching a public qualified-name string.
+
+The interpreter stores each live resource in a run-context registry and gives
+source execution an internal key containing context, nominal type, slot, and
+generation identities. Operations validate every component before provider
+dispatch. Finalization detaches pending work, runs one infallible trusted
+cleanup, retires the slot, and advances its generation so stale callbacks or
+copied backend bits cannot target a replacement resource.
+
+Move dataflow transfers one cleanup obligation; views never own cleanup. Scope
+exit, return, handled failure, cancellation, dropped actor messages, and runtime
+teardown finalize each remaining owner in deterministic reverse-acquisition
+order. Explicit close consumes the owner and suppresses the later scope drop.
+HIR preserves the nominal type and trusted-hook identity; MIR drop elaboration
+must prove one cleanup on every owner-ending control-flow edge before native
+resource APIs are exposed.
+
+Registry entries retain authority provenance for validation by later operations,
+but a resource is not a capability. Cleanup may use internal provider state only
+to release the owned object after source authority has moved. It cannot mint a
+capability or perform new work. C FFI `opaque pointer` declarations share
+move/view and drop analysis but retain their separate generated-source, ABI,
+policy, and `Foreign` capability contract. The complete rules and deterministic
+test matrix are in the
+[opaque runtime resource contract](completed/opaque_runtime_resource_contract.md).
 
 ### Breakpoint Control Plane
 

@@ -1380,11 +1380,12 @@ not use them as a substitute for the strict helpers.
 > HTTPS guarantees, and stdlib/runtime boundary are
 > [tracked by #101](https://github.com/vycdev/jett/issues/101). Low-level sockets use a
 > separate TCP-first transport, ownership, deadline, and `Network.allow`
-> contract proposed in
+> contract defined in
 > [`docs/open_design/net_socket_transport_contract.md`](open_design/net_socket_transport_contract.md)
-> for [#104](https://github.com/vycdev/jett/issues/104); its opaque runtime
-> resource representation prerequisite is
-> [tracked by #175](https://github.com/vycdev/jett/issues/175).
+> for [#104](https://github.com/vycdev/jett/issues/104). Its canonical
+> `resource Name` representation and lifecycle are defined by the
+> [opaque runtime resource contract](completed/opaque_runtime_resource_contract.md)
+> from [#175](https://github.com/vycdev/jett/issues/175).
 
 The `net.http` module defines its own error type for HTTP operations:
 
@@ -1985,6 +1986,21 @@ submit_order(items)
 - **Cross-function tracking**: because data flows one way (linear, no aliasing), the compiler can track a value's lifetime across function calls and free it at the earliest possible point.
 
 The LLM never writes allocation code, never calls `free()`, never chooses an allocation strategy. The compiler does all of it.
+
+**Opaque runtime resources use one distinct declaration.** Compiler-shipped
+source declares a nominal runtime-owned handle as `resource Name`, for example
+`export resource TcpStream`. A resource has no fields or source constructor. It
+is move-only, cannot be cloned, compared, serialized, or reflected as a value,
+and cannot be disguised as a fieldless struct.
+
+Moving a resource transfers its single cleanup obligation. A `view` borrows it
+without taking cleanup responsibility. An explicit close consumes the owner;
+otherwise the compiler invokes the same trusted finalizer exactly once when the
+live owner leaves scope, propagates an error, is dropped from an actor message,
+or unwinds through task cancellation. Private runtime carriers and authority
+provenance remain inaccessible to source. The complete declaration, lifecycle,
+interpreter registry, capability, C FFI separation, and backend rules are in the
+[opaque runtime resource contract](completed/opaque_runtime_resource_contract.md).
 
 **Recursive owned values use the same rule.** A self-recursive struct or enum
 names itself directly in its source type; Jett does not expose a `box[T]`, raw
@@ -3103,11 +3119,12 @@ secret[T] ──→ secret.compare() ALLOWED (constant-time comparison)
 > claim. See the
 > [Random capability and entropy contract](completed/random_capability_entropy_contract.md).
 
-> The TCP-first `net.socket` resource and `Network.allow` policy is proposed in
+> The TCP-first `net.socket` resource and `Network.allow` policy is defined in
 > [`docs/open_design/net_socket_transport_contract.md`](open_design/net_socket_transport_contract.md)
-> for [#104](https://github.com/vycdev/jett/issues/104). The required opaque
-> runtime resource representation is
-> [tracked by #175](https://github.com/vycdev/jett/issues/175).
+> for [#104](https://github.com/vycdev/jett/issues/104). The required
+> `resource Name` representation and exactly-once cleanup policy are defined by
+> the [opaque runtime resource contract](completed/opaque_runtime_resource_contract.md)
+> from [#175](https://github.com/vycdev/jett/issues/175).
 
 > The wall-clock API, value model, deterministic injection, and removal
 > of ambient `time.now_ms`/`time.now_s` are defined in the
