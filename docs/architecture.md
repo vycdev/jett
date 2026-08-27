@@ -1637,8 +1637,9 @@ Every error has a stable code (e.g., `E0601` for secret type exposure, `E0801` f
 > [#35](https://github.com/vycdev/jett/issues/35).
 
 The current driver provides the compiler facts used by both LSP and ASP
-interactive operations. The planned `jett_query` crate will become the sole
-Salsa database owner without changing these operation shapes:
+interactive operations. The implemented `jett_query` crate owns the Salsa
+database and initial whole-file parse query; later operation migrations keep
+these public shapes:
 
 | Query | Description | Used by |
 |---|---|---|
@@ -1664,18 +1665,43 @@ tracked by #35.
 
 ### Demand-Driven Computation
 
-No Salsa database is implemented yet. The current driver invokes parser,
-resolver, and typechecker operations directly. The selected first query slice
-adds an in-process `jett_query` database and memoizes
-`parse_file(FileKey) -> ParsedFile`; existing semantic passes initially remain
-whole-project computations over those parse results. That bounded implementation
-is tracked by [#166](https://github.com/vycdev/jett/issues/166).
+The initial in-process `jett_query` database is implemented and memoizes
+`parse_file(FileKey) -> ParsedFile`. The current driver creates a fresh database
+at its migrated single-file parse adapter, while project semantic passes and
+interactive operations still invoke resolver and typechecker operations
+directly. Cross-request LSP reuse and item-level semantic queries are not yet
+implemented. The bounded first slice was tracked by
+[#166](https://github.com/vycdev/jett/issues/166).
 
 The [initial query boundary](open_design/incremental_query_boundary.md) defines
 database ownership, ground-truth inputs, stable file identity, deterministic
 diagnostics, LSP/ASP snapshots, cancellation staging, and the later path to
 item-level signatures and bodies. Demand-driven semantic computation must not
 be claimed until its recomputation tests pass.
+
+### Persistent Content-Addressed Cache
+
+The selected
+[content-addressed compilation cache contract](completed/content_addressed_compilation_cache_contract.md)
+adds a separate local, cross-process performance layer after in-process Salsa
+memoization. Its first artifact is a successful whole-file direct AST plus
+non-error parser diagnostics. Exact source bytes, a canonical artifact schema,
+and a deterministic compiler compatibility identity form its SHA-256 key.
+
+The wire format is compiler-owned and independent of Rust layout, Salsa handles,
+process-local `FileId` values, pointers, and checkout paths. A hit reconstructs
+fresh owned AST values and binds spans to the caller's current `FileKey`,
+`FileId`, source map, and provenance. Discovery, namespace ownership, stdlib
+trust, resolution, type checking, capability policy, comptime, and verification
+still run against the current invocation.
+
+Cache objects are authenticated with a separate per-user key, then decoded as
+untrusted, size-bounded data, fully validated, kept immutable, and published
+atomically. Misses, incompatible versions, corruption, permission errors, full
+disks, and cleanup contention fall back to ordinary compilation. Failed,
+cancelled, stale, panicked, and partial work is not cached. Remote or shared
+caches, negative results, checked programs, HIR/MIR, and backend objects remain
+separate future contracts.
 
 ---
 
@@ -1848,9 +1874,10 @@ work.
 
 ## Incremental Compilation Strategy
 
-Fast recompilation is critical for the LLM compile-fix loop (Footnote 5), but
-the current compiler has no Salsa dependency or incremental database. The
-selected policy starts with a measured, correctness-preserving file boundary:
+Fast recompilation is critical for the LLM compile-fix loop (Footnote 5). The
+current compiler has the initial Salsa-backed direct-AST parse query, while
+project semantic passes remain whole-project. The selected policy starts with
+this measured, correctness-preserving file boundary:
 
 ```text
 parse_file(file: FileKey) -> ParsedFile
@@ -1864,7 +1891,9 @@ sequential semantic passes run. Later namespace and body parallelism is gated
 on stable declaration identities, ordered signature summaries, immutable query
 ownership, and exact dependency facts; worker timing is never a compiler input.
 Persistent compiler-result and artifact identity, serialization, and cache
-safety are tracked separately by [#153](https://github.com/vycdev/jett/issues/153).
+safety follow the
+[content-addressed compilation cache contract](completed/content_addressed_compilation_cache_contract.md)
+selected by [#153](https://github.com/vycdev/jett/issues/153).
 
 `FileKey` is an interned source-origin plus normalized logical path; current
 position-assigned `FileId` values are diagnostic handles, not cache identities.
@@ -1894,7 +1923,9 @@ database-and-parse-reuse implementation is tracked by
 [#166](https://github.com/vycdev/jett/issues/166). The parallel contract
 separately defines deterministic planning, interner ownership, diagnostic
 merging, cancellation, worker limits, and atomic publication.
-Persistent/content-addressed caching remains a separate follow-up stage.
+Persistent caching remains a separate implementation stage: it starts with
+successful parse artifacts and cannot serialize Salsa state or current
+process-local semantic identities.
 
 ---
 
@@ -2109,8 +2140,12 @@ Core stdlib (string, list, math, json) is implemented in Phase D. This phase com
    admits ready namespace/body queries under the
    [deterministic scheduling and publication contract](open_design/parallel_compilation_boundary.md)
    selected for [#151](https://github.com/vycdev/jett/issues/151).
-3. Content-addressed caching of compilation artifacts (identity,
-   serialization, trust, and lifecycle contract [tracked by #153](https://github.com/vycdev/jett/issues/153)).
+3. Content-addressed caching starts with successful whole-file parse artifacts
+   under the selected identity, canonical serialization, per-user
+   authentication, untrusted validation, atomic publication, and bounded lifecycle
+   [contract](completed/content_addressed_compilation_cache_contract.md) from
+   [#153](https://github.com/vycdev/jett/issues/153); later checked/backend
+   artifact kinds wait for stable representations.
 4. Comprehensive test suite.
 
 **Milestone:** Production-ready compiler with fast iteration cycles.

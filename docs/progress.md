@@ -187,7 +187,7 @@
 |---|---|
 | Salsa integration | Initial whole-file parse-query slice implemented (the first `jett_query` boundary memoizes parser-owned direct ASTs by stable logical file identity; see the [initial query and invalidation boundary](open_design/incremental_query_boundary.md) from [#147](https://github.com/vycdev/jett/issues/147), with implementation tracked by [#166](https://github.com/vycdev/jett/issues/166)) |
 | Parallel compilation | Design selected, implementation not started (bounded parallel parsing first; namespace/body scheduling follows stable declaration facts; see the [deterministic parallel compilation boundary](open_design/parallel_compilation_boundary.md), tracked by [#151](https://github.com/vycdev/jett/issues/151)) |
-| Content-addressed caching | Not started (compiler-result identity, serialization, trust, and lifecycle contract [tracked by #153](https://github.com/vycdev/jett/issues/153)) |
+| Content-addressed caching | Design selected, implementation not started (a private local cache starts with successful whole-file parse artifacts, canonical SHA-256 keys and wire schemas, per-user object authentication, untrusted decoding, current-provenance rebinding, atomic publication, and bounded cleanup; see the [content-addressed compilation cache contract](completed/content_addressed_compilation_cache_contract.md) from [#153](https://github.com/vycdev/jett/issues/153)) |
 
 ## VS Code Extension
 
