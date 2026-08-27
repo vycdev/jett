@@ -6193,9 +6193,10 @@ The LLM doesn't have to step through 500 normal orders to reach the one that's b
 
 ### Rule Set 28: Profiling — Bottleneck Summaries over Visual Flamegraphs
 
-> The initial CPU/memory sampling, attribution, output, security, platform, and
-> interpreter/future-runtime contract is tracked by
-> [#164](https://github.com/vycdev/jett/issues/164).
+> The selected [CPU and memory profiling contract](completed/cpu_memory_profiling_contract.md)
+> defines sampling, allocation accounting, attribution, bounded overhead,
+> output, security, platform behavior, and the interpreter/future-runtime
+> handoff. Implementation remains staged.
 
 #### The Problem with Traditional Profiling
 
@@ -6214,67 +6215,74 @@ Jett includes a built-in CPU sampling profiler at the compiler level. It is not 
 jett run --profile app.jett
 ```
 
-This runs the program normally while collecting CPU samples at a configurable frequency. When the program exits (or is interrupted), instead of generating a flamegraph, the compiler analyzes the samples and produces a **Bottleneck Summary** — a structured TOON document identifying the critical performance bottlenecks.
+This runs the program normally while collecting CPU samples at a configurable
+frequency. When the program exits, fails, or is cooperatively interrupted, the
+compiler analyzes the collected samples and produces a **Bottleneck Summary**.
+Human mode writes the summary to stderr. `--agent` embeds a typed
+`jett.profile.v1` object beside captured program streams in one TOON run
+envelope. Fatal host termination cannot promise a final report.
 
 #### Bottleneck Summary Format
 
 The output is a TOON array of bottleneck entries, sorted by impact (highest CPU percentage first):
 
 ```toon
-profile_summary:
-    total_samples: 48000
-    sample_rate_hz: 1000
-    wall_time_seconds: 48.0
-    cpu_time_seconds: 47.2
-bottlenecks[2]:
+profile:
+  schema: jett.profile.v1
+  mode: cpu
+  status: complete
+  termination: returned
+  backend: interpreter_safe_point
+  coverage: jett_runtime_threads
+  config:
+    requested_rate_hz: 1000
+    threshold_basis_points: 500
+    limit: 10
+    cpu_metadata_budget_bytes: 33554432
+  totals:
+    requested_ticks: 48000
+    recorded_samples: 47200
+    attributed_samples: 46800
+    coalesced_ticks: 800
+  bottlenecks[1]:
     rank: 1
     function: process_image
     namespace: pipeline.transform
-    file: transform.jett
+    path: src/transform.jett
     line: 142
-    cpu_percent: 34.2
-    self_percent: 28.1
-    total_samples: 16416
-    self_samples: 13488
-    hot_lines[3]{line,percent,code}:
-        155, 12.4, "Pixel pixel = image.get_pixel(x, y)"
-        162,  9.7, "Pixel blurred = convolve(kernel, neighbors)"
-        170,  6.0, "output.set_pixel(x, y, blurred)"
-    call_chain[1]: main → run_pipeline → process_batch → process_image
-    suggestion: "process_image accounts for 34.2% of CPU. The hot path is pixel-by-pixel iteration with per-pixel allocation. Consider using the standard library batch image operations (images.convolve_batch) which operate on the entire buffer."
-    ---
-    rank: 2
-    function: parse_config
-    namespace: config.loader
-    file: loader.jett
-    line: 28
-    cpu_percent: 18.7
-    self_percent: 3.2
-    total_samples: 8976
-    self_samples: 1536
-    hot_lines[2]{line,percent,code}:
-        45, 8.1, "Document parsed = json.parse[Document](raw_text) handle error: return fail(error)"
-        52, 7.4, "Document validated = schema.validate(parsed)"
-    call_chain[1]: main → initialize → parse_config
-    suggestion: "parse_config is called once at startup but accounts for 18.7% of CPU. The json.parse and schema.validate calls dominate. If the config file is static, consider parsing at comptime."
+    cpu_percent: 34.19
+    inclusive_samples: 16000
+    self_samples: 13000
+    hot_lines[1]{line,percent,code,source_redacted}:
+      155,12.40,"Pixel pixel = image.get_pixel(x, y)",false
+    suggestions[1]{rule,text}:
+      CPU_HIGH_SELF,"Inspect the reported hot lines in pipeline.transform.process_image; self work accounts for at least half of its samples."
 ```
 
 #### Key Design Decisions
 
 **1. The compiler generates suggestions, not just data.**
 
-Each bottleneck entry includes a `suggestion` field — a plain-English sentence the LLM (or human) can act on immediately. The compiler generates these using internal heuristics:
+Each bottleneck may include suggestions that an LLM or human can act on. They
+are deterministic compiler-owned records with stable rule IDs and fixed
+templates. The first rules distinguish high self time from callee-dominated
+time, allocation pressure, and retained allocation sites. They interpolate
+only reported names, locations, counts, and percentages.
 
-- If a function is called inside a loop and allocates on every iteration → suggest hoisting or batching.
-- If a function's self-time is high relative to total time → the bottleneck is in its own body, not callees.
-- If a function's self-time is low relative to total time → the bottleneck is in what it calls; suggest inlining or replacing callees.
-- If a function appears in a single call chain → suggest restructuring the caller.
-- If a hot line involves a known-expensive standard library function → suggest the efficient alternative.
-- If work is done at runtime that could be done at comptime → suggest `comptime`.
+The profiler does not speculate that code is in a loop, can move to comptime,
+has a semantically equivalent library replacement, or leaks memory. A later
+rule may make such a claim only when checked compiler facts prove its predicate
+and snapshot tests pin the rule and wording. Runtime data is never sent to an
+external model to generate advice.
 
 **2. Hot lines pinpoint the exact code.**
 
-Instead of just naming the function, the summary includes the specific lines within that function that consumed the most CPU. This gives the LLM (or human) surgical precision — fix *these three lines*, not "somewhere in this 40-line function."
+Instead of just naming the function, the summary includes the specific lines
+within that function that received the most leaf samples. Optional source
+excerpts come only from the loaded run manifest: comments are omitted, literal
+contents and secret-bearing expressions are redacted, and unsafe or unavailable
+source produces no excerpt. Profiles never contain runtime values or heap
+contents.
 
 **3. Call chains provide context.**
 
@@ -6286,7 +6294,11 @@ Bottlenecks are ranked by CPU percentage, highest first. An LLM can read just th
 
 **5. Threshold filtering.**
 
-Only bottlenecks above a configurable threshold (default: 5% of CPU time) are included. This eliminates noise. A traditional profiler shows every function; the bottleneck summary shows only what matters.
+Only bottlenecks at or above a configurable threshold are included. The default
+is 5.00%; the CLI accepts `0` through `100` with at most two fractional digits
+and compares exact integer counts before display rounding. CPU uses inclusive
+attributed Jett samples. Memory uses attributed allocated bytes. A separate
+`--profile-limit` bounds output to 10 entries by default and 100 at most.
 
 ```
 # Only show bottlenecks above 10% CPU
@@ -6298,7 +6310,8 @@ jett run --profile --profile-threshold 2 app.jett
 
 #### Integration with the Agent Server Protocol
 
-When combined with the `--agent` flag (Rule Set 21), the profiler output is emitted as part of the standard ASP TOON stream:
+When combined with the `--agent` flag (Rule Set 21), the profiler output is
+embedded in the standard structured run envelope:
 
 ```
 jett run --agent --profile app.jett
@@ -6324,25 +6337,45 @@ The same approach extends to memory profiling with `--profile-memory`:
 jett run --profile-memory app.jett
 ```
 
-Output follows the same structure but reports allocation-heavy functions instead of CPU-heavy ones:
+Output follows the same structure but reports allocation-heavy functions
+instead of CPU-heavy ones. Coverage is the Jett-managed heap, not RSS or total
+process memory. Allocate, resize, and free hooks distinguish cumulative
+allocated bytes, current live bytes, the global peak, and final retained bytes;
+compiler, profiler, stack, foreign-allocator, mapped-file, and child-process
+memory are excluded:
 
 ```toon
-memory_summary:
-    peak_memory_bytes: 134217728
-    total_allocations: 2400000
-    total_bytes_allocated: 891289600
-bottlenecks[1]:
+profile:
+  schema: jett.profile.v1
+  mode: memory
+  status: complete
+  termination: returned
+  backend: interpreter_alloc_hooks
+  coverage: jett_heap
+  config:
+    threshold_basis_points: 500
+    limit: 10
+    retention_metadata_budget_bytes: 67108864
+  totals:
+    allocation_count: 2400000
+    resize_count: 120
+    allocated_bytes: 891289600
+    freed_bytes: 757071872
+    peak_live_bytes: 134217728
+    retained_bytes: 134217728
+  bottlenecks[1]:
     rank: 1
     function: build_index
     namespace: search.indexer
-    file: indexer.jett
+    path: src/indexer.jett
     line: 88
-    allocation_percent: 42.1
-    total_allocations: 1010400
-    total_bytes: 375272960
-    hot_lines[1]{line,percent,code}:
-        102, 31.0, "IndexEntry entry = IndexEntry(term: term, doc_id: doc_id, position: position)"
-    suggestion: "build_index is responsible for 42.1% of all allocations. Each IndexEntry is allocated individually inside a loop. Consider restructuring to batch-create entries or pre-allocate the list with a known size."
+    allocation_percent: 42.11
+    allocation_count: 1010400
+    allocated_bytes: 375272960
+    freed_bytes: 300000000
+    retained_bytes: 75272960
+    suggestions[1]{rule,text}:
+      MEM_ALLOCATION_PRESSURE,"Reduce, reuse, or batch work at the hottest allocation site for search.indexer.build_index."
 ```
 
 #### Why This Is Perfect for LLMs
