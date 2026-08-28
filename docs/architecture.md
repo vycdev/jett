@@ -444,7 +444,7 @@ Walk all type declarations and build the type registry:
   type-level reflection. See the
   [opaque runtime resource contract](completed/opaque_runtime_resource_contract.md).
 - **Function types:** `function(T) returns U`.
-- **Capability types:** `Filesystem`, `Network`, `Stdout`, `Stderr`, `Stdin`, `Clock`, `Random`, `Process`, `Environment`, `Foreign`. Random sampling uses the explicit `view Random` API, injected per-runtime generator state, and non-cryptographic contract defined in the [Random capability and entropy contract](completed/random_capability_entropy_contract.md). The interpreter-backed [`Environment` contract](open_design/environment_argv_capability_contract.md) uses source-owned `Environment.get` and `Environment.args` over one immutable injected launch snapshot; ambient `os.env`/`os.args` are removed. `Foreign` guards the generated native C boundary specified by the [C FFI contract](open_design/c_ffi_binding_contract.md).
+- **Capability types:** `Filesystem`, `Network`, `Stdout`, `Stderr`, `Stdin`, `Clock`, `Random`, `Process`, `Environment`, `Foreign`. Random sampling uses the explicit `view Random` API, injected per-runtime generator state, and non-cryptographic contract defined in the [Random capability and entropy contract](completed/random_capability_entropy_contract.md). The interpreter-backed [`Environment` contract](open_design/environment_argv_capability_contract.md) uses source-owned `Environment.get` and `Environment.args` over one immutable injected launch snapshot; ambient `os.env`/`os.args` are removed. `Foreign` guards the generated native C boundary specified by the [C FFI contract](open_design/c_ffi_binding_contract.md). Property tests may create only the typed test capabilities admitted by the [capability mocking contract](completed/capability_mocking_test_harness_contract.md); this does not open the capability set or add production constructors.
 - **Secret wrapper:** `secret[T]`.
 - **State-qualified types:** `Machine at state`.
 - **Task-control failures:** `CancelledError` terminates a cancelled pending task
@@ -1409,6 +1409,9 @@ flowchart LR
 > for [#104](https://github.com/vycdev/jett/issues/104).
 > The public-source/private-runtime boundary for the initial `net.http` client
 > is separately [tracked by #101](https://github.com/vycdev/jett/issues/101).
+> The test-only source facade, typed provider registry, exact-script policy,
+> and property-attempt isolation boundary for capability mocks are defined in
+> the [capability mocking and deterministic test harness contract](completed/capability_mocking_test_harness_contract.md).
 
 The boundary between compiler-generated code and stdlib-implemented code is a critical architectural decision.
 
@@ -1554,6 +1557,14 @@ public declarations, range validation, choice, and shuffle live in trusted
 in private trusted kernels. The runner injects isolated production state or a
 typed deterministic test provider. Later backends and concurrent cancellation
 must preserve the [Random capability and entropy contract](completed/random_capability_entropy_contract.md).
+
+Capability mocks use the same public-source/private-runtime split without
+turning test providers into application APIs. `stdlib/test/mock.jett` owns
+typed scripts and property-only constructor declarations; a private test
+runtime registry owns capability handles, provider cursors, per-attempt
+isolation, and exact-consumption diagnostics. Clock, Random, and Environment
+adapt their existing typed test seams to that registry. The full boundary is
+defined by the [capability mocking and deterministic test harness contract](completed/capability_mocking_test_harness_contract.md).
 
 The complete public `math.*` API is defined in `stdlib/math.jett`. Compositional
 helpers have Jett bodies, including the consuming `math.sum(list[int64])`, which
@@ -1932,6 +1943,22 @@ Property-based coverage is staged with the compiler pipeline:
 - **Deferred until code generation exists:** if type checking succeeds, codegen
   never encounters a type error.
 
+### Capability Mocks in Language Property Tests
+
+`test.mock` is a compiler-shipped, test-only source facade. A property block
+may construct typed Clock, Random, or Environment test capabilities and pass
+them through ordinary `view` parameters. Constructors are rejected in normal
+functions, `main`, verify, comptime, build, and run contexts; mock authority is
+never available to production code.
+
+Every normal property iteration, replay, and shrink candidate receives a fresh
+private provider registry. Sequential providers consume capability-specific
+FIFO scripts exactly, explicit clones and actor handoffs share one cursor, and
+successful attempts reject unused suffixes. Different capability providers do
+not acquire an implicit global ordering. Generated `given` values are replayed
+and shrunk separately from source-owned scripts. See the
+[capability mocking and deterministic test harness contract](completed/capability_mocking_test_harness_contract.md).
+
 ---
 
 ## Implementation Phases
@@ -2094,7 +2121,7 @@ Core stdlib (string, list, math, json) is implemented in Phase D. This phase com
   (generation and entropy contract [tracked by #73](https://github.com/vycdev/jett/issues/73)), `log`
   (structured event, capability, secret, sink, and source/runtime contract
   [tracked by #143](https://github.com/vycdev/jett/issues/143)), `format`
-- **Testing:** `test.mock` (mock capabilities for property-based testing; capability-mocking and deterministic harness contract [tracked by #145](https://github.com/vycdev/jett/issues/145))
+- **Testing:** `test.mock` (property-only typed capability scripts and private per-attempt provider registry; the selected isolation, ordering, replay, shrinking, ownership, and backend contract is defined in the [capability mocking and deterministic test harness contract](completed/capability_mocking_test_harness_contract.md) from [#145](https://github.com/vycdev/jett/issues/145))
 
 **Milestone:** The standard library covers virtually every common operation. LLMs write orchestration code, not algorithms.
 

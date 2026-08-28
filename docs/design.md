@@ -3138,6 +3138,11 @@ secret[T] ──→ secret.compare() ALLOWED (constant-time comparison)
 > [Environment and argument capability contract](open_design/environment_argv_capability_contract.md),
 > and implemented by [#170](https://github.com/vycdev/jett/issues/170).
 
+> Property-only capability construction, typed Clock/Random/Environment
+> scripts, exact consumption, attempt isolation, and replay/shrinking behavior
+> are defined by the
+> [capability mocking and deterministic test harness contract](completed/capability_mocking_test_harness_contract.md).
+
 #### The Problem: Side Effects Hide in the Call Stack
 
 In high-performance languages like C++ or Rust, any function can open a file, connect to a network socket, or spawn a process. The function signature says `fn process(data: Vec<u8>) -> Result<Output>` — nothing in the signature reveals that this function writes to disk, sends network packets, or reads environment variables.
@@ -3392,9 +3397,17 @@ In traditional languages, an LLM might add a `log.info()` call inside a utility 
 
 The LLM generates `main()` first, which has all capabilities. As it generates child functions, it must explicitly pass down the capabilities each one needs. This is a natural top-down flow that matches the LLM's left-to-right generation process. The LLM never needs to "go back" and add a capability — it threads them forward as it writes.
 
-**5. Testing is trivial.**
+**5. Testing preserves the same signatures.**
 
-To test a function that takes a capability, pass a mock. The function doesn't know the difference — it just calls methods on the capability object. No dependency injection framework, no global state to reset, no monkey-patching. Mock capabilities and property-based testing are covered in Rule Set 25.
+To test a function that takes a capability, a property block may construct a
+typed `test.mock` provider and pass the resulting ordinary capability. The
+function cannot tell the difference: it still receives `view Clock`,
+`view Random`, or another admitted capability and calls the normal operations.
+Mock construction is property-only, providers reset for every iteration and
+shrink attempt, and scripts never fall back to host effects. There is no
+dependency-injection framework, global provider state, name interception, or
+monkey-patching. The complete boundary is covered in Rule Set 25 and the
+[capability mocking contract](completed/capability_mocking_test_harness_contract.md).
 
 ### Rule Set 17: Cross-Platform Compilation (Agnostic Capability Lowering)
 
@@ -5704,6 +5717,44 @@ property clamp:
 
 The `verify` block proves 5 specific cases at compile time. The `property` block proves the invariants hold for 10,000 random `(value, low, high)` triples — including integer boundaries, negative numbers, extreme ranges, and invalid combinations like `low > high` that the LLM would never think to test.
 
+#### Property Tests with Capability Mocks
+
+Effectful helpers keep their ordinary capability signatures in tests. A
+property may use compiler-shipped `test.mock` constructors for the capability
+contracts that have typed test adapters, then pass each result with an explicit
+`view`:
+
+```jett
+function sampled_label(view clock: Clock, view rng: Random) returns string:
+    time.Timestamp now = Clock.now(view clock)
+    bool enabled = random.bool(view rng)
+    int64 milliseconds = time.to_unix_milliseconds(now)
+    return "{milliseconds}:{enabled}"
+
+property sampled_label_is_deterministic:
+    Clock clock = test.mock.clock(list(
+        test.mock.ClockStep.wall(unix_milliseconds: 1250),
+    ))
+    Random rng = test.mock.random(list(
+        test.mock.RandomStep.boolean(value: true),
+    ))
+    assert sampled_label(view clock, view rng) == "1250:true"
+```
+
+The constructors are legal only directly in property bodies under `jett test`.
+They are rejected in ordinary functions, `main`, verify, comptime, build, and
+run contexts. Every iteration, replay, and shrink candidate receives fresh
+provider state at step zero. Scripts are exact per-capability FIFO expectations;
+unused suffixes and calls after exhaustion fail the test, while different
+capabilities have no hidden global ordering. Property generation and shrinking
+apply to `given` values, not live provider cursors or implicit script mutation.
+
+The initial typed adapters cover Clock, Random, and Environment. Other closed
+built-in capabilities join only after their own request, failure, authority,
+and cancellation contracts are selected. There is no generic `mock[T]`, no
+user-defined capability proxy, and no production capability constructor. See
+the [capability mocking and deterministic test harness contract](completed/capability_mocking_test_harness_contract.md).
+
 #### No Preconditions — Test Everything
 
 Property blocks have no `where` clause for filtering inputs. If a function should only accept certain inputs, use refinement types in the function signature (Rule Set 3) or validate inside the function. The fuzzer should hit invalid inputs too — that's how it finds bugs.
@@ -5828,7 +5879,7 @@ A `verify` block with 5 hand-picked examples might pass even if the function is 
 
 #### Implicit Views in Test and Debug Contexts
 
-In `property` blocks, `verify` blocks, and `breakpoint` evaluations, all values are **implicitly viewable** — they can be used multiple times without being consumed. This is a pragmatic relaxation of linear typing for testing and debugging contexts:
+In `property` blocks, `verify` blocks, and `breakpoint` evaluations, ordinary data values are **implicitly viewable** — they can be used multiple times without being consumed. This is a pragmatic relaxation of linear typing for testing and debugging contexts. Capability authority is not implicitly copied: capability calls still require explicit `view`, moves remain visible, and only an explicit permitted capability clone can duplicate a handle:
 
 ```
 property sort_preserves_elements:
@@ -5845,7 +5896,7 @@ property sort_preserves_elements:
 
 - Property and verify blocks never run in production — they execute at compile time or during `jett test`.
 - The relaxation is confined to a lexical scope (the block itself). Outside the block, normal linear rules apply.
-- The compiler still tracks types, capabilities, and refinements. Only linear consumption is relaxed.
+- The compiler still tracks types, capabilities, and refinements. Only ordinary data consumption is relaxed; capability authority remains explicit.
 - `breakpoint` evaluations are debug-only (compiled out in `--release`). Expression evaluation implicitly views all variables in scope, ensuring debugging is non-destructive.
 
 ### Rule Set 26: Variable Tracing
@@ -6970,7 +7021,7 @@ The standard library is intentionally massive and opinionated. The goal is to ma
 - **Process** — future process management remains separate under the `Process`
   capability; filesystem operations remain under `Filesystem`, and no
   `os.process` namespace is implied
-- **test** — mock infrastructure for property-based testing (`test.mock` for mock filesystems, networks, etc.; capability-mocking and deterministic harness contract [tracked by #145](https://github.com/vycdev/jett/issues/145))
+- **test** — property-only typed capability scripts and isolated harness providers (`test.mock` initially covers Clock, Random, and Environment; the selected model is defined by the [capability mocking and deterministic test harness contract](completed/capability_mocking_test_harness_contract.md) from [#145](https://github.com/vycdev/jett/issues/145))
 - **log** — structured logging with levels (initial event, capability, secret,
   sink, and deterministic-test contract
   [tracked by #143](https://github.com/vycdev/jett/issues/143))
