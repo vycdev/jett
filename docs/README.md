@@ -73,6 +73,7 @@ plans above for current work.
 - [JsonValue to JsonTree transition](completed/json_value_transition_plan.md)
 - [Integer arithmetic semantics](completed/integer_arithmetic_semantics.md)
 - [Root alias policy](completed/root_alias_policy.md)
+- [Structured logging contract](completed/structured_logging_contract.md)
 - [Recursive owned values](completed/recursive_owned_values.md)
 - [Type kind design](completed/type_kind_design.md)
 - [User-defined type naming](completed/user_type_naming.md)

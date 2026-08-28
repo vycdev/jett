@@ -2092,8 +2092,10 @@ Core stdlib (string, list, math, json) is implemented in Phase D. This phase com
   deterministic injection, and source/runtime policy is defined in the
   [random contract](completed/random_capability_entropy_contract.md)), `uuid`
   (generation and entropy contract [tracked by #73](https://github.com/vycdev/jett/issues/73)), `log`
-  (structured event, capability, secret, sink, and source/runtime contract
-  [tracked by #143](https://github.com/vycdev/jett/issues/143)), `format`
+  (structured event, dedicated capability, secret, sink, deterministic capture,
+  and source/runtime boundary selected by the
+  [structured logging contract](completed/structured_logging_contract.md) from
+  [#143](https://github.com/vycdev/jett/issues/143)), `format`
 - **Testing:** `test.mock` (mock capabilities for property-based testing; capability-mocking and deterministic harness contract [tracked by #145](https://github.com/vycdev/jett/issues/145))
 
 **Milestone:** The standard library covers virtually every common operation. LLMs write orchestration code, not algorithms.

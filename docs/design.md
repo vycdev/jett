@@ -1204,6 +1204,14 @@ Every token an LLM spends writing a sorting algorithm, a date parser, or an arra
 
 Jett ships with a massive, opinionated standard library that covers virtually every common operation. The LLM's job is reduced from "write algorithms" to "connect modules" — turning Jett into a high-level orchestration language where the LLM writes plumbing, not logic.
 
+Application logging follows the accepted
+[structured logging contract](completed/structured_logging_contract.md). The
+source-owned `log` module emits explicit events through a dedicated `Log`
+capability, preserves ordered string fields, rejects secret-bearing values, and
+keeps deterministic captures separate from stdout, diagnostics, and debugging
+channels. Filtering is a runtime observation after ordinary eager argument
+evaluation; release builds do not erase semantic log calls.
+
 #### 1. Macro-Primitives — High-Level Operations as Built-Ins
 
 Instead of providing low-level building blocks and hoping the LLM assembles them correctly, Jett provides **hyper-specific, high-level standard functions** for common tasks. These are battle-tested, edge-case-handled implementations that the LLM simply calls by name.
@@ -2926,7 +2934,7 @@ This is not a hypothetical — it is one of the most common security vulnerabili
 
 #### The Solution: Security Sensitivity at the Type Level
 
-Jett introduces a `secret` type wrapper that **taints** data at the type level. Once a value is marked as secret, the compiler tracks it through every operation and **structurally prevents** it from being passed to any output function — `Stdout.write`, `print`, `println`, `log`, `http.respond`, `Filesystem.write_file`, or any function that is not explicitly authorized to handle secrets.
+Jett introduces a `secret` type wrapper that **taints** data at the type level. Once a value is marked as secret, the compiler tracks it through every operation and **structurally prevents** it from being passed to any output function — `Stdout.write`, `print`, `println`, `log.*`, `http.respond`, `Filesystem.write_file`, or any function that is not explicitly authorized to handle secrets.
 
 **Declaring secret data:**
 
@@ -3101,7 +3109,7 @@ Every place where a secret is coarsened is marked with the `declassify` keyword.
 
 ```
 secret[T] ──→ Stdout.write()  BLOCKED
-secret[T] ──→ log()           BLOCKED
+secret[T] ──→ log.*()         BLOCKED
 secret[T] ──→ http.respond()  BLOCKED
 secret[T] ──→ json.serialize() BLOCKED
 secret[T] ──→ Filesystem.write_file() BLOCKED
@@ -3369,7 +3377,7 @@ The presence of a capability parameter **is** the effect declaration. There is n
 |-----------|------------------|
 | `function read(view fs: Filesystem, path: string)` | Reads/writes files |
 | `function send(view net: Network, data: string)` | Accesses the network |
-| `function log(view stdout: Stdout, msg: string)` | Writes to stdout |
+| `function write_log(view output: Log, msg: string)` | Emits through the structured application-log sink |
 | `function compute(x: int64) returns int64` | Pure — no capability, no side effects |
 
 A `Filesystem` parameter tells you "this function reads/writes files specifically." A `Network` parameter tells you "this function accesses the network." The capability is the effect declaration, made concrete.
@@ -3386,7 +3394,7 @@ If a function has no capability parameters, it is semantically pure. Not "probab
 
 **3. The LLM can't hallucinate side effects.**
 
-In traditional languages, an LLM might add a `log.info()` call inside a utility function, silently introducing a side effect. In Jett, that call requires a `Stdout` capability. If the function doesn't have one, the code doesn't compile. The LLM is forced to either add the capability to the signature (making the effect visible) or remove the logging call.
+In traditional languages, an LLM might add a `log.info()` call inside a utility function, silently introducing a side effect. In Jett, that call requires a `Log` capability. If the function doesn't have one, the code doesn't compile. The LLM is forced to either add the capability to the signature (making the effect visible) or remove the logging call.
 
 **4. Capability threading mirrors auto-regressive generation.**
 
