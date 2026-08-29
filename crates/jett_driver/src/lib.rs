@@ -2102,20 +2102,56 @@ pub fn goto_definition(source: &str, line: u32, col: u32) -> Option<(u32, u32)> 
     })
 }
 
-/// Convert a 1-based line+column to a byte offset in `source`.
-fn line_col_to_offset(source: &str, line: u32, col: u32) -> Option<u32> {
-    if line == 0 || col == 0 {
+/// Return the byte bounds of a 1-based logical source line.
+///
+/// Jett accepts LF, CRLF, and lone CR line endings. The returned range excludes
+/// the line ending itself so query columns cannot address either byte of it.
+fn source_line_bounds(source: &str, line: u32) -> Option<(usize, usize)> {
+    if line == 0 {
         return None;
     }
 
-    let mut line_start = 0usize;
-    for _ in 1..line {
-        line_start += source[line_start..].find('\n')? + 1;
+    let bytes = source.as_bytes();
+    let mut current_line = 1_u32;
+    let mut line_start = 0_usize;
+    let mut index = 0_usize;
+
+    while current_line < line {
+        match *bytes.get(index)? {
+            b'\n' => {
+                index += 1;
+                line_start = index;
+                current_line += 1;
+            }
+            b'\r' => {
+                index += 1;
+                if bytes.get(index) == Some(&b'\n') {
+                    index += 1;
+                }
+                line_start = index;
+                current_line += 1;
+            }
+            _ => index += 1,
+        }
     }
 
-    let line_end = source[line_start..]
-        .find('\n')
-        .map_or(source.len(), |offset| line_start + offset);
+    let mut line_end = line_start;
+    while let Some(byte) = bytes.get(line_end) {
+        if matches!(byte, b'\n' | b'\r') {
+            break;
+        }
+        line_end += 1;
+    }
+    Some((line_start, line_end))
+}
+
+/// Convert a 1-based line+column to a byte offset in `source`.
+fn line_col_to_offset(source: &str, line: u32, col: u32) -> Option<u32> {
+    if col == 0 {
+        return None;
+    }
+
+    let (line_start, line_end) = source_line_bounds(source, line)?;
     let line_source = &source[line_start..line_end];
     let column_offset = (col - 1) as usize;
     if column_offset > line_source.chars().count() {
@@ -3763,6 +3799,33 @@ mod tests {
         fs::remove_dir_all(&root).expect("temp query dir should be removed");
 
         assert!(outside_error.contains("position 4:999 is outside"));
+        assert_eq!(result.type_name, Some("int64".to_string()));
+        assert_eq!(
+            (
+                result.span_line,
+                result.span_column,
+                result.span_end_line,
+                result.span_end_column
+            ),
+            (Some(4), Some(19), Some(4), Some(20))
+        );
+    }
+
+    #[test]
+    fn query_type_at_handles_lone_carriage_return_lines() {
+        let root = temp_test_dir("jett_driver_query_type_at_lone_cr");
+        fs::create_dir_all(&root).expect("temp query dir should be created");
+        let file = root.join("main.jett");
+        fs::write(
+            &file,
+            "namespace app\r\rfunction main() returns nothing:\r    int64 total = 1 + 2\r    return nothing\r",
+        )
+        .expect("lone-CR query fixture should be written");
+
+        let result = query_type_at(&file, 4, 19).expect("type query should succeed");
+
+        fs::remove_dir_all(&root).expect("temp query dir should be removed");
+
         assert_eq!(result.type_name, Some("int64".to_string()));
         assert_eq!(
             (
