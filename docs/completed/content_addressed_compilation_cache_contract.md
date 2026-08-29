@@ -149,13 +149,18 @@ authorized by the current user produced the AST payload.
 
 ## Initial Parse Key
 
-`jett.parse-file.v1` has exactly these semantic fields:
+`jett.parse-file.v1` has exactly these tagged `semantic_fields`:
 
-1. exact source length and SHA-256 digest of the exact UTF-8 source bytes;
-2. compiler compatibility identity;
-3. parse artifact schema version;
-4. lexical/parser policy version when such policy exists outside the compiler
+1. exact source length as an unsigned 64-bit byte count;
+2. SHA-256 digest of the exact UTF-8 source bytes;
+3. lexical/parser policy version when such policy exists outside the compiler
    compatibility identity.
+
+The fixed `artifact_kind`, `artifact_schema`, and
+`compiler_compatibility_id` members of `CacheKeyRecord` already participate in
+the object key. They are encoded once in those fixed positions and are not
+duplicated in `semantic_fields`, so a record cannot carry two conflicting
+schema or compatibility values.
 
 The complete source bytes are already available to the caller and are checked
 against the recorded length and digest before decoding. Newline spelling,
@@ -201,6 +206,11 @@ without a trustworthy source revision computes a deterministic digest from the
 relevant source and lock inputs; if the build cannot provide one, persistent
 cache reads and writes are disabled rather than sharing under an ambiguous
 `dev` identity.
+
+A source-tree digest uses normalized repository-relative logical paths and
+exact file contents in canonical order. Checkout roots, file timestamps,
+directory-enumeration order, and other host metadata are excluded, so the same
+compiler source produces the same identity after relocation.
 
 The identity is scoped by artifact layer. A CLI-rendering-only change need not
 invalidate parse objects, while a lexer, parser, AST, diagnostic, or decoder
@@ -283,14 +293,23 @@ CacheEnvelope:
     canonical_key_record
     uncompressed_payload_length: u64
     stored_payload_length: u64
-    payload_digest[32]
+    payload_digest[32]  # SHA-256 of the canonical uncompressed payload
     payload
     authenticator[32]
 ```
 
+The envelope encoding is canonical for its version: fields appear in the order
+above, integers are unsigned little-endian, variable-width fields are preceded
+by their checked byte lengths, and padding or trailing bytes are forbidden.
+The authenticator is the final 32 bytes.
+
 Compression may be added only as an envelope-versioned storage choice with a
 fixed algorithm identifier and strict decoded-size bound. Compression bytes do
-not enter semantic keys. The initial implementation may remain uncompressed.
+not enter semantic keys. `stored_payload_length` bounds the bytes present in the
+envelope, while `uncompressed_payload_length` and `payload_digest` authenticate
+the canonical bytes produced after decoding. The initial implementation may
+remain uncompressed, in which case both lengths are equal and the stored bytes
+are the canonical payload.
 
 A reader performs all of these checks before returning a hit:
 
@@ -298,7 +317,8 @@ A reader performs all of these checks before returning a hit:
    supports that guarantee;
 2. enforce fixed header and declared-size bounds before allocation;
 3. validate magic, envelope version, artifact kind, and schema;
-4. parse the canonical key record and recompute its SHA-256 digest;
+4. parse the canonical key record, require its artifact kind and schema to
+   equal the envelope and requested artifact, and recompute its SHA-256 digest;
 5. require the digest to match the requested key and filename;
 6. verify the per-user object authenticator before decoding the payload;
 7. require source length/digest and all current semantic inputs to match;
@@ -361,10 +381,19 @@ with access to an explicitly shared directory may modify it.
 
 To prevent a writer with cache-directory access alone from substituting a
 different structurally valid AST for the same source key, every object carries
-an HMAC-SHA-256 authenticator. The MAC covers a domain separator, the complete
-canonical envelope except the authenticator field, the key record, and the
-stored payload. Its 32-byte key lives in the current user's private Jett
-configuration directory, outside the deletable cache root.
+an HMAC-SHA-256 authenticator. Its input is defined exactly as:
+
+```text
+HMAC-SHA-256(
+    user_cache_key,
+    "jett-cache-object-auth-v1" || canonical CacheEnvelope bytes through payload,
+)
+```
+
+The covered envelope bytes include the key record, lengths, payload digest, and
+stored payload exactly once; only the final authenticator field is absent. The
+32-byte `user_cache_key` lives in the current user's private Jett configuration
+directory, outside the deletable cache root.
 
 The first read-write cache use creates this key from the operating system's
 cryptographically secure random source with create-new and user-private
@@ -374,13 +403,14 @@ invalidates old objects without affecting compilation. The key and MAC never
 appear in diagnostics, event records, object names, source manifests, or agent
 output.
 
-A reader verifies the MAC in constant time before interpreting AST bytes. A
-missing or incorrect MAC is corruption, even when all public hashes and node
-invariants look valid. This keeps a copied, shared, or attacker-written cache
-from changing compiler facts unless that writer also has access to the current
-user's separate private authentication key. Compromise of the whole OS user
-account, remote-cache identities, multi-user key distribution, and hardware
-key protection remain outside this local cache contract.
+A reader computes the MAC before interpreting AST bytes and compares the
+computed and stored tags in constant time. A missing or incorrect MAC is
+corruption, even when all public hashes and node invariants look valid. This
+keeps a copied, shared, or attacker-written cache from changing compiler facts
+unless that writer also has access to the current user's separate private
+authentication key. Compromise of the whole OS user account, remote-cache
+identities, multi-user key distribution, and hardware key protection remain
+outside this local cache contract.
 
 An authenticated decoded object proves only that bytes passed the current
 user's MAC, structural, and digest checks. It does not prove:
@@ -672,10 +702,14 @@ file on disk is not proof that a later compiler query reused it.
 - every current lexer/parser AST shape round-trips structurally;
 - exact source ranges, literals, identifiers, and non-error diagnostics survive;
 - decoded spans bind to the current `FileId` and current logical source path;
+- fixed key identity fields cannot be duplicated, and an envelope/key-record
+  artifact-kind or schema mismatch is rejected;
 - truncated headers, oversized lengths, integer overflow, unknown tags,
   duplicate fields, invalid UTF-8, invalid spans, impossible nodes, trailing
   bytes, wrong names, missing/forged MACs, and key/payload digest mismatches are
   rejected without panic or excessive allocation;
+- authenticator test vectors pin the domain separator and prove every stored
+  envelope byte through the payload is covered exactly once;
 - deterministic encoding is byte-identical across repeated runs;
 - fuzzed arbitrary object bytes terminate safely under the size and nesting
   bounds.
