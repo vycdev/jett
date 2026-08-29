@@ -29,6 +29,7 @@
 | Type interning, struct/enum/interface defs | `jett_types` | 18 | Done |
 | Name resolution, scoping, namespace export visibility | `jett_resolve` | 27 | Done |
 | Type checking (expressions, operators, generics) | `jett_typecheck` | 100 | Done |
+| Module/import/prelude registry and backend-neutral trusted origin | `jett_project`, `jett_resolve`, later IR | n/a | Design selected by the [module and trusted-origin contract](completed/module_import_trusted_origin_contract.md); current block-local `use`, stdlib loading, and interpreter trust paths remain transitional |
 
 ### Phase C: Ownership and Capabilities — COMPLETE
 
@@ -144,8 +145,8 @@
 |---|---|
 | Property-based test runner | Done (basic: 100 generated iterations; all numeric primitives, bool/string/bytes/nothing, aliases/refinements, structs including generic structs, bitfields, enums, plus generic list/set/map/optional/result pools) |
 | Input shrinking on failure | Done (shrinking for int64, float64, string, bytes, list, set, map, optional, result, struct fields, enum payloads) |
-| CPU profiler (`--profile`) | Not started (sampling, attribution, output, security, platform, and interpreter/future-runtime contract tracked by [#164](https://github.com/vycdev/jett/issues/164)) |
-| Memory profiler (`--profile-memory`) | Not started (allocation, retention, peak-memory, attribution, and shared reporting/runtime contract tracked by [#164](https://github.com/vycdev/jett/issues/164)) |
+| CPU profiler (`--profile`) | Design complete; implementation not started ([sampling, attribution, output, security, platform, and runtime contract](completed/cpu_memory_profiling_contract.md)) |
+| Memory profiler (`--profile-memory`) | Design complete; implementation not started ([allocation, resize/free, retention, peak-memory, attribution, and runtime contract](completed/cpu_memory_profiling_contract.md)) |
 | `trace` keyword | Partial (parses, typechecks, runtime type-tagged current-value output in `jett run`) |
 | `breakpoint` keyword | Partial (parses, typechecks, and emits conditional runtime debug snapshots with visible binding types in `jett run`; the pause/inspection protocol is [decided](completed/breakpoint_pause_inspection_protocol.md), while its interpreter and future native-runtime stages remain unimplemented) |
 

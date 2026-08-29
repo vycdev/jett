@@ -86,9 +86,10 @@ jett/
     └── architecture.md
 ```
 
-The planned `jett_profiler` CPU/memory sampling, attribution, reporting,
-security, platform, and interpreter/future-runtime contract is tracked by
-[#164](https://github.com/vycdev/jett/issues/164).
+The selected [`jett_profiler` contract](completed/cpu_memory_profiling_contract.md)
+defines CPU/memory events, attribution, bounded collection, deterministic
+reporting, security, and the interpreter/future-runtime handoff. Implementation
+remains staged.
 
 ### Crate Dependency Graph
 
@@ -158,9 +159,18 @@ flowchart TD
 
 1. Locate `jett.proj` by walking up from the given path.
 2. Parse the TOON-format project file (name, version, entry point).
-3. Recursively discover all `.jett` files in the project directory, including vendored dependencies in `deps/` (Rule Set 14). Dependencies are `.jett` source files tracked in git — no package registry, no lock file.
-4. Assign each file a unique `FileId` (integer handle for source tracking).
-5. Read file contents into an arena-allocated string store for zero-copy access.
+3. Discover project sources, nested vendored dependencies under `deps/`, and
+   compiler-shipped stdlib sources as distinct origins. Dependencies are `.jett`
+   source tracked in git; compilation performs no package-registry or network
+   lookup.
+4. Normalize origin-relative logical paths and assign each file a stable
+   `FileKey` plus a session-local diagnostic `FileId`.
+5. Pre-scan namespaces and build the complete module registry before name
+   resolution. Project and dependency namespaces have one owning file; only
+   stdlib namespaces may use ordered fragments.
+6. Reject dependency cycles, duplicate roots, namespace collisions, and project
+   attempts to reopen stdlib namespaces deterministically.
+7. Read file contents into an arena-allocated string store for zero-copy access.
 
 ### Key Data Structures
 
@@ -170,6 +180,18 @@ Project {
     version: String,
     entry_file: FileId,
     files: Vec<SourceFile>,
+}
+
+SourceOrigin = Project(ProjectKey) | Dependency(DependencyKey) | Stdlib(StdlibKey)
+
+FileKey {
+    origin: SourceOrigin,
+    logical_path: String,
+}
+
+ModuleId {
+    origin: SourceOrigin,
+    namespace: Symbol,
 }
 
 SourceFile {
@@ -188,7 +210,18 @@ NamespaceSpan {
 ### Design Decisions
 
 - **File contents are loaded once and stored in an arena.** All subsequent phases reference file content by `FileId` + byte offset (`Span`). No re-reading.
-- **Namespace pre-scan.** Before full lexing, the discovery phase does a lightweight scan of each file to extract all `namespace` declarations. A single file can contain multiple namespaces (Rule Set 22). This builds the namespace registry needed for two-pass resolution.
+- **Explicit origin identity.** `FileId` is a compact source handle, not an
+  authorization mechanism. Compiler-assigned `SourceOrigin` and canonical
+  declaration identity carry stdlib trust through resolution, lowering, and
+  caches.
+- **Namespace pre-scan.** Before full lexing, discovery extracts every
+  `namespace` declaration and builds the registry needed for two-pass
+  resolution. A file may contain multiple namespaces, but project/dependency
+  namespaces cannot span files.
+- **One registry-backed import model.** Block-local `use` resolves an existing
+  namespace and adds no runtime work or trust. The detailed discovery, import,
+  prelude, and trusted-origin rules are defined in the
+  [module and trusted-origin contract](completed/module_import_trusted_origin_contract.md).
 
 ---
 
@@ -402,9 +435,9 @@ ResolveResult {
 - **No variable shadowing** — a binding in an inner scope cannot reuse a name from an outer scope.
 - **No unused imports** — every `use` must be referenced.
 - **No unused variables** — every variable declaration must be referenced.
-- **Inline-only imports** — `use` statements are only allowed inside functions/blocks, never at file level. Within a function or nested block, `use` must appear before any other code. Executable access to another project or vendored namespace requires an active local import; same-namespace access and canonical qualified types in declaration signatures do not. Compiler-provided standard namespaces remain implicitly available pending the broader prelude policy.
+- **Inline-only imports** — `use` statements are only allowed inside functions/blocks, never at file level. Within a function or nested block, `use` must appear before any other code. Executable access to another project or vendored namespace requires an active local import; same-namespace access and canonical qualified types in declaration signatures do not. Compiler-provided standard namespaces remain available by canonical qualification under the fixed prelude and module contract.
 - **Duplicate namespace detection** — two project/dependency files declaring the same namespace is an error. Compiler-shipped stdlib files have a narrow fragment exception so one stdlib namespace can be split across several implementation files; duplicate declarations inside that namespace still fail normally.
-- **Global constants** — registered as top-level declarations (global mutable variables are forbidden). Their initializers may use literals and same-namespace declarations, but project or vendored declarations from another namespace are rejected with `E0211`; compiler-provided standard declarations remain implicit pending the broader prelude policy.
+- **Global constants** — registered as top-level declarations (global mutable variables are forbidden). Their initializers may use literals and same-namespace declarations, but project or vendored declarations from another namespace are rejected with `E0211`; compiler-provided standard declarations follow the fixed stdlib namespace and prelude policy.
 - **Canonical type names** — every struct, enum, interface, machine, actor,
   bitfield, alias, and refinement declaration is validated before registration.
   Names must begin with an ASCII uppercase letter and otherwise contain only
@@ -1583,7 +1616,23 @@ capability, determinism, and compatibility rules are defined in the
 
 ### How the Compiler Locates the Stdlib
 
-The stdlib is a set of `.jett` files bundled with the compiler installation. At build time, the compiler adds the stdlib directory to the set of source files before discovery. Foundational files at the stdlib root are ordered before nested namespace fragments; files at the same depth remain lexical, so numbered fragments such as `json/10_*.jett` keep deterministic top-to-bottom declaration order. Stdlib namespaces (e.g., `namespace string`, `namespace math`) mostly resolve like user namespaces, but compiler-shipped stdlib files may use namespace fragments so a large module such as `json` can live in several implementation files while exposing one namespace. Project files and vendored dependencies cannot use this exception or reopen stdlib namespaces.
+The stdlib is a set of `.jett` files bundled with the compiler installation. The
+driver discovers them under an installation-selected root and assigns
+`SourceOrigin::Stdlib`; source syntax, project configuration, path spelling, and
+namespace names cannot request that origin. Foundational root files are ordered
+before nested namespace fragments; files at the same depth remain lexical, so
+numbered fragments such as `json/10_*.jett` keep deterministic top-to-bottom
+declaration order. Compiler-shipped stdlib files alone may use namespace
+fragments. Project files and vendored dependencies cannot use this exception or
+reopen stdlib namespaces.
+
+Stdlib namespaces are available by canonical qualification without a required
+`use`, but members remain namespaced and private by default. A fixed compiler
+manifest exposes only foundational prelude declarations such as `Equatable`;
+it cannot inject root type aliases. `export` controls source visibility, while
+trusted origin controls compiler policy and private-kernel delegation. The full
+contract and implementation stages are recorded in
+[module, import, prelude, and trusted origin](completed/module_import_trusted_origin_contract.md).
 
 ---
 
@@ -1804,25 +1853,41 @@ Default: 10,000 iterations per property block. Configurable via CLI flag.
 
 ## Profiler (`jett_profiler`)
 
-Built-in CPU and memory sampling profiler.
+`jett_profiler` owns backend-neutral CPU samples and allocation events plus pure
+aggregation, thresholding, source sanitization, deterministic suggestions, and
+human/TOON rendering. The driver owns capability negotiation, run-manifest
+metadata, lifecycle finalization, and composition with `RunOutput`; the CLI owns
+argument validation, output channels, and exit behavior. Runtimes only produce
+safe events and exclude collector metadata.
 
 ### CPU Profiling
 
-When `--profile` is active:
-1. Compile with instrumentation hooks at function entry/exit.
-2. Run the program with a sampling timer (default 1000 Hz).
-3. At each sample, record the current call stack.
-4. After execution, aggregate samples into per-function and per-line counts.
-5. Generate the bottleneck summary: top functions by CPU %, hot lines, call chains, suggestions.
+`jett run --profile` requests monotonic elapsed-time samples at 1000 Hz by
+default. The timer keeps at most one pending request per runtime worker. The
+current tree-walking interpreter acknowledges requests at statement/call safe
+points on its dedicated runtime thread; future native runtimes may use safe
+platform sampling. Backends report coalesced, unavailable, runtime, and waiting
+observations instead of charging them to the last user frame. Statement counts
+are not an allowed timing substitute.
 
 ### Memory Profiling
 
-When `--profile-memory` is active:
-1. Wrap the allocator to record allocation size and call site at each `alloc`.
-2. After execution, aggregate into per-function allocation counts and bytes.
-3. Generate the memory bottleneck summary.
+`jett run --profile-memory` observes only the Jett-managed heap. Normalized
+allocate, resize, and free events produce exact allocation count, allocated and
+freed bytes, live bytes, global peak, and final retained bytes. Allocation sites
+own retained attribution. Compiler, profiler, stack, foreign allocator, RSS,
+mapped-file, and child-process memory are outside this coverage.
 
-Both profilers output via the diagnostics system in either human or TOON format.
+Both modes use one stable attribution model over normalized relative paths,
+source spans, call chains, and run-local execution identities. They share exact
+threshold, tie, truncation, redaction, and fixed-template suggestion rules.
+Human summaries follow program output on stderr. `--agent` embeds a typed
+`jett.profile.v1` object beside captured program streams in one parseable run
+envelope. Unsupported required capabilities fail before `main`; interrupted or
+bounded-collector results are explicit partial profiles.
+
+The complete selected behavior and staged verification matrix are in the
+[CPU and memory profiling contract](completed/cpu_memory_profiling_contract.md).
 
 ---
 
