@@ -477,7 +477,7 @@ Walk all type declarations and build the type registry:
   type-level reflection. See the
   [opaque runtime resource contract](completed/opaque_runtime_resource_contract.md).
 - **Function types:** `function(T) returns U`.
-- **Capability types:** `Filesystem`, `Network`, `Stdout`, `Stderr`, `Stdin`, `Clock`, `Random`, `Process`, `Environment`, `Foreign`. Random sampling uses the explicit `view Random` API, injected per-runtime generator state, and non-cryptographic contract defined in the [Random capability and entropy contract](completed/random_capability_entropy_contract.md). The interpreter-backed [`Environment` contract](open_design/environment_argv_capability_contract.md) uses source-owned `Environment.get` and `Environment.args` over one immutable injected launch snapshot; ambient `os.env`/`os.args` are removed. `Foreign` guards the generated native C boundary specified by the [C FFI contract](open_design/c_ffi_binding_contract.md). Property tests may create only the typed test capabilities admitted by the [capability mocking contract](completed/capability_mocking_test_harness_contract.md); this does not open the capability set or add production constructors.
+- **Capability types:** `Filesystem`, `Network`, `Stdout`, `Stderr`, `Stdin`, `Clock`, `Random`, `Process`, `Environment`, `Foreign`, `Log`. Random sampling uses the explicit `view Random` API, injected per-runtime generator state, and non-cryptographic contract defined in the [Random capability and entropy contract](completed/random_capability_entropy_contract.md). The interpreter-backed [`Environment` contract](open_design/environment_argv_capability_contract.md) uses source-owned `Environment.get` and `Environment.args` over one immutable injected launch snapshot; ambient `os.env`/`os.args` are removed. `Foreign` guards the generated native C boundary specified by the [C FFI contract](open_design/c_ffi_binding_contract.md). `Log` authorizes the independent structured application-log channel defined by the [structured logging contract](completed/structured_logging_contract.md). Property tests may create only the typed test capabilities admitted by the [capability mocking contract](completed/capability_mocking_test_harness_contract.md); this does not open the capability set or add production constructors.
 - **Secret wrapper:** `secret[T]`.
 - **State-qualified types:** `Machine at state`.
 - **Task-control failures:** `CancelledError` terminates a cancelled pending task
@@ -645,6 +645,11 @@ Track which capabilities flow through the program:
   through `test.mock.environment`. See the
   [Environment and argument capability contract](open_design/environment_argv_capability_contract.md)
   and implementation issue [#170](https://github.com/vycdev/jett/issues/170).
+- **Application logging is a capability operation.** The source-owned
+  `log.emit` and level wrappers borrow `view Log`; the runtime injects a
+  dedicated provider, filter, capture, and checked sequence state. It remains
+  separate from stdout, stderr, compiler diagnostics, and debug output. See the
+  [structured logging contract](completed/structured_logging_contract.md).
 - **`trace` and `breakpoint` are capability-exempt** — they produce output/open connections without requiring a `Stdout` or `Network` capability. They are compiler keywords with special treatment, compiled out in release mode.
 - **`print` and `println` are compiler-owned debug builtins, not ordinary I/O.**
   They remain secret-output boundaries and require no `Stdout` capability. The
@@ -932,8 +937,8 @@ requirements propagate through ordinary type checking, so a nominally pure
 wrapper cannot hide an impure call. If a `verify` block or another comptime
 entrypoint calls an impure function, compilation fails before interpretation.
 The compiler never constructs runtime capability values for comptime; file,
-network, clock, randomness, environment, process, and foreign access are all
-excluded.
+network, clock, randomness, environment, process, foreign access, and
+application logging are all excluded.
 
 Only explicit `comptime expression` sites require build-time value evaluation.
 Ordinary pure calls may be constant-folded later, but that optimization cannot
@@ -1372,23 +1377,25 @@ The compiler generates a thin wrapper around the user's `main()` that constructs
 
 ```
 // User writes (target capability contract; implementation is staged):
-function main(stdout: Stdout, fs: Filesystem, env: Environment) returns nothing:
+function main(stdout: Stdout, logs: Log, fs: Filesystem, env: Environment) returns nothing:
     ...
 
 // Compiler generates (pseudocode):
 fn _jett_entry() {
     let stdout = jett_rt_create_stdout();      // Creates Stdout capability
+    let logs = jett_rt_create_log();           // Creates configured Log provider
     let fs = jett_rt_create_filesystem();      // Creates Filesystem capability
     let env = jett_rt_capture_environment();   // Freezes argv + environment
     // Network is NOT created — main() didn't request it
-    user_main(stdout, fs, env);
+    user_main(stdout, logs, fs, env);
     jett_rt_drop_environment(env);             // Releases the launch snapshot
     jett_rt_drop_filesystem(fs);               // Cleanup
+    jett_rt_drop_log(logs);
     jett_rt_drop_stdout(stdout);
 }
 ```
 
-Capability values are opaque structs containing OS-level handles (file descriptors, socket handles, etc.) or runner-owned state. `Environment` carries an immutable copy of launch arguments and environment entries; it never performs a fresh ambient host lookup after entry. `Filesystem.read_only(fs)` creates a new capability with a restricted permission flag — the runtime checks this flag before executing write operations. `Foreign` is the exception with no OS handle: when `main` requests it, the entry wrapper creates an unforgeable zero-sized token that authorizes calls through checked generated foreign declarations. It otherwise follows the same ownership, `view`, and explicit actor/task clone rules.
+Capability values are opaque structs containing OS-level handles (file descriptors, socket handles, etc.) or runner-owned state. `Environment` carries an immutable copy of launch arguments and environment entries; it never performs a fresh ambient host lookup after entry. `Log` carries an independently configured provider, filter, capture, and sequence state; it is never synthesized from stdout or stderr. `Filesystem.read_only(fs)` creates a new capability with a restricted permission flag — the runtime checks this flag before executing write operations. `Foreign` is the exception with no OS handle: when `main` requests it, the entry wrapper creates an unforgeable zero-sized token that authorizes calls through checked generated foreign declarations. It otherwise follows the same ownership, `view`, and explicit actor/task clone rules.
 
 `jett test` has a separate property-attempt entry path. It creates a fresh
 private provider registry and may execute checked direct `test.mock`
@@ -1805,7 +1812,7 @@ The Agent Server Protocol is not a persistent server — it's the `--agent` flag
 | Command | TOON Output |
 |---|---|
 | `jett build --agent` | Build errors or success |
-| `jett run --agent` | Captured stdout and typed trace/breakpoint debug rows |
+| `jett run --agent` | Captured stdout/stderr, typed debug rows, structured logs, and an optional profile in distinct fields |
 | `jett test --agent` | Verify + property test results with block ranges |
 | `jett query --agent --symbols ...` | File-local symbol outline |
 | `jett query --agent --type-at ...` | Type information |

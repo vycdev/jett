@@ -2310,8 +2310,9 @@ diagnostics, or otherwise change whether the source program is accepted.
 Purity is the complete eligibility boundary. A function that takes any
 capability cannot run at comptime, directly or transitively, because the
 compiler never supplies runtime `Filesystem`, `Network`, `Clock`, `Random`,
-`Environment`, `Process`, or other capability values during compilation.
-Comptime code therefore cannot perform I/O or observe ambient machine state.
+`Environment`, `Process`, `Foreign`, `Log`, or other capability values during
+compilation. Comptime code therefore cannot perform I/O, emit application logs,
+or observe ambient machine state.
 
 **Comptime for generic specialization:**
 
@@ -3195,6 +3196,7 @@ application or production artifact.
 # Process      — spawn child processes
 # Environment  — read launch environment variables and user arguments
 # Foreign      — cross an unverified generated native C boundary
+# Log          — emit structured application-log records
 ```
 
 Randomness follows the same visible rule as I/O. The existing capability-free
@@ -3213,12 +3215,12 @@ contract intentionally exposes no source-level seed or cryptographic RNG API.
 Property tests may use the narrow compiler-shipped `test.mock.random` facade;
 host conformance tests inject the same private runtime provider directly.
 
-**Capabilities are a closed, built-in set.** Users cannot define custom capability types. Capabilities represent primitive OS-level side effects (file I/O, networking, stdout, etc.) or, for `Foreign`, explicit permission to cross a native boundary whose narrower effects cannot be proven from a C header. These are a finite, well-known set. Higher-level abstractions like database access or HTTP clients are built on top of primitive capabilities (e.g., a database module takes a `Network` parameter internally). This keeps the capability system simple: the compiler knows the full set, purity tracking is straightforward, and LLMs have a small, fixed list to learn rather than an open-ended set that varies per project. Capability types are not syntactically distinguished from other types in function signatures — they follow the same `view` pattern as any other borrowed parameter.
+**Capabilities are a closed, built-in set.** Users cannot define custom capability types. Capabilities represent primitive OS-level side effects (file I/O, networking, stdout, structured logging, etc.) or, for `Foreign`, explicit permission to cross a native boundary whose narrower effects cannot be proven from a C header. These are a finite, well-known set. Higher-level abstractions like database access or HTTP clients are built on top of primitive capabilities (e.g., a database module takes a `Network` parameter internally). This keeps the capability system simple: the compiler knows the full set, purity tracking is straightforward, and LLMs have a small, fixed list to learn rather than an open-ended set that varies per project. Capability types are not syntactically distinguished from other types in function signatures — they follow the same `view` pattern as any other borrowed parameter.
 
 **How `main()` receives capabilities:**
 
 ```
-function main(stdout: Stdout, stderr: Stderr, fs: Filesystem, net: Network, env: Environment) returns nothing:
+function main(stdout: Stdout, stderr: Stderr, logs: Log, fs: Filesystem, net: Network, env: Environment) returns nothing:
     optional[string] configured_path = Environment.get(view env, "CONFIG_PATH") handle error:
         Stderr.write(view stderr, "CONFIG_PATH could not be read")
         return nothing
@@ -3230,6 +3232,9 @@ function main(stdout: Stdout, stderr: Stderr, fs: Filesystem, net: Network, env:
         Stderr.write(view stderr, "failed to load config")
         return nothing
 
+    log.info(view logs, "server starting", list()) handle error:
+        Stderr.write(view stderr, "application log sink unavailable")
+        return nothing
     run_server(view fs, view net, view stdout, config)
     Stdout.write(view stdout, "server stopped")
 ```
@@ -7113,9 +7118,10 @@ The standard library is intentionally massive and opinionated. The goal is to ma
   capability; filesystem operations remain under `Filesystem`, and no
   `os.process` namespace is implied
 - **test** — property-only typed capability scripts and isolated harness providers (`test.mock` initially covers Clock, Random, and Environment; the selected model is defined by the [capability mocking and deterministic test harness contract](completed/capability_mocking_test_harness_contract.md) from [#145](https://github.com/vycdev/jett/issues/145))
-- **log** — structured logging with levels (initial event, capability, secret,
-  sink, and deterministic-test contract
-  [tracked by #143](https://github.com/vycdev/jett/issues/143))
+- **log** — structured logging with levels (the initial event, capability,
+  source identity, secret, sink, deterministic-test, and runner-output contract
+  is defined by the [structured logging contract](completed/structured_logging_contract.md)
+  from [#143](https://github.com/vycdev/jett/issues/143))
 - **format** — number formatting, padding, and text alignment
 - **crypto** — stable UTF-8-to-lowercase-hex SHA-256, legacy-only MD5, and
   planned SHA-512/key-first HMAC; see the

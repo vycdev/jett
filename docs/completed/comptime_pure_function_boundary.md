@@ -13,9 +13,9 @@ function permission to execute there.
 
 A function that accepts any capability is ineligible. The compiler does not
 provide `Filesystem`, `Network`, `Clock`, `Random`, `Environment`, `Process`,
-`Foreign`, or any other runtime capability during compilation. This excludes
-I/O and ambient machine observations even when they would be technically
-possible for the compiler process to perform.
+`Foreign`, `Log`, or any other runtime capability during compilation. This
+excludes I/O, application logging, and ambient machine observations even when
+they would be technically possible for the compiler process to perform.
 
 Capability requirements propagate through calls. A function without
 capability parameters cannot call a capability-bearing function, so a pure
