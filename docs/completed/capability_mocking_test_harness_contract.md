@@ -377,13 +377,24 @@ string is valid in version one.
 After child tasks join or are cancelled, all observed mismatch records are
 sorted by `(source_origin, logical_path, span_start, span_end,
 construction_ordinal, provider_occurrence, capability_kind, step_index,
-category_rank)`. Origin variants rank `Project`, `Dependency`, then `Stdlib`.
+category_rank, expected_request_sort, actual_step_sort)`. Origin variants rank
+`Project`, `Dependency`, then `Stdlib`.
 Within a variant, fields compare in the displayed order by unsigned UTF-8 bytes;
 `graph_path` compares component-by-component and a proper prefix sorts first.
 Numeric fields compare numerically. Capability kind follows the rank above.
-Category ranks are `wrong_step_kind = 0`, `invalid_payload = 1`, `exhausted = 2`, and
-`unconsumed_steps = 3`. This is the record order in human and agent output. With
-placeholders substituted, the human first line is exactly:
+Category ranks are `wrong_step_kind = 0`, `invalid_payload = 1`, `exhausted =
+2`, and `unconsumed_steps = 3`. This is the record order in human and agent
+output.
+
+For each optional-kind sort component, `none` ranks before every present value;
+present strings compare by unsigned UTF-8 bytes. Because every valid string is
+enumerated above, this is a closed backend-independent order. Records that still
+tie are field-for-field identical, so exchanging them cannot change output bytes
+or the primary `FailureFingerprintV1`. In particular, two concurrent request
+kinds that observe the same non-advancing wrong step sort by
+`expected_request_sort`, not scheduler arrival.
+
+With placeholders substituted, the human first line is exactly:
 
 ```text
 mock {capability_kind} at {logical_path}:{span_start}: {category} (step {step_index})
@@ -738,6 +749,8 @@ logging contracts.
   immutable repeated reads, and independent returned lists.
 - Wrong kinds, invalid payloads, exhaustion, and unconsumed suffixes emit the
   exact `MockMismatchV1` schema in canonical provider/category order.
+- Concurrent mismatches tied at one provider and step use optional request/step
+  tie-breaks; field-identical duplicates cannot change the primary fingerprint.
 - Separate capabilities have independent FIFO scripts and no accidental global
   ordering dependency.
 - Explicit clones and actor handoffs share one provider cursor; independent
