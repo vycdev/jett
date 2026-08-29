@@ -905,6 +905,7 @@ fn keyword_lookup(text: &str) -> Option<TokenKind> {
         "fail" => Some(TokenKind::Fail),
         "clone" => Some(TokenKind::Clone),
         "view" => Some(TokenKind::View),
+        "resource" => Some(TokenKind::Resource),
         "type" => Some(TokenKind::Type),
         "where" => Some(TokenKind::Where),
         "machine" => Some(TokenKind::Machine),

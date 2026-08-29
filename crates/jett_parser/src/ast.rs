@@ -27,7 +27,16 @@ pub enum Item {
     VarDecl(VarDecl),
     Verify(VerifyBlock),
     Property(PropertyBlock),
+    Resource(ResourceDecl),
     TypeAlias(TypeAlias),
+}
+
+/// An opaque compiler-owned runtime resource declaration: `resource Name`.
+#[derive(Debug, Clone)]
+pub struct ResourceDecl {
+    pub name: Ident,
+    pub exported: bool,
+    pub span: Span,
 }
 
 // ---------------------------------------------------------------------------

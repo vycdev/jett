@@ -280,6 +280,7 @@ impl LanguageServer for JettBackend {
                     DefKind::Interface => CompletionItemKind::INTERFACE,
                     DefKind::Machine => CompletionItemKind::CLASS,
                     DefKind::Actor => CompletionItemKind::CLASS,
+                    DefKind::Resource => CompletionItemKind::CLASS,
                     DefKind::Variable | DefKind::Param => CompletionItemKind::VARIABLE,
                     DefKind::Type => CompletionItemKind::TYPE_PARAMETER,
                     DefKind::Constant => CompletionItemKind::CONSTANT,

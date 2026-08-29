@@ -238,6 +238,7 @@ impl<'src> Parser<'src> {
                     | TokenKind::Enum
                     | TokenKind::Machine
                     | TokenKind::Actor
+                    | TokenKind::Resource
                     | TokenKind::Type
             )
             && !(self.peek() == TokenKind::Network && self.peek_nth(1) == TokenKind::Bitfield)
@@ -245,7 +246,7 @@ impl<'src> Parser<'src> {
             let tok = self.peek_token().clone();
             self.error(
                 format!(
-                    "expected exportable item (function, interface, struct, bitfield, enum, machine, actor, or type), found {:?}",
+                    "expected exportable item (function, interface, struct, bitfield, enum, machine, actor, resource, or type), found {:?}",
                     tok.kind
                 ),
                 tok.span,
@@ -274,6 +275,7 @@ impl<'src> Parser<'src> {
             TokenKind::Actor => Some(Item::Actor(self.parse_actor(exported, export_span))),
             TokenKind::Verify => Some(Item::Verify(self.parse_verify_block())),
             TokenKind::Property => Some(Item::Property(self.parse_property_block())),
+            TokenKind::Resource => Some(Item::Resource(self.parse_resource(exported, export_span))),
             TokenKind::Type => Some(Item::TypeAlias(self.parse_type_alias(
                 exported,
                 root_exported,
@@ -289,14 +291,14 @@ impl<'src> Parser<'src> {
                 if exported {
                     self.error(
                         format!(
-                            "expected exportable item (function, interface, struct, bitfield, enum, machine, actor, or type), found {:?}",
+                            "expected exportable item (function, interface, struct, bitfield, enum, machine, actor, resource, or type), found {:?}",
                             tok.kind
                         ),
                         tok.span,
                     );
                 } else {
                     self.error(
-                        format!("expected item (namespace, function, mutual, interface, implement, struct, bitfield, enum, machine, type, property, or variable), found {:?}", tok.kind),
+                        format!("expected item (namespace, function, mutual, interface, implement, struct, bitfield, enum, machine, resource, type, property, or variable), found {:?}", tok.kind),
                         tok.span,
                     );
                 }
@@ -425,6 +427,17 @@ impl<'src> Parser<'src> {
             constraint,
             exported,
             root_exported,
+        }
+    }
+
+    fn parse_resource(&mut self, exported: bool, export_span: Option<Span>) -> ResourceDecl {
+        let kw = self.expect(TokenKind::Resource);
+        let start_span = export_span.unwrap_or(kw.span);
+        let name = self.parse_ident();
+        ResourceDecl {
+            span: start_span.merge(name.span),
+            name,
+            exported,
         }
     }
 
@@ -4254,6 +4267,22 @@ function dump(view user: User) returns string:
             }
             other => panic!("expected TypeAlias, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn parse_exported_resource_declaration() {
+        let result = parse_str("export resource FileHandle\n");
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        assert_eq!(result.module.items.len(), 1);
+        assert!(
+            matches!(
+                &result.module.items[0],
+                Item::Resource(resource)
+                    if resource.exported && resource.name.name == "FileHandle"
+            ),
+            "expected distinct resource declaration, got {:?}",
+            result.module.items[0]
+        );
     }
 
     #[test]

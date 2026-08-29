@@ -845,6 +845,17 @@ pub fn removed_ambient_environment_builtin(name: &str, span: Span) -> Diagnostic
     Diagnostic::error(363, format!("`{name}` was removed; {guidance}"), span)
 }
 
+/// E0364: Opaque runtime resources cannot be cloned.
+pub fn resource_cannot_be_cloned(type_name: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        364,
+        format!(
+            "opaque runtime resource `{type_name}` cannot be cloned; move or borrow it instead"
+        ),
+        span,
+    )
+}
+
 // Diagnostic codes E0800-E0899 are reserved for function complexity limits.
 
 /// E0800: Function body exceeds the statement count limit.

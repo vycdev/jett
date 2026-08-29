@@ -510,6 +510,16 @@ mod tests {
     }
 
     #[test]
+    fn format_preserves_resource_declarations() {
+        let source = "namespace io\nexport   resource   FileHandle\nresource LocalHandle\n";
+        let formatted = fmt(source);
+        assert_eq!(
+            formatted,
+            "namespace io\nexport resource FileHandle\nresource LocalHandle\n"
+        );
+    }
+
+    #[test]
     fn format_preserves_comment_only_files() {
         let source = "# first\n# second\n";
         let formatted = fmt(source);
