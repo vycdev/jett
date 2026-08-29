@@ -82,10 +82,17 @@ enters `main`:
 Profiling never changes a Jett program's source-visible return value or runtime
 error. If collection fails after user code starts, the runner disables the
 failed collector, lets the program reach its ordinary termination when safe,
-and emits `status: unavailable` or `status: partial` with a stable reason. A
-profiler failure produces the profiler CLI failure status only when the program
-would otherwise succeed; an existing compile, runtime, or interrupt failure
-keeps its own status.
+and emits profile `status: unavailable` or `status: partial` with reason
+`collector_failure`. If the program then returns, `RunOutputV1` keeps
+`termination: returned` but selects `failure.kind: profiler_failure`, stable
+message `profiler: collector failure`, and top-level TOON `status: error`. If
+the program instead reaches a runtime error or cooperative interrupt, that
+termination owns the run failure and the profile still records its collector
+reason. An ordinary bounded-detail state such as `cpu_metadata_limit`,
+`retention_metadata_limit`, or `stack_capture_limit` produces a partial profile
+without a profiler run failure. Compile/runtime/interrupt failures retain their
+existing exit precedence. The exact shared result and sibling order are defined
+by the [structured logging RunOutput composition](structured_logging_contract.md).
 
 ## Shared Attribution Model
 
@@ -388,12 +395,16 @@ must carry the same status, coverage, totals, partial reasons, and bottleneck
 ordering as structured output.
 
 With `--agent`, the CLI continues to emit one structured run envelope on stdout.
-Program stdout and stderr are captured as escaped fields or ordered stream rows;
-they are never concatenated with the profile object as raw text. The profile is
-an optional typed object in that same envelope. Compiler and profiler setup
-failures use the ordinary structured failure envelope. This preserves stdout as
-one parseable TOON document while preventing program output from impersonating
-profile fields.
+Program stdout and stderr are the always-present escaped `stdout` and `stderr`
+scalars; they are never concatenated with the profile object as raw text. The
+profile is the optional typed `profile` object after the always-present
+`debug`, `logs`, `log_sources`, `log_source_graph_path_segments`, and
+`log_fields` tables and before the optional final `error_kind` and `error` pair.
+The exact sibling order, structured-log schemas, failure retention, and absence
+rules are defined by the [structured logging RunOutput composition](structured_logging_contract.md).
+Compiler and profiler setup failures use the ordinary pre-execution structured
+failure envelope. This preserves stdout as one parseable TOON document while
+preventing program output or a log record from impersonating profile fields.
 
 The stable structured object begins:
 
@@ -569,6 +580,10 @@ Neither mode is marked implemented merely because its CLI flags parse.
   partial data are snapshot tested.
 - Human and TOON output contain the same totals and ordering; program output
   cannot alter structured profile fields.
+- Profiled success and runtime-failure fixtures combine stdout, stderr, debug
+  rows, accepted structured logs, a failed log sequence gap, and the optional
+  profile in the exact `RunOutputV1`/TOON sibling order; no channel consumes or
+  impersonates another, and pre-failure captures remain available.
 - Normal return, runtime error, collector failure, cooperative interrupt, and
   backend unsupported states preserve the selected exit policy.
 - Interpreter, bytecode, and native adapters consume the same deterministic

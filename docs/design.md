@@ -1214,6 +1214,14 @@ Every token an LLM spends writing a sorting algorithm, a date parser, or an arra
 
 Jett ships with a massive, opinionated standard library that covers virtually every common operation. The LLM's job is reduced from "write algorithms" to "connect modules" — turning Jett into a high-level orchestration language where the LLM writes plumbing, not logic.
 
+Application logging follows the accepted
+[structured logging contract](completed/structured_logging_contract.md). The
+source-owned `log` module emits explicit events through a dedicated `Log`
+capability, preserves ordered string fields, rejects secret-bearing values, and
+keeps deterministic captures separate from stdout, diagnostics, and debugging
+channels. Filtering is a runtime observation after ordinary eager argument
+evaluation; release builds do not erase semantic log calls.
+
 #### 1. Macro-Primitives — High-Level Operations as Built-Ins
 
 Instead of providing low-level building blocks and hoping the LLM assembles them correctly, Jett provides **hyper-specific, high-level standard functions** for common tasks. These are battle-tested, edge-case-handled implementations that the LLM simply calls by name.
@@ -2302,8 +2310,9 @@ diagnostics, or otherwise change whether the source program is accepted.
 Purity is the complete eligibility boundary. A function that takes any
 capability cannot run at comptime, directly or transitively, because the
 compiler never supplies runtime `Filesystem`, `Network`, `Clock`, `Random`,
-`Environment`, `Process`, or other capability values during compilation.
-Comptime code therefore cannot perform I/O or observe ambient machine state.
+`Environment`, `Process`, `Foreign`, `Log`, or other capability values during
+compilation. Comptime code therefore cannot perform I/O, emit application logs,
+or observe ambient machine state.
 
 **Comptime for generic specialization:**
 
@@ -2936,7 +2945,7 @@ This is not a hypothetical — it is one of the most common security vulnerabili
 
 #### The Solution: Security Sensitivity at the Type Level
 
-Jett introduces a `secret` type wrapper that **taints** data at the type level. Once a value is marked as secret, the compiler tracks it through every operation and **structurally prevents** it from being passed to any output function — `Stdout.write`, `print`, `println`, `log`, `http.respond`, `Filesystem.write_file`, or any function that is not explicitly authorized to handle secrets.
+Jett introduces a `secret` type wrapper that **taints** data at the type level. Once a value is marked as secret, the compiler tracks it through every operation and **structurally prevents** it from being passed to any output function — `Stdout.write`, `print`, `println`, `log.*`, `http.respond`, `Filesystem.write_file`, or any function that is not explicitly authorized to handle secrets.
 
 **Declaring secret data:**
 
@@ -3111,7 +3120,7 @@ Every place where a secret is coarsened is marked with the `declassify` keyword.
 
 ```
 secret[T] ──→ Stdout.write()  BLOCKED
-secret[T] ──→ log()           BLOCKED
+secret[T] ──→ log.*()         BLOCKED
 secret[T] ──→ http.respond()  BLOCKED
 secret[T] ──→ json.serialize() BLOCKED
 secret[T] ──→ Filesystem.write_file() BLOCKED
@@ -3187,6 +3196,7 @@ application or production artifact.
 # Process      — spawn child processes
 # Environment  — read launch environment variables and user arguments
 # Foreign      — cross an unverified generated native C boundary
+# Log          — emit structured application-log records
 ```
 
 Randomness follows the same visible rule as I/O. The existing capability-free
@@ -3205,12 +3215,12 @@ contract intentionally exposes no source-level seed or cryptographic RNG API.
 Property tests may use the narrow compiler-shipped `test.mock.random` facade;
 host conformance tests inject the same private runtime provider directly.
 
-**Capabilities are a closed, built-in set.** Users cannot define custom capability types. Capabilities represent primitive OS-level side effects (file I/O, networking, stdout, etc.) or, for `Foreign`, explicit permission to cross a native boundary whose narrower effects cannot be proven from a C header. These are a finite, well-known set. Higher-level abstractions like database access or HTTP clients are built on top of primitive capabilities (e.g., a database module takes a `Network` parameter internally). This keeps the capability system simple: the compiler knows the full set, purity tracking is straightforward, and LLMs have a small, fixed list to learn rather than an open-ended set that varies per project. Capability types are not syntactically distinguished from other types in function signatures — they follow the same `view` pattern as any other borrowed parameter.
+**Capabilities are a closed, built-in set.** Users cannot define custom capability types. Capabilities represent primitive OS-level side effects (file I/O, networking, stdout, structured logging, etc.) or, for `Foreign`, explicit permission to cross a native boundary whose narrower effects cannot be proven from a C header. These are a finite, well-known set. Higher-level abstractions like database access or HTTP clients are built on top of primitive capabilities (e.g., a database module takes a `Network` parameter internally). This keeps the capability system simple: the compiler knows the full set, purity tracking is straightforward, and LLMs have a small, fixed list to learn rather than an open-ended set that varies per project. Capability types are not syntactically distinguished from other types in function signatures — they follow the same `view` pattern as any other borrowed parameter.
 
 **How `main()` receives capabilities:**
 
 ```
-function main(stdout: Stdout, stderr: Stderr, fs: Filesystem, net: Network, env: Environment) returns nothing:
+function main(stdout: Stdout, stderr: Stderr, logs: Log, fs: Filesystem, net: Network, env: Environment) returns nothing:
     optional[string] configured_path = Environment.get(view env, "CONFIG_PATH") handle error:
         Stderr.write(view stderr, "CONFIG_PATH could not be read")
         return nothing
@@ -3222,6 +3232,9 @@ function main(stdout: Stdout, stderr: Stderr, fs: Filesystem, net: Network, env:
         Stderr.write(view stderr, "failed to load config")
         return nothing
 
+    log.info(view logs, "server starting", list()) handle error:
+        Stderr.write(view stderr, "application log sink unavailable")
+        return nothing
     run_server(view fs, view net, view stdout, config)
     Stdout.write(view stdout, "server stopped")
 ```
@@ -3397,7 +3410,7 @@ The presence of a capability parameter **is** the effect declaration. There is n
 |-----------|------------------|
 | `function read(view fs: Filesystem, path: string)` | Reads/writes files |
 | `function send(view net: Network, data: string)` | Accesses the network |
-| `function log(view stdout: Stdout, msg: string)` | Writes to stdout |
+| `function write_log(view output: Log, msg: string)` | Emits through the structured application-log sink |
 | `function compute(x: int64) returns int64` | Pure — no capability, no side effects |
 
 A `Filesystem` parameter tells you "this function reads/writes files specifically." A `Network` parameter tells you "this function accesses the network." The capability is the effect declaration, made concrete.
@@ -3414,7 +3427,7 @@ If a function has no capability parameters, it is semantically pure. Not "probab
 
 **3. The LLM can't hallucinate side effects.**
 
-In traditional languages, an LLM might add a `log.info()` call inside a utility function, silently introducing a side effect. In Jett, that call requires a `Stdout` capability. If the function doesn't have one, the code doesn't compile. The LLM is forced to either add the capability to the signature (making the effect visible) or remove the logging call.
+In traditional languages, an LLM might add a `log.info()` call inside a utility function, silently introducing a side effect. In Jett, that call requires a `Log` capability. If the function doesn't have one, the code doesn't compile. The LLM is forced to either add the capability to the signature (making the effect visible) or remove the logging call.
 
 **4. Capability threading mirrors auto-regressive generation.**
 
@@ -7105,9 +7118,10 @@ The standard library is intentionally massive and opinionated. The goal is to ma
   capability; filesystem operations remain under `Filesystem`, and no
   `os.process` namespace is implied
 - **test** — property-only typed capability scripts and isolated harness providers (`test.mock` initially covers Clock, Random, and Environment; the selected model is defined by the [capability mocking and deterministic test harness contract](completed/capability_mocking_test_harness_contract.md) from [#145](https://github.com/vycdev/jett/issues/145))
-- **log** — structured logging with levels (initial event, capability, secret,
-  sink, and deterministic-test contract
-  [tracked by #143](https://github.com/vycdev/jett/issues/143))
+- **log** — structured logging with levels (the initial event, capability,
+  source identity, secret, sink, deterministic-test, and runner-output contract
+  is defined by the [structured logging contract](completed/structured_logging_contract.md)
+  from [#143](https://github.com/vycdev/jett/issues/143))
 - **format** — number formatting, padding, and text alignment
 - **crypto** — stable UTF-8-to-lowercase-hex SHA-256, legacy-only MD5, and
   planned SHA-512/key-first HMAC; see the
