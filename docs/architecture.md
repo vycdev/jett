@@ -1402,7 +1402,6 @@ private provider registry and may execute checked direct `test.mock`
 constructor sites. The build/run entry wrapper above never links or invokes
 those hooks. Build, query, and LSP pipelines still parse, resolve, type-check,
 and diagnose property source but do not execute a property or constructor.
-
 ---
 
 ## Actor Runtime
