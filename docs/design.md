@@ -40,10 +40,12 @@ Jett is optimized not just for LLM code generation, but also for how coding agen
 **New code can be added safely.** Jett's strict top-to-bottom ordering means an agent appending a new function at the end of a file cannot break existing code above it. Adding functionality is always additive.
 
 **Builds must be deterministic.** Vendored dependencies are pinned by Git,
-while a separate content-addressed compilation-cache contract is
-[tracked by #153](https://github.com/vycdev/jett/issues/153). That contract must
-preserve reproducibility across environments rather than introducing
-"works on my machine" drift. Compiler parallelism follows a
+while the separate
+[content-addressed compilation-cache contract](completed/content_addressed_compilation_cache_contract.md)
+selects a private, validated, clean-build-equivalent performance layer. Its
+first artifact is a successful whole-file parse keyed by exact source and
+compiler compatibility; cache contents never grant source provenance or skip
+semantic policy. Compiler parallelism follows a
 [deterministic build-plan and atomic-publication contract](open_design/parallel_compilation_boundary.md):
 worker timing and worker count may change throughput, but never accepted source,
 diagnostic order, query identity, or published artifacts.
@@ -594,9 +596,11 @@ Jett requires **all imports to be declared locally**, inside a function or block
 Executable code must import project and vendored dependency namespaces before
 using their declarations. Canonical qualified project types remain valid in
 declaration signatures, where no block-local import scope exists. Compiler-provided
-standard namespaces remain implicitly available as standard functionality;
-`use` may still bind or alias them locally, while the broader prelude policy is
-tracked separately.
+standard namespaces remain implicitly available by canonical qualification;
+`use` may still bind or alias them locally. The fixed foundational prelude does
+not inject stdlib members or root type aliases. Namespace ownership, dependency
+ordering, aliases, and compiler-assigned trusted origin are defined by the
+[module and trusted-origin contract](completed/module_import_trusted_origin_contract.md).
 
 **What the compiler rejects:**
 
@@ -645,6 +649,12 @@ function compute_stats(values: list[int64]) returns float64:
 - A `use` statement is scoped to the block it appears in. `use math` inside a function is not visible outside that function.
 - All `use` statements in a function must appear at the top, before any other code. Imports scattered throughout the function body are a compile error. This gives every function a predictable structure: imports first, then logic.
 - A module imported in two functions is resolved once by the compiler — no runtime cost to repeated `use` statements.
+- `use` resolves a namespace from the compiler's module registry. It never loads
+  a file, executes initialization, changes export visibility, or grants trusted
+  stdlib authority.
+- Project and dependency namespace names are unique across the build. Only
+  compiler-shipped stdlib sources may contribute ordered fragments to one
+  namespace.
 
 ```
 function good_example(view stdout: Stdout) returns nothing:
@@ -2861,7 +2871,7 @@ function connect() returns nothing:
     return nothing
 ```
 
-The compiler scans all `.jett` files in the project (including `deps/`), reads their `namespace` declarations, and resolves `use json_extra` to whichever file declared `namespace json_extra`. The file path is irrelevant (Rule Set 22). No URL fetching, no dependency-integrity hash checking, no registry lookup. The dependency is right there, readable by the LLM, tracked by git. This dependency policy is distinct from the compiler-result and artifact cache [tracked by #153](https://github.com/vycdev/jett/issues/153).
+The compiler scans all `.jett` files in the project (including `deps/`), reads their `namespace` declarations, and resolves `use json_extra` to whichever file declared `namespace json_extra`. The file path is irrelevant (Rule Set 22). No URL fetching, no dependency-integrity hash checking, no registry lookup. The dependency is right there, readable by the LLM, tracked by git. This dependency policy is distinct from the private, local compiler-result and artifact [cache contract](completed/content_addressed_compilation_cache_contract.md): Git remains the dependency lock, while cache digests identify validated reusable compiler facts.
 
 **What happens when an LLM hallucinates a dependency:**
 
@@ -3146,6 +3156,11 @@ secret[T] ──→ secret.compare() ALLOWED (constant-time comparison)
 > [Environment and argument capability contract](open_design/environment_argv_capability_contract.md),
 > and implemented by [#170](https://github.com/vycdev/jett/issues/170).
 
+> Property-only capability construction, typed Clock/Random/Environment
+> scripts, exact consumption, attempt isolation, and replay/shrinking behavior
+> are defined by the
+> [capability mocking and deterministic test harness contract](completed/capability_mocking_test_harness_contract.md).
+
 #### The Problem: Side Effects Hide in the Call Stack
 
 In high-performance languages like C++ or Rust, any function can open a file, connect to a network socket, or spawn a process. The function signature says `fn process(data: Vec<u8>) -> Result<Output>` — nothing in the signature reveals that this function writes to disk, sends network packets, or reads environment variables.
@@ -3160,7 +3175,11 @@ Rule Set 2 established that side effects must be visible in the function signatu
 
 Jett completely bans global I/O access. There is no global `Stdout.write()`, no global `file.open()`, no implicit access to the network, file system, or operating system. Instead, I/O operations require a **capability object** — a value that grants permission to perform a specific kind of side effect.
 
-Capability objects are created **only in `main()`** and must be explicitly passed down to every function that needs them.
+Production capability objects are created **only for `main()`** and must be
+explicitly passed down to every function that needs them. The sole construction
+exception is an attempt-scoped typed `test.mock` capability owned directly by a
+property body when `jett test` executes it; that authority never enters an
+application or production artifact.
 
 **The capability types:**
 
@@ -3190,8 +3209,9 @@ function roll_die(view rng: Random) returns result[int64, string]:
 
 `random.int64` uses a half-open unbiased range, list choice/shuffle preserve
 their viewed input, and verify/comptime code cannot sample randomness. The first
-contract intentionally exposes no source-level seed or cryptographic RNG API;
-deterministic compiler/driver tests inject the runtime provider instead.
+contract intentionally exposes no source-level seed or cryptographic RNG API.
+Property tests may use the narrow compiler-shipped `test.mock.random` facade;
+host conformance tests inject the same private runtime provider directly.
 
 **Capabilities are a closed, built-in set.** Users cannot define custom capability types. Capabilities represent primitive OS-level side effects (file I/O, networking, stdout, etc.) or, for `Foreign`, explicit permission to cross a native boundary whose narrower effects cannot be proven from a C header. These are a finite, well-known set. Higher-level abstractions like database access or HTTP clients are built on top of primitive capabilities (e.g., a database module takes a `Network` parameter internally). This keeps the capability system simple: the compiler knows the full set, purity tracking is straightforward, and LLMs have a small, fixed list to learn rather than an open-ended set that varies per project. Capability types are not syntactically distinguished from other types in function signatures — they follow the same `view` pattern as any other borrowed parameter.
 
@@ -3247,11 +3267,19 @@ environment variables belong together because both are read-only launch data;
 the full policy is specified in the
 [Environment and argument capability contract](open_design/environment_argv_capability_contract.md).
 
-`main()` is the **only** function that receives capabilities from the runtime. Every other function in the program gets its capabilities by having them passed in as parameters. If a function doesn't have a `Filesystem` parameter, it **cannot** touch the file system. Period. The compiler enforces this.
+`main()` is the **only** function that receives production capabilities from the
+application runtime. A `jett test` property runner may separately mint only the
+typed, attempt-scoped mock capabilities explicitly constructed in that property.
+Every ordinary function gets capabilities by having them passed in as
+parameters. If a function does not have a `Filesystem` parameter, it **cannot**
+touch the file system. Period. The compiler enforces this.
 
-#### Capabilities Use `view` — Ownership Stays in `main()`
+#### Capabilities Use `view` — Ownership Stays at the Runtime Root
 
-`main()` **owns** all capabilities. Every other function **borrows** them via `view` — the same `view` keyword used for any other borrowed parameter (Rule Set 19). No special compiler magic is needed for capabilities.
+`main()` **owns** all production capabilities. A property body owns each mock it
+constructs for that attempt. Every ordinary function **borrows** a capability
+via `view` — the same `view` keyword used for any other borrowed parameter (Rule
+Set 19); testing changes provider construction, not passing semantics.
 
 ```
 function read_config(view fs: Filesystem, path: string) returns result[Config, string]:
@@ -3400,9 +3428,21 @@ In traditional languages, an LLM might add a `log.info()` call inside a utility 
 
 The LLM generates `main()` first, which has all capabilities. As it generates child functions, it must explicitly pass down the capabilities each one needs. This is a natural top-down flow that matches the LLM's left-to-right generation process. The LLM never needs to "go back" and add a capability — it threads them forward as it writes.
 
-**5. Testing is trivial.**
+**5. Testing preserves the same signatures.**
 
-To test a function that takes a capability, pass a mock. The function doesn't know the difference — it just calls methods on the capability object. No dependency injection framework, no global state to reset, no monkey-patching. Mock capabilities and property-based testing are covered in Rule Set 25.
+To test a function that takes a capability, a property block may construct a
+typed `test.mock` provider and pass the resulting ordinary capability. The
+function cannot tell the difference: it still receives `view Clock`,
+`view Random`, or another admitted capability and calls the normal operations.
+Mock construction is property-only, providers reset for every iteration and
+shrink attempt, and scripts never fall back to host effects. There is no
+dependency-injection framework, global provider state, name interception, or
+monkey-patching. Only the exact compiler-shipped constructor `DeclarationId`
+with stdlib origin can select a private hook. Build, query, and LSP modes still
+analyze property calls for consistent diagnostics but never execute them; only
+`jett test` installs the provider registry. The complete boundary is covered in
+Rule Set 25 and the
+[capability mocking contract](completed/capability_mocking_test_harness_contract.md).
 
 ### Rule Set 17: Cross-Platform Compilation (Agnostic Capability Lowering)
 
@@ -5712,6 +5752,58 @@ property clamp:
 
 The `verify` block proves 5 specific cases at compile time. The `property` block proves the invariants hold for 10,000 random `(value, low, high)` triples — including integer boundaries, negative numbers, extreme ranges, and invalid combinations like `low > high` that the LLM would never think to test.
 
+#### Property Tests with Capability Mocks
+
+Effectful helpers keep their ordinary capability signatures in tests. A
+property may use compiler-shipped `test.mock` constructors for the capability
+contracts that have typed test adapters, then pass each result with an explicit
+`view`:
+
+```jett
+function sampled_label(view clock: Clock, view rng: Random) returns string:
+    time.Timestamp now = Clock.now(view clock)
+    bool enabled = random.bool(view rng)
+    int64 milliseconds = time.to_unix_milliseconds(now)
+    return "{milliseconds}:{enabled}"
+
+property sampled_label_is_deterministic:
+    Clock clock = test.mock.clock(list(
+        test.mock.ClockStep.wall(unix_milliseconds: 1250),
+    ))
+    Random rng = test.mock.random(list(
+        test.mock.RandomStep.boolean(value: true),
+    ))
+    assert sampled_label(view clock, view rng) == "1250:true"
+```
+
+The constructors are source-legal only directly in property bodies. Build,
+query, and LSP modes parse, resolve, type-check, and diagnose those calls but do
+not execute them; `jett build` may accept a valid property while omitting it from
+the application artifact. Only `jett test` installs the private hooks and runs
+constructors. Ordinary functions, `main`, verify, comptime, global initializers,
+and application runtime code reject construction.
+
+Only a resolved manifest `DeclarationId` with `SourceOrigin::Stdlib` is
+authorized; matching project/dependency names cannot mint authority. Every
+provider receives a stable identity from the property declaration, `FileKey`
+(origin plus logical path), half-open UTF-8 constructor span, lexical ordinal,
+and checked execution occurrence. Physical roots are never identity. Every
+iteration, replay, and shrink candidate receives fresh provider state at step
+zero. Scripts are exact per-capability FIFO expectations; mismatches have one
+canonical schema and ordering, unused suffixes and calls after exhaustion fail
+the test, and different capabilities have no hidden global ordering. Property
+generation and shrinking apply to `given` values, not live cursors or implicit
+script mutation. Shrinking retains only the same complete stable primary failure
+fingerprint, while replay binds exact source and property-declaration digests,
+the full checked source/configuration graph, semantic options, and runner
+versions.
+
+The initial typed adapters cover Clock, Random, and Environment. Other closed
+built-in capabilities join only after their own request, failure, authority,
+and cancellation contracts are selected. There is no generic `mock[T]`, no
+user-defined capability proxy, and no production capability constructor. See
+the [capability mocking and deterministic test harness contract](completed/capability_mocking_test_harness_contract.md).
+
 #### No Preconditions — Test Everything
 
 Property blocks have no `where` clause for filtering inputs. If a function should only accept certain inputs, use refinement types in the function signature (Rule Set 3) or validate inside the function. The fuzzer should hit invalid inputs too — that's how it finds bugs.
@@ -5836,7 +5928,7 @@ A `verify` block with 5 hand-picked examples might pass even if the function is 
 
 #### Implicit Views in Test and Debug Contexts
 
-In `property` blocks, `verify` blocks, and `breakpoint` evaluations, all values are **implicitly viewable** — they can be used multiple times without being consumed. This is a pragmatic relaxation of linear typing for testing and debugging contexts:
+In `property` blocks, `verify` blocks, and `breakpoint` evaluations, ordinary data values are **implicitly viewable** — they can be used multiple times without being consumed. This is a pragmatic relaxation of linear typing for testing and debugging contexts. Capability authority is not implicitly copied: capability calls still require explicit `view`, moves remain visible, and only an explicit permitted capability clone can duplicate a handle:
 
 ```
 property sort_preserves_elements:
@@ -5853,7 +5945,7 @@ property sort_preserves_elements:
 
 - Property and verify blocks never run in production — they execute at compile time or during `jett test`.
 - The relaxation is confined to a lexical scope (the block itself). Outside the block, normal linear rules apply.
-- The compiler still tracks types, capabilities, and refinements. Only linear consumption is relaxed.
+- The compiler still tracks types, capabilities, and refinements. Only ordinary data consumption is relaxed; capability authority remains explicit.
 - `breakpoint` evaluations are debug-only (compiled out in `--release`). Expression evaluation implicitly views all variables in scope, ensuring debugging is non-destructive.
 
 ### Rule Set 26: Variable Tracing
@@ -6201,9 +6293,10 @@ The LLM doesn't have to step through 500 normal orders to reach the one that's b
 
 ### Rule Set 28: Profiling — Bottleneck Summaries over Visual Flamegraphs
 
-> The initial CPU/memory sampling, attribution, output, security, platform, and
-> interpreter/future-runtime contract is tracked by
-> [#164](https://github.com/vycdev/jett/issues/164).
+> The selected [CPU and memory profiling contract](completed/cpu_memory_profiling_contract.md)
+> defines sampling, allocation accounting, attribution, bounded overhead,
+> output, security, platform behavior, and the interpreter/future-runtime
+> handoff. Implementation remains staged.
 
 #### The Problem with Traditional Profiling
 
@@ -6222,67 +6315,74 @@ Jett includes a built-in CPU sampling profiler at the compiler level. It is not 
 jett run --profile app.jett
 ```
 
-This runs the program normally while collecting CPU samples at a configurable frequency. When the program exits (or is interrupted), instead of generating a flamegraph, the compiler analyzes the samples and produces a **Bottleneck Summary** — a structured TOON document identifying the critical performance bottlenecks.
+This runs the program normally while collecting CPU samples at a configurable
+frequency. When the program exits, fails, or is cooperatively interrupted, the
+compiler analyzes the collected samples and produces a **Bottleneck Summary**.
+Human mode writes the summary to stderr. `--agent` embeds a typed
+`jett.profile.v1` object beside captured program streams in one TOON run
+envelope. Fatal host termination cannot promise a final report.
 
 #### Bottleneck Summary Format
 
 The output is a TOON array of bottleneck entries, sorted by impact (highest CPU percentage first):
 
 ```toon
-profile_summary:
-    total_samples: 48000
-    sample_rate_hz: 1000
-    wall_time_seconds: 48.0
-    cpu_time_seconds: 47.2
-bottlenecks[2]:
+profile:
+  schema: jett.profile.v1
+  mode: cpu
+  status: complete
+  termination: returned
+  backend: interpreter_safe_point
+  coverage: jett_runtime_threads
+  config:
+    requested_rate_hz: 1000
+    threshold_basis_points: 500
+    limit: 10
+    cpu_metadata_budget_bytes: 33554432
+  totals:
+    requested_ticks: 48000
+    recorded_samples: 47200
+    attributed_samples: 46800
+    coalesced_ticks: 800
+  bottlenecks[1]:
     rank: 1
     function: process_image
     namespace: pipeline.transform
-    file: transform.jett
+    path: src/transform.jett
     line: 142
-    cpu_percent: 34.2
-    self_percent: 28.1
-    total_samples: 16416
-    self_samples: 13488
-    hot_lines[3]{line,percent,code}:
-        155, 12.4, "Pixel pixel = image.get_pixel(x, y)"
-        162,  9.7, "Pixel blurred = convolve(kernel, neighbors)"
-        170,  6.0, "output.set_pixel(x, y, blurred)"
-    call_chain[1]: main → run_pipeline → process_batch → process_image
-    suggestion: "process_image accounts for 34.2% of CPU. The hot path is pixel-by-pixel iteration with per-pixel allocation. Consider using the standard library batch image operations (images.convolve_batch) which operate on the entire buffer."
-    ---
-    rank: 2
-    function: parse_config
-    namespace: config.loader
-    file: loader.jett
-    line: 28
-    cpu_percent: 18.7
-    self_percent: 3.2
-    total_samples: 8976
-    self_samples: 1536
-    hot_lines[2]{line,percent,code}:
-        45, 8.1, "Document parsed = json.parse[Document](raw_text) handle error: return fail(error)"
-        52, 7.4, "Document validated = schema.validate(parsed)"
-    call_chain[1]: main → initialize → parse_config
-    suggestion: "parse_config is called once at startup but accounts for 18.7% of CPU. The json.parse and schema.validate calls dominate. If the config file is static, consider parsing at comptime."
+    cpu_percent: 34.19
+    inclusive_samples: 16000
+    self_samples: 13000
+    hot_lines[1]{line,percent,code,source_redacted}:
+      155,12.40,"Pixel pixel = image.get_pixel(x, y)",false
+    suggestions[1]{rule,text}:
+      CPU_HIGH_SELF,"Inspect the reported hot lines in pipeline.transform.process_image; self work accounts for at least half of its samples."
 ```
 
 #### Key Design Decisions
 
 **1. The compiler generates suggestions, not just data.**
 
-Each bottleneck entry includes a `suggestion` field — a plain-English sentence the LLM (or human) can act on immediately. The compiler generates these using internal heuristics:
+Each bottleneck may include suggestions that an LLM or human can act on. They
+are deterministic compiler-owned records with stable rule IDs and fixed
+templates. The first rules distinguish high self time from callee-dominated
+time, allocation pressure, and retained allocation sites. They interpolate
+only reported names, locations, counts, and percentages.
 
-- If a function is called inside a loop and allocates on every iteration → suggest hoisting or batching.
-- If a function's self-time is high relative to total time → the bottleneck is in its own body, not callees.
-- If a function's self-time is low relative to total time → the bottleneck is in what it calls; suggest inlining or replacing callees.
-- If a function appears in a single call chain → suggest restructuring the caller.
-- If a hot line involves a known-expensive standard library function → suggest the efficient alternative.
-- If work is done at runtime that could be done at comptime → suggest `comptime`.
+The profiler does not speculate that code is in a loop, can move to comptime,
+has a semantically equivalent library replacement, or leaks memory. A later
+rule may make such a claim only when checked compiler facts prove its predicate
+and snapshot tests pin the rule and wording. Runtime data is never sent to an
+external model to generate advice.
 
 **2. Hot lines pinpoint the exact code.**
 
-Instead of just naming the function, the summary includes the specific lines within that function that consumed the most CPU. This gives the LLM (or human) surgical precision — fix *these three lines*, not "somewhere in this 40-line function."
+Instead of just naming the function, the summary includes the specific lines
+within that function that received the most leaf samples. Optional source
+excerpts come only from the loaded run manifest: comments are omitted, literal
+contents and secret-bearing expressions are redacted, and unsafe or unavailable
+source produces no excerpt. Profiles never contain runtime values or heap
+contents.
 
 **3. Call chains provide context.**
 
@@ -6294,7 +6394,11 @@ Bottlenecks are ranked by CPU percentage, highest first. An LLM can read just th
 
 **5. Threshold filtering.**
 
-Only bottlenecks above a configurable threshold (default: 5% of CPU time) are included. This eliminates noise. A traditional profiler shows every function; the bottleneck summary shows only what matters.
+Only bottlenecks at or above a configurable threshold are included. The default
+is 5.00%; the CLI accepts `0` through `100` with at most two fractional digits
+and compares exact integer counts before display rounding. CPU uses inclusive
+attributed Jett samples. Memory uses attributed allocated bytes. A separate
+`--profile-limit` bounds output to 10 entries by default and 100 at most.
 
 ```
 # Only show bottlenecks above 10% CPU
@@ -6306,7 +6410,8 @@ jett run --profile --profile-threshold 2 app.jett
 
 #### Integration with the Agent Server Protocol
 
-When combined with the `--agent` flag (Rule Set 21), the profiler output is emitted as part of the standard ASP TOON stream:
+When combined with the `--agent` flag (Rule Set 21), the profiler output is
+embedded in the standard structured run envelope:
 
 ```
 jett run --agent --profile app.jett
@@ -6332,25 +6437,45 @@ The same approach extends to memory profiling with `--profile-memory`:
 jett run --profile-memory app.jett
 ```
 
-Output follows the same structure but reports allocation-heavy functions instead of CPU-heavy ones:
+Output follows the same structure but reports allocation-heavy functions
+instead of CPU-heavy ones. Coverage is the Jett-managed heap, not RSS or total
+process memory. Allocate, resize, and free hooks distinguish cumulative
+allocated bytes, current live bytes, the global peak, and final retained bytes;
+compiler, profiler, stack, foreign-allocator, mapped-file, and child-process
+memory are excluded:
 
 ```toon
-memory_summary:
-    peak_memory_bytes: 134217728
-    total_allocations: 2400000
-    total_bytes_allocated: 891289600
-bottlenecks[1]:
+profile:
+  schema: jett.profile.v1
+  mode: memory
+  status: complete
+  termination: returned
+  backend: interpreter_alloc_hooks
+  coverage: jett_heap
+  config:
+    threshold_basis_points: 500
+    limit: 10
+    retention_metadata_budget_bytes: 67108864
+  totals:
+    allocation_count: 2400000
+    resize_count: 120
+    allocated_bytes: 891289600
+    freed_bytes: 757071872
+    peak_live_bytes: 134217728
+    retained_bytes: 134217728
+  bottlenecks[1]:
     rank: 1
     function: build_index
     namespace: search.indexer
-    file: indexer.jett
+    path: src/indexer.jett
     line: 88
-    allocation_percent: 42.1
-    total_allocations: 1010400
-    total_bytes: 375272960
-    hot_lines[1]{line,percent,code}:
-        102, 31.0, "IndexEntry entry = IndexEntry(term: term, doc_id: doc_id, position: position)"
-    suggestion: "build_index is responsible for 42.1% of all allocations. Each IndexEntry is allocated individually inside a loop. Consider restructuring to batch-create entries or pre-allocate the list with a known size."
+    allocation_percent: 42.11
+    allocation_count: 1010400
+    allocated_bytes: 375272960
+    freed_bytes: 300000000
+    retained_bytes: 75272960
+    suggestions[1]{rule,text}:
+      MEM_ALLOCATION_PRESSURE,"Reduce, reuse, or batch work at the hottest allocation site for search.indexer.build_index."
 ```
 
 #### Why This Is Perfect for LLMs
@@ -6454,7 +6579,11 @@ function main(stdout: Stdout, fs: Filesystem) returns nothing:
     Stdout.write(view stdout, "running with config: {app_config.name}")
 ```
 
-The runtime provides capabilities to `main` based on its parameter list. If `main` does not declare a `Network` parameter, the program physically cannot access the network — the capability is never created. This is where the capability system begins: `main` is the root of the capability tree.
+The production runtime provides capabilities to `main` based on its parameter
+list. If `main` does not declare a `Network` parameter, the application cannot
+access the network — that capability is never created. This is where the
+production capability tree begins; the isolated `jett test` property provider
+registry is a separate test-only root.
 
 > **Note:** `main` follows the same limits as every other function (100 statements, 4 nesting levels, 6 parameters, 10 cyclomatic complexity). If `main` is hitting those limits, it is doing too much — extract the logic into named functions. A well-structured `main` is a short orchestrator that wires together capabilities and delegates to other functions.
 
@@ -6486,8 +6615,8 @@ Global constant initializers are namespace-local: they may use literals and
 declarations from their own namespace, but they cannot reference project or
 vendored declarations from another namespace. File-level `use` is forbidden,
 and global constants cannot create an implicit cross-namespace dependency.
-Compiler-provided standard declarations retain their normal implicit
-availability pending the broader prelude policy.
+Compiler-provided standard declarations retain the canonical qualified and
+fixed-prelude availability selected by the module contract.
 
 ### Functions
 
@@ -6769,14 +6898,19 @@ security operations and are unrelated to hash-table bucket selection.
 
 ### Capabilities Use `view`
 
-`main()` owns all capabilities. Every other function borrows them via `view` — the same keyword used for any other non-owning parameter. Callers write `view` at call sites, just like any other view parameter.
+`main()` owns all production capabilities, and a property body may own only its
+explicit attempt-scoped mocks. Every ordinary function borrows capabilities via
+`view` — the same keyword used for any other non-owning parameter. Callers write
+`view` at call sites, just like any other view parameter.
 
 ```
 function greet(view stdout: Stdout, name: string) returns nothing:
     Stdout.write(view stdout, "hello {name}")
 ```
 
-No special compiler rules for capabilities. They follow the same `view` semantics as every other type.
+Capabilities follow the same `view` semantics as every other type. The narrow
+`test.mock` construction gate changes only who may mint a test handle, not how a
+function accepts or uses one.
 
 ---
 
@@ -6978,7 +7112,7 @@ The standard library is intentionally massive and opinionated. The goal is to ma
 - **Process** — future process management remains separate under the `Process`
   capability; filesystem operations remain under `Filesystem`, and no
   `os.process` namespace is implied
-- **test** — mock infrastructure for property-based testing (`test.mock` for mock filesystems, networks, etc.; capability-mocking and deterministic harness contract [tracked by #145](https://github.com/vycdev/jett/issues/145))
+- **test** — property-only typed capability scripts and isolated harness providers (`test.mock` initially covers Clock, Random, and Environment; the selected model is defined by the [capability mocking and deterministic test harness contract](completed/capability_mocking_test_harness_contract.md) from [#145](https://github.com/vycdev/jett/issues/145))
 - **log** — structured logging with levels (initial event, capability, secret,
   sink, and deterministic-test contract
   [tracked by #143](https://github.com/vycdev/jett/issues/143))

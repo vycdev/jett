@@ -1,10 +1,11 @@
 # JSON Trusted Hooks Across Backends
 
-Status: implemented for interpreter/typechecker dispatch; future backend
-lowering remains open.
+Status: identity design selected; implemented for interpreter/typechecker
+dispatch, while module-registry and future-backend propagation remain open.
 
-Tracked by [#3](https://github.com/vycdev/jett/issues/3) for the
-module/import/prelude design and backend-neutral trusted-origin model.
+The backend-neutral identity is defined by the
+[module and trusted-origin contract](../completed/module_import_trusted_origin_contract.md)
+from [#3](https://github.com/vycdev/jett/issues/3).
 
 The interpreter and typechecker now treat compiler-shipped JSON stdlib hooks as
 trusted implementation details. Future native or bytecode backends need the same
@@ -98,8 +99,11 @@ Future backend work should mirror the existing interpreter/typechecker boundary:
 
 ## Open Questions
 
-- How will the future import/prelude system represent bundled stdlib identity?
 - Should native codegen call reflected hooks directly, lower through a runtime
   ABI, or specialize common JSON shapes after typechecking?
 - Should the hook table remain JSON-specific, or become a general compiler
   policy-hook registry once other stdlib features need the same treatment?
+
+The import/prelude question is resolved: compiler discovery assigns immutable
+`SourceOrigin::Stdlib` metadata, and canonical declaration identity carries it
+through aliases, lowering, and caches. Implementation remains staged.

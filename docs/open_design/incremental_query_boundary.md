@@ -30,8 +30,9 @@ current compiler. Item-level body reuse is a later stage and must not be
 claimed until stable declaration identities and cache-observability tests
 exist.
 
-Parallel query execution, persistent or content-addressed caches, HIR, MIR,
-native lowering, and the deferred CST are outside this first slice.
+Parallel query execution, HIR, MIR, native lowering, and the deferred CST are
+outside this first slice. The separate persistent layer now follows the
+[content-addressed compilation cache contract](../completed/content_addressed_compilation_cache_contract.md).
 
 ## Current Constraints
 
@@ -319,8 +320,9 @@ guard.
 LSP keeps one database per workspace session so revisions can reuse unchanged
 results. ASP and ordinary CLI commands are one-shot processes: they create one
 database per invocation and may reuse results among commands performed in that
-invocation, but there is no cross-process cache in this design. Persistent and
-content-addressed caches remain separate Phase L work.
+invocation. Cross-process reuse remains outside this query design and follows
+the separate
+[content-addressed compilation cache contract](../completed/content_addressed_compilation_cache_contract.md).
 
 Current ASP/LSP operation names and result envelopes stay stable. The driver
 adapts `file_symbols`, `type_at`, `signature`, completion, namespace,
@@ -384,8 +386,9 @@ measured.
 5. **Later independent stages**
    - add the CST/lowering query when source-tooling pressure justifies it;
    - add checked-program/HIR and MIR queries through #20 and #22;
-   - evaluate parallel execution and persistent/content-addressed caching only
-     after in-process recomputation is measured.
+   - evaluate parallel execution after in-process recomputation is measured;
+   - stage persistent parse reuse independently under the content-addressed
+     cache contract without serializing Salsa state.
 
 Each stage must preserve a working driver and can land independently. A stage
 that only wraps the whole project must describe itself that way; it cannot
@@ -442,7 +445,8 @@ reused and the ordinary correctness suite still passes.
 This design does not select or implement:
 
 - parallel query execution or namespace scheduling;
-- serialized Salsa state, persistent caches, or content-addressed artifacts;
+- serialized Salsa state; persistent artifacts follow the separate
+  [content-addressed cache contract](../completed/content_addressed_compilation_cache_contract.md);
 - distributed or remote builds;
 - a lossless CST library or incremental reparsing algorithm;
 - final declaration identity for malformed syntax before its tests exist;

@@ -17,6 +17,11 @@ This policy keeps public names searchable and prevents a second spelling from
 competing with canonical names such as `json.JsonTree`, `path.Path`, or
 `time.Timestamp`.
 
+The later [module and trusted-origin contract](module_import_trusted_origin_contract.md)
+keeps this decision intact: its fixed foundational prelude points to canonical
+declarations and cannot inject root type aliases or alternate reflected
+identities.
+
 ## JsonValue Retirement
 
 The only implemented root alias was the compiler-shipped compatibility bridge:

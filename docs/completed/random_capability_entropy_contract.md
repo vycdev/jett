@@ -152,7 +152,8 @@ the source signature, the checker reports a focused error at the call.
 
 `Random` follows Jett's ordinary capability rules:
 
-- only `main` owns the runtime-provided capability;
+- only `main` owns the production runtime-provided capability; a property body
+  may own the narrow test capability described below;
 - ordinary functions borrow it as `view Random`;
 - a helper using randomness propagates that capability requirement to callers;
 - capability-free functions cannot call any `random.*` operation;
@@ -225,15 +226,26 @@ simulation streams need the separate future value API described below.
 
 ## Deterministic Testing and Seeding
 
-The initial public surface has no seed parameter, `Random.seed`, or source-level
-constructor. Ordinary code cannot mint capabilities, and exposing a seed on the
-production capability would mix permission to consume entropy with a
-reproducible pure generator model.
+The production surface has no seed parameter, `Random.seed`, or application
+constructor. Ordinary functions, `main`, verify, comptime, build-time
+evaluation, and application runtime code cannot mint capabilities; exposing a
+seed on the production capability would mix permission to consume entropy with
+a reproducible pure generator model.
 
-Interpreter, bytecode, and native test harnesses instead inject the same
-backend-neutral scripted-provider interface when creating a runtime context. It
-is not callable or discoverable from Jett source. The script contains typed
-entries for three normalized requests:
+The sole source-facing exception is the compiler-shipped
+`test.mock.random(list[test.mock.RandomStep])` constructor selected by the
+[capability mocking contract](capability_mocking_test_harness_contract.md). Its
+declaration is discoverable and statically checked in every compiler mode, but
+it can execute only as a direct property-body expression under `jett test`.
+Authorization requires the resolved constructor `DeclarationId` with
+`SourceOrigin::Stdlib`; matching project/dependency names or source text grant
+nothing. It creates only an attempt-scoped scripted `Random`, never a production
+provider or seeded generator.
+
+Interpreter, bytecode, and native test harnesses inject the same
+backend-neutral scripted-provider interface into that fresh property runtime
+context. The typed source facade adapts the following three normalized request
+entries to it:
 
 ```text
 bounded(offset: uint64)  # 1 <= request width <= uint64.MAX; 0 <= offset < width
@@ -245,17 +257,22 @@ A valid `int64` call and a non-empty `choice` consume one matching `bounded`
 entry. `float64` consumes one `unit53` entry and `bool` consumes one `boolean`
 entry. Fisher-Yates shuffle consumes one `bounded` entry per swap, in descending
 upper-index order. Invalid integer bounds, empty choice, and empty/singleton
-shuffle consume no entry. A missing entry reports:
+shuffle consume no entry. In a `test.mock` property, a missing entry emits
+`MockMismatchV1` category `exhausted`; a wrong entry kind emits
+`wrong_step_kind`; and an offset/bits value outside the request domain emits
+`invalid_payload`. The exact fields, stable kind names, ordering, and rendering
+come from the [capability mocking contract](capability_mocking_test_harness_contract.md).
+An invalid entry is not advanced, and the attempt terminates. Matching
+`entropy_unavailable` remains the ordinary `Random: entropy unavailable`
+provider/runtime fault and is not a mismatch.
 
-```text
-Random: test provider exhausted
-```
-
-A wrong entry kind or an offset/bits value outside the request domain reports
-`Random: invalid test sample`. That invalid entry is not advanced, and the run
-terminates. Production rejection sampling occurs behind the normalized
-`bounded` request; kernel unit tests use controlled raw words to pin rejection
-and retry behavior separately. This keeps public deterministic scenarios
+The existing low-level Rust driver adapter may retain `Random: test provider
+exhausted` and `Random: invalid test sample` while it is consolidated behind the
+common registry. Those strings are private host-test diagnostics: they never
+appear as property human/agent output, never enter a shrink fingerprint or
+replay token, and are not a backend compatibility surface. Production rejection
+sampling occurs behind the normalized `bounded` request; kernel unit tests use
+controlled raw words to pin rejection and retry behavior separately. This keeps public deterministic scenarios
 identical across backends without making a production RNG's raw state or seeded
 sequence part of compatibility.
 

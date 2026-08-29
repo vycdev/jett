@@ -164,12 +164,13 @@ it must not mutate an existing `Environment` snapshot.
 
 `Environment` follows Jett's ordinary capability rules:
 
-- `main` owns the runtime-provided capability;
+- `main` owns the production runtime-provided capability; a property body may
+  own the narrow test capability described below;
 - ordinary functions borrow it as `view Environment`;
 - a helper that reads arguments or a variable propagates that capability
   requirement to its callers;
 - capability-free functions cannot call either operation and remain pure;
-- `verify`, property generation, and comptime evaluation cannot access
+- `verify`, generated `given` values, and comptime evaluation cannot access
   `Environment`, directly or through a helper;
 - compilation must never read build-host arguments or environment variables to
   produce an artifact.
@@ -177,6 +178,18 @@ it must not mutate an existing `Environment` snapshot.
 Both operations are classified as effects at their public declarations or
 trusted hooks. A compiler-shipped source body does not make a host operation
 pure. Capability checks happen before private runtime dispatch.
+
+The sole source-facing test exception is compiler-shipped
+`test.mock.environment(arguments, entries)` under the
+[capability mocking contract](../completed/capability_mocking_test_harness_contract.md).
+It creates an attempt-scoped immutable snapshot only as a direct property-body
+expression executed by `jett test`; property-generated `given` data may be used
+to build its explicit arguments and entries, but generation itself receives no
+capability. Build, query, and LSP modes still resolve and type-check the
+declaration without executing it. Authorization requires the exact manifest
+`DeclarationId` with `SourceOrigin::Stdlib`, so project/dependency lookalikes
+cannot mint `Environment`. Ordinary functions, `main`, verify, comptime, and
+application runtime code retain the prohibition above.
 
 Environment entries may contain credentials. Reading a value returns an
 ordinary `string`, matching existing capability APIs; the type system does not
@@ -278,8 +291,9 @@ around those capabilities.
 2. **Enforce the capability effect**
    - complete the checked `Environment` parameter type;
    - classify direct and transitive calls as effects;
-   - reject access from capability-free functions, `verify`, properties, and
-     comptime evaluation;
+   - reject access from capability-free functions, `verify`, property
+     generation, property bodies without an explicit mock, and comptime
+     evaluation;
    - pass an opaque environment capability rather than `Value::Nothing` to the
      runtime entry point.
 3. **Extract the public source surface**
@@ -297,7 +311,11 @@ around those capabilities.
 
 - Both public operations require a visible `view Environment` capability.
 - Direct and transitive capability-free calls are rejected.
-- `verify`, property, and comptime calls fail without reading the host process.
+- `verify`, property generation, a property body without an explicit mock, and
+  comptime calls fail without reading the host process.
+- A direct property-body `test.mock.environment` call creates only its explicit
+  attempt snapshot under `jett test`; build, query, and LSP checks never read the
+  host or execute the constructor.
 - Missing variables return `ok(none)`; present valid values return
   `ok(some(value))`.
 - Invalid names and non-Unicode values produce their distinct stable failures.

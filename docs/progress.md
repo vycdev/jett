@@ -29,6 +29,7 @@
 | Type interning, struct/enum/interface defs | `jett_types` | 18 | Done |
 | Name resolution, scoping, namespace export visibility | `jett_resolve` | 27 | Done |
 | Type checking (expressions, operators, generics) | `jett_typecheck` | 100 | Done |
+| Module/import/prelude registry and backend-neutral trusted origin | `jett_project`, `jett_resolve`, later IR | n/a | Design selected by the [module and trusted-origin contract](completed/module_import_trusted_origin_contract.md); current block-local `use`, stdlib loading, and interpreter trust paths remain transitional |
 
 ### Phase C: Ownership and Capabilities — COMPLETE
 
@@ -144,8 +145,8 @@
 |---|---|
 | Property-based test runner | Done (basic: 100 generated iterations; all numeric primitives, bool/string/bytes/nothing, aliases/refinements, structs including generic structs, bitfields, enums, plus generic list/set/map/optional/result pools) |
 | Input shrinking on failure | Done (shrinking for int64, float64, string, bytes, list, set, map, optional, result, struct fields, enum payloads) |
-| CPU profiler (`--profile`) | Not started (sampling, attribution, output, security, platform, and interpreter/future-runtime contract tracked by [#164](https://github.com/vycdev/jett/issues/164)) |
-| Memory profiler (`--profile-memory`) | Not started (allocation, retention, peak-memory, attribution, and shared reporting/runtime contract tracked by [#164](https://github.com/vycdev/jett/issues/164)) |
+| CPU profiler (`--profile`) | Design complete; implementation not started ([sampling, attribution, output, security, platform, and runtime contract](completed/cpu_memory_profiling_contract.md)) |
+| Memory profiler (`--profile-memory`) | Design complete; implementation not started ([allocation, resize/free, retention, peak-memory, attribution, and runtime contract](completed/cpu_memory_profiling_contract.md)) |
 | `trace` keyword | Partial (parses, typechecks, runtime type-tagged current-value output in `jett run`) |
 | `breakpoint` keyword | Partial (parses, typechecks, and emits conditional runtime debug snapshots with visible binding types in `jett run`; the pause/inspection protocol is [decided](completed/breakpoint_pause_inspection_protocol.md), while its interpreter and future native-runtime stages remain unimplemented) |
 
@@ -179,7 +180,7 @@
 | `csv` | Done for the interpreter-backed compiler (all 3 public declarations are source-owned in `stdlib/csv.jett`, with only private trusted parse/stringify kernels in the interpreter; parsing returns `result[..., string]`, ignores one leading UTF-8 BOM, treats empty input as zero records, preserves blank records, whitespace, quoted data, Unicode, LF/CRLF endings, and ragged raw rows; malformed quoting, bare CR record endings, invalid headers, and header/data width mismatches fail explicitly; `stringify` emits canonical LF-separated records with no final newline; future backends retain the [CSV format and failure contract](completed/csv_format_failure_contract.md)) |
 | `regex` | Not started (initial pattern, matching, extraction, Unicode, failure, resource, and source/runtime contract [tracked by #140](https://github.com/vycdev/jett/issues/140)) |
 | `log` | Design selected, implementation not started (dedicated `Log` capability; source-owned event, level, field, and error types; eager runtime filtering; ordered deterministic JSON records without implicit timestamps; compiler-enforced secret rejection; isolated injected sinks and captures; see the [structured logging contract](completed/structured_logging_contract.md) from [#143](https://github.com/vycdev/jett/issues/143)) |
-| `test.mock` | Not started (capability mocking and deterministic test-harness contract [tracked by #145](https://github.com/vycdev/jett/issues/145)) |
+| `test.mock` | Not started (the property-only source facade, typed provider adapters, exact scripts, isolation, replay/shrinking boundary, and future-backend obligations are defined by the [capability mocking and deterministic test harness contract](completed/capability_mocking_test_harness_contract.md) from [#145](https://github.com/vycdev/jett/issues/145)) |
 
 ### Phase L: Incremental Compilation — NOT STARTED
 
@@ -187,7 +188,7 @@
 |---|---|
 | Salsa integration | Initial whole-file parse-query slice implemented (the first `jett_query` boundary memoizes parser-owned direct ASTs by stable logical file identity; see the [initial query and invalidation boundary](open_design/incremental_query_boundary.md) from [#147](https://github.com/vycdev/jett/issues/147), with implementation tracked by [#166](https://github.com/vycdev/jett/issues/166)) |
 | Parallel compilation | Design selected, implementation not started (bounded parallel parsing first; namespace/body scheduling follows stable declaration facts; see the [deterministic parallel compilation boundary](open_design/parallel_compilation_boundary.md), tracked by [#151](https://github.com/vycdev/jett/issues/151)) |
-| Content-addressed caching | Not started (compiler-result identity, serialization, trust, and lifecycle contract [tracked by #153](https://github.com/vycdev/jett/issues/153)) |
+| Content-addressed caching | Design selected, implementation not started (a private local cache starts with successful whole-file parse artifacts, canonical SHA-256 keys and wire schemas, per-user object authentication, untrusted decoding, current-provenance rebinding, atomic publication, and bounded cleanup; see the [content-addressed compilation cache contract](completed/content_addressed_compilation_cache_contract.md) from [#153](https://github.com/vycdev/jett/issues/153)) |
 
 ## VS Code Extension
 
