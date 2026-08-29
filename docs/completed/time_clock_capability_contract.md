@@ -140,7 +140,8 @@ selecting timer, sleep, deadline, or scheduler semantics.
 
 `Clock` follows the ordinary capability ownership rules:
 
-- `main` owns the runtime-provided `Clock`.
+- `main` owns the production runtime-provided `Clock`; a property body may own
+  the narrow test capability described below.
 - Other functions borrow it as `view Clock`; sampling never consumes it.
 - A function that samples time declares `view Clock` directly or transitively.
 - Capability-free functions cannot call `Clock.now` and remain pure.
@@ -156,14 +157,27 @@ milliseconds happens after that boundary. This lets driver tests cover
 pre-epoch flooring, target-range overflow, and host failure instead of injecting
 an already-valid `int64` result.
 
-A fake clock owns a sequence per runtime context. Each `Clock.now` consumes one
-entry, and exhaustion reports the stable runtime error
-`Clock.now: test clock exhausted` rather than reusing a value silently. Cloned
+A fake clock owns a sequence per property-attempt runtime context. Each
+`Clock.now` consumes one entry. Under `test.mock`, exhaustion emits
+`MockMismatchV1` category `exhausted` under the exact schema and output rules in
+the [capability mocking contract](capability_mocking_test_harness_contract.md);
+it never reuses a value silently. A matching `ClockStep.unavailable` remains the
+ordinary stable wall-clock runtime fault and is not a mismatch. The existing
+low-level Rust driver adapter may temporarily retain `Clock.now: test clock
+exhausted` as a private host-test diagnostic, but that string never appears in
+property human/agent output, a shrink fingerprint, or a replay token and is not
+a backend compatibility surface. Cloned
 `Clock` capabilities, including clones passed to actors, share that runtime
 provider. Tests involving concurrent actors should use repeated equal samples
-unless the scheduler order is itself pinned. The fake is a test-harness
-facility, not a source-level constructor and not a way for ordinary code to mint
-capabilities.
+unless the scheduler order is itself pinned. The fake remains a private
+test-harness provider. Its sole source facade is the compiler-shipped
+`test.mock.clock(list[test.mock.ClockStep])` constructor defined by the
+[capability mocking contract](capability_mocking_test_harness_contract.md).
+That declaration is discoverable and statically checked in every compiler mode,
+but it executes only as a direct property-body expression under `jett test`.
+The resolved constructor must have `SourceOrigin::Stdlib` and the manifest
+`DeclarationId`; lookalike project/dependency declarations cannot mint a
+`Clock`. There is no production or ordinary-function source constructor.
 
 Pure calendar and arithmetic tests should construct `time.Timestamp` values
 with `time.from_unix_milliseconds`. Capability integration tests belong in the

@@ -86,9 +86,10 @@ jett/
     └── architecture.md
 ```
 
-The planned `jett_profiler` CPU/memory sampling, attribution, reporting,
-security, platform, and interpreter/future-runtime contract is tracked by
-[#164](https://github.com/vycdev/jett/issues/164).
+The selected [`jett_profiler` contract](completed/cpu_memory_profiling_contract.md)
+defines CPU/memory events, attribution, bounded collection, deterministic
+reporting, security, and the interpreter/future-runtime handoff. Implementation
+remains staged.
 
 ### Crate Dependency Graph
 
@@ -158,9 +159,18 @@ flowchart TD
 
 1. Locate `jett.proj` by walking up from the given path.
 2. Parse the TOON-format project file (name, version, entry point).
-3. Recursively discover all `.jett` files in the project directory, including vendored dependencies in `deps/` (Rule Set 14). Dependencies are `.jett` source files tracked in git — no package registry, no lock file.
-4. Assign each file a unique `FileId` (integer handle for source tracking).
-5. Read file contents into an arena-allocated string store for zero-copy access.
+3. Discover project sources, nested vendored dependencies under `deps/`, and
+   compiler-shipped stdlib sources as distinct origins. Dependencies are `.jett`
+   source tracked in git; compilation performs no package-registry or network
+   lookup.
+4. Normalize origin-relative logical paths and assign each file a stable
+   `FileKey` plus a session-local diagnostic `FileId`.
+5. Pre-scan namespaces and build the complete module registry before name
+   resolution. Project and dependency namespaces have one owning file; only
+   stdlib namespaces may use ordered fragments.
+6. Reject dependency cycles, duplicate roots, namespace collisions, and project
+   attempts to reopen stdlib namespaces deterministically.
+7. Read file contents into an arena-allocated string store for zero-copy access.
 
 ### Key Data Structures
 
@@ -170,6 +180,18 @@ Project {
     version: String,
     entry_file: FileId,
     files: Vec<SourceFile>,
+}
+
+SourceOrigin = Project(ProjectKey) | Dependency(DependencyKey) | Stdlib(StdlibKey)
+
+FileKey {
+    origin: SourceOrigin,
+    logical_path: String,
+}
+
+ModuleId {
+    origin: SourceOrigin,
+    namespace: Symbol,
 }
 
 SourceFile {
@@ -188,7 +210,18 @@ NamespaceSpan {
 ### Design Decisions
 
 - **File contents are loaded once and stored in an arena.** All subsequent phases reference file content by `FileId` + byte offset (`Span`). No re-reading.
-- **Namespace pre-scan.** Before full lexing, the discovery phase does a lightweight scan of each file to extract all `namespace` declarations. A single file can contain multiple namespaces (Rule Set 22). This builds the namespace registry needed for two-pass resolution.
+- **Explicit origin identity.** `FileId` is a compact source handle, not an
+  authorization mechanism. Compiler-assigned `SourceOrigin` and canonical
+  declaration identity carry stdlib trust through resolution, lowering, and
+  caches.
+- **Namespace pre-scan.** Before full lexing, discovery extracts every
+  `namespace` declaration and builds the registry needed for two-pass
+  resolution. A file may contain multiple namespaces, but project/dependency
+  namespaces cannot span files.
+- **One registry-backed import model.** Block-local `use` resolves an existing
+  namespace and adds no runtime work or trust. The detailed discovery, import,
+  prelude, and trusted-origin rules are defined in the
+  [module and trusted-origin contract](completed/module_import_trusted_origin_contract.md).
 
 ---
 
@@ -402,9 +435,9 @@ ResolveResult {
 - **No variable shadowing** — a binding in an inner scope cannot reuse a name from an outer scope.
 - **No unused imports** — every `use` must be referenced.
 - **No unused variables** — every variable declaration must be referenced.
-- **Inline-only imports** — `use` statements are only allowed inside functions/blocks, never at file level. Within a function or nested block, `use` must appear before any other code. Executable access to another project or vendored namespace requires an active local import; same-namespace access and canonical qualified types in declaration signatures do not. Compiler-provided standard namespaces remain implicitly available pending the broader prelude policy.
+- **Inline-only imports** — `use` statements are only allowed inside functions/blocks, never at file level. Within a function or nested block, `use` must appear before any other code. Executable access to another project or vendored namespace requires an active local import; same-namespace access and canonical qualified types in declaration signatures do not. Compiler-provided standard namespaces remain available by canonical qualification under the fixed prelude and module contract.
 - **Duplicate namespace detection** — two project/dependency files declaring the same namespace is an error. Compiler-shipped stdlib files have a narrow fragment exception so one stdlib namespace can be split across several implementation files; duplicate declarations inside that namespace still fail normally.
-- **Global constants** — registered as top-level declarations (global mutable variables are forbidden). Their initializers may use literals and same-namespace declarations, but project or vendored declarations from another namespace are rejected with `E0211`; compiler-provided standard declarations remain implicit pending the broader prelude policy.
+- **Global constants** — registered as top-level declarations (global mutable variables are forbidden). Their initializers may use literals and same-namespace declarations, but project or vendored declarations from another namespace are rejected with `E0211`; compiler-provided standard declarations follow the fixed stdlib namespace and prelude policy.
 - **Canonical type names** — every struct, enum, interface, machine, actor,
   bitfield, alias, and refinement declaration is validated before registration.
   Names must begin with an ASCII uppercase letter and otherwise contain only
@@ -444,7 +477,7 @@ Walk all type declarations and build the type registry:
   type-level reflection. See the
   [opaque runtime resource contract](completed/opaque_runtime_resource_contract.md).
 - **Function types:** `function(T) returns U`.
-- **Capability types:** `Filesystem`, `Network`, `Stdout`, `Stderr`, `Stdin`, `Clock`, `Random`, `Process`, `Environment`, `Foreign`. Random sampling uses the explicit `view Random` API, injected per-runtime generator state, and non-cryptographic contract defined in the [Random capability and entropy contract](completed/random_capability_entropy_contract.md). The interpreter-backed [`Environment` contract](open_design/environment_argv_capability_contract.md) uses source-owned `Environment.get` and `Environment.args` over one immutable injected launch snapshot; ambient `os.env`/`os.args` are removed. `Foreign` guards the generated native C boundary specified by the [C FFI contract](open_design/c_ffi_binding_contract.md).
+- **Capability types:** `Filesystem`, `Network`, `Stdout`, `Stderr`, `Stdin`, `Clock`, `Random`, `Process`, `Environment`, `Foreign`, `Log`. Random sampling uses the explicit `view Random` API, injected per-runtime generator state, and non-cryptographic contract defined in the [Random capability and entropy contract](completed/random_capability_entropy_contract.md). The interpreter-backed [`Environment` contract](open_design/environment_argv_capability_contract.md) uses source-owned `Environment.get` and `Environment.args` over one immutable injected launch snapshot; ambient `os.env`/`os.args` are removed. `Foreign` guards the generated native C boundary specified by the [C FFI contract](open_design/c_ffi_binding_contract.md). `Log` authorizes the independent structured application-log channel defined by the [structured logging contract](completed/structured_logging_contract.md). Property tests may create only the typed test capabilities admitted by the [capability mocking contract](completed/capability_mocking_test_harness_contract.md); this does not open the capability set or add production constructors.
 - **Secret wrapper:** `secret[T]`.
 - **State-qualified types:** `Machine at state`.
 - **Task-control failures:** `CancelledError` terminates a cancelled pending task
@@ -581,31 +614,42 @@ Track which capabilities flow through the program:
   capability guarantee.
 - A function that calls another function requiring a capability must itself accept that capability.
 - Capability narrowing consumes the original and produces a restricted version. All narrowing operations: `Filesystem.read_only(fs)`, `Filesystem.scoped(fs, "/data/")`, `Network.allow(net, "localhost")`, `Stdout.buffered(stdout)`. The runtime enforces restricted permissions (e.g., `read_only` prevents write operations, `scoped` restricts file paths).
-- **Only `main()` owns capabilities.** Every other function must borrow them via `view`. A non-`main` function declaring an owned (non-view) capability parameter is a compile error.
+- **Only `main()` owns production capabilities.** Every other function must
+  borrow them via `view`. The sole construction exception is a property body
+  owning a typed, attempt-scoped `test.mock` capability under `jett test`; this
+  creates no production authority. A non-`main` function declaring an owned
+  (non-view) capability parameter remains a compile error.
 - Actors receive capabilities at spawn time via `clone` (since passing would consume the caller's capability).
 - **Verify blocks** can only call pure functions (no capabilities).
 - **Random sampling is a capability operation.** The public `random.*`
   functions borrow `view Random`; there are no capability-free compatibility
   signatures.
   The runner injects generator state so production uses platform entropy while
-  tests use scripted deterministic samples. Verify and comptime evaluation
-  cannot sample randomness. See the
+  property tests use the narrow trusted `test.mock.random` facade over scripted
+  deterministic samples. Verify and comptime evaluation cannot sample
+  randomness. See the
   [Random capability and entropy contract](completed/random_capability_entropy_contract.md).
 - **Clock reads are capability operations.** The canonical operation is
   `Clock.now(view clock) -> time.Timestamp`; the ambient `time.now_ms` and
   `time.now_s` spellings have been removed. Verify and comptime evaluation
   cannot read a clock. Runtime contexts receive an injected production or
-  deterministic test clock. See the
+  deterministic property-test clock through `test.mock.clock`. See the
   [Time and Clock capability contract](completed/time_clock_capability_contract.md).
 - **Launch inputs are capability operations.** The source-owned
   `Environment.get(view env, key)` and `Environment.args(view env)` read one
   immutable runtime-injected launch snapshot through private trusted kernels.
   Capability-free `os.env` and `os.args` are removed with focused migration
-  diagnostics. Verify, property, and comptime evaluation cannot access process
-  launch data. Production captures native launch data before `main`; tests
-  inject isolated snapshots. See the
+  diagnostics. Verify, property generation, and comptime evaluation cannot
+  access process launch data. Production captures native launch data before
+  `main`; a property body may explicitly create an isolated test snapshot
+  through `test.mock.environment`. See the
   [Environment and argument capability contract](open_design/environment_argv_capability_contract.md)
   and implementation issue [#170](https://github.com/vycdev/jett/issues/170).
+- **Application logging is a capability operation.** The source-owned
+  `log.emit` and level wrappers borrow `view Log`; the runtime injects a
+  dedicated provider, filter, capture, and checked sequence state. It remains
+  separate from stdout, stderr, compiler diagnostics, and debug output. See the
+  [structured logging contract](completed/structured_logging_contract.md).
 - **`trace` and `breakpoint` are capability-exempt** — they produce output/open connections without requiring a `Stdout` or `Network` capability. They are compiler keywords with special treatment, compiled out in release mode.
 - **`print` and `println` are compiler-owned debug builtins, not ordinary I/O.**
   They remain secret-output boundaries and require no `Stdout` capability. The
@@ -893,8 +937,8 @@ requirements propagate through ordinary type checking, so a nominally pure
 wrapper cannot hide an impure call. If a `verify` block or another comptime
 entrypoint calls an impure function, compilation fails before interpretation.
 The compiler never constructs runtime capability values for comptime; file,
-network, clock, randomness, environment, process, and foreign access are all
-excluded.
+network, clock, randomness, environment, process, foreign access, and
+application logging are all excluded.
 
 Only explicit `comptime expression` sites require build-time value evaluation.
 Ordinary pure calls may be constant-folded later, but that optimization cannot
@@ -1237,7 +1281,7 @@ The runtime sits between Rust (~2K lines, no scheduler) and Pony (~15-20K lines,
 | **Actor scheduler** | ~3K-5K lines | Thread pool (one thread per CPU core) + per-actor bounded MPSC message queues + work-stealing. See Actor Runtime section below. |
 | **Async I/O event loop** | ~1K-3K lines | Integrates with the actor scheduler to avoid blocking thread pool threads on I/O. Uses `epoll` (Linux), `kqueue` (macOS), `IOCP` (Windows). When a capability method performs I/O, it submits the operation to the event loop and yields the actor, freeing the thread for other work. |
 | **Task scheduler** | ~500 lines | For `run`/`join`/`cancel` structured concurrency. Built on top of the actor scheduler — a spawned task is a lightweight actor. |
-| **Capability constructors** | ~200 lines | Functions that create capability values at program startup. Called by the generated `main` wrapper. |
+| **Capability constructors** | ~200 lines | Production functions create capability values at program startup for the generated `main` wrapper. Separately linked test-runner hooks may create only manifest-authorized, attempt-scoped providers for direct `test.mock` calls in property bodies. |
 | **Panic handler** | ~100 lines | For `assert` failures and unrecoverable errors. Prints the message and aborts. |
 | **Breakpoint control plane** | ~300 lines | Debug-only. A compiler-owned operation layer exposes pause, inspection, evaluation, and resume through an authenticated loopback HTTP adapter. The [decided protocol](completed/breakpoint_pause_inspection_protocol.md) is compiled out in release. |
 | **Entry point** | ~100 lines | `_jett_entry` initializes the runtime (thread pool, event loop), constructs capabilities, calls user's `main()`, and shuts down cleanly. |
@@ -1333,23 +1377,31 @@ The compiler generates a thin wrapper around the user's `main()` that constructs
 
 ```
 // User writes (target capability contract; implementation is staged):
-function main(stdout: Stdout, fs: Filesystem, env: Environment) returns nothing:
+function main(stdout: Stdout, logs: Log, fs: Filesystem, env: Environment) returns nothing:
     ...
 
 // Compiler generates (pseudocode):
 fn _jett_entry() {
     let stdout = jett_rt_create_stdout();      // Creates Stdout capability
+    let logs = jett_rt_create_log();           // Creates configured Log provider
     let fs = jett_rt_create_filesystem();      // Creates Filesystem capability
     let env = jett_rt_capture_environment();   // Freezes argv + environment
     // Network is NOT created — main() didn't request it
-    user_main(stdout, fs, env);
+    user_main(stdout, logs, fs, env);
     jett_rt_drop_environment(env);             // Releases the launch snapshot
     jett_rt_drop_filesystem(fs);               // Cleanup
+    jett_rt_drop_log(logs);
     jett_rt_drop_stdout(stdout);
 }
 ```
 
-Capability values are opaque structs containing OS-level handles (file descriptors, socket handles, etc.) or runner-owned state. `Environment` carries an immutable copy of launch arguments and environment entries; it never performs a fresh ambient host lookup after entry. `Filesystem.read_only(fs)` creates a new capability with a restricted permission flag — the runtime checks this flag before executing write operations. `Foreign` is the exception with no OS handle: when `main` requests it, the entry wrapper creates an unforgeable zero-sized token that authorizes calls through checked generated foreign declarations. It otherwise follows the same ownership, `view`, and explicit actor/task clone rules.
+Capability values are opaque structs containing OS-level handles (file descriptors, socket handles, etc.) or runner-owned state. `Environment` carries an immutable copy of launch arguments and environment entries; it never performs a fresh ambient host lookup after entry. `Log` carries an independently configured provider, filter, capture, and sequence state; it is never synthesized from stdout or stderr. `Filesystem.read_only(fs)` creates a new capability with a restricted permission flag — the runtime checks this flag before executing write operations. `Foreign` is the exception with no OS handle: when `main` requests it, the entry wrapper creates an unforgeable zero-sized token that authorizes calls through checked generated foreign declarations. It otherwise follows the same ownership, `view`, and explicit actor/task clone rules.
+
+`jett test` has a separate property-attempt entry path. It creates a fresh
+private provider registry and may execute checked direct `test.mock`
+constructor sites. The build/run entry wrapper above never links or invokes
+those hooks. Build, query, and LSP pipelines still parse, resolve, type-check,
+and diagnose property source but do not execute a property or constructor.
 
 ---
 
@@ -1409,6 +1461,9 @@ flowchart LR
 > for [#104](https://github.com/vycdev/jett/issues/104).
 > The public-source/private-runtime boundary for the initial `net.http` client
 > is separately [tracked by #101](https://github.com/vycdev/jett/issues/101).
+> The test-only source facade, typed provider registry, exact-script policy,
+> and property-attempt isolation boundary for capability mocks are defined in
+> the [capability mocking and deterministic test harness contract](completed/capability_mocking_test_harness_contract.md).
 
 The boundary between compiler-generated code and stdlib-implemented code is a critical architectural decision.
 
@@ -1555,6 +1610,14 @@ in private trusted kernels. The runner injects isolated production state or a
 typed deterministic test provider. Later backends and concurrent cancellation
 must preserve the [Random capability and entropy contract](completed/random_capability_entropy_contract.md).
 
+Capability mocks use the same public-source/private-runtime split without
+turning test providers into application APIs. `stdlib/test/mock.jett` owns
+typed scripts and property-only constructor declarations; a private test
+runtime registry owns capability handles, provider cursors, per-attempt
+isolation, and exact-consumption diagnostics. Clock, Random, and Environment
+adapt their existing typed test seams to that registry. The full boundary is
+defined by the [capability mocking and deterministic test harness contract](completed/capability_mocking_test_harness_contract.md).
+
 The complete public `math.*` API is defined in `stdlib/math.jett`. Compositional
 helpers have Jett bodies, including the consuming `math.sum(list[int64])`, which
 uses wrapping source addition. Private trusted kernels preserve floating-point
@@ -1583,7 +1646,23 @@ capability, determinism, and compatibility rules are defined in the
 
 ### How the Compiler Locates the Stdlib
 
-The stdlib is a set of `.jett` files bundled with the compiler installation. At build time, the compiler adds the stdlib directory to the set of source files before discovery. Foundational files at the stdlib root are ordered before nested namespace fragments; files at the same depth remain lexical, so numbered fragments such as `json/10_*.jett` keep deterministic top-to-bottom declaration order. Stdlib namespaces (e.g., `namespace string`, `namespace math`) mostly resolve like user namespaces, but compiler-shipped stdlib files may use namespace fragments so a large module such as `json` can live in several implementation files while exposing one namespace. Project files and vendored dependencies cannot use this exception or reopen stdlib namespaces.
+The stdlib is a set of `.jett` files bundled with the compiler installation. The
+driver discovers them under an installation-selected root and assigns
+`SourceOrigin::Stdlib`; source syntax, project configuration, path spelling, and
+namespace names cannot request that origin. Foundational root files are ordered
+before nested namespace fragments; files at the same depth remain lexical, so
+numbered fragments such as `json/10_*.jett` keep deterministic top-to-bottom
+declaration order. Compiler-shipped stdlib files alone may use namespace
+fragments. Project files and vendored dependencies cannot use this exception or
+reopen stdlib namespaces.
+
+Stdlib namespaces are available by canonical qualification without a required
+`use`, but members remain namespaced and private by default. A fixed compiler
+manifest exposes only foundational prelude declarations such as `Equatable`;
+it cannot inject root type aliases. `export` controls source visibility, while
+trusted origin controls compiler policy and private-kernel delegation. The full
+contract and implementation stages are recorded in
+[module, import, prelude, and trusted origin](completed/module_import_trusted_origin_contract.md).
 
 ---
 
@@ -1637,8 +1716,9 @@ Every error has a stable code (e.g., `E0601` for secret type exposure, `E0801` f
 > [#35](https://github.com/vycdev/jett/issues/35).
 
 The current driver provides the compiler facts used by both LSP and ASP
-interactive operations. The planned `jett_query` crate will become the sole
-Salsa database owner without changing these operation shapes:
+interactive operations. The implemented `jett_query` crate owns the Salsa
+database and initial whole-file parse query; later operation migrations keep
+these public shapes:
 
 | Query | Description | Used by |
 |---|---|---|
@@ -1664,18 +1744,43 @@ tracked by #35.
 
 ### Demand-Driven Computation
 
-No Salsa database is implemented yet. The current driver invokes parser,
-resolver, and typechecker operations directly. The selected first query slice
-adds an in-process `jett_query` database and memoizes
-`parse_file(FileKey) -> ParsedFile`; existing semantic passes initially remain
-whole-project computations over those parse results. That bounded implementation
-is tracked by [#166](https://github.com/vycdev/jett/issues/166).
+The initial in-process `jett_query` database is implemented and memoizes
+`parse_file(FileKey) -> ParsedFile`. The current driver creates a fresh database
+at its migrated single-file parse adapter, while project semantic passes and
+interactive operations still invoke resolver and typechecker operations
+directly. Cross-request LSP reuse and item-level semantic queries are not yet
+implemented. The bounded first slice was tracked by
+[#166](https://github.com/vycdev/jett/issues/166).
 
 The [initial query boundary](open_design/incremental_query_boundary.md) defines
 database ownership, ground-truth inputs, stable file identity, deterministic
 diagnostics, LSP/ASP snapshots, cancellation staging, and the later path to
 item-level signatures and bodies. Demand-driven semantic computation must not
 be claimed until its recomputation tests pass.
+
+### Persistent Content-Addressed Cache
+
+The selected
+[content-addressed compilation cache contract](completed/content_addressed_compilation_cache_contract.md)
+adds a separate local, cross-process performance layer after in-process Salsa
+memoization. Its first artifact is a successful whole-file direct AST plus
+non-error parser diagnostics. Exact source bytes, a canonical artifact schema,
+and a deterministic compiler compatibility identity form its SHA-256 key.
+
+The wire format is compiler-owned and independent of Rust layout, Salsa handles,
+process-local `FileId` values, pointers, and checkout paths. A hit reconstructs
+fresh owned AST values and binds spans to the caller's current `FileKey`,
+`FileId`, source map, and provenance. Discovery, namespace ownership, stdlib
+trust, resolution, type checking, capability policy, comptime, and verification
+still run against the current invocation.
+
+Cache objects are authenticated with a separate per-user key, then decoded as
+untrusted, size-bounded data, fully validated, kept immutable, and published
+atomically. Misses, incompatible versions, corruption, permission errors, full
+disks, and cleanup contention fall back to ordinary compilation. Failed,
+cancelled, stale, panicked, and partial work is not cached. Remote or shared
+caches, negative results, checked programs, HIR/MIR, and backend objects remain
+separate future contracts.
 
 ---
 
@@ -1707,7 +1812,7 @@ The Agent Server Protocol is not a persistent server — it's the `--agent` flag
 | Command | TOON Output |
 |---|---|
 | `jett build --agent` | Build errors or success |
-| `jett run --agent` | Captured stdout and typed trace/breakpoint debug rows |
+| `jett run --agent` | Captured stdout/stderr, typed debug rows, structured logs, and an optional profile in distinct fields |
 | `jett test --agent` | Verify + property test results with block ranges |
 | `jett query --agent --symbols ...` | File-local symbol outline |
 | `jett query --agent --type-at ...` | Type information |
@@ -1778,25 +1883,41 @@ Default: 10,000 iterations per property block. Configurable via CLI flag.
 
 ## Profiler (`jett_profiler`)
 
-Built-in CPU and memory sampling profiler.
+`jett_profiler` owns backend-neutral CPU samples and allocation events plus pure
+aggregation, thresholding, source sanitization, deterministic suggestions, and
+human/TOON rendering. The driver owns capability negotiation, run-manifest
+metadata, lifecycle finalization, and composition with `RunOutput`; the CLI owns
+argument validation, output channels, and exit behavior. Runtimes only produce
+safe events and exclude collector metadata.
 
 ### CPU Profiling
 
-When `--profile` is active:
-1. Compile with instrumentation hooks at function entry/exit.
-2. Run the program with a sampling timer (default 1000 Hz).
-3. At each sample, record the current call stack.
-4. After execution, aggregate samples into per-function and per-line counts.
-5. Generate the bottleneck summary: top functions by CPU %, hot lines, call chains, suggestions.
+`jett run --profile` requests monotonic elapsed-time samples at 1000 Hz by
+default. The timer keeps at most one pending request per runtime worker. The
+current tree-walking interpreter acknowledges requests at statement/call safe
+points on its dedicated runtime thread; future native runtimes may use safe
+platform sampling. Backends report coalesced, unavailable, runtime, and waiting
+observations instead of charging them to the last user frame. Statement counts
+are not an allowed timing substitute.
 
 ### Memory Profiling
 
-When `--profile-memory` is active:
-1. Wrap the allocator to record allocation size and call site at each `alloc`.
-2. After execution, aggregate into per-function allocation counts and bytes.
-3. Generate the memory bottleneck summary.
+`jett run --profile-memory` observes only the Jett-managed heap. Normalized
+allocate, resize, and free events produce exact allocation count, allocated and
+freed bytes, live bytes, global peak, and final retained bytes. Allocation sites
+own retained attribution. Compiler, profiler, stack, foreign allocator, RSS,
+mapped-file, and child-process memory are outside this coverage.
 
-Both profilers output via the diagnostics system in either human or TOON format.
+Both modes use one stable attribution model over normalized relative paths,
+source spans, call chains, and run-local execution identities. They share exact
+threshold, tie, truncation, redaction, and fixed-template suggestion rules.
+Human summaries follow program output on stderr. `--agent` embeds a typed
+`jett.profile.v1` object beside captured program streams in one parseable run
+envelope. Unsupported required capabilities fail before `main`; interrupted or
+bounded-collector results are explicit partial profiles.
+
+The complete selected behavior and staged verification matrix are in the
+[CPU and memory profiling contract](completed/cpu_memory_profiling_contract.md).
 
 ---
 
@@ -1848,9 +1969,10 @@ work.
 
 ## Incremental Compilation Strategy
 
-Fast recompilation is critical for the LLM compile-fix loop (Footnote 5), but
-the current compiler has no Salsa dependency or incremental database. The
-selected policy starts with a measured, correctness-preserving file boundary:
+Fast recompilation is critical for the LLM compile-fix loop (Footnote 5). The
+current compiler has the initial Salsa-backed direct-AST parse query, while
+project semantic passes remain whole-project. The selected policy starts with
+this measured, correctness-preserving file boundary:
 
 ```text
 parse_file(file: FileKey) -> ParsedFile
@@ -1864,7 +1986,9 @@ sequential semantic passes run. Later namespace and body parallelism is gated
 on stable declaration identities, ordered signature summaries, immutable query
 ownership, and exact dependency facts; worker timing is never a compiler input.
 Persistent compiler-result and artifact identity, serialization, and cache
-safety are tracked separately by [#153](https://github.com/vycdev/jett/issues/153).
+safety follow the
+[content-addressed compilation cache contract](completed/content_addressed_compilation_cache_contract.md)
+selected by [#153](https://github.com/vycdev/jett/issues/153).
 
 `FileKey` is an interned source-origin plus normalized logical path; current
 position-assigned `FileId` values are diagnostic handles, not cache identities.
@@ -1894,7 +2018,9 @@ database-and-parse-reuse implementation is tracked by
 [#166](https://github.com/vycdev/jett/issues/166). The parallel contract
 separately defines deterministic planning, interner ownership, diagnostic
 merging, cancellation, worker limits, and atomic publication.
-Persistent/content-addressed caching remains a separate follow-up stage.
+Persistent caching remains a separate implementation stage: it starts with
+successful parse artifacts and cannot serialize Salsa state or current
+process-local semantic identities.
 
 ---
 
@@ -1931,6 +2057,37 @@ Property-based coverage is staged with the compiler pipeline:
   identity for formatted source.
 - **Deferred until code generation exists:** if type checking succeeds, codegen
   never encounters a type error.
+
+### Capability Mocks in Language Property Tests
+
+`test.mock` is a compiler-shipped, test-only source facade. A property block
+may construct typed Clock, Random, or Environment test capabilities and pass
+them through ordinary `view` parameters. The checker authorizes a constructor
+only by the exact manifest `DeclarationId` with `SourceOrigin::Stdlib`, never by
+qualified-name or path spelling. Constructor calls are source-legal only as
+direct property-body expressions, excluding nested declarations, closures,
+actors, and spawned tasks. Normal functions, `main`, verify,
+comptime, and application runtime code cannot construct them.
+
+Build, query, and LSP pipelines run the same parse, resolution, type, ownership,
+capability, and context checks over property source without executing it. Only a
+live `jett test` property attempt installs the private hooks and executes a
+constructor. Each construction site carries the property `DeclarationId`,
+`FileKey` (`SourceOrigin` plus logical path), a half-open UTF-8 source span, a
+lexical ordinal, and a checked per-site occurrence. Physical roots never enter
+identity, replay, or diagnostic ordering.
+
+Every normal property iteration, replay, and shrink candidate receives a fresh
+private provider registry. Sequential providers consume capability-specific
+FIFO scripts exactly, explicit clones and actor handoffs share one cursor, and
+successful attempts reject unused suffixes. Different capability providers do
+not acquire an implicit global ordering. Generated `given` values are replayed
+and shrunk separately from source-owned scripts. Provider mismatches use one
+canonical schema and order; shrinking preserves the full stable primary failure
+fingerprint, and replay tokens bind exact source/property digests plus a
+relocation-independent digest of the full checked source, configuration, and
+semantic-option graph. See the
+[capability mocking and deterministic test harness contract](completed/capability_mocking_test_harness_contract.md).
 
 ---
 
@@ -2095,9 +2252,11 @@ Core stdlib (string, list, math, json) is implemented in Phase D. This phase com
   deterministic injection, and source/runtime policy is defined in the
   [random contract](completed/random_capability_entropy_contract.md)), `uuid`
   (generation and entropy contract [tracked by #73](https://github.com/vycdev/jett/issues/73)), `log`
-  (structured event, capability, secret, sink, and source/runtime contract
-  [tracked by #143](https://github.com/vycdev/jett/issues/143)), `format`
-- **Testing:** `test.mock` (mock capabilities for property-based testing; capability-mocking and deterministic harness contract [tracked by #145](https://github.com/vycdev/jett/issues/145))
+  (structured event, dedicated capability, secret, sink, deterministic capture,
+  and source/runtime boundary selected by the
+  [structured logging contract](completed/structured_logging_contract.md) from
+  [#143](https://github.com/vycdev/jett/issues/143)), `format`
+- **Testing:** `test.mock` (property-only typed capability scripts and private per-attempt provider registry; the selected isolation, ordering, replay, shrinking, ownership, and backend contract is defined in the [capability mocking and deterministic test harness contract](completed/capability_mocking_test_harness_contract.md) from [#145](https://github.com/vycdev/jett/issues/145))
 
 **Milestone:** The standard library covers virtually every common operation. LLMs write orchestration code, not algorithms.
 
@@ -2112,8 +2271,12 @@ Core stdlib (string, list, math, json) is implemented in Phase D. This phase com
    admits ready namespace/body queries under the
    [deterministic scheduling and publication contract](open_design/parallel_compilation_boundary.md)
    selected for [#151](https://github.com/vycdev/jett/issues/151).
-3. Content-addressed caching of compilation artifacts (identity,
-   serialization, trust, and lifecycle contract [tracked by #153](https://github.com/vycdev/jett/issues/153)).
+3. Content-addressed caching starts with successful whole-file parse artifacts
+   under the selected identity, canonical serialization, per-user
+   authentication, untrusted validation, atomic publication, and bounded lifecycle
+   [contract](completed/content_addressed_compilation_cache_contract.md) from
+   [#153](https://github.com/vycdev/jett/issues/153); later checked/backend
+   artifact kinds wait for stable representations.
 4. Comprehensive test suite.
 
 **Milestone:** Production-ready compiler with fast iteration cycles.
