@@ -52,25 +52,34 @@ The keys are compiler records, not source strings:
 ```text
 ProjectKey {
     canonical_name
-    canonical_root
 }
 
 DependencyKey {
     canonical_name
-    canonical_root
-    parent_project
+    graph_path
 }
 
 StdlibKey {
     compiler_distribution
     stdlib_version
 }
+
+DiscoveryRoot {
+    origin: SourceOrigin
+    physical_root
+}
 ```
 
-`canonical_root` is an internal, normalized discovery root. It is useful for
-containment and diagnostics but is not part of a source-visible name. Paths,
-symlinks, or two manifests with the same display name do not silently collapse
-into one origin.
+There is one `ProjectKey` for the selected build root. A dependency's
+`graph_path` is its normalized sequence of vendored dependency-directory
+segments from that project, so two dependency manifests with the same display
+name remain distinct origins. `physical_root` is a separately held,
+canonicalized host path used only for containment, duplicate-root, and cycle
+checks. It is not semantic identity, is never source-visible, and never enters
+diagnostic ordering or compiler cache keys. Relocating an unchanged checkout
+therefore preserves origin and file identities, while paths and symlink aliases
+that resolve to the same physical root are still detected and rejected rather
+than silently collapsed.
 
 Only the driver may construct `Stdlib(StdlibKey)`, and only for files discovered
 beneath the stdlib directory selected by the compiler installation. A project
@@ -93,8 +102,9 @@ FileKey {
 ```
 
 Logical paths use `/`, reject absolute paths and `..`, and are unique within an
-origin. Physical paths may be retained for I/O and diagnostics, but semantic
-identity uses `FileKey`.
+origin. Physical paths may be retained for I/O and local source lookup, but
+semantic identity, portable diagnostics, and persistent cache records use
+`FileKey`. Host-absolute roots must not affect compiler output.
 
 `FileId` remains a compact diagnostic handle allocated for one compiler
 session. Its numeric range must not decide source authority after discovery.
@@ -176,7 +186,9 @@ origins and declaration locations.
 
 Dependency roots form a directed acyclic graph. The compiler processes
 dependencies before dependents. Independent roots are ordered by canonical
-origin name and then normalized root identity.
+origin name and then normalized dependency `graph_path`. Physical discovery
+roots are deliberately excluded so checkout location cannot change declaration
+or diagnostic order.
 
 Within a project or dependency, source files are ordered by normalized logical
 path. Since a namespace has one owner, this order is for deterministic discovery,
@@ -370,6 +382,10 @@ than retain only a display name:
 - MIR call targets,
 - bytecode/native symbols and runtime-kernel bindings,
 - cache keys and serialized compiler artifacts.
+
+Serialized and cached origin records contain only the logical identities above;
+they never persist `DiscoveryRoot.physical_root` or reconstruct identity from a
+host-absolute path.
 
 Backends may erase metadata after final call targets are selected, but policy
 selection must happen from trusted identities before erasure. Native or bytecode
