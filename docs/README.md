@@ -63,6 +63,7 @@ plans above for current work.
 - [JSON reflection plan](completed/json_reflection_plan.md)
 - [JsonTree decoder blocker](completed/json_tree_decoder_blocker.md)
 - [Math numeric overload boundary](completed/math_numeric_overload_boundary.md)
+- [Module, import, prelude, and trusted-origin contract](completed/module_import_trusted_origin_contract.md)
 - [Primitive collection hashing boundary](completed/primitive_collection_hash_boundary.md)
 - [Random capability and entropy contract](completed/random_capability_entropy_contract.md)
 - [Time and Clock capability contract](completed/time_clock_capability_contract.md)

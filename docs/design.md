@@ -594,9 +594,11 @@ Jett requires **all imports to be declared locally**, inside a function or block
 Executable code must import project and vendored dependency namespaces before
 using their declarations. Canonical qualified project types remain valid in
 declaration signatures, where no block-local import scope exists. Compiler-provided
-standard namespaces remain implicitly available as standard functionality;
-`use` may still bind or alias them locally, while the broader prelude policy is
-tracked separately.
+standard namespaces remain implicitly available by canonical qualification;
+`use` may still bind or alias them locally. The fixed foundational prelude does
+not inject stdlib members or root type aliases. Namespace ownership, dependency
+ordering, aliases, and compiler-assigned trusted origin are defined by the
+[module and trusted-origin contract](completed/module_import_trusted_origin_contract.md).
 
 **What the compiler rejects:**
 
@@ -645,6 +647,12 @@ function compute_stats(values: list[int64]) returns float64:
 - A `use` statement is scoped to the block it appears in. `use math` inside a function is not visible outside that function.
 - All `use` statements in a function must appear at the top, before any other code. Imports scattered throughout the function body are a compile error. This gives every function a predictable structure: imports first, then logic.
 - A module imported in two functions is resolved once by the compiler — no runtime cost to repeated `use` statements.
+- `use` resolves a namespace from the compiler's module registry. It never loads
+  a file, executes initialization, changes export visibility, or grants trusted
+  stdlib authority.
+- Project and dependency namespace names are unique across the build. Only
+  compiler-shipped stdlib sources may contribute ordered fragments to one
+  namespace.
 
 ```
 function good_example(view stdout: Stdout) returns nothing:
@@ -6478,8 +6486,8 @@ Global constant initializers are namespace-local: they may use literals and
 declarations from their own namespace, but they cannot reference project or
 vendored declarations from another namespace. File-level `use` is forbidden,
 and global constants cannot create an implicit cross-namespace dependency.
-Compiler-provided standard declarations retain their normal implicit
-availability pending the broader prelude policy.
+Compiler-provided standard declarations retain the canonical qualified and
+fixed-prelude availability selected by the module contract.
 
 ### Functions
 

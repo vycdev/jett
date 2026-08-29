@@ -114,7 +114,10 @@ An untrusted registration of the same name clears that trust.
 
 ## Recommendation
 
-Tracked by [#3](https://github.com/vycdev/jett/issues/3) for the module/import/prelude design and backend-neutral trusted-origin model.
+The module/import/prelude decision and backend-neutral trusted-origin model are
+recorded in the [module and trusted-origin contract](../completed/module_import_trusted_origin_contract.md)
+from [#3](https://github.com/vycdev/jett/issues/3). Its implementation remains
+staged.
 
 Use two stages, with source visibility and compiler trust kept orthogonal:
 
@@ -127,8 +130,8 @@ Use two stages, with source visibility and compiler trust kept orthogonal:
 
 Both stages now exist for the current JSON interpreter path, but they do not
 make public JSON policy ordinary library behavior yet. Keep compiler-owned JSON
-policy checks until the broader import/prelude story and future backends can
-carry the same trusted-origin guarantees.
+policy checks until the selected registry and future backends carry the same
+trusted-origin guarantees.
 
 The JSON bridge uses a compiler-owned hook table, not public function name
 guessing:
@@ -158,9 +161,9 @@ For now:
   namespace-private source declarations. Their `json_` prefixes remain useful
   for readability, but privacy no longer depends on naming convention.
 
-Before removing compiler-owned JSON policy gates, finish the broader
-module/import/prelude story and decide how trusted private hooks should be
-represented outside the current interpreter registry.
+Before removing compiler-owned JSON policy gates, implement the selected module
+registry and carry canonical declaration origins outside the current interpreter
+registry.
 
 ## Current Implementation Status
 
@@ -179,7 +182,8 @@ Implemented:
   Executable project/dependency access also requires a local `use`; callers use
   its bound namespace name or explicit alias. Canonical qualified project types
   remain valid in declaration signatures, and compiler-provided stdlib
-  namespaces remain implicit pending the broader prelude policy.
+  namespaces remain available by canonical qualification under the selected
+  fixed-prelude policy.
 - The resolver no longer creates root-scope leaf bindings for namespaced
   declarations; same-namespace shorthand resolves through the canonical
   namespace path.
@@ -226,6 +230,8 @@ Still staged:
 
 - Public JSON policy remains compiler-owned; source `export` is not trusted
   origin.
+- The selected module registry, fixed prelude manifest, and backend-neutral
+  declaration-origin propagation are not implemented yet.
 
 ## Staged Implementation Plan
 

@@ -177,7 +177,10 @@ less lexical dependency model, not JSON-specific stdlib loading.
 
 ### 2. Public `json.*` Handoff
 
-Tracked by [#3](https://github.com/vycdev/jett/issues/3) for the module/import/prelude design and backend-neutral trusted-origin model.
+The module/import/prelude and backend-neutral trusted-origin decision is recorded
+in the [module and trusted-origin contract](../completed/module_import_trusted_origin_contract.md)
+from [#3](https://github.com/vycdev/jett/issues/3). The registry and lowering
+stages remain unimplemented.
 
 Generic and non-generic user functions can now be called through a qualified
 namespace name such as `helpers.wrap[T](value)` or
@@ -189,12 +192,12 @@ public API handoff:
 - the compiler-owned `json.parse`, `json.parse_exact`, `json.serialize`, and
   `json.serialize_public` paths still carry compiler-enforced policy checks,
 - `use` now gates executable access to project and vendored namespaces, but it
-  still resolves against the merged lexical scope rather than a real module
-  registry with backend-neutral identity and dependency metadata,
+  still resolves against the merged lexical scope rather than the selected
+  module registry with backend-neutral identity and dependency metadata,
 - canonical qualified declarations and export visibility now exist, but the
   language still lacks a real module/import registry and dependency model.
 
-This is larger than JSON and should be staged carefully.
+This is larger than JSON and is staged by the selected contract.
 See `/docs/active/stdlib_visibility_design.md` for the current visibility and
 trusted-stdlib recommendation.
 
@@ -231,9 +234,10 @@ choice is to keep the checks until the module/import story can carry those
 constraints deliberately.
 
 Status: implemented for the interpreter/runtime path through trusted bundled
-hooks. The remaining work is whether the public policy gates can be represented
-as ordinary stdlib constraints once imports, module metadata, and future
-backends can carry trusted origin safely.
+hooks. The selected registry preserves the gates through canonical trusted
+declaration identities. Whether the public policy gates can become ordinary
+stdlib constraints remains a separate decision after that identity reaches
+future backends.
 
 ### 4. Visibility
 
