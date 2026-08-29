@@ -43,6 +43,53 @@ fn nonnegative_usize(value: i64) -> usize {
     usize::try_from(value.max(0)).unwrap_or(usize::MAX)
 }
 
+fn repeat_string_checked(value: &str, count: i64) -> Result<String, String> {
+    let count = nonnegative_usize(count);
+    let output_len = value
+        .len()
+        .checked_mul(count)
+        .ok_or_else(|| "string.repeat: requested output is too large".to_string())?;
+    let mut output = String::new();
+    output
+        .try_reserve_exact(output_len)
+        .map_err(|_| "string.repeat: requested output is too large".to_string())?;
+    for _ in 0..count {
+        output.push_str(value);
+    }
+    Ok(output)
+}
+
+fn range_values_checked(start: i64, end: i64, step: i64) -> Result<Vec<Value>, String> {
+    if step == 0 {
+        return Err("range step cannot be zero".to_string());
+    }
+    let distance = if step > 0 && start < end {
+        (i128::from(end) - i128::from(start)) as u128
+    } else if step < 0 && start > end {
+        (i128::from(start) - i128::from(end)) as u128
+    } else {
+        0
+    };
+    let step_magnitude = i128::from(step).unsigned_abs();
+    let count = distance.div_ceil(step_magnitude);
+    let capacity =
+        usize::try_from(count).map_err(|_| "range: requested output is too large".to_string())?;
+    let mut items = Vec::new();
+    items
+        .try_reserve_exact(capacity)
+        .map_err(|_| "range: requested output is too large".to_string())?;
+
+    let mut value = start;
+    while (step > 0 && value < end) || (step < 0 && value > end) {
+        items.push(Value::Int64(value));
+        let Some(next) = value.checked_add(step) else {
+            break;
+        };
+        value = next;
+    }
+    Ok(items)
+}
+
 /// Compare secret byte strings without content-dependent early exits.
 ///
 /// Payload lengths are observable by contract. Equal-length contents are handed
@@ -8289,8 +8336,7 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::String(s), Value::Int64(n)) => {
-                        let n = nonnegative_usize(*n);
-                        Some(Ok(Value::String(s.repeat(n))))
+                        Some(repeat_string_checked(s, *n).map(Value::String))
                     }
                     _ => Some(Err(format!("{name} expects a string and an int64"))),
                 }
@@ -9419,45 +9465,21 @@ impl Interpreter {
                     // range(end) — 0 to end exclusive
                     1 => match &args[0] {
                         Value::Int64(end) => {
-                            let items: Vec<Value> = (0..*end).map(Value::Int64).collect();
-                            Some(Ok(Value::List(items)))
+                            Some(range_values_checked(0, *end, 1).map(Value::List))
                         }
                         _ => Some(Err(format!("{name} expects int64 arguments"))),
                     },
                     // range(start, end) — start to end exclusive
                     2 => match (&args[0], &args[1]) {
                         (Value::Int64(start), Value::Int64(end)) => {
-                            let items: Vec<Value> = (*start..*end).map(Value::Int64).collect();
-                            Some(Ok(Value::List(items)))
+                            Some(range_values_checked(*start, *end, 1).map(Value::List))
                         }
                         _ => Some(Err(format!("{name} expects int64 arguments"))),
                     },
                     // range(start, end, step)
                     3 => match (&args[0], &args[1], &args[2]) {
                         (Value::Int64(start), Value::Int64(end), Value::Int64(step)) => {
-                            if *step == 0 {
-                                return Some(Err("range step cannot be zero".to_string()));
-                            }
-                            let mut items = Vec::new();
-                            let mut i = *start;
-                            if *step > 0 {
-                                while i < *end {
-                                    items.push(Value::Int64(i));
-                                    let Some(next) = i.checked_add(*step) else {
-                                        break;
-                                    };
-                                    i = next;
-                                }
-                            } else {
-                                while i > *end {
-                                    items.push(Value::Int64(i));
-                                    let Some(next) = i.checked_add(*step) else {
-                                        break;
-                                    };
-                                    i = next;
-                                }
-                            }
-                            Some(Ok(Value::List(items)))
+                            Some(range_values_checked(*start, *end, *step).map(Value::List))
                         }
                         _ => Some(Err(format!("{name} expects int64 arguments"))),
                     },
