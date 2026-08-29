@@ -77,9 +77,10 @@ Persistent caching follows these invariants:
 5. Human, `--agent`, LSP, and ASP consumers receive the same compiler facts and
    diagnostic order whether the artifact was decoded or freshly computed.
 6. Only a complete successful parse query for the current source revision may
-   publish. Cancellation, staleness, or panic before its atomic publication
-   writes no reusable object; a later aggregate build failure or cancellation
-   does not invalidate an already published independent parse fact.
+   publish. Cancellation or staleness observed at the final prepublication
+   check, or a panic before installation, writes no reusable object. A signal
+   racing after that check may leave the complete independent parse fact, and a
+   later aggregate build failure or cancellation does not invalidate it.
 7. An artifact never grants compiler-shipped stdlib provenance, trusted-hook
    authority, namespace ownership, a capability, or permission to skip policy
    checking.
@@ -687,10 +688,11 @@ collection has one handle-relative no-follow `gc.lock`; failure to acquire its
 non-blocking OS lock skips cleanup. It follows the hard lifecycle budgets below,
 never gates the compiler result, and never authorizes partial-object reads.
 
-Cancellation after an immutable object was fully and atomically published need
-not remove that object if the object came from a complete successful query fact
-and is independent of the cancelled aggregate. Cancellation or staleness before
-that point removes only the writer's temporary file and publishes nothing.
+The final prepublication cancellation/staleness check is the writer's
+linearization point. If it observes either state, the writer removes its
+temporary file and does not install it. A signal racing after that check may
+leave the complete immutable parse object; the writer need not remove it because
+the fact is independent of the cancelled aggregate.
 
 ## Lifecycle And Eviction
 
@@ -928,8 +930,10 @@ file on disk is not proof that a later compiler query reused it.
 
 ### Failure and concurrency
 
-- failed or panicked parse queries, and cancellation or staleness observed
-  before atomic parse-object publication, publish no initial-cache object;
+- failed or panicked parse queries, and cancellation or staleness observed at
+  the final prepublication check, publish no initial-cache object;
+- cancellation or staleness racing immediately after the final check may leave
+  exactly one complete authenticated parse object and never a partial object;
 - a complete parse fact published before a later resolution/type/build failure
   or aggregate cancellation remains valid and is reusable, while no failed
   build result is cached;
