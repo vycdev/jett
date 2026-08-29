@@ -25,10 +25,12 @@ diagnostics for the caller's current `FileKey` and diagnostic `FileId`.
 Resolution, type checking, comptime evaluation, verification, interpretation,
 and current `BuildResult` values still execute normally.
 
-The initial cache does not persist Salsa state, failed parses or builds,
+The initial cache does not persist Salsa state, parse or build failures,
 whole-project checked results, runtime values, profiler data, HIR, MIR, LLVM IR,
-interpreter bytecode, or native objects. Later compiler representations may add
-new artifact kinds only after they have stable ownership and canonical wire
+interpreter bytecode, or native objects. It may retain a completed successful
+parse query reached during a build that later fails, because that immutable
+source fact is not a cached build outcome. Later compiler representations may
+add new artifact kinds only after they have stable ownership and canonical wire
 schemas.
 
 Remote or shared caches, distributed compilation, package registries,
@@ -74,8 +76,10 @@ Persistent caching follows these invariants:
 4. Cache I/O cannot turn accepted source into rejected source or the reverse.
 5. Human, `--agent`, LSP, and ASP consumers receive the same compiler facts and
    diagnostic order whether the artifact was decoded or freshly computed.
-6. Cancelled, stale, failed, panicked, or partially published work writes no
-   reusable object.
+6. Only a complete successful parse query for the current source revision may
+   publish. Cancellation, staleness, or panic before its atomic publication
+   writes no reusable object; a later aggregate build failure or cancellation
+   does not invalidate an already published independent parse fact.
 7. An artifact never grants compiler-shipped stdlib provenance, trusted-hook
    authority, namespace ownership, a capability, or permission to skip policy
    checking.
@@ -84,6 +88,8 @@ Persistent caching follows these invariants:
 
 A cache implementation must keep an uncached path in ordinary tests. The cache
 is an optimization defect if disabling or deleting it changes compiler output.
+Parse-object publication is query-scoped and is not staged until whole-build
+success. Build failures themselves are never cached.
 
 ## Artifact Kinds And Dependency Graph
 
@@ -123,16 +129,23 @@ The preimage is a canonical binary key record, not delimiter-concatenated text:
 CacheKeyRecord:
     magic = "jett-cache-key"
     key_format_version: u32
-    artifact_kind: length-prefixed UTF-8
+    artifact_kind: u64-byte-length + UTF-8
     artifact_schema: u32
-    compiler_compatibility_id: length-prefixed bytes
-    semantic_fields: ordered tagged length-prefixed byte strings
+    compiler_compatibility_id: u64-byte-length + bytes
+    semantic_field_count: u32
+    semantic_fields:
+        tag: u32
+        value: u64-byte-length + bytes
 ```
 
-Integers are unsigned little-endian. Lengths are checked before allocation.
-Tags are unique within a schema. Unknown required tags, duplicate tags,
-non-canonical ordering, trailing bytes, invalid UTF-8 in text fields, and
-integer overflow reject the key record.
+Integers are unsigned little-endian. Each schema assigns nonzero tags and
+requires fields in strictly increasing numeric-tag order; v1 has no optional
+or repeated semantic tag. Counts and lengths are checked against the remaining
+record and allocation bounds before conversion or allocation. An unknown,
+zero, duplicate, missing, or out-of-order tag, trailing bytes, invalid UTF-8 in
+text fields, or integer overflow rejects the key record. A future need for an
+optional field requires a new artifact schema that defines its exact tag and
+presence rule; readers do not guess must-understand bits.
 
 The object key is:
 
@@ -149,12 +162,18 @@ authorized by the current user produced the AST payload.
 
 ## Initial Parse Key
 
-`jett.parse-file.v1` has exactly these tagged `semantic_fields`:
+`jett.parse-file.v1` uses `key_format_version = 1`,
+`artifact_kind = "jett.parse-file.v1"`, `artifact_schema = 1`, and an exactly
+32-byte `compiler_compatibility_id`. It has `semantic_field_count = 3` and
+exactly these tagged `semantic_fields`:
 
-1. exact source length as an unsigned 64-bit byte count;
-2. SHA-256 digest of the exact UTF-8 source bytes;
-3. lexical/parser policy version when such policy exists outside the compiler
-   compatibility identity.
+1. tag `1`, source length: a value length of `8`, followed by the unsigned
+   64-bit little-endian exact source byte count;
+2. tag `2`, source digest: a value length of `32`, followed by SHA-256 of the
+   exact UTF-8 source bytes;
+3. tag `3`, parser policy: a value length of `4`, followed by an unsigned
+   32-bit little-endian policy revision. Revision zero means there is no
+   parser policy revision outside `compiler_compatibility_id`.
 
 The fixed `artifact_kind`, `artifact_schema`, and
 `compiler_compatibility_id` members of `CacheKeyRecord` already participate in
@@ -211,6 +230,51 @@ A source-tree digest uses normalized repository-relative logical paths and
 exact file contents in canonical order. Checkout roots, file timestamps,
 directory-enumeration order, and other host metadata are excluded, so the same
 compiler source produces the same identity after relocation.
+
+The digest preimage is a canonical record rather than concatenated path and
+content text:
+
+```text
+CompatibilityInputRecord:
+    magic = "jett-compat-input"
+    format_version: u32 = 1
+    domain: u32
+    entry_count: u32
+    entries sorted by logical_path UTF-8 bytes:
+        logical_path: u64-byte-length + normalized UTF-8 bytes
+        content: u64-byte-length + exact bytes
+```
+
+V1 assigns domain `1` to compiler source, `2` to locked dependency and semantic
+feature/configuration inputs, and `3` to bundled-stdlib source. Integers are
+unsigned little-endian. Logical paths are relative UTF-8, use `/`, preserve
+repository case, and reject empty segments, `.`, `..`, NUL, and absolute forms;
+sorting compares their exact UTF-8 bytes. Duplicate logical paths, an unknown
+or zero domain, invalid normalized paths, count/length overflow, and trailing
+bytes are rejected. SHA-256 of the domain-1 record is the source-tree component of
+`compiler_compatibility_id`; domains 2 and 3 supply their corresponding digest
+components. No path/content boundary or input class can be reinterpreted by
+concatenation.
+
+The compatibility ID itself is SHA-256 of a second canonical record with fixed
+magic `jett-compiler-compat`, `format_version = 1` as a `u32`, a `u32`
+component count, and strictly increasing `u32` component tags followed by
+`u64`-length-prefixed bytes. V1 assigns tag `1` to UTF-8 package version, `2`
+to source identity, `3` to the locked-dependency/feature digest, `4` to an
+applicable bundled-stdlib digest, `5` to UTF-8 artifact kind, `6` to the
+four-byte little-endian artifact schema, and `7` to the four-byte
+little-endian compiler-policy revision. Source identity begins with a one-byte
+discriminator: `1` plus a `u64` length and UTF-8 revision, or `2` plus the
+32-byte domain-1 `CompatibilityInputRecord` digest. Tags `3` and `4`, when
+present, contain the 32-byte domain-2 and domain-3 digests respectively.
+
+For `jett.parse-file.v1`, `component_count = 6` and the required tags are
+`1, 2, 3, 5, 6, 7`; it does not consume stdlib semantics and therefore omits
+tag `4`. A future artifact layer that consumes stdlib fixes tag `4` as required
+in its own compatibility schema. Missing required, unexpected, duplicate, or
+out-of-order tags, invalid fixed value lengths, and trailing bytes reject the
+record. This record uses the same unsigned-little-endian and bounded-length
+rules as `CacheKeyRecord`.
 
 The identity is scoped by artifact layer. A CLI-rendering-only change need not
 invalidate parse objects, while a lexer, parser, AST, diagnostic, or decoder
@@ -299,9 +363,17 @@ CacheEnvelope:
 ```
 
 The envelope encoding is canonical for its version: fields appear in the order
-above, integers are unsigned little-endian, variable-width fields are preceded
-by their checked byte lengths, and padding or trailing bytes are forbidden.
-The authenticator is the final 32 bytes.
+above; integers are unsigned little-endian; `artifact_kind` and
+`canonical_key_record` have unsigned 64-bit byte-length prefixes; and
+`stored_payload_length` is the payload's length prefix. Fixed digests have
+exactly 32 bytes. All lengths are bounded and checked before allocation.
+Padding, alternate integer widths, and trailing bytes are forbidden. The
+authenticator is the final 32 bytes.
+
+The initial object uses `envelope_version = 1`, exact artifact kind
+`jett.parse-file.v1`, and `artifact_schema = 1`. Its length-prefixed key record
+must consume exactly its declared bytes, its payload must consume exactly
+`stored_payload_length`, and end-of-file must follow the 32-byte authenticator.
 
 Compression may be added only as an envelope-versioned storage choice with a
 fixed algorithm identifier and strict decoded-size bound. Compression bytes do
@@ -313,8 +385,9 @@ are the canonical payload.
 
 A reader performs all of these checks before returning a hit:
 
-1. open a regular file without following a final symlink where the platform
-   supports that guarantee;
+1. open the final object as a no-follow regular file relative to its pinned
+   validated fan-out handle; a platform without that guarantee returns
+   `Unavailable`;
 2. enforce fixed header and declared-size bounds before allocation;
 3. validate magic, envelope version, artifact kind, and schema;
 4. parse the canonical key record, require its artifact kind and schema to
@@ -395,13 +468,49 @@ stored payload exactly once; only the final authenticator field is absent. The
 32-byte `user_cache_key` lives in the current user's private Jett configuration
 directory, outside the deletable cache root.
 
-The first read-write cache use creates this key from the operating system's
-cryptographically secure random source with create-new and user-private
-permissions. Concurrent creators read the winner. A read-only process without
-an existing key treats all objects as misses. Removing or rotating the key
-invalidates old objects without affecting compilation. The key and MAC never
-appear in diagnostics, event records, object names, source manifests, or agent
-output.
+The platform-selected private configuration directory is pinned independently
+of `--cache-dir` and uses the same handle-relative, no-follow component checks
+as cache confinement below. The key filename is fixed as
+`cache-auth-v1.key`. A reader opens it with
+no-follow semantics and accepts only a regular file owned by the current user,
+with the platform's user-private permissions, whose complete length is exactly
+32 bytes. On Unix the containing configuration directory and key request modes
+`0700` and `0600`; on Windows the DACL must deny write/read access to unrelated
+user principals under the platform's user-private policy. A wrong type, owner,
+permissions, or length is never truncated, padded, or used as key material.
+
+First-use creation never exposes the final filename while bytes are partial:
+
+1. acquire a non-blocking OS file lock on a no-follow regular
+   `cache-auth-v1.init.lock` in the pinned private configuration directory;
+2. re-check for a valid winner;
+3. generate 32 bytes from the operating system's cryptographically secure
+   random source;
+4. create a unique no-follow temporary regular file in that directory with
+   create-new and user-private permissions;
+5. write exactly 32 bytes, flush them durably, close the file, and re-open it to
+   validate type, ownership, permissions, and bytes;
+6. atomically install it at `cache-auth-v1.key` with no-replace semantics and
+   best-effort sync the directory;
+7. if another process won, delete the temporary file and validate the winner.
+
+A crash can leave only a uniquely named temporary file, never a partially
+written final key. Initialization examines at most 64 names matching the exact
+key-temporary grammar and removes at most 16 validated no-follow regular
+temporaries per invocation; all others are ignored for a later bounded pass.
+For a malformed legacy/final key, the process holding the initialization lock
+renames it to one bounded quarantine name and retries the full protocol once;
+failure, another malformed winner, or inability to guarantee atomic no-clobber
+publication disables persistent cache reads and writes for that invocation.
+Recovery never loops and never overwrites a valid key. Rotating or recovering
+the key invalidates old objects but cannot change compilation results.
+
+Concurrent creators validate the one installed winner. A read-only process
+without an existing valid key treats all objects as misses and never creates or
+repairs key state. A platform that cannot provide the required private-file,
+no-follow, lock, durable-temp, and atomic no-replace guarantees disables the
+persistent cache. The key and MAC never appear in diagnostics, event records,
+object names, source manifests, or agent output.
 
 A reader computes the MAC before interpreting AST bytes and compares the
 computed and stored tags in constant time. A missing or incorrect MAC is
@@ -507,6 +616,41 @@ Artifact schema and compiler compatibility remain inside keys and envelopes.
 The root `v1` separates incompatible storage protocols; a new protocol uses a
 new directory instead of guessing how to read old bytes.
 
+### Path confinement
+
+Every cache operation is confined beneath one pinned root-directory handle.
+The implementation opens and validates that root once, rejects a root that is
+not a directory or is itself a symbolic link, junction, or other reparse point,
+and retains the handle for the invocation. Every fixed child component
+(`v1`, `objects`, `sha256`, the two-character fan-out, `tmp`, and `state`) is
+then opened or created relative to its already validated parent handle with
+no-follow semantics and verified as the expected directory type. Object,
+temporary, cursor, and lock files are likewise opened relative to those handles
+and must be regular files. Validation followed by path-string reopening is not
+allowed.
+
+On Unix-like hosts this requires handle-relative operations with protections
+equivalent to `openat`/`openat2` plus `O_NOFOLLOW`, beneath-only resolution, and
+`renameat`-family publication. On Windows it requires directory-relative or
+equivalently pinned-handle operations that open reparse points themselves and
+reject symlinks, mount points, and junctions before use. A platform that cannot
+guarantee confinement and no-follow behavior treats persistent caching as
+`Unavailable`; it must not fall back to concatenated path traversal.
+
+All publication, quarantine, cleanup, lock, and metadata operations use the
+same pinned handles. Renames require source and destination handles beneath the
+same validated root. A name read from the filesystem is never used as a path:
+it is first validated against the exact digest, fan-out, temporary-name, lock,
+or cursor grammar. Replacing any intermediate path after handles are open
+cannot redirect the operation outside the root.
+
+Garbage collection enumerates only the known validated directories. It never
+recurses into an unexpected directory, follows a directory entry, resolves a
+link target, or deletes a non-regular entry. Unknown directories and links are
+ignored and reported only through bounded debug instrumentation. Cache HMACs
+authenticate object bytes; they are not authorization to traverse or mutate an
+unvalidated filesystem path.
+
 ## Atomic And Concurrent Publication
 
 A writer follows this sequence:
@@ -525,8 +669,13 @@ A writer follows this sequence:
 8. best-effort sync the containing directory when the platform supports durable
    directory metadata.
 
-A reader opens only the final object path. It never reads a temporary file and
-never waits for a writer lock.
+If atomic same-filesystem no-replace installation cannot be guaranteed, the
+writer reports `parse_write_skipped` and leaves the cache read-only for that
+invocation; it never emulates publication with delete-then-rename or overwrite.
+
+A reader opens only the final object through its validated fan-out directory
+handle with no-follow semantics. It never reads a temporary file, reopens an
+object by path string, or waits for a writer lock.
 
 Two writers for the same key must produce byte-identical canonical payloads. A
 race winner is not trusted merely because it arrived first. If the existing
@@ -534,8 +683,9 @@ object is invalid, one process may quarantine it and retry one atomic
 publication; implementations avoid unbounded replacement loops.
 
 Objects for different keys require no shared publication lock. Garbage
-collection has one non-blocking `gc.lock`; failure to acquire it skips cleanup.
-It never blocks a build and never authorizes partial-object reads.
+collection has one handle-relative no-follow `gc.lock`; failure to acquire its
+non-blocking OS lock skips cleanup. It follows the hard lifecycle budgets below,
+never gates the compiler result, and never authorizes partial-object reads.
 
 Cancellation after an immutable object was fully and atomically published need
 not remove that object if the object came from a complete successful query fact
@@ -544,27 +694,64 @@ that point removes only the writer's temporary file and publishes nothing.
 
 ## Lifecycle And Eviction
 
-The default cache budget is 2 GiB. After a successful write, a process may
-attempt cleanup when the store exceeds that budget. Cleanup acquires the
-non-blocking GC lock and evicts to 75 percent of the budget.
+The default cache budget is a soft 2 GiB target. After a successful write, a
+process may schedule cleanup after the compiler result and output publication
+are finalized, or run it on a bounded background worker. Cleanup is never in a
+parse/query critical path. It acquires the handle-relative non-blocking GC lock;
+failure to acquire it skips the pass.
+
+One cleanup pass has all of these hard budgets:
+
+```text
+elapsed monotonic time                 50 ms
+directory entries examined           10,000
+candidate records retained             4,096
+candidate metadata                    16 MiB
+object bytes read for validation      64 MiB
+filesystem removals or quarantines     1,024
+```
+
+The pass checks the time and remaining work budgets before every new filesystem
+operation and schedules no further I/O after a limit is reached. One already
+issued host I/O may complete after the deadline, but no unbounded loop or
+candidate allocation continues. Hitting a limit records a bounded
+`cache_gc_incomplete` debug event, atomically stores a validated continuation
+cursor, releases the lock, and returns without affecting the command result.
+The cursor contains only a scan generation, fan-out index, last validated
+filename, and checked cumulative byte count in a fixed-size versioned record;
+it is untrusted performance state, so malformed, overflowing, or stale data
+resets scanning safely and is never interpreted as a path or trusted quota
+fact.
+
+Cleanup incrementally walks only known fan-out and temporary directories from
+the cursor. It retains at most the bounded candidate count in an oldest-first
+heap ordered by recorded access time and then digest. Missing, invalid, or equal
+timestamps use digest order. A complete series of passes evicts toward 75
+percent of the target; one pass is not required to scan the store or reach that
+level. An attacker-created excess may therefore keep the store above target,
+but cannot force unbounded scan, memory, validation, or deletion work during a
+compiler command.
 
 Recency metadata is performance-only. A successful hit may best-effort update
-an object's access time at most once per 24 hours. Cleanup sorts candidates by
-recorded access time, then full digest as the deterministic tie-breaker.
-Missing, invalid, or equal timestamps use the digest order. The clock used for
-cleanup never enters compiler keys or results.
+an object's access time at most once per 24 hours. The clock used for cleanup
+and its injected deadline never enter compiler keys or results.
 
-Cleanup first removes abandoned temporary files older than 24 hours and invalid
-filenames. It then removes incompatible, corrupt, and oldest valid objects until
-under the target. An object opened by a reader may survive unlinking through
-ordinary filesystem semantics; platforms that prevent deletion simply skip it.
+Within the same budgets, cleanup first considers no-follow regular temporary
+files older than 24 hours and invalid regular object filenames, then
+incompatible, corrupt, and oldest valid objects. It never deletes an unknown
+directory, link, junction, reparse point, lock, cursor, or authentication key.
+An object opened by a reader may survive unlinking through ordinary filesystem
+semantics; platforms that prevent deletion simply skip it.
 
-Budget calculation, timestamp failure, full disks, read-only filesystems, and
-cleanup errors never fail compilation. A user can delete the entire cache while
-no compiler process depends on it; correctness is equivalent to a cold miss.
+Size accounting is incremental and bounded by the same cursor. An incomplete
+estimate schedules later passes rather than claiming the target was met. Budget
+calculation, deadline expiry, timestamp failure, full disks, read-only
+filesystems, and cleanup errors never fail compilation. A user can delete the
+entire cache while no compiler process depends on it; correctness is equivalent
+to a cold miss.
 
-Tests inject filesystem and clock behavior rather than sleeping or depending on
-host access times.
+Tests inject filesystem and monotonic-clock behavior rather than sleeping or
+depending on host access times.
 
 ## Diagnostics And Observability
 
@@ -581,12 +768,17 @@ parse_lookup_unavailable
 parse_write_published
 parse_write_raced
 parse_write_skipped
+cache_gc_complete
+cache_gc_incomplete
+cache_key_recovered
 ```
 
-The observer records artifact kind and digest, never AST payload or source text.
-Cache metrics do not alter human or agent diagnostic order. Elapsed time is
-useful for profiling but is not proof of a hit; tests assert event categories
-and query execution counts.
+Parse-object events record artifact kind and digest, never AST payload or source
+text. Lifecycle events record only a stable outcome/reason and bounded public
+counts; they never expose key bytes, host paths, directory entries, or cursor
+contents. Cache metrics do not alter human or agent diagnostic order. Elapsed
+time is useful for profiling but is not proof of a hit; tests assert event
+categories and query execution counts.
 
 A cache warning is emitted only for an explicit cache-management or strict
 diagnostic command. Normal builds silently fall back on transient cache I/O,
@@ -652,8 +844,10 @@ rules as an uncached build.
 1. **Protocol and decoder foundation**
    - add an internal cache module with canonical key/envelope codecs;
    - expose compiler compatibility identity;
-   - create and protect the per-user authentication key and verify object MACs;
-   - implement bounded, panic-free untrusted decoding and filesystem layout;
+   - atomically create, validate, recover, and protect the per-user
+     authentication key and verify object MACs;
+   - implement bounded, panic-free untrusted decoding plus pinned-handle,
+     no-follow filesystem confinement;
    - add injected filesystem, clock, cancellation, and event-observer seams.
 2. **Parse artifact codec**
    - define stable direct-AST node tags and relative source spans;
@@ -669,7 +863,7 @@ rules as an uncached build.
 4. **Atomic writes and lifecycle**
    - publish only complete successful parse artifacts;
    - implement race-safe immutable writes, temporary cleanup, budget accounting,
-     deterministic eviction tie-breaks, and non-blocking GC;
+     deterministic eviction tie-breaks, and hard-bounded incremental GC;
    - expose explicit cache mode/directory controls.
 5. **Measure before widening**
    - compare encode/decode cost with fresh parsing on representative projects;
@@ -693,6 +887,10 @@ file on disk is not proof that a later compiler query reused it.
   identity and provenance;
 - target, output path, renderer, color, and worker count do not change the parse
   key;
+- golden byte vectors pin every v1 magic value, integer width/endianness,
+  component/tag ID, count, length prefix, field order, discriminator, and exact
+  end-of-record boundary for key, compatibility-input, compatibility-ID, and
+  envelope records;
 - future aggregate keys change for ordered source/dependency/stdlib manifest,
   semantic configuration, mode, target, backend, and toolchain changes exactly
   where those inputs become relevant.
@@ -730,8 +928,11 @@ file on disk is not proof that a later compiler query reused it.
 
 ### Failure and concurrency
 
-- failed parses and builds, panics, cancelled work, and stale LSP revisions
-  publish no initial-cache object;
+- failed or panicked parse queries, and cancellation or staleness observed
+  before atomic parse-object publication, publish no initial-cache object;
+- a complete parse fact published before a later resolution/type/build failure
+  or aggregate cancellation remains valid and is reusable, while no failed
+  build result is cached;
 - interruption at every write step leaves either no final object or one complete
   valid object;
 - concurrent identical writers produce one valid immutable object and both
@@ -747,12 +948,22 @@ file on disk is not proof that a later compiler query reused it.
 ### Lifecycle and privacy
 
 - default paths and permissions follow the current user's cache convention;
-- concurrent authentication-key creation selects one private key, key rotation
-  invalidates old objects safely, and the key never enters cache logs or agent
-  output;
+- root and every fixed child component reject intermediate/final symlinks,
+  junctions, reparse points, type swaps, and rename races; object, temporary,
+  cursor, lock, quarantine, and GC operations remain confined to pinned handles;
+- GC skips links and unknown directories, cannot delete outside the root, and
+  stops independently at every entry, candidate, metadata-byte, object-byte,
+  mutation, and injected-time budget boundary while preserving a validated
+  continuation cursor;
+- concurrent authentication-key creation selects one complete private key;
+  crash points before and during temporary write/install expose no partial final
+  key, and malformed length/type/owner/permission cases take the bounded locked
+  quarantine-and-retry path or disable caching;
+- key rotation invalidates old objects safely, and the key never enters cache
+  logs or agent output;
 - source scans, bundles, and project manifests never include cache objects;
-- size accounting triggers non-blocking eviction to the selected target with
-  digest tie-breaks;
+- incremental size accounting and bounded candidate heaps move toward the soft
+  target with deterministic digest tie-breaks without gating compiler results;
 - injected-time tests cover access throttling and temporary-file expiry without
   sleeps;
 - logs and agent output never expose source payloads, literals, tokens, or full
