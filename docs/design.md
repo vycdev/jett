@@ -3167,7 +3167,11 @@ Rule Set 2 established that side effects must be visible in the function signatu
 
 Jett completely bans global I/O access. There is no global `Stdout.write()`, no global `file.open()`, no implicit access to the network, file system, or operating system. Instead, I/O operations require a **capability object** — a value that grants permission to perform a specific kind of side effect.
 
-Capability objects are created **only in `main()`** and must be explicitly passed down to every function that needs them.
+Production capability objects are created **only for `main()`** and must be
+explicitly passed down to every function that needs them. The sole construction
+exception is an attempt-scoped typed `test.mock` capability owned directly by a
+property body when `jett test` executes it; that authority never enters an
+application or production artifact.
 
 **The capability types:**
 
@@ -3197,8 +3201,9 @@ function roll_die(view rng: Random) returns result[int64, string]:
 
 `random.int64` uses a half-open unbiased range, list choice/shuffle preserve
 their viewed input, and verify/comptime code cannot sample randomness. The first
-contract intentionally exposes no source-level seed or cryptographic RNG API;
-deterministic compiler/driver tests inject the runtime provider instead.
+contract intentionally exposes no source-level seed or cryptographic RNG API.
+Property tests may use the narrow compiler-shipped `test.mock.random` facade;
+host conformance tests inject the same private runtime provider directly.
 
 **Capabilities are a closed, built-in set.** Users cannot define custom capability types. Capabilities represent primitive OS-level side effects (file I/O, networking, stdout, etc.) or, for `Foreign`, explicit permission to cross a native boundary whose narrower effects cannot be proven from a C header. These are a finite, well-known set. Higher-level abstractions like database access or HTTP clients are built on top of primitive capabilities (e.g., a database module takes a `Network` parameter internally). This keeps the capability system simple: the compiler knows the full set, purity tracking is straightforward, and LLMs have a small, fixed list to learn rather than an open-ended set that varies per project. Capability types are not syntactically distinguished from other types in function signatures — they follow the same `view` pattern as any other borrowed parameter.
 
@@ -3254,11 +3259,19 @@ environment variables belong together because both are read-only launch data;
 the full policy is specified in the
 [Environment and argument capability contract](open_design/environment_argv_capability_contract.md).
 
-`main()` is the **only** function that receives capabilities from the runtime. Every other function in the program gets its capabilities by having them passed in as parameters. If a function doesn't have a `Filesystem` parameter, it **cannot** touch the file system. Period. The compiler enforces this.
+`main()` is the **only** function that receives production capabilities from the
+application runtime. A `jett test` property runner may separately mint only the
+typed, attempt-scoped mock capabilities explicitly constructed in that property.
+Every ordinary function gets capabilities by having them passed in as
+parameters. If a function does not have a `Filesystem` parameter, it **cannot**
+touch the file system. Period. The compiler enforces this.
 
-#### Capabilities Use `view` — Ownership Stays in `main()`
+#### Capabilities Use `view` — Ownership Stays at the Runtime Root
 
-`main()` **owns** all capabilities. Every other function **borrows** them via `view` — the same `view` keyword used for any other borrowed parameter (Rule Set 19). No special compiler magic is needed for capabilities.
+`main()` **owns** all production capabilities. A property body owns each mock it
+constructs for that attempt. Every ordinary function **borrows** a capability
+via `view` — the same `view` keyword used for any other borrowed parameter (Rule
+Set 19); testing changes provider construction, not passing semantics.
 
 ```
 function read_config(view fs: Filesystem, path: string) returns result[Config, string]:
@@ -3416,7 +3429,11 @@ function cannot tell the difference: it still receives `view Clock`,
 Mock construction is property-only, providers reset for every iteration and
 shrink attempt, and scripts never fall back to host effects. There is no
 dependency-injection framework, global provider state, name interception, or
-monkey-patching. The complete boundary is covered in Rule Set 25 and the
+monkey-patching. Only the exact compiler-shipped constructor `DeclarationId`
+with stdlib origin can select a private hook. Build, query, and LSP modes still
+analyze property calls for consistent diagnostics but never execute them; only
+`jett test` installs the provider registry. The complete boundary is covered in
+Rule Set 25 and the
 [capability mocking contract](completed/capability_mocking_test_harness_contract.md).
 
 ### Rule Set 17: Cross-Platform Compilation (Agnostic Capability Lowering)
@@ -5751,13 +5768,27 @@ property sampled_label_is_deterministic:
     assert sampled_label(view clock, view rng) == "1250:true"
 ```
 
-The constructors are legal only directly in property bodies under `jett test`.
-They are rejected in ordinary functions, `main`, verify, comptime, build, and
-run contexts. Every iteration, replay, and shrink candidate receives fresh
-provider state at step zero. Scripts are exact per-capability FIFO expectations;
-unused suffixes and calls after exhaustion fail the test, while different
-capabilities have no hidden global ordering. Property generation and shrinking
-apply to `given` values, not live provider cursors or implicit script mutation.
+The constructors are source-legal only directly in property bodies. Build,
+query, and LSP modes parse, resolve, type-check, and diagnose those calls but do
+not execute them; `jett build` may accept a valid property while omitting it from
+the application artifact. Only `jett test` installs the private hooks and runs
+constructors. Ordinary functions, `main`, verify, comptime, global initializers,
+and application runtime code reject construction.
+
+Only a resolved manifest `DeclarationId` with `SourceOrigin::Stdlib` is
+authorized; matching project/dependency names cannot mint authority. Every
+provider receives a stable identity from the property declaration, `FileKey`
+(origin plus logical path), half-open UTF-8 constructor span, lexical ordinal,
+and checked execution occurrence. Physical roots are never identity. Every
+iteration, replay, and shrink candidate receives fresh provider state at step
+zero. Scripts are exact per-capability FIFO expectations; mismatches have one
+canonical schema and ordering, unused suffixes and calls after exhaustion fail
+the test, and different capabilities have no hidden global ordering. Property
+generation and shrinking apply to `given` values, not live cursors or implicit
+script mutation. Shrinking retains only the same complete stable primary failure
+fingerprint, while replay binds exact source and property-declaration digests,
+the full checked source/configuration graph, semantic options, and runner
+versions.
 
 The initial typed adapters cover Clock, Random, and Environment. Other closed
 built-in capabilities join only after their own request, failure, authority,
@@ -6540,7 +6571,11 @@ function main(stdout: Stdout, fs: Filesystem) returns nothing:
     Stdout.write(view stdout, "running with config: {app_config.name}")
 ```
 
-The runtime provides capabilities to `main` based on its parameter list. If `main` does not declare a `Network` parameter, the program physically cannot access the network — the capability is never created. This is where the capability system begins: `main` is the root of the capability tree.
+The production runtime provides capabilities to `main` based on its parameter
+list. If `main` does not declare a `Network` parameter, the application cannot
+access the network — that capability is never created. This is where the
+production capability tree begins; the isolated `jett test` property provider
+registry is a separate test-only root.
 
 > **Note:** `main` follows the same limits as every other function (100 statements, 4 nesting levels, 6 parameters, 10 cyclomatic complexity). If `main` is hitting those limits, it is doing too much — extract the logic into named functions. A well-structured `main` is a short orchestrator that wires together capabilities and delegates to other functions.
 
@@ -6855,14 +6890,19 @@ security operations and are unrelated to hash-table bucket selection.
 
 ### Capabilities Use `view`
 
-`main()` owns all capabilities. Every other function borrows them via `view` — the same keyword used for any other non-owning parameter. Callers write `view` at call sites, just like any other view parameter.
+`main()` owns all production capabilities, and a property body may own only its
+explicit attempt-scoped mocks. Every ordinary function borrows capabilities via
+`view` — the same keyword used for any other non-owning parameter. Callers write
+`view` at call sites, just like any other view parameter.
 
 ```
 function greet(view stdout: Stdout, name: string) returns nothing:
     Stdout.write(view stdout, "hello {name}")
 ```
 
-No special compiler rules for capabilities. They follow the same `view` semantics as every other type.
+Capabilities follow the same `view` semantics as every other type. The narrow
+`test.mock` construction gate changes only who may mint a test handle, not how a
+function accepts or uses one.
 
 ---
 
