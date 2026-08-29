@@ -86,9 +86,10 @@ jett/
     └── architecture.md
 ```
 
-The planned `jett_profiler` CPU/memory sampling, attribution, reporting,
-security, platform, and interpreter/future-runtime contract is tracked by
-[#164](https://github.com/vycdev/jett/issues/164).
+The selected [`jett_profiler` contract](completed/cpu_memory_profiling_contract.md)
+defines CPU/memory events, attribution, bounded collection, deterministic
+reporting, security, and the interpreter/future-runtime handoff. Implementation
+remains staged.
 
 ### Crate Dependency Graph
 
@@ -1826,25 +1827,41 @@ Default: 10,000 iterations per property block. Configurable via CLI flag.
 
 ## Profiler (`jett_profiler`)
 
-Built-in CPU and memory sampling profiler.
+`jett_profiler` owns backend-neutral CPU samples and allocation events plus pure
+aggregation, thresholding, source sanitization, deterministic suggestions, and
+human/TOON rendering. The driver owns capability negotiation, run-manifest
+metadata, lifecycle finalization, and composition with `RunOutput`; the CLI owns
+argument validation, output channels, and exit behavior. Runtimes only produce
+safe events and exclude collector metadata.
 
 ### CPU Profiling
 
-When `--profile` is active:
-1. Compile with instrumentation hooks at function entry/exit.
-2. Run the program with a sampling timer (default 1000 Hz).
-3. At each sample, record the current call stack.
-4. After execution, aggregate samples into per-function and per-line counts.
-5. Generate the bottleneck summary: top functions by CPU %, hot lines, call chains, suggestions.
+`jett run --profile` requests monotonic elapsed-time samples at 1000 Hz by
+default. The timer keeps at most one pending request per runtime worker. The
+current tree-walking interpreter acknowledges requests at statement/call safe
+points on its dedicated runtime thread; future native runtimes may use safe
+platform sampling. Backends report coalesced, unavailable, runtime, and waiting
+observations instead of charging them to the last user frame. Statement counts
+are not an allowed timing substitute.
 
 ### Memory Profiling
 
-When `--profile-memory` is active:
-1. Wrap the allocator to record allocation size and call site at each `alloc`.
-2. After execution, aggregate into per-function allocation counts and bytes.
-3. Generate the memory bottleneck summary.
+`jett run --profile-memory` observes only the Jett-managed heap. Normalized
+allocate, resize, and free events produce exact allocation count, allocated and
+freed bytes, live bytes, global peak, and final retained bytes. Allocation sites
+own retained attribution. Compiler, profiler, stack, foreign allocator, RSS,
+mapped-file, and child-process memory are outside this coverage.
 
-Both profilers output via the diagnostics system in either human or TOON format.
+Both modes use one stable attribution model over normalized relative paths,
+source spans, call chains, and run-local execution identities. They share exact
+threshold, tie, truncation, redaction, and fixed-template suggestion rules.
+Human summaries follow program output on stderr. `--agent` embeds a typed
+`jett.profile.v1` object beside captured program streams in one parseable run
+envelope. Unsupported required capabilities fail before `main`; interrupted or
+bounded-collector results are explicit partial profiles.
+
+The complete selected behavior and staged verification matrix are in the
+[CPU and memory profiling contract](completed/cpu_memory_profiling_contract.md).
 
 ---
 
