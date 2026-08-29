@@ -40,10 +40,12 @@ Jett is optimized not just for LLM code generation, but also for how coding agen
 **New code can be added safely.** Jett's strict top-to-bottom ordering means an agent appending a new function at the end of a file cannot break existing code above it. Adding functionality is always additive.
 
 **Builds must be deterministic.** Vendored dependencies are pinned by Git,
-while a separate content-addressed compilation-cache contract is
-[tracked by #153](https://github.com/vycdev/jett/issues/153). That contract must
-preserve reproducibility across environments rather than introducing
-"works on my machine" drift. Compiler parallelism follows a
+while the separate
+[content-addressed compilation-cache contract](completed/content_addressed_compilation_cache_contract.md)
+selects a private, validated, clean-build-equivalent performance layer. Its
+first artifact is a successful whole-file parse keyed by exact source and
+compiler compatibility; cache contents never grant source provenance or skip
+semantic policy. Compiler parallelism follows a
 [deterministic build-plan and atomic-publication contract](open_design/parallel_compilation_boundary.md):
 worker timing and worker count may change throughput, but never accepted source,
 diagnostic order, query identity, or published artifacts.
@@ -2861,7 +2863,7 @@ function connect() returns nothing:
     return nothing
 ```
 
-The compiler scans all `.jett` files in the project (including `deps/`), reads their `namespace` declarations, and resolves `use json_extra` to whichever file declared `namespace json_extra`. The file path is irrelevant (Rule Set 22). No URL fetching, no dependency-integrity hash checking, no registry lookup. The dependency is right there, readable by the LLM, tracked by git. This dependency policy is distinct from the compiler-result and artifact cache [tracked by #153](https://github.com/vycdev/jett/issues/153).
+The compiler scans all `.jett` files in the project (including `deps/`), reads their `namespace` declarations, and resolves `use json_extra` to whichever file declared `namespace json_extra`. The file path is irrelevant (Rule Set 22). No URL fetching, no dependency-integrity hash checking, no registry lookup. The dependency is right there, readable by the LLM, tracked by git. This dependency policy is distinct from the private, local compiler-result and artifact [cache contract](completed/content_addressed_compilation_cache_contract.md): Git remains the dependency lock, while cache digests identify validated reusable compiler facts.
 
 **What happens when an LLM hallucinates a dependency:**
 

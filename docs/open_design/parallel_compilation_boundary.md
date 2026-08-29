@@ -291,10 +291,11 @@ work.
 ## Relationship to Caching and Future Backends
 
 In-process Salsa memoization and parallel execution share immutable query
-results, but neither implies persistent caching. A future content-addressed
-cache may consume only a fully published canonical result and must follow
-[#153](https://github.com/vycdev/jett/issues/153) for identity, serialization,
-trust, atomic writes, and concurrent process behavior.
+results, but neither implies persistent caching. The separate
+[content-addressed compilation cache contract](../completed/content_addressed_compilation_cache_contract.md)
+starts with successful whole-file parse artifacts and defines identity,
+canonical serialization, untrusted validation, atomic writes, and concurrent
+process behavior.
 
 Cancelled, stale, failed, or partially merged stages cannot publish a persistent
 artifact. Two compiler processes racing to cache the same successful result are
@@ -330,7 +331,8 @@ reorder user-visible diagnostics or make target output depend on worker count.
    - preserve existing human, agent, and LSP envelopes.
 5. **Later phases**
    - add HIR/MIR/backend work nodes only after their ownership contracts land;
-   - coordinate persistent publication separately with #153;
+   - coordinate persistent publication with the content-addressed cache
+     contract selected by #153;
    - measure speedup only after correctness and recomputation gates pass.
 
 Each stage keeps a working compiler and may land independently. Parallel parse

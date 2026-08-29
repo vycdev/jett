@@ -106,6 +106,16 @@ origin. Physical paths may be retained for I/O and local source lookup, but
 semantic identity, portable diagnostics, and persistent cache records use
 `FileKey`. Host-absolute roots must not affect compiler output.
 
+The narrow syntax-only parse-object exception is defined by the
+[content-addressed cache contract](content_addressed_compilation_cache_contract.md).
+That object may deduplicate exact source bytes without putting `FileKey` in its
+object key or payload because parsing does not consume origin or path: lookup
+already owns the current `FileKey`, cached spans contain no authority, and
+decode rebinds every span and diagnostic to that caller identity. Any artifact
+whose fact, diagnostic, namespace, or policy depends on source identity must
+include `FileKey` or a canonical derivative. Content equality must never upgrade
+origin or carry trust across callers.
+
 `FileId` remains a compact diagnostic handle allocated for one compiler
 session. Its numeric range must not decide source authority after discovery.
 The current reserved stdlib range is a bootstrap representation that must be
@@ -381,7 +391,8 @@ than retain only a display name:
 - HIR functions and generic instantiations,
 - MIR call targets,
 - bytecode/native symbols and runtime-kernel bindings,
-- cache keys and serialized compiler artifacts.
+- cache keys and serialized compiler artifacts from the first layer whose fact
+  depends on source identity.
 
 Serialized and cached origin records contain only the logical identities above;
 they never persist `DiscoveryRoot.physical_root` or reconstruct identity from a
@@ -391,9 +402,12 @@ Backends may erase metadata after final call targets are selected, but policy
 selection must happen from trusted identities before erasure. Native or bytecode
 codegen must not rediscover trust from mangled symbol text.
 
-Compiler caches include the stdlib identity/version and source origin in keys.
-An artifact built from project source cannot be replayed as a trusted stdlib
-artifact because its text or logical path matches.
+Compiler cache layers that consume stdlib declarations, namespaces, or policy
+include the stdlib identity/version and source origin in their keys. The
+syntax-only parse object contains no authority and is rebound beneath current
+discovery before those layers run. An artifact built from project source cannot
+be replayed as a trusted stdlib artifact because its text or logical path
+matches.
 
 ## JSON and Stdlib Handoff
 
