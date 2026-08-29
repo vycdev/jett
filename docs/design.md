@@ -7130,12 +7130,13 @@ The standard library is intentionally massive and opinionated. The goal is to ma
   codecs; see the implemented
   [encoding representation and failure contract](completed/encoding_representation_failure_contract.md)
 - **validate** — standard refinement types for common formats: Email, URL, UUID, IPv4, IPv6. The type IS the validation — once assigned, the value is guaranteed valid.
-- **regex** — pure, one-shot matching and capture extraction over a bounded,
-  linear-time pattern language. Matches expose grapheme indices, never byte
-  offsets; literals, dot, ASCII classes, ordered alternatives, captures,
-  quantifiers, and leading `i`/`m`/`s` flags have deterministic cross-backend
-  behavior. Lookaround, backreferences, replacement, splitting, Unicode
-  property classes, and public compiled-pattern values are deferred. See the
+- **regex** — pure, one-shot matching and non-overlapping extraction over an
+  exact, bounded pattern grammar. Matches expose Unicode 17.0.0 grapheme
+  indices, never byte offsets; parser errors, simple literal folding, ordered
+  alternatives, captures, canonical NFA sizing, and a checked input-state work
+  cap have deterministic cross-backend behavior. Lookaround, backreferences,
+  replacement, splitting, Unicode property classes, and public compiled-pattern
+  values are deferred. See the
   [regular expression contract](completed/regex_matching_extraction_contract.md)
   selected by [#140](https://github.com/vycdev/jett/issues/140)
 - **csv** — strict parsing and writing of CSV data; public declarations are

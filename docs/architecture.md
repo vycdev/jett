@@ -1277,7 +1277,7 @@ The runtime sits between Rust (~2K lines, no scheduler) and Pony (~15-20K lines,
 | Component | Size estimate | Purpose |
 |---|---|---|
 | **Allocator** | ~200 lines | Thin wrapper around the system allocator (`malloc`/`free`). The compiler emits `alloc`/`dealloc` calls at the exact points where linear values are created/dropped — no GC or reference counting. |
-| **String representation** | ~500 lines + Unicode support | UTF-8 byte buffer with **small string optimization** (SSO): strings up to ~23 bytes are stored inline in the String struct, avoiding heap allocation. Larger strings use `{ length: i64, capacity: i64, data: *u8 }`. The interpreter uses a compact grapheme splitter for combining marks, variation selectors, emoji modifiers, ZWJ sequences, CRLF, and regional-indicator flag pairs; search and extraction helpers align matches to grapheme boundaries. A native runtime can replace this with full Unicode segmentation tables if needed. |
+| **String representation** | ~500 lines + Unicode support | UTF-8 byte buffer with **small string optimization** (SSO): strings up to ~23 bytes are stored inline in the String struct, avoiding heap allocation. Larger strings use `{ length: i64, capacity: i64, data: *u8 }`. The interpreter uses full extended-grapheme segmentation; search and extraction helpers align matches to grapheme boundaries. The regex handoff pins Unicode 17.0.0/UAX #29 revision 47 data in a checked manifest shared with string operations, and every native runtime must reproduce those boundaries rather than substitute host Unicode defaults. |
 | **Actor scheduler** | ~3K-5K lines | Thread pool (one thread per CPU core) + per-actor bounded MPSC message queues + work-stealing. See Actor Runtime section below. |
 | **Async I/O event loop** | ~1K-3K lines | Integrates with the actor scheduler to avoid blocking thread pool threads on I/O. Uses `epoll` (Linux), `kqueue` (macOS), `IOCP` (Windows). When a capability method performs I/O, it submits the operation to the event loop and yields the actor, freeing the thread for other work. |
 | **Task scheduler** | ~500 lines | For `run`/`join`/`cancel` structured concurrency. Built on top of the actor scheduler — a spawned task is a lightweight actor. |
@@ -2244,9 +2244,10 @@ Core stdlib (string, list, math, json) is implemented in Phase D. This phase com
   implemented byte-native codecs and strict failure policy are defined by the
   [encoding contract](completed/encoding_representation_failure_contract.md))
 - **OS:** `Environment` for read-only launch environment variables and user arguments (the proposed capability, snapshot, Unicode-failure, compatibility, and source/runtime boundary is defined in the [Environment and argument contract](open_design/environment_argv_capability_contract.md)); process management remains a separate `Process` capability concern
-- **Utilities:** `regex` (the selected pure, bounded, linear-time surface uses
-  one-shot matching, grapheme-indexed spans, structured captures/errors, and a
-  portable pattern subset; implementation is pending under the
+- **Utilities:** `regex` (the selected pure surface uses one-shot matching,
+  non-overlapping iteration, an exact portable grammar, Unicode 17.0.0
+  grapheme/fold data, grapheme-indexed spans, structured captures/errors, and
+  checked canonical NFA/work limits; implementation is pending under the
   [regular expression contract](completed/regex_matching_extraction_contract.md)
   from [#140](https://github.com/vycdev/jett/issues/140)), `random` (the explicit capability, entropy,
   deterministic injection, and source/runtime policy is defined in the
@@ -2299,7 +2300,7 @@ Core stdlib (string, list, math, json) is implemented in Phase D. This phase com
 | `clap` | CLI argument parsing |
 | `serde` | Serialization (for caching) |
 | `toon` | TOON format parsing/serialization (for `jett.proj`, ASP output). Custom crate or integrated into `jett_common` if no existing crate is available. |
-| `unicode-segmentation` | Optional future dependency for full UAX #29 grapheme cluster segmentation in the native runtime |
+| `unicode-segmentation` | Current interpreter dependency for extended-grapheme segmentation; its package version is non-normative, and the Unicode 17.0.0 manifest/conformance gate in the regular-expression contract fixes observable boundaries for future backends |
 | `mimalloc` | High-performance allocator (or system allocator as default) |
 
 ---
