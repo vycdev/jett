@@ -67,6 +67,7 @@ plans above for current work.
 - [Math numeric overload boundary](completed/math_numeric_overload_boundary.md)
 - [Module, import, prelude, and trusted-origin contract](completed/module_import_trusted_origin_contract.md)
 - [Primitive collection hashing boundary](completed/primitive_collection_hash_boundary.md)
+- [Regular expression matching and extraction contract](completed/regex_matching_extraction_contract.md)
 - [Random capability and entropy contract](completed/random_capability_entropy_contract.md)
 - [Time and Clock capability contract](completed/time_clock_capability_contract.md)
 - [Reflected construction staging](completed/reflected_construction_staging.md)
