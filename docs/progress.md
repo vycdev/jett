@@ -180,7 +180,7 @@
 | `csv` | Done for the interpreter-backed compiler (all 3 public declarations are source-owned in `stdlib/csv.jett`, with only private trusted parse/stringify kernels in the interpreter; parsing returns `result[..., string]`, ignores one leading UTF-8 BOM, treats empty input as zero records, preserves blank records, whitespace, quoted data, Unicode, LF/CRLF endings, and ragged raw rows; malformed quoting, bare CR record endings, invalid headers, and header/data width mismatches fail explicitly; `stringify` emits canonical LF-separated records with no final newline; future backends retain the [CSV format and failure contract](completed/csv_format_failure_contract.md)) |
 | `regex` | Not started (initial pattern, matching, extraction, Unicode, failure, resource, and source/runtime contract [tracked by #140](https://github.com/vycdev/jett/issues/140)) |
 | `log` | Not started (initial structured event, level/filter, capability, secret-safety, sink, deterministic-test, and source/runtime contract [tracked by #143](https://github.com/vycdev/jett/issues/143)) |
-| `test.mock` | Not started (capability mocking and deterministic test-harness contract [tracked by #145](https://github.com/vycdev/jett/issues/145)) |
+| `test.mock` | Not started (the property-only source facade, typed provider adapters, exact scripts, isolation, replay/shrinking boundary, and future-backend obligations are defined by the [capability mocking and deterministic test harness contract](completed/capability_mocking_test_harness_contract.md) from [#145](https://github.com/vycdev/jett/issues/145)) |
 
 ### Phase L: Incremental Compilation — NOT STARTED
 

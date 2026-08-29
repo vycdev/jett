@@ -49,6 +49,7 @@ plans above for current work.
 - [Breakpoint pause and inspection protocol](completed/breakpoint_pause_inspection_protocol.md)
 - [Bitfield reflection metadata](completed/bitfield_reflection_metadata.md)
 - [Bundle ordering contract](completed/bundle_ordering_contract.md)
+- [Capability mocking and deterministic test harness](completed/capability_mocking_test_harness_contract.md)
 - [Content-addressed compilation cache contract](completed/content_addressed_compilation_cache_contract.md)
 - [Comptime type bind](completed/comptime_type_bind.md)
 - [Explicit comptime expression semantics](completed/explicit_comptime_expression_semantics.md)

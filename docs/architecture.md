@@ -477,7 +477,7 @@ Walk all type declarations and build the type registry:
   type-level reflection. See the
   [opaque runtime resource contract](completed/opaque_runtime_resource_contract.md).
 - **Function types:** `function(T) returns U`.
-- **Capability types:** `Filesystem`, `Network`, `Stdout`, `Stderr`, `Stdin`, `Clock`, `Random`, `Process`, `Environment`, `Foreign`. Random sampling uses the explicit `view Random` API, injected per-runtime generator state, and non-cryptographic contract defined in the [Random capability and entropy contract](completed/random_capability_entropy_contract.md). The interpreter-backed [`Environment` contract](open_design/environment_argv_capability_contract.md) uses source-owned `Environment.get` and `Environment.args` over one immutable injected launch snapshot; ambient `os.env`/`os.args` are removed. `Foreign` guards the generated native C boundary specified by the [C FFI contract](open_design/c_ffi_binding_contract.md).
+- **Capability types:** `Filesystem`, `Network`, `Stdout`, `Stderr`, `Stdin`, `Clock`, `Random`, `Process`, `Environment`, `Foreign`. Random sampling uses the explicit `view Random` API, injected per-runtime generator state, and non-cryptographic contract defined in the [Random capability and entropy contract](completed/random_capability_entropy_contract.md). The interpreter-backed [`Environment` contract](open_design/environment_argv_capability_contract.md) uses source-owned `Environment.get` and `Environment.args` over one immutable injected launch snapshot; ambient `os.env`/`os.args` are removed. `Foreign` guards the generated native C boundary specified by the [C FFI contract](open_design/c_ffi_binding_contract.md). Property tests may create only the typed test capabilities admitted by the [capability mocking contract](completed/capability_mocking_test_harness_contract.md); this does not open the capability set or add production constructors.
 - **Secret wrapper:** `secret[T]`.
 - **State-qualified types:** `Machine at state`.
 - **Task-control failures:** `CancelledError` terminates a cancelled pending task
@@ -614,29 +614,35 @@ Track which capabilities flow through the program:
   capability guarantee.
 - A function that calls another function requiring a capability must itself accept that capability.
 - Capability narrowing consumes the original and produces a restricted version. All narrowing operations: `Filesystem.read_only(fs)`, `Filesystem.scoped(fs, "/data/")`, `Network.allow(net, "localhost")`, `Stdout.buffered(stdout)`. The runtime enforces restricted permissions (e.g., `read_only` prevents write operations, `scoped` restricts file paths).
-- **Only `main()` owns capabilities.** Every other function must borrow them via `view`. A non-`main` function declaring an owned (non-view) capability parameter is a compile error.
+- **Only `main()` owns production capabilities.** Every other function must
+  borrow them via `view`. The sole construction exception is a property body
+  owning a typed, attempt-scoped `test.mock` capability under `jett test`; this
+  creates no production authority. A non-`main` function declaring an owned
+  (non-view) capability parameter remains a compile error.
 - Actors receive capabilities at spawn time via `clone` (since passing would consume the caller's capability).
 - **Verify blocks** can only call pure functions (no capabilities).
 - **Random sampling is a capability operation.** The public `random.*`
   functions borrow `view Random`; there are no capability-free compatibility
   signatures.
   The runner injects generator state so production uses platform entropy while
-  tests use scripted deterministic samples. Verify and comptime evaluation
-  cannot sample randomness. See the
+  property tests use the narrow trusted `test.mock.random` facade over scripted
+  deterministic samples. Verify and comptime evaluation cannot sample
+  randomness. See the
   [Random capability and entropy contract](completed/random_capability_entropy_contract.md).
 - **Clock reads are capability operations.** The canonical operation is
   `Clock.now(view clock) -> time.Timestamp`; the ambient `time.now_ms` and
   `time.now_s` spellings have been removed. Verify and comptime evaluation
   cannot read a clock. Runtime contexts receive an injected production or
-  deterministic test clock. See the
+  deterministic property-test clock through `test.mock.clock`. See the
   [Time and Clock capability contract](completed/time_clock_capability_contract.md).
 - **Launch inputs are capability operations.** The source-owned
   `Environment.get(view env, key)` and `Environment.args(view env)` read one
   immutable runtime-injected launch snapshot through private trusted kernels.
   Capability-free `os.env` and `os.args` are removed with focused migration
-  diagnostics. Verify, property, and comptime evaluation cannot access process
-  launch data. Production captures native launch data before `main`; tests
-  inject isolated snapshots. See the
+  diagnostics. Verify, property generation, and comptime evaluation cannot
+  access process launch data. Production captures native launch data before
+  `main`; a property body may explicitly create an isolated test snapshot
+  through `test.mock.environment`. See the
   [Environment and argument capability contract](open_design/environment_argv_capability_contract.md)
   and implementation issue [#170](https://github.com/vycdev/jett/issues/170).
 - **`trace` and `breakpoint` are capability-exempt** — they produce output/open connections without requiring a `Stdout` or `Network` capability. They are compiler keywords with special treatment, compiled out in release mode.
@@ -1270,7 +1276,7 @@ The runtime sits between Rust (~2K lines, no scheduler) and Pony (~15-20K lines,
 | **Actor scheduler** | ~3K-5K lines | Thread pool (one thread per CPU core) + per-actor bounded MPSC message queues + work-stealing. See Actor Runtime section below. |
 | **Async I/O event loop** | ~1K-3K lines | Integrates with the actor scheduler to avoid blocking thread pool threads on I/O. Uses `epoll` (Linux), `kqueue` (macOS), `IOCP` (Windows). When a capability method performs I/O, it submits the operation to the event loop and yields the actor, freeing the thread for other work. |
 | **Task scheduler** | ~500 lines | For `run`/`join`/`cancel` structured concurrency. Built on top of the actor scheduler — a spawned task is a lightweight actor. |
-| **Capability constructors** | ~200 lines | Functions that create capability values at program startup. Called by the generated `main` wrapper. |
+| **Capability constructors** | ~200 lines | Production functions create capability values at program startup for the generated `main` wrapper. Separately linked test-runner hooks may create only manifest-authorized, attempt-scoped providers for direct `test.mock` calls in property bodies. |
 | **Panic handler** | ~100 lines | For `assert` failures and unrecoverable errors. Prints the message and aborts. |
 | **Breakpoint control plane** | ~300 lines | Debug-only. A compiler-owned operation layer exposes pause, inspection, evaluation, and resume through an authenticated loopback HTTP adapter. The [decided protocol](completed/breakpoint_pause_inspection_protocol.md) is compiled out in release. |
 | **Entry point** | ~100 lines | `_jett_entry` initializes the runtime (thread pool, event loop), constructs capabilities, calls user's `main()`, and shuts down cleanly. |
@@ -1384,6 +1390,12 @@ fn _jett_entry() {
 
 Capability values are opaque structs containing OS-level handles (file descriptors, socket handles, etc.) or runner-owned state. `Environment` carries an immutable copy of launch arguments and environment entries; it never performs a fresh ambient host lookup after entry. `Filesystem.read_only(fs)` creates a new capability with a restricted permission flag — the runtime checks this flag before executing write operations. `Foreign` is the exception with no OS handle: when `main` requests it, the entry wrapper creates an unforgeable zero-sized token that authorizes calls through checked generated foreign declarations. It otherwise follows the same ownership, `view`, and explicit actor/task clone rules.
 
+`jett test` has a separate property-attempt entry path. It creates a fresh
+private provider registry and may execute checked direct `test.mock`
+constructor sites. The build/run entry wrapper above never links or invokes
+those hooks. Build, query, and LSP pipelines still parse, resolve, type-check,
+and diagnose property source but do not execute a property or constructor.
+
 ---
 
 ## Actor Runtime
@@ -1442,6 +1454,9 @@ flowchart LR
 > for [#104](https://github.com/vycdev/jett/issues/104).
 > The public-source/private-runtime boundary for the initial `net.http` client
 > is separately [tracked by #101](https://github.com/vycdev/jett/issues/101).
+> The test-only source facade, typed provider registry, exact-script policy,
+> and property-attempt isolation boundary for capability mocks are defined in
+> the [capability mocking and deterministic test harness contract](completed/capability_mocking_test_harness_contract.md).
 
 The boundary between compiler-generated code and stdlib-implemented code is a critical architectural decision.
 
@@ -1587,6 +1602,14 @@ public declarations, range validation, choice, and shuffle live in trusted
 in private trusted kernels. The runner injects isolated production state or a
 typed deterministic test provider. Later backends and concurrent cancellation
 must preserve the [Random capability and entropy contract](completed/random_capability_entropy_contract.md).
+
+Capability mocks use the same public-source/private-runtime split without
+turning test providers into application APIs. `stdlib/test/mock.jett` owns
+typed scripts and property-only constructor declarations; a private test
+runtime registry owns capability handles, provider cursors, per-attempt
+isolation, and exact-consumption diagnostics. Clock, Random, and Environment
+adapt their existing typed test seams to that registry. The full boundary is
+defined by the [capability mocking and deterministic test harness contract](completed/capability_mocking_test_harness_contract.md).
 
 The complete public `math.*` API is defined in `stdlib/math.jett`. Compositional
 helpers have Jett bodies, including the consuming `math.sum(list[int64])`, which
@@ -2028,6 +2051,37 @@ Property-based coverage is staged with the compiler pipeline:
 - **Deferred until code generation exists:** if type checking succeeds, codegen
   never encounters a type error.
 
+### Capability Mocks in Language Property Tests
+
+`test.mock` is a compiler-shipped, test-only source facade. A property block
+may construct typed Clock, Random, or Environment test capabilities and pass
+them through ordinary `view` parameters. The checker authorizes a constructor
+only by the exact manifest `DeclarationId` with `SourceOrigin::Stdlib`, never by
+qualified-name or path spelling. Constructor calls are source-legal only as
+direct property-body expressions, excluding nested declarations, closures,
+actors, and spawned tasks. Normal functions, `main`, verify,
+comptime, and application runtime code cannot construct them.
+
+Build, query, and LSP pipelines run the same parse, resolution, type, ownership,
+capability, and context checks over property source without executing it. Only a
+live `jett test` property attempt installs the private hooks and executes a
+constructor. Each construction site carries the property `DeclarationId`,
+`FileKey` (`SourceOrigin` plus logical path), a half-open UTF-8 source span, a
+lexical ordinal, and a checked per-site occurrence. Physical roots never enter
+identity, replay, or diagnostic ordering.
+
+Every normal property iteration, replay, and shrink candidate receives a fresh
+private provider registry. Sequential providers consume capability-specific
+FIFO scripts exactly, explicit clones and actor handoffs share one cursor, and
+successful attempts reject unused suffixes. Different capability providers do
+not acquire an implicit global ordering. Generated `given` values are replayed
+and shrunk separately from source-owned scripts. Provider mismatches use one
+canonical schema and order; shrinking preserves the full stable primary failure
+fingerprint, and replay tokens bind exact source/property digests plus a
+relocation-independent digest of the full checked source, configuration, and
+semantic-option graph. See the
+[capability mocking and deterministic test harness contract](completed/capability_mocking_test_harness_contract.md).
+
 ---
 
 ## Implementation Phases
@@ -2190,7 +2244,7 @@ Core stdlib (string, list, math, json) is implemented in Phase D. This phase com
   (generation and entropy contract [tracked by #73](https://github.com/vycdev/jett/issues/73)), `log`
   (structured event, capability, secret, sink, and source/runtime contract
   [tracked by #143](https://github.com/vycdev/jett/issues/143)), `format`
-- **Testing:** `test.mock` (mock capabilities for property-based testing; capability-mocking and deterministic harness contract [tracked by #145](https://github.com/vycdev/jett/issues/145))
+- **Testing:** `test.mock` (property-only typed capability scripts and private per-attempt provider registry; the selected isolation, ordering, replay, shrinking, ownership, and backend contract is defined in the [capability mocking and deterministic test harness contract](completed/capability_mocking_test_harness_contract.md) from [#145](https://github.com/vycdev/jett/issues/145))
 
 **Milestone:** The standard library covers virtually every common operation. LLMs write orchestration code, not algorithms.
 
