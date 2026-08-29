@@ -1,0 +1,15 @@
+namespace app
+
+function negative_start_clamps() returns string:
+    bytes value = bytes.from_string("hello")
+    bytes sliced = bytes.slice(value, -4, 2)
+    return bytes.to_string(sliced) handle error:
+        default "error"
+verify negative_start_clamps:
+    assert negative_start_clamps() == "he"
+
+function reversed_range_is_empty() returns int64:
+    bytes value = bytes.from_string("hello")
+    return bytes.length(bytes.slice(value, 4, 2))
+verify reversed_range_is_empty:
+    assert reversed_range_is_empty() == 0
