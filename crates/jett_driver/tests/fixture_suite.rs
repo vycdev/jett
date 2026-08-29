@@ -1138,6 +1138,14 @@ compile_fail_fixture!(
     "ownership_branch_partial_move.jett"
 );
 compile_fail_fixture!(
+    compile_fail_ownership_for_zero_iteration_rebind,
+    "ownership_for_zero_iteration_rebind.jett"
+);
+compile_fail_fixture!(
+    compile_fail_ownership_while_zero_iteration_rebind,
+    "ownership_while_zero_iteration_rebind.jett"
+);
+compile_fail_fixture!(
     compile_fail_math_sum_consumes_list,
     "math_sum_consumes_list.jett"
 );
