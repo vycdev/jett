@@ -29,6 +29,7 @@
 | Type interning, struct/enum/interface defs | `jett_types` | 18 | Done |
 | Name resolution, scoping, namespace export visibility | `jett_resolve` | 27 | Done |
 | Type checking (expressions, operators, generics) | `jett_typecheck` | 100 | Done |
+| Module/import/prelude registry and backend-neutral trusted origin | `jett_project`, `jett_resolve`, later IR | n/a | Design selected by the [module and trusted-origin contract](completed/module_import_trusted_origin_contract.md); current block-local `use`, stdlib loading, and interpreter trust paths remain transitional |
 
 ### Phase C: Ownership and Capabilities — COMPLETE
 

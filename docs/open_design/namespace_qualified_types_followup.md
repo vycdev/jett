@@ -135,12 +135,13 @@ Local aliases are acceptable as a function-scoped readability tool because they
 do not change canonical symbol names, reflection metadata, or public API
 identity.
 
-The implemented path is now Option C for checked user-facing metadata. The next
-implementation step is to keep ordinary type/function paths on canonical
-qualified symbols while future import/prelude and bootstrap compatibility work
-decide how much root shorthand should exist.
+The implemented path is now Option C for checked user-facing metadata. The
+[module and trusted-origin contract](../completed/module_import_trusted_origin_contract.md)
+selects a registry of canonical qualified symbols, block-local namespace
+aliases, implicit qualified stdlib namespaces, a fixed foundational prelude,
+and no root type aliases.
 
-The broader import/prelude and bootstrap compatibility design is tracked by
+Registry-backed resolution and bootstrap cleanup remain implementation work from
 [#3](https://github.com/vycdev/jett/issues/3).
 
 ## Suggested Next Tests
