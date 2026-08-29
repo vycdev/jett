@@ -317,6 +317,11 @@ one. The summary reports `eligible_bottlenecks`, `emitted_bottlenecks`, and
 `truncated_bottlenecks`. An empty or entirely below-threshold profile is valid
 and emits an empty bottleneck list with totals intact.
 
+If the relevant denominator is zero -- no `state: jett` samples for CPU or no
+attributed allocated bytes for memory -- the profile has no eligible
+bottlenecks or suggestions. It does not divide by zero, invent a percentage, or
+promote runtime/unavailable observations into a user-function entry.
+
 Unavailable-symbol and runtime buckets are included in totals. An unavailable
 Jett symbol may be an emitted bottleneck if it crosses the threshold, with
 source and suggestions marked unavailable. The output never fabricates a source
@@ -336,7 +341,8 @@ counts, percentages, qualified names, and source locations. V1 rules are:
 - `MEM_ALLOCATION_PRESSURE`: reduce, reuse, or batch work at the hottest
   allocation site;
 - `MEM_RETAINED`: review the lifetime of allocations from a site when its
-  retained bytes cross the same configured threshold.
+  retained bytes divided by total attributed allocated bytes meet the same
+  configured threshold.
 
 Ties use the bottleneck ordering above. At most two suggestions are emitted per
 bottleneck, ordered by rule ID. A rule is omitted when required data is partial,
