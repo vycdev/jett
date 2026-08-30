@@ -43,6 +43,53 @@ fn nonnegative_usize(value: i64) -> usize {
     usize::try_from(value.max(0)).unwrap_or(usize::MAX)
 }
 
+fn repeat_string_checked(value: &str, count: i64) -> Result<String, String> {
+    let count = nonnegative_usize(count);
+    let output_len = value
+        .len()
+        .checked_mul(count)
+        .ok_or_else(|| "string.repeat: requested output is too large".to_string())?;
+    let mut output = String::new();
+    output
+        .try_reserve_exact(output_len)
+        .map_err(|_| "string.repeat: requested output is too large".to_string())?;
+    for _ in 0..count {
+        output.push_str(value);
+    }
+    Ok(output)
+}
+
+fn range_values_checked(start: i64, end: i64, step: i64) -> Result<Vec<Value>, String> {
+    if step == 0 {
+        return Err("range step cannot be zero".to_string());
+    }
+    let distance = if step > 0 && start < end {
+        (i128::from(end) - i128::from(start)) as u128
+    } else if step < 0 && start > end {
+        (i128::from(start) - i128::from(end)) as u128
+    } else {
+        0
+    };
+    let step_magnitude = i128::from(step).unsigned_abs();
+    let count = distance.div_ceil(step_magnitude);
+    let capacity =
+        usize::try_from(count).map_err(|_| "range: requested output is too large".to_string())?;
+    let mut items = Vec::new();
+    items
+        .try_reserve_exact(capacity)
+        .map_err(|_| "range: requested output is too large".to_string())?;
+
+    let mut value = start;
+    while (step > 0 && value < end) || (step < 0 && value > end) {
+        items.push(Value::Int64(value));
+        let Some(next) = value.checked_add(step) else {
+            break;
+        };
+        value = next;
+    }
+    Ok(items)
+}
+
 /// Compare secret byte strings without content-dependent early exits.
 ///
 /// Payload lengths are observable by contract. Equal-length contents are handed
@@ -8238,8 +8285,8 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::String(s), Value::String(delim)) => {
-                        let parts: Vec<Value> = s
-                            .split(delim.as_str())
+                        let parts: Vec<Value> = string_split_grapheme_matches(s, delim)
+                            .into_iter()
                             .map(|p| Value::String(p.to_string()))
                             .collect();
                         Some(Ok(Value::List(parts)))
@@ -8289,8 +8336,7 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::String(s), Value::Int64(n)) => {
-                        let n = nonnegative_usize(*n);
-                        Some(Ok(Value::String(s.repeat(n))))
+                        Some(repeat_string_checked(s, *n).map(Value::String))
                     }
                     _ => Some(Err(format!("{name} expects a string and an int64"))),
                 }
@@ -8333,6 +8379,24 @@ impl Interpreter {
             }
 
             // -- int64 / float64 conversions ----------------------------------
+            "int64.from_float64" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::Float64(n)
+                        if n.is_finite()
+                            && n.fract() == 0.0
+                            && *n >= i64::MIN as f64
+                            && *n < 9_223_372_036_854_775_808.0 =>
+                    {
+                        Some(Ok(Value::ResultOk(Box::new(Value::Int64(*n as i64)))))
+                    }
+                    Value::Float64(_) => Some(Ok(Value::ResultFail(Box::new(Value::String(
+                        "int64.from_float64: value is not exactly representable as int64"
+                            .to_string(),
+                    ))))),
+                    _ => Some(Err(format!("{name} expects a float64 argument"))),
+                }
+            }
             "int64.from_string" => {
                 require_args!(name, 1, args);
                 match &args[0] {
@@ -8457,6 +8521,7 @@ impl Interpreter {
                         let mut sorted = items.clone();
                         sorted.sort_by(|a, b| match (a, b) {
                             (Value::Int64(x), Value::Int64(y)) => x.cmp(y),
+                            (Value::Uint64(x), Value::Uint64(y)) => x.cmp(y),
                             (Value::Float64(x), Value::Float64(y)) => {
                                 x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal)
                             }
@@ -8535,11 +8600,16 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::List(keys), Value::List(values)) => {
-                        let entries: Vec<(Value, Value)> = keys
-                            .iter()
-                            .zip(values.iter())
-                            .map(|(k, v)| (k.clone(), v.clone()))
-                            .collect();
+                        let mut entries = Vec::new();
+                        for (key, value) in keys.iter().zip(values.iter()) {
+                            if let Some(entry) =
+                                entries.iter_mut().find(|(existing, _)| existing == key)
+                            {
+                                entry.1 = value.clone();
+                            } else {
+                                entries.push((key.clone(), value.clone()));
+                            }
+                        }
                         Some(Ok(Value::Map(entries)))
                     }
                     _ => Some(Err(format!("{name} expects two list arguments"))),
@@ -8809,7 +8879,7 @@ impl Interpreter {
                             });
                             let mid = nums.len() / 2;
                             let median = if nums.len() % 2 == 0 {
-                                (nums[mid - 1] + nums[mid]) / 2.0
+                                float_midpoint(nums[mid - 1], nums[mid])
                             } else {
                                 nums[mid]
                             };
@@ -9419,45 +9489,21 @@ impl Interpreter {
                     // range(end) — 0 to end exclusive
                     1 => match &args[0] {
                         Value::Int64(end) => {
-                            let items: Vec<Value> = (0..*end).map(Value::Int64).collect();
-                            Some(Ok(Value::List(items)))
+                            Some(range_values_checked(0, *end, 1).map(Value::List))
                         }
                         _ => Some(Err(format!("{name} expects int64 arguments"))),
                     },
                     // range(start, end) — start to end exclusive
                     2 => match (&args[0], &args[1]) {
                         (Value::Int64(start), Value::Int64(end)) => {
-                            let items: Vec<Value> = (*start..*end).map(Value::Int64).collect();
-                            Some(Ok(Value::List(items)))
+                            Some(range_values_checked(*start, *end, 1).map(Value::List))
                         }
                         _ => Some(Err(format!("{name} expects int64 arguments"))),
                     },
                     // range(start, end, step)
                     3 => match (&args[0], &args[1], &args[2]) {
                         (Value::Int64(start), Value::Int64(end), Value::Int64(step)) => {
-                            if *step == 0 {
-                                return Some(Err("range step cannot be zero".to_string()));
-                            }
-                            let mut items = Vec::new();
-                            let mut i = *start;
-                            if *step > 0 {
-                                while i < *end {
-                                    items.push(Value::Int64(i));
-                                    let Some(next) = i.checked_add(*step) else {
-                                        break;
-                                    };
-                                    i = next;
-                                }
-                            } else {
-                                while i > *end {
-                                    items.push(Value::Int64(i));
-                                    let Some(next) = i.checked_add(*step) else {
-                                        break;
-                                    };
-                                    i = next;
-                                }
-                            }
-                            Some(Ok(Value::List(items)))
+                            Some(range_values_checked(*start, *end, *step).map(Value::List))
                         }
                         _ => Some(Err(format!("{name} expects int64 arguments"))),
                     },
@@ -10363,6 +10409,37 @@ fn string_count_grapheme_matches(haystack: &str, needle: &str) -> usize {
     count
 }
 
+fn string_split_grapheme_matches<'a>(haystack: &'a str, delimiter: &str) -> Vec<&'a str> {
+    if delimiter.is_empty() {
+        let graphemes = string_graphemes(haystack);
+        let mut parts = Vec::with_capacity(graphemes.len() + 2);
+        parts.push("");
+        parts.extend(graphemes);
+        parts.push("");
+        return parts;
+    }
+
+    let boundaries = string_grapheme_boundaries(haystack);
+    let mut parts = Vec::new();
+    let mut part_start = 0;
+    let mut boundary_index = 0;
+    while boundary_index + 1 < boundaries.len() {
+        let start = boundaries[boundary_index];
+        if haystack[start..].starts_with(delimiter) {
+            let end = start + delimiter.len();
+            if let Ok(end_boundary_index) = boundaries.binary_search(&end) {
+                parts.push(&haystack[part_start..start]);
+                part_start = end;
+                boundary_index = end_boundary_index;
+                continue;
+            }
+        }
+        boundary_index += 1;
+    }
+    parts.push(&haystack[part_start..]);
+    parts
+}
+
 fn string_grapheme_boundaries(s: &str) -> Vec<usize> {
     let mut boundaries = vec![0];
     let mut offset = 0;
@@ -10375,6 +10452,20 @@ fn string_grapheme_boundaries(s: &str) -> Vec<usize> {
 
 fn string_graphemes(s: &str) -> Vec<&str> {
     UnicodeSegmentation::graphemes(s, true).collect()
+}
+
+fn float_midpoint(left: f64, right: f64) -> f64 {
+    if left == right {
+        return left;
+    }
+    if !left.is_finite() || !right.is_finite() {
+        return (left + right) / 2.0;
+    }
+    if left.is_sign_negative() == right.is_sign_negative() {
+        left + (right - left) / 2.0
+    } else {
+        left / 2.0 + right / 2.0
+    }
 }
 
 fn uint64_arithmetic_operand(value: i64) -> Result<u64, String> {

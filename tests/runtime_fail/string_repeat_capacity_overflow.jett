@@ -1,0 +1,4 @@
+function main() returns nothing:
+    string output = string.repeat("ab", 9223372036854775807)
+    print(output)
+    return nothing

@@ -1,0 +1,8 @@
+# ERROR: E0336
+enum SignedProtocol:
+    invalid = -1
+    tcp = 6
+bitfield Header:
+    protocol: 8 bits as SignedProtocol
+function main() returns nothing:
+    return nothing

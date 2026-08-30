@@ -1,0 +1,33 @@
+namespace app
+
+function center_odd_width() returns string:
+    return string.center("cat", 6)
+verify center_odd_width:
+    assert center_odd_width() == " cat  "
+
+function center_short_width() returns string:
+    return string.center("catalog", 4)
+verify center_short_width:
+    assert center_short_width() == "catalog"
+
+function align_helpers() returns string:
+    return "{string.ljust("cat", 5)}|{string.rjust("cat", 5)}"
+verify align_helpers:
+    assert align_helpers() == "cat  |  cat"
+
+function remove_affixes() returns string:
+    string prefix_removed = string.remove_prefix("prefix-value", "prefix-")
+    string suffix_removed = string.remove_suffix(prefix_removed, "value")
+    return suffix_removed
+verify remove_affixes:
+    assert remove_affixes() == ""
+
+function zfill_signs() returns string:
+    return "{string.zfill("-7", 4)}|{string.zfill("+7", 4)}|{string.zfill("7", 4)}"
+verify zfill_signs:
+    assert zfill_signs() == "-007|+007|0007"
+
+function character_class_helpers() returns bool:
+    return string.is_numeric("12345") and not string.is_numeric("12a") and string.is_alpha("abc") and not string.is_alpha("a1")
+verify character_class_helpers:
+    assert character_class_helpers() == true

@@ -1,0 +1,6 @@
+namespace app
+
+function integer_min_abs_is_wrapping() returns int64:
+    return math.abs((-9223372036854775807) - 1)
+verify integer_min_abs_is_wrapping:
+    assert integer_min_abs_is_wrapping() == ((-9223372036854775807) - 1)
