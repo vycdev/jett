@@ -35,10 +35,10 @@ timeouts do not provide a security boundary.
 
 `codex-calibration` uses the ChatGPT login held by the Codex CLI, removes API
 credential variables from the child environment, and refuses to run unless
-`codex login status` reports `Logged in using ChatGPT`. It runs the 30-cell
-medium-reasoning calibration in fresh ephemeral sessions from empty temporary
-directories. The Luna name is currently a rolling alias rather than a dated
-snapshot, so every row records the alias, UTC completion time, Codex version,
+`codex login status` reports `Logged in using ChatGPT`. The current v0.2
+calibration is a 40-cell medium-reasoning slice run in fresh ephemeral sessions
+from empty temporary directories. The Luna name is currently a rolling alias
+rather than a dated snapshot, so every row records the alias, UTC completion time, Codex version,
 backend, deterministic sequence, and event-log hash. Do not pool these rows with
 Responses API rows: the Codex agent wrapper is part of this treatment.
 
@@ -61,6 +61,12 @@ The isolated runner recipe and required no-network/resource controls are in
 - `tasks/*/hidden.*`: graders, excluded from prompts;
 - `references/*.md`: controlled-onboarding sheets;
 - `schemas/*.json`: machine-readable result and task contracts.
+
+The current typed-domain extension is specified by `protocol_v0.2.md` and
+`jett_subset_v0.2.md`. Its Python adapter adds pinned Pyright strict checking;
+all five typed-task adapters perform a static-check phase before hidden runtime tests.
+Task-specific forbidden patterns are a narrow preflight against type erasure
+and catch-all branches, and a rejection is recorded as `policy_error`.
 
 Never paste hidden files into prompts or model repair diagnostics. Results and
 raw responses should be written below `target/jett-bench/`, which is already

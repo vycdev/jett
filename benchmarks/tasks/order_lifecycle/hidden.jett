@@ -1,0 +1,41 @@
+function transition_result_label(outcome: TransitionResult) returns string:
+    match outcome:
+        accepted(state):
+            match state:
+                draft:
+                    return "accepted:draft"
+                submitted:
+                    return "accepted:submitted"
+                paid:
+                    return "accepted:paid"
+                shipped:
+                    return "accepted:shipped"
+                cancelled:
+                    return "accepted:cancelled"
+        rejected(error):
+            match error:
+                event_not_allowed:
+                    return "rejected:event_not_allowed"
+                terminal_state:
+                    return "rejected:terminal_state"
+verify order_lifecycle_hidden:
+    assert transition_result_label(transition(OrderState.draft, OrderEvent.submit)) == "accepted:submitted"
+    assert transition_result_label(transition(OrderState.draft, OrderEvent.pay)) == "rejected:event_not_allowed"
+    assert transition_result_label(transition(OrderState.draft, OrderEvent.ship)) == "rejected:event_not_allowed"
+    assert transition_result_label(transition(OrderState.draft, OrderEvent.cancel)) == "accepted:cancelled"
+    assert transition_result_label(transition(OrderState.submitted, OrderEvent.submit)) == "rejected:event_not_allowed"
+    assert transition_result_label(transition(OrderState.submitted, OrderEvent.pay)) == "accepted:paid"
+    assert transition_result_label(transition(OrderState.submitted, OrderEvent.ship)) == "rejected:event_not_allowed"
+    assert transition_result_label(transition(OrderState.submitted, OrderEvent.cancel)) == "accepted:cancelled"
+    assert transition_result_label(transition(OrderState.paid, OrderEvent.submit)) == "rejected:event_not_allowed"
+    assert transition_result_label(transition(OrderState.paid, OrderEvent.pay)) == "rejected:event_not_allowed"
+    assert transition_result_label(transition(OrderState.paid, OrderEvent.ship)) == "accepted:shipped"
+    assert transition_result_label(transition(OrderState.paid, OrderEvent.cancel)) == "accepted:cancelled"
+    assert transition_result_label(transition(OrderState.shipped, OrderEvent.submit)) == "rejected:terminal_state"
+    assert transition_result_label(transition(OrderState.shipped, OrderEvent.pay)) == "rejected:terminal_state"
+    assert transition_result_label(transition(OrderState.shipped, OrderEvent.ship)) == "rejected:terminal_state"
+    assert transition_result_label(transition(OrderState.shipped, OrderEvent.cancel)) == "rejected:terminal_state"
+    assert transition_result_label(transition(OrderState.cancelled, OrderEvent.submit)) == "rejected:terminal_state"
+    assert transition_result_label(transition(OrderState.cancelled, OrderEvent.pay)) == "rejected:terminal_state"
+    assert transition_result_label(transition(OrderState.cancelled, OrderEvent.ship)) == "rejected:terminal_state"
+    assert transition_result_label(transition(OrderState.cancelled, OrderEvent.cancel)) == "rejected:terminal_state"

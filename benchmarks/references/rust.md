@@ -1,4 +1,4 @@
-# Rust pilot reference v0.2
+# Rust pilot reference v0.3
 
 ## Type-driven development in Rust
 
@@ -13,3 +13,8 @@ Return one Rust 2024 source file containing the requested `pub fn`. Inputs use
 `if`/`else`, `for`, `while`, `%`, `&&`, and `||`. Mutable locals require
 `let mut`. Do not add `main`, perform I/O, add tests, or change the requested
 function signature.
+
+Use enums for closed states, events, and outcomes. Match every variant by name;
+Rust checks exhaustiveness, so do not add a wildcard arm. Preserve associated
+payloads in the enum variant that owns them, and avoid unsafe code, unchecked
+conversions, and panic-based shortcuts.

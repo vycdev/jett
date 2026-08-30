@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://jett.dev/schemas/benchmark-result-v0.1.json",
+  "$id": "https://jett.dev/schemas/benchmark-result-v0.2.json",
   "title": "Jett LLM benchmark result",
   "type": "object",
   "required": ["run_id", "task_id", "task_version", "language", "track", "reasoning_effort", "repetition", "status", "passed"],
@@ -23,7 +23,7 @@
     "reasoning_effort": {"enum": ["low", "medium", "high"]},
     "repetition": {"type": "integer", "minimum": 1},
     "prompt_sha256": {"type": "string"},
-    "status": {"enum": ["planned", "generated", "extraction_error", "compile_error", "test_failure", "timeout", "harness_error", "passed", "api_error", "backend_error"]},
+    "status": {"enum": ["planned", "generated", "extraction_error", "policy_error", "compile_error", "test_failure", "timeout", "harness_error", "passed", "api_error", "backend_error"]},
     "passed": {"type": "boolean"},
     "compile_succeeded": {"type": ["boolean", "null"]},
     "input_tokens": {"type": ["integer", "null"]},

@@ -1,0 +1,72 @@
+{
+  "id": "order_lifecycle",
+  "version": "1.0.0",
+  "title": "Typed order lifecycle",
+  "statement": "Implement the closed order lifecycle described by the required declarations. Legal transitions are draft + submit -> submitted, draft + cancel -> cancelled, submitted + pay -> paid, submitted + cancel -> cancelled, paid + ship -> shipped, and paid + cancel -> cancelled. A disallowed event in draft, submitted, or paid returns event_not_allowed. Every event applied to shipped or cancelled returns terminal_state.",
+  "constraints": [
+    "represent states, events, errors, and accepted/rejected outcomes with the exact declared types rather than untyped strings or numbers",
+    "handle every declared state and event variant explicitly; do not use a catch-all or default branch",
+    "return a typed rejected outcome for illegal transitions; do not throw, panic, or perform input/output",
+    "do not add tests or weaken, cast around, or suppress the required static types"
+  ],
+  "adapters": {
+    "jett": {
+      "signature": "namespace benchmark\n\nenum OrderState:\n    draft\n    submitted\n    paid\n    shipped\n    cancelled\n\nenum OrderEvent:\n    submit\n    pay\n    ship\n    cancel\n\nenum TransitionError:\n    event_not_allowed\n    terminal_state\n\nenum TransitionResult:\n    accepted(state: OrderState)\n    rejected(error: TransitionError)\n\nfunction transition(state: OrderState, event: OrderEvent) returns TransitionResult",
+      "baseline": "baseline.jett",
+      "hidden": "hidden.jett",
+      "candidate": "solution.jett",
+      "grade_mode": "append",
+      "commands": [["{jett}", "build", "{candidate}"], ["{jett}", "test", "{candidate}"]],
+      "forbidden_patterns": [{"pattern": "(?m)^\\s*(?:other|_)\\s*:", "message": "catch-all match arms are forbidden; handle every Jett enum variant explicitly"}]
+    },
+    "python": {
+      "signature": "from dataclasses import dataclass\nfrom enum import Enum, auto\n\nclass OrderState(Enum):\n    DRAFT = auto()\n    SUBMITTED = auto()\n    PAID = auto()\n    SHIPPED = auto()\n    CANCELLED = auto()\n\nclass OrderEvent(Enum):\n    SUBMIT = auto()\n    PAY = auto()\n    SHIP = auto()\n    CANCEL = auto()\n\nclass TransitionError(Enum):\n    EVENT_NOT_ALLOWED = auto()\n    TERMINAL_STATE = auto()\n\n@dataclass(frozen=True)\nclass Accepted:\n    state: OrderState\n\n@dataclass(frozen=True)\nclass Rejected:\n    error: TransitionError\n\ntype TransitionResult = Accepted | Rejected\n\ndef transition(state: OrderState, event: OrderEvent) -> TransitionResult",
+      "baseline": "baseline.py",
+      "hidden": "hidden.py",
+      "support_files": ["pyrightconfig.json"],
+      "candidate": "solution.py",
+      "grade_mode": "separate",
+      "commands": [["{pyright}", "--project", "pyrightconfig.json"], ["python", "hidden.py"]],
+      "forbidden_patterns": [
+        {"pattern": "\\bAny\\b|#\\s*(?:type:\\s*ignore|pyright:\\s*ignore)|\\bcast\\s*\\(", "message": "Python type bypasses such as Any, casts, and ignored diagnostics are forbidden"},
+        {"pattern": "(?m)^\\s*case\\s+_\\s*:", "message": "catch-all match cases are forbidden; handle every Python enum member explicitly"}
+      ]
+    },
+    "typescript": {
+      "signature": "export type OrderState = { readonly kind: \"draft\" } | { readonly kind: \"submitted\" } | { readonly kind: \"paid\" } | { readonly kind: \"shipped\" } | { readonly kind: \"cancelled\" };\nexport type OrderEvent = { readonly kind: \"submit\" } | { readonly kind: \"pay\" } | { readonly kind: \"ship\" } | { readonly kind: \"cancel\" };\nexport type TransitionError = \"event_not_allowed\" | \"terminal_state\";\nexport type TransitionResult = { readonly kind: \"accepted\"; readonly state: OrderState } | { readonly kind: \"rejected\"; readonly error: TransitionError };\nexport function transition(state: OrderState, event: OrderEvent): TransitionResult",
+      "baseline": "baseline.ts",
+      "hidden": "hidden.ts",
+      "candidate": "solution.ts",
+      "grade_mode": "separate",
+      "commands": [["npx", "tsc", "--strict", "--noImplicitReturns", "--noFallthroughCasesInSwitch", "--exactOptionalPropertyTypes", "--target", "ES2022", "--module", "NodeNext", "--moduleResolution", "NodeNext", "solution.ts", "hidden.ts", "--outDir", "out"], ["node", "out/hidden.js"]],
+      "forbidden_patterns": [
+        {"pattern": "\\bany\\b|@ts-(?:ignore|nocheck)|\\bas\\s+(?:const|[A-Za-z_$][A-Za-z0-9_$]*)\\b", "message": "TypeScript type bypasses such as any, suppressed diagnostics, and unchecked assertions are forbidden"},
+        {"pattern": "(?m)^\\s*default\\s*:", "message": "default switch branches are forbidden; handle every TypeScript union member explicitly"}
+      ]
+    },
+    "go": {
+      "signature": "package benchmark\n\ntype OrderState uint8\nconst (\n    Draft OrderState = iota\n    Submitted\n    Paid\n    Shipped\n    Cancelled\n)\n\ntype OrderEvent uint8\nconst (\n    Submit OrderEvent = iota\n    Pay\n    Ship\n    Cancel\n)\n\ntype TransitionError uint8\nconst (\n    EventNotAllowed TransitionError = iota\n    TerminalState\n)\n\ntype TransitionResult interface{ isTransitionResult() }\ntype Accepted struct{ State OrderState }\nfunc (Accepted) isTransitionResult() {}\ntype Rejected struct{ Error TransitionError }\nfunc (Rejected) isTransitionResult() {}\n\nfunc Transition(state OrderState, event OrderEvent) TransitionResult",
+      "baseline": "baseline.go",
+      "hidden": "hidden_test.go",
+      "candidate": "solution.go",
+      "grade_mode": "separate",
+      "commands": [["go", "test", "-run", "^$", "solution.go", "hidden_test.go"], ["go", "test", "solution.go", "hidden_test.go"]],
+      "forbidden_patterns": [
+        {"pattern": "\\bany\\b|interface\\s*\\{\\s*\\}", "message": "Go type erasure through any or interface{} is forbidden"},
+        {"pattern": "(?m)^\\s*default\\s*:", "message": "default switch branches are forbidden; handle every Go constant explicitly"}
+      ]
+    },
+    "rust": {
+      "signature": "#[derive(Debug, PartialEq, Eq)]\npub enum OrderState { Draft, Submitted, Paid, Shipped, Cancelled }\npub enum OrderEvent { Submit, Pay, Ship, Cancel }\n#[derive(Debug, PartialEq, Eq)]\npub enum TransitionError { EventNotAllowed, TerminalState }\n#[derive(Debug, PartialEq, Eq)]\npub enum TransitionResult { Accepted(OrderState), Rejected(TransitionError) }\npub fn transition(state: OrderState, event: OrderEvent) -> TransitionResult",
+      "baseline": "baseline.rs",
+      "hidden": "hidden.rs",
+      "candidate": "solution.rs",
+      "grade_mode": "separate",
+      "commands": [["rustc", "--edition=2024", "--test", "hidden.rs", "-o", "{executable}"], ["{executable}"]],
+      "forbidden_patterns": [
+        {"pattern": "\\bunsafe\\b|\\b(?:transmute|unreachable_unchecked)\\b", "message": "unsafe Rust and unchecked type escapes are forbidden"},
+        {"pattern": "_\\s*=>", "message": "wildcard match arms are forbidden; handle every Rust enum variant explicitly"}
+      ]
+    }
+  }
+}

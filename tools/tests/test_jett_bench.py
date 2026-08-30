@@ -12,18 +12,58 @@ class BenchmarkTests(unittest.TestCase):
 
     def test_pilot_matrix_has_expected_size_and_unique_ids(self) -> None:
         runs = list(jett_bench.planned_runs())
-        self.assertEqual(len(runs), 270)
+        self.assertEqual(len(runs), 360)
         self.assertEqual(len({run["run_id"] for run in runs}), len(runs))
         self.assertEqual({run["reasoning_effort"] for run in runs}, {"low", "medium", "high"})
 
     def test_codex_calibration_is_the_balanced_medium_slice(self) -> None:
         runs = jett_bench.codex_calibration_runs()
-        self.assertEqual(len(runs), 30)
+        self.assertEqual(len(runs), 40)
         self.assertEqual({run["reasoning_effort"] for run in runs}, {"medium"})
         self.assertEqual({run["repetition"] for run in runs}, {1})
-        self.assertEqual({run["sequence"] for run in runs}, set(range(1, 31)))
+        self.assertEqual({run["sequence"] for run in runs}, set(range(1, 41)))
         cells = {(run["task_id"], run["language"], run["track"]) for run in runs}
-        self.assertEqual(len(cells), 30)
+        self.assertEqual(len(cells), 40)
+
+    def test_type_policy_rejects_escape_hatches_before_execution(self) -> None:
+        directory, task = next(
+            pair for pair in jett_bench.load_tasks() if pair[1]["id"] == "order_lifecycle"
+        )
+        source = (directory / "baseline.ts").read_text(encoding="utf-8")
+        self.assertIsNone(
+            jett_bench.source_policy_diagnostic(task["adapters"]["typescript"], source)
+        )
+        diagnostic = jett_bench.source_policy_diagnostic(
+            task["adapters"]["typescript"], source + "\nconst bypass: any = 1;\n"
+        )
+        self.assertIn("type bypasses", diagnostic or "")
+
+    def test_all_type_task_baselines_pass_source_policy(self) -> None:
+        directory, task = next(
+            pair for pair in jett_bench.load_tasks() if pair[1]["id"] == "order_lifecycle"
+        )
+        for language, adapter in task["adapters"].items():
+            source = (directory / adapter["baseline"]).read_text(encoding="utf-8")
+            self.assertIsNone(
+                jett_bench.source_policy_diagnostic(adapter, source), language
+            )
+
+    def test_each_type_task_adapter_rejects_a_bypass(self) -> None:
+        _, task = next(
+            pair for pair in jett_bench.load_tasks() if pair[1]["id"] == "order_lifecycle"
+        )
+        bypasses = {
+            "jett": "match value:\n    other:\n        return value\n",
+            "python": "from typing import Any\n",
+            "typescript": "const value: any = 1;\n",
+            "go": "var value any\n",
+            "rust": "unsafe { unreachable_unchecked() }\n",
+        }
+        for language, source in bypasses.items():
+            self.assertIsNotNone(
+                jett_bench.source_policy_diagnostic(task["adapters"][language], source),
+                language,
+            )
 
     def test_hidden_graders_never_enter_prompts(self) -> None:
         for directory, task in jett_bench.load_tasks():

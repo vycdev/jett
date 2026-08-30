@@ -1,4 +1,4 @@
-# TypeScript pilot reference v0.2
+# TypeScript pilot reference v0.3
 
 ## Type-driven development in TypeScript
 
@@ -13,3 +13,9 @@ Use `bigint` and `n`-suffixed literals where the signature uses bigint; do not
 mix bigint and number arithmetic. Arrays may be read through indexing or
 `for...of`. Use `===`, `&&`, `||`, `%`, and explicit returns. Do not print,
 read input, add tests, or rename/remove the requested export.
+
+Model closed domains as discriminated unions with literal `kind` fields. A
+`switch (value.kind)` narrows the payload in each case. Handle every literal
+case and return directly; do not add `default`, use `any`, suppress a diagnostic,
+or erase the union through assertions. Strict checking and implicit-return
+checking run before hidden tests.

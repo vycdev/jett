@@ -123,11 +123,40 @@ def validate(config_path: Path = DEFAULT_CONFIG) -> list[str]:
                 filename = adapter.get(filename_field)
                 if filename and not (directory / filename).is_file():
                     errors.append(f"{task_id}/{language}: missing file {filename}")
+            support_files = adapter.get("support_files", [])
+            if not isinstance(support_files, list) or any(
+                not isinstance(filename, str) or not filename for filename in support_files
+            ):
+                errors.append(f"{task_id}/{language}: support_files must be filenames")
+            else:
+                for filename in support_files:
+                    if Path(filename).name != filename or not (directory / filename).is_file():
+                        errors.append(f"{task_id}/{language}: missing support file {filename}")
             if adapter.get("grade_mode") not in {"append", "separate"}:
                 errors.append(f"{task_id}/{language}: invalid grade_mode")
             commands = adapter.get("commands", [])
             if not commands or any(not isinstance(command, list) or not command for command in commands):
                 errors.append(f"{task_id}/{language}: commands must be non-empty argv arrays")
+            forbidden_patterns = adapter.get("forbidden_patterns", [])
+            if not isinstance(forbidden_patterns, list):
+                errors.append(f"{task_id}/{language}: forbidden_patterns must be a list")
+            else:
+                for policy in forbidden_patterns:
+                    if not isinstance(policy, dict) or set(policy) != {"pattern", "message"}:
+                        errors.append(
+                            f"{task_id}/{language}: forbidden pattern needs pattern and message"
+                        )
+                        continue
+                    if not isinstance(policy["message"], str) or not policy["message"]:
+                        errors.append(
+                            f"{task_id}/{language}: forbidden pattern message must be text"
+                        )
+                    try:
+                        re.compile(policy["pattern"])
+                    except (re.error, TypeError) as error:
+                        errors.append(
+                            f"{task_id}/{language}: invalid forbidden pattern: {error}"
+                        )
 
     for language in languages:
         reference = BENCHMARKS / "references" / f"{language}.md"
@@ -358,6 +387,31 @@ def jett_executable() -> Path:
     raise BenchmarkError("Jett executable not found; run `cargo build -q -p jett_cli` first")
 
 
+def pyright_executable() -> Path:
+    configured = os.environ.get("JETT_BENCH_PYRIGHT")
+    executable_name = "pyright.cmd" if os.name == "nt" else "pyright"
+    candidates = [
+        Path(configured) if configured else None,
+        DEFAULT_TARGET / "tooling" / "node_modules" / ".bin" / executable_name,
+    ]
+    installed = shutil.which("pyright")
+    if installed:
+        candidates.append(Path(installed))
+    for candidate in candidates:
+        if candidate and candidate.is_file():
+            return candidate.resolve()
+    raise BenchmarkError(
+        "Pyright executable not found; install pyright@1.1.405 or set JETT_BENCH_PYRIGHT"
+    )
+
+
+def source_policy_diagnostic(adapter: dict[str, Any], source: str) -> str | None:
+    for policy in adapter.get("forbidden_patterns", []):
+        if re.search(policy["pattern"], source):
+            return policy["message"]
+    return None
+
+
 def grade_source(
     task_directory: Path,
     task: dict[str, Any],
@@ -366,6 +420,16 @@ def grade_source(
     timeout_seconds: int,
 ) -> dict[str, Any]:
     adapter = task["adapters"][language]
+    policy_diagnostic = source_policy_diagnostic(adapter, source)
+    if policy_diagnostic is not None:
+        return {
+            "status": "policy_error",
+            "passed": False,
+            "compile_succeeded": None,
+            "grader_runtime_ms": 0.0,
+            "diagnostic": policy_diagnostic,
+            "command_logs": [],
+        }
     temp_root = DEFAULT_TARGET / "tmp"
     temp_root.mkdir(parents=True, exist_ok=True)
     started = time.perf_counter()
@@ -378,6 +442,8 @@ def grade_source(
         else:
             candidate.write_text(source, encoding="utf-8", newline="\n")
             shutil.copy2(task_directory / adapter["hidden"], work / adapter["hidden"])
+        for support_file in adapter.get("support_files", []):
+            shutil.copy2(task_directory / support_file, work / support_file)
 
         executable = work / ("hidden_test.exe" if os.name == "nt" else "hidden_test")
         replacements = {
@@ -387,6 +453,8 @@ def grade_source(
         }
         if any("{jett}" in command for command in adapter["commands"]):
             replacements["{jett}"] = str(jett_executable())
+        if any("{pyright}" in command for command in adapter["commands"]):
+            replacements["{pyright}"] = str(pyright_executable())
         logs = []
         compile_succeeded: bool | None = None
         for index, template in enumerate(adapter["commands"]):
@@ -404,8 +472,13 @@ def grade_source(
                     command[1:1] = ["-C", "linker=lld-link"]
                 if libraries:
                     process_environment["LIB"] = libraries
-            if os.name == "nt" and command[0] in {"npx", "tsc"}:
+            if os.name == "nt" and (
+                command[0] in {"npx", "tsc", "pyright"}
+                or command[0].lower().endswith((".cmd", ".bat"))
+            ):
                 wrapper = shutil.which(command[0]) or shutil.which(command[0] + ".cmd")
+                if wrapper is None and Path(command[0]).is_file():
+                    wrapper = command[0]
                 if wrapper and wrapper.lower().endswith((".cmd", ".bat")):
                     command = [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/c", wrapper, *command[1:]]
             command_cwd = ROOT if command[0] == "cargo" else work
@@ -477,11 +550,20 @@ def toolchain_versions() -> dict[str, str | None]:
         "go": ["go", "version"],
         "rust": ["rustc", "--version"],
     }
+    try:
+        commands["pyright"] = [str(pyright_executable()), "--version"]
+    except BenchmarkError:
+        commands["pyright"] = ["pyright", "--version"]
     versions: dict[str, str | None] = {"platform": platform.platform()}
     for name, command in commands.items():
         try:
-            if os.name == "nt" and command[0] in {"npx", "tsc"}:
+            if os.name == "nt" and (
+                command[0] in {"npx", "tsc", "pyright"}
+                or command[0].lower().endswith((".cmd", ".bat"))
+            ):
                 wrapper = shutil.which(command[0]) or shutil.which(command[0] + ".cmd")
+                if wrapper is None and Path(command[0]).is_file():
+                    wrapper = command[0]
                 if wrapper and wrapper.lower().endswith((".cmd", ".bat")):
                     command = [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/c", wrapper, *command[1:]]
             result = subprocess.run(
@@ -607,7 +689,7 @@ def repair_envelope(
     run = dict(original["run"])
     parent_run_id = run["run_id"]
     source = prior_result.get("extracted_source", prior_result.get("raw_output", ""))
-    if prior_result.get("status") == "compile_error":
+    if prior_result.get("status") in {"compile_error", "policy_error"}:
         feedback = "The source did not compile against the required declaration. Re-check syntax, types, exports, and language-specific policy."
     elif prior_result.get("status") == "extraction_error":
         feedback = "The response was not one complete source file. Return only one complete source file."
@@ -1072,6 +1154,7 @@ def main() -> int:
                     }
             backend = codex_backend_info()
             selected = codex_calibration_runs(args.config)[:args.limit]
+            selected_count = len(selected)
             completed = 0
             failures = 0
             for run in selected:
@@ -1101,7 +1184,7 @@ def main() -> int:
                 append_jsonl(args.output, result)
                 completed += 1
                 print(
-                    f"[{run['sequence']:02d}/30] {run['task_id']}/{run['language']}/"
+                    f"[{run['sequence']:02d}/{selected_count}] {run['task_id']}/{run['language']}/"
                     f"{run['track']}: {result['status']}",
                     flush=True,
                 )

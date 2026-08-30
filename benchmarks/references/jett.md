@@ -1,4 +1,4 @@
-# Jett pilot reference v0.2
+# Jett pilot reference v0.3
 
 ## Type-driven development in Jett
 
@@ -23,7 +23,7 @@ function example(values: list[int64], limit: int64) returns int64:
     return total
 ```
 
-Types used here are `int64`, `bool`, `string`, and `list[int64]`. Variables are
+Primitive task types include `int64`, `bool`, `string`, and `list[int64]`. Variables are
 declared as `Type name = expression` and reassigned as `name = expression`.
 Blocks begin with `:` and use four-space indentation. Boolean operators are
 `and`, `or`, and `not`. Remainder is spelled `left modulo right`.
@@ -34,3 +34,23 @@ print, read input, add tests, or use features outside the requested signature.
 Return a complete source file and keep `namespace benchmark` first. Functions
 have a hard cyclomatic-complexity maximum of 10; split logic into a small helper
 declared before its caller when necessary.
+
+Closed domain types use enums. Variants may carry typed payloads, and `match`
+must handle every variant explicitly:
+
+```jett
+enum Outcome:
+    accepted(value: int64)
+    rejected(reason: string)
+
+function label(outcome: Outcome) returns string:
+    match outcome:
+        accepted(value):
+            return "accepted {value}"
+        rejected(reason):
+            return "rejected {reason}"
+```
+
+Construct variants as `Outcome.accepted(1)`. Enums are move-only, so pass a
+value once or use `view` only when the requested signature permits it. Do not
+add `other:` catch-all arms in tasks that require explicit exhaustiveness.

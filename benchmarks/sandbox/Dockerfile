@@ -8,7 +8,7 @@ COPY --from=node_runtime /usr/local /usr/local
 COPY --from=go_runtime /usr/local/go /usr/local/go
 
 ENV PATH="/usr/local/go/bin:${PATH}"
-RUN npm install --global typescript@5.8.2
+RUN npm install --global typescript@5.8.2 pyright@1.1.405
 
 WORKDIR /workspace
 COPY . /workspace

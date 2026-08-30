@@ -1,4 +1,4 @@
-# Python pilot reference v0.2
+# Python pilot reference v0.3
 
 ## Type-driven development in Python
 
@@ -13,3 +13,9 @@ are sufficient for the bounded inputs. Lists use `list[int]`; iterate with
 `for value in values` or `enumerate(values)`. Use `%` for remainder, `and`/`or`
 for boolean expressions, and an explicit `return`. Do not print, read input,
 add tests, or rename the requested function.
+
+For a closed domain, use the requested `Enum` members and frozen dataclasses.
+A union such as `type Outcome = Accepted | Rejected` preserves which payload
+belongs to each case. Match every enum member explicitly; do not use `case _`,
+`Any`, `cast`, or ignored type diagnostics. Pyright runs in strict mode before
+the hidden tests.

@@ -1,4 +1,4 @@
-# Go pilot reference v0.2
+# Go pilot reference v0.3
 
 ## Type-driven development in Go
 
@@ -12,3 +12,10 @@ function. Use `int64`, `string`, slices, `if`, and `for`; Go has no `while`
 keyword, so use `for condition`. Range iteration provides index and value.
 Use `%`, `&&`, and `||`. Do not add a `main`, perform I/O, add tests, or rename
 the requested exported function.
+
+Use the requested named constant types for closed states and events. When the
+required outcome has different payload shapes, implement its private marker
+method on the requested concrete result structs. Switch over every named
+constant without a `default` branch. Go does not prove switch exhaustiveness,
+so keep the explicit cases visible and retain precise result types instead of
+using `any` or `interface{}`.

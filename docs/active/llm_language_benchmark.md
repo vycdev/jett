@@ -93,3 +93,24 @@ This validates the harness and the usefulness of Jett onboarding, but the task
 set has a ceiling effect and cannot isolate type-driven guidance from syntax
 instruction. The next benchmark step is to add harder tasks that exercise type
 modeling and repair quality before increasing repetitions or reasoning levels.
+
+## Typed-domain calibration v0.2
+
+The first harder task is now `order_lifecycle`. It requires closed types for
+five states, four events, two errors, and accepted/rejected outcomes, then
+grades the complete 20-case transition product. Jett uses payload enums and
+exhaustive matching; the other languages use their closest conventional static
+model.
+
+Every adapter now performs its language's static check before runtime grading.
+Python uses pinned Pyright strict mode, TypeScript enables strict and
+implicit-return checks, and task-versioned preflight rules reject common type
+erasure and catch-all branches. Go's compiler cannot prove exhaustive switches
+over named constants, so the protocol reports that limitation instead of
+claiming identical guarantees.
+
+The v0.2 matrix contains 360 planned study rows and a 40-row medium Luna
+subscription calibration slice. That slice has not been executed: it consumes
+subscription allowance and still requires explicit confirmation at run time.
+Known-good baselines and the isolated image must pass before calibration data
+is collected.
