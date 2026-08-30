@@ -14,3 +14,8 @@ The typed-domain follow-up is in
 cells plus a manual compliance audit that found one Go lifecycle grader false
 positive. Treat it as calibration evidence only; lifecycle task v1.0.0 is not
 suitable for a larger study.
+
+The ten-task calibration is in
+`2026-08-30_codex_luna_medium_v0.4_calibration/`. It records 100 subscription
+cells, an 80/100 static-check result, token and code-size totals, and three
+behaviorally correct Python rows rejected by a strict-checker style diagnostic.

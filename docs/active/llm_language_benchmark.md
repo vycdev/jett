@@ -146,3 +146,10 @@ maps, canonical integer parsing, and typed validation errors.
 The suite now contains ten tasks, producing 900 study rows and a balanced
 100-row medium Luna calibration slice. All 50 reference baselines must pass
 locally and in the no-network image before that slice is run.
+
+The 100-row medium Luna slice is recorded in
+`benchmarks/results/2026-08-30_codex_luna_medium_v0.4_calibration/`. Automated
+grading passed 80/100: Go 20, Rust 19, TypeScript 18, Python 16, and Jett 7.
+Onboarding improved Jett from 0/10 to 7/10. Three Python failures passed hidden
+behavior tests but were rejected by Pyright's strict unnecessary-`isinstance`
+diagnostic; the official score remains static-check based.
