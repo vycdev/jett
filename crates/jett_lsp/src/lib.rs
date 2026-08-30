@@ -305,21 +305,15 @@ fn diagnostics_for_source(source: &str, file_path: &str) -> Vec<Diagnostic> {
         .diagnostics
         .iter()
         .map(|d| {
-            let (start_line, start_col) =
-                jett_diagnostics::render::line_col(&result.source, d.span.start);
-            let (end_line, end_col) =
-                jett_diagnostics::render::line_col(&result.source, d.span.end);
-
             let severity = match d.severity {
                 jett_diagnostics::Severity::Error => Some(DiagnosticSeverity::ERROR),
                 jett_diagnostics::Severity::Warning => Some(DiagnosticSeverity::WARNING),
                 jett_diagnostics::Severity::Info => Some(DiagnosticSeverity::INFORMATION),
             };
 
-            // LSP positions are 0-based; line_col returns 1-based.
             let range = Range::new(
-                Position::new(start_line as u32 - 1, start_col as u32 - 1),
-                Position::new(end_line as u32 - 1, end_col as u32 - 1),
+                lsp_position(&result.source, d.span.start),
+                lsp_position(&result.source, d.span.end),
             );
 
             Diagnostic {
@@ -442,6 +436,26 @@ mod tests {
         ));
         assert_eq!(diagnostic.range.start.line, 0);
         assert_eq!(diagnostic.range.start.character, 0);
+    }
+
+    #[test]
+    fn diagnostics_for_source_uses_utf16_columns_after_supplementary_characters() {
+        let source = "namespace test\nfunction f() returns string:\n    return \"🙂\" !!!\n";
+        let compiler_result = jett_driver::build_source(source, "test.jett");
+        let diagnostics = diagnostics_for_source(source, "test.jett");
+
+        assert_eq!(diagnostics.len(), compiler_result.diagnostics.len());
+        for (diagnostic, compiler_diagnostic) in
+            diagnostics.iter().zip(&compiler_result.diagnostics)
+        {
+            assert_eq!(
+                diagnostic.range,
+                Range::new(
+                    lsp_position(source, compiler_diagnostic.span.start),
+                    lsp_position(source, compiler_diagnostic.span.end),
+                )
+            );
+        }
     }
 
     /// Verify that hover_type returns a type for a known expression.
