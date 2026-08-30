@@ -1727,7 +1727,7 @@ these public shapes:
 | `complete_at(file, line, col)` | Prefix-filtered completion candidates with deterministic rank, match kind, namespace, source range, and signature metadata | LSP, ASP |
 | `namespaces()` | All namespaces with public functions/types and declaration ranges | ASP |
 | `definition_at(file, line, col)` | Go-to-definition target with declaration-name range | LSP, ASP |
-| `references_at(file, line, col)` | Find all references to the selected symbol with use-site ranges | ASP |
+| `references_at(file, line, col)` | Find all references to the selected symbol with use-site ranges | LSP, ASP |
 | `diagnostics(file)` | All errors/warnings for a file | LSP |
 
 File-symbol parse failures and type-at parse, resolution, and type-check
@@ -1790,9 +1790,9 @@ Standard LSP implementation using the `tower-lsp` crate. Provides:
 - Real-time diagnostics (errors/warnings as you type).
 - Hover information (type at cursor).
 - Go-to-definition.
+- Find all references in the current document, optionally including the declaration.
 - Code completion.
-- Planned follow-ups: find all references, rename symbol, and code formatting
-  (via `jett_fmt`).
+- Planned follow-ups: rename symbol and code formatting (via `jett_fmt`).
 
 The LSP server currently stores full document text, invokes driver operations,
 and suppresses diagnostics from stale document versions. After `jett_query`

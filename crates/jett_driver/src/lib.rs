@@ -1949,6 +1949,15 @@ fn best_resolved_definition_at(
             }
         }
     }
+    for definition in &resolve_result.scope_table.definitions {
+        let span = definition.span;
+        if span.file == file_id && span.start <= offset && offset <= span.end {
+            let len = span.end - span.start;
+            if best_def.is_none() || len < best_def.unwrap().0 {
+                best_def = Some((len, definition.id));
+            }
+        }
+    }
     best_def
 }
 
@@ -2080,17 +2089,7 @@ pub fn goto_definition(source: &str, line: u32, col: u32) -> Option<(u32, u32)> 
     prepend_support_modules(&mut parse_result.module, discover_stdlib_modules());
 
     let resolve_result = resolve(&parse_result.module);
-
-    // Find the reference span that covers `offset`.
-    let mut best_def: Option<(u32, jett_resolve::scope::DefId)> = None;
-    for (span, def_id) in &resolve_result.resolutions {
-        if span.file == file_id && span.start <= offset && offset <= span.end {
-            let len = span.end - span.start;
-            if best_def.is_none() || len < best_def.unwrap().0 {
-                best_def = Some((len, *def_id));
-            }
-        }
-    }
+    let best_def = best_resolved_definition_at(&resolve_result, file_id, offset);
 
     best_def.and_then(|(_, def_id)| {
         let def_info = resolve_result.scope_table.def(def_id);
@@ -2100,6 +2099,41 @@ pub fn goto_definition(source: &str, line: u32, col: u32) -> Option<(u32, u32)> 
             None
         }
     })
+}
+
+/// Return byte spans for every use of the symbol selected at the given
+/// one-based line and column in `source`.
+pub fn references_at(source: &str, line: u32, col: u32) -> Vec<(u32, u32)> {
+    let file_id = FileId::new(0);
+    let Some(offset) = line_col_to_offset(source, line, col) else {
+        return Vec::new();
+    };
+
+    let mut parse_result = parse(source, file_id);
+    if parse_result
+        .errors
+        .iter()
+        .any(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+    {
+        return Vec::new();
+    }
+
+    prepend_support_modules(&mut parse_result.module, discover_stdlib_modules());
+    let resolve_result = resolve(&parse_result.module);
+    let Some((_, target_def_id)) = best_resolved_definition_at(&resolve_result, file_id, offset)
+    else {
+        return Vec::new();
+    };
+
+    let mut references = resolve_result
+        .resolutions
+        .iter()
+        .filter_map(|(span, def_id)| {
+            (*def_id == target_def_id && span.file == file_id).then_some((span.start, span.end))
+        })
+        .collect::<Vec<_>>();
+    references.sort_unstable();
+    references
 }
 
 /// Return the byte bounds of a 1-based logical source line.
@@ -5237,6 +5271,27 @@ mod tests {
         fs::remove_dir_all(&root).expect("temp project dir should be removed");
         fs::remove_dir_all(&external).expect("external source dir should be removed");
         assert_eq!(files, vec![source]);
+    }
+
+    #[test]
+    fn references_at_returns_all_source_use_sites() {
+        let source = "namespace app\n\nfunction double(value: int64) returns int64:\n    return value + value\n\nfunction main() returns int64:\n    return double(21)\n";
+
+        let references = references_at(source, 7, 12);
+
+        assert_eq!(references.len(), 1);
+        let call_start = source.find("double(21)").expect("call should exist") as u32;
+        assert_eq!(references, vec![(call_start, call_start + 6)]);
+    }
+
+    #[test]
+    fn references_at_accepts_the_source_declaration() {
+        let source = "namespace app\n\nfunction double(value: int64) returns int64:\n    return value + value\n\nfunction main() returns int64:\n    return double(21)\n";
+
+        let references = references_at(source, 3, 10);
+
+        let call_start = source.find("double(21)").expect("call should exist") as u32;
+        assert_eq!(references, vec![(call_start, call_start + 6)]);
     }
 }
 

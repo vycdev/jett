@@ -72,6 +72,7 @@ fn server_capabilities() -> ServerCapabilities {
         )),
         hover_provider: Some(HoverProviderCapability::Simple(true)),
         definition_provider: Some(OneOf::Left(true)),
+        references_provider: Some(OneOf::Left(true)),
         completion_provider: Some(CompletionOptions::default()),
         position_encoding: Some(PositionEncodingKind::UTF16),
         ..ServerCapabilities::default()
@@ -121,6 +122,33 @@ fn lsp_position(source: &str, byte_offset: u32) -> Position {
     let character = line_prefix.encode_utf16().count();
 
     Position::new(line as u32, character as u32)
+}
+
+fn reference_locations(
+    source: &str,
+    uri: &Url,
+    position: Position,
+    include_declaration: bool,
+) -> Option<Vec<Location>> {
+    let (line, column) = driver_position(source, position)?;
+    let mut spans = jett_driver::references_at(source, line, column);
+    if include_declaration
+        && let Some(definition) = jett_driver::goto_definition(source, line, column)
+        && !spans.contains(&definition)
+    {
+        spans.push(definition);
+        spans.sort_unstable();
+    }
+
+    (!spans.is_empty()).then(|| {
+        spans
+            .into_iter()
+            .map(|(start, end)| Location {
+                uri: uri.clone(),
+                range: Range::new(lsp_position(source, start), lsp_position(source, end)),
+            })
+            .collect()
+    })
 }
 
 #[tower_lsp::async_trait]
@@ -249,6 +277,23 @@ impl LanguageServer for JettBackend {
             uri: uri.clone(),
             range,
         })))
+    }
+
+    async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
+        let uri = &params.text_document_position.text_document.uri;
+        let position = params.text_document_position.position;
+
+        let documents = self.documents.read().await;
+        let Some(document) = documents.get(uri) else {
+            return Ok(None);
+        };
+
+        Ok(reference_locations(
+            &document.text,
+            uri,
+            position,
+            params.context.include_declaration,
+        ))
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
@@ -481,6 +526,51 @@ mod tests {
             options.save,
             Some(TextDocumentSyncSaveOptions::Supported(true))
         ));
+    }
+
+    #[test]
+    fn server_capabilities_advertise_find_references() {
+        let capabilities = server_capabilities();
+
+        assert_eq!(capabilities.references_provider, Some(OneOf::Left(true)));
+    }
+
+    #[test]
+    fn reference_locations_map_driver_spans_to_lsp_ranges() {
+        let source = "namespace app\n\nfunction double(value: int64) returns int64:\n    return value + value\n\nfunction main() returns int64:\n    return double(21)\n";
+        let uri = Url::parse("file:///workspace/main.jett").unwrap();
+
+        let locations = reference_locations(source, &uri, Position::new(6, 11), false)
+            .expect("call should resolve");
+
+        assert_eq!(locations.len(), 1);
+        assert_eq!(locations[0].uri, uri);
+        assert_eq!(
+            locations[0].range,
+            Range::new(Position::new(6, 11), Position::new(6, 17))
+        );
+    }
+
+    #[test]
+    fn reference_locations_include_the_declaration_when_requested() {
+        let source = "namespace app\n\nfunction double(value: int64) returns int64:\n    return value + value\n\nfunction main() returns int64:\n    return double(21)\n";
+        let uri = Url::parse("file:///workspace/main.jett").unwrap();
+
+        let locations = reference_locations(source, &uri, Position::new(6, 11), true)
+            .expect("call should resolve");
+
+        assert_eq!(locations.len(), 2);
+    }
+
+    #[test]
+    fn reference_locations_support_requests_on_the_declaration() {
+        let source = "namespace app\n\nfunction double(value: int64) returns int64:\n    return value + value\n\nfunction main() returns int64:\n    return double(21)\n";
+        let uri = Url::parse("file:///workspace/main.jett").unwrap();
+
+        let locations = reference_locations(source, &uri, Position::new(2, 9), true)
+            .expect("declaration should resolve");
+
+        assert_eq!(locations.len(), 2);
     }
 
     #[test]
