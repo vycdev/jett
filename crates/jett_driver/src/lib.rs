@@ -1506,25 +1506,42 @@ pub fn query_file_symbols_detailed(
     let source = fs::read_to_string(path).map_err(|error| {
         FileSymbolsQueryError::operational(format!("failed to read {}: {}", path.display(), error))
     })?;
-    let parsed = parse(&source, FileId::new(0));
+    let file_path = path.display().to_string();
+    let display_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    query_source_file_symbols_with_path(&source, file_path, display_path)
+}
+
+/// Return a file-local outline from source text that may not exist on disk.
+///
+/// LSP clients use this entry point so document symbols reflect the latest
+/// in-memory document revision rather than a stale saved file.
+pub fn query_source_file_symbols(
+    source: &str,
+    file_path: &str,
+) -> Result<FileSymbolsQueryResult, FileSymbolsQueryError> {
+    query_source_file_symbols_with_path(source, file_path.to_string(), PathBuf::from(file_path))
+}
+
+fn query_source_file_symbols_with_path(
+    source: &str,
+    file_path: String,
+    display_path: PathBuf,
+) -> Result<FileSymbolsQueryResult, FileSymbolsQueryError> {
+    let parsed = parse(source, FileId::new(0));
     if has_error_diagnostics(&parsed.errors) {
         return Err(FileSymbolsQueryError::compilation(
             "parse errors:",
             parsed.errors,
-            source,
-            path.display().to_string(),
+            source.to_string(),
+            file_path,
         ));
     }
 
     let mut symbols = Vec::new();
     let mut file_paths = HashMap::new();
-    let display_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     file_paths.insert(FileId::new(0), display_path);
-    append_file_symbol_query_entries(&mut symbols, &parsed.module, &source, &file_paths);
-    Ok(FileSymbolsQueryResult {
-        file_path: path.display().to_string(),
-        symbols,
-    })
+    append_file_symbol_query_entries(&mut symbols, &parsed.module, source, &file_paths);
+    Ok(FileSymbolsQueryResult { file_path, symbols })
 }
 
 fn append_file_symbol_query_entries(
@@ -3867,6 +3884,22 @@ mod tests {
                 .any(|symbol| symbol.name == "api.api_checks" && symbol.kind == "verify"),
             "expected verify block in file symbols, got {:?}",
             result.symbols
+        );
+    }
+
+    #[test]
+    fn query_source_file_symbols_uses_unsaved_source_text() {
+        let source = "namespace api\n\nexport function login() returns int64:\n    return 1\n";
+
+        let result = query_source_file_symbols(source, "untitled:api.jett")
+            .expect("source symbols query should succeed");
+
+        assert_eq!(result.file_path, "untitled:api.jett");
+        assert!(
+            result
+                .symbols
+                .iter()
+                .any(|symbol| symbol.name == "api.login" && symbol.kind == "function")
         );
     }
 

@@ -74,18 +74,56 @@ fn server_capabilities() -> ServerCapabilities {
         definition_provider: Some(OneOf::Left(true)),
         references_provider: Some(OneOf::Left(true)),
         completion_provider: Some(CompletionOptions::default()),
+        document_symbol_provider: Some(OneOf::Left(true)),
         document_formatting_provider: Some(OneOf::Left(true)),
         position_encoding: Some(PositionEncodingKind::UTF16),
         ..ServerCapabilities::default()
     }
 }
 
+/// Return a zero-based logical source line without its line ending.
+///
+/// Jett accepts LF, CRLF, and lone CR, so LSP conversions must recognize all
+/// three forms consistently with the compiler and query layer.
+fn source_line(source: &str, target_line: usize) -> Option<&str> {
+    let bytes = source.as_bytes();
+    let mut line = 0usize;
+    let mut start = 0usize;
+    let mut index = 0usize;
+
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\r' => {
+                if line == target_line {
+                    return Some(&source[start..index]);
+                }
+                index += 1;
+                if bytes.get(index) == Some(&b'\n') {
+                    index += 1;
+                }
+                line += 1;
+                start = index;
+            }
+            b'\n' => {
+                if line == target_line {
+                    return Some(&source[start..index]);
+                }
+                index += 1;
+                line += 1;
+                start = index;
+            }
+            _ => index += 1,
+        }
+    }
+
+    (line == target_line).then_some(&source[start..])
+}
+
 /// Convert a zero-based LSP UTF-16 position into the driver's one-based
 /// Unicode-scalar line and column representation.
 fn driver_position(source: &str, position: Position) -> Option<(u32, u32)> {
     let line_index = usize::try_from(position.line).ok()?;
-    let line_source = source.split('\n').nth(line_index)?;
-    let line_source = line_source.strip_suffix('\r').unwrap_or(line_source);
+    let line_source = source_line(source, line_index)?;
     let line = position.line.checked_add(1)?;
 
     let mut utf16_column = 0u32;
@@ -115,14 +153,95 @@ fn lsp_position(source: &str, byte_offset: u32) -> Position {
         end -= 1;
     }
 
-    let prefix = &source[..end];
-    let line = prefix.bytes().filter(|byte| *byte == b'\n').count();
-    let line_start = prefix.rfind('\n').map_or(0, |index| index + 1);
-    let line_prefix = &prefix[line_start..];
+    let bytes = source.as_bytes();
+    let mut line = 0usize;
+    let mut line_start = 0usize;
+    let mut index = 0usize;
+    while index < end {
+        match bytes[index] {
+            b'\r' => {
+                if bytes.get(index + 1) == Some(&b'\n') {
+                    if index + 1 >= end {
+                        break;
+                    }
+                    index += 2;
+                } else {
+                    index += 1;
+                }
+                line += 1;
+                line_start = index;
+            }
+            b'\n' => {
+                index += 1;
+                line += 1;
+                line_start = index;
+            }
+            _ => index += 1,
+        }
+    }
+    let line_prefix = &source[line_start..end];
     let line_prefix = line_prefix.strip_suffix('\r').unwrap_or(line_prefix);
     let character = line_prefix.encode_utf16().count();
 
     Position::new(line as u32, character as u32)
+}
+
+fn lsp_position_from_driver(source: &str, line: u32, column: u32) -> Option<Position> {
+    let line_index = usize::try_from(line.checked_sub(1)?).ok()?;
+    let scalar_index = usize::try_from(column.checked_sub(1)?).ok()?;
+    let line_source = source_line(source, line_index)?;
+    if scalar_index > line_source.chars().count() {
+        return None;
+    }
+    let utf16_column = line_source
+        .chars()
+        .take(scalar_index)
+        .map(char::len_utf16)
+        .sum::<usize>();
+    Some(Position::new(
+        u32::try_from(line_index).ok()?,
+        u32::try_from(utf16_column).ok()?,
+    ))
+}
+
+fn document_symbol_kind(kind: &str) -> SymbolKind {
+    match kind {
+        "namespace" => SymbolKind::MODULE,
+        "function" | "verify" | "property" => SymbolKind::FUNCTION,
+        "interface" => SymbolKind::INTERFACE,
+        "struct" | "bitfield" => SymbolKind::STRUCT,
+        "enum" => SymbolKind::ENUM,
+        "machine" | "actor" => SymbolKind::CLASS,
+        "variable" => SymbolKind::VARIABLE,
+        "type" => SymbolKind::TYPE_PARAMETER,
+        "implement" => SymbolKind::OBJECT,
+        _ => SymbolKind::OBJECT,
+    }
+}
+
+#[allow(deprecated)]
+fn document_symbols_for_source(source: &str) -> Option<Vec<DocumentSymbol>> {
+    let outline = jett_driver::query_source_file_symbols(source, "<lsp-document>").ok()?;
+    let symbols = outline
+        .symbols
+        .into_iter()
+        .filter_map(|symbol| {
+            let start = lsp_position_from_driver(source, symbol.line, symbol.column)?;
+            let end = lsp_position_from_driver(source, symbol.end_line, symbol.end_column)?;
+            let range = Range::new(start, end);
+            Some(DocumentSymbol {
+                name: symbol.name,
+                detail: symbol.signature,
+                kind: document_symbol_kind(&symbol.kind),
+                tags: None,
+                deprecated: None,
+                range,
+                selection_range: range,
+                children: None,
+            })
+        })
+        .collect();
+    Some(symbols)
 }
 
 fn reference_locations(
@@ -364,6 +483,22 @@ impl LanguageServer for JettBackend {
 
         Ok(Some(CompletionResponse::Array(items)))
     }
+
+    async fn document_symbol(
+        &self,
+        params: DocumentSymbolParams,
+    ) -> Result<Option<DocumentSymbolResponse>> {
+        let uri = &params.text_document.uri;
+        let documents = self.documents.read().await;
+        let Some(document) = documents.get(uri) else {
+            return Ok(None);
+        };
+        let Some(symbols) = document_symbols_for_source(&document.text) else {
+            return Ok(None);
+        };
+
+        Ok(Some(DocumentSymbolResponse::Nested(symbols)))
+    }
 }
 
 fn diagnostics_for_source(source: &str, file_path: &str) -> Vec<Diagnostic> {
@@ -461,6 +596,16 @@ mod tests {
         assert_eq!(lsp_position(source, u32::MAX), Position::new(1, 1));
     }
 
+    #[test]
+    fn position_conversions_support_lone_cr_lines() {
+        let source = "a\r🙂b";
+
+        assert_eq!(driver_position(source, Position::new(1, 0)), Some((2, 1)));
+        assert_eq!(driver_position(source, Position::new(1, 2)), Some((2, 2)));
+        assert_eq!(lsp_position(source, 2), Position::new(1, 0));
+        assert_eq!(lsp_position(source, 6), Position::new(1, 2));
+    }
+
     /// Verify that `build_source` produces diagnostics for invalid Jett code.
     /// This exercises the same path the LSP uses to validate documents.
     #[test]
@@ -537,7 +682,7 @@ mod tests {
     }
 
     #[test]
-    fn server_capabilities_advertise_save_notifications() {
+    fn server_capabilities_advertise_sync_and_document_symbols() {
         let capabilities = server_capabilities();
         let Some(TextDocumentSyncCapability::Options(options)) = capabilities.text_document_sync
         else {
@@ -549,6 +694,48 @@ mod tests {
             options.save,
             Some(TextDocumentSyncSaveOptions::Supported(true))
         ));
+        assert_eq!(
+            capabilities.document_symbol_provider,
+            Some(OneOf::Left(true))
+        );
+    }
+
+    #[test]
+    fn document_symbols_map_unsaved_source_outline() {
+        let source = "namespace api\n\nexport function login() returns int64:\n    return 1\n";
+
+        let symbols = document_symbols_for_source(source).expect("valid source outline");
+
+        let namespace = symbols
+            .iter()
+            .find(|symbol| symbol.name == "api")
+            .expect("namespace symbol");
+        assert_eq!(namespace.kind, SymbolKind::MODULE);
+        assert_eq!(namespace.selection_range.start, Position::new(0, 10));
+        assert_eq!(namespace.selection_range.end, Position::new(0, 13));
+
+        let login = symbols
+            .iter()
+            .find(|symbol| symbol.name == "api.login")
+            .expect("function symbol");
+        assert_eq!(login.kind, SymbolKind::FUNCTION);
+        assert_eq!(login.detail.as_deref(), Some("api.login() returns int64"));
+        assert_eq!(login.selection_range.start, Position::new(2, 16));
+        assert_eq!(login.selection_range.end, Position::new(2, 21));
+    }
+
+    #[test]
+    fn document_symbols_map_lone_cr_source_lines() {
+        let source = "namespace api\r\rexport function login() returns int64:\r    return 1\r";
+
+        let symbols = document_symbols_for_source(source).expect("valid source outline");
+        let login = symbols
+            .iter()
+            .find(|symbol| symbol.name == "api.login")
+            .expect("function symbol");
+
+        assert_eq!(login.selection_range.start, Position::new(2, 16));
+        assert_eq!(login.selection_range.end, Position::new(2, 21));
     }
 
     #[test]
