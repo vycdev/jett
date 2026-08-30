@@ -8238,8 +8238,8 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::String(s), Value::String(delim)) => {
-                        let parts: Vec<Value> = s
-                            .split(delim.as_str())
+                        let parts: Vec<Value> = string_split_grapheme_matches(s, delim)
+                            .into_iter()
                             .map(|p| Value::String(p.to_string()))
                             .collect();
                         Some(Ok(Value::List(parts)))
@@ -10361,6 +10361,37 @@ fn string_count_grapheme_matches(haystack: &str, needle: &str) -> usize {
         boundary_index += 1;
     }
     count
+}
+
+fn string_split_grapheme_matches<'a>(haystack: &'a str, delimiter: &str) -> Vec<&'a str> {
+    if delimiter.is_empty() {
+        let graphemes = string_graphemes(haystack);
+        let mut parts = Vec::with_capacity(graphemes.len() + 2);
+        parts.push("");
+        parts.extend(graphemes);
+        parts.push("");
+        return parts;
+    }
+
+    let boundaries = string_grapheme_boundaries(haystack);
+    let mut parts = Vec::new();
+    let mut part_start = 0;
+    let mut boundary_index = 0;
+    while boundary_index + 1 < boundaries.len() {
+        let start = boundaries[boundary_index];
+        if haystack[start..].starts_with(delimiter) {
+            let end = start + delimiter.len();
+            if let Ok(end_boundary_index) = boundaries.binary_search(&end) {
+                parts.push(&haystack[part_start..start]);
+                part_start = end;
+                boundary_index = end_boundary_index;
+                continue;
+            }
+        }
+        boundary_index += 1;
+    }
+    parts.push(&haystack[part_start..]);
+    parts
 }
 
 fn string_grapheme_boundaries(s: &str) -> Vec<usize> {
