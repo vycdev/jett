@@ -1879,6 +1879,10 @@ compile_fail_fixture!(
     compile_fail_math_average_median_non_numeric,
     "math_average_median_non_numeric.jett"
 );
+compile_fail_fixture!(
+    compile_fail_list_sort_non_orderable,
+    "list_sort_non_orderable.jett"
+);
 
 #[test]
 fn compile_fail_math_average_median_non_numeric_count() {

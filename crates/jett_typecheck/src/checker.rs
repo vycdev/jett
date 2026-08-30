@@ -3450,6 +3450,18 @@ impl<'a> TypeChecker<'a> {
             }
             "list.__sort" => {
                 let inner = self.optional_type_arg(&name, type_args, span);
+                if inner != TypeInterner::ERROR {
+                    let base = self.fully_coarsened_type(inner);
+                    if !self.is_numeric(base)
+                        && !matches!(base, TypeInterner::STRING | TypeInterner::BOOL)
+                    {
+                        self.sink.emit(errors::type_mismatch(
+                            "numeric, string, or bool",
+                            &self.type_name(inner),
+                            span,
+                        ));
+                    }
+                }
                 let list_ty = self.interner.intern(Type::List(inner));
                 Some((vec![list_ty], list_ty))
             }
