@@ -209,3 +209,22 @@ repaired 15/34 failures and raised the final result to 131/150. Jett repaired
 5/21 and ended at 14/30; the established languages repaired 10/13 and ended at
 117/120. These runs use one observation per cell and the rolling Luna alias, so
 they remain calibration evidence rather than a language ranking.
+
+## Jett skill smoke calibration v0.5.1
+
+A targeted ten-task Jett `skill_assisted` smoke run is recorded in
+`benchmarks/results/2026-08-30_codex_luna_medium_v0.5.1_jett_skill_smoke/`.
+Initial grading passed 8/10, compared with 1/10 for the prior skill treatment.
+The former mutable-local syntax pattern disappeared. The two failures wrapped
+ordinary function or constructor arguments across newlines, which Jett does
+not accept.
+
+The paired repair pass is recorded in
+`benchmarks/results/2026-08-30_codex_luna_medium_v0.5.1_jett_skill_smoke_compile_repair/`.
+Neither failure repaired successfully. One retained multiline call arguments;
+the other corrected that form but guessed `int64.to_string` instead of the
+implemented `string.from_int64` spelling.
+
+Benchmark v0.5.2 adds those two general syntax anchors to the skill. No task,
+grader, adapter, or language rule changed. A future smoke run must use the new
+version and skill hash rather than appending to the v0.5.1 evidence.

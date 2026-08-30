@@ -36,3 +36,11 @@ Its paired repair pass is in
 `2026-08-30_codex_luna_medium_v0.5_compile_repair/`. Fifteen of 34 failures
 were repaired, producing a 131/150 final result. Jett ended at 14/30; the four
 established languages ended at 117/120.
+
+The corrected Jett-skill smoke run is in
+`2026-08-30_codex_luna_medium_v0.5.1_jett_skill_smoke/`. It passed 8/10 initial
+tasks, and the prior mutable-local failure pattern disappeared. Its paired
+repair pass is in
+`2026-08-30_codex_luna_medium_v0.5.1_jett_skill_smoke_compile_repair/`; neither
+of the two remaining parse failures repaired. Those findings produced the
+versioned v0.5.2 skill correction.

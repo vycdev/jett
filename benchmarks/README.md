@@ -79,10 +79,10 @@ The isolated runner recipe and required no-network/resource controls are in
 - `references/*.md`: controlled-onboarding sheets;
 - `schemas/*.json`: machine-readable result and task contracts.
 
-The current skill-assisted extension is specified by `protocol_v0.5.1.md` and
-`jett_subset_v0.5.1.md`. It inherits v0.5 and corrects the Jett skill syntax
-anchors identified by the first skill calibration. Its Python adapter adds
-pinned Pyright strict checking; all five typed-task adapters perform a
+The current skill-assisted extension is specified by `protocol_v0.5.2.md` and
+`jett_subset_v0.5.2.md`. It inherits v0.5.1 and corrects the Jett expression
+and integer-rendering gaps identified by the targeted smoke run. Its Python
+adapter adds pinned Pyright strict checking; all five typed-task adapters perform a
 static-check phase before hidden runtime tests.
 Task-specific forbidden patterns are a narrow preflight against type erasure
 and catch-all branches, and a rejection is recorded as `policy_error`.
