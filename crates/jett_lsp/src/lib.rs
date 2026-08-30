@@ -73,6 +73,7 @@ fn server_capabilities() -> ServerCapabilities {
         hover_provider: Some(HoverProviderCapability::Simple(true)),
         definition_provider: Some(OneOf::Left(true)),
         references_provider: Some(OneOf::Left(true)),
+        rename_provider: Some(OneOf::Left(true)),
         completion_provider: Some(CompletionOptions::default()),
         document_symbol_provider: Some(OneOf::Left(true)),
         document_formatting_provider: Some(OneOf::Left(true)),
@@ -271,6 +272,27 @@ fn reference_locations(
     })
 }
 
+fn rename_edit(
+    source: &str,
+    uri: &Url,
+    position: Position,
+    new_name: &str,
+) -> Option<WorkspaceEdit> {
+    let edits = reference_locations(source, uri, position, true)?
+        .into_iter()
+        .map(|location| TextEdit {
+            range: location.range,
+            new_text: new_name.to_string(),
+        })
+        .collect();
+
+    Some(WorkspaceEdit {
+        changes: Some(HashMap::from([(uri.clone(), edits)])),
+        document_changes: None,
+        change_annotations: None,
+    })
+}
+
 fn formatting_edits(source: &str) -> Option<Vec<TextEdit>> {
     let result = jett_fmt::format_source(source, jett_common::FileId::new(0));
     if !result.errors.is_empty() || result.output == source {
@@ -427,6 +449,18 @@ impl LanguageServer for JettBackend {
             position,
             params.context.include_declaration,
         ))
+    }
+
+    async fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
+        let uri = &params.text_document_position.text_document.uri;
+        let position = params.text_document_position.position;
+
+        let documents = self.documents.read().await;
+        let Some(document) = documents.get(uri) else {
+            return Ok(None);
+        };
+
+        Ok(rename_edit(&document.text, uri, position, &params.new_name))
     }
 
     async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
@@ -752,6 +786,13 @@ mod tests {
     }
 
     #[test]
+    fn server_capabilities_advertise_symbol_rename() {
+        let capabilities = server_capabilities();
+
+        assert_eq!(capabilities.rename_provider, Some(OneOf::Left(true)));
+    }
+
+    #[test]
     fn reference_locations_map_driver_spans_to_lsp_ranges() {
         let source = "namespace app\n\nfunction double(value: int64) returns int64:\n    return value + value\n\nfunction main() returns int64:\n    return double(21)\n";
         let uri = Url::parse("file:///workspace/main.jett").unwrap();
@@ -797,6 +838,23 @@ mod tests {
             .expect("declaration should resolve");
 
         assert_eq!(locations.len(), 2);
+    }
+
+    #[test]
+    fn rename_edits_replace_a_declaration_and_all_its_references() {
+        let source = "namespace app\n\nfunction double(value: int64) returns int64:\n    return value + value\n";
+        let uri = Url::parse("file:///workspace/main.jett").unwrap();
+
+        let edit = rename_edit(source, &uri, Position::new(3, 11), "number")
+            .expect("parameter reference should resolve");
+        let changes = edit.changes.expect("document changes");
+        let edits = changes.get(&uri).expect("current document edits");
+
+        assert_eq!(edits.len(), 3);
+        assert!(edits.iter().all(|edit| edit.new_text == "number"));
+        assert_eq!(edits[0].range.start, Position::new(2, 16));
+        assert_eq!(edits[1].range.start, Position::new(3, 11));
+        assert_eq!(edits[2].range.start, Position::new(3, 19));
     }
 
     #[test]
