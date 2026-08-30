@@ -10,6 +10,24 @@ The pilot has 10 tasks x 5 languages x 2 tracks x 3 reasoning levels x 3
 repetitions = 900 rows. The Codex-subscription calibration slice is 100 fresh
 medium-reasoning rows with one repetition and no repairs.
 
+## Paired compile-and-repair treatment
+
+The one-shot calibration remains the primary result. An optional adaptive
+second stage may be run over its failures:
+
+1. Grade the first answer in the isolated no-network runner.
+2. Stop immediately when it passes.
+3. Otherwise send one new prompt with the same public task, the first answer,
+   and bounded compiler feedback.
+4. Grade the revised complete source once and record it as `compile_repair`.
+
+Zero-shot and onboarding remain the context tracks; compile-and-repair is an
+evaluation mode paired to either track. It is not an independent initial draw.
+Raw diagnostics are allowed only when they refer to candidate source lines.
+Diagnostics naming private files or appended private-grader lines are replaced
+with a normalized category. Reports retain the original score and add repair
+success, pass-after-repair, and repair token totals.
+
 ## Added tasks
 
 - `first_duplicate` tests order-sensitive duplicate detection with a set and

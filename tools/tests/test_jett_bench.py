@@ -150,6 +150,37 @@ class BenchmarkTests(unittest.TestCase):
         self.assertIn("private tests are intentionally withheld", repair["run"]["prompt"])
         self.assertEqual(repair["run"]["repair_attempt"], 1)
 
+    def test_codex_repair_prompt_includes_only_public_compiler_feedback(self) -> None:
+        original = next(iter(jett_bench.planned_runs()))
+        prior = {
+            "run_id": original["run_id"],
+            "response_id": "response-1",
+            "status": "compile_error",
+            "extracted_source": "function answer() returns int64:\n    return missing\n",
+            "diagnostic": "/tmp/submission/solution.jett:2:12: undefined name: missing",
+        }
+        repair = jett_bench.codex_repair_run(original, prior)
+        self.assertEqual(repair["evaluation_mode"], "compile_repair")
+        self.assertEqual(repair["parent_run_id"], original["run_id"])
+        self.assertEqual(repair["repair_feedback_kind"], "compiler_diagnostic")
+        self.assertIn("undefined name: missing", repair["prompt"])
+
+    def test_codex_repair_hides_private_grader_diagnostics(self) -> None:
+        private_file = {
+            "status": "compile_error",
+            "extracted_source": "fn answer() {}\n",
+            "diagnostic": "hidden.rs:4: SECRET_EXPECTED_VALUE",
+        }
+        appended_private = {
+            "status": "compile_error",
+            "extracted_source": "function answer():\n    return 1\n",
+            "diagnostic": "solution.jett:9:4: SECRET_EXPECTED_VALUE",
+        }
+        for prior in (private_file, appended_private):
+            kind, feedback = jett_bench.repair_feedback(prior)
+            self.assertEqual(kind, "normalized_compile")
+            self.assertNotIn("SECRET_EXPECTED_VALUE", feedback)
+
     def test_counts_response_tool_calls(self) -> None:
         response = {"output": [{"type": "message"}, {"type": "function_call"}]}
         self.assertEqual(jett_bench.response_tool_calls(response), 1)
@@ -219,6 +250,43 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(rollup["n"], 2)
         self.assertEqual(rollup["passed"], 1)
         self.assertEqual(rollup["total_input_tokens"], 300)
+
+    def test_aggregate_reports_paired_pass_after_repair(self) -> None:
+        initial = {
+            "run_id": "initial",
+            "backend": "codex_subscription",
+            "task_id": "task",
+            "language": "jett",
+            "track": "onboarding",
+            "reasoning_effort": "medium",
+            "repair_attempt": 0,
+            "status": "compile_error",
+            "passed": False,
+            "input_tokens": 100,
+            "output_tokens": 20,
+        }
+        repair = {
+            **initial,
+            "run_id": "initial:repair01",
+            "parent_run_id": "initial",
+            "repair_attempt": 1,
+            "status": "passed",
+            "passed": True,
+            "input_tokens": 150,
+            "output_tokens": 30,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "results.jsonl"
+            path.write_text(
+                json.dumps(initial) + "\n" + json.dumps(repair) + "\n",
+                encoding="utf-8",
+            )
+            summary = jett_bench.aggregate([path])
+        paired = summary["paired_repair_rollups"]["overall"][0]
+        self.assertEqual(paired["initial_pass_rate"], 0.0)
+        self.assertEqual(paired["repair_success_rate"], 1.0)
+        self.assertEqual(paired["pass_after_repair_rate"], 1.0)
+        self.assertEqual(paired["total_repair_input_tokens"], 150)
 
 
 if __name__ == "__main__":

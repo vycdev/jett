@@ -278,6 +278,7 @@ def planned_runs(config_path: Path = DEFAULT_CONFIG) -> Iterable[dict[str, Any]]
             "reasoning_effort": effort,
             "repetition": repetition,
             "repair_attempt": 0,
+            "evaluation_mode": "one_shot",
             "prompt_sha256": sha256_text(instructions + "\n" + prompt),
             "starter_sha256": (
                 sha256_text(
@@ -724,6 +725,7 @@ def repair_envelope(
     run["run_id"] = f"{parent_run_id}:repair{attempt:02d}"
     run["parent_run_id"] = parent_run_id
     run["repair_attempt"] = attempt
+    run["evaluation_mode"] = "compile_repair"
     run["prompt"] = (
         original["run"]["prompt"]
         + "\n\nRepair attempt. Here is your previous source:\n```\n"
@@ -733,6 +735,98 @@ def repair_envelope(
     )
     run["prompt_sha256"] = sha256_text(run["instructions"] + "\n" + run["prompt"])
     return {"run": run, "request": response_request(run, config)}
+
+
+PRIVATE_DIAGNOSTIC_FILE = re.compile(
+    r"(?i)(?:^|[\\/])(?:hidden(?:_test)?|grader)(?:\.[a-z0-9]+)?(?:$|[:\\/])"
+)
+
+
+def repair_feedback(prior_result: dict[str, Any]) -> tuple[str, str]:
+    """Return bounded public feedback without leaking hidden grader details."""
+    status = prior_result.get("status")
+    diagnostic = str(prior_result.get("diagnostic") or "").strip()
+    source = prior_result.get("extracted_source")
+    source_line_count = len(str(source).splitlines()) if source else 0
+    diagnostic_lines = [
+        int(value)
+        for value in re.findall(r"solution\.[A-Za-z0-9]+(?:\(|:)(\d+)", diagnostic)
+    ]
+    appended_private_line = (
+        not source_line_count
+        or not diagnostic_lines
+        or any(line > source_line_count for line in diagnostic_lines)
+    )
+    if (
+        status == "compile_error"
+        and diagnostic
+        and not PRIVATE_DIAGNOSTIC_FILE.search(diagnostic)
+        and not appended_private_line
+    ):
+        diagnostic = re.sub(
+            r"(?:[A-Za-z]:)?[/\\][^\n:]*?[/\\]solution(?=\.[A-Za-z0-9]+)",
+            "solution",
+            diagnostic,
+        )
+        return "compiler_diagnostic", diagnostic[-8000:]
+    if status == "policy_error" and diagnostic:
+        return "public_policy", diagnostic[-8000:]
+    if status == "extraction_error":
+        return "response_format", (
+            "The response was not one complete source file. Return only one complete "
+            "revised source file."
+        )
+    if status == "compile_error":
+        return "normalized_compile", (
+            "The source did not compile against the required declaration. Re-check syntax, "
+            "types, exports, and language-specific policy."
+        )
+    return "private_test_summary", (
+        "The source compiled but failed private tests. Re-check every public requirement, "
+        "boundary case, and exact output spelling."
+    )
+
+
+def codex_repair_run(original_run: dict[str, Any], prior_result: dict[str, Any]) -> dict[str, Any]:
+    run = dict(original_run)
+    parent_run_id = prior_result["run_id"]
+    source = prior_result.get("extracted_source", prior_result.get("raw_output", ""))
+    feedback_kind, feedback = repair_feedback(prior_result)
+    run["run_id"] = f"{parent_run_id}:repair01"
+    run["parent_run_id"] = parent_run_id
+    run["parent_response_id"] = prior_result.get("response_id")
+    run["repair_attempt"] = 1
+    run["evaluation_mode"] = "compile_repair"
+    run["repair_feedback_kind"] = feedback_kind
+    run["prompt"] = (
+        original_run["prompt"]
+        + "\n\nThis is the single compile-and-repair prompt. Your previous submission was:\n```\n"
+        + str(source).strip()
+        + "\n```\n\nFeedback from the isolated grader:\n"
+        + feedback
+        + "\n\nReturn one complete revised source file only."
+    )
+    run["prompt_sha256"] = sha256_text(run["instructions"] + "\n" + run["prompt"])
+    return run
+
+
+def codex_repair_runs(input_path: Path, config_path: Path = DEFAULT_CONFIG) -> list[dict[str, Any]]:
+    planned = {run["run_id"]: run for run in planned_runs(config_path)}
+    repairs = []
+    with input_path.open(encoding="utf-8") as source:
+        for line in source:
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            if row.get("repair_attempt", 0) != 0 or row.get("passed"):
+                continue
+            if row.get("status") in {"planned", "generated", "api_error", "backend_error", "harness_error"}:
+                continue
+            original = planned.get(row.get("run_id"))
+            if original is None:
+                raise BenchmarkError(f"cannot match repair row to current plan: {row.get('run_id')}")
+            repairs.append(codex_repair_run(original, row))
+    return repairs
 
 
 def call_responses_api(body: dict[str, Any], api_key: str, timeout: int = 300) -> tuple[dict[str, Any], float]:
@@ -973,6 +1067,47 @@ def rollup_rows(rows: list[dict[str, Any]], dimensions: tuple[str, ...]) -> list
     return summaries
 
 
+def paired_repair_rollups(
+    initial_rows: list[dict[str, Any]],
+    repair_rows: list[dict[str, Any]],
+    dimensions: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    repairs_by_parent = {
+        row.get("parent_run_id"): row
+        for row in repair_rows
+        if row.get("parent_run_id")
+    }
+    groups: dict[tuple[Any, ...], list[dict[str, Any]]] = defaultdict(list)
+    for row in initial_rows:
+        groups[tuple(row.get(dimension) for dimension in dimensions)].append(row)
+    summaries = []
+    for key, group in sorted(groups.items()):
+        attempted = [
+            repairs_by_parent[row.get("run_id")]
+            for row in group
+            if row.get("run_id") in repairs_by_parent
+        ]
+        initial_passed = sum(bool(row.get("passed")) for row in group)
+        repaired = sum(bool(row.get("passed")) for row in attempted)
+        summary = {dimension: value for dimension, value in zip(dimensions, key)}
+        summary.update({
+            "initial_n": len(group),
+            "initial_passed": initial_passed,
+            "initial_pass_rate": initial_passed / len(group),
+            "repair_attempted": len(attempted),
+            "repair_passed": repaired,
+            "repair_success_rate": repaired / len(attempted) if attempted else None,
+            "final_passed": initial_passed + repaired,
+            "pass_after_repair_rate": (initial_passed + repaired) / len(group),
+            "total_initial_input_tokens": sum(row.get("input_tokens") or 0 for row in group),
+            "total_repair_input_tokens": sum(row.get("input_tokens") or 0 for row in attempted),
+            "total_initial_output_tokens": sum(row.get("output_tokens") or 0 for row in group),
+            "total_repair_output_tokens": sum(row.get("output_tokens") or 0 for row in attempted),
+        })
+        summaries.append(summary)
+    return summaries
+
+
 def aggregate(paths: list[Path]) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     for path in paths:
@@ -1018,11 +1153,26 @@ def aggregate(paths: list[Path]) -> dict[str, Any]:
             "mean_source_lines": mean_present(group, "source_lines"),
             "mean_complexity_proxy": mean_present(group, "complexity_proxy"),
         })
+    paired_rollups = {}
+    if repair_rows:
+        paired_rollups = {
+            "overall": paired_repair_rollups(analysis_rows, repair_rows, ("backend",)),
+            "by_track": paired_repair_rollups(
+                analysis_rows, repair_rows, ("backend", "track")
+            ),
+            "by_language": paired_repair_rollups(
+                analysis_rows, repair_rows, ("backend", "language")
+            ),
+            "by_language_track": paired_repair_rollups(
+                analysis_rows, repair_rows, ("backend", "language", "track")
+            ),
+        }
     return {
         "row_count": len(rows),
         "initial_row_count": sum(row.get("repair_attempt", 0) == 0 for row in rows),
         "repair_row_count": len(repair_rows),
         "repair_pass_count": sum(bool(row.get("passed")) for row in repair_rows),
+        "paired_repair_rollups": paired_rollups,
         "group_count": len(summaries),
         "groups": summaries,
         "rollups": {
@@ -1071,6 +1221,18 @@ def parse_args() -> argparse.Namespace:
     codex_parser.add_argument("--limit", type=int, default=30)
     codex_parser.add_argument("--confirm-subscription-usage", action="store_true")
     codex_parser.add_argument("--resume", action="store_true")
+
+    repair_parser = subparsers.add_parser("codex-repair")
+    repair_parser.add_argument("input", type=Path)
+    repair_parser.add_argument(
+        "--output", type=Path, default=DEFAULT_TARGET / "codex-repair" / "raw.jsonl"
+    )
+    repair_parser.add_argument(
+        "--event-dir", type=Path, default=DEFAULT_TARGET / "codex-repair" / "events"
+    )
+    repair_parser.add_argument("--limit", type=int)
+    repair_parser.add_argument("--confirm-subscription-usage", action="store_true")
+    repair_parser.add_argument("--resume", action="store_true")
 
     grade_parser = subparsers.add_parser("grade-results")
     grade_parser.add_argument("input", type=Path)
@@ -1217,6 +1379,71 @@ def main() -> int:
             print(
                 f"appended {completed} Codex subscription results to {args.output}; "
                 "no API key was used",
+                flush=True,
+            )
+            return 1 if failures else 0
+
+        if args.command == "codex-repair":
+            config = require_valid(args.config)
+            if not args.confirm_subscription_usage:
+                raise BenchmarkError(
+                    "Codex subscription execution requires --confirm-subscription-usage"
+                )
+            if args.input.resolve() == args.output.resolve():
+                raise BenchmarkError("codex-repair input and output must differ")
+            existing_ids: set[str] = set()
+            if args.output.exists():
+                if not args.resume:
+                    raise BenchmarkError(
+                        f"output already exists: {args.output}; use --resume or a new path"
+                    )
+                with args.output.open(encoding="utf-8") as existing:
+                    existing_ids = {
+                        json.loads(line)["run_id"] for line in existing if line.strip()
+                    }
+            backend = codex_backend_info()
+            selected = codex_repair_runs(args.input, args.config)
+            if args.limit is not None:
+                selected = selected[:args.limit]
+            completed = 0
+            failures = 0
+            for sequence, run in enumerate(selected, start=1):
+                if run["run_id"] in existing_ids:
+                    continue
+                try:
+                    output, metrics, latency, event_path = call_codex_subscription(
+                        run, backend, args.event_dir
+                    )
+                    result = result_from_codex_subscription(
+                        run, backend, output, metrics, latency, event_path
+                    )
+                except BenchmarkError as error:
+                    result = {
+                        **{
+                            key: value
+                            for key, value in run.items()
+                            if key not in {"instructions", "prompt"}
+                        },
+                        "backend": "codex_subscription",
+                        "model_snapshot": None,
+                        "model_alias_is_rolling": True,
+                        "codex_cli_version": backend["version"],
+                        "subscription_login": backend["login"],
+                        "completed_at_utc": datetime.now(timezone.utc).isoformat(),
+                        "status": "backend_error",
+                        "passed": False,
+                        "diagnostic": str(error),
+                    }
+                    failures += 1
+                append_jsonl(args.output, result)
+                completed += 1
+                print(
+                    f"[{sequence:02d}/{len(selected)}] {run['task_id']}/{run['language']}/"
+                    f"{run['track']}/compile_repair: {result['status']}",
+                    flush=True,
+                )
+            print(
+                f"appended {completed} Codex repair results to {args.output}; no API key was used",
                 flush=True,
             )
             return 1 if failures else 0

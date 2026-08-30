@@ -22,6 +22,9 @@ python tools/jett_bench.py plan --output target/jett-bench/plan.jsonl
 python tools/jett_bench.py baselines --allow-unsafe-local
 python tools/jett_bench.py requests --output target/jett-bench/requests.jsonl
 python tools/jett_bench.py codex-calibration --confirm-subscription-usage
+python tools/jett_bench.py codex-repair graded-initial.jsonl \
+  --output target/jett-bench/codex-repair/raw.jsonl \
+  --confirm-subscription-usage
 python tools/jett_bench.py aggregate results.jsonl --output summary.json
 python -m unittest tools.tests.test_jett_bench
 ```
@@ -49,6 +52,16 @@ the no-network container:
 python tools/jett_bench.py grade-results /results/raw.jsonl \
   --output /results/graded.jsonl --allow-unsafe-local
 ```
+
+The optional `codex-repair` treatment is paired with those graded initial
+rows. A passing one-shot stops. A failing zero-shot or onboarding row receives
+exactly one second prompt containing the original public task, its first source
+file, and compiler feedback. Candidate-source diagnostics are included when
+they can be separated from private grader code; otherwise the prompt receives
+only a normalized failure category. Grade the repair JSONL in the same
+no-network container, then aggregate the initial and repair files together.
+The summary preserves one-shot scores and separately reports repair success and
+pass-after-repair rates.
 
 The isolated runner recipe and required no-network/resource controls are in
 `sandbox/README.md`.

@@ -30,8 +30,10 @@ pilot results receives a new version.
   rolling alias, backend, client version, order, and exact run time.
 - Reasoning: low, medium, high.
 - Context: every initial attempt is an independent Responses API request.
-- Repair: optional bounded repairs receive the prior answer and normalized
-  diagnostics in a new request; they do not reuse hidden expected values.
+- Repair: an optional paired `compile_repair` mode gives each failed one-shot
+  exactly one second prompt with its prior answer and safe compiler feedback.
+  Candidate diagnostics are preserved when private grader code can be excluded;
+  otherwise only a normalized category is provided.
 - Budgets: identical output-token and repair limits within a task cell.
 - Repetitions: three for harness validation, at least ten for a frozen study.
 
@@ -153,3 +155,8 @@ grading passed 80/100: Go 20, Rust 19, TypeScript 18, Python 16, and Jett 7.
 Onboarding improved Jett from 0/10 to 7/10. Three Python failures passed hidden
 behavior tests but were rejected by Pyright's strict unnecessary-`isinstance`
 diagnostic; the official score remains static-check based.
+
+The next treatment is now implemented as a paired compile-and-repair pass over
+failed zero-shot and onboarding rows. It does not replace the 100 one-shot
+scores: passing rows stop after prompt one, while failures receive one repair
+prompt and are reported through repair success and pass-after-repair rates.
