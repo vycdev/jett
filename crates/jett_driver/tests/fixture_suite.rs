@@ -1969,6 +1969,10 @@ compile_fail_fixture!(
     "bitfield_width_exceeds_runtime_limit.jett"
 );
 compile_fail_fixture!(
+    compile_fail_bitfield_negative_enum_discriminant,
+    "bitfield_negative_enum_discriminant.jett"
+);
+compile_fail_fixture!(
     compile_fail_uint8_handle_default_out_of_range,
     "uint8_handle_default_out_of_range.jett"
 );
