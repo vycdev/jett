@@ -8333,6 +8333,24 @@ impl Interpreter {
             }
 
             // -- int64 / float64 conversions ----------------------------------
+            "int64.from_float64" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::Float64(n)
+                        if n.is_finite()
+                            && n.fract() == 0.0
+                            && *n >= i64::MIN as f64
+                            && *n < 9_223_372_036_854_775_808.0 =>
+                    {
+                        Some(Ok(Value::ResultOk(Box::new(Value::Int64(*n as i64)))))
+                    }
+                    Value::Float64(_) => Some(Ok(Value::ResultFail(Box::new(Value::String(
+                        "int64.from_float64: value is not exactly representable as int64"
+                            .to_string(),
+                    ))))),
+                    _ => Some(Err(format!("{name} expects a float64 argument"))),
+                }
+            }
             "int64.from_string" => {
                 require_args!(name, 1, args);
                 match &args[0] {

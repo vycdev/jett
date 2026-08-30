@@ -119,7 +119,7 @@
 | Unhandled result/optional detection (E0341, E0342) | Done |
 | Set value type and 12 set builtins (`new`, `add`, `remove`, `contains`, `union`, `intersection`, `difference`) | Done |
 | `print`/`println` builtins | Partial (interpreter support, secret blocking, and E0362 release diagnostics are done; [debug-only capability policy](open_design/print_debug_builtin_policy.md) is decided, while debug-event isolation and future-backend conformance remain pending) |
-| Type conversions: `float64.from_string`, `string.from_float64`, `string.from_bool` | Done |
+| Type conversions: `int64.from_float64`, `float64.from_string`, `string.from_float64`, `string.from_bool` | Done |
 | `time.now_ms`, `time.now_s` | Removed (replaced by explicit `Clock.now`) |
 | `os.env`, `os.args` | Removed (replaced by explicit `Environment.get` and `Environment.args`, with focused migration diagnostics) |
 | Math: `pi`, `e`, `sin`, `cos`, `tan`, `mod`, `is_even`, `is_odd`, `sum` | Done |
