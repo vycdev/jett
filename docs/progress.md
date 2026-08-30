@@ -150,7 +150,7 @@
 | CPU profiler (`--profile`) | Initial backend-neutral configuration, sample aggregation, exact thresholding, deterministic ranking, and suggestion rules implemented in `jett_profiler`; CLI, rendering, and runtime sampling remain staged by the [profiling contract](completed/cpu_memory_profiling_contract.md) |
 | Memory profiler (`--profile-memory`) | Design complete; implementation not started ([allocation, resize/free, retention, peak-memory, attribution, and runtime contract](completed/cpu_memory_profiling_contract.md)) |
 | `trace` keyword | Partial (parses, typechecks, runtime type-tagged current-value output in `jett run`) |
-| `breakpoint` keyword | Partial (parses, typechecks, and emits conditional runtime debug snapshots with visible binding types in `jett run`; the pause/inspection protocol is [decided](completed/breakpoint_pause_inspection_protocol.md), while its interpreter and future native-runtime stages remain unimplemented) |
+| `breakpoint` keyword | Partial (parses, typechecks, and emits conditional runtime debug snapshots with visible binding types in `jett run`; the [decided pause/inspection protocol](completed/breakpoint_pause_inspection_protocol.md) now has a shared typed lifecycle, request-validation, authentication, source-manifest, and failure-rendering model in `jett_common`, while interpreter transport/operations and future native-runtime stages remain unimplemented) |
 
 ### Phase J: Cross-Platform and Interop — PARTIAL
 
