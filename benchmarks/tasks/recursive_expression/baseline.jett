@@ -1,0 +1,47 @@
+namespace benchmark
+enum Expr:
+    literal(value: int64)
+    add(left: Expr, right: Expr)
+    divide(numerator: Expr, denominator: Expr)
+    negate(inner: Expr)
+enum EvalResult:
+    value(number: int64)
+    division_by_zero
+function negate_result(outcome: EvalResult) returns EvalResult:
+    match outcome:
+        value(number):
+            return EvalResult.value(-number)
+        division_by_zero:
+            return EvalResult.division_by_zero
+function add_results(left: EvalResult, right: EvalResult) returns EvalResult:
+    match left:
+        value(left_number):
+            match right:
+                value(right_number):
+                    return EvalResult.value(left_number + right_number)
+                division_by_zero:
+                    return EvalResult.division_by_zero
+        division_by_zero:
+            return EvalResult.division_by_zero
+function divide_results(numerator: EvalResult, denominator: EvalResult) returns EvalResult:
+    match numerator:
+        value(numerator_number):
+            match denominator:
+                value(denominator_number):
+                    if denominator_number == 0:
+                        return EvalResult.division_by_zero
+                    return EvalResult.value(numerator_number / denominator_number)
+                division_by_zero:
+                    return EvalResult.division_by_zero
+        division_by_zero:
+            return EvalResult.division_by_zero
+function evaluate(expression: Expr) returns EvalResult:
+    match expression:
+        literal(number):
+            return EvalResult.value(number)
+        add(left, right):
+            return add_results(evaluate(left), evaluate(right))
+        divide(numerator, denominator):
+            return divide_results(evaluate(numerator), evaluate(denominator))
+        negate(inner):
+            return negate_result(evaluate(inner))

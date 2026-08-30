@@ -1,6 +1,6 @@
 {
-  "benchmark_version": "0.2.1-pilot",
-  "subset": "jett-v0.2",
+  "benchmark_version": "0.3.0-pilot",
+  "subset": "jett-v0.3",
   "model": "gpt-5.6-luna",
   "model_snapshot": null,
   "reasoning_efforts": ["low", "medium", "high"],

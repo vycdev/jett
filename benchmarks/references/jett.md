@@ -1,4 +1,4 @@
-# Jett pilot reference v0.3
+# Jett pilot reference v0.4
 
 ## Type-driven development in Jett
 
@@ -54,3 +54,6 @@ function label(outcome: Outcome) returns string:
 Construct variants as `Outcome.accepted(1)`. Enums are move-only, so pass a
 value once or use `view` only when the requested signature permits it. Do not
 add `other:` catch-all arms in tasks that require explicit exhaustiveness.
+Enums may be recursive. Keep recursive work in small typed helpers declared
+before their caller. If starter source is supplied, preserve its behavior and
+return one complete replacement file with the requested type evolution.

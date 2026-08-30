@@ -1,4 +1,4 @@
-# Python pilot reference v0.3
+# Python pilot reference v0.4
 
 ## Type-driven development in Python
 
@@ -19,3 +19,7 @@ A union such as `type Outcome = Accepted | Rejected` preserves which payload
 belongs to each case. Match every enum member explicitly; do not use `case _`,
 `Any`, `cast`, or ignored type diagnostics. Pyright runs in strict mode before
 the hidden tests.
+
+Recursive domains use postponed annotations and the exact requested union.
+When starter source is supplied, return one complete replacement module and
+let strict checking reveal every branch affected by the type change.

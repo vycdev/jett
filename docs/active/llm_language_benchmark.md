@@ -124,3 +124,14 @@ forbidden panic fallback that the v1.0.0 grader missed. That task version is
 calibration-only. Task v1.0.1 and benchmark config v0.2.1 now reject
 panic/throw shortcuts across Python, TypeScript, Go, and Rust before a larger
 study.
+
+## Recursive and maintenance expansion v0.3
+
+The suite now adds `recursive_expression`, which evaluates recursive closed
+data with typed division-failure propagation, and `account_state_evolution`,
+which evolves supplied working source by adding a payload-bearing state. The
+harness now supports versioned starter files and records their hashes.
+
+The matrix is 540 study rows. Its balanced medium Luna calibration slice is 60
+rows with no repairs. It should only be run after all 30 reference baselines
+pass locally and in the no-network image; this v0.3 slice has not yet been run.

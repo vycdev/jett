@@ -123,6 +123,13 @@ def validate(config_path: Path = DEFAULT_CONFIG) -> list[str]:
                 filename = adapter.get(filename_field)
                 if filename and not (directory / filename).is_file():
                     errors.append(f"{task_id}/{language}: missing file {filename}")
+            starter = adapter.get("starter")
+            if starter is not None and (
+                not isinstance(starter, str)
+                or Path(starter).name != starter
+                or not (directory / starter).is_file()
+            ):
+                errors.append(f"{task_id}/{language}: missing starter file {starter}")
             support_files = adapter.get("support_files", [])
             if not isinstance(support_files, list) or any(
                 not isinstance(filename, str) or not filename for filename in support_files
@@ -210,6 +217,17 @@ def render_prompt(task: dict[str, Any], language: str, track: str) -> tuple[str,
         f"Required declaration:\n```\n{adapter['signature']}\n```\n\n"
         f"Constraints:\n{constraint_text}"
     )
+    starter = adapter.get("starter")
+    if starter:
+        starter_source = (BENCHMARKS / "tasks" / task["id"] / starter).read_text(
+            encoding="utf-8"
+        )
+        prompt += (
+            "\n\nExisting source to update. It predates the requested change; return one "
+            "complete replacement file, not a patch:\n```\n"
+            + starter_source.rstrip()
+            + "\n```"
+        )
     if track == "onboarding":
         reference = (BENCHMARKS / "references" / f"{language}.md").read_text(encoding="utf-8")
         prompt += (
@@ -261,6 +279,14 @@ def planned_runs(config_path: Path = DEFAULT_CONFIG) -> Iterable[dict[str, Any]]
             "repetition": repetition,
             "repair_attempt": 0,
             "prompt_sha256": sha256_text(instructions + "\n" + prompt),
+            "starter_sha256": (
+                sha256_text(
+                    (BENCHMARKS / "tasks" / task["id"] / task["adapters"][language]["starter"])
+                    .read_text(encoding="utf-8")
+                )
+                if task["adapters"][language].get("starter")
+                else None
+            ),
             "reference_bytes": 0 if track == "zero_shot" else len(
                 (
                     TYPE_DRIVEN_GUIDANCE

@@ -1,4 +1,4 @@
-# Go pilot reference v0.3
+# Go pilot reference v0.4
 
 ## Type-driven development in Go
 
@@ -19,3 +19,7 @@ method on the requested concrete result structs. Switch over every named
 constant without a `default` branch. Go does not prove switch exhaustiveness,
 so keep the explicit cases visible and retain precise result types instead of
 using `any` or `interface{}`.
+
+Recursive domains use the requested private-marker interface and concrete
+structs. When starter source is supplied, return one complete replacement file
+and update every type switch affected by the new concrete state.

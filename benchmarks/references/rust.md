@@ -1,4 +1,4 @@
-# Rust pilot reference v0.3
+# Rust pilot reference v0.4
 
 ## Type-driven development in Rust
 
@@ -18,3 +18,7 @@ Use enums for closed states, events, and outcomes. Match every variant by name;
 Rust checks exhaustiveness, so do not add a wildcard arm. Preserve associated
 payloads in the enum variant that owns them, and avoid unsafe code, unchecked
 conversions, and panic-based shortcuts.
+
+Use `Box` at recursive enum boundaries when requested. When starter source is
+supplied, return one complete replacement file; exhaustive matching should
+identify every branch affected by the new variant.

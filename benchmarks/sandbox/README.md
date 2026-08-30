@@ -3,7 +3,7 @@
 Build from the repository root:
 
 ```text
-docker build -f benchmarks/sandbox/Dockerfile -t jett-bench:0.2 .
+docker build -f benchmarks/sandbox/Dockerfile -t jett-bench:0.3 .
 ```
 
 Validate repository-owned baselines with network disabled and bounded resources:
@@ -11,7 +11,7 @@ Validate repository-owned baselines with network disabled and bounded resources:
 ```text
 docker run --rm --network none --memory 2g --cpus 2 --pids-limit 256 \
   --cap-drop ALL --security-opt no-new-privileges \
-  jett-bench:0.2 baselines --allow-unsafe-local
+  jett-bench:0.3 baselines --allow-unsafe-local
 ```
 
 For generated-code grading, use a fresh container per submission. Do not pass

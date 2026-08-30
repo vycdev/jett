@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://jett.dev/schemas/benchmark-task-v0.2.json",
+  "$id": "https://jett.dev/schemas/benchmark-task-v0.3.json",
   "title": "Jett LLM benchmark task",
   "type": "object",
   "required": ["id", "version", "title", "statement", "constraints", "adapters"],
@@ -41,6 +41,9 @@
           "support_files": {
             "type": "array",
             "items": {"type": "string"}
+          },
+          "starter": {
+            "type": "string"
           }
         },
         "additionalProperties": false

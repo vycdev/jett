@@ -12,18 +12,34 @@ class BenchmarkTests(unittest.TestCase):
 
     def test_pilot_matrix_has_expected_size_and_unique_ids(self) -> None:
         runs = list(jett_bench.planned_runs())
-        self.assertEqual(len(runs), 360)
+        self.assertEqual(len(runs), 540)
         self.assertEqual(len({run["run_id"] for run in runs}), len(runs))
         self.assertEqual({run["reasoning_effort"] for run in runs}, {"low", "medium", "high"})
 
     def test_codex_calibration_is_the_balanced_medium_slice(self) -> None:
         runs = jett_bench.codex_calibration_runs()
-        self.assertEqual(len(runs), 40)
+        self.assertEqual(len(runs), 60)
         self.assertEqual({run["reasoning_effort"] for run in runs}, {"medium"})
         self.assertEqual({run["repetition"] for run in runs}, {1})
-        self.assertEqual({run["sequence"] for run in runs}, set(range(1, 41)))
+        self.assertEqual({run["sequence"] for run in runs}, set(range(1, 61)))
         cells = {(run["task_id"], run["language"], run["track"]) for run in runs}
-        self.assertEqual(len(cells), 40)
+        self.assertEqual(len(cells), 60)
+
+    def test_maintenance_starter_is_prompted_and_hashed(self) -> None:
+        directory, task = next(
+            pair for pair in jett_bench.load_tasks() if pair[1]["id"] == "account_state_evolution"
+        )
+        starter = (directory / task["adapters"]["jett"]["starter"]).read_text(
+            encoding="utf-8"
+        )
+        _, prompt = jett_bench.render_prompt(task, "jett", "zero_shot")
+        self.assertIn(starter.strip(), prompt)
+        run = next(
+            run
+            for run in jett_bench.planned_runs()
+            if run["task_id"] == task["id"] and run["language"] == "jett"
+        )
+        self.assertEqual(run["starter_sha256"], jett_bench.sha256_text(starter))
 
     def test_type_policy_rejects_escape_hatches_before_execution(self) -> None:
         directory, task = next(

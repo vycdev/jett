@@ -1,4 +1,4 @@
-# TypeScript pilot reference v0.3
+# TypeScript pilot reference v0.4
 
 ## Type-driven development in TypeScript
 
@@ -19,3 +19,7 @@ Model closed domains as discriminated unions with literal `kind` fields. A
 case and return directly; do not add `default`, use `any`, suppress a diagnostic,
 or erase the union through assertions. Strict checking and implicit-return
 checking run before hidden tests.
+
+Discriminated unions may be recursive. When starter source is supplied, return
+one complete replacement module and update every exhaustive switch affected by
+the requested union change.
