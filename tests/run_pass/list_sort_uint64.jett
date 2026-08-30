@@ -1,0 +1,11 @@
+namespace test
+function sort_uint64_test() returns string:
+    list[uint64] values = list(18446744073709551615, 2, 9223372036854775808)
+    list[uint64] sorted = list.sort[uint64](values)
+    uint64 first = list.first[uint64](view sorted) handle:
+        default 0
+    uint64 last = list.last[uint64](view sorted) handle:
+        default 0
+    return "{string.from_uint64(first)}:{string.from_uint64(last)}"
+verify sort_uint64_test:
+    assert sort_uint64_test() == "2:18446744073709551615"

@@ -8457,6 +8457,7 @@ impl Interpreter {
                         let mut sorted = items.clone();
                         sorted.sort_by(|a, b| match (a, b) {
                             (Value::Int64(x), Value::Int64(y)) => x.cmp(y),
+                            (Value::Uint64(x), Value::Uint64(y)) => x.cmp(y),
                             (Value::Float64(x), Value::Float64(y)) => {
                                 x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal)
                             }

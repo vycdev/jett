@@ -791,6 +791,7 @@ run_pass_fixture!(
 );
 run_pass_fixture!(run_pass_map_operations, "map_operations.jett");
 run_pass_fixture!(run_pass_list_operations, "list_operations.jett");
+run_pass_fixture!(run_pass_list_sort_uint64, "list_sort_uint64.jett");
 run_pass_fixture!(run_pass_list_access_source, "list_access_source.jett");
 run_pass_fixture!(run_pass_math_operations, "math_operations.jett");
 run_pass_fixture!(run_pass_json_serialize, "json_serialize.jett");
