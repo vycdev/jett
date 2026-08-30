@@ -242,3 +242,18 @@ the paired final result 10/10. Benchmark v0.5.3 therefore adds the exact
 `map.has` membership spelling and explains that nested matches and every
 `and`/`or` condition add complexity decision points. It remains general
 language guidance and contains no task-specific solution material.
+
+## Jett skill 2x2 calibration v0.5.3
+
+The controlled v0.5.3 run measured four cells over the same ten tasks:
+zero-shot one-shot, zero-shot with one compile-repair prompt, skill-assisted
+one-shot, and skill-assisted with one compile-repair prompt. Zero-shot passed
+0/10 initially and repaired 1/10. Skill-assisted passed 9/10 initially; its
+single repair failed, leaving 9/10 final.
+
+This isolates the skill as the dominant treatment in this sample. A compiler
+diagnostic alone did little to recover programs written without Jett syntax
+knowledge. The skill-assisted failure initially exceeded the complexity limit;
+its repair split helpers successfully but used reserved built-in type word
+`result` as a parameter. Benchmark v0.5.4 adds that general lexical constraint
+without including task-specific source or advice.

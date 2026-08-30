@@ -52,3 +52,9 @@ pass is in
 `2026-08-30_codex_luna_medium_v0.5.2_jett_skill_smoke_compile_repair/` and
 repaired all four failures, producing 10/10 pass-after-repair. The failures
 exposed map-membership and complexity-accounting gaps, producing v0.5.3.
+
+The controlled v0.5.3 Jett 2x2 comparison is in
+`2026-08-30_codex_luna_medium_v0.5.3_jett_2x2/`. Zero-shot passed 0/10
+one-shot and 1/10 after repair. Skill-assisted passed 9/10 one-shot and 9/10
+after repair. Its sole repair used reserved word `result` as an identifier,
+producing the v0.5.4 lexical clarification.

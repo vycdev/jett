@@ -7,6 +7,7 @@ Use the compiler and nearby accepted source as the authority. `docs/open_design/
 - A source file begins with `namespace name`. Namespaced declarations are private unless marked `export`.
 - Declarations are visible top to bottom. Put callees before callers; use `mutual:` only for genuine recursion cycles.
 - Built-in types use lowercase names. Declared types use PascalCase. Functions, variables, fields, variants, and namespaces use `snake_case`.
+- Keywords and built-in type spellings are reserved, not identifiers. Do not name a parameter or local `result`, `optional`, `view`, or another language word; use a domain name such as `outcome` instead.
 - Blocks use `:` plus four-space indentation. There are no braces or semicolons.
 - Every local has an explicit type and initializer: `Type name = value`. Add `mutable` before the type only when rebinding is required: `mutable Type name = value`.
 - Parameters and fields use `name: Type`; locals never do. Do not write `let`, `var`, or `mutable name: Type`.

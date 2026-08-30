@@ -40,7 +40,7 @@ timeouts do not provide a security boundary.
 
 `codex-calibration` uses the ChatGPT login held by the Codex CLI, removes API
 credential variables from the child environment, and refuses to run unless
-`codex login status` reports `Logged in using ChatGPT`. The current v0.5.3
+`codex login status` reports `Logged in using ChatGPT`. The current v0.5.4
 calibration is a 150-cell medium-reasoning slice run in fresh ephemeral sessions
 from empty temporary directories. The Luna name is currently a rolling alias
 rather than a dated snapshot, so every row records the alias, UTC completion time, Codex version,
@@ -79,9 +79,9 @@ The isolated runner recipe and required no-network/resource controls are in
 - `references/*.md`: controlled-onboarding sheets;
 - `schemas/*.json`: machine-readable result and task contracts.
 
-The current skill-assisted extension is specified by `protocol_v0.5.3.md` and
-`jett_subset_v0.5.3.md`. It inherits v0.5.2 and corrects the Jett map-membership
-and complexity-accounting gaps identified by the targeted smoke run. Its Python
+The current skill-assisted extension is specified by `protocol_v0.5.4.md` and
+`jett_subset_v0.5.4.md`. It inherits v0.5.3 and records that Jett keywords and
+built-in type spellings cannot be used as identifiers. Its Python
 adapter adds pinned Pyright strict checking; all five typed-task adapters perform a
 static-check phase before hidden runtime tests.
 Task-specific forbidden patterns are a narrow preflight against type erasure
