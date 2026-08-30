@@ -11,3 +11,5 @@ jett_diagnostics.workspace = true
 jett_parser.workspace = true
 salsa.workspace = true
 sha2.workspace = true
+hmac.workspace = true
+subtle.workspace = true
