@@ -399,13 +399,24 @@ def request_rows(config_path: Path = DEFAULT_CONFIG) -> Iterable[dict[str, Any]]
         yield {"run": run, "request": response_request(run, config)}
 
 
-def codex_calibration_runs(config_path: Path = DEFAULT_CONFIG) -> list[dict[str, Any]]:
+def codex_calibration_runs(
+    config_path: Path = DEFAULT_CONFIG,
+    *,
+    language: str | None = None,
+    track: str | None = None,
+) -> list[dict[str, Any]]:
     config = require_valid(config_path)
+    if language is not None and language not in config["languages"]:
+        raise BenchmarkError(f"unknown calibration language: {language}")
+    if track is not None and track not in config["tracks"]:
+        raise BenchmarkError(f"unknown calibration track: {track}")
     calibration = config["codex_subscription_calibration"]
     rows = [
         run for run in planned_runs(config_path)
         if run["reasoning_effort"] == calibration["reasoning_effort"]
         and run["repetition"] <= calibration["repetitions"]
+        and (language is None or run["language"] == language)
+        and (track is None or run["track"] == track)
     ]
     # A stable shuffled order reduces correlation between language and rolling-alias drift.
     rows.sort(key=lambda run: sha256_text("codex-calibration-order:" + run["run_id"]))
@@ -1290,6 +1301,8 @@ def parse_args() -> argparse.Namespace:
         "--event-dir", type=Path, default=DEFAULT_TARGET / "codex-calibration" / "events"
     )
     codex_parser.add_argument("--limit", type=int, default=30)
+    codex_parser.add_argument("--language")
+    codex_parser.add_argument("--track")
     codex_parser.add_argument("--confirm-subscription-usage", action="store_true")
     codex_parser.add_argument("--resume", action="store_true")
 
@@ -1412,7 +1425,9 @@ def main() -> int:
                         json.loads(line)["run_id"] for line in existing if line.strip()
                     }
             backend = codex_backend_info()
-            selected = codex_calibration_runs(args.config)[:args.limit]
+            selected = codex_calibration_runs(
+                args.config, language=args.language, track=args.track
+            )[:args.limit]
             selected_count = len(selected)
             completed = 0
             failures = 0
