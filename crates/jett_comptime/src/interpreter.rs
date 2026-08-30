@@ -8874,7 +8874,7 @@ impl Interpreter {
                             });
                             let mid = nums.len() / 2;
                             let median = if nums.len() % 2 == 0 {
-                                (nums[mid - 1] + nums[mid]) / 2.0
+                                float_midpoint(nums[mid - 1], nums[mid])
                             } else {
                                 nums[mid]
                             };
@@ -10447,6 +10447,20 @@ fn string_grapheme_boundaries(s: &str) -> Vec<usize> {
 
 fn string_graphemes(s: &str) -> Vec<&str> {
     UnicodeSegmentation::graphemes(s, true).collect()
+}
+
+fn float_midpoint(left: f64, right: f64) -> f64 {
+    if left == right {
+        return left;
+    }
+    if !left.is_finite() || !right.is_finite() {
+        return (left + right) / 2.0;
+    }
+    if left.is_sign_negative() == right.is_sign_negative() {
+        left + (right - left) / 2.0
+    } else {
+        left / 2.0 + right / 2.0
+    }
 }
 
 fn uint64_arithmetic_operand(value: i64) -> Result<u64, String> {
