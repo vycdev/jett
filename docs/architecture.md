@@ -1798,12 +1798,16 @@ tracked by #35.
 ### Demand-Driven Computation
 
 The initial in-process `jett_query` database is implemented and memoizes
-`parse_file(FileKey) -> ParsedFile`. The current driver creates a fresh database
-at its migrated single-file parse adapter, while project semantic passes and
-interactive operations still invoke resolver and typechecker operations
-directly. Cross-request LSP reuse and item-level semantic queries are not yet
-implemented. The bounded first slice was tracked by
-[#166](https://github.com/vycdev/jett/issues/166).
+`parse_file(FileKey) -> ParsedFile`. Its bounded parallel coordinator executes
+independent whole-file queries through cloned Salsa database snapshots, joins
+the complete worker set, and publishes results only after restoring manifest
+order. The current driver creates a fresh database at its migrated single-file
+parse adapter, while project semantic passes and interactive operations still
+invoke resolver and typechecker operations directly. Cancellation,
+stale-revision suppression, CLI/LSP worker controls, cross-request LSP reuse,
+and item-level semantic queries are not yet implemented. The bounded first
+query slice was tracked by [#166](https://github.com/vycdev/jett/issues/166),
+and the parallel boundary by [#151](https://github.com/vycdev/jett/issues/151).
 
 The [initial query boundary](open_design/incremental_query_boundary.md) defines
 database ownership, ground-truth inputs, stable file identity, deterministic

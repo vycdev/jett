@@ -1,7 +1,9 @@
 # Deterministic Parallel Compilation Boundary
 
 Status: selected design for issue
-[#151](https://github.com/vycdev/jett/issues/151); implementation not started.
+[#151](https://github.com/vycdev/jett/issues/151); the initial bounded parallel
+whole-file parse coordinator is implemented, while client integration and
+semantic parallel stages remain pending.
 
 ## Decision Summary
 
@@ -314,6 +316,12 @@ reorder user-visible diagnostics or make target output depend on worker count.
    - collect results in canonical manifest order;
    - keep resolver, typechecker, and diagnostic rendering sequential;
    - add worker-count, repeated-run, panic, and cancellation tests.
+
+   Status: the bounded coordinator uses cloned Salsa database snapshots, rejects
+   zero workers, executes independent parse queries, joins every worker before
+   publication, converts worker panic to one stable coordinator error, and
+   restores manifest order before returning. Cancellation, stale-revision
+   suppression, and CLI/LSP worker controls remain pending.
 2. **Deterministic declaration facts**
    - implement `DeclarationKey`, ordered summaries, namespace ownership,
      duplicate recovery, export facts, and `mutual:` signature groups;
