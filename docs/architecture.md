@@ -1792,8 +1792,8 @@ Standard LSP implementation using the `tower-lsp` crate. Provides:
 - Hover information (type at cursor).
 - Go-to-definition.
 - Code completion.
-- Planned follow-ups: find all references, rename symbol, and code formatting
-  (via `jett_fmt`).
+- Planned follow-ups: find all references and rename symbol. Whole-document
+  formatting is provided through `jett_fmt`.
 
 The LSP server currently stores full document text, invokes driver operations,
 and suppresses diagnostics from stale document versions. After `jett_query`

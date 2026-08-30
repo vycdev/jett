@@ -132,7 +132,7 @@
 | Component | Status |
 |---|---|
 | TOON output (`--agent` flag) | Partial (build diagnostics include file, ok/error status, severity counts, ranged diagnostics/labels, and tabular suggested fixes; format status, run stdout/typed debug output, ranged verify/property test summaries, namespace/symbol/type-at/definition-at/references-at/completion/signature query results, file-symbol parse failures, type-at compiler failures, and definition-at/references-at parse/resolution failures with known source context and cross-file labels are structured) |
-| LSP server (diagnostics on save) | Done |
+| LSP server (diagnostics on save and whole-document formatting) | Done |
 | LSP hover (type at cursor) | Done |
 | LSP go-to-definition | Done |
 | LSP completions | Done |
@@ -196,7 +196,7 @@
 |---|---|
 | Syntax highlighting (TextMate grammar) | Done |
 | Language configuration (brackets, indentation) | Done |
-| LSP integration (diagnostics) | Done (via `jett lsp`) |
+| LSP integration (diagnostics and formatting) | Done (via `jett lsp`) |
 
 ## CLI Commands
 

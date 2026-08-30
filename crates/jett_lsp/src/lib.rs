@@ -73,6 +73,7 @@ fn server_capabilities() -> ServerCapabilities {
         hover_provider: Some(HoverProviderCapability::Simple(true)),
         definition_provider: Some(OneOf::Left(true)),
         completion_provider: Some(CompletionOptions::default()),
+        document_formatting_provider: Some(OneOf::Left(true)),
         position_encoding: Some(PositionEncodingKind::UTF16),
         ..ServerCapabilities::default()
     }
@@ -121,6 +122,19 @@ fn lsp_position(source: &str, byte_offset: u32) -> Position {
     let character = line_prefix.encode_utf16().count();
 
     Position::new(line as u32, character as u32)
+}
+
+fn formatting_edits(source: &str) -> Option<Vec<TextEdit>> {
+    let result = jett_fmt::format_source(source, jett_common::FileId::new(0));
+    if !result.errors.is_empty() || result.output == source {
+        return None;
+    }
+
+    let end_offset = u32::try_from(source.len()).unwrap_or(u32::MAX);
+    Some(vec![TextEdit {
+        range: Range::new(Position::new(0, 0), lsp_position(source, end_offset)),
+        new_text: result.output,
+    }])
 }
 
 #[tower_lsp::async_trait]
@@ -249,6 +263,15 @@ impl LanguageServer for JettBackend {
             uri: uri.clone(),
             range,
         })))
+    }
+
+    async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
+        let documents = self.documents.read().await;
+        let Some(document) = documents.get(&params.text_document.uri) else {
+            return Ok(None);
+        };
+
+        Ok(formatting_edits(&document.text))
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
@@ -484,6 +507,16 @@ mod tests {
     }
 
     #[test]
+    fn server_capabilities_advertise_document_formatting() {
+        let capabilities = server_capabilities();
+
+        assert_eq!(
+            capabilities.document_formatting_provider,
+            Some(OneOf::Left(true))
+        );
+    }
+
+    #[test]
     fn save_validation_reads_the_latest_open_document() {
         let uri = Url::parse("file:///workspace/main.jett").unwrap();
         let mut documents = HashMap::new();
@@ -498,5 +531,22 @@ mod tests {
         let document = document_for_save(&documents, &uri).expect("open document");
         assert_eq!(document.text, "latest source");
         assert_eq!(document.version, 7);
+    }
+
+    #[test]
+    fn document_formatting_replaces_the_open_buffer_with_canonical_source() {
+        let source = "namespace app\n\nfunction f() returns int64:\n    return  1\n";
+
+        let edits = formatting_edits(source).expect("valid source should format");
+
+        assert_eq!(edits.len(), 1);
+        assert_eq!(
+            edits[0].range,
+            Range::new(Position::new(0, 0), Position::new(4, 0))
+        );
+        assert_eq!(
+            edits[0].new_text,
+            "namespace app\nfunction f() returns int64:\n    return 1\n"
+        );
     }
 }
