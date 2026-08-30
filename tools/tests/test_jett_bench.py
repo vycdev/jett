@@ -65,6 +65,22 @@ class BenchmarkTests(unittest.TestCase):
                 language,
             )
 
+    def test_lifecycle_task_rejects_panic_and_throw_shortcuts(self) -> None:
+        _, task = next(
+            pair for pair in jett_bench.load_tasks() if pair[1]["id"] == "order_lifecycle"
+        )
+        shortcuts = {
+            "python": 'raise RuntimeError("unreachable")\n',
+            "typescript": 'throw new Error("unreachable");\n',
+            "go": 'panic("unreachable")\n',
+            "rust": 'panic!("unreachable");\n',
+        }
+        for language, source in shortcuts.items():
+            self.assertIsNotNone(
+                jett_bench.source_policy_diagnostic(task["adapters"][language], source),
+                language,
+            )
+
     def test_hidden_graders_never_enter_prompts(self) -> None:
         for directory, task in jett_bench.load_tasks():
             for language in task["adapters"]:

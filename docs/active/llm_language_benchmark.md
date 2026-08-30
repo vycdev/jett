@@ -121,4 +121,6 @@ grading passed 36/40; all four failures were zero-shot Jett compile failures,
 while every onboarded cell passed. Manual review reduced public-contract
 compliance to 35/40 because the zero-shot Go lifecycle submission used a
 forbidden panic fallback that the v1.0.0 grader missed. That task version is
-calibration-only and must be replaced before a larger study.
+calibration-only. Task v1.0.1 and benchmark config v0.2.1 now reject
+panic/throw shortcuts across Python, TypeScript, Go, and Rust before a larger
+study.

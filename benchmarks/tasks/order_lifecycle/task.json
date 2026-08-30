@@ -1,6 +1,6 @@
 {
   "id": "order_lifecycle",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "title": "Typed order lifecycle",
   "statement": "Implement the closed order lifecycle described by the required declarations. Legal transitions are draft + submit -> submitted, draft + cancel -> cancelled, submitted + pay -> paid, submitted + cancel -> cancelled, paid + ship -> shipped, and paid + cancel -> cancelled. A disallowed event in draft, submitted, or paid returns event_not_allowed. Every event applied to shipped or cancelled returns terminal_state.",
   "constraints": [
@@ -29,7 +29,8 @@
       "commands": [["{pyright}", "--project", "pyrightconfig.json"], ["python", "hidden.py"]],
       "forbidden_patterns": [
         {"pattern": "\\bAny\\b|#\\s*(?:type:\\s*ignore|pyright:\\s*ignore)|\\bcast\\s*\\(", "message": "Python type bypasses such as Any, casts, and ignored diagnostics are forbidden"},
-        {"pattern": "(?m)^\\s*case\\s+_\\s*:", "message": "catch-all match cases are forbidden; handle every Python enum member explicitly"}
+        {"pattern": "(?m)^\\s*case\\s+_\\s*:", "message": "catch-all match cases are forbidden; handle every Python enum member explicitly"},
+        {"pattern": "\\braise\\b", "message": "raising exceptions is forbidden; return the declared rejected outcome"}
       ]
     },
     "typescript": {
@@ -41,7 +42,8 @@
       "commands": [["npx", "tsc", "--strict", "--noImplicitReturns", "--noFallthroughCasesInSwitch", "--exactOptionalPropertyTypes", "--target", "ES2022", "--module", "NodeNext", "--moduleResolution", "NodeNext", "solution.ts", "hidden.ts", "--outDir", "out"], ["node", "out/hidden.js"]],
       "forbidden_patterns": [
         {"pattern": "\\bany\\b|@ts-(?:ignore|nocheck)|\\bas\\s+(?:const|[A-Za-z_$][A-Za-z0-9_$]*)\\b", "message": "TypeScript type bypasses such as any, suppressed diagnostics, and unchecked assertions are forbidden"},
-        {"pattern": "(?m)^\\s*default\\s*:", "message": "default switch branches are forbidden; handle every TypeScript union member explicitly"}
+        {"pattern": "(?m)^\\s*default\\s*:", "message": "default switch branches are forbidden; handle every TypeScript union member explicitly"},
+        {"pattern": "\\bthrow\\b", "message": "throwing exceptions is forbidden; return the declared rejected outcome"}
       ]
     },
     "go": {
@@ -53,7 +55,8 @@
       "commands": [["go", "test", "-run", "^$", "solution.go", "hidden_test.go"], ["go", "test", "solution.go", "hidden_test.go"]],
       "forbidden_patterns": [
         {"pattern": "\\bany\\b|interface\\s*\\{\\s*\\}", "message": "Go type erasure through any or interface{} is forbidden"},
-        {"pattern": "(?m)^\\s*default\\s*:", "message": "default switch branches are forbidden; handle every Go constant explicitly"}
+        {"pattern": "(?m)^\\s*default\\s*:", "message": "default switch branches are forbidden; handle every Go constant explicitly"},
+        {"pattern": "\\bpanic\\s*\\(", "message": "panic is forbidden; return the declared rejected outcome"}
       ]
     },
     "rust": {
@@ -65,7 +68,8 @@
       "commands": [["rustc", "--edition=2024", "--test", "hidden.rs", "-o", "{executable}"], ["{executable}"]],
       "forbidden_patterns": [
         {"pattern": "\\bunsafe\\b|\\b(?:transmute|unreachable_unchecked)\\b", "message": "unsafe Rust and unchecked type escapes are forbidden"},
-        {"pattern": "_\\s*=>", "message": "wildcard match arms are forbidden; handle every Rust enum variant explicitly"}
+        {"pattern": "_\\s*=>", "message": "wildcard match arms are forbidden; handle every Rust enum variant explicitly"},
+        {"pattern": "\\bpanic\\s*!", "message": "panic is forbidden; return the declared rejected outcome"}
       ]
     }
   }
