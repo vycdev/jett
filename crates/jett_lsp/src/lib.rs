@@ -73,6 +73,7 @@ fn server_capabilities() -> ServerCapabilities {
         hover_provider: Some(HoverProviderCapability::Simple(true)),
         definition_provider: Some(OneOf::Left(true)),
         completion_provider: Some(CompletionOptions::default()),
+        document_symbol_provider: Some(OneOf::Left(true)),
         position_encoding: Some(PositionEncodingKind::UTF16),
         ..ServerCapabilities::default()
     }
@@ -121,6 +122,65 @@ fn lsp_position(source: &str, byte_offset: u32) -> Position {
     let character = line_prefix.encode_utf16().count();
 
     Position::new(line as u32, character as u32)
+}
+
+fn lsp_position_from_driver(source: &str, line: u32, column: u32) -> Option<Position> {
+    let line_index = usize::try_from(line.checked_sub(1)?).ok()?;
+    let scalar_index = usize::try_from(column.checked_sub(1)?).ok()?;
+    let line_source = source.split('\n').nth(line_index)?;
+    let line_source = line_source.strip_suffix('\r').unwrap_or(line_source);
+    if scalar_index > line_source.chars().count() {
+        return None;
+    }
+    let utf16_column = line_source
+        .chars()
+        .take(scalar_index)
+        .map(char::len_utf16)
+        .sum::<usize>();
+    Some(Position::new(
+        u32::try_from(line_index).ok()?,
+        u32::try_from(utf16_column).ok()?,
+    ))
+}
+
+fn document_symbol_kind(kind: &str) -> SymbolKind {
+    match kind {
+        "namespace" => SymbolKind::MODULE,
+        "function" | "verify" | "property" => SymbolKind::FUNCTION,
+        "interface" => SymbolKind::INTERFACE,
+        "struct" | "bitfield" => SymbolKind::STRUCT,
+        "enum" => SymbolKind::ENUM,
+        "machine" | "actor" => SymbolKind::CLASS,
+        "variable" => SymbolKind::VARIABLE,
+        "type" => SymbolKind::TYPE_PARAMETER,
+        "implement" => SymbolKind::OBJECT,
+        _ => SymbolKind::OBJECT,
+    }
+}
+
+#[allow(deprecated)]
+fn document_symbols_for_source(source: &str) -> Option<Vec<DocumentSymbol>> {
+    let outline = jett_driver::query_source_file_symbols(source, "<lsp-document>").ok()?;
+    let symbols = outline
+        .symbols
+        .into_iter()
+        .filter_map(|symbol| {
+            let start = lsp_position_from_driver(source, symbol.line, symbol.column)?;
+            let end = lsp_position_from_driver(source, symbol.end_line, symbol.end_column)?;
+            let range = Range::new(start, end);
+            Some(DocumentSymbol {
+                name: symbol.name,
+                detail: symbol.signature,
+                kind: document_symbol_kind(&symbol.kind),
+                tags: None,
+                deprecated: None,
+                range,
+                selection_range: range,
+                children: None,
+            })
+        })
+        .collect();
+    Some(symbols)
 }
 
 #[tower_lsp::async_trait]
@@ -296,6 +356,22 @@ impl LanguageServer for JettBackend {
 
         Ok(Some(CompletionResponse::Array(items)))
     }
+
+    async fn document_symbol(
+        &self,
+        params: DocumentSymbolParams,
+    ) -> Result<Option<DocumentSymbolResponse>> {
+        let uri = &params.text_document.uri;
+        let documents = self.documents.read().await;
+        let Some(document) = documents.get(uri) else {
+            return Ok(None);
+        };
+        let Some(symbols) = document_symbols_for_source(&document.text) else {
+            return Ok(None);
+        };
+
+        Ok(Some(DocumentSymbolResponse::Nested(symbols)))
+    }
 }
 
 fn diagnostics_for_source(source: &str, file_path: &str) -> Vec<Diagnostic> {
@@ -455,7 +531,7 @@ mod tests {
     }
 
     #[test]
-    fn server_capabilities_advertise_save_notifications() {
+    fn server_capabilities_advertise_sync_and_document_symbols() {
         let capabilities = server_capabilities();
         let Some(TextDocumentSyncCapability::Options(options)) = capabilities.text_document_sync
         else {
@@ -467,6 +543,34 @@ mod tests {
             options.save,
             Some(TextDocumentSyncSaveOptions::Supported(true))
         ));
+        assert_eq!(
+            capabilities.document_symbol_provider,
+            Some(OneOf::Left(true))
+        );
+    }
+
+    #[test]
+    fn document_symbols_map_unsaved_source_outline() {
+        let source = "namespace api\n\nexport function login() returns int64:\n    return 1\n";
+
+        let symbols = document_symbols_for_source(source).expect("valid source outline");
+
+        let namespace = symbols
+            .iter()
+            .find(|symbol| symbol.name == "api")
+            .expect("namespace symbol");
+        assert_eq!(namespace.kind, SymbolKind::MODULE);
+        assert_eq!(namespace.selection_range.start, Position::new(0, 10));
+        assert_eq!(namespace.selection_range.end, Position::new(0, 13));
+
+        let login = symbols
+            .iter()
+            .find(|symbol| symbol.name == "api.login")
+            .expect("function symbol");
+        assert_eq!(login.kind, SymbolKind::FUNCTION);
+        assert_eq!(login.detail.as_deref(), Some("api.login() returns int64"));
+        assert_eq!(login.selection_range.start, Position::new(2, 16));
+        assert_eq!(login.selection_range.end, Position::new(2, 21));
     }
 
     #[test]

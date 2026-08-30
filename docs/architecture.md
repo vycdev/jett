@@ -1791,6 +1791,8 @@ Standard LSP implementation using the `tower-lsp` crate. Provides:
 - Hover information (type at cursor).
 - Go-to-definition.
 - Code completion.
+- Document symbols from the latest in-memory source, including declaration
+  kinds, signatures, and UTF-16 ranges for editor outlines.
 - Planned follow-ups: find all references, rename symbol, and code formatting
   (via `jett_fmt`).
 
