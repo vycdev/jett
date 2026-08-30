@@ -43,7 +43,7 @@
 
 | Component | Crate | Tests | Status |
 |---|---|---|---|
-| HIR (monomorphization) | `jett_hir` | 6 | Typed ordinary and generic function lowering implemented for the core subset, with canonical source-origin/declaration identity, deterministic concrete function/local IDs, separate per-instantiation type facts, explicit, inferred, nested, and recursive generic calls, and core structured control flow; remaining constructs are staged by the [HIR lowering plan](active/hir_lowering_plan.md) and [#20](https://github.com/vycdev/jett/issues/20) |
+| HIR (monomorphization) | `jett_hir` | 7 | Typed ordinary and generic function lowering implemented for the core subset, with canonical source-origin/declaration identity, deterministic concrete function/local IDs, separate per-instantiation type facts, explicit, inferred, nested, and recursive generic calls, named arguments resolved to parameter indices without changing source evaluation order, and core structured control flow; remaining constructs are staged by the [HIR lowering plan](active/hir_lowering_plan.md) and [#20](https://github.com/vycdev/jett/issues/20) |
 | MIR (control flow graph) | `jett_mir` | — | Not started ([Tracked by #22](https://github.com/vycdev/jett/issues/22)) |
 | LLVM native codegen | `jett_codegen_llvm` | — | Not started |
 | Runtime library | `jett_runtime` | — | Not started |

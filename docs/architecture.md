@@ -772,7 +772,9 @@ the typechecker's ordered concrete generic-instantiation manifest. Explicit,
 inferred, repeated, and nested generic calls resolve to deterministic concrete
 HIR functions while each instantiation retains its own checked expression
 types. Typed parameters and locals, direct user calls, core expressions,
-returns, branches, and loops are covered. Remaining source constructs are
+returns, branches, and loops are covered. Named call arguments carry resolved
+parameter indices in source evaluation order, so later phases do not repeat
+source-name binding or reorder side effects. Remaining source constructs are
 staged by the [initial HIR lowering plan](active/hir_lowering_plan.md).
 
 ### Purpose

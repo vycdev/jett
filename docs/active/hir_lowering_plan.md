@@ -77,8 +77,10 @@ enter the manifest. Recursive discovery reserves identity before lowering.
    manifest and per-instantiation expression types and nested-call targets from
    `jett_typecheck`; lower explicit, inferred, repeated, nested, and recursive
    generic calls to concrete HIR function identities.
-3. Resolve named arguments, methods, fields, constructors, pipelines, handles,
-   matches, collections, reflection, and trusted calls into core HIR forms.
+3. **In progress:** named function-call arguments resolve to concrete parameter
+   indices while remaining in source evaluation order. Methods, fields,
+   constructors, pipelines, handles, matches, collections, reflection, and
+   trusted calls remain to be resolved into core HIR forms.
 4. Add deterministic HIR snapshots and wire HIR into the driver after every
    accepted source construct either lowers or has an explicit staged error.
 5. Freeze the HIR validator and begin the HIR-to-MIR contract in #22.

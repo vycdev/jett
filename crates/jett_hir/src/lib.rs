@@ -141,6 +141,14 @@ pub struct Expression {
     pub span: Span,
 }
 
+/// A call argument in source evaluation order, bound to one concrete
+/// parameter after positional and named arguments have been resolved.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CallArgument {
+    pub parameter: u32,
+    pub value: Expression,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExpressionKind {
     Int(i128),
@@ -160,7 +168,7 @@ pub enum ExpressionKind {
     },
     Call {
         function: FunctionId,
-        args: Vec<Expression>,
+        args: Vec<CallArgument>,
     },
     View(Box<Expression>),
     Clone(Box<Expression>),
@@ -228,6 +236,7 @@ struct Lowerer<'a> {
     origins: &'a HashMap<FileId, SourceOrigin>,
     functions: Vec<FunctionSource<'a>>,
     function_ids: HashMap<FunctionKey, FunctionId>,
+    function_params: HashMap<DefId, Vec<String>>,
     errors: Vec<LowerError>,
 }
 
@@ -245,6 +254,7 @@ impl<'a> Lowerer<'a> {
             origins,
             functions: Vec::new(),
             function_ids: HashMap::new(),
+            function_params: HashMap::new(),
             errors: Vec::new(),
         }
     }
@@ -284,6 +294,14 @@ impl<'a> Lowerer<'a> {
                         },
                         id,
                     );
+                    self.function_params.insert(
+                        definition,
+                        function
+                            .params
+                            .iter()
+                            .map(|param| param.name.name.clone())
+                            .collect(),
+                    );
                     self.functions.push(FunctionSource {
                         id,
                         definition,
@@ -295,6 +313,14 @@ impl<'a> Lowerer<'a> {
                     if let Some(definition) =
                         self.definition_at(function.name.span, DefKind::Function)
                     {
+                        self.function_params.insert(
+                            definition,
+                            function
+                                .params
+                                .iter()
+                                .map(|param| param.name.name.clone())
+                                .collect(),
+                        );
                         generic_templates.insert(definition, function);
                     }
                 }
@@ -722,16 +748,67 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             );
             return None;
         };
+        let Some(parameter_names) = self.parent.function_params.get(&definition).cloned() else {
+            self.parent
+                .error(ident.span, "call target has no HIR parameter manifest");
+            return None;
+        };
         let mut lowered_args = Vec::with_capacity(args.len());
+        let mut bound_parameters = vec![false; parameter_names.len()];
+        let mut next_positional = 0usize;
         for arg in args {
-            if arg.name.is_some() {
+            let parameter = if let Some(name) = &arg.name {
+                let Some(parameter) = parameter_names
+                    .iter()
+                    .position(|candidate| candidate == &name.name)
+                else {
+                    self.parent.error(
+                        name.span,
+                        format!("named argument '{}' has no matching parameter", name.name),
+                    );
+                    return None;
+                };
+                parameter
+            } else {
+                while bound_parameters.get(next_positional) == Some(&true) {
+                    next_positional += 1;
+                }
+                if next_positional >= parameter_names.len() {
+                    self.parent.error(arg.span, "call has too many arguments");
+                    return None;
+                }
+                next_positional
+            };
+            if bound_parameters[parameter] {
                 self.parent.error(
                     arg.span,
-                    "named arguments are not yet lowered to positional HIR arguments",
+                    format!(
+                        "parameter '{}' is bound more than once",
+                        parameter_names[parameter]
+                    ),
                 );
                 return None;
             }
-            lowered_args.push(self.lower_expression(&arg.value)?);
+            bound_parameters[parameter] = true;
+            let Ok(parameter) = u32::try_from(parameter) else {
+                self.parent
+                    .error(arg.span, "call parameter index exceeds the HIR limit");
+                return None;
+            };
+            lowered_args.push(CallArgument {
+                parameter,
+                value: self.lower_expression(&arg.value)?,
+            });
+        }
+        if let Some(missing) = bound_parameters.iter().position(|bound| !bound) {
+            self.parent.error(
+                call_span,
+                format!(
+                    "call does not bind parameter '{}'",
+                    parameter_names[missing]
+                ),
+            );
+            return None;
         }
         Some(ExpressionKind::Call {
             function,
@@ -1019,5 +1096,32 @@ function main() returns int64:
             panic!("expected recursive concrete call");
         };
         assert_eq!(*function, repeat.id);
+    }
+
+    #[test]
+    fn resolves_named_call_arguments_without_reordering_evaluation() {
+        let source = r#"namespace app
+function combine(first: int64, second: int64, third: int64) returns int64:
+    return first + second + third
+function main() returns int64:
+    return combine(10, third: 30, second: 20)
+"#;
+        let program = lower_source(source);
+        let main = &program.functions[1];
+        let StatementKind::Return(Some(Expression {
+            kind: ExpressionKind::Call { args, .. },
+            ..
+        })) = &main.body.statements[0].kind
+        else {
+            panic!("expected named call to lower");
+        };
+
+        assert_eq!(
+            args.iter().map(|arg| arg.parameter).collect::<Vec<_>>(),
+            vec![0, 2, 1]
+        );
+        assert!(matches!(args[0].value.kind, ExpressionKind::Int(10)));
+        assert!(matches!(args[1].value.kind, ExpressionKind::Int(30)));
+        assert!(matches!(args[2].value.kind, ExpressionKind::Int(20)));
     }
 }
