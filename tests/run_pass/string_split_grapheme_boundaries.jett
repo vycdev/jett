@@ -1,0 +1,9 @@
+function split_ignores_partial_grapheme_delimiters() returns bool:
+    list[string] parts = string.split("éx", "́")
+    if list.length[string](view parts) != 1:
+        return false
+    string only = list.get[string](view parts, 0) handle:
+        return false
+    return only == "éx"
+verify split_ignores_partial_grapheme_delimiters:
+    assert split_ignores_partial_grapheme_delimiters()

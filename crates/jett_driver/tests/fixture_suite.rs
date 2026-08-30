@@ -1000,6 +1000,10 @@ compile_fail_fixture!(
 
 run_pass_fixture!(run_pass_string_search, "string_search.jett");
 run_pass_fixture!(run_pass_string_indic_grapheme, "string_indic_grapheme.jett");
+run_pass_fixture!(
+    run_pass_string_split_grapheme_boundaries,
+    "string_split_grapheme_boundaries.jett"
+);
 run_pass_fixture!(run_pass_time_and_os, "time_and_os.jett");
 run_pass_fixture!(run_pass_time_values, "time_values.jett");
 run_pass_fixture!(run_pass_clock_production, "clock_production.jett");
