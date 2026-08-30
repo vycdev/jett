@@ -1,0 +1,5 @@
+.git
+.todo
+target
+**/__pycache__
+*.pyc

@@ -1,0 +1,21 @@
+{
+  "benchmark_version": "0.1.0-pilot",
+  "subset": "jett-v0.1",
+  "model": "gpt-5.6-luna",
+  "model_snapshot": null,
+  "reasoning_efforts": ["low", "medium", "high"],
+  "tracks": ["zero_shot", "onboarding"],
+  "languages": ["jett", "python", "typescript", "go", "rust"],
+  "repetitions": 3,
+  "study_minimum_repetitions": 10,
+  "max_output_tokens": 4096,
+  "max_repair_attempts": 1,
+  "grader_timeout_seconds": 30,
+  "prices_usd_per_million_tokens": {
+    "source": "https://developers.openai.com/api/docs/models/gpt-5.6-luna",
+    "checked_on": "2026-08-30",
+    "input": 0.20,
+    "cached_input": 0.02,
+    "output": 1.20
+  }
+}

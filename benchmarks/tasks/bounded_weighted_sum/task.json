@@ -1,0 +1,14 @@
+{
+  "id": "bounded_weighted_sum",
+  "version": "1.0.0",
+  "title": "Bounded weighted sum",
+  "statement": "Implement bounded_weighted_sum. For each value at zero-based index i, clamp the value to the inclusive range [-cap, cap], multiply it by i + 1, and return the sum. The empty list returns 0.",
+  "constraints": ["0 <= cap <= 100000", "values has at most 1000 elements", "all inputs and intermediate results fit in signed 64-bit integers", "do not perform input/output"],
+  "adapters": {
+    "jett": {"signature": "namespace benchmark\n\nfunction bounded_weighted_sum(values: list[int64], cap: int64) returns int64", "baseline": "baseline.jett", "hidden": "hidden.jett", "candidate": "solution.jett", "grade_mode": "append", "commands": [["{jett}", "build", "{candidate}"], ["{jett}", "test", "{candidate}"]]},
+    "python": {"signature": "def bounded_weighted_sum(values: list[int], cap: int) -> int", "baseline": "baseline.py", "hidden": "hidden.py", "candidate": "solution.py", "grade_mode": "separate", "commands": [["python", "hidden.py"]]},
+    "typescript": {"signature": "export function boundedWeightedSum(values: readonly bigint[], cap: bigint): bigint", "baseline": "baseline.ts", "hidden": "hidden.ts", "candidate": "solution.ts", "grade_mode": "separate", "commands": [["npx", "tsc", "--strict", "--target", "ES2022", "--module", "NodeNext", "--moduleResolution", "NodeNext", "solution.ts", "hidden.ts", "--outDir", "out"], ["node", "out/hidden.js"]]},
+    "go": {"signature": "package benchmark\n\nfunc BoundedWeightedSum(values []int64, cap int64) int64", "baseline": "baseline.go", "hidden": "hidden_test.go", "candidate": "solution.go", "grade_mode": "separate", "commands": [["go", "test", "solution.go", "hidden_test.go"]]},
+    "rust": {"signature": "pub fn bounded_weighted_sum(values: &[i64], cap: i64) -> i64", "baseline": "baseline.rs", "hidden": "hidden.rs", "candidate": "solution.rs", "grade_mode": "separate", "commands": [["rustc", "--edition=2024", "--test", "hidden.rs", "-o", "{executable}"], ["{executable}"]]}
+  }
+}
