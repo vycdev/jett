@@ -183,6 +183,7 @@ pub enum StatementKind {
     Trace(LocalId),
     Breakpoint(Option<Expression>),
     Respond(Expression),
+    Scope(Block),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -217,6 +218,11 @@ pub enum ExpressionKind {
     },
     Intrinsic {
         canonical_name: String,
+        args: Vec<Expression>,
+        evaluation_order: Vec<usize>,
+    },
+    IndirectCall {
+        callee: Box<Expression>,
         args: Vec<Expression>,
         evaluation_order: Vec<usize>,
     },
@@ -276,6 +282,21 @@ pub enum ExpressionKind {
     Run(Box<Expression>),
     Join(Box<Expression>),
     Cancel(Box<Expression>),
+    InlineFunction {
+        params: Vec<LocalId>,
+        body: Block,
+    },
+    ActorSpawn {
+        actor_type: String,
+        args: Vec<Expression>,
+        evaluation_order: Vec<usize>,
+    },
+    ActorMessage {
+        actor: Box<Expression>,
+        message: String,
+        args: Vec<Expression>,
+        kind: ActorMessageKind,
+    },
     Field {
         base: Box<Expression>,
         owner_type: TypeId,
@@ -304,6 +325,12 @@ pub struct MatchArm {
 pub enum StringSegment {
     Text(String),
     Value(Expression),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActorMessageKind {
+    Send,
+    Ask,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -490,6 +517,7 @@ impl Validator<'_> {
                 }
             }
             StatementKind::Respond(value) => self.expression(value),
+            StatementKind::Scope(block) => self.block(block),
         }
     }
 
@@ -521,6 +549,12 @@ impl Validator<'_> {
                 }
             }
             ExpressionKind::Intrinsic { args, .. } => {
+                for argument in args {
+                    self.expression(argument);
+                }
+            }
+            ExpressionKind::IndirectCall { callee, args, .. } => {
+                self.expression(callee);
                 for argument in args {
                     self.expression(argument);
                 }
@@ -582,6 +616,23 @@ impl Validator<'_> {
                 }
             }
             ExpressionKind::StateIs { value, .. } => self.expression(value),
+            ExpressionKind::InlineFunction { params, body } => {
+                for param in params {
+                    self.check_local(*param, expression.span);
+                }
+                self.block(body);
+            }
+            ExpressionKind::ActorSpawn { args, .. } => {
+                for argument in args {
+                    self.expression(argument);
+                }
+            }
+            ExpressionKind::ActorMessage { actor, args, .. } => {
+                self.expression(actor);
+                for argument in args {
+                    self.expression(argument);
+                }
+            }
             ExpressionKind::Field { base, .. } => self.expression(base),
             ExpressionKind::Int(_)
             | ExpressionKind::Float(_)
@@ -1180,14 +1231,11 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 StatementKind::Respond(self.lower_expression(&response.value)?),
                 response.span,
             ),
+            Stmt::ComptimeTypeBind(binding) => (
+                StatementKind::Scope(self.lower_block(&binding.body)),
+                binding.span,
+            ),
             Stmt::Use(_) => return None,
-            unsupported => {
-                self.parent.error(
-                    statement_span(unsupported),
-                    "source statement is not in the initial HIR lowering subset",
-                );
-                return None;
-            }
         };
         Some(Statement { kind, span })
     }
@@ -1367,6 +1415,39 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             Expr::Cancel(value, _) => {
                 ExpressionKind::Cancel(Box::new(self.lower_expression(value)?))
             }
+            Expr::InlineFn(params, _, body, _) => {
+                let mut lowered_params = Vec::with_capacity(params.len());
+                for param in params {
+                    let Some(definition) =
+                        self.parent.definition_at(param.name.span, DefKind::Param)
+                    else {
+                        self.parent
+                            .error(param.name.span, "closure parameter is unresolved");
+                        return None;
+                    };
+                    let Some(param_type) =
+                        self.parent.check.definition_types.get(&definition).copied()
+                    else {
+                        self.parent
+                            .error(param.name.span, "closure parameter has no checked type");
+                        return None;
+                    };
+                    lowered_params.push(self.allocate_local(
+                        definition,
+                        &param.name.name,
+                        param_type,
+                        param.mutable,
+                        param.span,
+                    ));
+                }
+                ExpressionKind::InlineFunction {
+                    params: lowered_params,
+                    body: self.lower_block(body),
+                }
+            }
+            Expr::Spawn(inner, _) => self.lower_actor_spawn(inner)?,
+            Expr::Send(inner, _) => self.lower_actor_message(inner, ActorMessageKind::Send)?,
+            Expr::Ask(inner, _) => self.lower_actor_message(inner, ActorMessageKind::Ask)?,
             Expr::View(value, _) => ExpressionKind::View(Box::new(self.lower_expression(value)?)),
             Expr::Clone(value, _) => ExpressionKind::Clone(Box::new(self.lower_expression(value)?)),
             unsupported => {
@@ -1378,6 +1459,44 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             }
         };
         Some(Expression { kind, ty, span })
+    }
+
+    fn lower_actor_spawn(&mut self, inner: &Expr) -> Option<ExpressionKind> {
+        let (callee, args, call_span) = match inner {
+            Expr::Call(callee, args, span) => (callee.as_ref(), args.as_slice(), *span),
+            _ => (inner, &[][..], inner.span()),
+        };
+        let actor_type = self.canonical_call_name(callee)?;
+        let (args, evaluation_order) = self.lower_arguments_in_parameter_order(args, call_span)?;
+        Some(ExpressionKind::ActorSpawn {
+            actor_type,
+            args,
+            evaluation_order,
+        })
+    }
+
+    fn lower_actor_message(
+        &mut self,
+        inner: &Expr,
+        kind: ActorMessageKind,
+    ) -> Option<ExpressionKind> {
+        let (callee, args, call_span) = match inner {
+            Expr::Call(callee, args, span) => (callee.as_ref(), args.as_slice(), *span),
+            _ => (inner, &[][..], inner.span()),
+        };
+        let Expr::FieldAccess(actor, message, _) = callee else {
+            self.parent
+                .error(callee.span(), "actor message target has no message member");
+            return None;
+        };
+        let actor = Box::new(self.lower_expression(actor)?);
+        let (args, _) = self.lower_arguments_in_parameter_order(args, call_span)?;
+        Some(ExpressionKind::ActorMessage {
+            actor,
+            message: message.name.clone(),
+            args,
+            kind,
+        })
     }
 
     fn lower_handle(
@@ -1491,6 +1610,17 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
 
         let (lowered_args, evaluation_order) =
             self.lower_arguments_in_parameter_order(args, call_span)?;
+        if matches!(
+            callee,
+            Expr::Ident(ident)
+                if matches!(self.resolved_kind(ident), Some(DefKind::Variable | DefKind::Param))
+        ) {
+            return Some(ExpressionKind::IndirectCall {
+                callee: Box::new(self.lower_expression(callee)?),
+                args: lowered_args,
+                evaluation_order,
+            });
+        }
         if self.is_source_call(callee, call_span) {
             Some(ExpressionKind::Call {
                 function: self.resolve_user_call_target(callee, call_span)?,
@@ -2102,26 +2232,6 @@ fn lower_unary_op(op: ast::UnaryOp) -> UnaryOp {
     match op {
         ast::UnaryOp::Not => UnaryOp::Not,
         ast::UnaryOp::Neg => UnaryOp::Negate,
-    }
-}
-
-fn statement_span(statement: &Stmt) -> Span {
-    match statement {
-        Stmt::VarDecl(value) => value.span,
-        Stmt::Assign(value) => value.span,
-        Stmt::Return(value) => value.span,
-        Stmt::Respond(value) => value.span,
-        Stmt::ComptimeTypeBind(value) => value.span,
-        Stmt::If(value) => value.span,
-        Stmt::For(value) => value.span,
-        Stmt::While(value) => value.span,
-        Stmt::Match(value) => value.span,
-        Stmt::Expr(value) => value.span,
-        Stmt::Use(value) => value.span,
-        Stmt::Assert(value) => value.span,
-        Stmt::Trace(value) => value.span,
-        Stmt::Breakpoint(value) => value.span,
-        Stmt::Break(span) | Stmt::Continue(span) => *span,
     }
 }
 
@@ -2840,6 +2950,70 @@ function absolute(value: int64) returns int64:
         };
         assert_eq!(canonical_name, "math.abs");
         assert_eq!(args.len(), 1);
+    }
+
+    #[test]
+    fn lowers_actor_operations() {
+        let source = r#"namespace app
+actor Counter:
+    mutable int64 count = 0
+    receive add(amount: int64):
+        count = count + amount
+    receive current responds int64:
+        respond count
+function main() returns int64:
+    Counter counter = spawn Counter()
+    send counter.add(2)
+    return ask counter.current
+"#;
+        let program = lower_source(source);
+        let main = &program.functions[0];
+        let StatementKind::Let { value, .. } = &main.body.statements[0].kind else {
+            panic!("expected actor local");
+        };
+        assert!(matches!(value.kind, ExpressionKind::ActorSpawn { .. }));
+        assert!(matches!(
+            main.body.statements[1].kind,
+            StatementKind::Expression(Expression {
+                kind: ExpressionKind::ActorMessage {
+                    kind: ActorMessageKind::Send,
+                    ..
+                },
+                ..
+            })
+        ));
+        assert!(matches!(
+            main.body.statements[2].kind,
+            StatementKind::Return(Some(Expression {
+                kind: ExpressionKind::ActorMessage {
+                    kind: ActorMessageKind::Ask,
+                    ..
+                },
+                ..
+            }))
+        ));
+    }
+
+    #[test]
+    fn lowers_inline_functions_and_indirect_calls() {
+        let source = r#"namespace app
+function main() returns int64:
+    function(int64) returns int64 double = function(value: int64) returns int64: return value * 2
+    return double(4)
+"#;
+        let program = lower_source(source);
+        let main = &program.functions[0];
+        let StatementKind::Let { value, .. } = &main.body.statements[0].kind else {
+            panic!("expected closure local");
+        };
+        assert!(matches!(value.kind, ExpressionKind::InlineFunction { .. }));
+        assert!(matches!(
+            main.body.statements[1].kind,
+            StatementKind::Return(Some(Expression {
+                kind: ExpressionKind::IndirectCall { .. },
+                ..
+            }))
+        ));
     }
 
     #[test]

@@ -77,6 +77,12 @@ typed HIR operations without changing lexical evaluation. Enum construction
 uses dense variant identities, and exhaustive `match` arms bind payload locals
 explicitly rather than preserving source patterns.
 
+Accepted compiler-owned calls become typed intrinsic HIR nodes only after the
+typechecker authorizes them; HIR records canonical identity and evaluation
+order without reapplying trusted-source policy. Inline functions, indirect
+calls, bitfields, state machines, and actor operations likewise use explicit
+backend-neutral nodes rather than retaining source AST fragments.
+
 The direct AST remains the initial frontend boundary, and the tree-walking
 interpreter remains available while HIR coverage grows. The later lossless CST
 will lower into that same AST. The staged compiler contract is recorded in the

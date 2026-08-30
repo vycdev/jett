@@ -220,6 +220,7 @@ impl Builder {
                 self.push(Statement::Breakpoint(condition.clone()))
             }
             hir::StatementKind::Respond(value) => self.push(Statement::Respond(value.clone())),
+            hir::StatementKind::Scope(block) => self.lower_block(block),
         }
     }
 

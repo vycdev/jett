@@ -82,7 +82,7 @@ enter the manifest. Recursive discovery reserves identity before lowering.
    manifest and per-instantiation expression types and nested-call targets from
    `jett_typecheck`; lower explicit, inferred, repeated, nested, and recursive
    generic calls to concrete HIR function identities.
-3. **In progress:** named arguments, source-defined method targets, struct
+3. **Implemented for the supported function-body surface:** named arguments, source-defined method targets, struct
    fields and constructors, list/map construction, and unhandled pipelines now
    lower into canonical core forms while retaining lexical left-to-right
    evaluation. Pipelines become nested calls to checked ordinary, generic, or
@@ -101,8 +101,11 @@ enter the manifest. Recursive discovery reserves identity before lowering.
    machines use dense layout IDs. Calls accepted as compiler operations lower
    to explicit canonical-name intrinsics with typed arguments and lexical
    evaluation order; this includes the remaining collection/reflection/trusted
-   call surface without granting authority in HIR. Closures, comptime type-bind
-   scopes, and actor operations remain staged.
+   call surface without granting authority in HIR. Inline functions, indirect
+   calls, comptime type-bind scopes, actor spawn/send/ask, and every accepted
+   statement form now lower explicitly. Materializing actor declarations and
+   receive-handler bodies as backend entities remains separate actor-runtime
+   work rather than an unlowered function-body expression.
 4. **Implemented:** deterministic HIR snapshots cover representative core and
    enum/handle programs. Every successful lowering runs the backend-facing HIR
    validator before publication. Driver wiring remains gated on complete source
