@@ -1,3 +1,7 @@
+mod render;
+
+pub use render::render_cpu_profile_toon;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
