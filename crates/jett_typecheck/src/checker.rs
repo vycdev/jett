@@ -2715,6 +2715,14 @@ impl<'a> TypeChecker<'a> {
         }
 
         match name.as_str() {
+            "int64.from_float64" => {
+                self.expect_no_type_args(&name, type_args, span);
+                Some((
+                    vec![TypeInterner::FLOAT64],
+                    self.interner
+                        .intern(Type::Result(TypeInterner::INT64, TypeInterner::STRING)),
+                ))
+            }
             "int64.from_string" => {
                 self.expect_no_type_args(&name, type_args, span);
                 Some((
