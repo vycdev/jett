@@ -10,6 +10,12 @@ verify sha256_vectors:
     assert crypto.sha256("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq") == "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"
     assert crypto.sha256("é🎉") == "457eec3d021f59e24b2e57e2bc9f0239490b4c290f4ab01820e159caa757ba93"
     assert crypto.sha256(string_with_nul()) == "59b271ae1bbcb1d31d41929817f4b16fb439eb4f31520b5ad1d5ce98920a7138"
+verify sha512_vectors:
+    assert crypto.sha512("") == "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e"
+    assert crypto.sha512("abc") == "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f"
+    assert crypto.sha512("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq") == "204a8fc6dda82f0a0ced7beb8e08a41657c16ef468b228a8279be331a703c33596fd15c13b1b07f9aa1d3bea57789ca031ad85c7a71dd70354ec631238ca3445"
+    assert crypto.sha512("é🎉") == "1ce29e828caaec331cadd87837fb50a460e2b15d31b2ec513d988cdaa8e1d68d9fd52f76273eba02a71b702594a8ce5497e924e41a4c4f7e870762cadf2c3af7"
+    assert crypto.sha512(string_with_nul()) == "48dd66f05b49586e072c9f3485a10982231e246b46fd5eb1765721c855610c5a81744d49b1cc7ffeeed783f6819fd3702d659ce14b5b9b4f5d14f2e05cc375b5"
 verify md5_legacy_vectors:
     assert crypto.md5("") == "d41d8cd98f00b204e9800998ecf8427e"
     assert crypto.md5("abc") == "900150983cd24fb0d6963f7d28e17f72"
@@ -19,10 +25,14 @@ verify md5_legacy_vectors:
     assert crypto.md5(string_with_nul()) == "70350f6027bce3713f6b76473084309b"
 verify digest_representation_and_determinism:
     string sha = crypto.sha256("same input")
+    string sha512 = crypto.sha512("same input")
     string legacy = crypto.md5("same input")
     assert string.length(sha) == 64
+    assert string.length(sha512) == 128
     assert string.length(legacy) == 32
     assert sha == string.lower(sha)
+    assert sha512 == string.lower(sha512)
     assert legacy == string.lower(legacy)
     assert sha == crypto.sha256("same input")
+    assert sha512 == crypto.sha512("same input")
     assert legacy == crypto.md5("same input")

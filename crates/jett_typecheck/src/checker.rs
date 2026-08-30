@@ -2661,6 +2661,7 @@ impl<'a> TypeChecker<'a> {
                 | "encoding.__form_encode"
                 | "encoding.__form_decode"
                 | "crypto.__sha256"
+                | "crypto.__sha512"
                 | "crypto.__md5"
                 | "csv.__parse"
                 | "csv.__stringify"
@@ -3789,7 +3790,7 @@ impl<'a> TypeChecker<'a> {
                 ))
             }
             // Private crypto kernels; public signatures live in stdlib/crypto.jett.
-            "crypto.__sha256" | "crypto.__md5" => self.no_type_args_signature(
+            "crypto.__sha256" | "crypto.__sha512" | "crypto.__md5" => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,

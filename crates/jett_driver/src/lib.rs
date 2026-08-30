@@ -4498,7 +4498,7 @@ mod tests {
 
     #[test]
     fn query_signature_reports_source_owned_crypto_surface() {
-        for function in ["sha256", "md5"] {
+        for function in ["sha256", "sha512", "md5"] {
             let name = format!("crypto.{function}");
             let result = query_signature(Path::new("."), &name)
                 .expect("crypto signature query should succeed")
@@ -4517,7 +4517,7 @@ mod tests {
             assert_eq!(result.return_type, "string");
         }
 
-        for reserved in ["crypto.sha512", "crypto.hmac_sha256", "crypto.hmac_sha512"] {
+        for reserved in ["crypto.hmac_sha256", "crypto.hmac_sha512"] {
             assert!(
                 query_signature(Path::new("."), reserved)
                     .expect("reserved crypto query should succeed")
