@@ -215,6 +215,11 @@ pub enum ExpressionKind {
         /// Parameter indexes in lexical source evaluation order.
         evaluation_order: Vec<usize>,
     },
+    Intrinsic {
+        canonical_name: String,
+        args: Vec<Expression>,
+        evaluation_order: Vec<usize>,
+    },
     StructConstruct {
         struct_type: TypeId,
         fields: Vec<Expression>,
@@ -511,6 +516,11 @@ impl Validator<'_> {
                 if function.index() as usize >= self.program.functions.len() {
                     self.error(expression.span, "call references an unknown HIR function");
                 }
+                for argument in args {
+                    self.expression(argument);
+                }
+            }
+            ExpressionKind::Intrinsic { args, .. } => {
                 for argument in args {
                     self.expression(argument);
                 }
@@ -1479,14 +1489,21 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             });
         }
 
-        let function = self.resolve_user_call_target(callee, call_span)?;
         let (lowered_args, evaluation_order) =
             self.lower_arguments_in_parameter_order(args, call_span)?;
-        Some(ExpressionKind::Call {
-            function,
-            args: lowered_args,
-            evaluation_order,
-        })
+        if self.is_source_call(callee, call_span) {
+            Some(ExpressionKind::Call {
+                function: self.resolve_user_call_target(callee, call_span)?,
+                args: lowered_args,
+                evaluation_order,
+            })
+        } else {
+            Some(ExpressionKind::Intrinsic {
+                canonical_name: self.canonical_call_name(callee)?,
+                args: lowered_args,
+                evaluation_order,
+            })
+        }
     }
 
     fn lower_enum_construct(
@@ -1531,6 +1548,35 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             .resolutions
             .get(&ident.span)
             .map(|definition| self.parent.resolve.scope_table.def(*definition).kind)
+    }
+
+    fn is_source_call(&self, callee: &Expr, span: Span) -> bool {
+        if self.method_calls.contains_key(&span) {
+            return true;
+        }
+        let Expr::Ident(ident) = callee else {
+            return false;
+        };
+        self.resolved_kind(ident) == Some(DefKind::Function)
+    }
+
+    fn canonical_call_name(&mut self, callee: &Expr) -> Option<String> {
+        fn dotted(expression: &Expr) -> Option<String> {
+            match expression {
+                Expr::Ident(ident) => Some(ident.name.clone()),
+                Expr::FieldAccess(base, field, _) => {
+                    Some(format!("{}.{}", dotted(base)?, field.name))
+                }
+                _ => None,
+            }
+        }
+        dotted(callee).or_else(|| {
+            self.parent.error(
+                callee.span(),
+                "checked intrinsic has no canonical call name",
+            );
+            None
+        })
     }
 
     fn lower_bitfield_construct(
@@ -1812,7 +1858,6 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         output_type: TypeId,
     ) -> Option<Expression> {
         let (callee, extra_args, piped_as_view) = Self::pipeline_step_call_parts(step);
-        let function = self.resolve_user_call_target(callee, step.span)?;
         let piped = if piped_as_view {
             Expression {
                 ty: piped.ty,
@@ -1824,12 +1869,21 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         };
         let (args, evaluation_order) =
             self.lower_pipeline_arguments(piped, extra_args, step.span)?;
-        Some(Expression {
-            kind: ExpressionKind::Call {
-                function,
+        let kind = if self.is_source_call(callee, step.span) {
+            ExpressionKind::Call {
+                function: self.resolve_user_call_target(callee, step.span)?,
                 args,
                 evaluation_order,
-            },
+            }
+        } else {
+            ExpressionKind::Intrinsic {
+                canonical_name: self.canonical_call_name(callee)?,
+                args,
+                evaluation_order,
+            }
+        };
+        Some(Expression {
+            kind,
             ty: output_type,
             span: step.span,
         })
@@ -2763,6 +2817,29 @@ function guest() returns Session at guest:
                 ..
             }))
         ));
+    }
+
+    #[test]
+    fn lowers_checked_compiler_calls_as_intrinsics() {
+        let source = r#"namespace app
+function absolute(value: int64) returns int64:
+    return math.abs(value)
+"#;
+        let program = lower_source(source);
+        let StatementKind::Return(Some(Expression {
+            kind:
+                ExpressionKind::Intrinsic {
+                    canonical_name,
+                    args,
+                    ..
+                },
+            ..
+        })) = &program.functions[0].body.statements[0].kind
+        else {
+            panic!("expected compiler intrinsic");
+        };
+        assert_eq!(canonical_name, "math.abs");
+        assert_eq!(args.len(), 1);
     }
 
     #[test]

@@ -788,6 +788,8 @@ loops, `for`, assertions/debug controls, string interpolation, comptime
 markers, explicit declassification/coarsening, state tests, and task-control
 markers are also covered. Bitfield and state-machine construction, transitions,
 and fields carry explicit checked types plus dense field/state IDs. Remaining
+compiler-owned calls carry canonical intrinsic identity, typed arguments, and
+lexical evaluation order after type checking has authorized them. Remaining
 source constructs are staged by the
 [initial HIR lowering plan](active/hir_lowering_plan.md).
 
