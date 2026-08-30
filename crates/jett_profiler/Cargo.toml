@@ -1,0 +1,6 @@
+[package]
+name = "jett_profiler"
+description = "Backend-neutral profiling models and deterministic aggregation for Jett"
+version.workspace = true
+edition.workspace = true
+license.workspace = true

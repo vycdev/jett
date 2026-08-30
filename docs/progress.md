@@ -145,7 +145,7 @@
 |---|---|
 | Property-based test runner | Done (basic: 100 generated iterations; all numeric primitives, bool/string/bytes/nothing, aliases/refinements, structs including generic structs, bitfields, enums, plus generic list/set/map/optional/result pools) |
 | Input shrinking on failure | Done (shrinking for int64, float64, string, bytes, list, set, map, optional, result, struct fields, enum payloads) |
-| CPU profiler (`--profile`) | Design complete; implementation not started ([sampling, attribution, output, security, platform, and runtime contract](completed/cpu_memory_profiling_contract.md)) |
+| CPU profiler (`--profile`) | Initial backend-neutral configuration, sample aggregation, exact thresholding, deterministic ranking, and suggestion rules implemented in `jett_profiler`; CLI, rendering, and runtime sampling remain staged by the [profiling contract](completed/cpu_memory_profiling_contract.md) |
 | Memory profiler (`--profile-memory`) | Design complete; implementation not started ([allocation, resize/free, retention, peak-memory, attribution, and runtime contract](completed/cpu_memory_profiling_contract.md)) |
 | `trace` keyword | Partial (parses, typechecks, runtime type-tagged current-value output in `jett run`) |
 | `breakpoint` keyword | Partial (parses, typechecks, and emits conditional runtime debug snapshots with visible binding types in `jett run`; the pause/inspection protocol is [decided](completed/breakpoint_pause_inspection_protocol.md), while its interpreter and future native-runtime stages remain unimplemented) |
