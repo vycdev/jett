@@ -196,6 +196,13 @@ describes type-before-name order but, unlike the onboarding sheet, shows no
 mutable-local example. The skill must gain compiler-accepted binding and
 collection examples and receive a new version before another calibration.
 
+Benchmark v0.5.1 makes that correction. The Jett skill now contrasts
+parameter/field syntax with local syntax and includes compiler-checked generic
+examples for mutable bindings, enums, optionals/results, collections, views,
+cloning, consuming updates, and typed helper extraction. Tasks and language
+semantics are unchanged; only future skill-assisted rows use the new version
+and hash.
+
 The paired repair stage is recorded in
 `benchmarks/results/2026-08-30_codex_luna_medium_v0.5_compile_repair/`. It
 repaired 15/34 failures and raised the final result to 131/150. Jett repaired

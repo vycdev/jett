@@ -10,7 +10,7 @@ Program against the implemented Jett surface, not remembered or proposed syntax.
 ## Workflow
 
 1. Inspect the requested public interface, nearby `.jett` source, and project configuration.
-2. Read [references/language.md](references/language.md) before writing unfamiliar Jett syntax or repairing a compiler error.
+2. Read [references/language.md](references/language.md) before writing Jett from scratch, using unfamiliar syntax, or repairing a compiler error. Treat its compiler-checked examples as syntax anchors instead of translating forms from another language.
 3. Derive concrete types and ownership transfers first. Split work at typed helper boundaries before adding branches.
 4. Preserve top-to-bottom declaration order, explicit effects, public namespace boundaries, and move-only values.
 5. Format, build, and test with the commands in the reference. Repair the earliest useful diagnostic before proceeding.
