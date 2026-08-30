@@ -24,6 +24,15 @@ class BenchmarkTests(unittest.TestCase):
                     _, prompt = jett_bench.render_prompt(task, language, track)
                     self.assertNotIn(hidden.strip(), prompt)
 
+    def test_type_driven_guidance_is_equal_across_onboarding_prompts(self) -> None:
+        for _, task in jett_bench.load_tasks():
+            for language in task["adapters"]:
+                _, onboarding = jett_bench.render_prompt(task, language, "onboarding")
+                _, zero_shot = jett_bench.render_prompt(task, language, "zero_shot")
+                self.assertEqual(onboarding.count(jett_bench.TYPE_DRIVEN_GUIDANCE), 1)
+                self.assertNotIn(jett_bench.TYPE_DRIVEN_GUIDANCE, zero_shot)
+                self.assertIn("## Type-driven development", onboarding)
+
     def test_extracts_one_fence_or_plain_source(self) -> None:
         self.assertEqual(jett_bench.extract_source("```rust\nfn x() {}\n```"), "fn x() {}\n")
         self.assertEqual(jett_bench.extract_source("fn x() {}"), "fn x() {}\n")

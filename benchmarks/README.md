@@ -46,3 +46,7 @@ The isolated runner recipe and required no-network/resource controls are in
 Never paste hidden files into prompts or model repair diagnostics. Results and
 raw responses should be written below `target/jett-bench/`, which is already
 ignored by the repository's `target/` rule.
+
+The onboarding track gives every language the same type-driven development
+instruction plus a language-specific section. `reference_bytes` includes both,
+so documentation exposure remains visible in results.

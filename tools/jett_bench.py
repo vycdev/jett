@@ -29,6 +29,12 @@ BENCHMARKS = ROOT / "benchmarks"
 DEFAULT_CONFIG = BENCHMARKS / "config" / "pilot.json"
 DEFAULT_TARGET = ROOT / "target" / "jett-bench"
 API_URL = "https://api.openai.com/v1/responses"
+TYPE_DRIVEN_GUIDANCE = (
+    "Use type-driven development: treat the required signature and types as design "
+    "constraints, derive typed helper boundaries and state before implementation, preserve "
+    "useful static information, and use type or compiler feedback to improve the structure "
+    "rather than bypassing it."
+)
 
 
 class BenchmarkError(RuntimeError):
@@ -168,7 +174,10 @@ def render_prompt(task: dict[str, Any], language: str, track: str) -> tuple[str,
     )
     if track == "onboarding":
         reference = (BENCHMARKS / "references" / f"{language}.md").read_text(encoding="utf-8")
-        prompt += f"\n\nLanguage reference for this track:\n\n{reference}"
+        prompt += (
+            f"\n\nDevelopment method for this track:\n{TYPE_DRIVEN_GUIDANCE}"
+            f"\n\nLanguage reference for this track:\n\n{reference}"
+        )
     elif track != "zero_shot":
         raise BenchmarkError(f"unknown track: {track}")
     return instructions, prompt
@@ -215,7 +224,11 @@ def planned_runs(config_path: Path = DEFAULT_CONFIG) -> Iterable[dict[str, Any]]
             "repair_attempt": 0,
             "prompt_sha256": sha256_text(instructions + "\n" + prompt),
             "reference_bytes": 0 if track == "zero_shot" else len(
-                (BENCHMARKS / "references" / f"{language}.md").read_bytes()
+                (
+                    TYPE_DRIVEN_GUIDANCE
+                    + "\n"
+                    + (BENCHMARKS / "references" / f"{language}.md").read_text(encoding="utf-8")
+                ).encode("utf-8")
             ),
             "git_revision": revision,
             "status": "planned",

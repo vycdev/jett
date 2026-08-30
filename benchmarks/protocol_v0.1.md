@@ -11,7 +11,10 @@ The planned pilot has 3 tasks x 5 languages x 2 tracks x 3 reasoning levels x
 
 `zero_shot` provides the common task statement, language name, required
 signature, and output rules. `onboarding` adds the versioned compact reference
-for that language. Neither track exposes tests from `hidden.*` files.
+for that language. Every onboarding prompt receives the same type-driven
+development principle, followed by language-specific advice for preserving and
+using static type information. Neither track exposes tests from `hidden.*`
+files.
 
 ## Generation and grading
 

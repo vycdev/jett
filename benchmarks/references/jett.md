@@ -1,4 +1,12 @@
-# Jett pilot reference v0.1
+# Jett pilot reference v0.2
+
+## Type-driven development in Jett
+
+Start from the required function type. Give every helper, parameter, local, and
+return value its precise Jett type; use those boundaries to split the algorithm
+before writing its branches. Do not weaken the requested types or bypass a
+compiler error. Within this pilot subset, prefer small typed helpers over
+encoding several logical states in one integer or string.
 
 Use one namespace and declare functions before callers or `verify` blocks.
 
