@@ -8535,11 +8535,16 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::List(keys), Value::List(values)) => {
-                        let entries: Vec<(Value, Value)> = keys
-                            .iter()
-                            .zip(values.iter())
-                            .map(|(k, v)| (k.clone(), v.clone()))
-                            .collect();
+                        let mut entries = Vec::new();
+                        for (key, value) in keys.iter().zip(values.iter()) {
+                            if let Some(entry) =
+                                entries.iter_mut().find(|(existing, _)| existing == key)
+                            {
+                                entry.1 = value.clone();
+                            } else {
+                                entries.push((key.clone(), value.clone()));
+                            }
+                        }
                         Some(Ok(Value::Map(entries)))
                     }
                     _ => Some(Err(format!("{name} expects two list arguments"))),
