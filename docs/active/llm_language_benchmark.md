@@ -114,3 +114,11 @@ subscription calibration slice. That slice has not been executed: it consumes
 subscription allowance and still requires explicit confirmation at run time.
 Known-good baselines and the isolated image must pass before calibration data
 is collected.
+
+The 40-cell medium Luna calibration is now recorded in
+`benchmarks/results/2026-08-30_codex_luna_medium_v0.2_calibration/`. Automated
+grading passed 36/40; all four failures were zero-shot Jett compile failures,
+while every onboarded cell passed. Manual review reduced public-contract
+compliance to 35/40 because the zero-shot Go lifecycle submission used a
+forbidden panic fallback that the v1.0.0 grader missed. That task version is
+calibration-only and must be replaced before a larger study.
