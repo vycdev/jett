@@ -1,0 +1,7 @@
+namespace test
+struct Row:
+    value: int64
+function sort_rows() returns list[Row]:
+    list[Row] rows = list(Row(value: 2), Row(value: 1))
+    return list.sort[Row](rows)
+# ERROR: E0300

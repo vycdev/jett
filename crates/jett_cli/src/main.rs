@@ -436,7 +436,7 @@ fn main() {
                         process::exit(1);
                     }
                 };
-                match jett_driver::query_definition_at(
+                match jett_driver::query_definition_at_detailed(
                     Path::new(&position.file),
                     position.line,
                     position.column,
@@ -450,7 +450,7 @@ fn main() {
                     }
                     Err(e) => {
                         if agent {
-                            print!("{}", render_query_agent_error(&e));
+                            print!("{}", render_query_diagnostic_agent_error(&e));
                         } else {
                             eprintln!("error: {e}");
                         }

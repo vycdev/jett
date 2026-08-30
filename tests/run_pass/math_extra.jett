@@ -14,3 +14,13 @@ function median_even_test() returns float64:
     return math.median(even)
 verify median_even_test:
     assert median_even_test() == 2.5
+function median_finite_extremes_test() returns bool:
+    float64 lower = float64.from_string("1.7e308") handle error:
+        return false
+    float64 upper = float64.from_string("1.7976931348623157e308") handle error:
+        return false
+    list[float64] extremes = list(lower, upper)
+    float64 median = math.median(extremes)
+    return median > lower and median < upper
+verify median_finite_extremes_test:
+    assert median_finite_extremes_test()

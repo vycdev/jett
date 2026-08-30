@@ -1,0 +1,9 @@
+# ERROR: E0400
+function consume(values: list[int64]) returns nothing:
+    list.length[int64](view values)
+function maybe_reinitialize(groups: list[list[int64]]) returns nothing:
+    mutable list[int64] values = list(1)
+    consume(values)
+    for group in view groups:
+        values = list(2)
+    consume(values)

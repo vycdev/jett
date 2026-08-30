@@ -1,0 +1,9 @@
+function discard(items: list[int64]) returns nothing:
+    return nothing
+function preserve_success_path() returns list[int64]:
+    list[int64] items = list(1, 2)
+    int64 first = list.get[int64](clone items, 0) handle:
+        discard(items)
+        return list(0)
+    string ignored = string.from_int64(first)
+    return items
