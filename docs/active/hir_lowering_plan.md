@@ -94,7 +94,7 @@ enter the manifest. Recursive discovery reserves identity before lowering.
    refinement-boundary handles now lower explicitly. `default` yields from the
    failure block while `return` exits the function; handled pipeline steps use
    this same form around their intermediate call. Bitfield/machine fields and
-   constructors, compiler intrinsics, matches, remaining collection operations,
+   constructors and compiler intrinsics, remaining collection operations,
    reflection, and trusted calls remain staged.
 4. Add deterministic HIR snapshots and wire HIR into the driver after every
    accepted source construct either lowers or has an explicit staged error.

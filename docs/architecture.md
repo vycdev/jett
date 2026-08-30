@@ -780,7 +780,9 @@ constructors preserve lexical element order; and pipelines become nested
 checked calls with the piped value as synthetic argument 1. Result, optional,
 and refinement-boundary handles are explicit typed HIR operations; their
 failure blocks distinguish local `default` fallback from function `return`,
-and step-local handles wrap only their intermediate pipeline call. Typed
+and step-local handles wrap only their intermediate pipeline call. Enum
+construction carries a dense checked variant ID and payloads; exhaustive
+matches carry variant arms, payload locals, and an optional catch-all. Typed
 parameters and locals, direct user calls, core expressions, returns, branches,
 and loops are also covered. Remaining source constructs are staged by the
 [initial HIR lowering plan](active/hir_lowering_plan.md).

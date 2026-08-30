@@ -42,6 +42,15 @@ impl FieldId {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct VariantId(u32);
+
+impl VariantId {
+    pub fn index(self) -> u32 {
+        self.0
+    }
+}
+
 /// Canonical declaration identity. Resolver `DefId`s are not part of it
 /// because they are allocated afresh in each compiler session.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -145,6 +154,10 @@ pub enum StatementKind {
         condition: Expression,
         body: Block,
     },
+    Match {
+        scrutinee: Expression,
+        arms: Vec<MatchArm>,
+    },
     Break,
     Continue,
 }
@@ -202,6 +215,11 @@ pub enum ExpressionKind {
         error_local: Option<LocalId>,
         failure: Block,
     },
+    EnumConstruct {
+        enum_type: TypeId,
+        variant: VariantId,
+        payloads: Vec<Expression>,
+    },
     Field {
         base: Box<Expression>,
         owner_type: TypeId,
@@ -216,6 +234,14 @@ pub enum HandleKind {
     Result,
     Optional,
     Refinement { refined_type: TypeId },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatchArm {
+    pub variant: Option<VariantId>,
+    pub bindings: Vec<LocalId>,
+    pub body: Block,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -772,6 +798,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 },
                 loop_stmt.span,
             ),
+            Stmt::Match(match_stmt) => (self.lower_match(match_stmt)?, match_stmt.span),
             Stmt::Break(span) => (StatementKind::Break, *span),
             Stmt::Continue(span) => (StatementKind::Continue, *span),
             Stmt::Use(_) => return None,
@@ -845,7 +872,13 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 op: lower_unary_op(*op),
                 value: Box::new(self.lower_expression(value)?),
             },
-            Expr::FieldAccess(base, field, _) => self.lower_field(base, field)?,
+            Expr::FieldAccess(base, field, _) => {
+                if self.enum_variant_index(ty, field).is_some() {
+                    self.lower_enum_construct(ty, field, &[], span)?
+                } else {
+                    self.lower_field(base, field)?
+                }
+            }
             Expr::Call(callee, args, _) | Expr::GenericCall(callee, _, args, _) => {
                 self.lower_call(callee, args, span)?
             }
@@ -874,6 +907,9 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 ExpressionKind::OptionalSome(Box::new(self.lower_expression(value)?))
             }
             Expr::None(_) => ExpressionKind::OptionalNone,
+            Expr::EnumVariant(_, variant, _) => {
+                self.lower_enum_construct(ty, variant, &[], span)?
+            }
             Expr::Handle(target, error_name, failure, _) => {
                 let target = self.lower_expression(target)?;
                 return self.lower_handle(target, error_name.as_ref(), failure, ty, span);
@@ -963,6 +999,26 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         args: &[ast::CallArg],
         call_span: Span,
     ) -> Option<ExpressionKind> {
+        let enum_variant = match callee {
+            Expr::EnumVariant(_, variant, _) => Some(variant),
+            Expr::FieldAccess(_, field, _)
+                if self
+                    .expression_types
+                    .get(&call_span)
+                    .is_some_and(|ty| self.enum_variant_index(*ty, field).is_some()) =>
+            {
+                Some(field)
+            }
+            _ => None,
+        };
+        if let Some(variant) = enum_variant {
+            let ty = self.expression_types.get(&call_span).copied().or_else(|| {
+                self.parent
+                    .error(call_span, "enum construction has no checked type");
+                None
+            })?;
+            return self.lower_enum_construct(ty, variant, args, call_span);
+        }
         if let Some(construction) = self.struct_constructions.get(&call_span) {
             let (fields, evaluation_order) =
                 self.lower_arguments_in_parameter_order(args, call_span)?;
@@ -982,6 +1038,113 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             args: lowered_args,
             evaluation_order,
         })
+    }
+
+    fn lower_enum_construct(
+        &mut self,
+        enum_type: TypeId,
+        variant: &ast::Ident,
+        args: &[ast::CallArg],
+        span: Span,
+    ) -> Option<ExpressionKind> {
+        let Some(index) = self.enum_variant_index(enum_type, variant) else {
+            self.parent
+                .error(span, "checked enum construction has no matching variant");
+            return None;
+        };
+        let payloads = args
+            .iter()
+            .map(|arg| self.lower_expression(&arg.value))
+            .collect::<Option<Vec<_>>>()?;
+        Some(ExpressionKind::EnumConstruct {
+            enum_type,
+            variant: VariantId(index as u32),
+            payloads,
+        })
+    }
+
+    fn enum_variant_index(&self, enum_type: TypeId, variant: &ast::Ident) -> Option<usize> {
+        let Type::Enum(enum_id) = *self.parent.check.interner.resolve(enum_type) else {
+            return None;
+        };
+        self.parent
+            .check
+            .interner
+            .resolve_enum(enum_id)
+            .variants
+            .iter()
+            .position(|candidate| candidate.name == variant.name)
+    }
+
+    fn lower_match(&mut self, match_stmt: &ast::MatchStmt) -> Option<StatementKind> {
+        let scrutinee = self.lower_expression(&match_stmt.expr)?;
+        let Type::Enum(enum_id) = *self.parent.check.interner.resolve(scrutinee.ty) else {
+            self.parent.error(
+                match_stmt.expr.span(),
+                "checked match scrutinee is not an enum",
+            );
+            return None;
+        };
+        let enum_definition = self.parent.check.interner.resolve_enum(enum_id).clone();
+        let mut arms = Vec::with_capacity(match_stmt.arms.len());
+        for arm in &match_stmt.arms {
+            let (variant, source_bindings, field_types) = match &arm.pattern {
+                ast::Pattern::Ident(name) => {
+                    let Some(index) = enum_definition
+                        .variants
+                        .iter()
+                        .position(|candidate| candidate.name == name.name)
+                    else {
+                        self.parent
+                            .error(name.span, "checked match variant is missing");
+                        return None;
+                    };
+                    (Some(VariantId(index as u32)), &[][..], &[][..])
+                }
+                ast::Pattern::Variant(name, bindings) => {
+                    let Some(index) = enum_definition
+                        .variants
+                        .iter()
+                        .position(|candidate| candidate.name == name.name)
+                    else {
+                        self.parent
+                            .error(name.span, "checked match variant is missing");
+                        return None;
+                    };
+                    let fields = &enum_definition.variants[index].fields;
+                    (
+                        Some(VariantId(index as u32)),
+                        bindings.as_slice(),
+                        fields.as_slice(),
+                    )
+                }
+                ast::Pattern::Other(_) => (None, &[][..], &[][..]),
+            };
+            let mut bindings = Vec::with_capacity(source_bindings.len());
+            for (binding, (_, field_type)) in source_bindings.iter().zip(field_types) {
+                let Some(definition) = self.parent.definition_at(binding.span, DefKind::Variable)
+                else {
+                    self.parent
+                        .error(binding.span, "match binding has no resolved definition");
+                    return None;
+                };
+                bindings.push(self.allocate_local(
+                    definition,
+                    &binding.name,
+                    *field_type,
+                    false,
+                    binding.span,
+                ));
+            }
+            let body = self.lower_block(&arm.body);
+            arms.push(MatchArm {
+                variant,
+                bindings,
+                body,
+                span: arm.span,
+            });
+        }
+        Some(StatementKind::Match { scrutinee, arms })
     }
 
     fn resolve_user_call_target(&mut self, callee: &Expr, call_span: Span) -> Option<FunctionId> {
@@ -1782,6 +1945,50 @@ function main() returns int64:
             failure.statements[0].kind,
             StatementKind::Return(Some(_))
         ));
+    }
+
+    #[test]
+    fn lowers_enum_construction_and_exhaustive_match() {
+        let source = r#"namespace app
+enum Shape:
+    point
+    circle(radius: int64)
+    rect(width: int64, height: int64)
+function area(shape: Shape) returns int64:
+    match shape:
+        point:
+            return 0
+        circle(radius):
+            return radius * radius
+        rect(width, height):
+            return width * height
+function main() returns int64:
+    Shape shape = Shape.circle(3)
+    return area(shape)
+"#;
+        let program = lower_source(source);
+        let area = &program.functions[0];
+        let main = &program.functions[1];
+        let StatementKind::Match { arms, .. } = &area.body.statements[0].kind else {
+            panic!("expected lowered match");
+        };
+        assert_eq!(arms.len(), 3);
+        assert_eq!(arms[0].variant.expect("point variant").index(), 0);
+        assert_eq!(arms[1].variant.expect("circle variant").index(), 1);
+        assert_eq!(arms[1].bindings.len(), 1);
+        assert_eq!(arms[2].bindings.len(), 2);
+
+        let StatementKind::Let { value, .. } = &main.body.statements[0].kind else {
+            panic!("expected enum local");
+        };
+        let ExpressionKind::EnumConstruct {
+            variant, payloads, ..
+        } = &value.kind
+        else {
+            panic!("expected enum construction");
+        };
+        assert_eq!(variant.index(), 1);
+        assert!(matches!(payloads[0].kind, ExpressionKind::Int(3)));
     }
 
     #[test]

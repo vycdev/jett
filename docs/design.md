@@ -73,7 +73,9 @@ the target, failure kind, optional error local, and failure block. `default`
 yields to that nearest handle while `return` still exits the function. A
 step-local handle wraps only its intermediate call, so its success or fallback
 continues into the next step. Source wrapper and collection constructors become
-typed HIR operations without changing lexical evaluation.
+typed HIR operations without changing lexical evaluation. Enum construction
+uses dense variant identities, and exhaustive `match` arms bind payload locals
+explicitly rather than preserving source patterns.
 
 The direct AST remains the initial frontend boundary, and the tree-walking
 interpreter remains available while HIR coverage grows. The later lossless CST
