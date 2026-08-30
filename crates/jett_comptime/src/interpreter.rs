@@ -8846,13 +8846,18 @@ impl Interpreter {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::List(items) if !items.is_empty() => {
-                        let sum = items.iter().try_fold(0.0, |sum, value| match value {
-                            Value::Int64(n) => Ok(sum + *n as f64),
-                            Value::Uint64(n) => Ok(sum + *n as f64),
-                            Value::Float64(n) => Ok(sum + *n),
-                            _ => Err("math.average expects a list of numeric values".to_string()),
-                        });
-                        Some(sum.map(|sum| Value::Float64(sum / items.len() as f64)))
+                        let numbers: Result<Vec<f64>, String> = items
+                            .iter()
+                            .map(|value| match value {
+                                Value::Int64(n) => Ok(*n as f64),
+                                Value::Uint64(n) => Ok(*n as f64),
+                                Value::Float64(n) => Ok(*n),
+                                _ => {
+                                    Err("math.average expects a list of numeric values".to_string())
+                                }
+                            })
+                            .collect();
+                        Some(numbers.map(|numbers| Value::Float64(float_average(&numbers))))
                     }
                     Value::List(_) => Some(Err("math.average: list is empty".to_string())),
                     _ => Some(Err(format!("{name} expects a list of numbers"))),
@@ -10475,6 +10480,16 @@ fn float_midpoint(left: f64, right: f64) -> f64 {
     } else {
         left / 2.0 + right / 2.0
     }
+}
+
+fn float_average(values: &[f64]) -> f64 {
+    let scale = values.iter().map(|value| value.abs()).fold(0.0, f64::max);
+    if scale == 0.0 || !scale.is_finite() {
+        return values.iter().sum::<f64>() / values.len() as f64;
+    }
+
+    let scaled_sum = values.iter().map(|value| value / scale).sum::<f64>();
+    scaled_sum / values.len() as f64 * scale
 }
 
 fn uint64_arithmetic_operand(value: i64) -> Result<u64, String> {
