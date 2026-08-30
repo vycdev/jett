@@ -83,12 +83,16 @@ enter the manifest. Recursive discovery reserves identity before lowering.
    `jett_typecheck`; lower explicit, inferred, repeated, nested, and recursive
    generic calls to concrete HIR function identities.
 3. **In progress:** named arguments, source-defined method targets, struct
-   fields, and struct constructors now lower into canonical core forms while
-   retaining lexical left-to-right argument evaluation. The checker exports
-   parameter permutations, concrete method bodies, constructor targets, and
+   fields and constructors, list/map construction, and unhandled pipelines now
+   lower into canonical core forms while retaining lexical left-to-right
+   evaluation. Pipelines become nested calls to checked ordinary, generic, or
+   concrete source-method targets; their synthetic piped argument participates
+   in the checked parameter permutation. The checker exports those
+   permutations, concrete method bodies, constructor targets, and
    refinement-validation requirements, including separate facts inside generic
-   instantiations. Bitfield/machine fields and constructors,
-   compiler intrinsics, pipelines, handles, matches, collections, reflection,
+   instantiations. Pipeline-step handles remain explicitly staged with general
+   handle lowering. Bitfield/machine fields and constructors, compiler
+   intrinsics, handles, matches, remaining collection operations, reflection,
    and trusted calls remain staged.
 4. Add deterministic HIR snapshots and wire HIR into the driver after every
    accepted source construct either lowers or has an explicit staged error.

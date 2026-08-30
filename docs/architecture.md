@@ -775,10 +775,12 @@ HIR functions while each instantiation retains its own checked facts. Named
 arguments are normalized to parameter order while retaining lexical evaluation
 order explicitly; source-defined interface and type-module calls select
 concrete method bodies; struct construction records canonical field order and
-refinement validation; and struct field access uses dense field IDs. Typed
-parameters and locals, direct user calls, core
-expressions, returns, branches, and loops are also covered. Remaining source
-constructs are staged by the
+refinement validation; struct field access uses dense field IDs; list/map
+constructors preserve lexical element order; and unhandled pipelines become
+nested checked calls with the piped value as synthetic argument 1. Typed
+parameters and locals, direct user calls, core expressions, returns, branches,
+and loops are also covered. Pipeline-step handles remain staged with general
+handle lowering. Remaining source constructs are staged by the
 [initial HIR lowering plan](active/hir_lowering_plan.md).
 
 ### Purpose
@@ -798,11 +800,13 @@ concrete owner and canonical interface in their identity.
 
 1. **Monomorphization:** Generate concrete versions of all generic functions for each type parameter combination used in the program.
 2. **Method-target materialization:** the checked target for `Speaker.speak(view my_dog)` becomes the specific `implement Speaker for Dog` HIR function.
-3. **Auto-view for field access:** `self.x` is annotated as an implicit view operation.
-4. **Explicit copyability:** Numeric primitives, `bool`, `nothing`, and immutable
+3. **Pipeline normalization:** unhandled `value into f(extra)` steps become nested checked calls with `value` as synthetic argument 1; step-local handles lower with the general handle representation in a later slice.
+4. **Collection construction:** source `list(...)` and `map(...)` become typed HIR aggregate constructors while preserving lexical evaluation order.
+5. **Auto-view for field access:** `self.x` is annotated as an implicit view operation.
+6. **Explicit copyability:** Numeric primitives, `bool`, `nothing`, and immutable
    `string` are implicitly copyable. The primitive `bytes` type remains
    move-only and follows the same view/consume rules as other owned storage.
-5. **Comptime reflection lowering:** Preserve enough type metadata for comptime code to inspect `type.name[T]()`, `type.kind[T]()`, `type.has_secret[T]()`, `type.fields[T]()`, bitfield layout metadata, state-machine state/transition metadata, active machine states, and reflected active-state payload fields. JSON serialization is expressible in terms of these reflection primitives rather than as format-specific HIR magic. Struct, bitfield, enum, and state-machine deserialization use the explicit `TypeConstruction` builder family to build `T` from parsed field values; that builder is the sole canonical source form, with no parallel construction-block syntax.
+7. **Comptime reflection lowering:** Preserve enough type metadata for comptime code to inspect `type.name[T]()`, `type.kind[T]()`, `type.has_secret[T]()`, `type.fields[T]()`, bitfield layout metadata, state-machine state/transition metadata, active machine states, and reflected active-state payload fields. JSON serialization is expressible in terms of these reflection primitives rather than as format-specific HIR magic. Struct, bitfield, enum, and state-machine deserialization use the explicit `TypeConstruction` builder family to build `T` from parsed field values; that builder is the sole canonical source form, with no parallel construction-block syntax.
 
 ---
 

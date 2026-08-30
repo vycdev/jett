@@ -8430,6 +8430,7 @@ impl<'a> TypeChecker<'a> {
             _ => (&step.function, false),
         };
         match function {
+            Expr::Call(callee, args, _) => (callee, &[], args, piped_as_view),
             Expr::GenericCall(callee, type_args, args, _) => {
                 (callee, type_args, args, piped_as_view)
             }
@@ -8539,28 +8540,68 @@ impl<'a> TypeChecker<'a> {
         } else {
             None
         };
+        let user_parameter_names = if user_function_signature.is_some() {
+            callee_name
+                .as_deref()
+                .and_then(|name| self.function_parameter_names.get(name).cloned())
+        } else {
+            None
+        };
+        let method_metadata = if builtin_signature.is_none() && user_function_signature.is_none() {
+            self.method_signature_for_callee(function)
+        } else {
+            None
+        };
 
         let (param_types, return_type) = if let Some(signature) = builtin_signature {
             signature
         } else if let Some(signature) = user_function_signature {
             signature
         } else {
-            self.check_expr(function);
-            for arg in extra_args {
-                self.check_expr(&arg.value);
+            let callee_ty = self.check_expr(function);
+            match self.interner.resolve(callee_ty).clone() {
+                Type::Function {
+                    params,
+                    return_type,
+                } => (params, return_type),
+                _ => {
+                    for arg in extra_args {
+                        self.check_expr(&arg.value);
+                    }
+                    self.sink.emit(errors::not_callable(
+                        callee_name.as_deref().unwrap_or("pipeline step"),
+                        step.span,
+                    ));
+                    return TypeInterner::ERROR;
+                }
             }
-            self.sink.emit(errors::not_callable(
-                callee_name.as_deref().unwrap_or("pipeline step"),
-                step.span,
-            ));
-            return TypeInterner::ERROR;
         };
 
         let arg_count = extra_args.len() + 1;
-        if arg_count != param_types.len() {
-            let func_name = callee_name
-                .clone()
-                .unwrap_or_else(|| "<pipeline step>".to_string());
+        let func_name = callee_name
+            .clone()
+            .unwrap_or_else(|| "<pipeline step>".to_string());
+        let parameter_names = user_parameter_names.or_else(|| {
+            method_metadata.as_ref().map(|(_, signature)| {
+                signature
+                    .params
+                    .iter()
+                    .map(|(name, _, _)| name.clone())
+                    .collect()
+            })
+        });
+        let argument_order = if let Some(parameter_names) = parameter_names {
+            let Some(order) =
+                self.bind_pipeline_arguments(&func_name, &parameter_names, extra_args, step.span)
+            else {
+                for arg in extra_args {
+                    self.check_expr(&arg.value);
+                }
+                return return_type;
+            };
+            self.record_call_argument_order(step.span, order.clone());
+            order
+        } else if arg_count != param_types.len() {
             self.sink.emit(errors::argument_count_mismatch(
                 &func_name,
                 param_types.len(),
@@ -8571,32 +8612,36 @@ impl<'a> TypeChecker<'a> {
                 self.check_expr(&arg.value);
             }
             return return_type;
-        }
+        } else {
+            (0..arg_count).collect()
+        };
 
         let mut tainted_return = false;
         let mut checked_arg_types = Vec::with_capacity(arg_count);
-        checked_arg_types.push(current_ty);
-        tainted_return |= self.check_argument_against_param_type(
-            callee_name.as_deref(),
-            callee_is_pure,
-            "#1",
-            param_types[0],
-            current_ty,
-            step.span,
-        );
-
-        for (index, arg) in extra_args.iter().enumerate() {
-            let param_ty = param_types[index + 1];
-            let arg_ty = self.check_expr_for_expected(&arg.value, param_ty, false);
+        for (parameter_index, &source_index) in argument_order.iter().enumerate() {
+            let param_ty = param_types[parameter_index];
+            let (arg_ty, arg_span) = if source_index == 0 {
+                (current_ty, step.span)
+            } else {
+                let arg = &extra_args[source_index - 1];
+                (
+                    self.check_expr_for_expected(&arg.value, param_ty, false),
+                    arg.value.span(),
+                )
+            };
             checked_arg_types.push(arg_ty);
             tainted_return |= self.check_argument_against_param_type(
                 callee_name.as_deref(),
                 callee_is_pure,
-                &format!("#{}", index + 2),
+                &format!("#{}", parameter_index + 1),
                 param_ty,
                 arg_ty,
-                arg.value.span(),
+                arg_span,
             );
+        }
+
+        if let Some((declared_owner, _)) = method_metadata {
+            self.record_source_method_call(function, declared_owner, &checked_arg_types, step.span);
         }
 
         if matches!(callee_name.as_deref(), Some("secret.compare")) {
@@ -8637,45 +8682,53 @@ impl<'a> TypeChecker<'a> {
     ) -> Option<TypeId> {
         let function_name = callee_name?;
         let template = self.generic_function_templates.get(function_name)?.clone();
-        let arg_count = extra_args.len() + 1;
-        if arg_count != template.params.len() {
-            self.sink.emit(errors::argument_count_mismatch(
-                function_name,
-                template.params.len(),
-                arg_count,
-                span,
-            ));
+        let parameter_names = template
+            .params
+            .iter()
+            .map(|param| param.name.name.clone())
+            .collect::<Vec<_>>();
+        let Some(argument_order) =
+            self.bind_pipeline_arguments(function_name, &parameter_names, extra_args, span)
+        else {
             for arg in extra_args {
                 self.check_expr(&arg.value);
             }
             return Some(TypeInterner::ERROR);
-        }
+        };
+        self.record_call_argument_order(span, argument_order.clone());
 
-        let mut actual_types = Vec::with_capacity(arg_count);
-        actual_types.push(current_ty);
-        actual_types.extend(extra_args.iter().map(|arg| self.check_expr(&arg.value)));
+        let actual_types = argument_order
+            .iter()
+            .map(|&source_index| {
+                if source_index == 0 {
+                    current_ty
+                } else {
+                    self.check_expr(&extra_args[source_index - 1].value)
+                }
+            })
+            .collect::<Vec<_>>();
         let Some(inferred) = self.infer_generic_signature(&template, &actual_types) else {
             self.emit_cannot_infer_generic(function_name, &template, span);
             return Some(TypeInterner::ERROR);
         };
 
         let mut arguments_match = true;
-        if !self.types_compatible(inferred.param_types[0], current_ty) {
-            arguments_match = false;
-            self.sink.emit(errors::type_mismatch(
-                &self.type_name(inferred.param_types[0]),
-                &self.type_name(current_ty),
-                span,
-            ));
-        }
-        for (arg, &expected) in extra_args.iter().zip(inferred.param_types.iter().skip(1)) {
-            let got = self.check_expr_for_expected(&arg.value, expected, false);
+        for (&source_index, &expected) in argument_order.iter().zip(&inferred.param_types) {
+            let (got, arg_span) = if source_index == 0 {
+                (current_ty, span)
+            } else {
+                let arg = &extra_args[source_index - 1];
+                (
+                    self.check_expr_for_expected(&arg.value, expected, false),
+                    arg.value.span(),
+                )
+            };
             if !self.types_compatible(expected, got) {
                 arguments_match = false;
                 self.sink.emit(errors::type_mismatch(
                     &self.type_name(expected),
                     &self.type_name(got),
-                    arg.value.span(),
+                    arg_span,
                 ));
             }
         }
@@ -8772,40 +8825,38 @@ impl<'a> TypeChecker<'a> {
             .unwrap_or(TypeInterner::NOTHING);
         self.type_var_subst = old_subst;
 
-        let arg_count = extra_args.len() + 1;
-        if arg_count != param_types.len() {
-            self.sink.emit(errors::argument_count_mismatch(
-                function_name,
-                param_types.len(),
-                arg_count,
-                span,
-            ));
+        let parameter_names = template
+            .params
+            .iter()
+            .map(|param| param.name.name.clone())
+            .collect::<Vec<_>>();
+        let Some(argument_order) =
+            self.bind_pipeline_arguments(function_name, &parameter_names, extra_args, span)
+        else {
             for arg in extra_args {
                 self.check_expr(&arg.value);
             }
             return Some(TypeInterner::ERROR);
-        }
+        };
+        self.record_call_argument_order(span, argument_order.clone());
 
         let mut arguments_match = true;
-        if let Some(&expected) = param_types.first()
-            && !self.types_compatible(expected, current_ty)
-        {
-            arguments_match = false;
-            self.sink.emit(errors::type_mismatch(
-                &self.type_name(expected),
-                &self.type_name(current_ty),
-                span,
-            ));
-        }
-
-        for (arg, &expected) in extra_args.iter().zip(param_types.iter().skip(1)) {
-            let got = self.check_expr_for_expected(&arg.value, expected, false);
+        for (&source_index, &expected) in argument_order.iter().zip(&param_types) {
+            let (got, arg_span) = if source_index == 0 {
+                (current_ty, span)
+            } else {
+                let arg = &extra_args[source_index - 1];
+                (
+                    self.check_expr_for_expected(&arg.value, expected, false),
+                    arg.value.span(),
+                )
+            };
             if !self.types_compatible(expected, got) {
                 arguments_match = false;
                 self.sink.emit(errors::type_mismatch(
                     &self.type_name(expected),
                     &self.type_name(got),
-                    arg.value.span(),
+                    arg_span,
                 ));
             }
         }
@@ -10466,6 +10517,82 @@ impl<'a> TypeChecker<'a> {
             source_indices
                 .into_iter()
                 .map(|index| index.expect("validated call arguments must be complete"))
+                .collect()
+        })
+    }
+
+    fn bind_pipeline_arguments(
+        &mut self,
+        function_name: &str,
+        parameter_names: &[String],
+        extra_args: &[ast::CallArg],
+        span: Span,
+    ) -> Option<Vec<usize>> {
+        let argument_count = extra_args.len() + 1;
+        if argument_count != parameter_names.len() {
+            self.sink.emit(errors::argument_count_mismatch(
+                function_name,
+                parameter_names.len(),
+                argument_count,
+                span,
+            ));
+            return None;
+        }
+
+        let mut source_indices = vec![None; parameter_names.len()];
+        source_indices[0] = Some(0);
+        let mut valid = true;
+        for (extra_index, arg) in extra_args.iter().enumerate() {
+            let source_index = extra_index + 1;
+            let parameter_index = if let Some(name) = &arg.name {
+                let Some(index) = parameter_names
+                    .iter()
+                    .position(|parameter| parameter == &name.name)
+                else {
+                    self.sink.emit(errors::unknown_named_argument(
+                        function_name,
+                        &name.name,
+                        arg.span,
+                    ));
+                    valid = false;
+                    continue;
+                };
+                index
+            } else {
+                let Some(index) = source_indices.iter().position(Option::is_none) else {
+                    valid = false;
+                    continue;
+                };
+                index
+            };
+
+            if source_indices[parameter_index].is_some() {
+                self.sink.emit(errors::duplicate_named_argument(
+                    function_name,
+                    &parameter_names[parameter_index],
+                    arg.span,
+                ));
+                valid = false;
+                continue;
+            }
+            source_indices[parameter_index] = Some(source_index);
+        }
+
+        for (parameter_index, source_index) in source_indices.iter().enumerate() {
+            if source_index.is_none() {
+                self.sink.emit(errors::missing_call_argument(
+                    function_name,
+                    &parameter_names[parameter_index],
+                    span,
+                ));
+                valid = false;
+            }
+        }
+
+        valid.then(|| {
+            source_indices
+                .into_iter()
+                .map(|index| index.expect("validated pipeline arguments must be complete"))
                 .collect()
         })
     }
@@ -14547,6 +14674,37 @@ function main() returns int64:
             "expected E0369, got: {:?}",
             duplicate
         );
+    }
+
+    #[test]
+    fn pipeline_arguments_and_method_targets_are_checked_in_parameter_order() {
+        let result = check_source_result(
+            "\
+struct Score:
+    value: int64
+    function add(view self: Score, bonus: int64) returns int64:
+        return self.value + bonus
+function choose[T](first: T, second: T, third: T) returns T:
+    return first
+function main() returns int64:
+    Score score = Score(value: 7)
+    int64 chosen = 1 into choose[int64](third: 3, second: 2)
+    return score into view Score.add(bonus: chosen)
+",
+        );
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+        assert!(
+            result
+                .call_argument_orders
+                .values()
+                .any(|order| order.source_indices == vec![0, 2, 1])
+        );
+        assert_eq!(result.method_calls.len(), 1);
     }
 
     #[test]

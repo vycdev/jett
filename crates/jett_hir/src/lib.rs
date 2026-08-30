@@ -184,6 +184,12 @@ pub enum ExpressionKind {
         evaluation_order: Vec<usize>,
         validates_refinements: bool,
     },
+    ListConstruct {
+        elements: Vec<Expression>,
+    },
+    MapConstruct {
+        entries: Vec<MapEntry>,
+    },
     Field {
         base: Box<Expression>,
         owner_type: TypeId,
@@ -191,6 +197,12 @@ pub enum ExpressionKind {
     },
     View(Box<Expression>),
     Clone(Box<Expression>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MapEntry {
+    pub key: Expression,
+    pub value: Expression,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -806,6 +818,26 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             Expr::Call(callee, args, _) | Expr::GenericCall(callee, _, args, _) => {
                 self.lower_call(callee, args, span)?
             }
+            Expr::ListConstruct(elements, _) => ExpressionKind::ListConstruct {
+                elements: elements
+                    .iter()
+                    .map(|element| self.lower_expression(element))
+                    .collect::<Option<Vec<_>>>()?,
+            },
+            Expr::MapConstruct(entries, _) => ExpressionKind::MapConstruct {
+                entries: entries
+                    .iter()
+                    .map(|(key, value)| {
+                        Some(MapEntry {
+                            key: self.lower_expression(key)?,
+                            value: self.lower_expression(value)?,
+                        })
+                    })
+                    .collect::<Option<Vec<_>>>()?,
+            },
+            Expr::Pipeline(initial, steps, _) => {
+                return self.lower_pipeline(initial, steps, ty, span);
+            }
             Expr::Paren(inner, _) => {
                 return self.lower_expression(inner).map(|mut lowered| {
                     lowered.span = span;
@@ -843,6 +875,17 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             });
         }
 
+        let function = self.resolve_user_call_target(callee, call_span)?;
+        let (lowered_args, evaluation_order) =
+            self.lower_arguments_in_parameter_order(args, call_span)?;
+        Some(ExpressionKind::Call {
+            function,
+            args: lowered_args,
+            evaluation_order,
+        })
+    }
+
+    fn resolve_user_call_target(&mut self, callee: &Expr, call_span: Span) -> Option<FunctionId> {
         if let Some(method) = self.method_calls.get(&call_span) {
             let key = FunctionKey::Method {
                 source_span: method.source_span,
@@ -854,19 +897,13 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 );
                 return None;
             };
-            let (args, evaluation_order) =
-                self.lower_arguments_in_parameter_order(args, call_span)?;
-            return Some(ExpressionKind::Call {
-                function,
-                args,
-                evaluation_order,
-            });
+            return Some(function);
         }
 
         let Expr::Ident(ident) = callee else {
             self.parent.error(
                 callee.span(),
-                "only direct user-function calls are in the initial HIR subset",
+                "only direct user-function calls are in the current HIR subset",
             );
             return None;
         };
@@ -900,13 +937,138 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             );
             return None;
         };
-        let (lowered_args, evaluation_order) =
-            self.lower_arguments_in_parameter_order(args, call_span)?;
-        Some(ExpressionKind::Call {
-            function,
-            args: lowered_args,
-            evaluation_order,
+        Some(function)
+    }
+
+    fn lower_pipeline(
+        &mut self,
+        initial: &Expr,
+        steps: &[ast::PipelineStep],
+        pipeline_type: TypeId,
+        pipeline_span: Span,
+    ) -> Option<Expression> {
+        if let Some(step) = steps.iter().find(|step| step.handle.is_some()) {
+            self.parent.error(
+                step.span,
+                "handled pipeline steps require the staged HIR handle lowering slice",
+            );
+            return None;
+        }
+
+        let mut current = self.lower_expression(initial)?;
+        for (index, step) in steps.iter().enumerate() {
+            let output_type = if let Some(next_step) = steps.get(index + 1) {
+                let Some(ty) = self.expression_types.get(&next_step.span).copied() else {
+                    self.parent
+                        .error(next_step.span, "pipeline step has no checked input type");
+                    return None;
+                };
+                ty
+            } else {
+                pipeline_type
+            };
+            current = self.lower_pipeline_step(current, step, output_type)?;
+        }
+        current.ty = pipeline_type;
+        current.span = pipeline_span;
+        Some(current)
+    }
+
+    fn lower_pipeline_step(
+        &mut self,
+        piped: Expression,
+        step: &ast::PipelineStep,
+        output_type: TypeId,
+    ) -> Option<Expression> {
+        let (callee, extra_args, piped_as_view) = Self::pipeline_step_call_parts(step);
+        let function = self.resolve_user_call_target(callee, step.span)?;
+        let piped = if piped_as_view {
+            Expression {
+                ty: piped.ty,
+                span: step.function.span(),
+                kind: ExpressionKind::View(Box::new(piped)),
+            }
+        } else {
+            piped
+        };
+        let (args, evaluation_order) =
+            self.lower_pipeline_arguments(piped, extra_args, step.span)?;
+        Some(Expression {
+            kind: ExpressionKind::Call {
+                function,
+                args,
+                evaluation_order,
+            },
+            ty: output_type,
+            span: step.span,
         })
+    }
+
+    fn pipeline_step_call_parts(step: &ast::PipelineStep) -> (&Expr, &[ast::CallArg], bool) {
+        let (function, piped_as_view) = match &step.function {
+            Expr::View(inner, _) => (inner.as_ref(), true),
+            _ => (&step.function, false),
+        };
+        match function {
+            Expr::Call(callee, args, _) => (callee, args, piped_as_view),
+            Expr::GenericCall(callee, _, args, _) => (callee, args, piped_as_view),
+            _ => (function, &step.extra_args, piped_as_view),
+        }
+    }
+
+    fn lower_pipeline_arguments(
+        &mut self,
+        piped: Expression,
+        extra_args: &[ast::CallArg],
+        step_span: Span,
+    ) -> Option<(Vec<Expression>, Vec<usize>)> {
+        let argument_count = extra_args.len() + 1;
+        let source_indices = if let Some(order) = self.call_argument_orders.get(&step_span) {
+            order.source_indices.clone()
+        } else if extra_args.iter().all(|arg| arg.name.is_none()) {
+            (0..argument_count).collect()
+        } else {
+            self.parent.error(
+                step_span,
+                "named pipeline arguments have no checked parameter order",
+            );
+            return None;
+        };
+        let mut seen = vec![false; argument_count];
+        let invalid_permutation = source_indices.iter().any(|&index| {
+            if index >= argument_count || seen[index] {
+                true
+            } else {
+                seen[index] = true;
+                false
+            }
+        });
+        if source_indices.len() != argument_count || invalid_permutation {
+            self.parent
+                .error(step_span, "checked pipeline argument order is invalid");
+            return None;
+        }
+        let evaluation_order = (0..argument_count)
+            .map(|source_index| {
+                source_indices
+                    .iter()
+                    .position(|&candidate| candidate == source_index)
+                    .expect("validated pipeline order must be a permutation")
+            })
+            .collect();
+
+        let mut piped = Some(piped);
+        let args = source_indices
+            .into_iter()
+            .map(|source_index| {
+                if source_index == 0 {
+                    piped.take()
+                } else {
+                    self.lower_expression(&extra_args[source_index - 1].value)
+                }
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some((args, evaluation_order))
     }
 
     fn lower_arguments_in_parameter_order(
@@ -1400,5 +1562,149 @@ function main() returns int64:
                 ExpressionKind::Int(7) | ExpressionKind::Local(_)
             ));
         }
+    }
+
+    #[test]
+    fn lowers_list_and_map_construction_in_lexical_order() {
+        let source = r#"namespace app
+function main() returns map[string, list[int64]]:
+    return map("odds": list(1, 3), "evens": list(2, 4))
+"#;
+        let program = lower_source(source);
+        let main = &program.functions[0];
+        let StatementKind::Return(Some(Expression {
+            kind: ExpressionKind::MapConstruct { entries },
+            ..
+        })) = &main.body.statements[0].kind
+        else {
+            panic!("expected map construction");
+        };
+        assert_eq!(entries.len(), 2);
+        assert!(
+            matches!(entries[0].key.kind, ExpressionKind::String(ref value) if value == "odds")
+        );
+        let ExpressionKind::ListConstruct { elements } = &entries[0].value.kind else {
+            panic!("expected nested list construction");
+        };
+        assert!(matches!(elements[0].kind, ExpressionKind::Int(1)));
+        assert!(matches!(elements[1].kind, ExpressionKind::Int(3)));
+    }
+
+    #[test]
+    fn desugars_pipeline_steps_to_checked_hir_calls() {
+        let source = r#"namespace app
+struct Score:
+    value: int64
+    function add(view self: Score, bonus: int64) returns int64:
+        return self.value + bonus
+function choose[T](first: T, second: T, third: T) returns T:
+    return first
+function increment(value: int64) returns int64:
+    return value + 1
+function main() returns int64:
+    Score score = Score(value: 7)
+    int64 chosen = 1 into choose[int64](third: 3, second: 2)
+    return score into view Score.add(bonus: chosen) into increment
+"#;
+        let program = lower_source(source);
+        let main = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "main")
+            .expect("main function");
+        let choose = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "choose")
+            .expect("concrete choose function");
+        let method = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "Score.add")
+            .expect("score method");
+        let increment = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "increment")
+            .expect("increment function");
+
+        let StatementKind::Let { value, .. } = &main.body.statements[1].kind else {
+            panic!("expected chosen local");
+        };
+        let ExpressionKind::Call {
+            function,
+            args,
+            evaluation_order,
+        } = &value.kind
+        else {
+            panic!("expected lowered generic pipeline step");
+        };
+        assert_eq!(*function, choose.id);
+        assert_eq!(evaluation_order, &[0, 2, 1]);
+        assert!(matches!(args[0].kind, ExpressionKind::Int(1)));
+        assert!(matches!(args[1].kind, ExpressionKind::Int(2)));
+        assert!(matches!(args[2].kind, ExpressionKind::Int(3)));
+
+        let StatementKind::Return(Some(Expression {
+            kind:
+                ExpressionKind::Call {
+                    function,
+                    args,
+                    evaluation_order,
+                },
+            ..
+        })) = &main.body.statements[2].kind
+        else {
+            panic!("expected final pipeline call");
+        };
+        assert_eq!(*function, increment.id);
+        assert_eq!(evaluation_order, &[0]);
+        let ExpressionKind::Call {
+            function,
+            args,
+            evaluation_order,
+        } = &args[0].kind
+        else {
+            panic!("expected concrete method pipeline step");
+        };
+        assert_eq!(*function, method.id);
+        assert_eq!(evaluation_order, &[0, 1]);
+        assert!(matches!(args[0].kind, ExpressionKind::View(_)));
+    }
+
+    #[test]
+    fn stages_handled_pipeline_steps_explicitly() {
+        let source = r#"namespace app
+function parse(value: string) returns result[int64, string]:
+    return fail("invalid")
+function main() returns int64:
+    return "x" into parse handle error:
+        default 0
+"#;
+        let file = FileId::new(0);
+        let parsed = jett_parser::parse(source, file);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = jett_resolve::resolve(&parsed.module);
+        let checked = jett_typecheck::check(&parsed.module, &resolved);
+        assert!(
+            checked
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != Severity::Error),
+            "type errors: {:?}",
+            checked.diagnostics
+        );
+        let origins = HashMap::from([(file, SourceOrigin::Project)]);
+        let errors = lower(&parsed.module, &resolved, &checked, &origins)
+            .expect_err("handled pipeline must remain staged");
+        assert!(errors.iter().any(|error| {
+            error
+                .message
+                .contains("handled pipeline steps require the staged HIR handle")
+        }));
     }
 }
