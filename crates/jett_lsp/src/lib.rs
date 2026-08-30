@@ -74,6 +74,10 @@ fn server_capabilities() -> ServerCapabilities {
         definition_provider: Some(OneOf::Left(true)),
         references_provider: Some(OneOf::Left(true)),
         completion_provider: Some(CompletionOptions::default()),
+        signature_help_provider: Some(SignatureHelpOptions {
+            trigger_characters: Some(vec!["(".to_string(), ",".to_string()]),
+            ..SignatureHelpOptions::default()
+        }),
         document_symbol_provider: Some(OneOf::Left(true)),
         document_formatting_provider: Some(OneOf::Left(true)),
         position_encoding: Some(PositionEncodingKind::UTF16),
@@ -284,6 +288,176 @@ fn formatting_edits(source: &str) -> Option<Vec<TextEdit>> {
     }])
 }
 
+fn signature_help_source_offset(source: &str, position: Position) -> Option<usize> {
+    let line_source = source_line(source, usize::try_from(position.line).ok()?)?;
+    let line_start = line_source.as_ptr() as usize - source.as_ptr() as usize;
+    let mut utf16_column = 0u32;
+    for (offset, ch) in line_source.char_indices() {
+        if utf16_column == position.character {
+            return Some(line_start + offset);
+        }
+        utf16_column = utf16_column.checked_add(ch.len_utf16() as u32)?;
+        if position.character < utf16_column {
+            return None;
+        }
+    }
+    (utf16_column == position.character).then_some(line_start + line_source.len())
+}
+
+fn call_context_at(source: &str, position: Position) -> Option<(String, u32)> {
+    #[derive(Clone, Copy)]
+    struct Delimiter {
+        kind: u8,
+        offset: usize,
+        commas: u32,
+    }
+
+    let cursor = signature_help_source_offset(source, position)?;
+    let bytes = source.as_bytes();
+    let mut delimiters = Vec::new();
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut in_comment = false;
+    let mut index = 0usize;
+    while index < cursor {
+        let byte = bytes[index];
+        if in_comment {
+            if matches!(byte, b'\n' | b'\r') {
+                in_comment = false;
+            }
+            index += 1;
+            continue;
+        }
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                in_string = false;
+            }
+            index += 1;
+            continue;
+        }
+        if byte == b'"' {
+            in_string = true;
+        } else if byte == b'#' || (byte == b'/' && bytes.get(index + 1) == Some(&b'/')) {
+            in_comment = true;
+        } else if matches!(byte, b'(' | b'[' | b'{') {
+            delimiters.push(Delimiter {
+                kind: byte,
+                offset: index,
+                commas: 0,
+            });
+        } else if matches!(byte, b')' | b']' | b'}') {
+            let opening = match byte {
+                b')' => b'(',
+                b']' => b'[',
+                _ => b'{',
+            };
+            if let Some(position) = delimiters.iter().rposition(|entry| entry.kind == opening) {
+                delimiters.truncate(position);
+            }
+        } else if byte == b','
+            && let Some(delimiter) = delimiters.last_mut()
+            && delimiter.kind == b'('
+        {
+            delimiter.commas = delimiter.commas.saturating_add(1);
+        }
+        index += 1;
+    }
+
+    let call = delimiters.iter().rev().find(|entry| entry.kind == b'(')?;
+    let mut end = call.offset;
+    while end > 0 && bytes[end - 1].is_ascii_whitespace() {
+        end -= 1;
+    }
+    if end > 0 && bytes[end - 1] == b']' {
+        let mut depth = 1usize;
+        end -= 1;
+        while end > 0 && depth > 0 {
+            end -= 1;
+            match bytes[end] {
+                b']' => depth += 1,
+                b'[' => depth -= 1,
+                _ => {}
+            }
+        }
+        if depth != 0 {
+            return None;
+        }
+        while end > 0 && bytes[end - 1].is_ascii_whitespace() {
+            end -= 1;
+        }
+    }
+    let mut start = end;
+    while start > 0
+        && (bytes[start - 1].is_ascii_alphanumeric() || matches!(bytes[start - 1], b'_' | b'.'))
+    {
+        start -= 1;
+    }
+    let callee = source.get(start..end)?;
+    (!callee.is_empty()).then(|| (callee.to_string(), call.commas))
+}
+
+fn signature_parameter_label(parameter: &jett_driver::SignatureParam) -> String {
+    let mut label = String::new();
+    if parameter.view {
+        label.push_str("view ");
+    }
+    if parameter.mutable {
+        label.push_str("mutable ");
+    }
+    label.push_str(&parameter.name);
+    label.push_str(": ");
+    label.push_str(&parameter.type_name);
+    label
+}
+
+fn signature_help_for_source(source: &str, position: Position) -> Option<SignatureHelp> {
+    let (callee, active_parameter) = call_context_at(source, position)?;
+    let signature = jett_driver::query_source_signature(source, &callee)
+        .ok()
+        .flatten()?;
+    let type_params = if signature.type_params.is_empty() {
+        String::new()
+    } else {
+        format!("[{}]", signature.type_params.join(", "))
+    };
+    let parameter_labels: Vec<String> = signature
+        .params
+        .iter()
+        .map(signature_parameter_label)
+        .collect();
+    let label = format!(
+        "{}{}({}) returns {}",
+        signature.name,
+        type_params,
+        parameter_labels.join(", "),
+        signature.return_type
+    );
+    let parameters = parameter_labels
+        .into_iter()
+        .map(|label| ParameterInformation {
+            label: ParameterLabel::Simple(label),
+            documentation: None,
+        })
+        .collect();
+    let active_parameter = (!signature.params.is_empty())
+        .then_some(active_parameter.min(u32::try_from(signature.params.len() - 1).ok()?));
+
+    Some(SignatureHelp {
+        signatures: vec![SignatureInformation {
+            label,
+            documentation: None,
+            parameters: Some(parameters),
+            active_parameter: None,
+        }],
+        active_signature: Some(0),
+        active_parameter,
+    })
+}
+
 #[tower_lsp::async_trait]
 impl LanguageServer for JettBackend {
     async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
@@ -485,6 +659,19 @@ impl LanguageServer for JettBackend {
         Ok(Some(CompletionResponse::Array(items)))
     }
 
+    async fn signature_help(&self, params: SignatureHelpParams) -> Result<Option<SignatureHelp>> {
+        let uri = &params.text_document_position_params.text_document.uri;
+        let documents = self.documents.read().await;
+        let Some(document) = documents.get(uri) else {
+            return Ok(None);
+        };
+
+        Ok(signature_help_for_source(
+            &document.text,
+            params.text_document_position_params.position,
+        ))
+    }
+
     async fn document_symbol(
         &self,
         params: DocumentSymbolParams,
@@ -683,7 +870,7 @@ mod tests {
     }
 
     #[test]
-    fn server_capabilities_advertise_sync_and_document_symbols() {
+    fn server_capabilities_advertise_sync_document_symbols_and_signature_help() {
         let capabilities = server_capabilities();
         let Some(TextDocumentSyncCapability::Options(options)) = capabilities.text_document_sync
         else {
@@ -698,6 +885,14 @@ mod tests {
         assert_eq!(
             capabilities.document_symbol_provider,
             Some(OneOf::Left(true))
+        );
+        assert_eq!(
+            capabilities.signature_help_provider,
+            Some(SignatureHelpOptions {
+                trigger_characters: Some(vec!["(".to_string(), ",".to_string()]),
+                retrigger_characters: None,
+                work_done_progress_options: WorkDoneProgressOptions::default(),
+            })
         );
     }
 
@@ -737,6 +932,63 @@ mod tests {
 
         assert_eq!(login.selection_range.start, Position::new(2, 16));
         assert_eq!(login.selection_range.end, Position::new(2, 21));
+    }
+
+    #[test]
+    fn signature_help_tracks_the_active_parameter_of_nested_calls() {
+        let source = "namespace app\n\nexport function add(left: int64, right: int64) returns int64:\n    return left + right\n\nfunction main() returns int64:\n    return app.add(1, app.add(2, 3))\n";
+        let cursor_offset = source.find("2, 3").expect("inner arguments") + "2, ".len();
+
+        let help = signature_help_for_source(
+            source,
+            lsp_position(source, u32::try_from(cursor_offset).unwrap()),
+        )
+        .expect("nested call should provide signature help");
+
+        assert_eq!(help.active_signature, Some(0));
+        assert_eq!(help.active_parameter, Some(1));
+        assert_eq!(help.signatures.len(), 1);
+        assert_eq!(
+            help.signatures[0].label,
+            "app.add(left: int64, right: int64) returns int64"
+        );
+        assert_eq!(
+            help.signatures[0].parameters.as_ref().unwrap()[1].label,
+            ParameterLabel::Simple("right: int64".to_string())
+        );
+    }
+
+    #[test]
+    fn signature_help_resolves_private_unqualified_document_calls() {
+        let source = "namespace app\n\nfunction helper(value: string) returns string:\n    return value\n\nfunction main() returns string:\n    return helper(\"value\")\n";
+        let cursor_offset = source.find("\"value\"").expect("call argument");
+
+        let help = signature_help_for_source(
+            source,
+            lsp_position(source, u32::try_from(cursor_offset).unwrap()),
+        )
+        .expect("private call should provide signature help");
+
+        assert_eq!(
+            help.signatures[0].label,
+            "app.helper(value: string) returns string"
+        );
+        assert_eq!(help.active_parameter, Some(0));
+    }
+
+    #[test]
+    fn signature_help_survives_an_incomplete_call() {
+        let source = "namespace app\n\nexport function add(left: int64, right: int64) returns int64:\n    return left + right\n\nfunction main() returns int64:\n    return app.add(";
+        let cursor = lsp_position(source, u32::try_from(source.len()).unwrap());
+
+        let help = signature_help_for_source(source, cursor)
+            .expect("an unfinished call should still provide signature help");
+
+        assert_eq!(
+            help.signatures[0].label,
+            "app.add(left: int64, right: int64) returns int64"
+        );
+        assert_eq!(help.active_parameter, Some(0));
     }
 
     #[test]

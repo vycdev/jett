@@ -1849,6 +1849,8 @@ Standard LSP implementation using the `tower-lsp` crate. Provides:
 - Go-to-definition.
 - Find all references in the current document, optionally including the declaration.
 - Code completion.
+- Signature help for source-defined and standard-library calls, including the
+  active argument in nested calls and unsaved private document functions.
 - Document symbols from the latest in-memory source, including declaration
   kinds, signatures, and UTF-16 ranges for editor outlines.
 - Whole-document formatting is provided through `jett_fmt`.

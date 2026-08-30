@@ -1051,19 +1051,75 @@ pub fn query_signature(
     Ok(None)
 }
 
+/// Return a source-level function signature from the current in-memory document
+/// or the compiler standard library.
+pub fn query_source_signature(
+    source: &str,
+    function_name: &str,
+) -> Result<Option<SignatureQueryResult>, String> {
+    let parsed = parse_source_with_query(source, "<lsp-document>");
+
+    // Signature help is requested while calls are often syntactically
+    // incomplete. Use parser-recovered declarations from the current document
+    // instead of suppressing all help because another expression is unfinished.
+    let mut file_paths = HashMap::new();
+    file_paths.insert(FileId::new(0), PathBuf::from("<lsp-document>"));
+    if let Some(signature) = module_signature_query_result_with_visibility(
+        &parsed.module,
+        &file_paths,
+        function_name,
+        true,
+    ) {
+        return Ok(Some(signature));
+    }
+
+    let support_modules = discover_stdlib_modules_with_diagnostics();
+    let support_errors = error_messages_from_diagnostics(&support_modules.diagnostics);
+    if !support_errors.is_empty() {
+        return Err(format!(
+            "query support parse errors:\n{}",
+            support_errors.join("\n")
+        ));
+    }
+    for module in &support_modules.modules {
+        if let Some(signature) =
+            module_signature_query_result(module, &support_modules.files, function_name)
+        {
+            return Ok(Some(signature));
+        }
+    }
+
+    Ok(None)
+}
+
 fn module_signature_query_result(
     module: &Module,
     file_paths: &HashMap<FileId, PathBuf>,
     function_name: &str,
+) -> Option<SignatureQueryResult> {
+    module_signature_query_result_with_visibility(module, file_paths, function_name, false)
+}
+
+fn module_signature_query_result_with_visibility(
+    module: &Module,
+    file_paths: &HashMap<FileId, PathBuf>,
+    function_name: &str,
+    include_private: bool,
 ) -> Option<SignatureQueryResult> {
     let mut current_namespace: Option<String> = None;
     for item in &module.items {
         match item {
             Item::Namespace(ns) => current_namespace = Some(ns.name.name.clone()),
             Item::Function(func) => {
-                if let Some(signature) =
-                    function_signature_query_result(func, current_namespace.as_deref(), file_paths)
-                    && signature.name == function_name
+                if let Some(signature) = function_signature_query_result(
+                    func,
+                    current_namespace.as_deref(),
+                    file_paths,
+                    include_private,
+                ) && (signature.name == function_name
+                    || (include_private
+                        && !function_name.contains('.')
+                        && signature.name.rsplit('.').next() == Some(function_name)))
                 {
                     return Some(signature);
                 }
@@ -1074,7 +1130,11 @@ fn module_signature_query_result(
                         decl,
                         current_namespace.as_deref(),
                         file_paths,
-                    ) && signature.name == function_name
+                        include_private,
+                    ) && (signature.name == function_name
+                        || (include_private
+                            && !function_name.contains('.')
+                            && signature.name.rsplit('.').next() == Some(function_name)))
                     {
                         return Some(signature);
                     }
@@ -1107,9 +1167,12 @@ fn append_module_signature_displays(
         match item {
             Item::Namespace(ns) => current_namespace = Some(ns.name.name.clone()),
             Item::Function(func) => {
-                if let Some(signature) =
-                    function_signature_query_result(func, current_namespace.as_deref(), file_paths)
-                {
+                if let Some(signature) = function_signature_query_result(
+                    func,
+                    current_namespace.as_deref(),
+                    file_paths,
+                    false,
+                ) {
                     signatures
                         .entry(signature.name.clone())
                         .or_insert_with(|| signature_display(&signature));
@@ -1121,6 +1184,7 @@ fn append_module_signature_displays(
                         decl,
                         current_namespace.as_deref(),
                         file_paths,
+                        false,
                     ) {
                         signatures
                             .entry(signature.name.clone())
@@ -1148,8 +1212,9 @@ fn function_signature_query_result(
     func: &FunctionDef,
     namespace: Option<&str>,
     file_paths: &HashMap<FileId, PathBuf>,
+    include_private: bool,
 ) -> Option<SignatureQueryResult> {
-    if namespace.is_some() && !func.exported {
+    if !include_private && namespace.is_some() && !func.exported {
         return None;
     }
 
@@ -1168,8 +1233,9 @@ fn function_decl_signature_query_result(
     decl: &FunctionDecl,
     namespace: Option<&str>,
     file_paths: &HashMap<FileId, PathBuf>,
+    include_private: bool,
 ) -> Option<SignatureQueryResult> {
-    if namespace.is_some() && !decl.exported {
+    if !include_private && namespace.is_some() && !decl.exported {
         return None;
     }
 
@@ -4379,6 +4445,35 @@ mod tests {
         );
         assert_eq!(helper.match_kind, CompletionMatchKind::LeafPrefix);
         assert_eq!(helper.rank, 20);
+    }
+
+    #[test]
+    fn query_source_signature_reports_unsaved_function_signature() {
+        let source = "namespace app\n\nexport function add(left: int64, right: int64) returns int64:\n    return left + right\n";
+
+        let result = query_source_signature(source, "app.add")
+            .expect("source signature query should succeed")
+            .expect("app.add signature should be found");
+
+        assert_eq!(result.name, "app.add");
+        assert_eq!(result.params.len(), 2);
+        assert_eq!(result.params[0].name, "left");
+        assert_eq!(result.params[1].type_name, "int64");
+        assert_eq!(result.return_type, "int64");
+    }
+
+    #[test]
+    fn query_source_signature_reports_private_document_function() {
+        let source =
+            "namespace app\n\nfunction helper(value: string) returns string:\n    return value\n";
+
+        let result = query_source_signature(source, "app.helper")
+            .expect("source signature query should succeed")
+            .expect("private in-document function should be found");
+
+        assert_eq!(result.name, "app.helper");
+        assert_eq!(result.params[0].name, "value");
+        assert_eq!(result.return_type, "string");
     }
 
     #[test]
