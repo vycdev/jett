@@ -90,10 +90,12 @@ enter the manifest. Recursive discovery reserves identity before lowering.
    in the checked parameter permutation. The checker exports those
    permutations, concrete method bodies, constructor targets, and
    refinement-validation requirements, including separate facts inside generic
-   instantiations. Pipeline-step handles remain explicitly staged with general
-   handle lowering. Bitfield/machine fields and constructors, compiler
-   intrinsics, handles, matches, remaining collection operations, reflection,
-   and trusted calls remain staged.
+   instantiations. Result/optional construction and result, optional, and
+   refinement-boundary handles now lower explicitly. `default` yields from the
+   failure block while `return` exits the function; handled pipeline steps use
+   this same form around their intermediate call. Bitfield/machine fields and
+   constructors, compiler intrinsics, matches, remaining collection operations,
+   reflection, and trusted calls remain staged.
 4. Add deterministic HIR snapshots and wire HIR into the driver after every
    accepted source construct either lowers or has an explicit staged error.
 5. Freeze the HIR validator and begin the HIR-to-MIR contract in #22.

@@ -133,6 +133,8 @@ pub enum StatementKind {
         value: Expression,
     },
     Return(Option<Expression>),
+    /// Yield a fallback value to the nearest enclosing handle expression.
+    HandleDefault(Expression),
     Expression(Expression),
     If {
         condition: Expression,
@@ -190,6 +192,16 @@ pub enum ExpressionKind {
     MapConstruct {
         entries: Vec<MapEntry>,
     },
+    ResultOk(Box<Expression>),
+    ResultFail(Box<Expression>),
+    OptionalSome(Box<Expression>),
+    OptionalNone,
+    Handle {
+        target: Box<Expression>,
+        kind: HandleKind,
+        error_local: Option<LocalId>,
+        failure: Block,
+    },
     Field {
         base: Box<Expression>,
         owner_type: TypeId,
@@ -197,6 +209,13 @@ pub enum ExpressionKind {
     },
     View(Box<Expression>),
     Clone(Box<Expression>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandleKind {
+    Result,
+    Optional,
+    Refinement { refined_type: TypeId },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -425,6 +444,7 @@ impl<'a> Lowerer<'a> {
             call_argument_orders,
             method_calls,
             struct_constructions,
+            pipeline_step_call_types,
             concrete_args,
         ) = if let Some(instantiation) = &source.instantiation {
             (
@@ -435,6 +455,7 @@ impl<'a> Lowerer<'a> {
                 instantiation.call_argument_orders.clone(),
                 instantiation.method_calls.clone(),
                 instantiation.struct_constructions.clone(),
+                instantiation.pipeline_step_call_types.clone(),
                 instantiation.concrete_args.clone(),
             )
         } else if let Some(method) = &source.method {
@@ -446,6 +467,7 @@ impl<'a> Lowerer<'a> {
                 self.check.call_argument_orders.clone(),
                 self.check.method_calls.clone(),
                 self.check.struct_constructions.clone(),
+                self.check.pipeline_step_call_types.clone(),
                 Vec::new(),
             )
         } else {
@@ -484,6 +506,7 @@ impl<'a> Lowerer<'a> {
                 self.check.call_argument_orders.clone(),
                 self.check.method_calls.clone(),
                 self.check.struct_constructions.clone(),
+                self.check.pipeline_step_call_types.clone(),
                 Vec::new(),
             )
         };
@@ -504,6 +527,7 @@ impl<'a> Lowerer<'a> {
             &call_argument_orders,
             &method_calls,
             &struct_constructions,
+            &pipeline_step_call_types,
         );
         let mut params = Vec::with_capacity(source.function.params.len());
         for (param, ty) in source.function.params.iter().zip(parameter_types) {
@@ -618,6 +642,7 @@ struct BodyLowerer<'lowerer, 'program> {
     call_argument_orders: &'lowerer HashMap<Span, CheckedCallArgumentOrder>,
     method_calls: &'lowerer HashMap<Span, CheckedMethodCall>,
     struct_constructions: &'lowerer HashMap<Span, CheckedStructConstruction>,
+    pipeline_step_call_types: &'lowerer HashMap<Span, TypeId>,
     local_ids: HashMap<DefId, LocalId>,
     locals: Vec<Local>,
 }
@@ -631,6 +656,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         call_argument_orders: &'lowerer HashMap<Span, CheckedCallArgumentOrder>,
         method_calls: &'lowerer HashMap<Span, CheckedMethodCall>,
         struct_constructions: &'lowerer HashMap<Span, CheckedStructConstruction>,
+        pipeline_step_call_types: &'lowerer HashMap<Span, TypeId>,
     ) -> Self {
         Self {
             parent,
@@ -640,6 +666,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             call_argument_orders,
             method_calls,
             struct_constructions,
+            pipeline_step_call_types,
             local_ids: HashMap::new(),
             locals: Vec::new(),
         }
@@ -716,10 +743,14 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 };
                 (StatementKind::Return(value), ret.span)
             }
-            Stmt::Expr(expr) => (
-                StatementKind::Expression(self.lower_expression(&expr.expr)?),
-                expr.span,
-            ),
+            Stmt::Expr(expr) => {
+                let kind = if let Expr::Default(value, _) = &expr.expr {
+                    StatementKind::HandleDefault(self.lower_expression(value)?)
+                } else {
+                    StatementKind::Expression(self.lower_expression(&expr.expr)?)
+                };
+                (kind, expr.span)
+            }
             Stmt::If(branch) => {
                 let condition = self.lower_expression(&branch.condition)?;
                 let then_block = self.lower_block(&branch.then_block);
@@ -835,6 +866,18 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                     })
                     .collect::<Option<Vec<_>>>()?,
             },
+            Expr::Ok(value, _) => ExpressionKind::ResultOk(Box::new(self.lower_expression(value)?)),
+            Expr::Fail(error, _) => {
+                ExpressionKind::ResultFail(Box::new(self.lower_expression(error)?))
+            }
+            Expr::Some(value, _) => {
+                ExpressionKind::OptionalSome(Box::new(self.lower_expression(value)?))
+            }
+            Expr::None(_) => ExpressionKind::OptionalNone,
+            Expr::Handle(target, error_name, failure, _) => {
+                let target = self.lower_expression(target)?;
+                return self.lower_handle(target, error_name.as_ref(), failure, ty, span);
+            }
             Expr::Pipeline(initial, steps, _) => {
                 return self.lower_pipeline(initial, steps, ty, span);
             }
@@ -856,6 +899,62 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             }
         };
         Some(Expression { kind, ty, span })
+    }
+
+    fn lower_handle(
+        &mut self,
+        target: Expression,
+        error_name: Option<&ast::Ident>,
+        failure: &ast::Block,
+        output_type: TypeId,
+        span: Span,
+    ) -> Option<Expression> {
+        let kind = match self.parent.check.interner.resolve(target.ty) {
+            Type::Result(_, _) => HandleKind::Result,
+            Type::Optional(_) => HandleKind::Optional,
+            _ if matches!(
+                self.parent.check.interner.resolve(output_type),
+                Type::Refinement { .. }
+            ) =>
+            {
+                HandleKind::Refinement {
+                    refined_type: output_type,
+                }
+            }
+            _ => {
+                self.parent.error(
+                    span,
+                    "checked handle target is neither result, optional, nor refinement",
+                );
+                return None;
+            }
+        };
+        let error_local = if let Some(name) = error_name {
+            let Some(definition) = self.parent.definition_at(name.span, DefKind::Variable) else {
+                self.parent
+                    .error(name.span, "handle error binding has no resolved definition");
+                return None;
+            };
+            let Some(ty) = self.parent.check.definition_types.get(&definition).copied() else {
+                self.parent
+                    .error(name.span, "handle error binding has no checked type");
+                return None;
+            };
+            Some(self.allocate_local(definition, &name.name, ty, false, name.span))
+        } else {
+            None
+        };
+        let failure = self.lower_block(failure);
+        Some(Expression {
+            kind: ExpressionKind::Handle {
+                target: Box::new(target),
+                kind,
+                error_local,
+                failure,
+            },
+            ty: output_type,
+            span,
+        })
     }
 
     fn lower_call(
@@ -947,14 +1046,6 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         pipeline_type: TypeId,
         pipeline_span: Span,
     ) -> Option<Expression> {
-        if let Some(step) = steps.iter().find(|step| step.handle.is_some()) {
-            self.parent.error(
-                step.span,
-                "handled pipeline steps require the staged HIR handle lowering slice",
-            );
-            return None;
-        }
-
         let mut current = self.lower_expression(initial)?;
         for (index, step) in steps.iter().enumerate() {
             let output_type = if let Some(next_step) = steps.get(index + 1) {
@@ -967,7 +1058,21 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             } else {
                 pipeline_type
             };
-            current = self.lower_pipeline_step(current, step, output_type)?;
+            let Some(call_type) = self.pipeline_step_call_types.get(&step.span).copied() else {
+                self.parent
+                    .error(step.span, "pipeline step has no checked call-result type");
+                return None;
+            };
+            current = self.lower_pipeline_step(current, step, call_type)?;
+            if let Some(handle) = &step.handle {
+                current = self.lower_handle(
+                    current,
+                    handle.error_name.as_ref(),
+                    &handle.body,
+                    output_type,
+                    handle.span,
+                )?;
+            }
         }
         current.ty = pipeline_type;
         current.span = pipeline_span;
@@ -1591,6 +1696,121 @@ function main() returns map[string, list[int64]]:
     }
 
     #[test]
+    fn lowers_wrappers_and_general_handles_with_scoped_control_flow() {
+        let source = r#"namespace app
+function parse(value: string) returns result[int64, string]:
+    return ok(7)
+function first() returns optional[int64]:
+    return some(3)
+function fallback() returns optional[int64]:
+    return none
+function main() returns int64:
+    int64 parsed = parse("x") handle error:
+        string message = error
+        default 0
+    int64 present = first() handle:
+        default 1
+    int64 absent = fallback() handle:
+        return 2
+    return parsed + present + absent
+"#;
+        let program = lower_source(source);
+        let parse = &program.functions[0];
+        let first = &program.functions[1];
+        let fallback = &program.functions[2];
+        let main = &program.functions[3];
+
+        let StatementKind::Return(Some(Expression {
+            kind: ExpressionKind::ResultOk(_),
+            ..
+        })) = &parse.body.statements[0].kind
+        else {
+            panic!("expected explicit result-ok construction");
+        };
+        assert!(matches!(
+            first.body.statements[0].kind,
+            StatementKind::Return(Some(Expression {
+                kind: ExpressionKind::OptionalSome(_),
+                ..
+            }))
+        ));
+        assert!(matches!(
+            fallback.body.statements[0].kind,
+            StatementKind::Return(Some(Expression {
+                kind: ExpressionKind::OptionalNone,
+                ..
+            }))
+        ));
+
+        let StatementKind::Let { value, .. } = &main.body.statements[0].kind else {
+            panic!("expected handled result");
+        };
+        let ExpressionKind::Handle {
+            kind: HandleKind::Result,
+            error_local: Some(error_local),
+            failure,
+            ..
+        } = &value.kind
+        else {
+            panic!("expected result handle with an error binding");
+        };
+        assert_eq!(main.locals[error_local.index() as usize].name, "error");
+        assert!(matches!(
+            failure.statements[1].kind,
+            StatementKind::HandleDefault(_)
+        ));
+
+        let StatementKind::Let { value, .. } = &main.body.statements[1].kind else {
+            panic!("expected handled optional");
+        };
+        assert!(matches!(
+            value.kind,
+            ExpressionKind::Handle {
+                kind: HandleKind::Optional,
+                error_local: None,
+                ..
+            }
+        ));
+
+        let StatementKind::Let { value, .. } = &main.body.statements[2].kind else {
+            panic!("expected return-terminated handle");
+        };
+        let ExpressionKind::Handle { failure, .. } = &value.kind else {
+            panic!("expected optional handle");
+        };
+        assert!(matches!(
+            failure.statements[0].kind,
+            StatementKind::Return(Some(_))
+        ));
+    }
+
+    #[test]
+    fn lowers_refinement_boundary_handles_explicitly() {
+        let source = r#"namespace app
+type Positive = int64 where value > 0
+function positive_or_one(raw: int64, fallback: Positive) returns Positive:
+    Positive value = raw handle error:
+        default fallback
+    return value
+"#;
+        let program = lower_source(source);
+        let function = &program.functions[0];
+        let StatementKind::Let { value, .. } = &function.body.statements[0].kind else {
+            panic!("expected refinement local");
+        };
+        let ExpressionKind::Handle {
+            kind: HandleKind::Refinement { refined_type },
+            error_local: Some(error_local),
+            ..
+        } = value.kind
+        else {
+            panic!("expected refinement boundary handle");
+        };
+        assert_eq!(refined_type, value.ty);
+        assert_eq!(function.locals[error_local.index() as usize].name, "error");
+    }
+
+    #[test]
     fn desugars_pipeline_steps_to_checked_hir_calls() {
         let source = r#"namespace app
 struct Score:
@@ -1673,38 +1893,85 @@ function main() returns int64:
     }
 
     #[test]
-    fn stages_handled_pipeline_steps_explicitly() {
+    fn lowers_handled_pipeline_steps_and_continues_with_the_unwrapped_value() {
         let source = r#"namespace app
 function parse(value: string) returns result[int64, string]:
     return fail("invalid")
+function plus_one(value: int64) returns int64:
+    return value + 1
 function main() returns int64:
-    return "x" into parse handle error:
-        default 0
+    return "x"
+        into parse handle error:
+            string message = error
+            default 0
+        into plus_one
 "#;
-        let file = FileId::new(0);
-        let parsed = jett_parser::parse(source, file);
-        assert!(
-            parsed.errors.is_empty(),
-            "parse errors: {:?}",
-            parsed.errors
-        );
-        let resolved = jett_resolve::resolve(&parsed.module);
-        let checked = jett_typecheck::check(&parsed.module, &resolved);
-        assert!(
-            checked
-                .diagnostics
-                .iter()
-                .all(|diagnostic| diagnostic.severity != Severity::Error),
-            "type errors: {:?}",
-            checked.diagnostics
-        );
-        let origins = HashMap::from([(file, SourceOrigin::Project)]);
-        let errors = lower(&parsed.module, &resolved, &checked, &origins)
-            .expect_err("handled pipeline must remain staged");
-        assert!(errors.iter().any(|error| {
-            error
-                .message
-                .contains("handled pipeline steps require the staged HIR handle")
-        }));
+        let program = lower_source(source);
+        let main = &program.functions[2];
+        let StatementKind::Return(Some(Expression {
+            kind: ExpressionKind::Call { args, .. },
+            ..
+        })) = &main.body.statements[0].kind
+        else {
+            panic!("expected final pipeline call");
+        };
+        let ExpressionKind::Handle {
+            target,
+            kind: HandleKind::Result,
+            error_local: Some(_),
+            failure,
+        } = &args[0].kind
+        else {
+            panic!("expected handled pipeline call as the next step input");
+        };
+        assert!(matches!(target.kind, ExpressionKind::Call { .. }));
+        assert!(matches!(
+            failure.statements[1].kind,
+            StatementKind::HandleDefault(_)
+        ));
+    }
+
+    #[test]
+    fn keeps_handled_pipeline_types_inside_generic_instantiations() {
+        let source = r#"namespace app
+function wrap[T](value: T) returns result[T, string]:
+    return ok(value)
+function recover[T](value: T, fallback: T) returns T:
+    return value
+        into wrap[T]() handle error:
+            default fallback
+function main() returns int64:
+    return recover[int64](7, 0)
+"#;
+        let program = lower_source(source);
+        let recover = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "recover")
+            .expect("concrete recover function");
+        let StatementKind::Return(Some(Expression {
+            kind:
+                ExpressionKind::Handle {
+                    target,
+                    kind: HandleKind::Result,
+                    ..
+                },
+            ..
+        })) = &recover.body.statements[0].kind
+        else {
+            panic!("expected handled generic pipeline");
+        };
+        assert!(matches!(target.kind, ExpressionKind::Call { .. }));
+        assert!(matches!(
+            recover
+                .identity
+                .type_arguments
+                .first()
+                .map(|ty| program.functions.iter().any(|function| {
+                    function.identity.declaration.name == "wrap"
+                        && function.identity.type_arguments.first() == Some(ty)
+                })),
+            Some(true)
+        ));
     }
 }

@@ -44,6 +44,8 @@ pub struct CheckedGenericFunctionInstantiation {
     pub method_calls: HashMap<Span, CheckedMethodCall>,
     /// Concrete struct construction targets selected in this body.
     pub struct_constructions: HashMap<Span, CheckedStructConstruction>,
+    /// Raw call-result types for pipeline steps before any step-local handle.
+    pub pipeline_step_call_types: HashMap<Span, TypeId>,
 }
 
 /// The concrete generic target selected for one checked call expression.
@@ -108,6 +110,8 @@ pub struct CheckResult {
     pub method_calls: HashMap<Span, CheckedMethodCall>,
     /// Checked struct construction targets, keyed by call span.
     pub struct_constructions: HashMap<Span, CheckedStructConstruction>,
+    /// Raw call-result types for pipeline steps before any step-local handle.
+    pub pipeline_step_call_types: HashMap<Span, TypeId>,
     /// Accepted concrete generic bodies in deterministic discovery order.
     pub generic_function_instantiations: Vec<CheckedGenericFunctionInstantiation>,
     /// The type interner, containing all types encountered during checking.
@@ -157,6 +161,7 @@ pub fn check_with_options(
         method_definitions: checker.method_definitions,
         method_calls: checker.method_calls,
         struct_constructions: checker.struct_constructions,
+        pipeline_step_call_types: checker.pipeline_step_call_types,
         generic_function_instantiations: checker.generic_function_instantiations,
         interner: checker.interner,
         reflection_metadata,
@@ -243,6 +248,7 @@ struct ActiveGenericInstantiation {
     call_argument_orders: HashMap<Span, CheckedCallArgumentOrder>,
     method_calls: HashMap<Span, CheckedMethodCall>,
     struct_constructions: HashMap<Span, CheckedStructConstruction>,
+    pipeline_step_call_types: HashMap<Span, TypeId>,
 }
 
 // ---------------------------------------------------------------------------
@@ -370,6 +376,8 @@ struct TypeChecker<'a> {
     method_calls: HashMap<Span, CheckedMethodCall>,
     /// Checked struct constructions outside generic bodies.
     struct_constructions: HashMap<Span, CheckedStructConstruction>,
+    /// Raw pipeline call-result types outside generic bodies.
+    pipeline_step_call_types: HashMap<Span, TypeId>,
     /// Per-instantiation facts currently being collected. Nested generic body
     /// checks push another scope so their spans never overwrite the caller's.
     active_generic_instantiations: Vec<ActiveGenericInstantiation>,
@@ -449,6 +457,7 @@ impl<'a> TypeChecker<'a> {
             interface_method_definitions: HashMap::new(),
             method_calls: HashMap::new(),
             struct_constructions: HashMap::new(),
+            pipeline_step_call_types: HashMap::new(),
             active_generic_instantiations: Vec::new(),
             specialize_reflection_branches: false,
             current_respond_type: None,
@@ -5556,6 +5565,7 @@ impl<'a> TypeChecker<'a> {
                         call_argument_orders: HashMap::new(),
                         method_calls: HashMap::new(),
                         struct_constructions: HashMap::new(),
+                        pipeline_step_call_types: HashMap::new(),
                     });
                 index
             }
@@ -5586,6 +5596,7 @@ impl<'a> TypeChecker<'a> {
                     call_argument_orders: HashMap::new(),
                     method_calls: HashMap::new(),
                     struct_constructions: HashMap::new(),
+                    pipeline_step_call_types: HashMap::new(),
                 });
         }
 
@@ -5608,6 +5619,9 @@ impl<'a> TypeChecker<'a> {
             entry
                 .struct_constructions
                 .extend(active.struct_constructions);
+            entry
+                .pipeline_step_call_types
+                .extend(active.pipeline_step_call_types);
         }
 
         self.type_var_subst = old_subst;
@@ -5697,6 +5711,14 @@ impl<'a> TypeChecker<'a> {
             active.struct_constructions.insert(span, construction);
         } else {
             self.struct_constructions.insert(span, construction);
+        }
+    }
+
+    fn record_pipeline_step_call_type(&mut self, span: Span, ty: TypeId) {
+        if let Some(active) = self.active_generic_instantiations.last_mut() {
+            active.pipeline_step_call_types.insert(span, ty);
+        } else {
+            self.pipeline_step_call_types.insert(span, ty);
         }
     }
 
@@ -8440,6 +8462,7 @@ impl<'a> TypeChecker<'a> {
 
     fn check_pipeline_step(&mut self, current_ty: TypeId, step: &ast::PipelineStep) -> TypeId {
         let step_ty = self.check_pipeline_step_call(current_ty, step);
+        self.record_pipeline_step_call_type(step.span, step_ty);
         if let Some(handle) = &step.handle {
             return self.check_handle_with_target_type(
                 step_ty,

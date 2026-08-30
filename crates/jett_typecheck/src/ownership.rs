@@ -612,6 +612,17 @@ impl<'a> OwnershipChecker<'a> {
                     let (callee, extra_args, _) = Self::pipeline_step_call_parts(step);
                     self.check_expr_ownership(callee);
                     self.check_call_arguments_ownership(callee, extra_args, 1);
+                    if let Some(handle) = &step.handle {
+                        let success_state = self.states.clone();
+                        let handler_state =
+                            self.check_block_from_state(&success_state, &handle.body);
+                        let mut fallthrough_states = vec![success_state.clone()];
+                        if Self::block_can_fall_through(&handle.body) {
+                            fallthrough_states.push(handler_state);
+                        }
+                        self.states =
+                            self.merge_fallthrough_states(&success_state, &fallthrough_states);
+                    }
                 }
             }
             Expr::At(inner, _, _) => {

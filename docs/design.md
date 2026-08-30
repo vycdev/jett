@@ -66,11 +66,14 @@ parameter order. Struct construction likewise carries canonical field order
 and whether refinement validation produces a `result`. Source-defined method
 calls carry the exact concrete body selected by type checking, including
 interface dispatch; HIR does not rediscover those decisions from dotted names.
-The current direct-AST pipeline node is transient: unhandled steps lower to
-nested checked HIR calls with the piped value synthesized as argument 1. A
-step-local `handle` shares the general handle lowering path and remains staged
-until that representation is implemented. Source `list(...)` and `map(...)`
-become typed HIR aggregate constructors without changing lexical evaluation.
+The current direct-AST pipeline node is transient: its steps lower to nested
+checked HIR calls with the piped value synthesized as argument 1. Result,
+optional, and refinement-boundary handles share one explicit HIR form holding
+the target, failure kind, optional error local, and failure block. `default`
+yields to that nearest handle while `return` still exits the function. A
+step-local handle wraps only its intermediate call, so its success or fallback
+continues into the next step. Source wrapper and collection constructors become
+typed HIR operations without changing lexical evaluation.
 
 The direct AST remains the initial frontend boundary, and the tree-walking
 interpreter remains available while HIR coverage grows. The later lossless CST

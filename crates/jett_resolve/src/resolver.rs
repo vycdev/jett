@@ -1149,6 +1149,20 @@ impl Resolver {
                     for arg in &step.extra_args {
                         self.resolve_call_arg(arg, item_index);
                     }
+                    if let Some(handle) = &step.handle {
+                        let scope = self.push_scope();
+                        if let Some(binding) = &handle.error_name {
+                            self.declare_local_without_unused_warning(
+                                &binding.name,
+                                DefKind::Variable,
+                                binding.span,
+                            );
+                        }
+                        for stmt in &handle.body.stmts {
+                            self.resolve_stmt(stmt, item_index);
+                        }
+                        self.pop_scope(scope);
+                    }
                 }
             }
             Expr::At(expr, _state_name, _) => {

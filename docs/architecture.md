@@ -776,11 +776,13 @@ arguments are normalized to parameter order while retaining lexical evaluation
 order explicitly; source-defined interface and type-module calls select
 concrete method bodies; struct construction records canonical field order and
 refinement validation; struct field access uses dense field IDs; list/map
-constructors preserve lexical element order; and unhandled pipelines become
-nested checked calls with the piped value as synthetic argument 1. Typed
+constructors preserve lexical element order; and pipelines become nested
+checked calls with the piped value as synthetic argument 1. Result, optional,
+and refinement-boundary handles are explicit typed HIR operations; their
+failure blocks distinguish local `default` fallback from function `return`,
+and step-local handles wrap only their intermediate pipeline call. Typed
 parameters and locals, direct user calls, core expressions, returns, branches,
-and loops are also covered. Pipeline-step handles remain staged with general
-handle lowering. Remaining source constructs are staged by the
+and loops are also covered. Remaining source constructs are staged by the
 [initial HIR lowering plan](active/hir_lowering_plan.md).
 
 ### Purpose
@@ -800,7 +802,7 @@ concrete owner and canonical interface in their identity.
 
 1. **Monomorphization:** Generate concrete versions of all generic functions for each type parameter combination used in the program.
 2. **Method-target materialization:** the checked target for `Speaker.speak(view my_dog)` becomes the specific `implement Speaker for Dog` HIR function.
-3. **Pipeline normalization:** unhandled `value into f(extra)` steps become nested checked calls with `value` as synthetic argument 1; step-local handles lower with the general handle representation in a later slice.
+3. **Pipeline normalization:** `value into f(extra)` steps become nested checked calls with `value` as synthetic argument 1; a step-local handle explicitly wraps that step before its unwrapped value continues.
 4. **Collection construction:** source `list(...)` and `map(...)` become typed HIR aggregate constructors while preserving lexical evaluation order.
 5. **Auto-view for field access:** `self.x` is annotated as an implicit view operation.
 6. **Explicit copyability:** Numeric primitives, `bool`, `nothing`, and immutable
