@@ -1,7 +1,7 @@
 # Initial HIR Lowering Plan
 
-Status: accepted boundary; generic-instantiation lowering implemented for the
-current core HIR subset.
+Status: accepted boundary; generic instantiations plus the first aggregate and
+method slice are implemented for the current HIR subset.
 
 Tracked by [#20](https://github.com/vycdev/jett/issues/20).
 
@@ -29,6 +29,8 @@ type identities; they may not persist interner indices.
 `SourceOrigin` is supplied explicitly for every source file. HIR never infers
 authority from `FileId`, path spelling, namespace spelling, or a reserved
 numeric range. Namespace aliases are lookup-only and never enter HIR identity.
+An interface-implementation method identity includes both the concrete owner
+and canonical interface so two same-named interface methods cannot collide.
 
 Every HIR expression has one checked `TypeId` and source span. Every function,
 parameter, and local has a deterministic dense HIR ID assigned in canonical
@@ -43,11 +45,14 @@ authorization. HIR consumes accepted facts and makes execution choices
 explicit. It does not turn runtime booleans into type proofs or recognize
 trusted hooks by spelling.
 
-HIR owns deterministic concrete-function discovery, monomorphization, method
-resolution, removal of syntax-only forms, explicit execution operations, and a
-backend-neutral typed input for MIR. MIR owns control-flow graphs, definitive
-ownership dataflow, drop placement, and backend-independent validation.
-Backend adapters may not redefine HIR language policy.
+HIR owns deterministic concrete-function discovery, monomorphization,
+materialization of checked method targets, removal of syntax-only forms,
+explicit execution operations, and a backend-neutral typed input for MIR. The
+typechecker selects the legal concrete source method because interface dispatch
+depends on checked argument types; HIR assigns that body a deterministic
+`FunctionId`. MIR owns control-flow graphs, definitive ownership dataflow, drop
+placement, and backend-independent validation. Backend adapters may not
+redefine HIR language policy.
 
 ## Generic Instantiation Contract
 
@@ -77,8 +82,14 @@ enter the manifest. Recursive discovery reserves identity before lowering.
    manifest and per-instantiation expression types and nested-call targets from
    `jett_typecheck`; lower explicit, inferred, repeated, nested, and recursive
    generic calls to concrete HIR function identities.
-3. Resolve named arguments, methods, fields, constructors, pipelines, handles,
-   matches, collections, reflection, and trusted calls into core HIR forms.
+3. **In progress:** named arguments, source-defined method targets, struct
+   fields, and struct constructors now lower into canonical core forms while
+   retaining lexical left-to-right argument evaluation. The checker exports
+   parameter permutations, concrete method bodies, constructor targets, and
+   refinement-validation requirements, including separate facts inside generic
+   instantiations. Bitfield/machine fields and constructors,
+   compiler intrinsics, pipelines, handles, matches, collections, reflection,
+   and trusted calls remain staged.
 4. Add deterministic HIR snapshots and wire HIR into the driver after every
    accepted source construct either lowers or has an explicit staged error.
 5. Freeze the HIR validator and begin the HIR-to-MIR contract in #22.

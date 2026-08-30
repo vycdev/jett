@@ -61,6 +61,12 @@ explicit ownership operations, capabilities, trusted source origin, and source
 provenance. Generic function identity is the canonical declaration plus its
 concrete type arguments.
 
+Named call arguments reach HIR only as a checked permutation into canonical
+parameter order. Struct construction likewise carries canonical field order
+and whether refinement validation produces a `result`. Source-defined method
+calls carry the exact concrete body selected by type checking, including
+interface dispatch; HIR does not rediscover those decisions from dotted names.
+
 The direct AST remains the initial frontend boundary, and the tree-walking
 interpreter remains available while HIR coverage grows. The later lossless CST
 will lower into that same AST. The staged compiler contract is recorded in the
@@ -6654,6 +6660,11 @@ Every function always has a `returns` clause — functions that produce no value
 **Every code path must end with an explicit `return` — except `returns nothing` functions.** A function that `returns int64` must have `return <value>` on every code path. If any path is missing a return, the compiler rejects it. The one exception: functions that `returns nothing` may omit the final `return nothing` — the function implicitly returns when execution reaches the end. Early `return nothing` is still allowed for exiting mid-function.
 
 Named arguments work in both struct construction AND function calls. Any parameter can be passed by name for clarity. This allows `GuiCapability.create_text_field(gui, label, width: 200, height: 30)` — mixing positional and named arguments in a single call.
+
+Argument expressions are always evaluated once in lexical left-to-right source
+order. Named arguments change which parameter receives a value, not when the
+expression producing that value runs. HIR stores values in canonical parameter
+or field order and carries the original evaluation permutation explicitly.
 
 ### Conditionals
 

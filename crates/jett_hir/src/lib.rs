@@ -9,7 +9,10 @@ use std::collections::HashMap;
 use jett_common::{FileId, SourceOrigin, Span};
 use jett_parser::ast::{self, Expr, Item, Module, Stmt};
 use jett_resolve::{DefId, DefKind, ResolveResult};
-use jett_typecheck::{CheckResult, CheckedGenericCall, CheckedGenericFunctionInstantiation};
+use jett_typecheck::{
+    CheckResult, CheckedCallArgumentOrder, CheckedGenericCall, CheckedGenericFunctionInstantiation,
+    CheckedMethodCall, CheckedMethodDefinition, CheckedStructConstruction,
+};
 use jett_types::{Type, TypeId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -30,6 +33,15 @@ impl LocalId {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FieldId(u32);
+
+impl FieldId {
+    pub fn index(self) -> u32 {
+        self.0
+    }
+}
+
 /// Canonical declaration identity. Resolver `DefId`s are not part of it
 /// because they are allocated afresh in each compiler session.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -43,6 +55,7 @@ pub struct DeclarationId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DeclarationKind {
     Function,
+    Method,
 }
 
 /// One concrete in-memory function identity. Type arguments are empty for an
@@ -64,7 +77,7 @@ pub struct Program {
 pub struct Function {
     pub id: FunctionId,
     pub identity: FunctionIdentity,
-    pub source_definition: DefId,
+    pub source_definition: Option<DefId>,
     pub params: Vec<Param>,
     pub return_type: TypeId,
     pub locals: Vec<Local>,
@@ -161,6 +174,20 @@ pub enum ExpressionKind {
     Call {
         function: FunctionId,
         args: Vec<Expression>,
+        /// Parameter indexes in lexical source evaluation order.
+        evaluation_order: Vec<usize>,
+    },
+    StructConstruct {
+        struct_type: TypeId,
+        fields: Vec<Expression>,
+        /// Field indexes in lexical source evaluation order.
+        evaluation_order: Vec<usize>,
+        validates_refinements: bool,
+    },
+    Field {
+        base: Box<Expression>,
+        owner_type: TypeId,
+        field: FieldId,
     },
     View(Box<Expression>),
     Clone(Box<Expression>),
@@ -210,15 +237,21 @@ pub fn lower(
 
 struct FunctionSource<'a> {
     id: FunctionId,
-    definition: DefId,
+    definition: Option<DefId>,
     function: &'a ast::FunctionDef,
     instantiation: Option<CheckedGenericFunctionInstantiation>,
+    method: Option<CheckedMethodDefinition>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct FunctionKey {
-    definition: DefId,
-    concrete_args: Vec<TypeId>,
+enum FunctionKey {
+    Definition {
+        definition: DefId,
+        concrete_args: Vec<TypeId>,
+    },
+    Method {
+        source_span: Span,
+    },
 }
 
 struct Lowerer<'a> {
@@ -278,7 +311,7 @@ impl<'a> Lowerer<'a> {
                     };
                     let id = FunctionId(self.functions.len() as u32);
                     self.function_ids.insert(
-                        FunctionKey {
+                        FunctionKey::Definition {
                             definition,
                             concrete_args: Vec::new(),
                         },
@@ -286,9 +319,10 @@ impl<'a> Lowerer<'a> {
                     );
                     self.functions.push(FunctionSource {
                         id,
-                        definition,
+                        definition: Some(definition),
                         function,
                         instantiation: None,
+                        method: None,
                     });
                 }
                 Item::Function(function) => {
@@ -313,7 +347,7 @@ impl<'a> Lowerer<'a> {
             };
             let id = FunctionId(self.functions.len() as u32);
             self.function_ids.insert(
-                FunctionKey {
+                FunctionKey::Definition {
                     definition: instantiation.definition,
                     concrete_args: instantiation.concrete_args.clone(),
                 },
@@ -321,11 +355,43 @@ impl<'a> Lowerer<'a> {
             );
             self.functions.push(FunctionSource {
                 id,
-                definition: instantiation.definition,
+                definition: Some(instantiation.definition),
                 function,
                 instantiation: Some(instantiation),
+                method: None,
             });
         }
+
+        for method in self.check.method_definitions.clone() {
+            let Some(function) = self.method_at(method.source_span) else {
+                self.error(method.source_span, "checked method has no source body");
+                continue;
+            };
+            let id = FunctionId(self.functions.len() as u32);
+            self.function_ids.insert(
+                FunctionKey::Method {
+                    source_span: method.source_span,
+                },
+                id,
+            );
+            self.functions.push(FunctionSource {
+                id,
+                definition: None,
+                function,
+                instantiation: None,
+                method: Some(method),
+            });
+        }
+    }
+
+    fn method_at(&self, span: Span) -> Option<&'a ast::FunctionDef> {
+        self.module.items.iter().find_map(|item| match item {
+            Item::Struct(definition) => {
+                definition.methods.iter().find(|method| method.span == span)
+            }
+            Item::Implement(block) => block.methods.iter().find(|method| method.span == span),
+            _ => None,
+        })
     }
 
     fn lower_function(&mut self, source: FunctionSource<'a>) -> Option<Function> {
@@ -339,45 +405,76 @@ impl<'a> Lowerer<'a> {
                 return None;
             }
         };
-        let (parameter_types, return_type, expression_types, generic_calls, concrete_args) =
-            if let Some(instantiation) = &source.instantiation {
-                (
-                    instantiation.parameter_types.clone(),
-                    instantiation.return_type,
-                    instantiation.type_map.clone(),
-                    instantiation.generic_calls.clone(),
-                    instantiation.concrete_args.clone(),
-                )
-            } else {
-                let function_ty = match self.check.definition_types.get(&source.definition) {
-                    Some(ty) => *ty,
-                    None => {
-                        self.error(source.function.name.span, "function has no checked type");
-                        return None;
-                    }
-                };
-                let (parameter_types, return_type) = match self.check.interner.resolve(function_ty)
-                {
-                    Type::Function {
-                        params,
-                        return_type,
-                    } => (params.clone(), *return_type),
-                    _ => {
-                        self.error(
-                            source.function.name.span,
-                            "definition is not a checked function",
-                        );
-                        return None;
-                    }
-                };
-                (
-                    parameter_types,
-                    return_type,
-                    self.check.type_map.clone(),
-                    self.check.generic_calls.clone(),
-                    Vec::new(),
-                )
+        let (
+            parameter_types,
+            return_type,
+            expression_types,
+            generic_calls,
+            call_argument_orders,
+            method_calls,
+            struct_constructions,
+            concrete_args,
+        ) = if let Some(instantiation) = &source.instantiation {
+            (
+                instantiation.parameter_types.clone(),
+                instantiation.return_type,
+                instantiation.type_map.clone(),
+                instantiation.generic_calls.clone(),
+                instantiation.call_argument_orders.clone(),
+                instantiation.method_calls.clone(),
+                instantiation.struct_constructions.clone(),
+                instantiation.concrete_args.clone(),
+            )
+        } else if let Some(method) = &source.method {
+            (
+                method.parameter_types.clone(),
+                method.return_type,
+                self.check.type_map.clone(),
+                self.check.generic_calls.clone(),
+                self.check.call_argument_orders.clone(),
+                self.check.method_calls.clone(),
+                self.check.struct_constructions.clone(),
+                Vec::new(),
+            )
+        } else {
+            let Some(definition) = source.definition else {
+                self.error(
+                    source.function.span,
+                    "function source has no checked identity",
+                );
+                return None;
             };
+            let function_ty = match self.check.definition_types.get(&definition) {
+                Some(ty) => *ty,
+                None => {
+                    self.error(source.function.name.span, "function has no checked type");
+                    return None;
+                }
+            };
+            let (parameter_types, return_type) = match self.check.interner.resolve(function_ty) {
+                Type::Function {
+                    params,
+                    return_type,
+                } => (params.clone(), *return_type),
+                _ => {
+                    self.error(
+                        source.function.name.span,
+                        "definition is not a checked function",
+                    );
+                    return None;
+                }
+            };
+            (
+                parameter_types,
+                return_type,
+                self.check.type_map.clone(),
+                self.check.generic_calls.clone(),
+                self.check.call_argument_orders.clone(),
+                self.check.method_calls.clone(),
+                self.check.struct_constructions.clone(),
+                Vec::new(),
+            )
+        };
         if parameter_types.len() != source.function.params.len() {
             self.error(
                 source.function.span,
@@ -387,8 +484,15 @@ impl<'a> Lowerer<'a> {
         }
 
         let function_ids = self.function_ids.clone();
-        let mut body_lowerer =
-            BodyLowerer::new(self, &function_ids, &expression_types, &generic_calls);
+        let mut body_lowerer = BodyLowerer::new(
+            self,
+            &function_ids,
+            &expression_types,
+            &generic_calls,
+            &call_argument_orders,
+            &method_calls,
+            &struct_constructions,
+        );
         let mut params = Vec::with_capacity(source.function.params.len());
         for (param, ty) in source.function.params.iter().zip(parameter_types) {
             let Some(definition) = body_lowerer
@@ -422,16 +526,49 @@ impl<'a> Lowerer<'a> {
         }
         let body = body_lowerer.lower_block(&source.function.body);
         let locals = body_lowerer.locals;
-        let definition = self.resolve.scope_table.def(source.definition);
+        let (namespace, name, kind) = if let Some(method) = &source.method {
+            if let Some(interface) = &method.interface_name {
+                (
+                    String::new(),
+                    format!(
+                        "{} as {interface}.{}",
+                        method.owner_name, source.function.name.name
+                    ),
+                    DeclarationKind::Method,
+                )
+            } else {
+                let (namespace, owner) = method
+                    .owner_name
+                    .rsplit_once('.')
+                    .map(|(namespace, owner)| (namespace.to_string(), owner.to_string()))
+                    .unwrap_or_else(|| (String::new(), method.owner_name.clone()));
+                (
+                    namespace,
+                    format!("{owner}.{}", source.function.name.name),
+                    DeclarationKind::Method,
+                )
+            }
+        } else {
+            let definition = self.resolve.scope_table.def(
+                source
+                    .definition
+                    .expect("ordinary function definition checked above"),
+            );
+            (
+                definition.namespace.clone().unwrap_or_default(),
+                source.function.name.name.clone(),
+                DeclarationKind::Function,
+            )
+        };
 
         Some(Function {
             id: source.id,
             identity: FunctionIdentity {
                 declaration: DeclarationId {
                     origin,
-                    namespace: definition.namespace.clone().unwrap_or_default(),
-                    name: source.function.name.name.clone(),
-                    kind: DeclarationKind::Function,
+                    namespace,
+                    name,
+                    kind,
                 },
                 type_arguments: concrete_args,
             },
@@ -466,6 +603,9 @@ struct BodyLowerer<'lowerer, 'program> {
     function_ids: &'lowerer HashMap<FunctionKey, FunctionId>,
     expression_types: &'lowerer HashMap<Span, TypeId>,
     generic_calls: &'lowerer HashMap<Span, CheckedGenericCall>,
+    call_argument_orders: &'lowerer HashMap<Span, CheckedCallArgumentOrder>,
+    method_calls: &'lowerer HashMap<Span, CheckedMethodCall>,
+    struct_constructions: &'lowerer HashMap<Span, CheckedStructConstruction>,
     local_ids: HashMap<DefId, LocalId>,
     locals: Vec<Local>,
 }
@@ -476,12 +616,18 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         function_ids: &'lowerer HashMap<FunctionKey, FunctionId>,
         expression_types: &'lowerer HashMap<Span, TypeId>,
         generic_calls: &'lowerer HashMap<Span, CheckedGenericCall>,
+        call_argument_orders: &'lowerer HashMap<Span, CheckedCallArgumentOrder>,
+        method_calls: &'lowerer HashMap<Span, CheckedMethodCall>,
+        struct_constructions: &'lowerer HashMap<Span, CheckedStructConstruction>,
     ) -> Self {
         Self {
             parent,
             function_ids,
             expression_types,
             generic_calls,
+            call_argument_orders,
+            method_calls,
+            struct_constructions,
             local_ids: HashMap::new(),
             locals: Vec::new(),
         }
@@ -656,6 +802,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 op: lower_unary_op(*op),
                 value: Box::new(self.lower_expression(value)?),
             },
+            Expr::FieldAccess(base, field, _) => self.lower_field(base, field)?,
             Expr::Call(callee, args, _) | Expr::GenericCall(callee, _, args, _) => {
                 self.lower_call(callee, args, span)?
             }
@@ -685,6 +832,37 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         args: &[ast::CallArg],
         call_span: Span,
     ) -> Option<ExpressionKind> {
+        if let Some(construction) = self.struct_constructions.get(&call_span) {
+            let (fields, evaluation_order) =
+                self.lower_arguments_in_parameter_order(args, call_span)?;
+            return Some(ExpressionKind::StructConstruct {
+                struct_type: construction.struct_type,
+                fields,
+                evaluation_order,
+                validates_refinements: construction.validates_refinements,
+            });
+        }
+
+        if let Some(method) = self.method_calls.get(&call_span) {
+            let key = FunctionKey::Method {
+                source_span: method.source_span,
+            };
+            let Some(function) = self.function_ids.get(&key).copied() else {
+                self.parent.error(
+                    call_span,
+                    "method call target has no checked concrete HIR function",
+                );
+                return None;
+            };
+            let (args, evaluation_order) =
+                self.lower_arguments_in_parameter_order(args, call_span)?;
+            return Some(ExpressionKind::Call {
+                function,
+                args,
+                evaluation_order,
+            });
+        }
+
         let Expr::Ident(ident) = callee else {
             self.parent.error(
                 callee.span(),
@@ -705,12 +883,12 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 );
                 return None;
             }
-            FunctionKey {
+            FunctionKey::Definition {
                 definition,
                 concrete_args: generic.concrete_args.clone(),
             }
         } else {
-            FunctionKey {
+            FunctionKey::Definition {
                 definition,
                 concrete_args: Vec::new(),
             }
@@ -722,20 +900,97 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             );
             return None;
         };
-        let mut lowered_args = Vec::with_capacity(args.len());
-        for arg in args {
-            if arg.name.is_some() {
-                self.parent.error(
-                    arg.span,
-                    "named arguments are not yet lowered to positional HIR arguments",
-                );
-                return None;
-            }
-            lowered_args.push(self.lower_expression(&arg.value)?);
-        }
+        let (lowered_args, evaluation_order) =
+            self.lower_arguments_in_parameter_order(args, call_span)?;
         Some(ExpressionKind::Call {
             function,
             args: lowered_args,
+            evaluation_order,
+        })
+    }
+
+    fn lower_arguments_in_parameter_order(
+        &mut self,
+        args: &[ast::CallArg],
+        call_span: Span,
+    ) -> Option<(Vec<Expression>, Vec<usize>)> {
+        let source_indices = if let Some(order) = self.call_argument_orders.get(&call_span) {
+            order.source_indices.clone()
+        } else if args.iter().all(|arg| arg.name.is_none()) {
+            (0..args.len()).collect()
+        } else {
+            self.parent.error(
+                call_span,
+                "named call arguments have no checked parameter order",
+            );
+            return None;
+        };
+        let mut seen = vec![false; args.len()];
+        let invalid_permutation = source_indices.iter().any(|&index| {
+            if index >= args.len() || seen[index] {
+                true
+            } else {
+                seen[index] = true;
+                false
+            }
+        });
+        if source_indices.len() != args.len() || invalid_permutation {
+            self.parent
+                .error(call_span, "checked call argument order is invalid");
+            return None;
+        }
+        let evaluation_order = (0..args.len())
+            .map(|source_index| {
+                source_indices
+                    .iter()
+                    .position(|&candidate| candidate == source_index)
+                    .expect("validated call order must be a permutation")
+            })
+            .collect();
+        let lowered = source_indices
+            .into_iter()
+            .map(|index| self.lower_expression(&args[index].value))
+            .collect::<Option<Vec<_>>>()?;
+        Some((lowered, evaluation_order))
+    }
+
+    fn lower_field(&mut self, base: &Expr, field: &ast::Ident) -> Option<ExpressionKind> {
+        let base = self.lower_expression(base)?;
+        let owner_type = match self.parent.check.interner.resolve(base.ty) {
+            Type::Struct(_) => base.ty,
+            Type::Secret(inner)
+                if matches!(self.parent.check.interner.resolve(*inner), Type::Struct(_)) =>
+            {
+                *inner
+            }
+            _ => {
+                self.parent.error(
+                    field.span,
+                    "only checked struct fields are in the current HIR lowering subset",
+                );
+                return None;
+            }
+        };
+        let Type::Struct(struct_id) = *self.parent.check.interner.resolve(owner_type) else {
+            unreachable!("owner type was checked as a struct")
+        };
+        let Some(field_index) = self
+            .parent
+            .check
+            .interner
+            .resolve_struct(struct_id)
+            .fields
+            .iter()
+            .position(|(name, _)| name == &field.name)
+        else {
+            self.parent
+                .error(field.span, "checked struct field has no canonical index");
+            return None;
+        };
+        Some(ExpressionKind::Field {
+            base: Box::new(base),
+            owner_type,
+            field: FieldId(field_index as u32),
         })
     }
 
@@ -1019,5 +1274,131 @@ function main() returns int64:
             panic!("expected recursive concrete call");
         };
         assert_eq!(*function, repeat.id);
+    }
+
+    #[test]
+    fn lowers_struct_construction_fields_and_named_calls_to_canonical_order() {
+        let source = r#"namespace app
+struct Point:
+    x: int64
+    y: int64
+function difference(left: int64, right: int64) returns int64:
+    return left - right
+function main() returns int64:
+    Point point = Point(y: 2, x: 7)
+    return difference(right: point.y, left: point.x)
+"#;
+        let program = lower_source(source);
+        let difference = &program.functions[0];
+        let main = &program.functions[1];
+
+        let StatementKind::Let { value, .. } = &main.body.statements[0].kind else {
+            panic!("expected point construction");
+        };
+        let ExpressionKind::StructConstruct { fields, .. } = &value.kind else {
+            panic!("expected canonical struct construction");
+        };
+        assert!(matches!(fields[0].kind, ExpressionKind::Int(7)));
+        assert!(matches!(fields[1].kind, ExpressionKind::Int(2)));
+
+        let StatementKind::Return(Some(Expression {
+            kind:
+                ExpressionKind::Call {
+                    function,
+                    args,
+                    evaluation_order,
+                },
+            ..
+        })) = &main.body.statements[1].kind
+        else {
+            panic!("expected named function call");
+        };
+        assert_eq!(*function, difference.id);
+        assert_eq!(evaluation_order, &[1, 0]);
+        let ExpressionKind::Field { field, .. } = args[0].kind else {
+            panic!("expected left field argument");
+        };
+        assert_eq!(field.index(), 0);
+        let ExpressionKind::Field { field, .. } = args[1].kind else {
+            panic!("expected right field argument");
+        };
+        assert_eq!(field.index(), 1);
+    }
+
+    #[test]
+    fn lowers_interface_calls_to_the_concrete_method_body() {
+        let source = r#"namespace app
+interface Scored:
+    function score(view self: Scored, bonus: int64) returns int64
+struct User:
+    points: int64
+implement Scored for User:
+    function score(view self: User, bonus: int64) returns int64:
+        return self.points + bonus
+function main() returns int64:
+    User user = User(points: 7)
+    return Scored.score(bonus: 5, self: view user)
+"#;
+        let program = lower_source(source);
+        assert_eq!(program.functions.len(), 2);
+        let main = &program.functions[0];
+        let method = &program.functions[1];
+        assert_eq!(method.identity.declaration.kind, DeclarationKind::Method);
+        assert_eq!(
+            method.identity.declaration.name,
+            "app.User as app.Scored.score"
+        );
+
+        let StatementKind::Return(Some(Expression {
+            kind:
+                ExpressionKind::Call {
+                    function,
+                    args,
+                    evaluation_order,
+                },
+            ..
+        })) = &main.body.statements[1].kind
+        else {
+            panic!("expected concrete method call");
+        };
+        assert_eq!(*function, method.id);
+        assert_eq!(evaluation_order, &[1, 0]);
+        assert!(matches!(args[0].kind, ExpressionKind::View(_)));
+        assert!(matches!(args[1].kind, ExpressionKind::Int(5)));
+    }
+
+    #[test]
+    fn keeps_named_argument_orders_inside_generic_instantiations() {
+        let source = r#"namespace app
+function inner[T](first: T, second: T) returns T:
+    return first
+function outer[T](first: T, second: T) returns T:
+    return inner[T](second: second, first: first)
+function main() returns int64:
+    return outer[int64](second: 2, first: 7)
+"#;
+        let program = lower_source(source);
+        let main = &program.functions[0];
+        let outer = &program.functions[1];
+
+        for function in [main, outer] {
+            let StatementKind::Return(Some(Expression {
+                kind:
+                    ExpressionKind::Call {
+                        args,
+                        evaluation_order,
+                        ..
+                    },
+                ..
+            })) = &function.body.statements[0].kind
+            else {
+                panic!("expected named generic call");
+            };
+            assert_eq!(evaluation_order, &[1, 0]);
+            assert!(matches!(
+                args[0].kind,
+                ExpressionKind::Int(7) | ExpressionKind::Local(_)
+            ));
+        }
     }
 }

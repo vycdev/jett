@@ -38,6 +38,12 @@ pub struct CheckedGenericFunctionInstantiation {
     pub type_map: HashMap<Span, TypeId>,
     /// Nested generic calls selected while checking this concrete body.
     pub generic_calls: HashMap<Span, CheckedGenericCall>,
+    /// Source arguments normalized to parameter order for calls in this body.
+    pub call_argument_orders: HashMap<Span, CheckedCallArgumentOrder>,
+    /// Concrete source-defined method targets selected in this body.
+    pub method_calls: HashMap<Span, CheckedMethodCall>,
+    /// Concrete struct construction targets selected in this body.
+    pub struct_constructions: HashMap<Span, CheckedStructConstruction>,
 }
 
 /// The concrete generic target selected for one checked call expression.
@@ -45,6 +51,38 @@ pub struct CheckedGenericFunctionInstantiation {
 pub struct CheckedGenericCall {
     pub definition: DefId,
     pub concrete_args: Vec<TypeId>,
+}
+
+/// The checked permutation from parameter order to source argument order.
+///
+/// HIR consumes this to erase named arguments without repeating binding rules.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckedCallArgumentOrder {
+    pub source_indices: Vec<usize>,
+}
+
+/// One source-defined method body available to HIR.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckedMethodDefinition {
+    pub source_span: Span,
+    pub owner_type: TypeId,
+    pub owner_name: String,
+    pub interface_name: Option<String>,
+    pub parameter_types: Vec<TypeId>,
+    pub return_type: TypeId,
+}
+
+/// The concrete source-defined method selected for a checked call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckedMethodCall {
+    pub source_span: Span,
+}
+
+/// The concrete struct type selected for a checked construction call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckedStructConstruction {
+    pub struct_type: TypeId,
+    pub validates_refinements: bool,
 }
 
 /// The result of type checking.
@@ -62,6 +100,14 @@ pub struct CheckResult {
     pub definition_types: HashMap<DefId, TypeId>,
     /// Generic calls made outside generic function bodies, keyed by call span.
     pub generic_calls: HashMap<Span, CheckedGenericCall>,
+    /// Source arguments normalized to parameter order, keyed by call span.
+    pub call_argument_orders: HashMap<Span, CheckedCallArgumentOrder>,
+    /// Source-defined method bodies in deterministic declaration order.
+    pub method_definitions: Vec<CheckedMethodDefinition>,
+    /// Concrete source-defined method targets, keyed by call span.
+    pub method_calls: HashMap<Span, CheckedMethodCall>,
+    /// Checked struct construction targets, keyed by call span.
+    pub struct_constructions: HashMap<Span, CheckedStructConstruction>,
     /// Accepted concrete generic bodies in deterministic discovery order.
     pub generic_function_instantiations: Vec<CheckedGenericFunctionInstantiation>,
     /// The type interner, containing all types encountered during checking.
@@ -107,6 +153,10 @@ pub fn check_with_options(
         type_map: checker.type_map,
         definition_types: checker.type_env,
         generic_calls: checker.generic_calls,
+        call_argument_orders: checker.call_argument_orders,
+        method_definitions: checker.method_definitions,
+        method_calls: checker.method_calls,
+        struct_constructions: checker.struct_constructions,
         generic_function_instantiations: checker.generic_function_instantiations,
         interner: checker.interner,
         reflection_metadata,
@@ -190,6 +240,9 @@ struct ActiveGenericInstantiation {
     manifest_index: usize,
     type_map: HashMap<Span, TypeId>,
     generic_calls: HashMap<Span, CheckedGenericCall>,
+    call_argument_orders: HashMap<Span, CheckedCallArgumentOrder>,
+    method_calls: HashMap<Span, CheckedMethodCall>,
+    struct_constructions: HashMap<Span, CheckedStructConstruction>,
 }
 
 // ---------------------------------------------------------------------------
@@ -226,6 +279,8 @@ struct TypeChecker<'a> {
     /// User-defined function name -> parameter and return types. Namespaced
     /// declarations are registered under their canonical `namespace.name`.
     function_signatures: HashMap<String, (Vec<TypeId>, TypeId)>,
+    /// User-function parameter names in declaration order.
+    function_parameter_names: HashMap<String, Vec<String>>,
     /// Function signatures originating from compiler-shipped stdlib files.
     trusted_stdlib_function_signatures: HashMap<String, (Vec<TypeId>, TypeId)>,
     /// Name of the function currently being type-checked (None outside functions).
@@ -303,6 +358,18 @@ struct TypeChecker<'a> {
     generic_function_instantiations: Vec<CheckedGenericFunctionInstantiation>,
     /// Concrete generic calls made outside a generic function body.
     generic_calls: HashMap<Span, CheckedGenericCall>,
+    /// Checked source-to-parameter permutations outside generic bodies.
+    call_argument_orders: HashMap<Span, CheckedCallArgumentOrder>,
+    /// Source method bodies exported to HIR.
+    method_definitions: Vec<CheckedMethodDefinition>,
+    /// (owner type, method name) -> exported method definition index.
+    method_definitions_by_owner: HashMap<(TypeId, String), usize>,
+    /// (interface type, owner type, method name) -> definition index.
+    interface_method_definitions: HashMap<(TypeId, TypeId, String), usize>,
+    /// Checked method calls outside generic bodies.
+    method_calls: HashMap<Span, CheckedMethodCall>,
+    /// Checked struct constructions outside generic bodies.
+    struct_constructions: HashMap<Span, CheckedStructConstruction>,
     /// Per-instantiation facts currently being collected. Nested generic body
     /// checks push another scope so their spans never overwrite the caller's.
     active_generic_instantiations: Vec<ActiveGenericInstantiation>,
@@ -342,6 +409,7 @@ impl<'a> TypeChecker<'a> {
             impl_methods_by_type: HashMap::new(),
             purity_map: HashMap::new(),
             function_signatures: HashMap::new(),
+            function_parameter_names: HashMap::new(),
             trusted_stdlib_function_signatures: HashMap::new(),
             current_function_name: None,
             current_function_pure: false,
@@ -375,6 +443,12 @@ impl<'a> TypeChecker<'a> {
             generic_instantiation_indices: HashMap::new(),
             generic_function_instantiations: Vec::new(),
             generic_calls: HashMap::new(),
+            call_argument_orders: HashMap::new(),
+            method_definitions: Vec::new(),
+            method_definitions_by_owner: HashMap::new(),
+            interface_method_definitions: HashMap::new(),
+            method_calls: HashMap::new(),
+            struct_constructions: HashMap::new(),
             active_generic_instantiations: Vec::new(),
             specialize_reflection_branches: false,
             current_respond_type: None,
@@ -4062,6 +4136,18 @@ impl<'a> TypeChecker<'a> {
                                 }
                                 self.function_signatures.insert(name, signature.clone());
                             }
+                            let parameter_names = decl
+                                .params
+                                .iter()
+                                .map(|param| param.name.name.clone())
+                                .collect::<Vec<_>>();
+                            for name in Self::function_lookup_names(
+                                current_namespace.as_deref(),
+                                &decl.name.name,
+                            ) {
+                                self.function_parameter_names
+                                    .insert(name, parameter_names.clone());
+                            }
                         }
                     }
                 }
@@ -4078,6 +4164,18 @@ impl<'a> TypeChecker<'a> {
                                     .insert(name.clone(), signature.clone());
                             }
                             self.function_signatures.insert(name, signature.clone());
+                        }
+                        let parameter_names = func
+                            .params
+                            .iter()
+                            .map(|param| param.name.name.clone())
+                            .collect::<Vec<_>>();
+                        for name in Self::function_lookup_names(
+                            current_namespace.as_deref(),
+                            &func.name.name,
+                        ) {
+                            self.function_parameter_names
+                                .insert(name, parameter_names.clone());
                         }
                     } else {
                         // Generic function — store the template; type checking happens at call sites.
@@ -4626,7 +4724,7 @@ impl<'a> TypeChecker<'a> {
             self.reflection_fields_for_struct_def(def, namespace, fields.as_slice());
         self.reflection_fields_by_id
             .insert(ty, (canonical_name.clone(), reflection_fields));
-        let methods = def
+        let methods: Vec<FunctionSig> = def
             .methods
             .iter()
             .map(|method| self.method_signature(method))
@@ -4635,11 +4733,14 @@ impl<'a> TypeChecker<'a> {
         self.interner.update_struct(
             sid,
             TypeStructDef {
-                name: canonical_name,
+                name: canonical_name.clone(),
                 fields,
-                methods,
+                methods: methods.clone(),
             },
         );
+        for (method, signature) in def.methods.iter().zip(methods) {
+            self.register_checked_method_definition(ty, &canonical_name, method, &signature, None);
+        }
     }
 
     fn finish_interface(&mut self, def: &ast::InterfaceDecl, namespace: Option<&str>) {
@@ -5031,9 +5132,19 @@ impl<'a> TypeChecker<'a> {
             .iter()
             .map(|method| {
                 let sig = self.method_signature(method);
-                (method.name.name.clone(), sig)
+                (method, method.name.name.clone(), sig)
             })
             .collect();
+
+        for (method, _, sig) in &method_sigs {
+            self.register_checked_method_definition(
+                owner_ty,
+                &owner_name,
+                method,
+                sig,
+                Some(interface_ty),
+            );
+        }
 
         let impl_methods = self.impl_methods_by_type.entry(owner_ty).or_default();
         let interface_methods = self
@@ -5041,7 +5152,7 @@ impl<'a> TypeChecker<'a> {
             .entry((interface_ty, owner_ty))
             .or_default();
 
-        for (method_name, sig) in method_sigs {
+        for (_, method_name, sig) in method_sigs {
             self.purity_map
                 .insert(format!("{owner_name}.{method_name}"), sig.is_pure);
             self.purity_map
@@ -5442,6 +5553,9 @@ impl<'a> TypeChecker<'a> {
                         return_type,
                         type_map: HashMap::new(),
                         generic_calls: HashMap::new(),
+                        call_argument_orders: HashMap::new(),
+                        method_calls: HashMap::new(),
+                        struct_constructions: HashMap::new(),
                     });
                 index
             }
@@ -5469,6 +5583,9 @@ impl<'a> TypeChecker<'a> {
                     manifest_index,
                     type_map: HashMap::new(),
                     generic_calls: HashMap::new(),
+                    call_argument_orders: HashMap::new(),
+                    method_calls: HashMap::new(),
+                    struct_constructions: HashMap::new(),
                 });
         }
 
@@ -5484,6 +5601,13 @@ impl<'a> TypeChecker<'a> {
             let entry = &mut self.generic_function_instantiations[active.manifest_index];
             entry.type_map.extend(active.type_map);
             entry.generic_calls.extend(active.generic_calls);
+            entry
+                .call_argument_orders
+                .extend(active.call_argument_orders);
+            entry.method_calls.extend(active.method_calls);
+            entry
+                .struct_constructions
+                .extend(active.struct_constructions);
         }
 
         self.type_var_subst = old_subst;
@@ -5506,11 +5630,73 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn register_checked_method_definition(
+        &mut self,
+        owner_type: TypeId,
+        owner_name: &str,
+        method: &FunctionDef,
+        signature: &FunctionSig,
+        interface_type: Option<TypeId>,
+    ) {
+        let index = self.method_definitions.len();
+        self.method_definitions.push(CheckedMethodDefinition {
+            source_span: method.span,
+            owner_type,
+            owner_name: owner_name.to_string(),
+            interface_name: interface_type.map(|interface| self.type_name(interface)),
+            parameter_types: signature.params.iter().map(|(_, ty, _)| *ty).collect(),
+            return_type: signature.return_type,
+        });
+        self.method_definitions_by_owner
+            .insert((owner_type, method.name.name.clone()), index);
+        if let Some(interface_type) = interface_type {
+            self.interface_method_definitions.insert(
+                (interface_type, owner_type, method.name.name.clone()),
+                index,
+            );
+        }
+    }
+
     fn record_generic_call_target(&mut self, span: Span, call: CheckedGenericCall) {
         if let Some(active) = self.active_generic_instantiations.last_mut() {
             active.generic_calls.insert(span, call);
         } else {
             self.generic_calls.insert(span, call);
+        }
+    }
+
+    fn record_call_argument_order(&mut self, span: Span, source_indices: Vec<usize>) {
+        let order = CheckedCallArgumentOrder { source_indices };
+        if let Some(active) = self.active_generic_instantiations.last_mut() {
+            active.call_argument_orders.insert(span, order);
+        } else {
+            self.call_argument_orders.insert(span, order);
+        }
+    }
+
+    fn record_method_call(&mut self, span: Span, source_span: Span) {
+        let call = CheckedMethodCall { source_span };
+        if let Some(active) = self.active_generic_instantiations.last_mut() {
+            active.method_calls.insert(span, call);
+        } else {
+            self.method_calls.insert(span, call);
+        }
+    }
+
+    fn record_struct_construction(
+        &mut self,
+        span: Span,
+        struct_type: TypeId,
+        validates_refinements: bool,
+    ) {
+        let construction = CheckedStructConstruction {
+            struct_type,
+            validates_refinements,
+        };
+        if let Some(active) = self.active_generic_instantiations.last_mut() {
+            active.struct_constructions.insert(span, construction);
+        } else {
+            self.struct_constructions.insert(span, construction);
         }
     }
 
@@ -9855,21 +10041,24 @@ impl<'a> TypeChecker<'a> {
 
                     self.type_var_subst = old_subst;
 
-                    // Check argument count and types.
-                    if args.len() != param_types.len() {
-                        self.sink.emit(errors::argument_count_mismatch(
-                            function_name,
-                            param_types.len(),
-                            args.len(),
-                            span,
-                        ));
+                    let parameter_names = template
+                        .params
+                        .iter()
+                        .map(|param| param.name.name.clone())
+                        .collect::<Vec<_>>();
+                    let Some(argument_order) =
+                        self.bind_call_arguments(function_name, &parameter_names, args, span)
+                    else {
                         for arg in args {
                             self.check_expr(&arg.value);
                         }
                         return TypeInterner::ERROR;
-                    }
+                    };
+                    self.record_call_argument_order(span, argument_order.clone());
                     let mut arguments_match = true;
-                    for (arg, &expected) in args.iter().zip(param_types.iter()) {
+                    for (&source_index, &expected) in argument_order.iter().zip(param_types.iter())
+                    {
+                        let arg = &args[source_index];
                         let got = self.check_expr_for_expected(&arg.value, expected, false);
                         if !self.types_compatible(expected, got) {
                             arguments_match = false;
@@ -9881,8 +10070,15 @@ impl<'a> TypeChecker<'a> {
                         }
                     }
                     if arguments_match {
-                        let param_facts =
-                            self.reflection_param_facts_for_call(&template, &param_types, args);
+                        let ordered_args = argument_order
+                            .iter()
+                            .map(|&source_index| args[source_index].clone())
+                            .collect::<Vec<_>>();
+                        let param_facts = self.reflection_param_facts_for_call(
+                            &template,
+                            &param_types,
+                            &ordered_args,
+                        );
                         self.record_generic_call_for_template(span, &template, &concrete_args);
                         self.check_generic_function_instantiation(
                             function_name,
@@ -9977,6 +10173,18 @@ impl<'a> TypeChecker<'a> {
         } else {
             None
         };
+        let user_parameter_names = if user_function_signature.is_some() {
+            callee_name
+                .as_deref()
+                .and_then(|name| self.function_parameter_names.get(name).cloned())
+        } else {
+            None
+        };
+        let method_metadata = if builtin_signature.is_none() && user_function_signature.is_none() {
+            self.method_signature_for_callee(callee)
+        } else {
+            None
+        };
 
         let (param_types, return_type) = if let Some(signature) = builtin_signature {
             signature
@@ -10038,11 +10246,29 @@ impl<'a> TypeChecker<'a> {
             }
         };
 
-        // Check argument count.
-        if args.len() != param_types.len() {
-            let func_name = callee_name
-                .clone()
-                .unwrap_or_else(|| "<anonymous>".to_string());
+        let func_name = callee_name
+            .clone()
+            .unwrap_or_else(|| "<anonymous>".to_string());
+        let parameter_names = user_parameter_names.or_else(|| {
+            method_metadata.as_ref().map(|(_, signature)| {
+                signature
+                    .params
+                    .iter()
+                    .map(|(name, _, _)| name.clone())
+                    .collect()
+            })
+        });
+        let argument_order = if let Some(parameter_names) = parameter_names {
+            let Some(order) = self.bind_call_arguments(&func_name, &parameter_names, args, span)
+            else {
+                for arg in args {
+                    self.check_expr(&arg.value);
+                }
+                return return_type;
+            };
+            self.record_call_argument_order(span, order.clone());
+            order
+        } else if args.len() != param_types.len() {
             self.sink.emit(errors::argument_count_mismatch(
                 &func_name,
                 param_types.len(),
@@ -10054,12 +10280,15 @@ impl<'a> TypeChecker<'a> {
                 self.check_expr(&arg.value);
             }
             return return_type;
-        }
+        } else {
+            (0..args.len()).collect()
+        };
 
         // Check each argument type.
         let mut tainted_return = false;
         let mut checked_arg_types = Vec::with_capacity(args.len());
-        for (i, arg) in args.iter().enumerate() {
+        for (i, &source_index) in argument_order.iter().enumerate() {
+            let arg = &args[source_index];
             let param_ty = param_types[i];
             let arg_ty = self.check_expr_for_expected(&arg.value, param_ty, false);
             checked_arg_types.push(arg_ty);
@@ -10131,8 +10360,15 @@ impl<'a> TypeChecker<'a> {
         }
 
         if matches!(callee_name.as_deref(), Some("secret.compare")) {
-            let spans: Vec<_> = args.iter().map(|arg| arg.value.span()).collect();
+            let spans: Vec<_> = argument_order
+                .iter()
+                .map(|&index| args[index].value.span())
+                .collect();
             self.check_secret_compare_types(&checked_arg_types, &spans);
+        }
+
+        if let Some((declared_owner, _)) = method_metadata {
+            self.record_source_method_call(callee, declared_owner, &checked_arg_types, span);
         }
 
         if matches!(callee_name.as_deref(), Some("math.mod"))
@@ -10161,6 +10397,143 @@ impl<'a> TypeChecker<'a> {
         return_type
     }
 
+    fn bind_call_arguments(
+        &mut self,
+        function_name: &str,
+        parameter_names: &[String],
+        args: &[ast::CallArg],
+        span: Span,
+    ) -> Option<Vec<usize>> {
+        if args.len() != parameter_names.len() {
+            self.sink.emit(errors::argument_count_mismatch(
+                function_name,
+                parameter_names.len(),
+                args.len(),
+                span,
+            ));
+            return None;
+        }
+
+        let mut source_indices = vec![None; parameter_names.len()];
+        let mut valid = true;
+        for (source_index, arg) in args.iter().enumerate() {
+            let parameter_index = if let Some(name) = &arg.name {
+                let Some(index) = parameter_names
+                    .iter()
+                    .position(|parameter| parameter == &name.name)
+                else {
+                    self.sink.emit(errors::unknown_named_argument(
+                        function_name,
+                        &name.name,
+                        arg.span,
+                    ));
+                    valid = false;
+                    continue;
+                };
+                index
+            } else {
+                let Some(index) = source_indices.iter().position(Option::is_none) else {
+                    valid = false;
+                    continue;
+                };
+                index
+            };
+
+            if source_indices[parameter_index].is_some() {
+                self.sink.emit(errors::duplicate_named_argument(
+                    function_name,
+                    &parameter_names[parameter_index],
+                    arg.span,
+                ));
+                valid = false;
+                continue;
+            }
+            source_indices[parameter_index] = Some(source_index);
+        }
+
+        for (parameter_index, source_index) in source_indices.iter().enumerate() {
+            if source_index.is_none() {
+                self.sink.emit(errors::missing_call_argument(
+                    function_name,
+                    &parameter_names[parameter_index],
+                    span,
+                ));
+                valid = false;
+            }
+        }
+
+        valid.then(|| {
+            source_indices
+                .into_iter()
+                .map(|index| index.expect("validated call arguments must be complete"))
+                .collect()
+        })
+    }
+
+    fn method_signature_for_callee(&self, callee: &Expr) -> Option<(TypeId, FunctionSig)> {
+        let Expr::FieldAccess(base, field, _) = callee else {
+            return None;
+        };
+        let base_name = Self::extract_dotted_name(base)?;
+        let base_name = self.resolved_or_expanded_name(&base_name, base.span());
+        let owner_type = self.named_types.get(&base_name).copied()?;
+        let signature = match self.interner.resolve(owner_type) {
+            Type::Interface(iid) => self
+                .interner
+                .resolve_interface(*iid)
+                .methods
+                .iter()
+                .find(|method| method.name == field.name)
+                .cloned(),
+            Type::Struct(sid) => self
+                .interner
+                .resolve_struct(*sid)
+                .methods
+                .iter()
+                .find(|method| method.name == field.name)
+                .cloned()
+                .or_else(|| {
+                    self.impl_methods_by_type
+                        .get(&owner_type)
+                        .and_then(|methods| methods.get(&field.name))
+                        .cloned()
+                }),
+            _ => self
+                .impl_methods_by_type
+                .get(&owner_type)
+                .and_then(|methods| methods.get(&field.name))
+                .cloned(),
+        }?;
+        Some((owner_type, signature))
+    }
+
+    fn record_source_method_call(
+        &mut self,
+        callee: &Expr,
+        declared_owner: TypeId,
+        checked_arg_types: &[TypeId],
+        span: Span,
+    ) {
+        let Expr::FieldAccess(_, field, _) = callee else {
+            return;
+        };
+        let definition_index = match self.interner.resolve(declared_owner) {
+            Type::Interface(_) => checked_arg_types.first().and_then(|owner_type| {
+                self.interface_method_definitions
+                    .get(&(declared_owner, *owner_type, field.name.clone()))
+                    .copied()
+            }),
+            _ => self
+                .method_definitions_by_owner
+                .get(&(declared_owner, field.name.clone()))
+                .copied(),
+        };
+        if let Some(index) = definition_index {
+            let source_span = self.method_definitions[index].source_span;
+            self.record_method_call(span, source_span);
+        }
+    }
+
     fn check_inferred_generic_function_call(
         &mut self,
         function_name: &str,
@@ -10172,22 +10545,24 @@ impl<'a> TypeChecker<'a> {
             .get(function_name)
             .expect("generic template existence checked by caller")
             .clone();
-        if args.len() != template.params.len() {
-            self.sink.emit(errors::argument_count_mismatch(
-                function_name,
-                template.params.len(),
-                args.len(),
-                span,
-            ));
+        let parameter_names = template
+            .params
+            .iter()
+            .map(|param| param.name.name.clone())
+            .collect::<Vec<_>>();
+        let Some(argument_order) =
+            self.bind_call_arguments(function_name, &parameter_names, args, span)
+        else {
             for arg in args {
                 self.check_expr(&arg.value);
             }
             return TypeInterner::ERROR;
-        }
+        };
+        self.record_call_argument_order(span, argument_order.clone());
 
-        let actual_types = args
+        let actual_types = argument_order
             .iter()
-            .map(|arg| self.check_expr(&arg.value))
+            .map(|&source_index| self.check_expr(&args[source_index].value))
             .collect::<Vec<_>>();
         let Some(inferred) = self.infer_generic_signature(&template, &actual_types) else {
             self.emit_cannot_infer_generic(function_name, &template, span);
@@ -10206,7 +10581,8 @@ impl<'a> TypeChecker<'a> {
         }
 
         let mut arguments_match = true;
-        for (arg, &expected) in args.iter().zip(&inferred.param_types) {
+        for (&source_index, &expected) in argument_order.iter().zip(&inferred.param_types) {
+            let arg = &args[source_index];
             let got = self.check_expr_for_expected(&arg.value, expected, false);
             if !self.types_compatible(expected, got) {
                 arguments_match = false;
@@ -10219,8 +10595,15 @@ impl<'a> TypeChecker<'a> {
         }
 
         if arguments_match {
-            let param_facts =
-                self.reflection_param_facts_for_call(&template, &inferred.param_types, args);
+            let ordered_args = argument_order
+                .iter()
+                .map(|&source_index| args[source_index].clone())
+                .collect::<Vec<_>>();
+            let param_facts = self.reflection_param_facts_for_call(
+                &template,
+                &inferred.param_types,
+                &ordered_args,
+            );
             self.record_generic_call_for_template(span, &template, &inferred.concrete_args);
             self.check_generic_function_instantiation(
                 function_name,
@@ -10786,12 +11169,14 @@ impl<'a> TypeChecker<'a> {
     ) -> TypeId {
         let struct_def = self.interner.resolve_struct(sid).clone();
         let mut assigned = vec![false; struct_def.fields.len()];
+        let mut source_indices = vec![None; struct_def.fields.len()];
+        let mut arguments_valid = true;
         let validates_refinements = struct_def
             .fields
             .iter()
             .any(|(_, ty)| self.is_refinement_type(*ty));
 
-        for arg in args {
+        for (source_index, arg) in args.iter().enumerate() {
             let Some(field_index) = (match &arg.name {
                 Some(name) => struct_def
                     .fields
@@ -10814,6 +11199,7 @@ impl<'a> TypeChecker<'a> {
                     ));
                 }
                 self.check_expr(&arg.value);
+                arguments_valid = false;
                 continue;
             };
 
@@ -10824,10 +11210,12 @@ impl<'a> TypeChecker<'a> {
                     arg.span,
                 ));
                 self.check_expr(&arg.value);
+                arguments_valid = false;
                 continue;
             }
 
             assigned[field_index] = true;
+            source_indices[field_index] = Some(source_index);
             let expected_ty = struct_def.fields[field_index].1;
             let arg_ty = if self.is_refinement_type(expected_ty) {
                 match &arg.value {
@@ -10859,10 +11247,24 @@ impl<'a> TypeChecker<'a> {
                     field_name,
                     span,
                 ));
+                arguments_valid = false;
             }
         }
 
+        if arguments_valid {
+            self.record_call_argument_order(
+                span,
+                source_indices
+                    .into_iter()
+                    .map(|index| index.expect("validated constructor fields must be complete"))
+                    .collect(),
+            );
+        }
+
         let struct_ty = self.interner.intern(Type::Struct(sid));
+        if arguments_valid {
+            self.record_struct_construction(span, struct_ty, validates_refinements);
+        }
         if validates_refinements {
             self.interner
                 .intern(Type::Result(struct_ty, TypeInterner::STRING))
@@ -14085,6 +14487,66 @@ function main() returns int64:
             .filter(|d| d.severity == jett_diagnostics::Severity::Error)
             .collect();
         assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+    }
+
+    #[test]
+    fn named_function_arguments_record_parameter_order() {
+        let result = check_source_result(
+            "\
+function subtract(left: int64, right: int64) returns int64:
+    return left - right
+
+function main() returns int64:
+    return subtract(right: 2, left: 7)
+",
+        );
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+        let order = result
+            .call_argument_orders
+            .values()
+            .next()
+            .expect("named call must export its parameter order");
+        assert_eq!(order.source_indices, vec![1, 0]);
+    }
+
+    #[test]
+    fn named_function_arguments_reject_unknown_and_duplicate_parameters() {
+        let unknown = check_source_errors(
+            "\
+function subtract(left: int64, right: int64) returns int64:
+    return left - right
+function main() returns int64:
+    return subtract(left: 7, other: 2)
+",
+        );
+        assert!(
+            unknown
+                .iter()
+                .any(|diagnostic| diagnostic.code.code() == 368),
+            "expected E0368, got: {:?}",
+            unknown
+        );
+
+        let duplicate = check_source_errors(
+            "\
+function subtract(left: int64, right: int64) returns int64:
+    return left - right
+function main() returns int64:
+    return subtract(left: 7, left: 2)
+",
+        );
+        assert!(
+            duplicate
+                .iter()
+                .any(|diagnostic| diagnostic.code.code() == 369),
+            "expected E0369, got: {:?}",
+            duplicate
+        );
     }
 
     #[test]

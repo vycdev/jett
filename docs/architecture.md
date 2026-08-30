@@ -460,8 +460,9 @@ This is the most complex phase of the compiler. It enforces the majority of Jett
 **Input:** AST + `ResolveResult`.
 
 **Output:** checked diagnostics, a `Span -> TypeId` expression type map,
-definition types, checked reflection metadata, an ordered concrete generic
-instantiation manifest with per-instantiation expression and nested-call facts,
+definition types, checked reflection metadata, normalized call-argument
+orders, source-defined method and struct-construction targets, an ordered
+concrete generic instantiation manifest with the same per-instantiation facts,
 and ownership/capability diagnostics. HIR materializes this as typed nodes; the
 current driver also uses the global expression map for hover/tooling and
 interpreter runtime facts.
@@ -770,10 +771,15 @@ representation.
 **Implementation status:** the `jett_hir` crate lowers ordinary functions and
 the typechecker's ordered concrete generic-instantiation manifest. Explicit,
 inferred, repeated, and nested generic calls resolve to deterministic concrete
-HIR functions while each instantiation retains its own checked expression
-types. Typed parameters and locals, direct user calls, core expressions,
-returns, branches, and loops are covered. Remaining source constructs are
-staged by the [initial HIR lowering plan](active/hir_lowering_plan.md).
+HIR functions while each instantiation retains its own checked facts. Named
+arguments are normalized to parameter order while retaining lexical evaluation
+order explicitly; source-defined interface and type-module calls select
+concrete method bodies; struct construction records canonical field order and
+refinement validation; and struct field access uses dense field IDs. Typed
+parameters and locals, direct user calls, core
+expressions, returns, branches, and loops are also covered. Remaining source
+constructs are staged by the
+[initial HIR lowering plan](active/hir_lowering_plan.md).
 
 ### Purpose
 
@@ -785,11 +791,13 @@ canonical namespace, canonical declaration name and kind, plus concrete type
 arguments. Persistent artifacts replace raw type interner IDs with canonical
 structural type identities. Lowering never infers source authority from
 `FileId` ranges or trusted-looking names.
+Interface-implementation method declarations additionally include both the
+concrete owner and canonical interface in their identity.
 
 ### Key Transformations
 
 1. **Monomorphization:** Generate concrete versions of all generic functions for each type parameter combination used in the program.
-2. **Method resolution:** `Dog.speak(view my_dog)` is resolved to the specific `implement Speaker for Dog` function.
+2. **Method-target materialization:** the checked target for `Speaker.speak(view my_dog)` becomes the specific `implement Speaker for Dog` HIR function.
 3. **Auto-view for field access:** `self.x` is annotated as an implicit view operation.
 4. **Explicit copyability:** Numeric primitives, `bool`, `nothing`, and immutable
    `string` are implicitly copyable. The primitive `bytes` type remains
