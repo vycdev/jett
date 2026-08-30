@@ -1,6 +1,7 @@
 # Initial HIR Lowering Plan
 
-Status: accepted boundary; first monomorphic lowering slice implemented.
+Status: accepted boundary; generic-instantiation lowering implemented for the
+current core HIR subset.
 
 Tracked by [#20](https://github.com/vycdev/jett/issues/20).
 
@@ -72,8 +73,10 @@ enter the manifest. Recursive discovery reserves identity before lowering.
    typed lowering for ordinary top-level functions, parameters, locals,
    literals, unary/binary expressions, direct user calls, assignment, return,
    `if`/`else` normalization, `while`, `break`, `continue`, views, and clones.
-2. Export the ordered generic-instantiation manifest and per-instantiation type
-   facts from `jett_typecheck`; lower generic functions and generic calls.
+2. **Implemented:** export the ordered, deduplicated generic-instantiation
+   manifest and per-instantiation expression types and nested-call targets from
+   `jett_typecheck`; lower explicit, inferred, repeated, nested, and recursive
+   generic calls to concrete HIR function identities.
 3. Resolve named arguments, methods, fields, constructors, pipelines, handles,
    matches, collections, reflection, and trusted calls into core HIR forms.
 4. Add deterministic HIR snapshots and wire HIR into the driver after every

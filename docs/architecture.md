@@ -460,9 +460,11 @@ This is the most complex phase of the compiler. It enforces the majority of Jett
 **Input:** AST + `ResolveResult`.
 
 **Output:** checked diagnostics, a `Span -> TypeId` expression type map,
-checked reflection metadata, and ownership/capability diagnostics. Later HIR
-lowering can materialize this as a typed tree, but the current driver already
-uses the expression map for hover/tooling and for interpreter runtime facts.
+definition types, checked reflection metadata, an ordered concrete generic
+instantiation manifest with per-instantiation expression and nested-call facts,
+and ownership/capability diagnostics. HIR materializes this as typed nodes; the
+current driver also uses the global expression map for hover/tooling and
+interpreter runtime facts.
 
 ### Sub-Phases (executed in order)
 
@@ -765,12 +767,13 @@ than a duplicate `TypedTree`; HIR materializes those facts into typed nodes.
 **Output:** HIR — a typed, backend-neutral, fully monomorphized intermediate
 representation.
 
-**Implementation status:** the `jett_hir` crate and first deterministic
-monomorphic lowering slice are implemented. It covers ordinary top-level
-functions, typed parameters and locals, direct user calls, core expressions,
-returns, branches, and loops. The ordered generic-instantiation handoff and
-remaining source constructs are staged by the
-[initial HIR lowering plan](active/hir_lowering_plan.md).
+**Implementation status:** the `jett_hir` crate lowers ordinary functions and
+the typechecker's ordered concrete generic-instantiation manifest. Explicit,
+inferred, repeated, and nested generic calls resolve to deterministic concrete
+HIR functions while each instantiation retains its own checked expression
+types. Typed parameters and locals, direct user calls, core expressions,
+returns, branches, and loops are covered. Remaining source constructs are
+staged by the [initial HIR lowering plan](active/hir_lowering_plan.md).
 
 ### Purpose
 

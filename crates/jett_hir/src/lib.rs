@@ -1,15 +1,15 @@
 //! Jett's typed, backend-neutral high-level intermediate representation.
 //!
-//! The initial lowering slice deliberately covers ordinary monomorphic
-//! functions and core structured control flow. Unsupported source constructs
-//! fail explicitly; they never survive as embedded AST nodes.
+//! The initial lowering covers ordinary and generic functions plus core
+//! structured control flow. Unsupported source constructs fail explicitly;
+//! they never survive as embedded AST nodes.
 
 use std::collections::HashMap;
 
 use jett_common::{FileId, SourceOrigin, Span};
 use jett_parser::ast::{self, Expr, Item, Module, Stmt};
 use jett_resolve::{DefId, DefKind, ResolveResult};
-use jett_typecheck::CheckResult;
+use jett_typecheck::{CheckResult, CheckedGenericCall, CheckedGenericFunctionInstantiation};
 use jett_types::{Type, TypeId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -212,6 +212,13 @@ struct FunctionSource<'a> {
     id: FunctionId,
     definition: DefId,
     function: &'a ast::FunctionDef,
+    instantiation: Option<CheckedGenericFunctionInstantiation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct FunctionKey {
+    definition: DefId,
+    concrete_args: Vec<TypeId>,
 }
 
 struct Lowerer<'a> {
@@ -220,7 +227,7 @@ struct Lowerer<'a> {
     check: &'a CheckResult,
     origins: &'a HashMap<FileId, SourceOrigin>,
     functions: Vec<FunctionSource<'a>>,
-    function_ids: HashMap<DefId, FunctionId>,
+    function_ids: HashMap<FunctionKey, FunctionId>,
     errors: Vec<LowerError>,
 }
 
@@ -259,6 +266,7 @@ impl<'a> Lowerer<'a> {
     }
 
     fn collect_functions(&mut self) {
+        let mut generic_templates = HashMap::new();
         for item in &self.module.items {
             match item {
                 Item::Function(function) if function.type_params.is_empty() => {
@@ -269,15 +277,54 @@ impl<'a> Lowerer<'a> {
                         continue;
                     };
                     let id = FunctionId(self.functions.len() as u32);
-                    self.function_ids.insert(definition, id);
+                    self.function_ids.insert(
+                        FunctionKey {
+                            definition,
+                            concrete_args: Vec::new(),
+                        },
+                        id,
+                    );
                     self.functions.push(FunctionSource {
                         id,
                         definition,
                         function,
+                        instantiation: None,
                     });
+                }
+                Item::Function(function) => {
+                    if let Some(definition) =
+                        self.definition_at(function.name.span, DefKind::Function)
+                    {
+                        generic_templates.insert(definition, function);
+                    }
                 }
                 _ => {}
             }
+        }
+
+        for instantiation in self.check.generic_function_instantiations.clone() {
+            let Some(function) = generic_templates.get(&instantiation.definition).copied() else {
+                let span = self.resolve.scope_table.def(instantiation.definition).span;
+                self.error(
+                    span,
+                    "generic instantiation has no top-level function template",
+                );
+                continue;
+            };
+            let id = FunctionId(self.functions.len() as u32);
+            self.function_ids.insert(
+                FunctionKey {
+                    definition: instantiation.definition,
+                    concrete_args: instantiation.concrete_args.clone(),
+                },
+                id,
+            );
+            self.functions.push(FunctionSource {
+                id,
+                definition: instantiation.definition,
+                function,
+                instantiation: Some(instantiation),
+            });
         }
     }
 
@@ -292,26 +339,45 @@ impl<'a> Lowerer<'a> {
                 return None;
             }
         };
-        let function_ty = match self.check.definition_types.get(&source.definition) {
-            Some(ty) => *ty,
-            None => {
-                self.error(source.function.name.span, "function has no checked type");
-                return None;
-            }
-        };
-        let (parameter_types, return_type) = match self.check.interner.resolve(function_ty) {
-            Type::Function {
-                params,
-                return_type,
-            } => (params.clone(), *return_type),
-            _ => {
-                self.error(
-                    source.function.name.span,
-                    "definition is not a checked function",
-                );
-                return None;
-            }
-        };
+        let (parameter_types, return_type, expression_types, generic_calls, concrete_args) =
+            if let Some(instantiation) = &source.instantiation {
+                (
+                    instantiation.parameter_types.clone(),
+                    instantiation.return_type,
+                    instantiation.type_map.clone(),
+                    instantiation.generic_calls.clone(),
+                    instantiation.concrete_args.clone(),
+                )
+            } else {
+                let function_ty = match self.check.definition_types.get(&source.definition) {
+                    Some(ty) => *ty,
+                    None => {
+                        self.error(source.function.name.span, "function has no checked type");
+                        return None;
+                    }
+                };
+                let (parameter_types, return_type) = match self.check.interner.resolve(function_ty)
+                {
+                    Type::Function {
+                        params,
+                        return_type,
+                    } => (params.clone(), *return_type),
+                    _ => {
+                        self.error(
+                            source.function.name.span,
+                            "definition is not a checked function",
+                        );
+                        return None;
+                    }
+                };
+                (
+                    parameter_types,
+                    return_type,
+                    self.check.type_map.clone(),
+                    self.check.generic_calls.clone(),
+                    Vec::new(),
+                )
+            };
         if parameter_types.len() != source.function.params.len() {
             self.error(
                 source.function.span,
@@ -321,7 +387,8 @@ impl<'a> Lowerer<'a> {
         }
 
         let function_ids = self.function_ids.clone();
-        let mut body_lowerer = BodyLowerer::new(self, &function_ids);
+        let mut body_lowerer =
+            BodyLowerer::new(self, &function_ids, &expression_types, &generic_calls);
         let mut params = Vec::with_capacity(source.function.params.len());
         for (param, ty) in source.function.params.iter().zip(parameter_types) {
             let Some(definition) = body_lowerer
@@ -366,7 +433,7 @@ impl<'a> Lowerer<'a> {
                     name: source.function.name.name.clone(),
                     kind: DeclarationKind::Function,
                 },
-                type_arguments: Vec::new(),
+                type_arguments: concrete_args,
             },
             source_definition: source.definition,
             params,
@@ -396,7 +463,9 @@ impl<'a> Lowerer<'a> {
 
 struct BodyLowerer<'lowerer, 'program> {
     parent: &'lowerer mut Lowerer<'program>,
-    function_ids: &'lowerer HashMap<DefId, FunctionId>,
+    function_ids: &'lowerer HashMap<FunctionKey, FunctionId>,
+    expression_types: &'lowerer HashMap<Span, TypeId>,
+    generic_calls: &'lowerer HashMap<Span, CheckedGenericCall>,
     local_ids: HashMap<DefId, LocalId>,
     locals: Vec<Local>,
 }
@@ -404,11 +473,15 @@ struct BodyLowerer<'lowerer, 'program> {
 impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
     fn new(
         parent: &'lowerer mut Lowerer<'program>,
-        function_ids: &'lowerer HashMap<DefId, FunctionId>,
+        function_ids: &'lowerer HashMap<FunctionKey, FunctionId>,
+        expression_types: &'lowerer HashMap<Span, TypeId>,
+        generic_calls: &'lowerer HashMap<Span, CheckedGenericCall>,
     ) -> Self {
         Self {
             parent,
             function_ids,
+            expression_types,
+            generic_calls,
             local_ids: HashMap::new(),
             locals: Vec::new(),
         }
@@ -457,12 +530,10 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                     return None;
                 };
                 let Some(ty) = self
-                    .parent
-                    .check
-                    .definition_types
-                    .get(&definition)
+                    .expression_types
+                    .get(&decl.value.span())
                     .copied()
-                    .or_else(|| self.parent.check.type_map.get(&decl.value.span()).copied())
+                    .or_else(|| self.parent.check.definition_types.get(&definition).copied())
                 else {
                     self.parent
                         .error(decl.name.span, "local has no checked type");
@@ -585,40 +656,8 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 op: lower_unary_op(*op),
                 value: Box::new(self.lower_expression(value)?),
             },
-            Expr::Call(callee, args, _) => {
-                let Expr::Ident(ident) = callee.as_ref() else {
-                    self.parent.error(
-                        callee.span(),
-                        "only direct user-function calls are in the initial HIR subset",
-                    );
-                    return None;
-                };
-                let Some(definition) = self.parent.resolve.resolutions.get(&ident.span).copied()
-                else {
-                    self.parent
-                        .error(ident.span, "call target has no resolved definition");
-                    return None;
-                };
-                let Some(function) = self.function_ids.get(&definition).copied() else {
-                    self.parent
-                        .error(ident.span, "call target is not an initial HIR function");
-                    return None;
-                };
-                let mut lowered_args = Vec::with_capacity(args.len());
-                for arg in args {
-                    if arg.name.is_some() {
-                        self.parent.error(
-                            arg.span,
-                            "named arguments are not yet lowered to positional HIR arguments",
-                        );
-                        return None;
-                    }
-                    lowered_args.push(self.lower_expression(&arg.value)?);
-                }
-                ExpressionKind::Call {
-                    function,
-                    args: lowered_args,
-                }
+            Expr::Call(callee, args, _) | Expr::GenericCall(callee, _, args, _) => {
+                self.lower_call(callee, args, span)?
             }
             Expr::Paren(inner, _) => {
                 return self.lower_expression(inner).map(|mut lowered| {
@@ -640,8 +679,68 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         Some(Expression { kind, ty, span })
     }
 
+    fn lower_call(
+        &mut self,
+        callee: &Expr,
+        args: &[ast::CallArg],
+        call_span: Span,
+    ) -> Option<ExpressionKind> {
+        let Expr::Ident(ident) = callee else {
+            self.parent.error(
+                callee.span(),
+                "only direct user-function calls are in the initial HIR subset",
+            );
+            return None;
+        };
+        let Some(definition) = self.parent.resolve.resolutions.get(&ident.span).copied() else {
+            self.parent
+                .error(ident.span, "call target has no resolved definition");
+            return None;
+        };
+        let key = if let Some(generic) = self.generic_calls.get(&call_span) {
+            if generic.definition != definition {
+                self.parent.error(
+                    call_span,
+                    "checked generic call target disagrees with name resolution",
+                );
+                return None;
+            }
+            FunctionKey {
+                definition,
+                concrete_args: generic.concrete_args.clone(),
+            }
+        } else {
+            FunctionKey {
+                definition,
+                concrete_args: Vec::new(),
+            }
+        };
+        let Some(function) = self.function_ids.get(&key).copied() else {
+            self.parent.error(
+                ident.span,
+                "call target has no checked concrete HIR function",
+            );
+            return None;
+        };
+        let mut lowered_args = Vec::with_capacity(args.len());
+        for arg in args {
+            if arg.name.is_some() {
+                self.parent.error(
+                    arg.span,
+                    "named arguments are not yet lowered to positional HIR arguments",
+                );
+                return None;
+            }
+            lowered_args.push(self.lower_expression(&arg.value)?);
+        }
+        Some(ExpressionKind::Call {
+            function,
+            args: lowered_args,
+        })
+    }
+
     fn expression_type(&mut self, expression: &Expr) -> Option<TypeId> {
-        if let Some(ty) = self.parent.check.type_map.get(&expression.span()).copied() {
+        if let Some(ty) = self.expression_types.get(&expression.span()).copied() {
             return Some(ty);
         }
         if let Expr::Ident(ident) = expression
@@ -817,5 +916,108 @@ function count_to(limit: int64) returns int64:
             body.statements[0].kind,
             StatementKind::Assign { .. }
         ));
+    }
+
+    #[test]
+    fn lowers_nested_generic_instantiations_and_calls() {
+        let source = r#"namespace app
+function inner[T](value: T) returns T:
+    return value
+function outer[T](value: T) returns T:
+    return inner[T](value)
+function main() returns int64:
+    return outer[int64](42)
+"#;
+        let program = lower_source(source);
+        assert_eq!(program.functions.len(), 3);
+
+        let main = &program.functions[0];
+        let outer = &program.functions[1];
+        let inner = &program.functions[2];
+        assert!(main.identity.type_arguments.is_empty());
+        assert_eq!(outer.identity.type_arguments.len(), 1);
+        assert_eq!(inner.identity.type_arguments.len(), 1);
+        assert_eq!(outer.params[0].ty, outer.identity.type_arguments[0]);
+        assert_eq!(inner.params[0].ty, inner.identity.type_arguments[0]);
+
+        let StatementKind::Return(Some(Expression {
+            kind: ExpressionKind::Call { function, .. },
+            ..
+        })) = &main.body.statements[0].kind
+        else {
+            panic!("expected main to call outer[int64]");
+        };
+        assert_eq!(*function, outer.id);
+
+        let StatementKind::Return(Some(Expression {
+            kind: ExpressionKind::Call { function, .. },
+            ..
+        })) = &outer.body.statements[0].kind
+        else {
+            panic!("expected outer[int64] to call inner[int64]");
+        };
+        assert_eq!(*function, inner.id);
+    }
+
+    #[test]
+    fn keeps_inferred_instantiation_type_facts_separate() {
+        let source = r#"namespace app
+function identity[T](value: T) returns T:
+    return value
+function main() returns nothing:
+    int64 number = identity(1)
+    string text = identity("jett")
+"#;
+        let program = lower_source(source);
+        assert_eq!(program.functions.len(), 3);
+        let main = &program.functions[0];
+        let integer_identity = &program.functions[1];
+        let string_identity = &program.functions[2];
+
+        assert_ne!(
+            integer_identity.identity.type_arguments,
+            string_identity.identity.type_arguments
+        );
+        assert_eq!(integer_identity.params[0].ty, integer_identity.return_type);
+        assert_eq!(string_identity.params[0].ty, string_identity.return_type);
+
+        let StatementKind::Let { value, .. } = &main.body.statements[0].kind else {
+            panic!("expected first inferred generic call");
+        };
+        let ExpressionKind::Call { function, .. } = value.kind else {
+            panic!("expected first inferred generic call target");
+        };
+        assert_eq!(function, integer_identity.id);
+
+        let StatementKind::Let { value, .. } = &main.body.statements[1].kind else {
+            panic!("expected second inferred generic call");
+        };
+        let ExpressionKind::Call { function, .. } = value.kind else {
+            panic!("expected second inferred generic call target");
+        };
+        assert_eq!(function, string_identity.id);
+    }
+
+    #[test]
+    fn lowers_recursive_generic_calls_to_the_reserved_identity() {
+        let source = r#"namespace app
+function repeat[T](value: T, remaining: int64) returns T:
+    if remaining == 0:
+        return value
+    return repeat[T](value, remaining - 1)
+function main() returns int64:
+    return repeat[int64](7, 2)
+"#;
+        let program = lower_source(source);
+        assert_eq!(program.functions.len(), 2);
+        let repeat = &program.functions[1];
+        let StatementKind::Return(Some(Expression {
+            kind: ExpressionKind::Call { function, .. },
+            ..
+        })) = &repeat.body.statements[1].kind
+        else {
+            panic!("expected recursive concrete call");
+        };
+        assert_eq!(*function, repeat.id);
     }
 }

@@ -28,7 +28,7 @@
 |---|---|---|---|
 | Type interning, struct/enum/interface defs | `jett_types` | 18 | Done |
 | Name resolution, scoping, namespace export visibility | `jett_resolve` | 27 | Done |
-| Type checking (expressions, operators, generics) | `jett_typecheck` | 100 | Done |
+| Type checking (expressions, operators, generics) | `jett_typecheck` | 117 | Done; checked output now includes an ordered, deduplicated concrete generic-instantiation manifest with per-instantiation expression and nested-call facts |
 | Module/import/prelude registry and backend-neutral trusted origin | `jett_project`, `jett_resolve`, later IR | n/a | Design selected by the [module and trusted-origin contract](completed/module_import_trusted_origin_contract.md); current block-local `use`, stdlib loading, and interpreter trust paths remain transitional |
 
 ### Phase C: Ownership and Capabilities — COMPLETE
@@ -43,7 +43,7 @@
 
 | Component | Crate | Tests | Status |
 |---|---|---|---|
-| HIR (monomorphization) | `jett_hir` | 3 | Initial typed monomorphic lowering slice implemented with canonical source-origin/declaration identity, deterministic function/local IDs, direct user calls, and core structured control flow; generic-instantiation manifest and remaining constructs are staged by the [HIR lowering plan](active/hir_lowering_plan.md) and [#20](https://github.com/vycdev/jett/issues/20) |
+| HIR (monomorphization) | `jett_hir` | 6 | Typed ordinary and generic function lowering implemented for the core subset, with canonical source-origin/declaration identity, deterministic concrete function/local IDs, separate per-instantiation type facts, explicit, inferred, nested, and recursive generic calls, and core structured control flow; remaining constructs are staged by the [HIR lowering plan](active/hir_lowering_plan.md) and [#20](https://github.com/vycdev/jett/issues/20) |
 | MIR (control flow graph) | `jett_mir` | — | Not started ([Tracked by #22](https://github.com/vycdev/jett/issues/22)) |
 | LLVM native codegen | `jett_codegen_llvm` | — | Not started |
 | Runtime library | `jett_runtime` | — | Not started |

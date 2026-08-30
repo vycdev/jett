@@ -23,6 +23,30 @@ use jett_types::{
 use crate::capability;
 use crate::errors;
 
+/// One accepted concrete generic function body produced by type checking.
+#[derive(Debug, Clone)]
+pub struct CheckedGenericFunctionInstantiation {
+    /// Session-local definition of the generic function template.
+    pub definition: DefId,
+    /// Concrete type arguments in source type-parameter order.
+    pub concrete_args: Vec<TypeId>,
+    /// Fully substituted parameter types.
+    pub parameter_types: Vec<TypeId>,
+    /// Fully substituted return type.
+    pub return_type: TypeId,
+    /// Expression types captured while checking this concrete body.
+    pub type_map: HashMap<Span, TypeId>,
+    /// Nested generic calls selected while checking this concrete body.
+    pub generic_calls: HashMap<Span, CheckedGenericCall>,
+}
+
+/// The concrete generic target selected for one checked call expression.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckedGenericCall {
+    pub definition: DefId,
+    pub concrete_args: Vec<TypeId>,
+}
+
 /// The result of type checking.
 #[derive(Debug)]
 pub struct CheckResult {
@@ -36,6 +60,10 @@ pub struct CheckResult {
     /// HIR identity is derived separately from source origin and canonical
     /// declaration metadata.
     pub definition_types: HashMap<DefId, TypeId>,
+    /// Generic calls made outside generic function bodies, keyed by call span.
+    pub generic_calls: HashMap<Span, CheckedGenericCall>,
+    /// Accepted concrete generic bodies in deterministic discovery order.
+    pub generic_function_instantiations: Vec<CheckedGenericFunctionInstantiation>,
     /// The type interner, containing all types encountered during checking.
     pub interner: TypeInterner,
     /// Checked reflection metadata snapshot for comptime reflection builtins.
@@ -78,6 +106,8 @@ pub fn check_with_options(
         diagnostics,
         type_map: checker.type_map,
         definition_types: checker.type_env,
+        generic_calls: checker.generic_calls,
+        generic_function_instantiations: checker.generic_function_instantiations,
         interner: checker.interner,
         reflection_metadata,
     }
@@ -153,6 +183,13 @@ struct ClosureCaptureScope {
     locals: HashSet<DefId>,
     /// Move-only captures already diagnosed in this closure.
     rejected: HashSet<DefId>,
+}
+
+#[derive(Debug)]
+struct ActiveGenericInstantiation {
+    manifest_index: usize,
+    type_map: HashMap<Span, TypeId>,
+    generic_calls: HashMap<Span, CheckedGenericCall>,
 }
 
 // ---------------------------------------------------------------------------
@@ -260,6 +297,15 @@ struct TypeChecker<'a> {
     /// Generic function instantiations whose bodies have already been checked.
     checked_generic_function_instantiations:
         HashSet<(String, Vec<TypeId>, Vec<String>, ReflectionParamFacts)>,
+    /// Canonical concrete identity to its deterministic manifest slot.
+    generic_instantiation_indices: HashMap<(DefId, Vec<TypeId>), usize>,
+    /// Ordered, concrete checked-program handoff consumed by HIR.
+    generic_function_instantiations: Vec<CheckedGenericFunctionInstantiation>,
+    /// Concrete generic calls made outside a generic function body.
+    generic_calls: HashMap<Span, CheckedGenericCall>,
+    /// Per-instantiation facts currently being collected. Nested generic body
+    /// checks push another scope so their spans never overwrite the caller's.
+    active_generic_instantiations: Vec<ActiveGenericInstantiation>,
     /// True while checking a generic instantiation whose type-param reflection
     /// is limited to directly evaluable branch conditions.
     specialize_reflection_branches: bool,
@@ -326,6 +372,10 @@ impl<'a> TypeChecker<'a> {
             reflected_machine_state_type_scopes: Vec::new(),
             generic_function_templates: HashMap::new(),
             checked_generic_function_instantiations: HashSet::new(),
+            generic_instantiation_indices: HashMap::new(),
+            generic_function_instantiations: Vec::new(),
+            generic_calls: HashMap::new(),
+            active_generic_instantiations: Vec::new(),
             specialize_reflection_branches: false,
             current_respond_type: None,
         };
@@ -5334,6 +5384,8 @@ impl<'a> TypeChecker<'a> {
         }
         let specialize_reflection_branches = branch_specializable || !param_facts.is_empty();
 
+        let definition = self.declaration_def_id(func.name.span);
+
         let kind_key = func
             .type_params
             .iter()
@@ -5365,6 +5417,35 @@ impl<'a> TypeChecker<'a> {
 
         let old_subst = std::mem::replace(&mut self.type_var_subst, subst);
         let old_kind_subst = std::mem::replace(&mut self.type_var_kind_tags, kind_subst);
+        let parameter_types = func
+            .params
+            .iter()
+            .map(|param| self.resolve_type_expr(&param.ty))
+            .collect::<Vec<_>>();
+        let return_type = func
+            .return_type
+            .as_ref()
+            .map(|ty| self.resolve_type_expr(ty))
+            .unwrap_or(TypeInterner::NOTHING);
+        let manifest_index = definition.map(|definition| {
+            let identity = (definition, concrete_args.to_vec());
+            if let Some(index) = self.generic_instantiation_indices.get(&identity) {
+                *index
+            } else {
+                let index = self.generic_function_instantiations.len();
+                self.generic_instantiation_indices.insert(identity, index);
+                self.generic_function_instantiations
+                    .push(CheckedGenericFunctionInstantiation {
+                        definition,
+                        concrete_args: concrete_args.to_vec(),
+                        parameter_types: parameter_types.clone(),
+                        return_type,
+                        type_map: HashMap::new(),
+                        generic_calls: HashMap::new(),
+                    });
+                index
+            }
+        });
         let old_return_type = self.current_return_type;
         let old_function_name = self.current_function_name.clone();
         let old_function_pure = self.current_function_pure;
@@ -5382,9 +5463,28 @@ impl<'a> TypeChecker<'a> {
         self.current_respond_type = None;
         self.specialize_reflection_branches = specialize_reflection_branches;
 
+        if let Some(manifest_index) = manifest_index {
+            self.active_generic_instantiations
+                .push(ActiveGenericInstantiation {
+                    manifest_index,
+                    type_map: HashMap::new(),
+                    generic_calls: HashMap::new(),
+                });
+        }
+
         self.push_reflection_param_fact_scope(func, &param_facts);
         self.check_function_impl(func, instantiated_name);
         self.pop_reflection_local_fact_scope();
+
+        if manifest_index.is_some() {
+            let active = self
+                .active_generic_instantiations
+                .pop()
+                .expect("generic instantiation fact scope must be balanced");
+            let entry = &mut self.generic_function_instantiations[active.manifest_index];
+            entry.type_map.extend(active.type_map);
+            entry.generic_calls.extend(active.generic_calls);
+        }
 
         self.type_var_subst = old_subst;
         self.type_var_kind_tags = old_kind_subst;
@@ -5397,6 +5497,39 @@ impl<'a> TypeChecker<'a> {
         self.handle_body_depth = old_handle_body_depth;
         self.current_respond_type = old_respond_type;
         self.specialize_reflection_branches = old_specialize_reflection_branches;
+    }
+
+    fn record_expression_type(&mut self, span: Span, ty: TypeId) {
+        self.type_map.insert(span, ty);
+        if let Some(active) = self.active_generic_instantiations.last_mut() {
+            active.type_map.insert(span, ty);
+        }
+    }
+
+    fn record_generic_call_target(&mut self, span: Span, call: CheckedGenericCall) {
+        if let Some(active) = self.active_generic_instantiations.last_mut() {
+            active.generic_calls.insert(span, call);
+        } else {
+            self.generic_calls.insert(span, call);
+        }
+    }
+
+    fn record_generic_call_for_template(
+        &mut self,
+        span: Span,
+        func: &FunctionDef,
+        concrete_args: &[TypeId],
+    ) {
+        let Some(definition) = self.declaration_def_id(func.name.span) else {
+            return;
+        };
+        self.record_generic_call_target(
+            span,
+            CheckedGenericCall {
+                definition,
+                concrete_args: concrete_args.to_vec(),
+            },
+        );
     }
 
     fn generic_function_uses_type_param_reflection(&self, func: &FunctionDef) -> bool {
@@ -7040,7 +7173,7 @@ impl<'a> TypeChecker<'a> {
             }
         };
 
-        self.type_map.insert(expr.span(), ty);
+        self.record_expression_type(expr.span(), ty);
         ty
     }
 
@@ -8088,7 +8221,7 @@ impl<'a> TypeChecker<'a> {
         };
 
         // Record the type for this expression span.
-        self.type_map.insert(expr.span(), ty);
+        self.record_expression_type(expr.span(), ty);
         ty
     }
 
@@ -8097,7 +8230,7 @@ impl<'a> TypeChecker<'a> {
         for step in steps {
             // The interpreter uses the checked input type to infer source-generic
             // arguments for the synthetic first argument of a pipeline call.
-            self.type_map.insert(step.span, current_ty);
+            self.record_expression_type(step.span, current_ty);
             current_ty = self.check_pipeline_step(current_ty, step);
         }
         current_ty
@@ -8362,6 +8495,7 @@ impl<'a> TypeChecker<'a> {
         }
 
         if arguments_match {
+            self.record_generic_call_for_template(span, &template, &inferred.concrete_args);
             self.check_generic_function_instantiation(
                 function_name,
                 &template,
@@ -8491,6 +8625,7 @@ impl<'a> TypeChecker<'a> {
         }
 
         if arguments_match {
+            self.record_generic_call_for_template(span, &template, &concrete_args);
             self.check_generic_function_instantiation(
                 function_name,
                 &template,
@@ -9313,7 +9448,7 @@ impl<'a> TypeChecker<'a> {
 
         match self.math_numeric_policy_base(current_ty) {
             Some((base, tainted)) => {
-                self.check_math_source_facade_instantiation(name, base);
+                self.check_math_source_facade_instantiation(name, base, span);
                 self.maybe_wrap_secret(base, tainted)
             }
             None => {
@@ -9392,7 +9527,7 @@ impl<'a> TypeChecker<'a> {
             return TypeInterner::ERROR;
         }
 
-        self.check_math_source_facade_instantiation(name, base);
+        self.check_math_source_facade_instantiation(name, base, span);
         self.maybe_wrap_secret(base, left_tainted || right_tainted)
     }
 
@@ -9407,7 +9542,12 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
-    fn check_math_source_facade_instantiation(&mut self, name: &str, concrete: TypeId) {
+    fn check_math_source_facade_instantiation(
+        &mut self,
+        name: &str,
+        concrete: TypeId,
+        call_span: Span,
+    ) {
         let Some(template) = self.generic_function_templates.get(name).cloned() else {
             return;
         };
@@ -9415,6 +9555,7 @@ impl<'a> TypeChecker<'a> {
             return;
         };
         let subst = HashMap::from([(type_param.name.clone(), concrete)]);
+        self.record_generic_call_for_template(call_span, &template, &[concrete]);
         self.check_generic_function_instantiation(
             name,
             &template,
@@ -9449,7 +9590,7 @@ impl<'a> TypeChecker<'a> {
 
         match self.math_numeric_policy_base(arg_ty) {
             Some((base, tainted)) => {
-                self.check_math_source_facade_instantiation(name, base);
+                self.check_math_source_facade_instantiation(name, base, span);
                 self.maybe_wrap_secret(base, tainted)
             }
             None => {
@@ -9523,7 +9664,7 @@ impl<'a> TypeChecker<'a> {
             return TypeInterner::ERROR;
         }
 
-        self.check_math_source_facade_instantiation(name, base);
+        self.check_math_source_facade_instantiation(name, base, span);
         self.maybe_wrap_secret(base, left_tainted || right_tainted)
     }
 
@@ -9742,6 +9883,7 @@ impl<'a> TypeChecker<'a> {
                     if arguments_match {
                         let param_facts =
                             self.reflection_param_facts_for_call(&template, &param_types, args);
+                        self.record_generic_call_for_template(span, &template, &concrete_args);
                         self.check_generic_function_instantiation(
                             function_name,
                             &template,
@@ -10079,6 +10221,7 @@ impl<'a> TypeChecker<'a> {
         if arguments_match {
             let param_facts =
                 self.reflection_param_facts_for_call(&template, &inferred.param_types, args);
+            self.record_generic_call_for_template(span, &template, &inferred.concrete_args);
             self.check_generic_function_instantiation(
                 function_name,
                 &template,
@@ -11356,7 +11499,7 @@ impl<'a> TypeChecker<'a> {
                         if !self.types_compatible(success_ty, default_ty) {
                             default_ty =
                                 self.check_expr_for_expected(default_value, success_ty, false);
-                            self.type_map.insert(expr_stmt.expr.span(), default_ty);
+                            self.record_expression_type(expr_stmt.expr.span(), default_ty);
                         }
                         if !self.types_compatible(success_ty, default_ty) {
                             self.sink.emit(errors::type_mismatch(
@@ -15504,5 +15647,33 @@ function main() returns nothing:
             diagnostic.code.code() == 367
                 && diagnostic.severity == jett_diagnostics::Severity::Error
         }));
+    }
+
+    #[test]
+    fn generic_instantiation_manifest_is_ordered_deduplicated_and_nested() {
+        let result = check_source_result(
+            "function inner[T](value: T) returns T:\n    return value\nfunction outer[T](value: T) returns T:\n    return inner[T](value)\nfunction main() returns int64:\n    int64 first = outer[int64](1)\n    int64 second = outer[int64](2)\n    return first + second\n",
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "unexpected diagnostics: {:?}",
+            result.diagnostics
+        );
+        assert_eq!(result.generic_function_instantiations.len(), 2);
+        let outer = &result.generic_function_instantiations[0];
+        let inner = &result.generic_function_instantiations[1];
+        assert_eq!(outer.concrete_args, vec![TypeInterner::INT64]);
+        assert_eq!(inner.concrete_args, vec![TypeInterner::INT64]);
+        assert_eq!(outer.parameter_types, vec![TypeInterner::INT64]);
+        assert_eq!(outer.return_type, TypeInterner::INT64);
+        assert!(!outer.type_map.is_empty());
+        assert_eq!(outer.generic_calls.len(), 1);
+        let nested_call = outer.generic_calls.values().next().unwrap();
+        assert_eq!(nested_call.definition, inner.definition);
+        assert_eq!(nested_call.concrete_args, vec![TypeInterner::INT64]);
+        assert_eq!(result.generic_calls.len(), 2);
     }
 }
