@@ -230,6 +230,302 @@ fn rounded_percent_hundredths(part: u64, total: u64) -> u16 {
     u16::try_from(rounded).unwrap_or(10_000)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MemoryConfig {
+    pub threshold_basis_points: u16,
+    pub limit: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryConfigError {
+    ThresholdOutOfRange,
+    LimitOutOfRange,
+}
+
+impl MemoryConfig {
+    pub fn new(threshold_basis_points: u16, limit: usize) -> Result<Self, MemoryConfigError> {
+        if threshold_basis_points > 10_000 {
+            return Err(MemoryConfigError::ThresholdOutOfRange);
+        }
+        if !(1..=100).contains(&limit) {
+            return Err(MemoryConfigError::LimitOutOfRange);
+        }
+        Ok(Self {
+            threshold_basis_points,
+            limit,
+        })
+    }
+}
+
+impl Default for MemoryConfig {
+    fn default() -> Self {
+        Self {
+            threshold_basis_points: 500,
+            limit: 10,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AllocationOperation {
+    Allocate { size: u64 },
+    Resize { new_size: u64 },
+    Free,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AllocationEvent {
+    pub allocation_id: u64,
+    pub operation: AllocationOperation,
+    pub stack: Vec<FrameIdentity>,
+}
+
+impl AllocationEvent {
+    pub fn allocate(allocation_id: u64, size: u64, stack: Vec<FrameIdentity>) -> Self {
+        Self {
+            allocation_id,
+            operation: AllocationOperation::Allocate { size },
+            stack,
+        }
+    }
+
+    pub fn resize(allocation_id: u64, new_size: u64, stack: Vec<FrameIdentity>) -> Self {
+        Self {
+            allocation_id,
+            operation: AllocationOperation::Resize { new_size },
+            stack,
+        }
+    }
+
+    pub fn free(allocation_id: u64, stack: Vec<FrameIdentity>) -> Self {
+        Self {
+            allocation_id,
+            operation: AllocationOperation::Free,
+            stack,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct MemoryTotals {
+    pub allocation_count: u64,
+    pub resize_count: u64,
+    pub allocated_bytes: u64,
+    pub freed_bytes: u64,
+    pub live_bytes: u64,
+    pub peak_live_bytes: u64,
+    pub retained_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum MemorySuggestionRule {
+    AllocationPressure,
+    Retained,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryBottleneck {
+    pub frame: FrameIdentity,
+    pub allocation_count: u64,
+    pub resize_count: u64,
+    pub allocated_bytes: u64,
+    pub freed_bytes: u64,
+    pub retained_bytes: u64,
+    pub live_at_peak_bytes: u64,
+    pub allocation_percent_hundredths: u16,
+    pub suggestions: Vec<MemorySuggestionRule>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryProfile {
+    pub config: MemoryConfig,
+    pub totals: MemoryTotals,
+    pub eligible_bottlenecks: usize,
+    pub truncated_bottlenecks: usize,
+    pub bottlenecks: Vec<MemoryBottleneck>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryProfileError {
+    DuplicateAllocation(u64),
+    UnknownAllocation(u64),
+    CounterOverflow,
+}
+
+#[derive(Debug, Clone)]
+struct LiveAllocation {
+    size: u64,
+    creation_site: Option<FrameIdentity>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct MemorySiteCounts {
+    allocation_count: u64,
+    resize_count: u64,
+    allocated_bytes: u64,
+    freed_bytes: u64,
+    retained_bytes: u64,
+    live_at_peak_bytes: u64,
+}
+
+impl MemoryProfile {
+    pub fn aggregate(
+        config: MemoryConfig,
+        events: Vec<AllocationEvent>,
+    ) -> Result<Self, MemoryProfileError> {
+        let mut totals = MemoryTotals::default();
+        let mut known_ids = BTreeSet::new();
+        let mut live_allocations: BTreeMap<u64, LiveAllocation> = BTreeMap::new();
+        let mut sites: BTreeMap<FrameIdentity, MemorySiteCounts> = BTreeMap::new();
+
+        for event in events {
+            let active_site = event.stack.last().cloned();
+            match event.operation {
+                AllocationOperation::Allocate { size } => {
+                    if !known_ids.insert(event.allocation_id) {
+                        return Err(MemoryProfileError::DuplicateAllocation(event.allocation_id));
+                    }
+                    totals.allocation_count = checked_add(totals.allocation_count, 1)?;
+                    totals.allocated_bytes = checked_add(totals.allocated_bytes, size)?;
+                    totals.live_bytes = checked_add(totals.live_bytes, size)?;
+                    if let Some(site) = &active_site {
+                        let counts = sites.entry(site.clone()).or_default();
+                        counts.allocation_count = checked_add(counts.allocation_count, 1)?;
+                        counts.allocated_bytes = checked_add(counts.allocated_bytes, size)?;
+                    }
+                    live_allocations.insert(
+                        event.allocation_id,
+                        LiveAllocation {
+                            size,
+                            creation_site: active_site,
+                        },
+                    );
+                }
+                AllocationOperation::Resize { new_size } => {
+                    let allocation = live_allocations
+                        .get_mut(&event.allocation_id)
+                        .ok_or(MemoryProfileError::UnknownAllocation(event.allocation_id))?;
+                    totals.resize_count = checked_add(totals.resize_count, 1)?;
+                    if let Some(site) = &active_site {
+                        let counts = sites.entry(site.clone()).or_default();
+                        counts.resize_count = checked_add(counts.resize_count, 1)?;
+                    }
+                    if new_size >= allocation.size {
+                        let growth = new_size - allocation.size;
+                        totals.allocated_bytes = checked_add(totals.allocated_bytes, growth)?;
+                        totals.live_bytes = checked_add(totals.live_bytes, growth)?;
+                        if let Some(site) = &active_site {
+                            let counts = sites.entry(site.clone()).or_default();
+                            counts.allocated_bytes = checked_add(counts.allocated_bytes, growth)?;
+                        }
+                    } else {
+                        let released = allocation.size - new_size;
+                        totals.freed_bytes = checked_add(totals.freed_bytes, released)?;
+                        totals.live_bytes -= released;
+                        if let Some(site) = &allocation.creation_site {
+                            let counts = sites.entry(site.clone()).or_default();
+                            counts.freed_bytes = checked_add(counts.freed_bytes, released)?;
+                        }
+                    }
+                    allocation.size = new_size;
+                }
+                AllocationOperation::Free => {
+                    let allocation = live_allocations
+                        .remove(&event.allocation_id)
+                        .ok_or(MemoryProfileError::UnknownAllocation(event.allocation_id))?;
+                    totals.freed_bytes = checked_add(totals.freed_bytes, allocation.size)?;
+                    totals.live_bytes -= allocation.size;
+                    if let Some(site) = allocation.creation_site {
+                        let counts = sites.entry(site).or_default();
+                        counts.freed_bytes = checked_add(counts.freed_bytes, allocation.size)?;
+                    }
+                }
+            }
+
+            if totals.live_bytes > totals.peak_live_bytes {
+                totals.peak_live_bytes = totals.live_bytes;
+                for counts in sites.values_mut() {
+                    counts.live_at_peak_bytes = 0;
+                }
+                for allocation in live_allocations.values() {
+                    if let Some(site) = &allocation.creation_site {
+                        let counts = sites.entry(site.clone()).or_default();
+                        counts.live_at_peak_bytes =
+                            checked_add(counts.live_at_peak_bytes, allocation.size)?;
+                    }
+                }
+            }
+        }
+
+        totals.retained_bytes = totals.live_bytes;
+        for allocation in live_allocations.values() {
+            if let Some(site) = &allocation.creation_site {
+                let counts = sites.entry(site.clone()).or_default();
+                counts.retained_bytes = checked_add(counts.retained_bytes, allocation.size)?;
+            }
+        }
+
+        let attributed_allocated_bytes = sites.values().try_fold(0_u64, |total, counts| {
+            checked_add(total, counts.allocated_bytes)
+        })?;
+        let mut bottlenecks: Vec<MemoryBottleneck> = sites
+            .into_iter()
+            .filter(|(_, counts)| {
+                attributed_allocated_bytes != 0
+                    && u128::from(counts.allocated_bytes) * 10_000
+                        >= u128::from(attributed_allocated_bytes)
+                            * u128::from(config.threshold_basis_points)
+            })
+            .map(|(frame, counts)| {
+                let mut suggestions = vec![MemorySuggestionRule::AllocationPressure];
+                if attributed_allocated_bytes != 0
+                    && u128::from(counts.retained_bytes) * 10_000
+                        >= u128::from(attributed_allocated_bytes)
+                            * u128::from(config.threshold_basis_points)
+                {
+                    suggestions.push(MemorySuggestionRule::Retained);
+                }
+                MemoryBottleneck {
+                    frame,
+                    allocation_count: counts.allocation_count,
+                    resize_count: counts.resize_count,
+                    allocated_bytes: counts.allocated_bytes,
+                    freed_bytes: counts.freed_bytes,
+                    retained_bytes: counts.retained_bytes,
+                    live_at_peak_bytes: counts.live_at_peak_bytes,
+                    allocation_percent_hundredths: rounded_percent_hundredths(
+                        counts.allocated_bytes,
+                        attributed_allocated_bytes,
+                    ),
+                    suggestions,
+                }
+            })
+            .collect();
+        bottlenecks.sort_by(|left, right| {
+            right
+                .allocated_bytes
+                .cmp(&left.allocated_bytes)
+                .then_with(|| right.allocation_count.cmp(&left.allocation_count))
+                .then_with(|| left.frame.cmp(&right.frame))
+        });
+        let eligible_bottlenecks = bottlenecks.len();
+        bottlenecks.truncate(config.limit);
+
+        Ok(Self {
+            config,
+            totals,
+            eligible_bottlenecks,
+            truncated_bottlenecks: eligible_bottlenecks - bottlenecks.len(),
+            bottlenecks,
+        })
+    }
+}
+
+fn checked_add(left: u64, right: u64) -> Result<u64, MemoryProfileError> {
+    left.checked_add(right)
+        .ok_or(MemoryProfileError::CounterOverflow)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -345,5 +641,103 @@ mod tests {
 
         assert_eq!(main.suggestion, CpuSuggestionRule::CalleeDominated);
         assert_eq!(leaf.suggestion, CpuSuggestionRule::HighSelf);
+    }
+
+    #[test]
+    fn memory_profile_tracks_resize_free_peak_and_retention_by_creation_site() {
+        let creator = frame("app", "create");
+        let grower = frame("app", "grow");
+        let events = vec![
+            AllocationEvent::allocate(1, 100, vec![creator.clone()]),
+            AllocationEvent::resize(1, 150, vec![grower.clone()]),
+            AllocationEvent::allocate(2, 20, vec![creator.clone()]),
+            AllocationEvent::resize(2, 5, vec![grower.clone()]),
+            AllocationEvent::free(2, vec![grower.clone()]),
+        ];
+
+        let profile = MemoryProfile::aggregate(MemoryConfig::default(), events).unwrap();
+
+        assert_eq!(
+            profile.totals,
+            MemoryTotals {
+                allocation_count: 2,
+                resize_count: 2,
+                allocated_bytes: 170,
+                freed_bytes: 20,
+                live_bytes: 150,
+                peak_live_bytes: 170,
+                retained_bytes: 150,
+            }
+        );
+        let creator_entry = profile
+            .bottlenecks
+            .iter()
+            .find(|entry| entry.frame == creator)
+            .expect("creator bottleneck");
+        assert_eq!(creator_entry.allocation_count, 2);
+        assert_eq!(creator_entry.resize_count, 0);
+        assert_eq!(creator_entry.allocated_bytes, 120);
+        assert_eq!(creator_entry.freed_bytes, 20);
+        assert_eq!(creator_entry.retained_bytes, 150);
+        assert_eq!(creator_entry.live_at_peak_bytes, 170);
+        assert_eq!(creator_entry.allocation_percent_hundredths, 7_059);
+
+        let grower_entry = profile
+            .bottlenecks
+            .iter()
+            .find(|entry| entry.frame == grower)
+            .expect("grower bottleneck");
+        assert_eq!(grower_entry.allocation_count, 0);
+        assert_eq!(grower_entry.resize_count, 2);
+        assert_eq!(grower_entry.allocated_bytes, 50);
+        assert_eq!(grower_entry.freed_bytes, 0);
+        assert_eq!(grower_entry.retained_bytes, 0);
+        assert_eq!(grower_entry.live_at_peak_bytes, 0);
+        assert_eq!(grower_entry.allocation_percent_hundredths, 2_941);
+    }
+
+    #[test]
+    fn memory_profile_applies_exact_threshold_ordering_and_limit() {
+        let alpha = frame("app", "alpha");
+        let beta = frame("app", "beta");
+        let gamma = frame("app", "gamma");
+        let config = MemoryConfig::new(3_000, 2).unwrap();
+        let events = vec![
+            AllocationEvent::allocate(1, 40, vec![beta.clone()]),
+            AllocationEvent::allocate(2, 30, vec![gamma]),
+            AllocationEvent::allocate(3, 30, vec![alpha.clone()]),
+        ];
+
+        let profile = MemoryProfile::aggregate(config, events).unwrap();
+
+        assert_eq!(profile.eligible_bottlenecks, 3);
+        assert_eq!(profile.truncated_bottlenecks, 1);
+        assert_eq!(profile.bottlenecks.len(), 2);
+        assert_eq!(profile.bottlenecks[0].frame, beta);
+        assert_eq!(profile.bottlenecks[1].frame, alpha);
+    }
+
+    #[test]
+    fn memory_profile_rejects_invalid_allocation_lifecycles() {
+        let site = frame("app", "allocate");
+        let duplicate = vec![
+            AllocationEvent::allocate(1, 1, vec![site.clone()]),
+            AllocationEvent::allocate(1, 2, vec![site.clone()]),
+        ];
+        let unknown_resize = vec![AllocationEvent::resize(7, 2, vec![site.clone()])];
+        let unknown_free = vec![AllocationEvent::free(9, vec![site])];
+
+        assert_eq!(
+            MemoryProfile::aggregate(MemoryConfig::default(), duplicate),
+            Err(MemoryProfileError::DuplicateAllocation(1))
+        );
+        assert_eq!(
+            MemoryProfile::aggregate(MemoryConfig::default(), unknown_resize),
+            Err(MemoryProfileError::UnknownAllocation(7))
+        );
+        assert_eq!(
+            MemoryProfile::aggregate(MemoryConfig::default(), unknown_free),
+            Err(MemoryProfileError::UnknownAllocation(9))
+        );
     }
 }
