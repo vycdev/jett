@@ -1764,7 +1764,10 @@ The selected
 adds a separate local, cross-process performance layer after in-process Salsa
 memoization. Its first artifact is a successful whole-file direct AST plus
 non-error parser diagnostics. Exact source bytes, a canonical artifact schema,
-and a deterministic compiler compatibility identity form its SHA-256 key.
+and a deterministic compiler compatibility identity form its SHA-256 key. The
+current `jett_query` cache module implements the exact v1 parse-key record,
+digest, strict decoder, and current-source validation. Artifact serialization,
+authenticated storage, and persistent query read-through remain pending.
 
 The wire format is compiler-owned and independent of Rust layout, Salsa handles,
 process-local `FileId` values, pointers, and checkout paths. A hit reconstructs

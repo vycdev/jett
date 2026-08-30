@@ -6,6 +6,8 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
+pub mod cache;
+
 /// The authority that supplied a source file.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SourceOrigin {
