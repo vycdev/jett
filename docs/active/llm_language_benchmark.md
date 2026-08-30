@@ -183,3 +183,22 @@ observed solutions, or task-specific repair advice. For deterministic
 evaluation, the harness serializes the complete language skill into the prompt
 instead of relying on automatic activation. This produces a 1,350-row study
 matrix and a 150-row balanced medium calibration slice.
+
+That slice is recorded in
+`benchmarks/results/2026-08-30_codex_luna_medium_v0.5_calibration/`. Initial
+grading passed 116/150: zero-shot 33/50, onboarding 45/50, and skill-assisted
+38/50. Excluding Jett, onboarding and skill-assisted tied at 37/40. Jett scored
+0/10 zero-shot, 8/10 onboarding, and 1/10 skill-assisted.
+
+The Jett skill result exposes a specific documentation gap. Seven of its nine
+failed responses used invalid `mutable name: Type` declarations. The reference
+describes type-before-name order but, unlike the onboarding sheet, shows no
+mutable-local example. The skill must gain compiler-accepted binding and
+collection examples and receive a new version before another calibration.
+
+The paired repair stage is recorded in
+`benchmarks/results/2026-08-30_codex_luna_medium_v0.5_compile_repair/`. It
+repaired 15/34 failures and raised the final result to 131/150. Jett repaired
+5/21 and ended at 14/30; the established languages repaired 10/13 and ended at
+117/120. These runs use one observation per cell and the rolling Luna alias, so
+they remain calibration evidence rather than a language ranking.

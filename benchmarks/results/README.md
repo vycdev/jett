@@ -24,3 +24,15 @@ Its paired one-prompt repair pass is in
 `2026-08-30_codex_luna_medium_v0.4_compile_repair/`. Ten of the 20 initial
 failures were repaired, producing a 90/100 pass-after-repair result. All seven
 established-language failures were repaired; Jett repaired 3 of 13.
+
+The parity programming-skill calibration is in
+`2026-08-30_codex_luna_medium_v0.5_calibration/`. It records 150 subscription
+cells across zero-shot, onboarding, and skill-assisted tracks. Initial grading
+passed 116/150. The established-language skill track tied onboarding at 37/40,
+but Jett's skill track passed only 1/10 because its reference lacked a concrete
+mutable-local example and repeatedly induced invalid declaration syntax.
+
+Its paired repair pass is in
+`2026-08-30_codex_luna_medium_v0.5_compile_repair/`. Fifteen of 34 failures
+were repaired, producing a 131/150 final result. Jett ended at 14/30; the four
+established languages ended at 117/120.
