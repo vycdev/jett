@@ -6,18 +6,20 @@ task/language/track cell: 4 tasks x 5 languages x 2 tracks = 40 responses.
 
 ## Harness result
 
-| Language | Zero-shot | Zero-shot tokens (input / output / reasoning) | Onboarding | Onboarding tokens (input / output / reasoning) |
-| --- | ---: | ---: | ---: | ---: |
-| Jett | 0/4 | 50,400 / 2,268 / 1,607 | 4/4 | 52,479 / 1,564 / 688 |
-| Python | 4/4 | 50,643 / 1,033 / 220 | 4/4 | 51,622 / 1,103 / 217 |
-| TypeScript | 4/4 | 50,962 / 1,222 / 196 | 4/4 | 51,570 / 1,342 / 304 |
-| Go | 4/4 | 50,343 / 860 / 184 | 4/4 | 51,955 / 1,344 / 560 |
-| Rust | 4/4 | 50,916 / 1,064 / 221 | 4/4 | 51,767 / 1,268 / 378 |
-| Total | 16/20 | 253,264 / 6,447 / 2,428 | 20/20 | 259,393 / 6,621 / 2,147 |
+| Language | Zero-shot | Zero-shot tokens (input / output / reasoning) | Zero-shot code chars (total / mean) | Onboarding | Onboarding tokens (input / output / reasoning) | Onboarding code chars (total / mean) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Jett | 0/4 | 50,400 / 2,268 / 1,607 | 2,750 / 687.5 | 4/4 | 52,479 / 1,564 / 688 | 3,853 / 963.3 |
+| Python | 4/4 | 50,643 / 1,033 / 220 | 3,612 / 903.0 | 4/4 | 51,622 / 1,103 / 217 | 3,559 / 889.8 |
+| TypeScript | 4/4 | 50,962 / 1,222 / 196 | 3,596 / 899.0 | 4/4 | 51,570 / 1,342 / 304 | 3,611 / 902.8 |
+| Go | 4/4 | 50,343 / 860 / 184 | 2,191 / 547.8 | 4/4 | 51,955 / 1,344 / 560 | 2,656 / 664.0 |
+| Rust | 4/4 | 50,916 / 1,064 / 221 | 3,533 / 883.3 | 4/4 | 51,767 / 1,268 / 378 | 3,741 / 935.3 |
+| Total | 16/20 | 253,264 / 6,447 / 2,428 | 15,682 / 784.1 | 20/20 | 259,393 / 6,621 / 2,147 | 17,420 / 871.0 |
 
 Reasoning tokens are the reported reasoning portion of output tokens, not an
 additional amount to add to output. Of the input totals, 206,848 zero-shot and
-200,704 onboarding tokens were cached.
+200,704 onboarding tokens were cached. Code characters are counted from the
+extracted source, including whitespace and newlines; character counts are used
+instead of language-specific code tokenizers so the measurement stays uniform.
 
 The automated graders reported 36/40 passes. All four compile failures were
 zero-shot Jett submissions. Luna again guessed braces, `var`, `%`, or missing
