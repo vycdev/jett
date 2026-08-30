@@ -80,6 +80,7 @@ fn item_file(item: &Item) -> FileId {
         Item::VarDecl(item) => item.span.file,
         Item::Verify(item) => item.span.file,
         Item::Property(item) => item.span.file,
+        Item::Resource(item) => item.span.file,
         Item::TypeAlias(item) => item.span.file,
     }
 }
@@ -122,6 +123,7 @@ fn collect_item<'a>(
         | Item::Interface(_)
         | Item::Bitfield(_)
         | Item::Enum(_)
+        | Item::Resource(_)
         | Item::Machine(_) => {}
     }
 }

@@ -163,6 +163,7 @@ impl<'a> OwnershipChecker<'a> {
                 Item::VarDecl(value) => value.span.file,
                 Item::Verify(value) => value.span.file,
                 Item::Property(value) => value.span.file,
+                Item::Resource(value) => value.span.file,
                 Item::TypeAlias(value) => value.span.file,
             };
             if current_file.is_some_and(|file| file != item_file) {

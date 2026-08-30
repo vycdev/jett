@@ -211,7 +211,7 @@ fn document_symbol_kind(kind: &str) -> SymbolKind {
         "interface" => SymbolKind::INTERFACE,
         "struct" | "bitfield" => SymbolKind::STRUCT,
         "enum" => SymbolKind::ENUM,
-        "machine" | "actor" => SymbolKind::CLASS,
+        "machine" | "actor" | "resource" => SymbolKind::CLASS,
         "variable" => SymbolKind::VARIABLE,
         "type" => SymbolKind::TYPE_PARAMETER,
         "implement" => SymbolKind::OBJECT,
@@ -467,6 +467,7 @@ impl LanguageServer for JettBackend {
                     DefKind::Interface => CompletionItemKind::INTERFACE,
                     DefKind::Machine => CompletionItemKind::CLASS,
                     DefKind::Actor => CompletionItemKind::CLASS,
+                    DefKind::Resource => CompletionItemKind::CLASS,
                     DefKind::Variable | DefKind::Param => CompletionItemKind::VARIABLE,
                     DefKind::Type => CompletionItemKind::TYPE_PARAMETER,
                     DefKind::Constant => CompletionItemKind::CONSTANT,
@@ -736,6 +737,11 @@ mod tests {
 
         assert_eq!(login.selection_range.start, Position::new(2, 16));
         assert_eq!(login.selection_range.end, Position::new(2, 21));
+    }
+
+    #[test]
+    fn document_symbol_kind_maps_resources() {
+        assert_eq!(document_symbol_kind("resource"), SymbolKind::CLASS);
     }
 
     #[test]

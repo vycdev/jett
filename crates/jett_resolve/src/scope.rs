@@ -39,6 +39,7 @@ pub enum DefKind {
     Enum,
     Machine,
     Actor,
+    Resource,
     Variable,
     Param,
     Type,

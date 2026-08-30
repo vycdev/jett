@@ -1090,6 +1090,7 @@ fn module_signature_query_result(
             | Item::VarDecl(_)
             | Item::Verify(_)
             | Item::Property(_)
+            | Item::Resource(_)
             | Item::TypeAlias(_) => {}
         }
     }
@@ -1137,6 +1138,7 @@ fn append_module_signature_displays(
             | Item::VarDecl(_)
             | Item::Verify(_)
             | Item::Property(_)
+            | Item::Resource(_)
             | Item::TypeAlias(_) => {}
         }
     }
@@ -1714,6 +1716,16 @@ fn append_file_symbol_query_entries(
                 prop.name.span,
                 source,
             ),
+            Item::Resource(resource) => push_file_symbol_query_entry(
+                symbols,
+                file_symbol_name(&resource.name.name, current_namespace.as_deref()),
+                "resource",
+                current_namespace.clone(),
+                file_symbol_visibility(current_namespace.as_deref(), resource.exported),
+                None,
+                resource.name.span,
+                source,
+            ),
             Item::TypeAlias(alias) => push_file_symbol_query_entry(
                 symbols,
                 file_symbol_name(&alias.name.name, current_namespace.as_deref()),
@@ -1925,6 +1937,16 @@ fn append_module_query_definitions(
                 current_source,
                 file_paths,
             ),
+            Item::Resource(resource) => push_exported_query_definition(
+                definitions,
+                &resource.name.name,
+                DefKind::Resource,
+                current_namespace.as_deref(),
+                resource.exported,
+                resource.name.span,
+                current_source,
+                file_paths,
+            ),
             Item::TypeAlias(alias) => {
                 push_exported_query_definition(
                     definitions,
@@ -2091,6 +2113,7 @@ pub fn query_kind_name(kind: jett_resolve::scope::DefKind) -> &'static str {
         DefKind::Enum => "enum",
         DefKind::Machine => "machine",
         DefKind::Actor => "actor",
+        DefKind::Resource => "resource",
         DefKind::Variable => "variable",
         DefKind::Param => "param",
         DefKind::Type => "type",
@@ -2159,6 +2182,7 @@ fn item_span(item: &Item) -> jett_common::Span {
         Item::VarDecl(decl) => decl.span,
         Item::Verify(verify) => verify.span,
         Item::Property(prop) => prop.span,
+        Item::Resource(resource) => resource.span,
         Item::TypeAlias(alias) => alias.span,
     }
 }
@@ -2458,6 +2482,7 @@ fn item_file(item: &Item) -> FileId {
         Item::VarDecl(decl) => decl.span.file,
         Item::Verify(verify) => verify.span.file,
         Item::Property(prop) => prop.span.file,
+        Item::Resource(resource) => resource.span.file,
         Item::TypeAlias(alias) => alias.span.file,
     }
 }

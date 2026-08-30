@@ -64,6 +64,8 @@ pub enum Type {
     Interface(InterfaceId),
     /// A user-defined actor.
     Actor(ActorId),
+    /// An opaque compiler-shipped runtime resource.
+    Resource(String),
     /// A user-defined state machine, without a statically known current state.
     Machine(MachineId),
     /// A state-qualified machine value: `Machine at state`.

@@ -288,6 +288,21 @@ impl Resolver {
                         a.exported,
                     );
                 }
+                Item::Resource(resource) => {
+                    self.check_user_type_name(&resource.name.name, resource.name.span);
+                    if !resource.span.file.is_stdlib() {
+                        self.sink
+                            .emit(errors::resource_declaration_requires_stdlib(resource.span));
+                    } else if let Some(def_id) = self.declare_namespaced_user_type(
+                        &resource.name.name,
+                        DefKind::Resource,
+                        resource.name.span,
+                        index,
+                        resource.exported,
+                    ) {
+                        self.resolutions.insert(resource.name.span, def_id);
+                    }
+                }
                 Item::TypeAlias(ta) => {
                     if ta.root_exported {
                         self.check_user_type_name(&ta.name.name, ta.name.span);
@@ -463,6 +478,7 @@ impl Resolver {
             Item::VarDecl(decl) => decl.span.file,
             Item::Verify(verify) => verify.span.file,
             Item::Property(prop) => prop.span.file,
+            Item::Resource(resource) => resource.span.file,
             Item::TypeAlias(alias) => alias.span.file,
         }
     }
@@ -3478,5 +3494,39 @@ function main() returns int64:
             "expected no errors, got: {:#?}",
             result.diagnostics
         );
+    }
+
+    #[test]
+    fn project_resource_declaration_is_rejected() {
+        let module = parse_module("resource FileHandle\n");
+        let result = resolve(&module);
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code.code() == 213 && diagnostic.severity == Severity::Error
+        }));
+    }
+
+    #[test]
+    fn stdlib_resource_declaration_defines_resource_symbol() {
+        let module = parse_module_with_file(
+            "namespace io\nexport resource FileHandle\n",
+            FileId::new(STDLIB_FILE_ID_START),
+        );
+        let result = resolve(&module);
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "unexpected errors: {errors:#?}");
+
+        let resource = match &module.items[1] {
+            Item::Resource(resource) => resource,
+            item => panic!("expected resource item, got {item:?}"),
+        };
+        let def_id = result
+            .resolutions
+            .get(&resource.name.span)
+            .expect("resource declaration should resolve to a definition");
+        assert_eq!(result.scope_table.def(*def_id).kind, DefKind::Resource);
     }
 }

@@ -975,6 +975,7 @@ impl Interpreter {
             Item::VarDecl(decl) => decl.span.file,
             Item::Verify(verify) => verify.span.file,
             Item::Property(prop) => prop.span.file,
+            Item::Resource(resource) => resource.span.file,
             Item::TypeAlias(alias) => alias.span.file,
         }
     }

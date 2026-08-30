@@ -33,6 +33,7 @@ pub enum TokenKind {
     Fail,
     Clone,
     View,
+    Resource,
     Type,
     Where,
     Machine,

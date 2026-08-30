@@ -845,6 +845,50 @@ pub fn removed_ambient_environment_builtin(name: &str, span: Span) -> Diagnostic
     Diagnostic::error(363, format!("`{name}` was removed; {guidance}"), span)
 }
 
+/// E0364: Opaque runtime resources cannot be cloned.
+pub fn resource_cannot_be_cloned(type_name: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        364,
+        format!(
+            "opaque runtime resource `{type_name}` cannot be cloned; move or borrow it instead"
+        ),
+        span,
+    )
+}
+
+/// E0365: Opaque runtime resources have no comparison semantics.
+pub fn resource_cannot_be_compared(type_name: &str, operator: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        365,
+        format!("opaque runtime resource `{type_name}` cannot be compared with `{operator}`"),
+        span,
+    )
+}
+
+/// E0366: Opaque runtime resources cannot implement source interfaces.
+pub fn resource_cannot_implement_interface(
+    type_name: &str,
+    interface_name: &str,
+    span: Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        366,
+        format!(
+            "opaque runtime resource `{type_name}` cannot implement interface `{interface_name}`"
+        ),
+        span,
+    )
+}
+
+/// E0367: Opaque runtime resources cannot be wrapped in refinements.
+pub fn resource_cannot_be_refined(type_name: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        367,
+        format!("opaque runtime resource type `{type_name}` cannot be refined"),
+        span,
+    )
+}
+
 // Diagnostic codes E0800-E0899 are reserved for function complexity limits.
 
 /// E0800: Function body exceeds the statement count limit.

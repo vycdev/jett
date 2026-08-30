@@ -257,6 +257,7 @@ impl TypeInterner {
             Type::Enum(eid) => self.resolve_enum(*eid).name.clone(),
             Type::Interface(iid) => self.resolve_interface(*iid).name.clone(),
             Type::Actor(aid) => self.resolve_actor(*aid).name.clone(),
+            Type::Resource(name) => name.clone(),
             Type::Machine(mid) => self.resolve_machine(*mid).name.clone(),
             Type::MachineState { machine, state } => {
                 let machine_def = self.resolve_machine(*machine);

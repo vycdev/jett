@@ -597,6 +597,7 @@ impl<'a> TypeChecker<'a> {
                 )
             }
             Type::Refinement { name, .. } => name.clone(),
+            Type::Resource(name) => name.clone(),
             Type::Error => "<error>".to_string(),
         }
     }
@@ -616,6 +617,7 @@ impl<'a> TypeChecker<'a> {
             Item::VarDecl(decl) => decl.span.file,
             Item::Verify(verify) => verify.span.file,
             Item::Property(prop) => prop.span.file,
+            Item::Resource(resource) => resource.span.file,
             Item::TypeAlias(alias) => alias.span.file,
         }
     }
@@ -1277,6 +1279,65 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn type_contains_resource_data(&self, ty: TypeId) -> bool {
+        let mut visited = HashSet::new();
+        self.type_contains_resource_data_inner(ty, &mut visited)
+    }
+
+    fn type_contains_resource_data_inner(&self, ty: TypeId, visited: &mut HashSet<TypeId>) -> bool {
+        if !visited.insert(ty) {
+            return false;
+        }
+
+        match self.interner.resolve(ty) {
+            Type::Resource(_) => true,
+            Type::List(inner) | Type::Set(inner) | Type::Optional(inner) | Type::Secret(inner) => {
+                self.type_contains_resource_data_inner(*inner, visited)
+            }
+            Type::Map(key, value) | Type::Result(key, value) => {
+                self.type_contains_resource_data_inner(*key, visited)
+                    || self.type_contains_resource_data_inner(*value, visited)
+            }
+            Type::Struct(sid) => self
+                .interner
+                .resolve_struct(*sid)
+                .fields
+                .iter()
+                .any(|(_, field_ty)| self.type_contains_resource_data_inner(*field_ty, visited)),
+            Type::Bitfield(bid) => self
+                .interner
+                .resolve_bitfield(*bid)
+                .fields
+                .iter()
+                .any(|field| self.type_contains_resource_data_inner(field.ty, visited)),
+            Type::Enum(eid) => self
+                .interner
+                .resolve_enum(*eid)
+                .variants
+                .iter()
+                .flat_map(|variant| variant.fields.iter())
+                .any(|(_, field_ty)| self.type_contains_resource_data_inner(*field_ty, visited)),
+            Type::Machine(mid) => self
+                .interner
+                .resolve_machine(*mid)
+                .states
+                .iter()
+                .flat_map(|state| state.fields.iter())
+                .any(|(_, field_ty)| self.type_contains_resource_data_inner(*field_ty, visited)),
+            Type::MachineState { machine, state } => self
+                .interner
+                .resolve_machine(*machine)
+                .state(*state)
+                .is_some_and(|state_def| {
+                    state_def.fields.iter().any(|(_, field_ty)| {
+                        self.type_contains_resource_data_inner(*field_ty, visited)
+                    })
+                }),
+            Type::Refinement { base, .. } => self.type_contains_resource_data_inner(*base, visited),
+            _ => false,
+        }
+    }
+
     fn json_public_projection_allows_secret_data(&self, ty: TypeId) -> bool {
         let mut visited = HashSet::new();
         self.json_public_projection_allows_secret_data_inner(ty, &mut visited)
@@ -1435,6 +1496,7 @@ impl<'a> TypeChecker<'a> {
             Type::Refinement { .. } => "refinement",
             Type::Machine(_) => "machine",
             Type::MachineState { .. } => "machine_state",
+            Type::Resource(_) => "resource",
             Type::Interface(_) | Type::Actor(_) | Type::Error => "unknown",
         }
     }
@@ -1469,6 +1531,7 @@ impl<'a> TypeChecker<'a> {
             Type::Refinement { .. } => "refinement_type",
             Type::Machine(_) => "machine_type",
             Type::MachineState { .. } => "machine_state_type",
+            Type::Resource(_) => "resource_type",
             Type::Interface(_) | Type::Actor(_) | Type::Error => "unknown_type",
         }
     }
@@ -2084,6 +2147,7 @@ impl<'a> TypeChecker<'a> {
             Type::TypeConstruction
             | Type::Interface(_)
             | Type::Actor(_)
+            | Type::Resource(_)
             | Type::Function { .. } => {
                 self.push_json_unsupported_type(ty, unsupported_types, unsupported);
             }
@@ -3890,6 +3954,7 @@ impl<'a> TypeChecker<'a> {
                 Item::Enum(def) => self.predeclare_enum(def, current_namespace.as_deref()),
                 Item::Machine(def) => self.predeclare_machine(def, current_namespace.as_deref()),
                 Item::Actor(def) => self.predeclare_actor(def, current_namespace.as_deref()),
+                Item::Resource(def) => self.predeclare_resource(def, current_namespace.as_deref()),
                 _ => {}
             }
         }
@@ -4106,6 +4171,16 @@ impl<'a> TypeChecker<'a> {
     // ------------------------------------------------------------------
     // Actors
     // ------------------------------------------------------------------
+
+    fn predeclare_resource(&mut self, def: &ast::ResourceDecl, namespace: Option<&str>) {
+        let canonical_name = Self::canonical_name(namespace, &def.name.name);
+        let ty = self.interner.intern(Type::Resource(canonical_name.clone()));
+        self.register_named_type(namespace, &def.name.name, ty);
+        self.register_trusted_stdlib_named_type(&canonical_name, ty, def.name.span);
+        if let Some(def_id) = self.declaration_def_id(def.name.span) {
+            self.type_env.insert(def_id, ty);
+        }
+    }
 
     fn predeclare_actor(&mut self, def: &ast::ActorDef, namespace: Option<&str>) {
         let canonical_name = Self::canonical_name(namespace, &def.name.name);
@@ -4886,6 +4961,14 @@ impl<'a> TypeChecker<'a> {
 
         let owner_name = self.type_name(owner_ty);
         let interface_name = self.type_name(interface_ty);
+        if matches!(self.interner.resolve(owner_ty), Type::Resource(_)) {
+            self.sink.emit(errors::resource_cannot_implement_interface(
+                &owner_name,
+                &interface_name,
+                block.span,
+            ));
+            return;
+        }
         let method_sigs: Vec<_> = block
             .methods
             .iter()
@@ -7921,9 +8004,15 @@ impl<'a> TypeChecker<'a> {
                 TypeInterner::NOTHING
             }
             Expr::Ask(inner, _) => self.check_send_ask_inner(inner),
-            Expr::Clone(inner, _) => {
-                // `clone expr` returns the same type as the expression.
-                self.check_expr(inner)
+            Expr::Clone(inner, span) => {
+                let inner_ty = self.check_expr(inner);
+                if self.type_contains_resource_data(inner_ty) {
+                    self.sink.emit(errors::resource_cannot_be_cloned(
+                        &self.type_name(inner_ty),
+                        *span,
+                    ));
+                }
+                inner_ty
             }
             Expr::Run(inner, _) => {
                 // `run call` returns the same type as the call (pending tracked internally).
@@ -8880,6 +8969,21 @@ impl<'a> TypeChecker<'a> {
         let (lhs_base, lhs_secret) = self.strip_secret_type(lhs_ty);
         let (rhs_base, rhs_secret) = self.strip_secret_type(rhs_ty);
         let tainted = lhs_secret || rhs_secret;
+
+        if lhs_base == rhs_base
+            && matches!(self.interner.resolve(lhs_base), Type::Resource(_))
+            && matches!(
+                op,
+                BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq
+            )
+        {
+            self.sink.emit(errors::resource_cannot_be_compared(
+                &self.type_name(lhs_base),
+                Self::binop_str(op),
+                span,
+            ));
+            return TypeInterner::ERROR;
+        }
 
         match op {
             // Arithmetic operators: both sides must be the same numeric type.
@@ -11383,7 +11487,13 @@ impl<'a> TypeChecker<'a> {
             .cloned()
             .expect("type alias existence checked before resolution");
         let base_ty = self.resolve_type_expr(&alias.base_type);
-        let alias_ty = if alias.constraint.is_some() {
+        let alias_ty = if alias.constraint.is_some() && self.type_contains_resource_data(base_ty) {
+            self.sink.emit(errors::resource_cannot_be_refined(
+                &self.type_name(base_ty),
+                alias.span,
+            ));
+            TypeInterner::ERROR
+        } else if alias.constraint.is_some() {
             self.interner.intern(Type::Refinement {
                 name: name.to_string(),
                 base: base_ty,
@@ -15289,5 +15399,103 @@ function main() returns nothing:
             "expected E0338, got: {:?}",
             errors
         );
+    }
+
+    #[test]
+    fn stdlib_resource_is_nominal_and_reflected_as_resource() {
+        let result = check_source_result_with_file_id(
+            "namespace io\nexport resource FileHandle\n",
+            FileId::new(STDLIB_FILE_ID_START),
+        );
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "unexpected errors: {errors:#?}");
+
+        let resource_type = result
+            .interner
+            .type_ids()
+            .find(|type_id| {
+                matches!(
+                    result.interner.resolve(*type_id),
+                    Type::Resource(name) if name == "io.FileHandle"
+                )
+            })
+            .expect("resource should have a distinct nominal semantic type");
+        let info = result
+            .reflection_metadata
+            .get_type_info_for_id(resource_type)
+            .expect("resource reflection metadata should be present");
+        assert_eq!(info.type_name, "io.FileHandle");
+        assert_eq!(info.kind, "resource");
+        assert!(
+            result
+                .reflection_metadata
+                .get_type_fields_for_id(resource_type)
+                .is_none(),
+            "resources must not expose aggregate fields"
+        );
+    }
+
+    #[test]
+    fn stdlib_resource_clone_is_rejected() {
+        let result = check_source_result_with_file_id(
+            "namespace io\nexport resource FileHandle\nfunction duplicate(value: FileHandle) returns FileHandle:\n    return clone value\n",
+            FileId::new(STDLIB_FILE_ID_START),
+        );
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code.code() == 364
+                && diagnostic.severity == jett_diagnostics::Severity::Error
+        }));
+    }
+
+    #[test]
+    fn stdlib_resource_nested_clone_is_rejected() {
+        let result = check_source_result_with_file_id(
+            "namespace io\nexport resource FileHandle\nfunction duplicate(value: optional[FileHandle]) returns optional[FileHandle]:\n    return clone value\n",
+            FileId::new(STDLIB_FILE_ID_START),
+        );
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code.code() == 364
+                && diagnostic.severity == jett_diagnostics::Severity::Error
+        }));
+    }
+
+    #[test]
+    fn stdlib_resource_comparison_is_rejected() {
+        let result = check_source_result_with_file_id(
+            "namespace io\nexport resource FileHandle\nfunction same(view left: FileHandle, view right: FileHandle) returns bool:\n    return left == right\n",
+            FileId::new(STDLIB_FILE_ID_START),
+        );
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code.code() == 365
+                && diagnostic.severity == jett_diagnostics::Severity::Error
+        }));
+    }
+
+    #[test]
+    fn stdlib_resource_interface_implementation_is_rejected() {
+        let result = check_source_result_with_file_id(
+            "namespace io\nexport resource FileHandle\ninterface Marker:\n    function mark(view self: Marker) returns bool\nimplement Marker for FileHandle:\n    function mark(view self: FileHandle) returns bool:\n        return true\n",
+            FileId::new(STDLIB_FILE_ID_START),
+        );
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code.code() == 366
+                && diagnostic.severity == jett_diagnostics::Severity::Error
+        }));
+    }
+
+    #[test]
+    fn stdlib_resource_refinement_is_rejected() {
+        let result = check_source_result_with_file_id(
+            "namespace io\nexport resource FileHandle\ntype OpenHandle = FileHandle where true\n",
+            FileId::new(STDLIB_FILE_ID_START),
+        );
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code.code() == 367
+                && diagnostic.severity == jett_diagnostics::Severity::Error
+        }));
     }
 }
