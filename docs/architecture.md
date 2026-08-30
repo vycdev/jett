@@ -797,10 +797,13 @@ materialization remains actor-runtime work. Remaining source constructs are stag
 [initial HIR lowering plan](active/hir_lowering_plan.md).
 
 The initial implemented `jett_mir` boundary accepts only HIR that passes the
-structural validator. It lowers top-level `if`, `while`, exhaustive `match`,
-`break`, `continue`, and `return` into deterministic dense basic blocks with
-explicit branch, switch, goto, and return terminators. Handle-internal control
-flow and definitive ownership/drop elaboration remain subsequent MIR work.
+HIR structural validator. It lowers top-level `if`, `while`, exhaustive
+`match`, `break`, `continue`, and `return` into deterministic dense basic
+blocks with explicit branch, switch, goto, and return terminators. Its public
+MIR validator rejects noncanonical block IDs, out-of-range function entries,
+and invalid goto, branch, switch, or for-loop edges before later backends
+consume a graph. Handle-internal control flow and definitive ownership/drop
+elaboration remain subsequent MIR work.
 
 ### Purpose
 
