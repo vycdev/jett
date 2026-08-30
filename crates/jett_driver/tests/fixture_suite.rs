@@ -582,6 +582,22 @@ fn math_factorial_wraps_overflow() {
 }
 
 #[test]
+fn string_repeat_rejects_unrepresentable_output() {
+    assert_runtime_fail(
+        "string_repeat_capacity_overflow.jett",
+        "runtime error: string.repeat: requested output is too large",
+    );
+}
+
+#[test]
+fn range_rejects_unrepresentable_output() {
+    assert_runtime_fail(
+        "range_capacity_overflow.jett",
+        "runtime error: range: requested output is too large",
+    );
+}
+
+#[test]
 fn math_clamp_rejects_invalid_bounds() {
     let cases = [
         (
