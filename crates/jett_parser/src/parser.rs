@@ -116,17 +116,6 @@ impl<'src> Parser<'src> {
         }
     }
 
-    fn parse_i64_token(&mut self, token: &Token, context: &str) -> i64 {
-        let text = self.token_text(token).to_string();
-        text.parse::<i64>().unwrap_or_else(|_| {
-            self.error(
-                format!("{context} must fit in the supported signed 64-bit literal range"),
-                token.span,
-            );
-            0
-        })
-    }
-
     fn parse_i128_token(&mut self, token: &Token, context: &str) -> i128 {
         let text = self.token_text(token).to_string();
         text.parse::<i128>().unwrap_or_else(|_| {
@@ -868,9 +857,25 @@ impl<'src> Parser<'src> {
         }
 
         if self.eat(TokenKind::Eq).is_some() {
+            let minus_tok = self.eat(TokenKind::Minus);
             let value_tok = self.expect(TokenKind::IntLiteral);
-            discriminant = Some(self.parse_i64_token(&value_tok, "enum discriminant"));
-            end_span = value_tok.span;
+            let value_span = minus_tok
+                .as_ref()
+                .map_or(value_tok.span, |minus| minus.span.merge(value_tok.span));
+            let value_text = self.token_text(&value_tok);
+            let signed_text = if minus_tok.is_some() {
+                format!("-{value_text}")
+            } else {
+                value_text.to_string()
+            };
+            discriminant = Some(signed_text.parse::<i64>().unwrap_or_else(|_| {
+                self.error(
+                    "enum discriminant must fit in the supported signed 64-bit literal range",
+                    value_span,
+                );
+                0
+            }));
+            end_span = value_span;
         }
 
         Variant {
@@ -2699,6 +2704,24 @@ mod tests {
         assert!(!result.errors.is_empty());
         assert_eq!(result.module.span.file, file);
         assert!(result.errors.iter().all(|error| error.span.file == file));
+    }
+
+    #[test]
+    fn parse_negative_enum_discriminant() {
+        let source = "invalid = -1";
+        let lexed = jett_lexer::tokenize(source, FileId::new(0));
+        assert!(lexed.errors.is_empty(), "lex errors: {:?}", lexed.errors);
+
+        let mut parser = Parser::new(source, lexed.tokens);
+        let variant = parser.parse_variant();
+
+        assert!(
+            parser.errors.is_empty(),
+            "parse errors: {:?}",
+            parser.errors
+        );
+        assert_eq!(variant.discriminant, Some(-1));
+        assert_eq!(parser.peek(), TokenKind::Eof);
     }
 
     // -----------------------------------------------------------------------

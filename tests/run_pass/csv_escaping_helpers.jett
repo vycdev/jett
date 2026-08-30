@@ -1,0 +1,20 @@
+namespace app
+
+function csv_escaped_quote_test() returns string:
+    list[list[string]] rows = csv.parse("name,quote\nalice,\"hello \"\"world\"\"\"") handle error:
+        return error
+    list[string] row = list.get[list[string]](rows, 1) handle:
+        default list("missing")
+    return list.get[string](row, 1) handle:
+        default "missing"
+verify csv_escaped_quote_test:
+    assert csv_escaped_quote_test() == "hello \"world\""
+
+function csv_trailing_crlf_test() returns string:
+    list[list[string]] rows = csv.parse("a,b\r\n1,2\r\n") handle error:
+        return error
+    list[string] second_row = list.get[list[string]](rows, 1) handle:
+        default list()
+    return "{list.length(rows)}:{list.length[string](second_row)}"
+verify csv_trailing_crlf_test:
+    assert csv_trailing_crlf_test() == "2:2"

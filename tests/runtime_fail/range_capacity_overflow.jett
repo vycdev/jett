@@ -1,0 +1,5 @@
+function main() returns nothing:
+    list[int64] values = range(0, 9223372036854775807)
+    int64 count = list.length[int64](view values)
+    print(count)
+    return nothing

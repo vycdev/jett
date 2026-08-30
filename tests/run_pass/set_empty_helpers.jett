@@ -1,0 +1,28 @@
+namespace app
+
+function empty_set_is_empty() returns bool:
+    set[int64] empty = set.new[int64]()
+    return set.is_empty[int64](empty)
+verify empty_set_is_empty:
+    assert empty_set_is_empty() == true
+
+function empty_set_algebra_lengths() returns int64:
+    set[int64] empty_for_union = set.new[int64]()
+    set[int64] one_for_union = set.add[int64](set.new[int64](), 1)
+    set[int64] empty_for_intersection = set.new[int64]()
+    set[int64] one_for_intersection = set.add[int64](set.new[int64](), 1)
+    set[int64] one_for_difference = set.add[int64](set.new[int64](), 1)
+    set[int64] empty_for_difference = set.new[int64]()
+    set[int64] union_set = set.union[int64](empty_for_union, one_for_union)
+    set[int64] intersection_set = set.intersection[int64](empty_for_intersection, one_for_intersection)
+    set[int64] difference_set = set.difference[int64](one_for_difference, empty_for_difference)
+    return set.length[int64](union_set) + set.length[int64](intersection_set) + set.length[int64](difference_set)
+verify empty_set_algebra_lengths:
+    assert empty_set_algebra_lengths() == 2
+
+function set_to_list_preserves_cardinality() returns int64:
+    set[int64] values = set.add[int64](set.add[int64](set.new[int64](), 10), 20)
+    list[int64] output = set.to_list[int64](values)
+    return list.length[int64](output)
+verify set_to_list_preserves_cardinality:
+    assert set_to_list_preserves_cardinality() == 2

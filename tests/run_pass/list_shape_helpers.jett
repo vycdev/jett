@@ -1,0 +1,33 @@
+namespace app
+
+function chunk_count() returns int64:
+    list[list[int64]] chunks = list.chunk(list(1, 2, 3, 4, 5), 2)
+    return list.length(chunks)
+verify chunk_count:
+    assert chunk_count() == 3
+
+function chunk_tail_length() returns int64:
+    list[list[int64]] chunks = list.chunk(list(1, 2, 3, 4, 5), 2)
+    list[int64] tail = list.get[list[int64]](chunks, 2) handle:
+        default list()
+    return list.length(tail)
+verify chunk_tail_length:
+    assert chunk_tail_length() == 1
+
+function zip_shortest_count() returns int64:
+    list[list.Pair[int64, string]] pairs = list.zip(list(1, 2, 3), list("one", "two"))
+    return list.length(pairs)
+verify zip_shortest_count:
+    assert zip_shortest_count() == 2
+
+function chunk_nonpositive_size() returns int64:
+    list[list[int64]] chunks = list.chunk(list(1, 2, 3), 0)
+    return list.length(chunks)
+verify chunk_nonpositive_size:
+    assert chunk_nonpositive_size() == 3
+
+function chunk_empty_input() returns int64:
+    list[list[int64]] chunks = list.chunk(list(), 3)
+    return list.length(chunks)
+verify chunk_empty_input:
+    assert chunk_empty_input() == 0

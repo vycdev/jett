@@ -72,18 +72,58 @@ fn server_capabilities() -> ServerCapabilities {
         )),
         hover_provider: Some(HoverProviderCapability::Simple(true)),
         definition_provider: Some(OneOf::Left(true)),
+        references_provider: Some(OneOf::Left(true)),
         completion_provider: Some(CompletionOptions::default()),
+        document_symbol_provider: Some(OneOf::Left(true)),
+        document_formatting_provider: Some(OneOf::Left(true)),
         position_encoding: Some(PositionEncodingKind::UTF16),
         ..ServerCapabilities::default()
     }
+}
+
+/// Return a zero-based logical source line without its line ending.
+///
+/// Jett accepts LF, CRLF, and lone CR, so LSP conversions must recognize all
+/// three forms consistently with the compiler and query layer.
+fn source_line(source: &str, target_line: usize) -> Option<&str> {
+    let bytes = source.as_bytes();
+    let mut line = 0usize;
+    let mut start = 0usize;
+    let mut index = 0usize;
+
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\r' => {
+                if line == target_line {
+                    return Some(&source[start..index]);
+                }
+                index += 1;
+                if bytes.get(index) == Some(&b'\n') {
+                    index += 1;
+                }
+                line += 1;
+                start = index;
+            }
+            b'\n' => {
+                if line == target_line {
+                    return Some(&source[start..index]);
+                }
+                index += 1;
+                line += 1;
+                start = index;
+            }
+            _ => index += 1,
+        }
+    }
+
+    (line == target_line).then_some(&source[start..])
 }
 
 /// Convert a zero-based LSP UTF-16 position into the driver's one-based
 /// Unicode-scalar line and column representation.
 fn driver_position(source: &str, position: Position) -> Option<(u32, u32)> {
     let line_index = usize::try_from(position.line).ok()?;
-    let line_source = source.split('\n').nth(line_index)?;
-    let line_source = line_source.strip_suffix('\r').unwrap_or(line_source);
+    let line_source = source_line(source, line_index)?;
     let line = position.line.checked_add(1)?;
 
     let mut utf16_column = 0u32;
@@ -113,14 +153,135 @@ fn lsp_position(source: &str, byte_offset: u32) -> Position {
         end -= 1;
     }
 
-    let prefix = &source[..end];
-    let line = prefix.bytes().filter(|byte| *byte == b'\n').count();
-    let line_start = prefix.rfind('\n').map_or(0, |index| index + 1);
-    let line_prefix = &prefix[line_start..];
+    let bytes = source.as_bytes();
+    let mut line = 0usize;
+    let mut line_start = 0usize;
+    let mut index = 0usize;
+    while index < end {
+        match bytes[index] {
+            b'\r' => {
+                if bytes.get(index + 1) == Some(&b'\n') {
+                    if index + 1 >= end {
+                        break;
+                    }
+                    index += 2;
+                } else {
+                    index += 1;
+                }
+                line += 1;
+                line_start = index;
+            }
+            b'\n' => {
+                index += 1;
+                line += 1;
+                line_start = index;
+            }
+            _ => index += 1,
+        }
+    }
+    let line_prefix = &source[line_start..end];
     let line_prefix = line_prefix.strip_suffix('\r').unwrap_or(line_prefix);
     let character = line_prefix.encode_utf16().count();
 
     Position::new(line as u32, character as u32)
+}
+
+fn lsp_position_from_driver(source: &str, line: u32, column: u32) -> Option<Position> {
+    let line_index = usize::try_from(line.checked_sub(1)?).ok()?;
+    let scalar_index = usize::try_from(column.checked_sub(1)?).ok()?;
+    let line_source = source_line(source, line_index)?;
+    if scalar_index > line_source.chars().count() {
+        return None;
+    }
+    let utf16_column = line_source
+        .chars()
+        .take(scalar_index)
+        .map(char::len_utf16)
+        .sum::<usize>();
+    Some(Position::new(
+        u32::try_from(line_index).ok()?,
+        u32::try_from(utf16_column).ok()?,
+    ))
+}
+
+fn document_symbol_kind(kind: &str) -> SymbolKind {
+    match kind {
+        "namespace" => SymbolKind::MODULE,
+        "function" | "verify" | "property" => SymbolKind::FUNCTION,
+        "interface" => SymbolKind::INTERFACE,
+        "struct" | "bitfield" => SymbolKind::STRUCT,
+        "enum" => SymbolKind::ENUM,
+        "machine" | "actor" => SymbolKind::CLASS,
+        "variable" => SymbolKind::VARIABLE,
+        "type" => SymbolKind::TYPE_PARAMETER,
+        "implement" => SymbolKind::OBJECT,
+        _ => SymbolKind::OBJECT,
+    }
+}
+
+#[allow(deprecated)]
+fn document_symbols_for_source(source: &str) -> Option<Vec<DocumentSymbol>> {
+    let outline = jett_driver::query_source_file_symbols(source, "<lsp-document>").ok()?;
+    let symbols = outline
+        .symbols
+        .into_iter()
+        .filter_map(|symbol| {
+            let start = lsp_position_from_driver(source, symbol.line, symbol.column)?;
+            let end = lsp_position_from_driver(source, symbol.end_line, symbol.end_column)?;
+            let range = Range::new(start, end);
+            Some(DocumentSymbol {
+                name: symbol.name,
+                detail: symbol.signature,
+                kind: document_symbol_kind(&symbol.kind),
+                tags: None,
+                deprecated: None,
+                range,
+                selection_range: range,
+                children: None,
+            })
+        })
+        .collect();
+    Some(symbols)
+}
+
+fn reference_locations(
+    source: &str,
+    uri: &Url,
+    position: Position,
+    include_declaration: bool,
+) -> Option<Vec<Location>> {
+    let (line, column) = driver_position(source, position)?;
+    let mut spans = jett_driver::references_at(source, line, column);
+    if include_declaration
+        && let Some(definition) = jett_driver::goto_definition(source, line, column)
+        && !spans.contains(&definition)
+    {
+        spans.push(definition);
+        spans.sort_unstable();
+    }
+
+    (!spans.is_empty()).then(|| {
+        spans
+            .into_iter()
+            .map(|(start, end)| Location {
+                uri: uri.clone(),
+                range: Range::new(lsp_position(source, start), lsp_position(source, end)),
+            })
+            .collect()
+    })
+}
+
+fn formatting_edits(source: &str) -> Option<Vec<TextEdit>> {
+    let result = jett_fmt::format_source(source, jett_common::FileId::new(0));
+    if !result.errors.is_empty() || result.output == source {
+        return None;
+    }
+
+    let end_offset = u32::try_from(source.len()).unwrap_or(u32::MAX);
+    Some(vec![TextEdit {
+        range: Range::new(Position::new(0, 0), lsp_position(source, end_offset)),
+        new_text: result.output,
+    }])
 }
 
 #[tower_lsp::async_trait]
@@ -251,6 +412,32 @@ impl LanguageServer for JettBackend {
         })))
     }
 
+    async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
+        let uri = &params.text_document_position.text_document.uri;
+        let position = params.text_document_position.position;
+
+        let documents = self.documents.read().await;
+        let Some(document) = documents.get(uri) else {
+            return Ok(None);
+        };
+
+        Ok(reference_locations(
+            &document.text,
+            uri,
+            position,
+            params.context.include_declaration,
+        ))
+    }
+
+    async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
+        let documents = self.documents.read().await;
+        let Some(document) = documents.get(&params.text_document.uri) else {
+            return Ok(None);
+        };
+
+        Ok(formatting_edits(&document.text))
+    }
+
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let uri = &params.text_document_position.text_document.uri;
 
@@ -297,6 +484,22 @@ impl LanguageServer for JettBackend {
 
         Ok(Some(CompletionResponse::Array(items)))
     }
+
+    async fn document_symbol(
+        &self,
+        params: DocumentSymbolParams,
+    ) -> Result<Option<DocumentSymbolResponse>> {
+        let uri = &params.text_document.uri;
+        let documents = self.documents.read().await;
+        let Some(document) = documents.get(uri) else {
+            return Ok(None);
+        };
+        let Some(symbols) = document_symbols_for_source(&document.text) else {
+            return Ok(None);
+        };
+
+        Ok(Some(DocumentSymbolResponse::Nested(symbols)))
+    }
 }
 
 fn diagnostics_for_source(source: &str, file_path: &str) -> Vec<Diagnostic> {
@@ -306,21 +509,15 @@ fn diagnostics_for_source(source: &str, file_path: &str) -> Vec<Diagnostic> {
         .diagnostics
         .iter()
         .map(|d| {
-            let (start_line, start_col) =
-                jett_diagnostics::render::line_col(&result.source, d.span.start);
-            let (end_line, end_col) =
-                jett_diagnostics::render::line_col(&result.source, d.span.end);
-
             let severity = match d.severity {
                 jett_diagnostics::Severity::Error => Some(DiagnosticSeverity::ERROR),
                 jett_diagnostics::Severity::Warning => Some(DiagnosticSeverity::WARNING),
                 jett_diagnostics::Severity::Info => Some(DiagnosticSeverity::INFORMATION),
             };
 
-            // LSP positions are 0-based; line_col returns 1-based.
             let range = Range::new(
-                Position::new(start_line as u32 - 1, start_col as u32 - 1),
-                Position::new(end_line as u32 - 1, end_col as u32 - 1),
+                lsp_position(&result.source, d.span.start),
+                lsp_position(&result.source, d.span.end),
             );
 
             Diagnostic {
@@ -400,6 +597,16 @@ mod tests {
         assert_eq!(lsp_position(source, u32::MAX), Position::new(1, 1));
     }
 
+    #[test]
+    fn position_conversions_support_lone_cr_lines() {
+        let source = "a\r🙂b";
+
+        assert_eq!(driver_position(source, Position::new(1, 0)), Some((2, 1)));
+        assert_eq!(driver_position(source, Position::new(1, 2)), Some((2, 2)));
+        assert_eq!(lsp_position(source, 2), Position::new(1, 0));
+        assert_eq!(lsp_position(source, 6), Position::new(1, 2));
+    }
+
     /// Verify that `build_source` produces diagnostics for invalid Jett code.
     /// This exercises the same path the LSP uses to validate documents.
     #[test]
@@ -445,6 +652,26 @@ mod tests {
         assert_eq!(diagnostic.range.start.character, 0);
     }
 
+    #[test]
+    fn diagnostics_for_source_uses_utf16_columns_after_supplementary_characters() {
+        let source = "namespace test\nfunction f() returns string:\n    return \"🙂\" !!!\n";
+        let compiler_result = jett_driver::build_source(source, "test.jett");
+        let diagnostics = diagnostics_for_source(source, "test.jett");
+
+        assert_eq!(diagnostics.len(), compiler_result.diagnostics.len());
+        for (diagnostic, compiler_diagnostic) in
+            diagnostics.iter().zip(&compiler_result.diagnostics)
+        {
+            assert_eq!(
+                diagnostic.range,
+                Range::new(
+                    lsp_position(source, compiler_diagnostic.span.start),
+                    lsp_position(source, compiler_diagnostic.span.end),
+                )
+            );
+        }
+    }
+
     /// Verify that hover_type returns a type for a known expression.
     #[test]
     fn hover_type_returns_type_for_identifier() {
@@ -456,7 +683,7 @@ mod tests {
     }
 
     #[test]
-    fn server_capabilities_advertise_save_notifications() {
+    fn server_capabilities_advertise_sync_and_document_symbols() {
         let capabilities = server_capabilities();
         let Some(TextDocumentSyncCapability::Options(options)) = capabilities.text_document_sync
         else {
@@ -468,6 +695,103 @@ mod tests {
             options.save,
             Some(TextDocumentSyncSaveOptions::Supported(true))
         ));
+        assert_eq!(
+            capabilities.document_symbol_provider,
+            Some(OneOf::Left(true))
+        );
+    }
+
+    #[test]
+    fn document_symbols_map_unsaved_source_outline() {
+        let source = "namespace api\n\nexport function login() returns int64:\n    return 1\n";
+
+        let symbols = document_symbols_for_source(source).expect("valid source outline");
+
+        let namespace = symbols
+            .iter()
+            .find(|symbol| symbol.name == "api")
+            .expect("namespace symbol");
+        assert_eq!(namespace.kind, SymbolKind::MODULE);
+        assert_eq!(namespace.selection_range.start, Position::new(0, 10));
+        assert_eq!(namespace.selection_range.end, Position::new(0, 13));
+
+        let login = symbols
+            .iter()
+            .find(|symbol| symbol.name == "api.login")
+            .expect("function symbol");
+        assert_eq!(login.kind, SymbolKind::FUNCTION);
+        assert_eq!(login.detail.as_deref(), Some("api.login() returns int64"));
+        assert_eq!(login.selection_range.start, Position::new(2, 16));
+        assert_eq!(login.selection_range.end, Position::new(2, 21));
+    }
+
+    #[test]
+    fn document_symbols_map_lone_cr_source_lines() {
+        let source = "namespace api\r\rexport function login() returns int64:\r    return 1\r";
+
+        let symbols = document_symbols_for_source(source).expect("valid source outline");
+        let login = symbols
+            .iter()
+            .find(|symbol| symbol.name == "api.login")
+            .expect("function symbol");
+
+        assert_eq!(login.selection_range.start, Position::new(2, 16));
+        assert_eq!(login.selection_range.end, Position::new(2, 21));
+    }
+
+    #[test]
+    fn server_capabilities_advertise_find_references() {
+        let capabilities = server_capabilities();
+
+        assert_eq!(capabilities.references_provider, Some(OneOf::Left(true)));
+    }
+
+    #[test]
+    fn reference_locations_map_driver_spans_to_lsp_ranges() {
+        let source = "namespace app\n\nfunction double(value: int64) returns int64:\n    return value + value\n\nfunction main() returns int64:\n    return double(21)\n";
+        let uri = Url::parse("file:///workspace/main.jett").unwrap();
+
+        let locations = reference_locations(source, &uri, Position::new(6, 11), false)
+            .expect("call should resolve");
+
+        assert_eq!(locations.len(), 1);
+        assert_eq!(locations[0].uri, uri);
+        assert_eq!(
+            locations[0].range,
+            Range::new(Position::new(6, 11), Position::new(6, 17))
+        );
+    }
+
+    #[test]
+    fn server_capabilities_advertise_document_formatting() {
+        let capabilities = server_capabilities();
+
+        assert_eq!(
+            capabilities.document_formatting_provider,
+            Some(OneOf::Left(true))
+        );
+    }
+
+    #[test]
+    fn reference_locations_include_the_declaration_when_requested() {
+        let source = "namespace app\n\nfunction double(value: int64) returns int64:\n    return value + value\n\nfunction main() returns int64:\n    return double(21)\n";
+        let uri = Url::parse("file:///workspace/main.jett").unwrap();
+
+        let locations = reference_locations(source, &uri, Position::new(6, 11), true)
+            .expect("call should resolve");
+
+        assert_eq!(locations.len(), 2);
+    }
+
+    #[test]
+    fn reference_locations_support_requests_on_the_declaration() {
+        let source = "namespace app\n\nfunction double(value: int64) returns int64:\n    return value + value\n\nfunction main() returns int64:\n    return double(21)\n";
+        let uri = Url::parse("file:///workspace/main.jett").unwrap();
+
+        let locations = reference_locations(source, &uri, Position::new(2, 9), true)
+            .expect("declaration should resolve");
+
+        assert_eq!(locations.len(), 2);
     }
 
     #[test]
@@ -485,5 +809,22 @@ mod tests {
         let document = document_for_save(&documents, &uri).expect("open document");
         assert_eq!(document.text, "latest source");
         assert_eq!(document.version, 7);
+    }
+
+    #[test]
+    fn document_formatting_replaces_the_open_buffer_with_canonical_source() {
+        let source = "namespace app\n\nfunction f() returns int64:\n    return  1\n";
+
+        let edits = formatting_edits(source).expect("valid source should format");
+
+        assert_eq!(edits.len(), 1);
+        assert_eq!(
+            edits[0].range,
+            Range::new(Position::new(0, 0), Position::new(4, 0))
+        );
+        assert_eq!(
+            edits[0].new_text,
+            "namespace app\nfunction f() returns int64:\n    return 1\n"
+        );
     }
 }

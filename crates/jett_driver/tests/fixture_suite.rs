@@ -359,6 +359,10 @@ compile_pass_fixture!(
     "ownership_branch_return_consumes.jett"
 );
 compile_pass_fixture!(
+    compile_pass_ownership_handle_return_fallthrough,
+    "ownership_handle_return_fallthrough.jett"
+);
+compile_pass_fixture!(
     compile_pass_ownership_pipeline_implicit_view_input,
     "ownership_pipeline_implicit_view_input.jett"
 );
@@ -578,6 +582,22 @@ fn math_factorial_wraps_overflow() {
 }
 
 #[test]
+fn string_repeat_rejects_unrepresentable_output() {
+    assert_runtime_fail(
+        "string_repeat_capacity_overflow.jett",
+        "runtime error: string.repeat: requested output is too large",
+    );
+}
+
+#[test]
+fn range_rejects_unrepresentable_output() {
+    assert_runtime_fail(
+        "range_capacity_overflow.jett",
+        "runtime error: range: requested output is too large",
+    );
+}
+
+#[test]
 fn math_clamp_rejects_invalid_bounds() {
     let cases = [
         (
@@ -790,7 +810,12 @@ run_pass_fixture!(
     "structured_concurrency.jett"
 );
 run_pass_fixture!(run_pass_map_operations, "map_operations.jett");
+run_pass_fixture!(
+    run_pass_map_from_lists_duplicate_keys,
+    "map_from_lists_duplicate_keys.jett"
+);
 run_pass_fixture!(run_pass_list_operations, "list_operations.jett");
+run_pass_fixture!(run_pass_list_sort_uint64, "list_sort_uint64.jett");
 run_pass_fixture!(run_pass_list_access_source, "list_access_source.jett");
 run_pass_fixture!(run_pass_math_operations, "math_operations.jett");
 run_pass_fixture!(run_pass_json_serialize, "json_serialize.jett");
@@ -979,6 +1004,10 @@ compile_fail_fixture!(
 
 run_pass_fixture!(run_pass_string_search, "string_search.jett");
 run_pass_fixture!(run_pass_string_indic_grapheme, "string_indic_grapheme.jett");
+run_pass_fixture!(
+    run_pass_string_split_grapheme_boundaries,
+    "string_split_grapheme_boundaries.jett"
+);
 run_pass_fixture!(run_pass_time_and_os, "time_and_os.jett");
 run_pass_fixture!(run_pass_time_values, "time_values.jett");
 run_pass_fixture!(run_pass_clock_production, "clock_production.jett");
@@ -1136,6 +1165,14 @@ compile_fail_fixture!(
 compile_fail_fixture!(
     compile_fail_ownership_branch_partial_move,
     "ownership_branch_partial_move.jett"
+);
+compile_fail_fixture!(
+    compile_fail_ownership_for_zero_iteration_rebind,
+    "ownership_for_zero_iteration_rebind.jett"
+);
+compile_fail_fixture!(
+    compile_fail_ownership_while_zero_iteration_rebind,
+    "ownership_while_zero_iteration_rebind.jett"
 );
 compile_fail_fixture!(
     compile_fail_math_sum_consumes_list,
@@ -1842,6 +1879,10 @@ compile_fail_fixture!(
     compile_fail_math_average_median_non_numeric,
     "math_average_median_non_numeric.jett"
 );
+compile_fail_fixture!(
+    compile_fail_list_sort_non_orderable,
+    "list_sort_non_orderable.jett"
+);
 
 #[test]
 fn compile_fail_math_average_median_non_numeric_count() {
@@ -1926,6 +1967,10 @@ compile_fail_fixture!(
 compile_fail_fixture!(
     compile_fail_bitfield_width_exceeds_runtime_limit,
     "bitfield_width_exceeds_runtime_limit.jett"
+);
+compile_fail_fixture!(
+    compile_fail_bitfield_negative_enum_discriminant,
+    "bitfield_negative_enum_discriminant.jett"
 );
 compile_fail_fixture!(
     compile_fail_uint8_handle_default_out_of_range,

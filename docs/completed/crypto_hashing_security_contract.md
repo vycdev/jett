@@ -1,7 +1,7 @@
 # Crypto Hashing and Security Contract
 
-Status: initial SHA-256/legacy-MD5 surface implemented on 2026-08-13.
-SHA-512 and HMAC names remain reserved and undiscoverable until separately implemented.
+Status: SHA-256/legacy-MD5 surface implemented on 2026-08-13; SHA-512 implemented on 2026-08-30.
+HMAC names remain reserved and undiscoverable until separately implemented.
 
 ## Context
 
@@ -73,8 +73,7 @@ function does not make a security claim about MD5.
 
 ### SHA-512
 
-SHA-512 is a planned addition, not part of the initial implemented surface. If
-added, its text form is reserved as:
+SHA-512 is implemented with the text form:
 
 ```text
 crypto.sha512(input: string) returns string
@@ -246,7 +245,7 @@ prerequisites for extracting the interpreter-facing source wrappers.
    - keep SHA-256 and MD5 processing behind private runtime hooks;
    - remove hardcoded public signature knowledge from the checker and verify
      project code cannot claim or reopen `namespace crypto`.
-3. **Add SHA-512 independently — future additive work**
+3. **Add SHA-512 independently — complete**
    - implement the reserved text signature and fixed 128-character output;
    - land FIPS known vectors and cross-backend parity with the declaration.
 4. **Add HMAC independently — future additive work**
@@ -263,8 +262,7 @@ prerequisites for extracting the interpreter-facing source wrappers.
 - SHA-256 and MD5 match published empty, short, multi-block, and Unicode text
   vectors.
 - Embedded NUL and non-ASCII strings hash their exact UTF-8 bytes.
-- SHA-256 emits 64 lowercase hex characters; MD5 emits 32; future SHA-512 emits
-  128.
+- SHA-256 emits 64 lowercase hex characters; MD5 emits 32; SHA-512 emits 128.
 - Wrong argument and result types fail during checking rather than at runtime.
 - Hashing `secret[string]` returns `secret[string]` and cannot be printed,
   interpolated, or serialized without explicit policy.

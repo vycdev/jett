@@ -2666,6 +2666,7 @@ impl<'a> TypeChecker<'a> {
                 | "encoding.__form_encode"
                 | "encoding.__form_decode"
                 | "crypto.__sha256"
+                | "crypto.__sha512"
                 | "crypto.__md5"
                 | "csv.__parse"
                 | "csv.__stringify"
@@ -2720,6 +2721,14 @@ impl<'a> TypeChecker<'a> {
         }
 
         match name.as_str() {
+            "int64.from_float64" => {
+                self.expect_no_type_args(&name, type_args, span);
+                Some((
+                    vec![TypeInterner::FLOAT64],
+                    self.interner
+                        .intern(Type::Result(TypeInterner::INT64, TypeInterner::STRING)),
+                ))
+            }
             "int64.from_string" => {
                 self.expect_no_type_args(&name, type_args, span);
                 Some((
@@ -3447,6 +3456,18 @@ impl<'a> TypeChecker<'a> {
             }
             "list.__sort" => {
                 let inner = self.optional_type_arg(&name, type_args, span);
+                if inner != TypeInterner::ERROR {
+                    let base = self.fully_coarsened_type(inner);
+                    if !self.is_numeric(base)
+                        && !matches!(base, TypeInterner::STRING | TypeInterner::BOOL)
+                    {
+                        self.sink.emit(errors::type_mismatch(
+                            "numeric, string, or bool",
+                            &self.type_name(inner),
+                            span,
+                        ));
+                    }
+                }
                 let list_ty = self.interner.intern(Type::List(inner));
                 Some((vec![list_ty], list_ty))
             }
@@ -3794,7 +3815,7 @@ impl<'a> TypeChecker<'a> {
                 ))
             }
             // Private crypto kernels; public signatures live in stdlib/crypto.jett.
-            "crypto.__sha256" | "crypto.__md5" => self.no_type_args_signature(
+            "crypto.__sha256" | "crypto.__sha512" | "crypto.__md5" => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
@@ -4579,24 +4600,18 @@ impl<'a> TypeChecker<'a> {
                                         ));
                                     }
 
-                                    let max_discriminant = enum_def
-                                        .variants
-                                        .iter()
-                                        .map(|variant| variant.discriminant)
-                                        .max()
-                                        .unwrap_or(0);
-                                    let fits = if max_discriminant < 0 {
-                                        false
-                                    } else if *width >= 63 {
-                                        true
-                                    } else {
-                                        (max_discriminant as u64) < (1_u64 << *width)
-                                    };
-                                    if !fits {
+                                    let discriminants_fit =
+                                        enum_def.variants.iter().all(|variant| {
+                                            variant.discriminant >= 0
+                                                && (*width >= 63
+                                                    || (variant.discriminant as u64)
+                                                        < (1_u64 << *width))
+                                        });
+                                    if !discriminants_fit {
                                         self.sink.emit(errors::invalid_bitfield_field(
                                             &def.name.name,
                                             &field.name.name,
-                                            "enum annotation has a discriminant that does not fit in the declared bit width",
+                                            "enum annotation requires every discriminant to be nonnegative and fit in the declared bit width",
                                             field.span,
                                         ));
                                     }
@@ -15129,6 +15144,26 @@ function main() returns nothing:
 bitfield Packet:
     header: 8 bits
     payload: bytes
+",
+        );
+
+        assert!(
+            errors.iter().any(|d| d.code.code() == 336),
+            "expected E0336, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn bitfield_enum_annotation_rejects_negative_discriminant() {
+        let errors = check_source_errors(
+            "\
+enum SignedProtocol:
+    invalid = -1
+    tcp = 6
+
+bitfield Header:
+    protocol: 8 bits as SignedProtocol
 
 function main() returns nothing:
     return nothing

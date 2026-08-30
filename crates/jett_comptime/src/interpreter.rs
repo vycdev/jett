@@ -43,6 +43,53 @@ fn nonnegative_usize(value: i64) -> usize {
     usize::try_from(value.max(0)).unwrap_or(usize::MAX)
 }
 
+fn repeat_string_checked(value: &str, count: i64) -> Result<String, String> {
+    let count = nonnegative_usize(count);
+    let output_len = value
+        .len()
+        .checked_mul(count)
+        .ok_or_else(|| "string.repeat: requested output is too large".to_string())?;
+    let mut output = String::new();
+    output
+        .try_reserve_exact(output_len)
+        .map_err(|_| "string.repeat: requested output is too large".to_string())?;
+    for _ in 0..count {
+        output.push_str(value);
+    }
+    Ok(output)
+}
+
+fn range_values_checked(start: i64, end: i64, step: i64) -> Result<Vec<Value>, String> {
+    if step == 0 {
+        return Err("range step cannot be zero".to_string());
+    }
+    let distance = if step > 0 && start < end {
+        (i128::from(end) - i128::from(start)) as u128
+    } else if step < 0 && start > end {
+        (i128::from(start) - i128::from(end)) as u128
+    } else {
+        0
+    };
+    let step_magnitude = i128::from(step).unsigned_abs();
+    let count = distance.div_ceil(step_magnitude);
+    let capacity =
+        usize::try_from(count).map_err(|_| "range: requested output is too large".to_string())?;
+    let mut items = Vec::new();
+    items
+        .try_reserve_exact(capacity)
+        .map_err(|_| "range: requested output is too large".to_string())?;
+
+    let mut value = start;
+    while (step > 0 && value < end) || (step < 0 && value > end) {
+        items.push(Value::Int64(value));
+        let Some(next) = value.checked_add(step) else {
+            break;
+        };
+        value = next;
+    }
+    Ok(items)
+}
+
 /// Compare secret byte strings without content-dependent early exits.
 ///
 /// Payload lengths are observable by contract. Equal-length contents are handed
@@ -8239,8 +8286,8 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::String(s), Value::String(delim)) => {
-                        let parts: Vec<Value> = s
-                            .split(delim.as_str())
+                        let parts: Vec<Value> = string_split_grapheme_matches(s, delim)
+                            .into_iter()
                             .map(|p| Value::String(p.to_string()))
                             .collect();
                         Some(Ok(Value::List(parts)))
@@ -8290,8 +8337,7 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::String(s), Value::Int64(n)) => {
-                        let n = nonnegative_usize(*n);
-                        Some(Ok(Value::String(s.repeat(n))))
+                        Some(repeat_string_checked(s, *n).map(Value::String))
                     }
                     _ => Some(Err(format!("{name} expects a string and an int64"))),
                 }
@@ -8334,6 +8380,24 @@ impl Interpreter {
             }
 
             // -- int64 / float64 conversions ----------------------------------
+            "int64.from_float64" => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::Float64(n)
+                        if n.is_finite()
+                            && n.fract() == 0.0
+                            && *n >= i64::MIN as f64
+                            && *n < 9_223_372_036_854_775_808.0 =>
+                    {
+                        Some(Ok(Value::ResultOk(Box::new(Value::Int64(*n as i64)))))
+                    }
+                    Value::Float64(_) => Some(Ok(Value::ResultFail(Box::new(Value::String(
+                        "int64.from_float64: value is not exactly representable as int64"
+                            .to_string(),
+                    ))))),
+                    _ => Some(Err(format!("{name} expects a float64 argument"))),
+                }
+            }
             "int64.from_string" => {
                 require_args!(name, 1, args);
                 match &args[0] {
@@ -8458,6 +8522,7 @@ impl Interpreter {
                         let mut sorted = items.clone();
                         sorted.sort_by(|a, b| match (a, b) {
                             (Value::Int64(x), Value::Int64(y)) => x.cmp(y),
+                            (Value::Uint64(x), Value::Uint64(y)) => x.cmp(y),
                             (Value::Float64(x), Value::Float64(y)) => {
                                 x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal)
                             }
@@ -8536,11 +8601,16 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::List(keys), Value::List(values)) => {
-                        let entries: Vec<(Value, Value)> = keys
-                            .iter()
-                            .zip(values.iter())
-                            .map(|(k, v)| (k.clone(), v.clone()))
-                            .collect();
+                        let mut entries = Vec::new();
+                        for (key, value) in keys.iter().zip(values.iter()) {
+                            if let Some(entry) =
+                                entries.iter_mut().find(|(existing, _)| existing == key)
+                            {
+                                entry.1 = value.clone();
+                            } else {
+                                entries.push((key.clone(), value.clone()));
+                            }
+                        }
                         Some(Ok(Value::Map(entries)))
                     }
                     _ => Some(Err(format!("{name} expects two list arguments"))),
@@ -8810,7 +8880,7 @@ impl Interpreter {
                             });
                             let mid = nums.len() / 2;
                             let median = if nums.len() % 2 == 0 {
-                                (nums[mid - 1] + nums[mid]) / 2.0
+                                float_midpoint(nums[mid - 1], nums[mid])
                             } else {
                                 nums[mid]
                             };
@@ -9250,6 +9320,14 @@ impl Interpreter {
                 }
             }
 
+            "crypto.__sha512" if self.current_function_trusted_stdlib => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::Bytes(bytes) => Some(Ok(Value::Bytes(sha512_digest(bytes)))),
+                    _ => Some(Err(format!("{name} expects a bytes argument"))),
+                }
+            }
+
             "crypto.__md5" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
@@ -9420,45 +9498,21 @@ impl Interpreter {
                     // range(end) — 0 to end exclusive
                     1 => match &args[0] {
                         Value::Int64(end) => {
-                            let items: Vec<Value> = (0..*end).map(Value::Int64).collect();
-                            Some(Ok(Value::List(items)))
+                            Some(range_values_checked(0, *end, 1).map(Value::List))
                         }
                         _ => Some(Err(format!("{name} expects int64 arguments"))),
                     },
                     // range(start, end) — start to end exclusive
                     2 => match (&args[0], &args[1]) {
                         (Value::Int64(start), Value::Int64(end)) => {
-                            let items: Vec<Value> = (*start..*end).map(Value::Int64).collect();
-                            Some(Ok(Value::List(items)))
+                            Some(range_values_checked(*start, *end, 1).map(Value::List))
                         }
                         _ => Some(Err(format!("{name} expects int64 arguments"))),
                     },
                     // range(start, end, step)
                     3 => match (&args[0], &args[1], &args[2]) {
                         (Value::Int64(start), Value::Int64(end), Value::Int64(step)) => {
-                            if *step == 0 {
-                                return Some(Err("range step cannot be zero".to_string()));
-                            }
-                            let mut items = Vec::new();
-                            let mut i = *start;
-                            if *step > 0 {
-                                while i < *end {
-                                    items.push(Value::Int64(i));
-                                    let Some(next) = i.checked_add(*step) else {
-                                        break;
-                                    };
-                                    i = next;
-                                }
-                            } else {
-                                while i > *end {
-                                    items.push(Value::Int64(i));
-                                    let Some(next) = i.checked_add(*step) else {
-                                        break;
-                                    };
-                                    i = next;
-                                }
-                            }
-                            Some(Ok(Value::List(items)))
+                            Some(range_values_checked(*start, *end, *step).map(Value::List))
                         }
                         _ => Some(Err(format!("{name} expects int64 arguments"))),
                     },
@@ -10364,6 +10418,37 @@ fn string_count_grapheme_matches(haystack: &str, needle: &str) -> usize {
     count
 }
 
+fn string_split_grapheme_matches<'a>(haystack: &'a str, delimiter: &str) -> Vec<&'a str> {
+    if delimiter.is_empty() {
+        let graphemes = string_graphemes(haystack);
+        let mut parts = Vec::with_capacity(graphemes.len() + 2);
+        parts.push("");
+        parts.extend(graphemes);
+        parts.push("");
+        return parts;
+    }
+
+    let boundaries = string_grapheme_boundaries(haystack);
+    let mut parts = Vec::new();
+    let mut part_start = 0;
+    let mut boundary_index = 0;
+    while boundary_index + 1 < boundaries.len() {
+        let start = boundaries[boundary_index];
+        if haystack[start..].starts_with(delimiter) {
+            let end = start + delimiter.len();
+            if let Ok(end_boundary_index) = boundaries.binary_search(&end) {
+                parts.push(&haystack[part_start..start]);
+                part_start = end;
+                boundary_index = end_boundary_index;
+                continue;
+            }
+        }
+        boundary_index += 1;
+    }
+    parts.push(&haystack[part_start..]);
+    parts
+}
+
 fn string_grapheme_boundaries(s: &str) -> Vec<usize> {
     let mut boundaries = vec![0];
     let mut offset = 0;
@@ -10376,6 +10461,20 @@ fn string_grapheme_boundaries(s: &str) -> Vec<usize> {
 
 fn string_graphemes(s: &str) -> Vec<&str> {
     UnicodeSegmentation::graphemes(s, true).collect()
+}
+
+fn float_midpoint(left: f64, right: f64) -> f64 {
+    if left == right {
+        return left;
+    }
+    if !left.is_finite() || !right.is_finite() {
+        return (left + right) / 2.0;
+    }
+    if left.is_sign_negative() == right.is_sign_negative() {
+        left + (right - left) / 2.0
+    } else {
+        left / 2.0 + right / 2.0
+    }
 }
 
 fn uint64_arithmetic_operand(value: i64) -> Result<u64, String> {
@@ -16340,6 +16439,108 @@ fn sha256_digest(data: &[u8]) -> Vec<u8> {
     }
     h.into_iter()
         .flat_map(u32::to_be_bytes)
+        .collect::<Vec<u8>>()
+}
+
+// ---------------------------------------------------------------------------
+// SHA-512 helper (no external crate dependency)
+// ---------------------------------------------------------------------------
+
+fn sha512_digest(data: &[u8]) -> Vec<u8> {
+    #[rustfmt::skip]
+    const K: [u64; 80] = [
+        0x428a2f98d728ae22, 0x7137449123ef65cd, 0xb5c0fbcfec4d3b2f, 0xe9b5dba58189dbbc,
+        0x3956c25bf348b538, 0x59f111f1b605d019, 0x923f82a4af194f9b, 0xab1c5ed5da6d8118,
+        0xd807aa98a3030242, 0x12835b0145706fbe, 0x243185be4ee4b28c, 0x550c7dc3d5ffb4e2,
+        0x72be5d74f27b896f, 0x80deb1fe3b1696b1, 0x9bdc06a725c71235, 0xc19bf174cf692694,
+        0xe49b69c19ef14ad2, 0xefbe4786384f25e3, 0x0fc19dc68b8cd5b5, 0x240ca1cc77ac9c65,
+        0x2de92c6f592b0275, 0x4a7484aa6ea6e483, 0x5cb0a9dcbd41fbd4, 0x76f988da831153b5,
+        0x983e5152ee66dfab, 0xa831c66d2db43210, 0xb00327c898fb213f, 0xbf597fc7beef0ee4,
+        0xc6e00bf33da88fc2, 0xd5a79147930aa725, 0x06ca6351e003826f, 0x142929670a0e6e70,
+        0x27b70a8546d22ffc, 0x2e1b21385c26c926, 0x4d2c6dfc5ac42aed, 0x53380d139d95b3df,
+        0x650a73548baf63de, 0x766a0abb3c77b2a8, 0x81c2c92e47edaee6, 0x92722c851482353b,
+        0xa2bfe8a14cf10364, 0xa81a664bbc423001, 0xc24b8b70d0f89791, 0xc76c51a30654be30,
+        0xd192e819d6ef5218, 0xd69906245565a910, 0xf40e35855771202a, 0x106aa07032bbd1b8,
+        0x19a4c116b8d2d0c8, 0x1e376c085141ab53, 0x2748774cdf8eeb99, 0x34b0bcb5e19b48a8,
+        0x391c0cb3c5c95a63, 0x4ed8aa4ae3418acb, 0x5b9cca4f7763e373, 0x682e6ff3d6b2b8a3,
+        0x748f82ee5defb2fc, 0x78a5636f43172f60, 0x84c87814a1f0ab72, 0x8cc702081a6439ec,
+        0x90befffa23631e28, 0xa4506cebde82bde9, 0xbef9a3f7b2c67915, 0xc67178f2e372532b,
+        0xca273eceea26619c, 0xd186b8c721c0c207, 0xeada7dd6cde0eb1e, 0xf57d4f7fee6ed178,
+        0x06f067aa72176fba, 0x0a637dc5a2c898a6, 0x113f9804bef90dae, 0x1b710b35131c471b,
+        0x28db77f523047d84, 0x32caab7b40c72493, 0x3c9ebe0a15c9bebc, 0x431d67c49c100d4c,
+        0x4cc5d4becb3e42b6, 0x597f299cfc657e2a, 0x5fcb6fab3ad6faec, 0x6c44198c4a475817,
+    ];
+    let mut h: [u64; 8] = [
+        0x6a09e667f3bcc908,
+        0xbb67ae8584caa73b,
+        0x3c6ef372fe94f82b,
+        0xa54ff53a5f1d36f1,
+        0x510e527fade682d1,
+        0x9b05688c2b3e6c1f,
+        0x1f83d9abfb41bd6b,
+        0x5be0cd19137e2179,
+    ];
+    let bit_len = (data.len() as u128).wrapping_mul(8);
+    let mut msg = data.to_vec();
+    msg.push(0x80);
+    while msg.len() % 128 != 112 {
+        msg.push(0x00);
+    }
+    msg.extend_from_slice(&bit_len.to_be_bytes());
+    for chunk in msg.chunks(128) {
+        let mut w = [0u64; 80];
+        for i in 0..16 {
+            w[i] = u64::from_be_bytes([
+                chunk[i * 8],
+                chunk[i * 8 + 1],
+                chunk[i * 8 + 2],
+                chunk[i * 8 + 3],
+                chunk[i * 8 + 4],
+                chunk[i * 8 + 5],
+                chunk[i * 8 + 6],
+                chunk[i * 8 + 7],
+            ]);
+        }
+        for i in 16..80 {
+            let s0 = w[i - 15].rotate_right(1) ^ w[i - 15].rotate_right(8) ^ (w[i - 15] >> 7);
+            let s1 = w[i - 2].rotate_right(19) ^ w[i - 2].rotate_right(61) ^ (w[i - 2] >> 6);
+            w[i] = w[i - 16]
+                .wrapping_add(s0)
+                .wrapping_add(w[i - 7])
+                .wrapping_add(s1);
+        }
+        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut hh] = h;
+        for i in 0..80 {
+            let s1 = e.rotate_right(14) ^ e.rotate_right(18) ^ e.rotate_right(41);
+            let ch = (e & f) ^ ((!e) & g);
+            let temp1 = hh
+                .wrapping_add(s1)
+                .wrapping_add(ch)
+                .wrapping_add(K[i])
+                .wrapping_add(w[i]);
+            let s0 = a.rotate_right(28) ^ a.rotate_right(34) ^ a.rotate_right(39);
+            let maj = (a & b) ^ (a & c) ^ (b & c);
+            let temp2 = s0.wrapping_add(maj);
+            hh = g;
+            g = f;
+            f = e;
+            e = d.wrapping_add(temp1);
+            d = c;
+            c = b;
+            b = a;
+            a = temp1.wrapping_add(temp2);
+        }
+        h[0] = h[0].wrapping_add(a);
+        h[1] = h[1].wrapping_add(b);
+        h[2] = h[2].wrapping_add(c);
+        h[3] = h[3].wrapping_add(d);
+        h[4] = h[4].wrapping_add(e);
+        h[5] = h[5].wrapping_add(f);
+        h[6] = h[6].wrapping_add(g);
+        h[7] = h[7].wrapping_add(hh);
+    }
+    h.into_iter()
+        .flat_map(u64::to_be_bytes)
         .collect::<Vec<u8>>()
 }
 

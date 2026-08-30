@@ -119,7 +119,7 @@
 | Unhandled result/optional detection (E0341, E0342) | Done |
 | Set value type and 12 set builtins (`new`, `add`, `remove`, `contains`, `union`, `intersection`, `difference`) | Done |
 | `print`/`println` builtins | Partial (interpreter support, secret blocking, and E0362 release diagnostics are done; [debug-only capability policy](open_design/print_debug_builtin_policy.md) is decided, while debug-event isolation and future-backend conformance remain pending) |
-| Type conversions: `float64.from_string`, `string.from_float64`, `string.from_bool` | Done |
+| Type conversions: `int64.from_float64`, `float64.from_string`, `string.from_float64`, `string.from_bool` | Done |
 | `time.now_ms`, `time.now_s` | Removed (replaced by explicit `Clock.now`) |
 | `os.env`, `os.args` | Removed (replaced by explicit `Environment.get` and `Environment.args`, with focused migration diagnostics) |
 | Math: `pi`, `e`, `sin`, `cos`, `tan`, `mod`, `is_even`, `is_odd`, `sum` | Done |
@@ -131,13 +131,15 @@
 
 | Component | Status |
 |---|---|
-| TOON output (`--agent` flag) | Partial (build diagnostics include file, ok/error status, severity counts, ranged diagnostics/labels, and tabular suggested fixes; format status, run stdout/typed debug output, ranged verify/property test summaries, namespace/symbol/type-at/definition-at/references-at/completion/signature query results, file-symbol parse failures, and type-at compiler failures with known source context and cross-file labels are structured) |
-| LSP server (diagnostics on save) | Done |
+| TOON output (`--agent` flag) | Partial (build diagnostics include file, ok/error status, severity counts, ranged diagnostics/labels, and tabular suggested fixes; format status, run stdout/typed debug output, ranged verify/property test summaries, namespace/symbol/type-at/definition-at/references-at/completion/signature query results, file-symbol parse failures, type-at compiler failures, and definition-at/references-at parse/resolution failures with known source context and cross-file labels are structured) |
+| LSP server (diagnostics on save and whole-document formatting) | Done |
 | LSP hover (type at cursor) | Done |
 | LSP go-to-definition | Done |
+| LSP find references | Done (current document, with optional declaration inclusion) |
 | LSP completions | Done |
+| LSP document symbols | Done (top-level file outline from the latest in-memory document, with declaration kinds, signatures, and UTF-16 ranges) |
 | MCP server | Not started; initial transport, tool/resource, and ASP handoff boundary tracked by [#37](https://github.com/vycdev/jett/issues/37) |
-| ASP query system | Partial (`jett query --agent --namespaces`, `--symbols`, `--type-at`, `--definition-at`, `--references-at`, prefix-filtered `--complete-at`, and `--signature` are implemented; namespace, type, symbol, definition, reference, and completion rows include source ranges; file-symbol parse failures and type-at parse, resolution, and type-check failures with known source context preserve structured diagnostics and cross-file labels; completion rows also include deterministic rank, match kind, namespace, visibility, and source-level signatures where available) |
+| ASP query system | Partial (`jett query --agent --namespaces`, `--symbols`, `--type-at`, `--definition-at`, `--references-at`, prefix-filtered `--complete-at`, and `--signature` are implemented; namespace, type, symbol, definition, reference, and completion rows include source ranges; file-symbol parse failures, type-at parse/resolution/type-check failures, and definition-at/references-at parse/resolution failures with known source context preserve structured diagnostics and cross-file labels; completion rows also include deterministic rank, match kind, namespace, visibility, and source-level signatures where available) |
 
 ### Phase I: Testing and Profiling — PARTIAL
 
@@ -145,7 +147,7 @@
 |---|---|
 | Property-based test runner | Done (basic: 100 generated iterations; all numeric primitives, bool/string/bytes/nothing, aliases/refinements, structs including generic structs, bitfields, enums, plus generic list/set/map/optional/result pools) |
 | Input shrinking on failure | Done (shrinking for int64, float64, string, bytes, list, set, map, optional, result, struct fields, enum payloads) |
-| CPU profiler (`--profile`) | Design complete; implementation not started ([sampling, attribution, output, security, platform, and runtime contract](completed/cpu_memory_profiling_contract.md)) |
+| CPU profiler (`--profile`) | Initial backend-neutral configuration, sample aggregation, exact thresholding, deterministic ranking, and suggestion rules implemented in `jett_profiler`; CLI, rendering, and runtime sampling remain staged by the [profiling contract](completed/cpu_memory_profiling_contract.md) |
 | Memory profiler (`--profile-memory`) | Design complete; implementation not started ([allocation, resize/free, retention, peak-memory, attribution, and runtime contract](completed/cpu_memory_profiling_contract.md)) |
 | `trace` keyword | Partial (parses, typechecks, runtime type-tagged current-value output in `jett run`) |
 | `breakpoint` keyword | Partial (parses, typechecks, and emits conditional runtime debug snapshots with visible binding types in `jett run`; the pause/inspection protocol is [decided](completed/breakpoint_pause_inspection_protocol.md), while its interpreter and future native-runtime stages remain unimplemented) |
@@ -169,7 +171,7 @@
 | `math` | Done (all public declarations are source-owned in `stdlib/math.jett`; compositional helpers have Jett bodies, integer operations share the language's wrapping semantics and nonzero-divisor proof rule, while private trusted kernels preserve floating-point primitives, constants, exact numeric collection behavior, and remaining domain failures; project code cannot call the kernels, and the closed `abs`/`min`/`max` `int64`/`float64` call policy remains compiler-enforced without creating general overloading) |
 | `json` | Partial (json.serialize, json.serialize_public, json.parse_exact, json.parse_raw and raw-tree accessors, compiler-owned public policy for parse/serialization; interpreter entrypoints require trusted stdlib-loaded reflected `.jett` hooks under `namespace json`; typed parsing routes through the stdlib `json.JsonTree` parser/decoder and exact parsing rejects unknown object fields recursively; reflected construction covers nested structs, enum-annotated bitfields, enums, machines, collections, wrappers, bytes, sized numeric primitives, null, secrets, aliases/refinements, and missing optional-field defaults; `json.JsonTree` is the sole raw representation and both former `JsonValue` aliases are rejected; checked reflection metadata feeds direct reflection, construction, runtime execution, and secret serialization policy) |
 | `random` | Done for the interpreter-backed compiler (all 5 public declarations are source-owned in `stdlib/random.jett`; every call borrows an explicit `Random`, integer sampling is half-open and unbiased, choice/shuffle preserve borrowed inputs, production state is runtime-injected, typed scripted samples make tests deterministic, and only private trusted sampling kernels remain; concurrent cancellation/clone sharing and later backends retain handoff obligations in the [random contract](completed/random_capability_entropy_contract.md)) |
-| `crypto` | Done for the implemented initial surface (`sha256` and legacy-only `md5` are source-owned in `stdlib/crypto.jett`; wrappers use exact UTF-8 bytes and lowercase byte hex, only private raw-digest kernels remain, secret lifting is preserved, and SHA-512/HMAC stay reserved and undiscoverable per the [crypto contract](completed/crypto_hashing_security_contract.md)) |
+| `crypto` | Done for the implemented text-digest surface (`sha256`, `sha512`, and legacy-only `md5` are source-owned in `stdlib/crypto.jett`; wrappers use exact UTF-8 bytes and lowercase byte hex, only private raw-digest kernels remain, secret lifting is preserved, and HMAC stays reserved and undiscoverable per the [crypto contract](completed/crypto_hashing_security_contract.md)) |
 | `encoding` | Done for the interpreter-backed compiler (all 8 public declarations are source-owned in `stdlib/encoding.jett`; Base64/hex operate on arbitrary bytes, all decoders return stable handled errors, URL and form component semantics are distinct, project code cannot call private kernels, and the future-backend handoff is recorded in the [encoding contract](completed/encoding_representation_failure_contract.md)) |
 | `bytes` | Done (all 9 public declarations are source-owned in `stdlib/bytes.jett`; observers use read-only views, `slice` returns independent owned bytes, `concat` consumes both inputs, and only private trusted raw-byte and UTF-8/hex kernels remain) |
 | `uuid` | Partial (`uuid.new`; generation and entropy contract [tracked by #73](https://github.com/vycdev/jett/issues/73)) |
@@ -188,7 +190,7 @@
 |---|---|
 | Salsa integration | Initial whole-file parse-query slice implemented (the first `jett_query` boundary memoizes parser-owned direct ASTs by stable logical file identity; see the [initial query and invalidation boundary](open_design/incremental_query_boundary.md) from [#147](https://github.com/vycdev/jett/issues/147), with implementation tracked by [#166](https://github.com/vycdev/jett/issues/166)) |
 | Parallel compilation | Design selected, implementation not started (bounded parallel parsing first; namespace/body scheduling follows stable declaration facts; see the [deterministic parallel compilation boundary](open_design/parallel_compilation_boundary.md), tracked by [#151](https://github.com/vycdev/jett/issues/151)) |
-| Content-addressed caching | Design selected, implementation not started (a private local cache starts with successful whole-file parse artifacts, canonical SHA-256 keys and wire schemas, per-user object authentication, untrusted decoding, current-provenance rebinding, atomic publication, and bounded cleanup; see the [content-addressed compilation cache contract](completed/content_addressed_compilation_cache_contract.md) from [#153](https://github.com/vycdev/jett/issues/153)) |
+| Content-addressed caching | Initial canonical parse-key codec implemented (SHA-256 identity, exact v1 binary records, strict decoding, and current-source validation); parse artifact serialization, authenticated storage, read-through integration, atomic publication, and bounded cleanup remain pending under the [content-addressed compilation cache contract](completed/content_addressed_compilation_cache_contract.md) from [#153](https://github.com/vycdev/jett/issues/153) |
 
 ## VS Code Extension
 
@@ -196,7 +198,7 @@
 |---|---|
 | Syntax highlighting (TextMate grammar) | Done |
 | Language configuration (brackets, indentation) | Done |
-| LSP integration (diagnostics) | Done (via `jett lsp`) |
+| LSP integration (diagnostics and formatting) | Done (via `jett lsp`) |
 
 ## CLI Commands
 
