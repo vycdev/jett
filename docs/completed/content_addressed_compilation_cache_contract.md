@@ -1,8 +1,9 @@
 # Content-Addressed Compilation Cache Contract
 
-Status: selected design; the canonical parse-key codec is implemented, while
-artifact serialization and persistent read-through remain pending. This
-document closes the design scope tracked by
+Status: selected design; the canonical parse-key and authenticated-envelope
+codecs are implemented, while compiler compatibility identity, authentication
+key storage, artifact serialization, persistent storage, and read-through
+remain pending. This document closes the design scope tracked by
 [#153](https://github.com/vycdev/jett/issues/153).
 
 ## Purpose And Scope
