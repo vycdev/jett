@@ -52,6 +52,20 @@ diagnostic order, query identity, or published artifacts.
 
 *Note: The `--agent` flag and the Agent Server Protocol (ASP) referenced above are defined in Rule Set 21. The ASP specifies how the compiler communicates structured TOON output to agents — including build errors, type queries, signature lookups, completions, and test results. The exact capabilities and query formats are still being refined and may evolve as the compiler is implemented. See Rule Set 21 for the current specification.*
 
+### Checked Program and HIR Boundary
+
+Jett's first backend-neutral execution boundary is a typed HIR lowered from the
+semantic AST, resolver facts, and typechecker facts. HIR does not reinterpret
+source spellings: it carries resolved declaration targets, checked types,
+explicit ownership operations, capabilities, trusted source origin, and source
+provenance. Generic function identity is the canonical declaration plus its
+concrete type arguments.
+
+The direct AST remains the initial frontend boundary, and the tree-walking
+interpreter remains available while HIR coverage grows. The later lossless CST
+will lower into that same AST. The staged compiler contract is recorded in the
+[initial HIR lowering plan](active/hir_lowering_plan.md).
+
 ---
 
 ## Foundational Rules

@@ -30,6 +30,12 @@ pub struct CheckResult {
     pub diagnostics: Vec<Diagnostic>,
     /// Map from expression spans to their inferred type.
     pub type_map: HashMap<Span, TypeId>,
+    /// Session-local resolved definitions and their checked types.
+    ///
+    /// Lowering uses this map with the resolver's `DefId` join keys. Durable
+    /// HIR identity is derived separately from source origin and canonical
+    /// declaration metadata.
+    pub definition_types: HashMap<DefId, TypeId>,
     /// The type interner, containing all types encountered during checking.
     pub interner: TypeInterner,
     /// Checked reflection metadata snapshot for comptime reflection builtins.
@@ -71,6 +77,7 @@ pub fn check_with_options(
     CheckResult {
         diagnostics,
         type_map: checker.type_map,
+        definition_types: checker.type_env,
         interner: checker.interner,
         reflection_metadata,
     }

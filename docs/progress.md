@@ -39,11 +39,11 @@
 | Capability purity enforcement | `jett_typecheck/capability` | 7 | Done |
 | Secret taint analysis | — | — | Partial (refined-secret taint fixed by [#18](https://github.com/vycdev/jett/issues/18); content-constant interpreter comparison for string/bytes secrets defined by [#33](https://github.com/vycdev/jett/issues/33), with native lowering pending [#20](https://github.com/vycdev/jett/issues/20) and [#22](https://github.com/vycdev/jett/issues/22)) |
 
-### Phase D: Code Generation — NOT STARTED
+### Phase D: Code Generation — STARTED
 
 | Component | Crate | Tests | Status |
 |---|---|---|---|
-| HIR (monomorphization) | `jett_hir` | — | Not started ([Tracked by #20](https://github.com/vycdev/jett/issues/20)) |
+| HIR (monomorphization) | `jett_hir` | 3 | Initial typed monomorphic lowering slice implemented with canonical source-origin/declaration identity, deterministic function/local IDs, direct user calls, and core structured control flow; generic-instantiation manifest and remaining constructs are staged by the [HIR lowering plan](active/hir_lowering_plan.md) and [#20](https://github.com/vycdev/jett/issues/20) |
 | MIR (control flow graph) | `jett_mir` | — | Not started ([Tracked by #22](https://github.com/vycdev/jett/issues/22)) |
 | LLVM native codegen | `jett_codegen_llvm` | — | Not started |
 | Runtime library | `jett_runtime` | — | Not started |

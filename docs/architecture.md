@@ -758,13 +758,30 @@ These are compile errors, not warnings.
 
 > Tracked by [#20](https://github.com/vycdev/jett/issues/20).
 
-**Input:** TypedTree from Phase 6.
+**Input:** semantic AST + `ResolveResult` + `CheckResult` from Phase 6. The
+current checked-program boundary is maps plus the shared type interner rather
+than a duplicate `TypedTree`; HIR materializes those facts into typed nodes.
 
-**Output:** HIR — a fully monomorphized intermediate representation.
+**Output:** HIR — a typed, backend-neutral, fully monomorphized intermediate
+representation.
+
+**Implementation status:** the `jett_hir` crate and first deterministic
+monomorphic lowering slice are implemented. It covers ordinary top-level
+functions, typed parameters and locals, direct user calls, core expressions,
+returns, branches, and loops. The ordered generic-instantiation handoff and
+remaining source constructs are staged by the
+[initial HIR lowering plan](active/hir_lowering_plan.md).
 
 ### Purpose
 
 The HIR is the first representation where generic functions are fully expanded. Each call to `sort[int64]` and `sort[string]` produces a separate HIR function. The HIR is also where desugaring is complete — no more syntax sugar, just core operations.
+
+Resolver `DefId` and `TypeId` values remain session-local join keys. An
+in-memory HIR function identity is the compiler-supplied source origin,
+canonical namespace, canonical declaration name and kind, plus concrete type
+arguments. Persistent artifacts replace raw type interner IDs with canonical
+structural type identities. Lowering never infers source authority from
+`FileId` ranges or trusted-looking names.
 
 ### Key Transformations
 

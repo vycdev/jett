@@ -1,3 +1,4 @@
+pub use jett_common::SourceOrigin;
 use jett_common::{FileId, STDLIB_FILE_ID_START};
 use jett_diagnostics::Diagnostic;
 use jett_parser::ast::Module;
@@ -7,14 +8,6 @@ use std::fmt;
 use std::sync::{Arc, Mutex};
 
 pub mod cache;
-
-/// The authority that supplied a source file.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum SourceOrigin {
-    Project,
-    Dependency(String),
-    Stdlib,
-}
 
 /// Stable source identity within a query database.
 ///
