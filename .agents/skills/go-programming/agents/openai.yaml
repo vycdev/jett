@@ -1,0 +1,4 @@
+interface:
+  display_name: "Go Programming"
+  short_description: "Type-driven Go programming and repair"
+  default_prompt: "Use $go-programming to implement and verify this Go program."

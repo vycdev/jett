@@ -12,18 +12,48 @@ class BenchmarkTests(unittest.TestCase):
 
     def test_pilot_matrix_has_expected_size_and_unique_ids(self) -> None:
         runs = list(jett_bench.planned_runs())
-        self.assertEqual(len(runs), 900)
+        self.assertEqual(len(runs), 1350)
         self.assertEqual(len({run["run_id"] for run in runs}), len(runs))
         self.assertEqual({run["reasoning_effort"] for run in runs}, {"low", "medium", "high"})
 
     def test_codex_calibration_is_the_balanced_medium_slice(self) -> None:
         runs = jett_bench.codex_calibration_runs()
-        self.assertEqual(len(runs), 100)
+        self.assertEqual(len(runs), 150)
         self.assertEqual({run["reasoning_effort"] for run in runs}, {"medium"})
         self.assertEqual({run["repetition"] for run in runs}, {1})
-        self.assertEqual({run["sequence"] for run in runs}, set(range(1, 101)))
+        self.assertEqual({run["sequence"] for run in runs}, set(range(1, 151)))
         cells = {(run["task_id"], run["language"], run["track"]) for run in runs}
-        self.assertEqual(len(cells), 100)
+        self.assertEqual(len(cells), 150)
+
+    def test_programming_skills_have_parity_and_no_task_material(self) -> None:
+        tasks = jett_bench.load_tasks()
+        task_ids = {task["id"] for _, task in tasks}
+        for language in jett_bench.LANGUAGE_SKILLS:
+            bundle = jett_bench.skill_bundle(language)
+            self.assertIn("## Workflow", bundle)
+            self.assertIn("## Boundary", bundle)
+            self.assertIn("## Verification loop", bundle)
+            self.assertIn("## Provenance", bundle)
+            for task_id in task_ids:
+                self.assertNotIn(task_id, bundle.lower())
+            for directory, task in tasks:
+                adapter = task["adapters"][language]
+                self.assertNotIn(task["statement"].strip(), bundle)
+                self.assertNotIn(adapter["signature"].strip(), bundle)
+                for constraint in task["constraints"]:
+                    if len(constraint) >= 30:
+                        self.assertNotIn(constraint, bundle)
+                for field in ("baseline", "hidden", "starter"):
+                    filename = adapter.get(field)
+                    if filename:
+                        source = (directory / filename).read_text(encoding="utf-8").strip()
+                        self.assertNotIn(source, bundle)
+
+            _, prompt = jett_bench.render_prompt(
+                tasks[0][1], language, "skill_assisted"
+            )
+            self.assertIn(bundle.strip(), prompt)
+            self.assertEqual(prompt.count(jett_bench.TYPE_DRIVEN_GUIDANCE), 1)
 
     def test_maintenance_starter_is_prompted_and_hashed(self) -> None:
         directory, task = next(

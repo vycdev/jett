@@ -38,8 +38,8 @@ timeouts do not provide a security boundary.
 
 `codex-calibration` uses the ChatGPT login held by the Codex CLI, removes API
 credential variables from the child environment, and refuses to run unless
-`codex login status` reports `Logged in using ChatGPT`. The current v0.4
-calibration is a 100-cell medium-reasoning slice run in fresh ephemeral sessions
+`codex login status` reports `Logged in using ChatGPT`. The current v0.5
+calibration is a 150-cell medium-reasoning slice run in fresh ephemeral sessions
 from empty temporary directories. The Luna name is currently a rolling alias
 rather than a dated snapshot, so every row records the alias, UTC completion time, Codex version,
 backend, deterministic sequence, and event-log hash. Do not pool these rows with
@@ -54,7 +54,7 @@ python tools/jett_bench.py grade-results /results/raw.jsonl \
 ```
 
 The optional `codex-repair` treatment is paired with those graded initial
-rows. A passing one-shot stops. A failing zero-shot or onboarding row receives
+rows. A passing one-shot stops. A failing row from any context track receives
 exactly one second prompt containing the original public task, its first source
 file, and compiler feedback. Candidate-source diagnostics are included when
 they can be separated from private grader code; otherwise the prompt receives
@@ -75,8 +75,8 @@ The isolated runner recipe and required no-network/resource controls are in
 - `references/*.md`: controlled-onboarding sheets;
 - `schemas/*.json`: machine-readable result and task contracts.
 
-The current typed-domain extension is specified by `protocol_v0.4.md` and
-`jett_subset_v0.4.md`. Its Python adapter adds pinned Pyright strict checking;
+The current skill-assisted extension is specified by `protocol_v0.5.md` and
+`jett_subset_v0.5.md`. Its Python adapter adds pinned Pyright strict checking;
 all five typed-task adapters perform a static-check phase before hidden runtime tests.
 Task-specific forbidden patterns are a narrow preflight against type erasure
 and catch-all branches, and a rejection is recorded as `policy_error`.
@@ -85,9 +85,15 @@ The v0.3 task set adds recursive closed data and a maintenance task that asks
 the model to evolve supplied source. Starter-source hashes are recorded with
 planned and generated rows so the maintenance input is auditable.
 
-The v0.4 task set contains ten tasks. The four additions cover optional values
+The task set contains ten tasks. The four v0.4 additions cover optional values
 and sets, struct/list transformation, typed map updates, and canonical string
 parsing with structured failures.
+
+The v0.5 matrix adds a third `skill_assisted` context track, for 1,350 planned
+rows and a 150-row balanced medium calibration. Five repo-scoped skills live in
+`.agents/skills/`. The harness materializes their instruction files directly
+for deterministic evaluation, records their hashes and byte counts, and checks
+that they contain no task identifiers or complete benchmark source fixtures.
 
 Never paste hidden files into prompts or model repair diagnostics. Results and
 raw responses should be written below `target/jett-bench/`, which is already
@@ -96,3 +102,7 @@ ignored by the repository's `target/` rule.
 The onboarding track gives every language the same type-driven development
 instruction plus a language-specific section. `reference_bytes` includes both,
 so documentation exposure remains visible in results.
+The skill-assisted track applies the same common instruction, then adds that
+language's complete skill bundle. `skill_sha256`, `skill_bytes`, and
+`reference_bytes` make the larger Jett context and every future skill revision
+explicit.

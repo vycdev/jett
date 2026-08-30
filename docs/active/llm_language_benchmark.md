@@ -25,7 +25,8 @@ pilot results receives a new version.
 ## Experiment shape
 
 - Languages: Jett, Python, TypeScript, Go, Rust.
-- Tracks: zero-shot and controlled onboarding.
+- Tracks: zero-shot, controlled onboarding, and parity-matched programming
+  skills.
 - Model: a pinned GPT-5.6 Luna snapshot when available; otherwise record the
   rolling alias, backend, client version, order, and exact run time.
 - Reasoning: low, medium, high.
@@ -168,3 +169,17 @@ Python, TypeScript, and Rust repaired every failed row; Jett repaired 3/13,
 ending at 10/20. The remaining Jett failures were all compile-time failures,
 showing that a single diagnostic usually does not replace onboarding for the
 current language surface.
+
+## Programming-skill expansion v0.5
+
+The next context treatment gives all five languages a proper programming skill,
+not only Jett. Each repo-scoped skill contains the same type-driven workflow,
+compiler-repair loop, evaluation boundary, and language reference shape. Jett's
+reference is larger because its syntax and ownership rules are not present in
+model pretraining; every row records the exact skill hash and byte count.
+
+The skills contain no benchmark task names, source fixtures, hidden graders,
+observed solutions, or task-specific repair advice. For deterministic
+evaluation, the harness serializes the complete language skill into the prompt
+instead of relying on automatic activation. This produces a 1,350-row study
+matrix and a 150-row balanced medium calibration slice.

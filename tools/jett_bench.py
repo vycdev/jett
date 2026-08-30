@@ -30,6 +30,14 @@ BENCHMARKS = ROOT / "benchmarks"
 DEFAULT_CONFIG = BENCHMARKS / "config" / "pilot.json"
 DEFAULT_TARGET = ROOT / "target" / "jett-bench"
 API_URL = "https://api.openai.com/v1/responses"
+SKILL_ROOT = ROOT / ".agents" / "skills"
+LANGUAGE_SKILLS = {
+    "jett": "jett-programming",
+    "python": "python-programming",
+    "typescript": "typescript-programming",
+    "go": "go-programming",
+    "rust": "rust-programming",
+}
 TYPE_DRIVEN_GUIDANCE = (
     "Use type-driven development: treat the required signature and types as design "
     "constraints, derive typed helper boundaries and state before implementation, preserve "
@@ -70,6 +78,28 @@ def load_tasks() -> list[tuple[Path, dict[str, Any]]]:
     for path in sorted((BENCHMARKS / "tasks").glob("*/task.json")):
         tasks.append((path.parent, read_json(path)))
     return tasks
+
+
+def skill_instruction_files(language: str) -> list[Path]:
+    skill_name = LANGUAGE_SKILLS.get(language)
+    if skill_name is None:
+        raise BenchmarkError(f"no programming skill configured for {language}")
+    directory = SKILL_ROOT / skill_name
+    return [
+        directory / "SKILL.md",
+        *sorted((directory / "references").rglob("*.md")),
+    ]
+
+
+def skill_bundle(language: str) -> str:
+    sections = []
+    for path in skill_instruction_files(language):
+        if not path.is_file():
+            raise BenchmarkError(f"missing skill instruction file: {path}")
+        relative = path.relative_to(SKILL_ROOT).as_posix()
+        content = path.read_text(encoding="utf-8").strip()
+        sections.append(f"## {relative}\n\n{content}")
+    return "\n\n".join(sections) + "\n"
 
 
 def validate(config_path: Path = DEFAULT_CONFIG) -> list[str]:
@@ -169,6 +199,26 @@ def validate(config_path: Path = DEFAULT_CONFIG) -> list[str]:
         reference = BENCHMARKS / "references" / f"{language}.md"
         if not reference.is_file():
             errors.append(f"missing onboarding reference: {reference}")
+        try:
+            bundle = skill_bundle(language)
+        except BenchmarkError as error:
+            errors.append(str(error))
+            continue
+        required_skill_sections = (
+            "## Workflow",
+            "## Boundary",
+            "## Verification loop",
+            "## Provenance",
+        )
+        for section in required_skill_sections:
+            if section not in bundle:
+                errors.append(f"{language} programming skill missing {section}")
+        lowered_bundle = bundle.lower()
+        for _, task in tasks:
+            if task["id"].lower() in lowered_bundle:
+                errors.append(f"{language} programming skill mentions benchmark task {task['id']}")
+        if "benchmarks/tasks" in lowered_bundle or "hidden grader source" in lowered_bundle:
+            errors.append(f"{language} programming skill contains evaluation-only material")
 
     for schema_name in ("result.schema.json", "task.schema.json"):
         schema = BENCHMARKS / "schemas" / schema_name
@@ -184,8 +234,9 @@ def validate(config_path: Path = DEFAULT_CONFIG) -> list[str]:
     allowed_efforts = {"low", "medium", "high"}
     if not set(config.get("reasoning_efforts", [])).issubset(allowed_efforts):
         errors.append("pilot reasoning efforts must be low, medium, or high")
-    if set(config.get("tracks", [])) != {"zero_shot", "onboarding"}:
-        errors.append("pilot must contain zero_shot and onboarding tracks")
+    required_tracks = {"zero_shot", "onboarding", "skill_assisted"}
+    if set(config.get("tracks", [])) != required_tracks:
+        errors.append("pilot must contain zero_shot, onboarding, and skill_assisted tracks")
     calibration = config.get("codex_subscription_calibration", {})
     if calibration.get("reasoning_effort") not in allowed_efforts:
         errors.append("Codex calibration reasoning effort must be low, medium, or high")
@@ -234,6 +285,13 @@ def render_prompt(task: dict[str, Any], language: str, track: str) -> tuple[str,
             f"\n\nDevelopment method for this track:\n{TYPE_DRIVEN_GUIDANCE}"
             f"\n\nLanguage reference for this track:\n\n{reference}"
         )
+    elif track == "skill_assisted":
+        prompt += (
+            f"\n\nDevelopment method for this track:\n{TYPE_DRIVEN_GUIDANCE}"
+            "\n\nProgramming skill for this track. Treat these as reusable language and "
+            "workflow instructions, not task-specific hints:\n\n"
+            + skill_bundle(language)
+        )
     elif track != "zero_shot":
         raise BenchmarkError(f"unknown track: {track}")
     return instructions, prompt
@@ -263,6 +321,7 @@ def planned_runs(config_path: Path = DEFAULT_CONFIG) -> Iterable[dict[str, Any]]
         range(1, config["repetitions"] + 1),
     ):
         instructions, prompt = render_prompt(task, language, track)
+        bundled_skill = skill_bundle(language) if track == "skill_assisted" else None
         run_id = f"{config['benchmark_version']}:{task['id']}:{task['version']}:{language}:{track}:{effort}:{repetition:02d}"
         yield {
             "run_id": run_id,
@@ -288,12 +347,24 @@ def planned_runs(config_path: Path = DEFAULT_CONFIG) -> Iterable[dict[str, Any]]
                 if task["adapters"][language].get("starter")
                 else None
             ),
-            "reference_bytes": 0 if track == "zero_shot" else len(
-                (
-                    TYPE_DRIVEN_GUIDANCE
-                    + "\n"
-                    + (BENCHMARKS / "references" / f"{language}.md").read_text(encoding="utf-8")
-                ).encode("utf-8")
+            "skill_sha256": sha256_text(bundled_skill) if bundled_skill else None,
+            "skill_bytes": len(bundled_skill.encode("utf-8")) if bundled_skill else 0,
+            "reference_bytes": (
+                0
+                if track == "zero_shot"
+                else len(
+                    (
+                        TYPE_DRIVEN_GUIDANCE
+                        + "\n"
+                        + (
+                            (BENCHMARKS / "references" / f"{language}.md").read_text(
+                                encoding="utf-8"
+                            )
+                            if track == "onboarding"
+                            else bundled_skill or ""
+                        )
+                    ).encode("utf-8")
+                )
             ),
             "git_revision": revision,
             "status": "planned",
