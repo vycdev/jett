@@ -16,6 +16,15 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(len({run["run_id"] for run in runs}), len(runs))
         self.assertEqual({run["reasoning_effort"] for run in runs}, {"low", "medium", "high"})
 
+    def test_codex_calibration_is_the_balanced_medium_slice(self) -> None:
+        runs = jett_bench.codex_calibration_runs()
+        self.assertEqual(len(runs), 30)
+        self.assertEqual({run["reasoning_effort"] for run in runs}, {"medium"})
+        self.assertEqual({run["repetition"] for run in runs}, {1})
+        self.assertEqual({run["sequence"] for run in runs}, set(range(1, 31)))
+        cells = {(run["task_id"], run["language"], run["track"]) for run in runs}
+        self.assertEqual(len(cells), 30)
+
     def test_hidden_graders_never_enter_prompts(self) -> None:
         for directory, task in jett_bench.load_tasks():
             for language in task["adapters"]:
@@ -73,6 +82,33 @@ class BenchmarkTests(unittest.TestCase):
         response = {"output": [{"type": "message"}, {"type": "function_call"}]}
         self.assertEqual(jett_bench.response_tool_calls(response), 1)
 
+    def test_parses_codex_subscription_metrics(self) -> None:
+        events = [
+            {"type": "thread.started", "thread_id": "thread-1"},
+            {"type": "item.completed", "item": {"id": "tool-1", "type": "command_execution"}},
+            {"type": "turn.completed", "usage": {
+                "input_tokens": 100, "cached_input_tokens": 20, "output_tokens": 30
+            }},
+        ]
+        metrics = jett_bench.codex_event_metrics(events)
+        self.assertEqual(metrics["response_id"], "thread-1")
+        self.assertEqual(metrics["input_tokens"], 100)
+        self.assertEqual(metrics["tool_calls"], 1)
+        self.assertEqual(metrics["tool_types"], ["command_execution"])
+
+    def test_codex_environment_removes_api_billing_credentials(self) -> None:
+        import os
+
+        previous = os.environ.get("OPENAI_API_KEY")
+        os.environ["OPENAI_API_KEY"] = "not-a-real-key"
+        try:
+            self.assertNotIn("OPENAI_API_KEY", jett_bench.codex_environment())
+        finally:
+            if previous is None:
+                del os.environ["OPENAI_API_KEY"]
+            else:
+                os.environ["OPENAI_API_KEY"] = previous
+
     def test_aggregate_keeps_metrics_separate(self) -> None:
         rows = [
             {
@@ -107,6 +143,10 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(group["compile_rate"], 1.0)
         self.assertEqual(group["mean_input_tokens"], 150.0)
         self.assertEqual(group["mean_grader_runtime_ms"], 3.0)
+        rollup = summary["rollups"]["by_language_track"][0]
+        self.assertEqual(rollup["n"], 2)
+        self.assertEqual(rollup["passed"], 1)
+        self.assertEqual(rollup["total_input_tokens"], 300)
 
 
 if __name__ == "__main__":

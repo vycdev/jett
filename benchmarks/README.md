@@ -6,8 +6,9 @@ planning, baseline grading, request generation, and result aggregation do not
 need an API key.
 
 The configured model is GPT-5.6 Luna, which supports low, medium, and high
-reasoning through the Responses API. Model behavior and pricing can change, so
-publication runs must pin a snapshot and update the price file from the
+reasoning. The benchmark supports the Responses API and Codex subscription as
+separate backends. Model behavior and pricing can change, so API publication
+runs should pin a dated snapshot when one exists and update the price file from the
 [official model page](https://developers.openai.com/api/docs/models/gpt-5.6-luna).
 Request fields follow the official
 [Responses API reference](https://developers.openai.com/api/reference/resources/responses/methods/create).
@@ -20,6 +21,7 @@ python tools/jett_bench.py validate
 python tools/jett_bench.py plan --output target/jett-bench/plan.jsonl
 python tools/jett_bench.py baselines --allow-unsafe-local
 python tools/jett_bench.py requests --output target/jett-bench/requests.jsonl
+python tools/jett_bench.py codex-calibration --confirm-subscription-usage
 python tools/jett_bench.py aggregate results.jsonl --output summary.json
 python -m unittest tools.tests.test_jett_bench
 ```
@@ -30,6 +32,23 @@ OpenAI. `api-run` exists for an authorized pilot and requires both
 snapshot in the experiment file, and run generated code only inside an isolated
 environment. `--allow-unsafe-local` is intentionally alarming: local process
 timeouts do not provide a security boundary.
+
+`codex-calibration` uses the ChatGPT login held by the Codex CLI, removes API
+credential variables from the child environment, and refuses to run unless
+`codex login status` reports `Logged in using ChatGPT`. It runs the 30-cell
+medium-reasoning calibration in fresh ephemeral sessions from empty temporary
+directories. The Luna name is currently a rolling alias rather than a dated
+snapshot, so every row records the alias, UTC completion time, Codex version,
+backend, deterministic sequence, and event-log hash. Do not pool these rows with
+Responses API rows: the Codex agent wrapper is part of this treatment.
+
+Generation does not execute submitted code. Grade the resulting JSONL inside
+the no-network container:
+
+```text
+python tools/jett_bench.py grade-results /results/raw.jsonl \
+  --output /results/graded.jsonl --allow-unsafe-local
+```
 
 The isolated runner recipe and required no-network/resource controls are in
 `sandbox/README.md`.

@@ -26,7 +26,8 @@ pilot results receives a new version.
 
 - Languages: Jett, Python, TypeScript, Go, Rust.
 - Tracks: zero-shot and controlled onboarding.
-- Model: a pinned GPT-5.6 Luna snapshot when an API run is authorized.
+- Model: a pinned GPT-5.6 Luna snapshot when available; otherwise record the
+  rolling alias, backend, client version, order, and exact run time.
 - Reasoning: low, medium, high.
 - Context: every initial attempt is an independent Responses API request.
 - Repair: optional bounded repairs receive the prior answer and normalized
@@ -63,6 +64,10 @@ API requests are dry-run artifacts by default. Executing paid calls requires a
 separate explicit flag and `OPENAI_API_KEY`; creating the benchmark does not
 authorize spending credits.
 
+Codex subscription calibration is a separate backend. It requires explicit
+subscription-usage confirmation, verifies ChatGPT login, strips API billing
+credentials, and records results separately from API experiments.
+
 ## Exit criteria for the pilot
 
 - All known-good solutions pass every hidden grader on the recorded toolchains.
@@ -74,3 +79,17 @@ authorize spending credits.
 - The task set is revised or frozen before the larger run.
 
 Implementation and operator instructions live in `benchmarks/README.md`.
+
+## First calibration
+
+The 2026-08-30 Codex-subscription calibration completed 30 independent Luna
+medium-reasoning cells with no API key, repairs, or observed tool calls. It
+passed 27/30: every established-language cell and every onboarded Jett cell
+passed; all three zero-shot Jett cells guessed invalid surface syntax and
+failed compilation. The versioned artifacts are in
+`benchmarks/results/2026-08-30_codex_luna_medium_calibration/`.
+
+This validates the harness and the usefulness of Jett onboarding, but the task
+set has a ceiling effect and cannot isolate type-driven guidance from syntax
+instruction. The next benchmark step is to add harder tasks that exercise type
+modeling and repair quality before increasing repetitions or reasoning levels.

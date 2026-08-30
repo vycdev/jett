@@ -6,6 +6,22 @@ One row is one task, language, track, reasoning level, and repetition. Initial
 rows use fresh context and must not share response IDs or conversation state.
 The planned pilot has 3 tasks x 5 languages x 2 tracks x 3 reasoning levels x
 3 repetitions = 270 rows. The frozen study raises repetitions to at least 10.
+The Codex subscription calibration is the 30-row medium-reasoning slice with
+one repetition and no repair attempts.
+
+## Backends
+
+Responses API and Codex subscription results are distinct treatments and must
+never be pooled. Subscription runs use a fresh ephemeral `codex exec` process,
+an empty working directory, ignored user/project configuration, read-only
+sandboxing, and an explicit instruction not to use tools. They record any tool
+use that still occurs. API credential variables are removed and the runner
+requires ChatGPT-login status before consuming subscription allowance.
+
+When a dated model snapshot is unavailable, record the rolling alias, Codex CLI
+version, UTC time, deterministic run order, and raw event-log hash. This is
+weaker reproducibility than a pinned snapshot and must be disclosed with any
+result.
 
 ## Tracks
 

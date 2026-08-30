@@ -20,6 +20,7 @@ import time
 import urllib.error
 import urllib.request
 from collections import defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -85,6 +86,7 @@ def validate(config_path: Path = DEFAULT_CONFIG) -> list[str]:
         "max_output_tokens",
         "grader_timeout_seconds",
         "prices_usd_per_million_tokens",
+        "codex_subscription_calibration",
     }
     missing = required_config - config.keys()
     if missing:
@@ -148,6 +150,13 @@ def validate(config_path: Path = DEFAULT_CONFIG) -> list[str]:
         errors.append("pilot reasoning efforts must be low, medium, or high")
     if set(config.get("tracks", [])) != {"zero_shot", "onboarding"}:
         errors.append("pilot must contain zero_shot and onboarding tracks")
+    calibration = config.get("codex_subscription_calibration", {})
+    if calibration.get("reasoning_effort") not in allowed_efforts:
+        errors.append("Codex calibration reasoning effort must be low, medium, or high")
+    if calibration.get("repetitions") != 1:
+        errors.append("Codex calibration must use exactly one repetition")
+    if calibration.get("max_repair_attempts") != 0:
+        errors.append("Codex calibration must disable repairs")
     return errors
 
 
@@ -261,6 +270,21 @@ def request_rows(config_path: Path = DEFAULT_CONFIG) -> Iterable[dict[str, Any]]
     config = require_valid(config_path)
     for run in planned_runs(config_path):
         yield {"run": run, "request": response_request(run, config)}
+
+
+def codex_calibration_runs(config_path: Path = DEFAULT_CONFIG) -> list[dict[str, Any]]:
+    config = require_valid(config_path)
+    calibration = config["codex_subscription_calibration"]
+    rows = [
+        run for run in planned_runs(config_path)
+        if run["reasoning_effort"] == calibration["reasoning_effort"]
+        and run["repetition"] <= calibration["repetitions"]
+    ]
+    # A stable shuffled order reduces correlation between language and rolling-alias drift.
+    rows.sort(key=lambda run: sha256_text("codex-calibration-order:" + run["run_id"]))
+    for sequence, run in enumerate(rows, start=1):
+        run["sequence"] = sequence
+    return rows
 
 
 FENCE = re.compile(r"```[^\n`]*\n(.*?)```", re.DOTALL)
@@ -622,6 +646,183 @@ def call_responses_api(body: dict[str, Any], api_key: str, timeout: int = 300) -
     return payload, (time.perf_counter() - started) * 1000
 
 
+def codex_environment() -> dict[str, str]:
+    environment = dict(os.environ)
+    for name in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_ORG_ID", "OPENAI_PROJECT_ID"):
+        environment.pop(name, None)
+    return environment
+
+
+def codex_backend_info() -> dict[str, str]:
+    executable = shutil.which("codex")
+    if not executable:
+        raise BenchmarkError("Codex CLI is not installed")
+    environment = codex_environment()
+    try:
+        version = subprocess.run(
+            [executable, "--version"], capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=15, check=True, env=environment,
+        ).stdout.strip()
+        login = subprocess.run(
+            [executable, "login", "status"], capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=15, check=True, env=environment,
+        )
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        raise BenchmarkError(f"cannot inspect Codex subscription login: {error}") from error
+    login_text = (login.stdout + login.stderr).strip()
+    if "Logged in using ChatGPT" not in login_text:
+        raise BenchmarkError(
+            "Codex is not logged in using ChatGPT; refusing to risk API-key billing"
+        )
+    return {"executable": executable, "version": version, "login": "ChatGPT subscription"}
+
+
+def parse_codex_events(raw: str) -> list[dict[str, Any]]:
+    events = []
+    for line in raw.splitlines():
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            events.append(value)
+    return events
+
+
+def codex_event_metrics(events: list[dict[str, Any]]) -> dict[str, Any]:
+    usage: dict[str, Any] = {}
+    thread_id = None
+    tool_ids: set[str] = set()
+    tool_types: set[str] = set()
+    non_tool_types = {"agent_message", "reasoning", "error", "todo_list"}
+    for event in events:
+        if event.get("type") == "thread.started":
+            thread_id = event.get("thread_id")
+        candidate = event.get("usage")
+        if isinstance(candidate, dict) and "input_tokens" in candidate:
+            usage = candidate
+        item = event.get("item")
+        if isinstance(item, dict):
+            item_type = item.get("type")
+            if item_type and item_type not in non_tool_types:
+                tool_types.add(str(item_type))
+                tool_ids.add(str(item.get("id") or f"{item_type}:{len(tool_ids)}"))
+    return {
+        "response_id": thread_id,
+        "input_tokens": usage.get("input_tokens"),
+        "cached_input_tokens": usage.get("cached_input_tokens"),
+        "output_tokens": usage.get("output_tokens"),
+        "reasoning_tokens": usage.get("reasoning_output_tokens"),
+        "tool_calls": len(tool_ids),
+        "tool_types": sorted(tool_types),
+    }
+
+
+def call_codex_subscription(
+    run: dict[str, Any],
+    backend: dict[str, str],
+    event_directory: Path,
+    timeout_seconds: int = 300,
+) -> tuple[str, dict[str, Any], float, str]:
+    event_directory.mkdir(parents=True, exist_ok=True)
+    event_path = event_directory / (sha256_text(run["run_id"])[:16] + ".jsonl")
+    prompt = (
+        "Benchmark isolation rule: solve only from this prompt. Do not use shell commands, "
+        "tools, filesystem inspection, network access, or prior knowledge of this repository.\n\n"
+        + run["instructions"]
+        + "\n\n"
+        + run["prompt"]
+    )
+    started = time.perf_counter()
+    with tempfile.TemporaryDirectory(prefix="jett-codex-calibration-") as directory:
+        output_path = Path(directory) / "last-message.txt"
+        command = [
+            backend["executable"], "exec", "--json", "--color", "never", "--ephemeral",
+            "--ignore-user-config", "--ignore-rules", "--strict-config",
+            "--skip-git-repo-check", "--sandbox", "read-only", "-C", directory,
+            "--model", run["model"],
+            "--config", f'model_reasoning_effort="{run["reasoning_effort"]}"',
+            "--output-last-message", str(output_path), "-",
+        ]
+        try:
+            completed = subprocess.run(
+                command, input=prompt, capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=timeout_seconds, check=False,
+                env=codex_environment(),
+            )
+        except subprocess.TimeoutExpired as error:
+            raise BenchmarkError(f"Codex subscription run timed out: {error}") from error
+        except OSError as error:
+            raise BenchmarkError(f"Codex subscription run failed: {error}") from error
+        latency_ms = (time.perf_counter() - started) * 1000
+        event_path.write_text(completed.stdout, encoding="utf-8", newline="\n")
+        if completed.returncode != 0:
+            raise BenchmarkError(
+                f"Codex subscription run exited {completed.returncode}: "
+                f"{(completed.stderr or completed.stdout)[-4000:]}"
+            )
+        if not output_path.is_file():
+            raise BenchmarkError("Codex subscription run produced no final message")
+        output = output_path.read_text(encoding="utf-8")
+    metrics = codex_event_metrics(parse_codex_events(completed.stdout))
+    return output, metrics, latency_ms, str(event_path)
+
+
+def result_from_codex_subscription(
+    run: dict[str, Any],
+    backend: dict[str, str],
+    output: str,
+    metrics: dict[str, Any],
+    latency_ms: float,
+    event_path: str,
+) -> dict[str, Any]:
+    result = {
+        **{key: value for key, value in run.items() if key not in {"instructions", "prompt"}},
+        "backend": "codex_subscription",
+        "model_snapshot": None,
+        "model_alias_is_rolling": True,
+        "codex_cli_version": backend["version"],
+        "subscription_login": backend["login"],
+        "completed_at_utc": datetime.now(timezone.utc).isoformat(),
+        "raw_output": output,
+        "raw_event_log": Path(event_path).name,
+        "raw_event_log_sha256": sha256_text(Path(event_path).read_text(encoding="utf-8")),
+        "latency_ms": latency_ms,
+        "estimated_cost_usd": None,
+        "status": "generated",
+        "passed": False,
+        **metrics,
+    }
+    try:
+        source = extract_source(output)
+    except BenchmarkError as error:
+        return {**result, "status": "extraction_error", "diagnostic": str(error)}
+    result.update(source_metrics(source))
+    result["extracted_source"] = source
+    return result
+
+
+def grade_result_rows(input_path: Path, output_path: Path, config_path: Path) -> int:
+    config = require_valid(config_path)
+    tasks = {task["id"]: (directory, task) for directory, task in load_tasks()}
+    rows = []
+    with input_path.open(encoding="utf-8") as source:
+        for line in source:
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            extracted = row.get("extracted_source")
+            if extracted and row.get("task_id") in tasks:
+                directory, task = tasks[row["task_id"]]
+                row["generation_status"] = row["status"]
+                row.update(grade_source(
+                    directory, task, row["language"], extracted,
+                    config["grader_timeout_seconds"],
+                ))
+            rows.append(row)
+    return write_jsonl(output_path, rows)
+
+
 def pass_at_k(n: int, correct: int, k: int) -> float | None:
     if n < k or n <= 0:
         return None
@@ -637,27 +838,60 @@ def mean_present(rows: list[dict[str, Any]], field: str) -> float | None:
     return statistics.fmean(values) if values else None
 
 
+def rollup_rows(rows: list[dict[str, Any]], dimensions: tuple[str, ...]) -> list[dict[str, Any]]:
+    groups: dict[tuple[Any, ...], list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        groups[tuple(row.get(field, "unspecified") for field in dimensions)].append(row)
+    summaries = []
+    for key, group in sorted(groups.items()):
+        compile_known = [row for row in group if row.get("compile_succeeded") is not None]
+        summary = {field: value for field, value in zip(dimensions, key)}
+        summary.update({
+            "n": len(group),
+            "passed": sum(bool(row.get("passed")) for row in group),
+            "pass_rate": sum(bool(row.get("passed")) for row in group) / len(group),
+            "compile_rate": (
+                sum(bool(row["compile_succeeded"]) for row in compile_known) / len(compile_known)
+                if compile_known else None
+            ),
+            "total_input_tokens": sum(row.get("input_tokens") or 0 for row in group),
+            "total_output_tokens": sum(row.get("output_tokens") or 0 for row in group),
+            "total_reasoning_tokens": sum(row.get("reasoning_tokens") or 0 for row in group),
+            "total_tool_calls": sum(row.get("tool_calls") or 0 for row in group),
+            "mean_latency_ms": mean_present(group, "latency_ms"),
+            "mean_grader_runtime_ms": mean_present(group, "grader_runtime_ms"),
+        })
+        summaries.append(summary)
+    return summaries
+
+
 def aggregate(paths: list[Path]) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     for path in paths:
         with path.open(encoding="utf-8") as source:
             rows.extend(json.loads(line) for line in source if line.strip())
-    groups: dict[tuple[str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    groups: dict[tuple[str, str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
     repair_rows = [row for row in rows if row.get("repair_attempt", 0) > 0]
+    analysis_rows = []
     for row in rows:
         if row.get("track") == "baseline" or row.get("status") == "planned" or row.get("repair_attempt", 0) > 0:
             continue
-        key = (row["task_id"], row["language"], row["track"], row["reasoning_effort"])
+        analysis_rows.append(row)
+        key = (
+            row.get("backend", "unspecified"), row["task_id"], row["language"],
+            row["track"], row["reasoning_effort"],
+        )
         groups[key].append(row)
     summaries = []
     for key, group in sorted(groups.items()):
         correct = sum(bool(row.get("passed")) for row in group)
         compile_known = [row for row in group if row.get("compile_succeeded") is not None]
         summaries.append({
-            "task_id": key[0],
-            "language": key[1],
-            "track": key[2],
-            "reasoning_effort": key[3],
+            "backend": key[0],
+            "task_id": key[1],
+            "language": key[2],
+            "track": key[3],
+            "reasoning_effort": key[4],
             "n": len(group),
             "correct": correct,
             "compile_rate": (
@@ -683,6 +917,14 @@ def aggregate(paths: list[Path]) -> dict[str, Any]:
         "repair_pass_count": sum(bool(row.get("passed")) for row in repair_rows),
         "group_count": len(summaries),
         "groups": summaries,
+        "rollups": {
+            "overall": rollup_rows(analysis_rows, ("backend",)),
+            "by_track": rollup_rows(analysis_rows, ("backend", "track")),
+            "by_language": rollup_rows(analysis_rows, ("backend", "language")),
+            "by_language_track": rollup_rows(
+                analysis_rows, ("backend", "language", "track")
+            ),
+        },
     }
 
 
@@ -710,6 +952,22 @@ def parse_args() -> argparse.Namespace:
     api_parser.add_argument("--allow-unpinned-model", action="store_true")
     api_parser.add_argument("--grade", action="store_true")
     api_parser.add_argument("--allow-unsafe-local", action="store_true")
+
+    codex_parser = subparsers.add_parser("codex-calibration")
+    codex_parser.add_argument(
+        "--output", type=Path, default=DEFAULT_TARGET / "codex-calibration" / "raw.jsonl"
+    )
+    codex_parser.add_argument(
+        "--event-dir", type=Path, default=DEFAULT_TARGET / "codex-calibration" / "events"
+    )
+    codex_parser.add_argument("--limit", type=int, default=30)
+    codex_parser.add_argument("--confirm-subscription-usage", action="store_true")
+    codex_parser.add_argument("--resume", action="store_true")
+
+    grade_parser = subparsers.add_parser("grade-results")
+    grade_parser.add_argument("input", type=Path)
+    grade_parser.add_argument("--output", type=Path, required=True)
+    grade_parser.add_argument("--allow-unsafe-local", action="store_true")
 
     aggregate_parser = subparsers.add_parser("aggregate")
     aggregate_parser.add_argument("inputs", nargs="+", type=Path)
@@ -792,6 +1050,78 @@ def main() -> int:
                     completed += 1
                     print(f"{prior['run_id']}: {prior['status']}")
             print(f"appended {completed} results to {args.output}")
+            return 0
+
+        if args.command == "codex-calibration":
+            config = require_valid(args.config)
+            if not args.confirm_subscription_usage:
+                raise BenchmarkError(
+                    "Codex subscription execution requires --confirm-subscription-usage"
+                )
+            if config["model"] != "gpt-5.6-luna":
+                raise BenchmarkError("Codex calibration is pinned to the Luna rolling alias")
+            existing_ids: set[str] = set()
+            if args.output.exists():
+                if not args.resume:
+                    raise BenchmarkError(
+                        f"output already exists: {args.output}; use --resume or a new path"
+                    )
+                with args.output.open(encoding="utf-8") as existing:
+                    existing_ids = {
+                        json.loads(line)["run_id"] for line in existing if line.strip()
+                    }
+            backend = codex_backend_info()
+            selected = codex_calibration_runs(args.config)[:args.limit]
+            completed = 0
+            failures = 0
+            for run in selected:
+                if run["run_id"] in existing_ids:
+                    continue
+                try:
+                    output, metrics, latency, event_path = call_codex_subscription(
+                        run, backend, args.event_dir
+                    )
+                    result = result_from_codex_subscription(
+                        run, backend, output, metrics, latency, event_path
+                    )
+                except BenchmarkError as error:
+                    result = {
+                        **{key: value for key, value in run.items() if key not in {"instructions", "prompt"}},
+                        "backend": "codex_subscription",
+                        "model_snapshot": None,
+                        "model_alias_is_rolling": True,
+                        "codex_cli_version": backend["version"],
+                        "subscription_login": backend["login"],
+                        "completed_at_utc": datetime.now(timezone.utc).isoformat(),
+                        "status": "backend_error",
+                        "passed": False,
+                        "diagnostic": str(error),
+                    }
+                    failures += 1
+                append_jsonl(args.output, result)
+                completed += 1
+                print(
+                    f"[{run['sequence']:02d}/30] {run['task_id']}/{run['language']}/"
+                    f"{run['track']}: {result['status']}",
+                    flush=True,
+                )
+            print(
+                f"appended {completed} Codex subscription results to {args.output}; "
+                "no API key was used",
+                flush=True,
+            )
+            return 1 if failures else 0
+
+        if args.command == "grade-results":
+            if not args.allow_unsafe_local:
+                raise BenchmarkError(
+                    "grading executes generated code; use an isolated container and pass "
+                    "--allow-unsafe-local inside it"
+                )
+            if args.input.resolve() == args.output.resolve():
+                raise BenchmarkError("grade-results input and output must differ")
+            count = grade_result_rows(args.input, args.output, args.config)
+            print(f"wrote {count} graded results to {args.output}")
             return 0
 
         if args.command == "aggregate":
