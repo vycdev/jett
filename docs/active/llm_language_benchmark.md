@@ -228,3 +228,17 @@ implemented `string.from_int64` spelling.
 Benchmark v0.5.2 adds those two general syntax anchors to the skill. No task,
 grader, adapter, or language rule changed. A future smoke run must use the new
 version and skill hash rather than appending to the v0.5.1 evidence.
+
+## Jett skill smoke calibration v0.5.2
+
+The targeted v0.5.2 Jett `skill_assisted` smoke passed 6/10 initial tasks.
+Both tasks that failed under v0.5.1 now passed, confirming that multiline-call
+and integer-rendering guidance reached the model. The four new failures were
+compile errors: one guessed nonexistent `map.contains`, while three exceeded
+the complexity limit through boolean chains or nested exhaustive matches.
+
+All four submissions passed after one compiler-feedback repair prompt, making
+the paired final result 10/10. Benchmark v0.5.3 therefore adds the exact
+`map.has` membership spelling and explains that nested matches and every
+`and`/`or` condition add complexity decision points. It remains general
+language guidance and contains no task-specific solution material.

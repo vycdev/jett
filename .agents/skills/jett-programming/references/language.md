@@ -31,7 +31,7 @@ function shift(point: Coordinate, row_delta: int64) returns Coordinate:
 
 Use `if` / `else if` / `else`, `for item in items:`, and `while condition:`. Equality operators are `==` and `!=`; boolean operators are `and`, `or`, and `not`; remainder is `modulo`. A newline ends an ordinary expression: keep each function call and constructor argument list on one physical line. When a call would be too long, bind typed intermediate values first instead of wrapping its arguments across lines.
 
-Functions have a cyclomatic-complexity maximum of 10 and bounded nesting, statements, and parameters. Extract small typed helpers, declare them before the caller, and keep each function below the limit instead of building one large match or branch ladder.
+Functions have a cyclomatic-complexity maximum of 10 and bounded nesting, statements, and parameters. Nested matches and every `and` or `or` condition add decision points, so a short-looking function can still exceed the limit. Extract small typed helpers before writing a full branch matrix, declare them before the caller, and keep each function below the limit.
 
 ## Closed data and failures
 
@@ -82,6 +82,8 @@ function parsed_or_zero(text: string) returns int64:
     return parsed
 function render_number(value: int64) returns string:
     return string.from_int64(value)
+function has_count(view counts: map[string, int64], name: string) returns bool:
+    return map.has[string, int64](view counts, name)
 function collection_forms() returns int64:
     mutable list[int64] values = list.new[int64]()
     values = list.append[int64](values, 7)
@@ -95,7 +97,7 @@ function collection_forms() returns int64:
     return map.get_or[string, int64](counts, "items", 0)
 ```
 
-Use `list.get` rather than `values[index]`, `set.contains` rather than a method call, and `map.get_or` rather than `map[key]`. Query the compiler for the exact signature when uncertain.
+Use `list.get` rather than `values[index]`, `set.contains` rather than a method call, `map.has` (or its `map.contains_key` alias) for map membership, and `map.get_or` rather than `map[key]`. There is no `map.contains`. Query the compiler for the exact signature when uncertain.
 
 Parse decimal integers with `int64.from_string(text) handle error:` and render them with `string.from_int64(value)`.
 

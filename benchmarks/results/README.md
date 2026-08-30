@@ -44,3 +44,11 @@ repair pass is in
 `2026-08-30_codex_luna_medium_v0.5.1_jett_skill_smoke_compile_repair/`; neither
 of the two remaining parse failures repaired. Those findings produced the
 versioned v0.5.2 skill correction.
+
+The v0.5.2 follow-up is in
+`2026-08-30_codex_luna_medium_v0.5.2_jett_skill_smoke/`. It passed 6/10
+initial tasks; both failures targeted by v0.5.2 now passed. Its paired repair
+pass is in
+`2026-08-30_codex_luna_medium_v0.5.2_jett_skill_smoke_compile_repair/` and
+repaired all four failures, producing 10/10 pass-after-repair. The failures
+exposed map-membership and complexity-accounting gaps, producing v0.5.3.
