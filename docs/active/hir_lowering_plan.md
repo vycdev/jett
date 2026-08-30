@@ -93,9 +93,12 @@ enter the manifest. Recursive discovery reserves identity before lowering.
    instantiations. Result/optional construction and result, optional, and
    refinement-boundary handles now lower explicitly. `default` yields from the
    failure block while `return` exits the function; handled pipeline steps use
-   this same form around their intermediate call. Bitfield/machine fields and
-   constructors and compiler intrinsics, remaining collection operations,
-   reflection, and trusted calls remain staged.
+   this same form around their intermediate call. String interpolation,
+   comptime markers, declassification/coarsening, machine state tests, task
+   run/join/cancel markers, `for`, assertions, tracing, breakpoints, and actor
+   responses also lower explicitly. Bitfield/machine fields and constructors,
+   compiler intrinsics, remaining collection operations, reflection, trusted
+   calls, closures, and actor operations remain staged.
 4. **Implemented:** deterministic HIR snapshots cover representative core and
    enum/handle programs. Every successful lowering runs the backend-facing HIR
    validator before publication. Driver wiring remains gated on complete source

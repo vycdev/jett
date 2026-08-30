@@ -51,6 +51,15 @@ impl VariantId {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct StateId(u32);
+
+impl StateId {
+    pub fn index(self) -> u32 {
+        self.0
+    }
+}
+
 /// Canonical declaration identity. Resolver `DefId`s are not part of it
 /// because they are allocated afresh in each compiler session.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -154,12 +163,26 @@ pub enum StatementKind {
         condition: Expression,
         body: Block,
     },
+    For {
+        key: LocalId,
+        value: Option<LocalId>,
+        by_view: bool,
+        iterable: Expression,
+        body: Block,
+    },
     Match {
         scrutinee: Expression,
         arms: Vec<MatchArm>,
     },
     Break,
     Continue,
+    Assert {
+        condition: Expression,
+        message: Option<Expression>,
+    },
+    Trace(LocalId),
+    Breakpoint(Option<Expression>),
+    Respond(Expression),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -220,6 +243,17 @@ pub enum ExpressionKind {
         variant: VariantId,
         payloads: Vec<Expression>,
     },
+    StringInterpolation(Vec<StringSegment>),
+    Comptime(Box<Expression>),
+    Declassify(Box<Expression>),
+    Coarsen(Box<Expression>),
+    StateIs {
+        value: Box<Expression>,
+        state: StateId,
+    },
+    Run(Box<Expression>),
+    Join(Box<Expression>),
+    Cancel(Box<Expression>),
     Field {
         base: Box<Expression>,
         owner_type: TypeId,
@@ -242,6 +276,12 @@ pub struct MatchArm {
     pub bindings: Vec<LocalId>,
     pub body: Block,
     pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum StringSegment {
+    Text(String),
+    Value(Expression),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -377,6 +417,22 @@ impl Validator<'_> {
                 self.block(body);
                 self.loop_depth -= 1;
             }
+            StatementKind::For {
+                key,
+                value,
+                iterable,
+                body,
+                ..
+            } => {
+                self.check_local(*key, statement.span);
+                if let Some(value) = value {
+                    self.check_local(*value, statement.span);
+                }
+                self.expression(iterable);
+                self.loop_depth += 1;
+                self.block(body);
+                self.loop_depth -= 1;
+            }
             StatementKind::Match { scrutinee, arms } => {
                 self.expression(scrutinee);
                 let mut variants = std::collections::HashSet::new();
@@ -399,6 +455,19 @@ impl Validator<'_> {
                 self.error(statement.span, "loop control is outside a loop");
             }
             StatementKind::Break | StatementKind::Continue => {}
+            StatementKind::Assert { condition, message } => {
+                self.expression(condition);
+                if let Some(message) = message {
+                    self.expression(message);
+                }
+            }
+            StatementKind::Trace(local) => self.check_local(*local, statement.span),
+            StatementKind::Breakpoint(condition) => {
+                if let Some(condition) = condition {
+                    self.expression(condition);
+                }
+            }
+            StatementKind::Respond(value) => self.expression(value),
         }
     }
 
@@ -414,7 +483,13 @@ impl Validator<'_> {
             | ExpressionKind::ResultFail(value)
             | ExpressionKind::OptionalSome(value)
             | ExpressionKind::View(value)
-            | ExpressionKind::Clone(value) => self.expression(value),
+            | ExpressionKind::Clone(value)
+            | ExpressionKind::Comptime(value)
+            | ExpressionKind::Declassify(value)
+            | ExpressionKind::Coarsen(value)
+            | ExpressionKind::Run(value)
+            | ExpressionKind::Join(value)
+            | ExpressionKind::Cancel(value) => self.expression(value),
             ExpressionKind::Call { function, args, .. } => {
                 if function.index() as usize >= self.program.functions.len() {
                     self.error(expression.span, "call references an unknown HIR function");
@@ -458,6 +533,14 @@ impl Validator<'_> {
                     self.expression(payload);
                 }
             }
+            ExpressionKind::StringInterpolation(parts) => {
+                for part in parts {
+                    if let StringSegment::Value(value) = part {
+                        self.expression(value);
+                    }
+                }
+            }
+            ExpressionKind::StateIs { value, .. } => self.expression(value),
             ExpressionKind::Field { base, .. } => self.expression(base),
             ExpressionKind::Int(_)
             | ExpressionKind::Float(_)
@@ -1004,9 +1087,58 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 },
                 loop_stmt.span,
             ),
+            Stmt::For(loop_stmt) => {
+                let key = self.allocate_declared_local(&loop_stmt.variable, false)?;
+                let value = match &loop_stmt.value_variable {
+                    Some(binding) => Some(self.allocate_declared_local(binding, false)?),
+                    None => None,
+                };
+                (
+                    StatementKind::For {
+                        key,
+                        value,
+                        by_view: loop_stmt.view,
+                        iterable: self.lower_expression(&loop_stmt.iterable)?,
+                        body: self.lower_block(&loop_stmt.body),
+                    },
+                    loop_stmt.span,
+                )
+            }
             Stmt::Match(match_stmt) => (self.lower_match(match_stmt)?, match_stmt.span),
             Stmt::Break(span) => (StatementKind::Break, *span),
             Stmt::Continue(span) => (StatementKind::Continue, *span),
+            Stmt::Assert(assertion) => (
+                StatementKind::Assert {
+                    condition: self.lower_expression(&assertion.condition)?,
+                    message: match &assertion.message {
+                        Some(value) => Some(self.lower_expression(value)?),
+                        None => None,
+                    },
+                },
+                assertion.span,
+            ),
+            Stmt::Trace(trace) => {
+                let Some(definition) = self.parent.resolve.resolutions.get(&trace.name.span) else {
+                    self.parent.error(trace.span, "trace target is unresolved");
+                    return None;
+                };
+                let Some(local) = self.local_ids.get(definition).copied() else {
+                    self.parent.error(trace.span, "trace target is not a local");
+                    return None;
+                };
+                (StatementKind::Trace(local), trace.span)
+            }
+            Stmt::Breakpoint(point) => (
+                StatementKind::Breakpoint(match &point.condition {
+                    Some(value) => Some(self.lower_expression(value)?),
+                    None => None,
+                }),
+                point.span,
+            ),
+            Stmt::Respond(response) => (
+                StatementKind::Respond(self.lower_expression(&response.value)?),
+                response.span,
+            ),
             Stmt::Use(_) => return None,
             unsupported => {
                 self.parent.error(
@@ -1017,6 +1149,19 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             }
         };
         Some(Statement { kind, span })
+    }
+
+    fn allocate_declared_local(&mut self, name: &ast::Ident, mutable: bool) -> Option<LocalId> {
+        let Some(definition) = self.parent.definition_at(name.span, DefKind::Variable) else {
+            self.parent
+                .error(name.span, "binding has no resolved definition");
+            return None;
+        };
+        let Some(ty) = self.parent.check.definition_types.get(&definition).copied() else {
+            self.parent.error(name.span, "binding has no checked type");
+            return None;
+        };
+        Some(self.allocate_local(definition, &name.name, ty, mutable, name.span))
     }
 
     fn lower_else_chain(
@@ -1113,6 +1258,17 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 ExpressionKind::OptionalSome(Box::new(self.lower_expression(value)?))
             }
             Expr::None(_) => ExpressionKind::OptionalNone,
+            Expr::StringInterpolation(parts, _) => ExpressionKind::StringInterpolation(
+                parts
+                    .iter()
+                    .map(|part| match part {
+                        ast::StringPart::Literal(text) => Some(StringSegment::Text(text.clone())),
+                        ast::StringPart::Expr(value) => {
+                            Some(StringSegment::Value(self.lower_expression(value)?))
+                        }
+                    })
+                    .collect::<Option<Vec<_>>>()?,
+            ),
             Expr::EnumVariant(_, variant, _) => {
                 self.lower_enum_construct(ty, variant, &[], span)?
             }
@@ -1129,6 +1285,46 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                     lowered.ty = ty;
                     lowered
                 });
+            }
+            Expr::Comptime(value, _) => {
+                ExpressionKind::Comptime(Box::new(self.lower_expression(value)?))
+            }
+            Expr::Declassify(value, _) => {
+                ExpressionKind::Declassify(Box::new(self.lower_expression(value)?))
+            }
+            Expr::Coarsen(value, _) => {
+                ExpressionKind::Coarsen(Box::new(self.lower_expression(value)?))
+            }
+            Expr::At(value, state, _) => {
+                let value = self.lower_expression(value)?;
+                let machine = match self.parent.check.interner.resolve(value.ty) {
+                    Type::Machine(machine) | Type::MachineState { machine, .. } => *machine,
+                    _ => {
+                        self.parent
+                            .error(span, "state check target is not a machine");
+                        return None;
+                    }
+                };
+                let Some(state_id) = self
+                    .parent
+                    .check
+                    .interner
+                    .resolve_machine(machine)
+                    .state_id(&state.name)
+                else {
+                    self.parent
+                        .error(state.span, "checked machine state is missing");
+                    return None;
+                };
+                ExpressionKind::StateIs {
+                    value: Box::new(value),
+                    state: StateId(state_id.index()),
+                }
+            }
+            Expr::Run(value, _) => ExpressionKind::Run(Box::new(self.lower_expression(value)?)),
+            Expr::Join(value, _) => ExpressionKind::Join(Box::new(self.lower_expression(value)?)),
+            Expr::Cancel(value, _) => {
+                ExpressionKind::Cancel(Box::new(self.lower_expression(value)?))
             }
             Expr::View(value, _) => ExpressionKind::View(Box::new(self.lower_expression(value)?)),
             Expr::Clone(value, _) => ExpressionKind::Clone(Box::new(self.lower_expression(value)?)),
@@ -1871,6 +2067,43 @@ function count_to(limit: int64) returns int64:
             body.statements[0].kind,
             StatementKind::Assign { .. }
         ));
+    }
+
+    #[test]
+    fn lowers_for_debug_comptime_and_interpolation_forms() {
+        let source = r#"namespace app
+function render(view values: list[int64]) returns string:
+    mutable string output = comptime "values"
+    for value in view values:
+        breakpoint value > 10
+        trace value
+        output = "{output}:{value}"
+    return output
+"#;
+        let program = lower_source(source);
+        let function = &program.functions[0];
+        assert!(matches!(
+            function.body.statements[0].kind,
+            StatementKind::Let {
+                value: Expression {
+                    kind: ExpressionKind::Comptime(_),
+                    ..
+                },
+                ..
+            }
+        ));
+        let StatementKind::For { body, .. } = &function.body.statements[1].kind else {
+            panic!("expected explicit for loop");
+        };
+        assert!(matches!(
+            body.statements[0].kind,
+            StatementKind::Breakpoint(Some(_))
+        ));
+        assert!(matches!(body.statements[1].kind, StatementKind::Trace(_)));
+        let StatementKind::Assign { value, .. } = &body.statements[2].kind else {
+            panic!("expected interpolation assignment");
+        };
+        assert!(matches!(value.kind, ExpressionKind::StringInterpolation(_)));
     }
 
     #[test]

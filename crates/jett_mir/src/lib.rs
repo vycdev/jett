@@ -46,6 +46,13 @@ pub enum Statement {
     },
     Evaluate(Expression),
     HandleDefault(Expression),
+    Assert {
+        condition: Expression,
+        message: Option<Expression>,
+    },
+    Trace(LocalId),
+    Breakpoint(Option<Expression>),
+    Respond(Expression),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -61,6 +68,14 @@ pub enum Terminator {
         scrutinee: Expression,
         variants: Vec<(VariantId, BlockId, Vec<LocalId>)>,
         otherwise: Option<BlockId>,
+    },
+    ForEach {
+        key: LocalId,
+        value: Option<LocalId>,
+        by_view: bool,
+        iterable: Expression,
+        body: BlockId,
+        exit: BlockId,
     },
     Unreachable,
 }
@@ -188,7 +203,23 @@ impl Builder {
                 else_block,
             } => self.lower_if(condition, then_block, else_block.as_ref()),
             hir::StatementKind::While { condition, body } => self.lower_while(condition, body),
+            hir::StatementKind::For {
+                key,
+                value,
+                by_view,
+                iterable,
+                body,
+            } => self.lower_for(*key, *value, *by_view, iterable, body),
             hir::StatementKind::Match { scrutinee, arms } => self.lower_match(scrutinee, arms),
+            hir::StatementKind::Assert { condition, message } => self.push(Statement::Assert {
+                condition: condition.clone(),
+                message: message.clone(),
+            }),
+            hir::StatementKind::Trace(local) => self.push(Statement::Trace(*local)),
+            hir::StatementKind::Breakpoint(condition) => {
+                self.push(Statement::Breakpoint(condition.clone()))
+            }
+            hir::StatementKind::Respond(value) => self.push(Statement::Respond(value.clone())),
         }
     }
 
@@ -232,6 +263,33 @@ impl Builder {
         self.current = body_block;
         self.lower_block(body);
         self.close_to(condition_block);
+        self.loops.pop();
+        self.current = exit;
+    }
+
+    fn lower_for(
+        &mut self,
+        key: LocalId,
+        value: Option<LocalId>,
+        by_view: bool,
+        iterable: &Expression,
+        body: &hir::Block,
+    ) {
+        let header = self.current;
+        let body_block = self.new_block();
+        let exit = self.new_block();
+        self.terminate(Terminator::ForEach {
+            key,
+            value,
+            by_view,
+            iterable: iterable.clone(),
+            body: body_block,
+            exit,
+        });
+        self.loops.push((header, exit));
+        self.current = body_block;
+        self.lower_block(body);
+        self.close_to(header);
         self.loops.pop();
         self.current = exit;
     }
