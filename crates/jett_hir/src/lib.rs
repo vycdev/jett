@@ -274,6 +274,202 @@ pub enum UnaryOp {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidationError {
+    pub span: Span,
+    pub message: String,
+}
+
+/// Validate backend-facing HIR invariants after lowering and before MIR.
+pub fn validate(program: &Program) -> Result<(), Vec<ValidationError>> {
+    let mut validator = Validator {
+        program,
+        errors: Vec::new(),
+        local_count: 0,
+        loop_depth: 0,
+        handle_depth: 0,
+    };
+    for (index, function) in program.functions.iter().enumerate() {
+        if function.id.index() as usize != index {
+            validator.error(function.span, "function IDs must be dense and ordered");
+        }
+        validator.local_count = function.locals.len();
+        for (local_index, local) in function.locals.iter().enumerate() {
+            if local.id.index() as usize != local_index {
+                validator.error(local.span, "local IDs must be dense and ordered");
+            }
+        }
+        for param in &function.params {
+            validator.check_local(param.local, param.span);
+        }
+        validator.block(&function.body);
+    }
+    if validator.errors.is_empty() {
+        Ok(())
+    } else {
+        Err(validator.errors)
+    }
+}
+
+struct Validator<'a> {
+    program: &'a Program,
+    errors: Vec<ValidationError>,
+    local_count: usize,
+    loop_depth: usize,
+    handle_depth: usize,
+}
+
+impl Validator<'_> {
+    fn error(&mut self, span: Span, message: impl Into<String>) {
+        self.errors.push(ValidationError {
+            span,
+            message: message.into(),
+        });
+    }
+
+    fn check_local(&mut self, local: LocalId, span: Span) {
+        if local.index() as usize >= self.local_count {
+            self.error(span, "HIR references a local outside its function");
+        }
+    }
+
+    fn block(&mut self, block: &Block) {
+        for statement in &block.statements {
+            self.statement(statement);
+        }
+    }
+
+    fn statement(&mut self, statement: &Statement) {
+        match &statement.kind {
+            StatementKind::Let { local, value } => {
+                self.check_local(*local, statement.span);
+                self.expression(value);
+            }
+            StatementKind::Assign { target, value } => {
+                self.expression(target);
+                self.expression(value);
+            }
+            StatementKind::Return(value) => {
+                if let Some(value) = value {
+                    self.expression(value);
+                }
+            }
+            StatementKind::HandleDefault(value) => {
+                if self.handle_depth == 0 {
+                    self.error(statement.span, "handle default is outside a failure block");
+                }
+                self.expression(value);
+            }
+            StatementKind::Expression(value) => self.expression(value),
+            StatementKind::If {
+                condition,
+                then_block,
+                else_block,
+            } => {
+                self.expression(condition);
+                self.block(then_block);
+                if let Some(block) = else_block {
+                    self.block(block);
+                }
+            }
+            StatementKind::While { condition, body } => {
+                self.expression(condition);
+                self.loop_depth += 1;
+                self.block(body);
+                self.loop_depth -= 1;
+            }
+            StatementKind::Match { scrutinee, arms } => {
+                self.expression(scrutinee);
+                let mut variants = std::collections::HashSet::new();
+                let mut catch_all = false;
+                for arm in arms {
+                    if let Some(variant) = arm.variant {
+                        if !variants.insert(variant) {
+                            self.error(arm.span, "match contains a duplicate variant arm");
+                        }
+                    } else if std::mem::replace(&mut catch_all, true) {
+                        self.error(arm.span, "match contains multiple catch-all arms");
+                    }
+                    for binding in &arm.bindings {
+                        self.check_local(*binding, arm.span);
+                    }
+                    self.block(&arm.body);
+                }
+            }
+            StatementKind::Break | StatementKind::Continue if self.loop_depth == 0 => {
+                self.error(statement.span, "loop control is outside a loop");
+            }
+            StatementKind::Break | StatementKind::Continue => {}
+        }
+    }
+
+    fn expression(&mut self, expression: &Expression) {
+        match &expression.kind {
+            ExpressionKind::Local(local) => self.check_local(*local, expression.span),
+            ExpressionKind::Binary { left, right, .. } => {
+                self.expression(left);
+                self.expression(right);
+            }
+            ExpressionKind::Unary { value, .. }
+            | ExpressionKind::ResultOk(value)
+            | ExpressionKind::ResultFail(value)
+            | ExpressionKind::OptionalSome(value)
+            | ExpressionKind::View(value)
+            | ExpressionKind::Clone(value) => self.expression(value),
+            ExpressionKind::Call { function, args, .. } => {
+                if function.index() as usize >= self.program.functions.len() {
+                    self.error(expression.span, "call references an unknown HIR function");
+                }
+                for argument in args {
+                    self.expression(argument);
+                }
+            }
+            ExpressionKind::StructConstruct { fields, .. } => {
+                for field in fields {
+                    self.expression(field);
+                }
+            }
+            ExpressionKind::ListConstruct { elements } => {
+                for element in elements {
+                    self.expression(element);
+                }
+            }
+            ExpressionKind::MapConstruct { entries } => {
+                for entry in entries {
+                    self.expression(&entry.key);
+                    self.expression(&entry.value);
+                }
+            }
+            ExpressionKind::Handle {
+                target,
+                error_local,
+                failure,
+                ..
+            } => {
+                self.expression(target);
+                if let Some(local) = error_local {
+                    self.check_local(*local, expression.span);
+                }
+                self.handle_depth += 1;
+                self.block(failure);
+                self.handle_depth -= 1;
+            }
+            ExpressionKind::EnumConstruct { payloads, .. } => {
+                for payload in payloads {
+                    self.expression(payload);
+                }
+            }
+            ExpressionKind::Field { base, .. } => self.expression(base),
+            ExpressionKind::Int(_)
+            | ExpressionKind::Float(_)
+            | ExpressionKind::String(_)
+            | ExpressionKind::Bool(_)
+            | ExpressionKind::Nothing
+            | ExpressionKind::OptionalNone => {}
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LowerError {
     pub span: Span,
     pub message: String,
@@ -349,7 +545,17 @@ impl<'a> Lowerer<'a> {
             }
         }
         if self.errors.is_empty() {
-            Ok(Program { functions })
+            let program = Program { functions };
+            validate(&program).map_err(|errors| {
+                errors
+                    .into_iter()
+                    .map(|error| LowerError {
+                        span: error.span,
+                        message: error.message,
+                    })
+                    .collect::<Vec<_>>()
+            })?;
+            Ok(program)
         } else {
             Err(self.errors)
         }
@@ -1574,6 +1780,70 @@ function choose(flag: bool, a: int64, b: int64) returns int64:
             errors
                 .iter()
                 .any(|error| error.message.contains("source origin"))
+        );
+    }
+
+    #[test]
+    fn snapshots_core_hir() {
+        let program = lower_source(
+            r#"namespace app
+function add(left: int64, right: int64) returns int64:
+    return left + right
+function main() returns int64:
+    int64 value = add(right: 2, left: 1)
+    if value > 0:
+        return value
+    return 0
+"#,
+        );
+        insta::assert_debug_snapshot!("hir_core", program);
+    }
+
+    #[test]
+    fn snapshots_enum_and_handle_hir() {
+        let program = lower_source(
+            r#"namespace app
+enum Value:
+    number(value: int64)
+    missing
+function parse(raw: string) returns result[Value, string]:
+    return ok(Value.number(1))
+function main() returns int64:
+    Value value = parse("x") handle error:
+        default Value.missing
+    match value:
+        number(number):
+            return number
+        missing:
+            return 0
+"#,
+        );
+        insta::assert_debug_snapshot!("hir_enum_handle", program);
+    }
+
+    #[test]
+    fn validator_rejects_unknown_function_targets() {
+        let mut program = lower_source(
+            r#"namespace app
+function identity(value: int64) returns int64:
+    return value
+function main() returns int64:
+    return identity(1)
+"#,
+        );
+        let StatementKind::Return(Some(Expression {
+            kind: ExpressionKind::Call { function, .. },
+            ..
+        })) = &mut program.functions[1].body.statements[0].kind
+        else {
+            panic!("expected call");
+        };
+        *function = FunctionId(99);
+        let errors = validate(&program).expect_err("invalid target must fail validation");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.message.contains("unknown HIR function"))
         );
     }
 

@@ -96,9 +96,14 @@ enter the manifest. Recursive discovery reserves identity before lowering.
    this same form around their intermediate call. Bitfield/machine fields and
    constructors and compiler intrinsics, remaining collection operations,
    reflection, and trusted calls remain staged.
-4. Add deterministic HIR snapshots and wire HIR into the driver after every
-   accepted source construct either lowers or has an explicit staged error.
-5. Freeze the HIR validator and begin the HIR-to-MIR contract in #22.
+4. **Implemented:** deterministic HIR snapshots cover representative core and
+   enum/handle programs. Every successful lowering runs the backend-facing HIR
+   validator before publication. Driver wiring remains gated on complete source
+   coverage.
+5. **Implemented initial boundary:** `jett_mir` accepts only validated HIR and
+   lowers top-level structured branches, loops, matches, returns, and loop
+   control into deterministic basic blocks. Full expression control-flow and
+   ownership/drop elaboration continue under #22.
 
 The current tree-walking interpreter remains the execution path during these
 stages. HIR is not a second source-language implementation and does not yet

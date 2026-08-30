@@ -787,6 +787,12 @@ parameters and locals, direct user calls, core expressions, returns, branches,
 and loops are also covered. Remaining source constructs are staged by the
 [initial HIR lowering plan](active/hir_lowering_plan.md).
 
+The initial implemented `jett_mir` boundary accepts only HIR that passes the
+structural validator. It lowers top-level `if`, `while`, exhaustive `match`,
+`break`, `continue`, and `return` into deterministic dense basic blocks with
+explicit branch, switch, goto, and return terminators. Handle-internal control
+flow and definitive ownership/drop elaboration remain subsequent MIR work.
+
 ### Purpose
 
 The HIR is the first representation where generic functions are fully expanded. Each call to `sort[int64]` and `sort[string]` produces a separate HIR function. The HIR is also where desugaring is complete — no more syntax sugar, just core operations.
