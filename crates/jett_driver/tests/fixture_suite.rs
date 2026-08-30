@@ -359,6 +359,10 @@ compile_pass_fixture!(
     "ownership_branch_return_consumes.jett"
 );
 compile_pass_fixture!(
+    compile_pass_ownership_handle_return_fallthrough,
+    "ownership_handle_return_fallthrough.jett"
+);
+compile_pass_fixture!(
     compile_pass_ownership_pipeline_implicit_view_input,
     "ownership_pipeline_implicit_view_input.jett"
 );

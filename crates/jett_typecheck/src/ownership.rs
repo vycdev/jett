@@ -568,7 +568,13 @@ impl<'a> OwnershipChecker<'a> {
             }
             Expr::Handle(target, _, body, _) => {
                 self.check_expr_ownership(target);
-                self.check_block(body);
+                let success_state = self.states.clone();
+                let handler_state = self.check_block_from_state(&success_state, body);
+                let mut fallthrough_states = vec![success_state.clone()];
+                if Self::block_can_fall_through(body) {
+                    fallthrough_states.push(handler_state);
+                }
+                self.states = self.merge_fallthrough_states(&success_state, &fallthrough_states);
             }
             Expr::Ok(inner, _) | Expr::Fail(inner, _) | Expr::Some(inner, _) => {
                 self.check_expr_ownership(inner);
