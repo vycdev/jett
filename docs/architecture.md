@@ -1848,11 +1848,12 @@ Standard LSP implementation using the `tower-lsp` crate. Provides:
 - Hover information (type at cursor).
 - Go-to-definition.
 - Find all references in the current document, optionally including the declaration.
+- Rename a resolved symbol across its declaration and references in the current
+  document using UTF-16 workspace edits.
 - Code completion.
 - Document symbols from the latest in-memory source, including declaration
   kinds, signatures, and UTF-16 ranges for editor outlines.
 - Whole-document formatting is provided through `jett_fmt`.
-- Planned follow-up: rename symbol.
 
 The LSP server currently stores full document text, invokes driver operations,
 and suppresses diagnostics from stale document versions. After `jett_query`
