@@ -3,9 +3,11 @@ use jett_common::{FileId, STDLIB_FILE_ID_START};
 use jett_diagnostics::Diagnostic;
 use jett_parser::ast::Module;
 use salsa::Setter as _;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
+use std::thread;
 
 pub mod cache;
 
@@ -101,6 +103,91 @@ pub fn parse_project(db: &dyn Db, manifest: ProjectManifest) -> Vec<Arc<ParsedFi
         .collect()
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParallelParseError {
+    InvalidWorkerCount,
+    WorkerPanicked,
+}
+
+impl fmt::Display for ParallelParseError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidWorkerCount => {
+                write!(formatter, "parse worker count must be at least one")
+            }
+            Self::WorkerPanicked => write!(formatter, "parallel parse worker failed"),
+        }
+    }
+}
+
+impl std::error::Error for ParallelParseError {}
+
+/// Parse every file in one manifest through a bounded set of Salsa database
+/// snapshots, then publish the complete results in manifest order.
+pub fn parse_project_with_jobs(
+    db: &QueryDatabase,
+    manifest: ProjectManifest,
+    jobs: usize,
+) -> Result<Vec<Arc<ParsedFile>>, ParallelParseError> {
+    if jobs == 0 {
+        return Err(ParallelParseError::InvalidWorkerCount);
+    }
+
+    // Project configuration belongs to orchestration, not the independent
+    // whole-file parse queries.
+    let _ = manifest.project(db);
+    let _ = manifest.config(db);
+    let files = manifest.files(db);
+    if files.len() <= 1 || jobs == 1 {
+        return Ok(files.into_iter().map(|file| parse_file(db, file)).collect());
+    }
+
+    let worker_count = jobs.min(files.len());
+    let queue = Arc::new(Mutex::new(
+        files.into_iter().enumerate().collect::<VecDeque<_>>(),
+    ));
+    let (sender, receiver) = mpsc::channel();
+    let worker_result = thread::scope(|scope| {
+        let mut workers = Vec::with_capacity(worker_count);
+        for _ in 0..worker_count {
+            let worker_db = db.clone();
+            let queue = Arc::clone(&queue);
+            let sender = sender.clone();
+            workers.push(scope.spawn(move || {
+                loop {
+                    let work = queue
+                        .lock()
+                        .expect("parallel parse queue poisoned")
+                        .pop_front();
+                    let Some((index, file)) = work else {
+                        break;
+                    };
+                    let parsed = parse_file(&worker_db, file);
+                    if sender.send((index, parsed)).is_err() {
+                        break;
+                    }
+                }
+            }));
+        }
+        drop(sender);
+
+        let mut panicked = false;
+        for worker in workers {
+            panicked |= worker.join().is_err();
+        }
+        if panicked {
+            Err(ParallelParseError::WorkerPanicked)
+        } else {
+            Ok(())
+        }
+    });
+    worker_result?;
+
+    let mut parsed = receiver.into_iter().collect::<Vec<_>>();
+    parsed.sort_by_key(|(index, _)| *index);
+    Ok(parsed.into_iter().map(|(_, file)| file).collect())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileRegistryError {
     AbsolutePath(String),
@@ -159,6 +246,18 @@ pub struct QueryDatabase {
     next_project_file_id: u32,
     next_stdlib_file_id: u32,
     parse_executions: Arc<Mutex<HashMap<FileKey, usize>>>,
+}
+
+impl Clone for QueryDatabase {
+    fn clone(&self) -> Self {
+        Self {
+            storage: self.storage.clone(),
+            files: self.files.clone(),
+            next_project_file_id: self.next_project_file_id,
+            next_stdlib_file_id: self.next_stdlib_file_id,
+            parse_executions: Arc::clone(&self.parse_executions),
+        }
+    }
 }
 
 impl Default for QueryDatabase {
@@ -435,5 +534,41 @@ mod tests {
         let first = diagnostic_signature();
         assert!(!first.is_empty());
         assert_eq!(first, diagnostic_signature());
+    }
+
+    #[test]
+    fn parallel_project_parse_preserves_manifest_order() {
+        let mut db = QueryDatabase::default();
+        let project = ProjectKey::new(&db, "demo");
+        let files = vec![
+            source(&mut db, "z.jett", "function z():\n    return nothing\n"),
+            source(&mut db, "a.jett", "function a():\n    return nothing\n"),
+            source(&mut db, "m.jett", "function m():\n    return nothing\n"),
+        ];
+        let manifest = ProjectManifest::new(&db, project, files.clone(), Arc::from("debug"));
+
+        let parsed =
+            parse_project_with_jobs(&db, manifest, 4).expect("parallel parse should succeed");
+        let parsed_keys = parsed.iter().map(|file| file.key).collect::<Vec<_>>();
+        let expected_keys = files.iter().map(|file| file.key(&db)).collect::<Vec<_>>();
+
+        assert_eq!(parsed_keys, expected_keys);
+    }
+
+    #[test]
+    fn parallel_project_parse_rejects_zero_workers() {
+        let mut db = QueryDatabase::default();
+        let project = ProjectKey::new(&db, "demo");
+        let file = source(
+            &mut db,
+            "main.jett",
+            "function main():\n    return nothing\n",
+        );
+        let manifest = ProjectManifest::new(&db, project, vec![file], Arc::from("debug"));
+
+        assert!(matches!(
+            parse_project_with_jobs(&db, manifest, 0),
+            Err(ParallelParseError::InvalidWorkerCount)
+        ));
     }
 }
