@@ -35,8 +35,8 @@ timeouts do not provide a security boundary.
 
 `codex-calibration` uses the ChatGPT login held by the Codex CLI, removes API
 credential variables from the child environment, and refuses to run unless
-`codex login status` reports `Logged in using ChatGPT`. The current v0.3
-calibration is a 60-cell medium-reasoning slice run in fresh ephemeral sessions
+`codex login status` reports `Logged in using ChatGPT`. The current v0.4
+calibration is a 100-cell medium-reasoning slice run in fresh ephemeral sessions
 from empty temporary directories. The Luna name is currently a rolling alias
 rather than a dated snapshot, so every row records the alias, UTC completion time, Codex version,
 backend, deterministic sequence, and event-log hash. Do not pool these rows with
@@ -62,8 +62,8 @@ The isolated runner recipe and required no-network/resource controls are in
 - `references/*.md`: controlled-onboarding sheets;
 - `schemas/*.json`: machine-readable result and task contracts.
 
-The current typed-domain extension is specified by `protocol_v0.3.md` and
-`jett_subset_v0.3.md`. Its Python adapter adds pinned Pyright strict checking;
+The current typed-domain extension is specified by `protocol_v0.4.md` and
+`jett_subset_v0.4.md`. Its Python adapter adds pinned Pyright strict checking;
 all five typed-task adapters perform a static-check phase before hidden runtime tests.
 Task-specific forbidden patterns are a narrow preflight against type erasure
 and catch-all branches, and a rejection is recorded as `policy_error`.
@@ -71,6 +71,10 @@ and catch-all branches, and a rejection is recorded as `policy_error`.
 The v0.3 task set adds recursive closed data and a maintenance task that asks
 the model to evolve supplied source. Starter-source hashes are recorded with
 planned and generated rows so the maintenance input is auditable.
+
+The v0.4 task set contains ten tasks. The four additions cover optional values
+and sets, struct/list transformation, typed map updates, and canonical string
+parsing with structured failures.
 
 Never paste hidden files into prompts or model repair diagnostics. Results and
 raw responses should be written below `target/jett-bench/`, which is already

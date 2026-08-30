@@ -135,3 +135,14 @@ harness now supports versioned starter files and records their hashes.
 The matrix is 540 study rows. Its balanced medium Luna calibration slice is 60
 rows with no repairs. It should only be run after all 30 reference baselines
 pass locally and in the no-network image; this v0.3 slice has not yet been run.
+
+## Ten-task collection and parsing expansion v0.4
+
+Four tasks extend coverage beyond recursion and state modeling:
+`first_duplicate`, `merge_sorted_intervals`, `inventory_batch`, and
+`score_lines`. They exercise sets, optionals, structs, list transformations,
+maps, canonical integer parsing, and typed validation errors.
+
+The suite now contains ten tasks, producing 900 study rows and a balanced
+100-row medium Luna calibration slice. All 50 reference baselines must pass
+locally and in the no-network image before that slice is run.

@@ -1,4 +1,4 @@
-# Rust pilot reference v0.4
+# Rust pilot reference v0.5
 
 ## Type-driven development in Rust
 
@@ -22,3 +22,8 @@ conversions, and panic-based shortcuts.
 Use `Box` at recursive enum boundaries when requested. When starter source is
 supplied, return one complete replacement file; exhaustive matching should
 identify every branch affected by the new variant.
+
+Use structs for requested records, `HashSet<T>` for membership, and the exact
+requested map type. Express optional values with `Option<T>` and conversion
+failures with ordinary `Result` matching. For canonical int64 text, parse as
+`i64` and compare `value.to_string()` with the original input.

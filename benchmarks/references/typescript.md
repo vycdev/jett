@@ -1,4 +1,4 @@
-# TypeScript pilot reference v0.4
+# TypeScript pilot reference v0.5
 
 ## Type-driven development in TypeScript
 
@@ -23,3 +23,9 @@ checking run before hidden tests.
 Discriminated unions may be recursive. When starter source is supplied, return
 one complete replacement module and update every exhaustive switch affected by
 the requested union change.
+
+Use readonly object fields for requested record shapes, `Set<T>` for
+membership, and `Map<K, V>` internally when returning `ReadonlyMap<K, V>`.
+Express an optional as `T | null`. `BigInt(text)` can fail, so catch conversion
+failure and then check the int64 bounds and canonical decimal rendering when
+the task requires them.

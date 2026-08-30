@@ -1,0 +1,77 @@
+{
+  "id": "score_lines",
+  "version": "1.0.0",
+  "title": "Parse canonical score lines",
+  "statement": "Parse lines of the exact form name=score into a name-to-score map. A name is any non-empty string without '='. A score is a canonical base-10 int64: its text must exactly equal the normal decimal rendering of the parsed value, so plus signs, whitespace, leading zeros, and -0 are invalid. For each line validate shape first, then score, then duplicate name. Return the first zero-based failing line with malformed, invalid_score, or duplicate_name.",
+  "constraints": [
+    "use the exact declared error and result types",
+    "return an empty map for empty input and preserve every valid score",
+    "inputs contain at most 10000 lines",
+    "handle every error and result variant explicitly without catch-all or default branches",
+    "do not throw, panic, perform input/output, add tests, or suppress static diagnostics"
+  ],
+  "adapters": {
+    "jett": {
+      "signature": "namespace benchmark\n\nenum ScoreError:\n    malformed\n    invalid_score\n    duplicate_name\n\nenum ScoreResult:\n    accepted(scores: map[string, int64])\n    rejected(line: int64, error: ScoreError)\n\nfunction parse_scores(lines: list[string]) returns ScoreResult",
+      "baseline": "baseline.jett",
+      "hidden": "hidden.jett",
+      "candidate": "solution.jett",
+      "grade_mode": "append",
+      "commands": [["{jett}", "build", "{candidate}"], ["{jett}", "test", "{candidate}"]],
+      "forbidden_patterns": [{"pattern": "(?m)^\\s*(?:other|_)\\s*:", "message": "catch-all match arms are forbidden; handle every Jett enum variant explicitly"}]
+    },
+    "python": {
+      "signature": "from dataclasses import dataclass\nfrom enum import Enum\n\nclass ScoreError(Enum):\n    MALFORMED = \"malformed\"\n    INVALID_SCORE = \"invalid_score\"\n    DUPLICATE_NAME = \"duplicate_name\"\n@dataclass(frozen=True)\nclass ParsedScores:\n    scores: dict[str, int]\n@dataclass(frozen=True)\nclass ScoreFailure:\n    line: int\n    error: ScoreError\ntype ScoreResult = ParsedScores | ScoreFailure\ndef parse_scores(lines: list[str]) -> ScoreResult",
+      "baseline": "baseline.py",
+      "hidden": "hidden.py",
+      "support_files": ["pyrightconfig.json"],
+      "candidate": "solution.py",
+      "grade_mode": "separate",
+      "commands": [["{pyright}", "--project", "pyrightconfig.json"], ["python", "hidden.py"]],
+      "forbidden_patterns": [
+        {"pattern": "\\bAny\\b|#\\s*(?:type:\\s*ignore|pyright:\\s*ignore)|\\bcast\\s*\\(", "message": "Python type bypasses such as Any, casts, and ignored diagnostics are forbidden"},
+        {"pattern": "(?m)^\\s*case\\s+_\\s*:", "message": "catch-all match cases are forbidden; handle every Python union member explicitly"},
+        {"pattern": "\\braise\\b", "message": "raising exceptions is forbidden; return ScoreFailure"}
+      ]
+    },
+    "typescript": {
+      "signature": "export type ScoreError = \"malformed\" | \"invalid_score\" | \"duplicate_name\";\nexport type ScoreResult = { readonly kind: \"accepted\"; readonly scores: ReadonlyMap<string, bigint> } | { readonly kind: \"rejected\"; readonly line: bigint; readonly error: ScoreError };\nexport function parseScores(lines: readonly string[]): ScoreResult",
+      "baseline": "baseline.ts",
+      "hidden": "hidden.ts",
+      "candidate": "solution.ts",
+      "grade_mode": "separate",
+      "commands": [["npx", "tsc", "--strict", "--noImplicitReturns", "--target", "ES2022", "--module", "NodeNext", "--moduleResolution", "NodeNext", "solution.ts", "hidden.ts", "--outDir", "out"], ["node", "out/hidden.js"]],
+      "forbidden_patterns": [
+        {"pattern": "\\bany\\b|@ts-(?:ignore|nocheck)|\\bas\\s+(?:const|[A-Za-z_$][A-Za-z0-9_$]*)\\b", "message": "TypeScript type bypasses such as any, suppressed diagnostics, and unchecked assertions are forbidden"},
+        {"pattern": "(?m)^\\s*default\\s*:", "message": "default switch branches are forbidden; handle every TypeScript union member explicitly"},
+        {"pattern": "\\bthrow\\b", "message": "throwing exceptions is forbidden; return rejected"}
+      ]
+    },
+    "go": {
+      "signature": "package benchmark\n\ntype ScoreError int\nconst ( Malformed ScoreError = iota; InvalidScore; DuplicateName )\ntype ScoreResult interface{ isScoreResult() }\ntype ParsedScores struct{ Scores map[string]int64 }\ntype ScoreFailure struct{ Line int64; Error ScoreError }\nfunc (ParsedScores) isScoreResult() {}\nfunc (ScoreFailure) isScoreResult() {}\nfunc ParseScores(lines []string) ScoreResult",
+      "baseline": "baseline.go",
+      "hidden": "hidden_test.go",
+      "candidate": "solution.go",
+      "grade_mode": "separate",
+      "commands": [["go", "test", "-run", "^$", "solution.go", "hidden_test.go"], ["go", "test", "solution.go", "hidden_test.go"]],
+      "forbidden_patterns": [
+        {"pattern": "\\bany\\b|interface\\s*\\{\\s*\\}", "message": "Go type erasure through any or interface{} is forbidden"},
+        {"pattern": "(?m)^\\s*default\\s*:", "message": "default switch branches are forbidden; handle every Go concrete type explicitly"},
+        {"pattern": "\\bpanic\\s*\\(", "message": "panic is forbidden; return ScoreFailure"}
+      ]
+    },
+    "rust": {
+      "signature": "#[derive(Debug, PartialEq, Eq)]\npub enum ScoreError { Malformed, InvalidScore, DuplicateName }\n#[derive(Debug, PartialEq, Eq)]\npub enum ScoreResult { Parsed(std::collections::BTreeMap<String, i64>), Failure { line: i64, error: ScoreError } }\npub fn parse_scores(lines: Vec<String>) -> ScoreResult",
+      "baseline": "baseline.rs",
+      "hidden": "hidden.rs",
+      "candidate": "solution.rs",
+      "grade_mode": "separate",
+      "commands": [["rustc", "--edition=2024", "--test", "hidden.rs", "-o", "{executable}"], ["{executable}"]],
+      "forbidden_patterns": [
+        {"pattern": "\\bunsafe\\b|\\b(?:transmute|unreachable_unchecked)\\b", "message": "unsafe Rust and unchecked type escapes are forbidden"},
+        {"pattern": "_\\s*=>", "message": "wildcard match arms are forbidden; handle every Rust enum variant explicitly"},
+        {"pattern": "\\bpanic\\s*!", "message": "panic is forbidden; return Failure"}
+      ]
+    }
+  }
+}

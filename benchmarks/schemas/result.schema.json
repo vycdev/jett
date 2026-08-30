@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://jett.dev/schemas/benchmark-result-v0.3.json",
+  "$id": "https://jett.dev/schemas/benchmark-result-v0.4.json",
   "title": "Jett LLM benchmark result",
   "type": "object",
   "required": ["run_id", "task_id", "task_version", "language", "track", "reasoning_effort", "repetition", "status", "passed"],

@@ -1,4 +1,4 @@
-# Jett pilot reference v0.4
+# Jett pilot reference v0.5
 
 ## Type-driven development in Jett
 
@@ -57,3 +57,34 @@ add `other:` catch-all arms in tasks that require explicit exhaustiveness.
 Enums may be recursive. Keep recursive work in small typed helpers declared
 before their caller. If starter source is supplied, preserve its behavior and
 return one complete replacement file with the requested type evolution.
+
+Structs declare named fields and use named construction:
+
+```jett
+struct Interval:
+    start: int64
+    end: int64
+
+function example_interval() returns Interval:
+    return Interval(start: 1, end: 3)
+```
+
+Collection updates consume and return the collection. Read with `view`; use an
+explicit `clone` only when a consuming lookup must leave the original available:
+
+```jett
+function collection_example() returns int64:
+    mutable set[int64] seen = set.new[int64]()
+    bool present = set.contains[int64](view seen, 7)
+    seen = set.add[int64](seen, 7)
+
+    mutable map[string, int64] scores = map.new[string, int64]()
+    int64 prior = map.get_or[string, int64](clone scores, "ada", 0)
+    scores = map.set[string, int64](scores, "ada", prior + 1)
+    return map.get_or[string, int64](scores, "ada", 0)
+```
+
+Optionals use `some(value)` and `none`. A handled optional or result unwraps to
+the target type; the handler returns or supplies a default. String helpers use
+`string.split`, integer parsing uses `int64.from_string(...) handle error:`,
+and decimal rendering uses `string.from_int64`.

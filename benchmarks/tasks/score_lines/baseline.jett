@@ -1,0 +1,37 @@
+namespace benchmark
+enum ScoreError:
+    malformed
+    invalid_score
+    duplicate_name
+enum ScoreResult:
+    accepted(scores: map[string, int64])
+    rejected(line: int64, error: ScoreError)
+struct ScoreEntry:
+    name: string
+    score: int64
+function parse_score_line(line: string) returns result[ScoreEntry, ScoreError]:
+    list[string] parts = string.split(line, "=")
+    if list.length[string](view parts) != 2:
+        return fail(ScoreError.malformed)
+    string name = list.get[string](view parts, 0) handle:
+        return fail(ScoreError.malformed)
+    string raw_score = list.get[string](view parts, 1) handle:
+        return fail(ScoreError.malformed)
+    if name == "":
+        return fail(ScoreError.malformed)
+    int64 score = int64.from_string(raw_score) handle error:
+        return fail(ScoreError.invalid_score)
+    if string.from_int64(score) != raw_score:
+        return fail(ScoreError.invalid_score)
+    return ok(ScoreEntry(name: name, score: score))
+function parse_scores(lines: list[string]) returns ScoreResult:
+    mutable map[string, int64] scores = map.new[string, int64]()
+    mutable int64 line_index = 0
+    for line in lines:
+        ScoreEntry entry = parse_score_line(line) handle error:
+            return ScoreResult.rejected(line_index, error)
+        if map.has[string, int64](view scores, entry.name):
+            return ScoreResult.rejected(line_index, ScoreError.duplicate_name)
+        scores = map.set[string, int64](scores, entry.name, entry.score)
+        line_index = line_index + 1
+    return ScoreResult.accepted(scores)
