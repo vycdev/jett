@@ -9,6 +9,7 @@ license.workspace = true
 jett_common.workspace = true
 jett_diagnostics.workspace = true
 jett_driver.workspace = true
+jett_fmt.workspace = true
 jett_resolve.workspace = true
 tower-lsp.workspace = true
 tokio = { workspace = true, features = ["full"] }

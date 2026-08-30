@@ -1,0 +1,12 @@
+namespace test
+function duplicate_key_count() returns int64:
+    map[string, int64] values = map.from_lists[string, int64](list("alpha", "alpha"), list(1, 2))
+    return map.length[string, int64](view values)
+function duplicate_key_value() returns int64:
+    map[string, int64] values = map.from_lists[string, int64](list("alpha", "alpha"), list(1, 2))
+    int64 value = map.get[string, int64](values, "alpha") handle:
+        default 0
+    return value
+verify map_from_lists_replaces_duplicate_keys:
+    assert duplicate_key_count() == 1
+    assert duplicate_key_value() == 2

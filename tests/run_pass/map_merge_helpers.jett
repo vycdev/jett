@@ -1,0 +1,24 @@
+namespace app
+
+function merge_overwrites_existing_key() returns int64:
+    map[string, int64] first = map("same": 1, "keep": 2)
+    map[string, int64] second = map("same": 9, "added": 3)
+    map[string, int64] merged = map.merge(first, second)
+    return map.get_or(merged, "same", 0)
+verify merge_overwrites_existing_key:
+    assert merge_overwrites_existing_key() == 9
+
+function merge_keeps_and_adds_keys() returns int64:
+    map[string, int64] first = map("same": 1, "keep": 2)
+    map[string, int64] second = map("same": 9, "added": 3)
+    map[string, int64] merged = map.merge(first, second)
+    return map.length(merged)
+verify merge_keeps_and_adds_keys:
+    assert merge_keeps_and_adds_keys() == 3
+
+function empty_keys_and_values() returns int64:
+    map[string, int64] empty_keys_map = map()
+    map[string, int64] empty_values_map = map()
+    return list.length(map.keys(empty_keys_map)) + list.length(map.values(empty_values_map))
+verify empty_keys_and_values:
+    assert empty_keys_and_values() == 0

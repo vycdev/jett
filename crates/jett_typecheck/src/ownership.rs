@@ -438,6 +438,8 @@ impl<'a> OwnershipChecker<'a> {
             self.consume_expr(&for_stmt.iterable, for_stmt.iterable.span());
         }
 
+        let entry_state = self.states.clone();
+
         // The loop variable is a fresh owned (or viewed) binding.
         // We don't know the exact type here without the type map, so we use ERROR
         // as a placeholder — it will be treated as copyable for ownership purposes.
@@ -456,11 +458,29 @@ impl<'a> OwnershipChecker<'a> {
         );
 
         self.check_block(&for_stmt.body);
+        let mut body_state = self.states.clone();
+        if let Some(outer) = entry_state.get(&for_stmt.variable.name) {
+            body_state.insert(for_stmt.variable.name.clone(), outer.clone());
+        } else {
+            body_state.remove(&for_stmt.variable.name);
+        }
+
+        let mut fallthrough_states = vec![entry_state.clone()];
+        if Self::block_can_fall_through(&for_stmt.body) {
+            fallthrough_states.push(body_state);
+        }
+        self.states = self.merge_fallthrough_states(&entry_state, &fallthrough_states);
     }
 
     fn check_while(&mut self, while_stmt: &ast::WhileStmt) {
         self.check_expr_ownership(&while_stmt.condition);
-        self.check_block(&while_stmt.body);
+        let entry_state = self.states.clone();
+        let body_state = self.check_block_from_state(&entry_state, &while_stmt.body);
+        let mut fallthrough_states = vec![entry_state.clone()];
+        if Self::block_can_fall_through(&while_stmt.body) {
+            fallthrough_states.push(body_state);
+        }
+        self.states = self.merge_fallthrough_states(&entry_state, &fallthrough_states);
     }
 
     fn check_assert(&mut self, assert_stmt: &ast::AssertStmt) {
@@ -548,7 +568,13 @@ impl<'a> OwnershipChecker<'a> {
             }
             Expr::Handle(target, _, body, _) => {
                 self.check_expr_ownership(target);
-                self.check_block(body);
+                let success_state = self.states.clone();
+                let handler_state = self.check_block_from_state(&success_state, body);
+                let mut fallthrough_states = vec![success_state.clone()];
+                if Self::block_can_fall_through(body) {
+                    fallthrough_states.push(handler_state);
+                }
+                self.states = self.merge_fallthrough_states(&success_state, &fallthrough_states);
             }
             Expr::Ok(inner, _) | Expr::Fail(inner, _) | Expr::Some(inner, _) => {
                 self.check_expr_ownership(inner);

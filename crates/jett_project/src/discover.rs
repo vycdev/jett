@@ -238,17 +238,29 @@ fn prescan_namespaces(content: &str, interner: &mut SymbolInterner) -> Vec<Names
     namespaces
 }
 
-/// Iterate over lines with their byte offsets.
+/// Iterate over LF, CRLF, or lone-CR lines with their byte offsets.
 fn line_offsets(content: &str) -> impl Iterator<Item = (usize, &str)> {
-    content.split_inclusive('\n').scan(0, |offset, line| {
-        let start = *offset;
-        *offset += line.len();
-        let line = if let Some(line) = line.strip_suffix('\n') {
-            line.strip_suffix('\r').unwrap_or(line)
-        } else {
-            line
+    let mut offset = 0;
+    std::iter::from_fn(move || {
+        if offset >= content.len() {
+            return None;
+        }
+
+        let start = offset;
+        let remaining = &content[start..];
+        let Some((line_end, terminator)) = remaining
+            .char_indices()
+            .find(|(_, character)| *character == '\n' || *character == '\r')
+        else {
+            offset = content.len();
+            return Some((start, remaining));
         };
-        Some((start, line))
+
+        offset = start + line_end + terminator.len_utf8();
+        if terminator == '\r' && remaining.as_bytes().get(line_end + 1) == Some(&b'\n') {
+            offset += 1;
+        }
+        Some((start, &remaining[..line_end]))
     })
 }
 
@@ -334,6 +346,23 @@ mod tests {
             "namespace models\r\n\r\nstruct User:\r\n    name: string\r\n\r\nnamespace auth\r\n";
         let ns = prescan_namespaces(content, &mut interner);
         assert_eq!(ns.len(), 2);
+        assert_eq!(ns[0].byte_offset, 0);
+        assert_eq!(
+            ns[1].byte_offset as usize,
+            content.find("namespace auth").unwrap()
+        );
+    }
+
+    #[test]
+    fn prescan_namespaces_tracks_lone_carriage_return_lines() {
+        let mut interner = SymbolInterner::new();
+        let content = "namespace models\rstruct User:\r    name: string\rnamespace auth\r";
+
+        let ns = prescan_namespaces(content, &mut interner);
+
+        assert_eq!(ns.len(), 2);
+        assert_eq!(interner.resolve(ns[0].name), "models");
+        assert_eq!(interner.resolve(ns[1].name), "auth");
         assert_eq!(ns[0].byte_offset, 0);
         assert_eq!(
             ns[1].byte_offset as usize,

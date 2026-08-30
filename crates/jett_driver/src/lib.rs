@@ -212,6 +212,12 @@ pub type FileSymbolsQueryError = QueryError;
 /// Error returned by a detailed type-at query.
 pub type TypeAtQueryError = QueryError;
 
+/// Error returned by a detailed definition-at query.
+pub type DefinitionAtQueryError = QueryError;
+
+/// Error returned by a detailed references-at query.
+pub type ReferencesAtQueryError = QueryError;
+
 /// Result of `jett query --agent --type-at file:line:column`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeAtQueryResult {
@@ -657,43 +663,78 @@ pub fn query_definition_at(
     line: u32,
     column: u32,
 ) -> Result<DefinitionAtQueryResult, String> {
-    let source = fs::read_to_string(path)
-        .map_err(|e| format!("failed to read {}: {}", path.display(), e))?;
+    query_definition_at_detailed(path, line, column).map_err(|error| error.to_string())
+}
+
+/// Return the resolved definition while retaining compiler diagnostics on failure.
+pub fn query_definition_at_detailed(
+    path: &Path,
+    line: u32,
+    column: u32,
+) -> Result<DefinitionAtQueryResult, DefinitionAtQueryError> {
+    let source = fs::read_to_string(path).map_err(|error| {
+        DefinitionAtQueryError::operational(format!("failed to read {}: {}", path.display(), error))
+    })?;
     let file_path = path.display().to_string();
     let file_id = FileId::new(0);
     let Some(offset) = line_col_to_offset(&source, line, column) else {
-        return Err(format!(
+        return Err(DefinitionAtQueryError::operational(format!(
             "position {line}:{column} is outside {}",
             path.display()
-        ));
+        )));
     };
 
     let mut parse_result = parse(&source, file_id);
-    let parse_errors = error_messages_from_diagnostics(&parse_result.errors);
-    if !parse_errors.is_empty() {
-        return Err(format!("parse errors:\n{}", parse_errors.join("\n")));
+    if has_error_diagnostics(&parse_result.errors) {
+        return Err(DefinitionAtQueryError::compilation(
+            "parse errors:",
+            parse_result.errors,
+            source,
+            file_path,
+        ));
     }
 
     let mut support_modules = discover_stdlib_modules_with_diagnostics();
     support_modules.extend(discover_project_modules_with_diagnostics(path));
     let support_errors = error_messages_from_diagnostics(&support_modules.diagnostics);
     if !support_errors.is_empty() {
-        return Err(format!(
+        return Err(DefinitionAtQueryError::operational(format!(
             "support parse errors:\n{}",
             support_errors.join("\n")
-        ));
+        )));
     }
 
     let mut file_paths = support_modules.files.clone();
     let display_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     file_paths.insert(file_id, display_path);
 
-    prepend_support_modules(&mut parse_result.module, support_modules.modules);
+    prepend_support_modules(
+        &mut parse_result.module,
+        std::mem::take(&mut support_modules.modules),
+    );
 
     let resolve_result = resolve(&parse_result.module);
     let resolve_errors = error_messages_from_diagnostics(&resolve_result.diagnostics);
     if !resolve_errors.is_empty() {
-        return Err(format!("resolution errors:\n{}", resolve_errors.join("\n")));
+        let diagnostic_sources = query_diagnostic_sources(
+            file_id,
+            &source,
+            &file_path,
+            &support_modules,
+            &resolve_result.diagnostics,
+        );
+        if diagnostics_have_source_context(&resolve_result.diagnostics, &diagnostic_sources) {
+            return Err(DefinitionAtQueryError::compilation_with_sources(
+                "resolution errors:",
+                resolve_result.diagnostics,
+                file_id,
+                diagnostic_sources,
+            ));
+        }
+        return Err(DefinitionAtQueryError::operational(format!(
+            "resolution errors:\n{}",
+            resolve_errors.join("\n")
+        )));
     }
 
     let mut best_def: Option<(u32, jett_resolve::scope::DefId)> = None;
@@ -740,43 +781,78 @@ pub fn query_references_at(
     line: u32,
     column: u32,
 ) -> Result<ReferencesAtQueryResult, String> {
-    let source = fs::read_to_string(path)
-        .map_err(|e| format!("failed to read {}: {}", path.display(), e))?;
+    query_references_at_detailed(path, line, column).map_err(|error| error.to_string())
+}
+
+/// Return resolver-visible references while retaining compiler diagnostics on failure.
+pub fn query_references_at_detailed(
+    path: &Path,
+    line: u32,
+    column: u32,
+) -> Result<ReferencesAtQueryResult, ReferencesAtQueryError> {
+    let source = fs::read_to_string(path).map_err(|error| {
+        ReferencesAtQueryError::operational(format!("failed to read {}: {}", path.display(), error))
+    })?;
     let file_path = path.display().to_string();
     let file_id = FileId::new(0);
     let Some(offset) = line_col_to_offset(&source, line, column) else {
-        return Err(format!(
+        return Err(ReferencesAtQueryError::operational(format!(
             "position {line}:{column} is outside {}",
             path.display()
-        ));
+        )));
     };
 
     let mut parse_result = parse(&source, file_id);
-    let parse_errors = error_messages_from_diagnostics(&parse_result.errors);
-    if !parse_errors.is_empty() {
-        return Err(format!("parse errors:\n{}", parse_errors.join("\n")));
+    if has_error_diagnostics(&parse_result.errors) {
+        return Err(ReferencesAtQueryError::compilation(
+            "parse errors:",
+            parse_result.errors,
+            source,
+            file_path,
+        ));
     }
 
     let mut support_modules = discover_stdlib_modules_with_diagnostics();
     support_modules.extend(discover_project_modules_with_diagnostics(path));
     let support_errors = error_messages_from_diagnostics(&support_modules.diagnostics);
     if !support_errors.is_empty() {
-        return Err(format!(
+        return Err(ReferencesAtQueryError::operational(format!(
             "support parse errors:\n{}",
             support_errors.join("\n")
-        ));
+        )));
     }
 
     let mut file_paths = support_modules.files.clone();
     let display_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     file_paths.insert(file_id, display_path);
 
-    prepend_support_modules(&mut parse_result.module, support_modules.modules);
+    prepend_support_modules(
+        &mut parse_result.module,
+        std::mem::take(&mut support_modules.modules),
+    );
 
     let resolve_result = resolve(&parse_result.module);
     let resolve_errors = error_messages_from_diagnostics(&resolve_result.diagnostics);
     if !resolve_errors.is_empty() {
-        return Err(format!("resolution errors:\n{}", resolve_errors.join("\n")));
+        let diagnostic_sources = query_diagnostic_sources(
+            file_id,
+            &source,
+            &file_path,
+            &support_modules,
+            &resolve_result.diagnostics,
+        );
+        if diagnostics_have_source_context(&resolve_result.diagnostics, &diagnostic_sources) {
+            return Err(ReferencesAtQueryError::compilation_with_sources(
+                "resolution errors:",
+                resolve_result.diagnostics,
+                file_id,
+                diagnostic_sources,
+            ));
+        }
+        return Err(ReferencesAtQueryError::operational(format!(
+            "resolution errors:\n{}",
+            resolve_errors.join("\n")
+        )));
     }
 
     let Some((_, target_def_id)) = best_resolved_definition_at(&resolve_result, file_id, offset)
@@ -1966,6 +2042,15 @@ fn best_resolved_definition_at(
             }
         }
     }
+    for definition in &resolve_result.scope_table.definitions {
+        let span = definition.span;
+        if span.file == file_id && span.start <= offset && offset <= span.end {
+            let len = span.end - span.start;
+            if best_def.is_none() || len < best_def.unwrap().0 {
+                best_def = Some((len, definition.id));
+            }
+        }
+    }
     best_def
 }
 
@@ -2097,17 +2182,7 @@ pub fn goto_definition(source: &str, line: u32, col: u32) -> Option<(u32, u32)> 
     prepend_support_modules(&mut parse_result.module, discover_stdlib_modules());
 
     let resolve_result = resolve(&parse_result.module);
-
-    // Find the reference span that covers `offset`.
-    let mut best_def: Option<(u32, jett_resolve::scope::DefId)> = None;
-    for (span, def_id) in &resolve_result.resolutions {
-        if span.file == file_id && span.start <= offset && offset <= span.end {
-            let len = span.end - span.start;
-            if best_def.is_none() || len < best_def.unwrap().0 {
-                best_def = Some((len, *def_id));
-            }
-        }
-    }
+    let best_def = best_resolved_definition_at(&resolve_result, file_id, offset);
 
     best_def.and_then(|(_, def_id)| {
         let def_info = resolve_result.scope_table.def(def_id);
@@ -2119,20 +2194,91 @@ pub fn goto_definition(source: &str, line: u32, col: u32) -> Option<(u32, u32)> 
     })
 }
 
-/// Convert a 1-based line+column to a byte offset in `source`.
-fn line_col_to_offset(source: &str, line: u32, col: u32) -> Option<u32> {
-    if line == 0 || col == 0 {
+/// Return byte spans for every use of the symbol selected at the given
+/// one-based line and column in `source`.
+pub fn references_at(source: &str, line: u32, col: u32) -> Vec<(u32, u32)> {
+    let file_id = FileId::new(0);
+    let Some(offset) = line_col_to_offset(source, line, col) else {
+        return Vec::new();
+    };
+
+    let mut parse_result = parse(source, file_id);
+    if parse_result
+        .errors
+        .iter()
+        .any(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+    {
+        return Vec::new();
+    }
+
+    prepend_support_modules(&mut parse_result.module, discover_stdlib_modules());
+    let resolve_result = resolve(&parse_result.module);
+    let Some((_, target_def_id)) = best_resolved_definition_at(&resolve_result, file_id, offset)
+    else {
+        return Vec::new();
+    };
+
+    let mut references = resolve_result
+        .resolutions
+        .iter()
+        .filter_map(|(span, def_id)| {
+            (*def_id == target_def_id && span.file == file_id).then_some((span.start, span.end))
+        })
+        .collect::<Vec<_>>();
+    references.sort_unstable();
+    references
+}
+
+/// Return the byte bounds of a 1-based logical source line.
+///
+/// Jett accepts LF, CRLF, and lone CR line endings. The returned range excludes
+/// the line ending itself so query columns cannot address either byte of it.
+fn source_line_bounds(source: &str, line: u32) -> Option<(usize, usize)> {
+    if line == 0 {
         return None;
     }
 
-    let mut line_start = 0usize;
-    for _ in 1..line {
-        line_start += source[line_start..].find('\n')? + 1;
+    let bytes = source.as_bytes();
+    let mut current_line = 1_u32;
+    let mut line_start = 0_usize;
+    let mut index = 0_usize;
+
+    while current_line < line {
+        match *bytes.get(index)? {
+            b'\n' => {
+                index += 1;
+                line_start = index;
+                current_line += 1;
+            }
+            b'\r' => {
+                index += 1;
+                if bytes.get(index) == Some(&b'\n') {
+                    index += 1;
+                }
+                line_start = index;
+                current_line += 1;
+            }
+            _ => index += 1,
+        }
     }
 
-    let line_end = source[line_start..]
-        .find('\n')
-        .map_or(source.len(), |offset| line_start + offset);
+    let mut line_end = line_start;
+    while let Some(byte) = bytes.get(line_end) {
+        if matches!(byte, b'\n' | b'\r') {
+            break;
+        }
+        line_end += 1;
+    }
+    Some((line_start, line_end))
+}
+
+/// Convert a 1-based line+column to a byte offset in `source`.
+fn line_col_to_offset(source: &str, line: u32, col: u32) -> Option<u32> {
+    if col == 0 {
+        return None;
+    }
+
+    let (line_start, line_end) = source_line_bounds(source, line)?;
     let line_source = &source[line_start..line_end];
     let column_offset = (col - 1) as usize;
     if column_offset > line_source.chars().count() {
@@ -3809,6 +3955,33 @@ mod tests {
     }
 
     #[test]
+    fn query_type_at_handles_lone_carriage_return_lines() {
+        let root = temp_test_dir("jett_driver_query_type_at_lone_cr");
+        fs::create_dir_all(&root).expect("temp query dir should be created");
+        let file = root.join("main.jett");
+        fs::write(
+            &file,
+            "namespace app\r\rfunction main() returns nothing:\r    int64 total = 1 + 2\r    return nothing\r",
+        )
+        .expect("lone-CR query fixture should be written");
+
+        let result = query_type_at(&file, 4, 19).expect("type query should succeed");
+
+        fs::remove_dir_all(&root).expect("temp query dir should be removed");
+
+        assert_eq!(result.type_name, Some("int64".to_string()));
+        assert_eq!(
+            (
+                result.span_line,
+                result.span_column,
+                result.span_end_line,
+                result.span_end_column
+            ),
+            (Some(4), Some(19), Some(4), Some(20))
+        );
+    }
+
+    #[test]
     fn query_type_at_preserves_parse_and_type_diagnostics() {
         let root = temp_test_dir("jett_driver_query_type_at_errors");
         fs::create_dir_all(&root).expect("temp query dir should be created");
@@ -5207,6 +5380,27 @@ mod tests {
         fs::remove_dir_all(&root).expect("temp project dir should be removed");
         fs::remove_dir_all(&external).expect("external source dir should be removed");
         assert_eq!(files, vec![source]);
+    }
+
+    #[test]
+    fn references_at_returns_all_source_use_sites() {
+        let source = "namespace app\n\nfunction double(value: int64) returns int64:\n    return value + value\n\nfunction main() returns int64:\n    return double(21)\n";
+
+        let references = references_at(source, 7, 12);
+
+        assert_eq!(references.len(), 1);
+        let call_start = source.find("double(21)").expect("call should exist") as u32;
+        assert_eq!(references, vec![(call_start, call_start + 6)]);
+    }
+
+    #[test]
+    fn references_at_accepts_the_source_declaration() {
+        let source = "namespace app\n\nfunction double(value: int64) returns int64:\n    return value + value\n\nfunction main() returns int64:\n    return double(21)\n";
+
+        let references = references_at(source, 3, 10);
+
+        let call_start = source.find("double(21)").expect("call should exist") as u32;
+        assert_eq!(references, vec![(call_start, call_start + 6)]);
     }
 }
 

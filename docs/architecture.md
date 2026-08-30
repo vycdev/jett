@@ -1727,18 +1727,19 @@ these public shapes:
 | `complete_at(file, line, col)` | Prefix-filtered completion candidates with deterministic rank, match kind, namespace, source range, and signature metadata | LSP, ASP |
 | `namespaces()` | All namespaces with public functions/types and declaration ranges | ASP |
 | `definition_at(file, line, col)` | Go-to-definition target with declaration-name range | LSP, ASP |
-| `references_at(file, line, col)` | Find all references to the selected symbol with use-site ranges | ASP |
+| `references_at(file, line, col)` | Find all references to the selected symbol with use-site ranges | LSP, ASP |
 | `diagnostics(file)` | All errors/warnings for a file | LSP |
 
-File-symbol parse failures and type-at parse, resolution, and type-check
-failures with known source context retain `Diagnostic` values through the
-driver boundary. Type-at failures retain the source map used by the compiler,
-so diagnostics and labels in sibling project or stdlib files keep their own
-paths and ranges. Agent mode renders those failures with the build diagnostic
-envelope. Because the current suggested-fix table has no file column, type-at
-fixes are emitted only for the requested file. Operational failures without
-matching compiler source context use a prose `error` scalar. Extending that
-boundary and a file-aware fix schema to the remaining queries and commands is
+File-symbol parse failures, references-at parse/resolution failures, and
+type-at parse, resolution, and type-check failures with known source context
+retain `Diagnostic` values through the driver boundary. Type-at and
+references-at failures retain the source map used by the compiler, so
+diagnostics and labels in sibling project or stdlib files keep their own paths
+and ranges. Agent mode renders those failures with the build diagnostic
+envelope. Because the current suggested-fix table has no file column, fixes
+are emitted only for the requested file. Operational failures without matching
+compiler source context use a prose `error` scalar. Extending that boundary and
+a file-aware fix schema to the remaining queries and commands is
 tracked by #35.
 
 ### Demand-Driven Computation
@@ -1790,11 +1791,12 @@ Standard LSP implementation using the `tower-lsp` crate. Provides:
 - Real-time diagnostics (errors/warnings as you type).
 - Hover information (type at cursor).
 - Go-to-definition.
+- Find all references in the current document, optionally including the declaration.
 - Code completion.
 - Document symbols from the latest in-memory source, including declaration
   kinds, signatures, and UTF-16 ranges for editor outlines.
-- Planned follow-ups: find all references, rename symbol, and code formatting
-  (via `jett_fmt`).
+- Whole-document formatting is provided through `jett_fmt`.
+- Planned follow-up: rename symbol.
 
 The LSP server currently stores full document text, invokes driver operations,
 and suppresses diagnostics from stale document versions. After `jett_query`
