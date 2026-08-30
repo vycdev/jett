@@ -786,7 +786,9 @@ matches carry variant arms, payload locals, and an optional catch-all. Typed
 parameters and locals, direct user calls, core expressions, returns, branches,
 loops, `for`, assertions/debug controls, string interpolation, comptime
 markers, explicit declassification/coarsening, state tests, and task-control
-markers are also covered. Remaining source constructs are staged by the
+markers are also covered. Bitfield and state-machine construction, transitions,
+and fields carry explicit checked types plus dense field/state IDs. Remaining
+source constructs are staged by the
 [initial HIR lowering plan](active/hir_lowering_plan.md).
 
 The initial implemented `jett_mir` boundary accepts only HIR that passes the

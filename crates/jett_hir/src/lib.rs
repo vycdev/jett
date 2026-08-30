@@ -222,6 +222,23 @@ pub enum ExpressionKind {
         evaluation_order: Vec<usize>,
         validates_refinements: bool,
     },
+    BitfieldConstruct {
+        bitfield_type: TypeId,
+        fields: Vec<Expression>,
+        evaluation_order: Vec<usize>,
+        validates_widths: bool,
+    },
+    MachineConstruct {
+        state_type: TypeId,
+        state: StateId,
+        payloads: Vec<Expression>,
+    },
+    MachineTransition {
+        source: Box<Expression>,
+        state_type: TypeId,
+        target: StateId,
+        payloads: Vec<Expression>,
+    },
     ListConstruct {
         elements: Vec<Expression>,
     },
@@ -498,9 +515,23 @@ impl Validator<'_> {
                     self.expression(argument);
                 }
             }
-            ExpressionKind::StructConstruct { fields, .. } => {
+            ExpressionKind::StructConstruct { fields, .. }
+            | ExpressionKind::BitfieldConstruct { fields, .. } => {
                 for field in fields {
                     self.expression(field);
+                }
+            }
+            ExpressionKind::MachineConstruct { payloads, .. } => {
+                for payload in payloads {
+                    self.expression(payload);
+                }
+            }
+            ExpressionKind::MachineTransition {
+                source, payloads, ..
+            } => {
+                self.expression(source);
+                for payload in payloads {
+                    self.expression(payload);
                 }
             }
             ExpressionKind::ListConstruct { elements } => {
@@ -1421,6 +1452,22 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             })?;
             return self.lower_enum_construct(ty, variant, args, call_span);
         }
+        if let Expr::Ident(name) = callee
+            && self.resolved_kind(name) == Some(DefKind::Bitfield)
+        {
+            return self.lower_bitfield_construct(args, call_span);
+        }
+        if let Expr::Ident(name) = callee
+            && self.resolved_kind(name) == Some(DefKind::Machine)
+        {
+            return self.lower_machine_construct(args, call_span);
+        }
+        if let Expr::FieldAccess(base, member, _) = callee
+            && member.name == "transition"
+            && matches!(base.as_ref(), Expr::Ident(name) if self.resolved_kind(name) == Some(DefKind::Machine))
+        {
+            return self.lower_machine_transition(args, call_span);
+        }
         if let Some(construction) = self.struct_constructions.get(&call_span) {
             let (fields, evaluation_order) =
                 self.lower_arguments_in_parameter_order(args, call_span)?;
@@ -1476,6 +1523,120 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             .variants
             .iter()
             .position(|candidate| candidate.name == variant.name)
+    }
+
+    fn resolved_kind(&self, ident: &ast::Ident) -> Option<DefKind> {
+        self.parent
+            .resolve
+            .resolutions
+            .get(&ident.span)
+            .map(|definition| self.parent.resolve.scope_table.def(*definition).kind)
+    }
+
+    fn lower_bitfield_construct(
+        &mut self,
+        args: &[ast::CallArg],
+        span: Span,
+    ) -> Option<ExpressionKind> {
+        let checked_type = self.expression_types.get(&span).copied()?;
+        let (bitfield_type, validates_widths) =
+            match self.parent.check.interner.resolve(checked_type) {
+                Type::Bitfield(_) => (checked_type, false),
+                Type::Result(ok, _)
+                    if matches!(self.parent.check.interner.resolve(*ok), Type::Bitfield(_)) =>
+                {
+                    (*ok, true)
+                }
+                _ => {
+                    self.parent
+                        .error(span, "checked bitfield construction has an invalid type");
+                    return None;
+                }
+            };
+        let Type::Bitfield(bitfield_id) = *self.parent.check.interner.resolve(bitfield_type) else {
+            unreachable!()
+        };
+        let definition = self.parent.check.interner.resolve_bitfield(bitfield_id);
+        let mut source_indices = vec![usize::MAX; definition.fields.len()];
+        for (source_index, arg) in args.iter().enumerate() {
+            let field_index = if let Some(name) = &arg.name {
+                definition
+                    .fields
+                    .iter()
+                    .position(|field| field.name == name.name)?
+            } else {
+                source_indices
+                    .iter()
+                    .position(|index| *index == usize::MAX)?
+            };
+            source_indices[field_index] = source_index;
+        }
+        let evaluation_order = (0..args.len())
+            .map(|source| {
+                source_indices
+                    .iter()
+                    .position(|candidate| *candidate == source)
+                    .unwrap()
+            })
+            .collect();
+        let fields = source_indices
+            .into_iter()
+            .map(|index| self.lower_expression(&args[index].value))
+            .collect::<Option<Vec<_>>>()?;
+        Some(ExpressionKind::BitfieldConstruct {
+            bitfield_type,
+            fields,
+            evaluation_order,
+            validates_widths,
+        })
+    }
+
+    fn lower_machine_construct(
+        &mut self,
+        args: &[ast::CallArg],
+        span: Span,
+    ) -> Option<ExpressionKind> {
+        let state_type = self.expression_types.get(&span).copied()?;
+        let Type::MachineState { state, .. } = self.parent.check.interner.resolve(state_type)
+        else {
+            self.parent
+                .error(span, "machine construction lacks a checked state type");
+            return None;
+        };
+        let payloads = args[1..]
+            .iter()
+            .map(|arg| self.lower_expression(&arg.value))
+            .collect::<Option<Vec<_>>>()?;
+        Some(ExpressionKind::MachineConstruct {
+            state_type,
+            state: StateId(state.index()),
+            payloads,
+        })
+    }
+
+    fn lower_machine_transition(
+        &mut self,
+        args: &[ast::CallArg],
+        span: Span,
+    ) -> Option<ExpressionKind> {
+        let state_type = self.expression_types.get(&span).copied()?;
+        let Type::MachineState { state, .. } = self.parent.check.interner.resolve(state_type)
+        else {
+            self.parent
+                .error(span, "machine transition lacks a checked target state");
+            return None;
+        };
+        let source = Box::new(self.lower_expression(&args[0].value)?);
+        let payloads = args[2..]
+            .iter()
+            .map(|arg| self.lower_expression(&arg.value))
+            .collect::<Option<Vec<_>>>()?;
+        Some(ExpressionKind::MachineTransition {
+            source,
+            state_type,
+            target: StateId(state.index()),
+            payloads,
+        })
     }
 
     fn lower_match(&mut self, match_stmt: &ast::MatchStmt) -> Option<StatementKind> {
@@ -1789,34 +1950,57 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
     fn lower_field(&mut self, base: &Expr, field: &ast::Ident) -> Option<ExpressionKind> {
         let base = self.lower_expression(base)?;
         let owner_type = match self.parent.check.interner.resolve(base.ty) {
-            Type::Struct(_) => base.ty,
+            Type::Struct(_) | Type::Bitfield(_) | Type::MachineState { .. } => base.ty,
             Type::Secret(inner)
-                if matches!(self.parent.check.interner.resolve(*inner), Type::Struct(_)) =>
+                if matches!(
+                    self.parent.check.interner.resolve(*inner),
+                    Type::Struct(_) | Type::Bitfield(_) | Type::MachineState { .. }
+                ) =>
             {
                 *inner
             }
             _ => {
                 self.parent.error(
                     field.span,
-                    "only checked struct fields are in the current HIR lowering subset",
+                    "checked field owner has no HIR aggregate layout",
                 );
                 return None;
             }
         };
-        let Type::Struct(struct_id) = *self.parent.check.interner.resolve(owner_type) else {
-            unreachable!("owner type was checked as a struct")
+        let field_index = match *self.parent.check.interner.resolve(owner_type) {
+            Type::Struct(struct_id) => self
+                .parent
+                .check
+                .interner
+                .resolve_struct(struct_id)
+                .fields
+                .iter()
+                .position(|(name, _)| name == &field.name),
+            Type::Bitfield(bitfield_id) => self
+                .parent
+                .check
+                .interner
+                .resolve_bitfield(bitfield_id)
+                .fields
+                .iter()
+                .position(|candidate| candidate.name == field.name),
+            Type::MachineState { machine, state } => self
+                .parent
+                .check
+                .interner
+                .resolve_machine(machine)
+                .state(state)
+                .and_then(|state| {
+                    state
+                        .fields
+                        .iter()
+                        .position(|(name, _)| name == &field.name)
+                }),
+            _ => unreachable!(),
         };
-        let Some(field_index) = self
-            .parent
-            .check
-            .interner
-            .resolve_struct(struct_id)
-            .fields
-            .iter()
-            .position(|(name, _)| name == &field.name)
-        else {
+        let Some(field_index) = field_index else {
             self.parent
-                .error(field.span, "checked struct field has no canonical index");
+                .error(field.span, "checked aggregate field has no canonical index");
             return None;
         };
         Some(ExpressionKind::Field {
@@ -2518,6 +2702,67 @@ function positive_or_one(raw: int64, fallback: Positive) returns Positive:
         };
         assert_eq!(refined_type, value.ty);
         assert_eq!(function.locals[error_local.index() as usize].name, "error");
+    }
+
+    #[test]
+    fn lowers_bitfield_and_machine_operations() {
+        let source = r#"namespace app
+bitfield Header:
+    version: 4 bits
+    length: 4 bits
+machine Session:
+    states:
+        guest
+        logged_in(user_id: string)
+    transitions:
+        guest to logged_in
+function header() returns int64:
+    Header value = Header(length: 5, version: 4)
+    return value.version
+function login(session: Session at guest) returns string:
+    Session at logged_in next = Session.transition(session, logged_in, "user-1")
+    return next.user_id
+function guest() returns Session at guest:
+    return Session(guest)
+"#;
+        let program = lower_source(source);
+        let header = &program.functions[0];
+        let StatementKind::Let { value, .. } = &header.body.statements[0].kind else {
+            panic!("expected bitfield local");
+        };
+        let ExpressionKind::BitfieldConstruct {
+            fields,
+            evaluation_order,
+            ..
+        } = &value.kind
+        else {
+            panic!("expected bitfield construction");
+        };
+        assert!(matches!(fields[0].kind, ExpressionKind::Int(4)));
+        assert_eq!(evaluation_order, &[1, 0]);
+
+        let login = &program.functions[1];
+        let StatementKind::Let { value, .. } = &login.body.statements[0].kind else {
+            panic!("expected transition local");
+        };
+        assert!(matches!(
+            value.kind,
+            ExpressionKind::MachineTransition {
+                target: StateId(1),
+                ..
+            }
+        ));
+        let guest = &program.functions[2];
+        assert!(matches!(
+            guest.body.statements[0].kind,
+            StatementKind::Return(Some(Expression {
+                kind: ExpressionKind::MachineConstruct {
+                    state: StateId(0),
+                    ..
+                },
+                ..
+            }))
+        ));
     }
 
     #[test]

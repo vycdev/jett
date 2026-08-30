@@ -96,9 +96,11 @@ enter the manifest. Recursive discovery reserves identity before lowering.
    this same form around their intermediate call. String interpolation,
    comptime markers, declassification/coarsening, machine state tests, task
    run/join/cancel markers, `for`, assertions, tracing, breakpoints, and actor
-   responses also lower explicitly. Bitfield/machine fields and constructors,
-   compiler intrinsics, remaining collection operations, reflection, trusted
-   calls, closures, and actor operations remain staged.
+   responses also lower explicitly. Bitfield construction, machine construction
+   and transitions, plus fields on structs, bitfields, and state-qualified
+   machines use dense layout IDs. Compiler intrinsics, remaining collection
+   operations, reflection, trusted calls, closures, and actor operations remain
+   staged.
 4. **Implemented:** deterministic HIR snapshots cover representative core and
    enum/handle programs. Every successful lowering runs the backend-facing HIR
    validator before publication. Driver wiring remains gated on complete source
