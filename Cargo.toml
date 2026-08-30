@@ -15,6 +15,7 @@ members = [
     "crates/jett_query",
     "crates/jett_driver",
     "crates/jett_lsp",
+    "crates/jett_profiler",
     "crates/jett_cli",
 ]
 
@@ -39,6 +40,7 @@ jett_fmt = { path = "crates/jett_fmt" }
 jett_query = { path = "crates/jett_query" }
 jett_driver = { path = "crates/jett_driver" }
 jett_lsp = { path = "crates/jett_lsp" }
+jett_profiler = { path = "crates/jett_profiler" }
 
 # External crates
 clap = { version = "4", features = ["derive"] }
