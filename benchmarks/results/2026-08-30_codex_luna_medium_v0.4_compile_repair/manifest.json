@@ -1,0 +1,79 @@
+{
+  "benchmark_version": "0.4.0-pilot",
+  "run_kind": "codex-subscription-compile-repair",
+  "parent_run": "../2026-08-30_codex_luna_medium_v0.4_calibration",
+  "generated_at_utc": {
+    "first": "2026-08-30T15:00:15.727739+00:00",
+    "last": "2026-08-30T15:04:14.656524+00:00"
+  },
+  "backend": "codex_subscription",
+  "authentication": "ChatGPT subscription",
+  "api_key_present": false,
+  "model": "gpt-5.6-luna",
+  "model_snapshot": null,
+  "model_alias_is_rolling": true,
+  "codex_cli_version": "codex-cli 0.145.0",
+  "reasoning_effort": "medium",
+  "evaluation_mode": "compile_repair",
+  "repair_attempts_per_failed_initial": 1,
+  "adaptive_stopping": "initial passes receive no second prompt",
+  "eligible_initial_failures": 20,
+  "row_count": 20,
+  "unique_response_ids": 20,
+  "feedback_kinds": {
+    "compiler_diagnostic": 20
+  },
+  "prompt_git_revision": "64a6b9fcdc6e40a841099e65b271e539fbbce9f2",
+  "generation_isolation": {
+    "ephemeral_sessions": true,
+    "empty_temporary_working_directory": true,
+    "user_config_ignored": true,
+    "project_rules_ignored": true,
+    "sandbox": "read-only",
+    "tools_forbidden_by_prompt": true,
+    "observed_tool_calls": 0
+  },
+  "grading_isolation": {
+    "container_image": "jett-bench:0.4",
+    "container_image_sha256": "adafbf56707ed5f8cc16cf3597296ca6f3cf5a4a4bc5a497b73e0fe4f8e29e8a",
+    "network": "none",
+    "memory_limit": "2g",
+    "cpu_limit": 2,
+    "pid_limit": 256,
+    "capabilities": "all dropped",
+    "no_new_privileges": true
+  },
+  "usage": {
+    "input_tokens": 274203,
+    "cached_input_tokens": 219136,
+    "output_tokens": 10697,
+    "reasoning_tokens": 5663,
+    "extracted_code_bytes": 23206,
+    "extracted_code_lines": 653,
+    "model_latency_ms": 253623.09130007634,
+    "estimated_api_cost_usd": null,
+    "subscription_allowance_consumed": true
+  },
+  "grading": {
+    "repair_passed": 10,
+    "repair_compile_errors": 10,
+    "repair_test_failures": 0,
+    "grader_runtime_ms": 8697.97926096362
+  },
+  "paired_outcome": {
+    "initial_passed": 80,
+    "repair_passed": 10,
+    "final_passed": 90,
+    "total_initial_rows": 100
+  },
+  "artifacts": {
+    "results": {
+      "path": "results.jsonl",
+      "sha256": "752ac8a5f1dcbea64e283540aceb94b91e1bd52848135c49ae3d6f048fd5c4d7"
+    },
+    "summary": {
+      "path": "summary.json",
+      "sha256": "c2eba722f09aec13f604f6e18431f68bdacf307702ba47c880dfa0f1c7b2e65b"
+    }
+  }
+}

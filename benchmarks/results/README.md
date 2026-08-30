@@ -19,3 +19,8 @@ The ten-task calibration is in
 `2026-08-30_codex_luna_medium_v0.4_calibration/`. It records 100 subscription
 cells, an 80/100 static-check result, token and code-size totals, and three
 behaviorally correct Python rows rejected by a strict-checker style diagnostic.
+
+Its paired one-prompt repair pass is in
+`2026-08-30_codex_luna_medium_v0.4_compile_repair/`. Ten of the 20 initial
+failures were repaired, producing a 90/100 pass-after-repair result. All seven
+established-language failures were repaired; Jett repaired 3 of 13.

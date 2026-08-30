@@ -160,3 +160,11 @@ The next treatment is now implemented as a paired compile-and-repair pass over
 failed zero-shot and onboarding rows. It does not replace the 100 one-shot
 scores: passing rows stop after prompt one, while failures receive one repair
 prompt and are reported through repair success and pass-after-repair rates.
+
+That repair pass is recorded in
+`benchmarks/results/2026-08-30_codex_luna_medium_v0.4_compile_repair/`. It
+repaired 10/20 failures and raised the paired result from 80/100 to 90/100.
+Python, TypeScript, and Rust repaired every failed row; Jett repaired 3/13,
+ending at 10/20. The remaining Jett failures were all compile-time failures,
+showing that a single diagnostic usually does not replace onboarding for the
+current language surface.
