@@ -102,7 +102,8 @@ enter the manifest. Recursive discovery reserves identity before lowering.
    to explicit canonical-name intrinsics with typed arguments and lexical
    evaluation order; this includes the remaining collection/reflection/trusted
    call surface without granting authority in HIR. Inline functions, indirect
-   calls, comptime type-bind scopes, actor spawn/send/ask, and every accepted
+   calls, comptime type-bind scopes, actor spawn/send/ask with checked named-
+   argument normalization and lexical evaluation order, and every accepted
    statement form now lower explicitly. Materializing actor declarations and
    receive-handler bodies as backend entities remains separate actor-runtime
    work rather than an unlowered function-body expression.
