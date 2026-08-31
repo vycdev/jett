@@ -4343,8 +4343,8 @@ constraint_violated:
   expected: string
   got: secret[string]
   explanation: secret[string] cannot be passed to functions that expose data (string interpolation, Stdout.write, log, http.respond)
-suggested_fixes[1]{code,line,column,old_text,new_text,explanation}:
-  E0012,23,41,"user: {user.password_hash}","user: {secret.redact(user.password_hash)}",use secret.redact() to get a masked representation of the secret value
+suggested_fixes[1]{code,file,line,column,end_line,end_column,old_text,new_text,explanation}:
+  E0012,src/handlers.jett,23,41,23,54,"user: {user.password_hash}","user: {secret.redact(user.password_hash)}",use secret.redact() to get a masked representation of the secret value
 ```
 
 **What this payload contains:**
@@ -4434,12 +4434,12 @@ span_end_column: 21
 
 If parsing, resolution, or type checking fails with known source context, the
 type query returns the same structured diagnostic envelope as
-`jett build --agent`. Diagnostic and label rows use the source file matching
-each compiler span, including sibling project and stdlib files. The existing
-suggested-fix table has no file column, so this query emits fixes only when the
-fix targets the requested file. Invalid positions, file-read failures, and
-compiler failures without matching source context remain operational `error`
-scalars. The file-aware fix schema and other query and command failure paths
+`jett build --agent`. Diagnostic, label, and suggested-fix rows use the source
+file matching each compiler span, including sibling project and stdlib files.
+Suggested fixes carry complete target ranges, so agents never have to infer a
+file or replacement extent from the primary diagnostic. Invalid positions,
+file-read failures, and compiler failures without matching source context
+remain operational `error` scalars. Other query and command failure paths
 remain tracked by #35.
 
 **Definition lookup:**
