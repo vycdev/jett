@@ -1,0 +1,9 @@
+[package]
+name = "jett_regex"
+description = "Portable pattern parsing and canonical automaton preflight for Jett regex"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+unicode-segmentation.workspace = true

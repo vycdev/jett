@@ -68,6 +68,7 @@ jett/
 │   ├── jett_asp/               # Agent Server Protocol (TOON output formatting)
 │   ├── jett_mcp/               # MCP server wrapping ASP
 │   ├── jett_profiler/          # Built-in CPU/memory profiler
+│   ├── jett_regex/             # Portable regex parser and canonical NFA preflight
 │   ├── jett_fuzz/              # Property-based test runner and fuzzer
 │   ├── jett_bind/              # C header → .jett binding generator
 │   ├── jett_runtime/           # Runtime library linked into every binary (allocator, actors, strings)
