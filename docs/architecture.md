@@ -799,7 +799,9 @@ materialization remains actor-runtime work. Remaining source constructs are stag
 The initial implemented `jett_mir` boundary accepts only HIR that passes the
 structural validator. It lowers top-level `if`, `while`, exhaustive `match`,
 `break`, `continue`, and `return` into deterministic dense basic blocks with
-explicit branch, switch, goto, and return terminators. Handle-internal control
+explicit branch, switch, goto, and return terminators. Its CFG analysis exposes
+deduplicated successors, canonical predecessors, and reachable reverse
+postorder for deterministic backend dataflow passes. Handle-internal control
 flow and definitive ownership/drop elaboration remain subsequent MIR work.
 
 ### Purpose

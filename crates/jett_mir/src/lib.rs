@@ -1,5 +1,9 @@
 //! Jett's backend-neutral control-flow graph representation.
 
+mod analysis;
+
+pub use analysis::{AnalysisError, ControlFlowGraph};
+
 use jett_common::Span;
 use jett_hir::{self as hir, Expression, FunctionIdentity, LocalId, VariantId};
 use jett_types::TypeId;
