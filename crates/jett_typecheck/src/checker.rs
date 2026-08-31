@@ -1310,7 +1310,12 @@ impl<'a> TypeChecker<'a> {
                 | "json.serialize_public"
                 | "json.serialize_raw"
                 | "Filesystem.write_file"
-                | "log"
+                | "log.emit"
+                | "log.debug"
+                | "log.info"
+                | "log.warn"
+                | "log.error"
+                | "log.__emit"
                 | "http.respond"
         )
     }
@@ -2876,6 +2881,7 @@ impl<'a> TypeChecker<'a> {
                 | "Clock.__now"
                 | "Environment.__get"
                 | "Environment.__args"
+                | "log.__emit"
         );
         if private_stdlib_kernel && !span.file.is_stdlib() {
             self.sink
@@ -4040,6 +4046,15 @@ impl<'a> TypeChecker<'a> {
                 self.expect_no_type_args(&name, type_args, span);
                 let list_string = self.interner.intern(Type::List(TypeInterner::STRING));
                 Some((vec![TypeInterner::ERROR], list_string))
+            }
+            "log.__emit" => {
+                self.expect_no_type_args(&name, type_args, span);
+                let event = *self.named_types.get("log.Event")?;
+                let error = *self.named_types.get("log.Error")?;
+                let result = self
+                    .interner
+                    .intern(Type::Result(TypeInterner::NOTHING, error));
+                Some((vec![TypeInterner::ERROR, event], result))
             }
             // Private CSV kernels; public signatures live in stdlib/csv.jett.
             "csv.__parse" => {

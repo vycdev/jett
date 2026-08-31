@@ -1658,6 +1658,7 @@ fn is_builtin_type(name: &str) -> bool {
             | "TypeMachineState"
             | "TypeMachineTransition"
             | "TypeVariant"
+            | "Log"
     )
 }
 

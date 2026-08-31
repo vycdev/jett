@@ -1,0 +1,5 @@
+function main(output: Log) returns nothing:
+    list[log.Field] fields = list(log.Field(name: "port", value: "8080"))
+    nothing emitted = log.info(view output, "started", fields) handle error:
+        return nothing
+    return emitted

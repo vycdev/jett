@@ -1355,6 +1355,7 @@ fn signature_builtin_type_name(name: &str) -> bool {
             | "Random"
             | "Process"
             | "Environment"
+            | "Log"
     )
 }
 
@@ -3059,6 +3060,7 @@ fn type_expr_is_capability(ty: &TypeExpr) -> bool {
                 | "Random"
                 | "Process"
                 | "Environment"
+                | "Log"
         ),
         TypeExpr::View(inner, _) => type_expr_is_capability(inner),
         TypeExpr::StateQualified(inner, _, _) => type_expr_is_capability(inner),
