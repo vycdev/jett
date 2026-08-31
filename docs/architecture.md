@@ -1789,11 +1789,11 @@ retain `Diagnostic` values through the driver boundary. Type-at and
 references-at failures retain the source map used by the compiler, so
 diagnostics and labels in sibling project or stdlib files keep their own paths
 and ranges. Agent mode renders those failures with the build diagnostic
-envelope. Because the current suggested-fix table has no file column, fixes
-are emitted only for the requested file. Operational failures without matching
-compiler source context use a prose `error` scalar. Extending that boundary and
-a file-aware fix schema to the remaining queries and commands is
-tracked by #35.
+envelope. Suggested-fix rows also carry their target file and complete range,
+so fixes in sibling project or stdlib sources are preserved instead of being
+silently omitted. Operational failures without matching compiler source
+context use a prose `error` scalar. Extending structured diagnostics to the
+remaining queries and commands is tracked by #35.
 
 ### Demand-Driven Computation
 

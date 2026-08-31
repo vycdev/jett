@@ -1,6 +1,6 @@
 use crate::render::line_col;
 use crate::{Diagnostic, Severity};
-use jett_common::{FileId, Span};
+use jett_common::FileId;
 
 /// Source text and display path for one file in a multi-file diagnostic payload.
 #[derive(Debug, Clone, Copy)]
@@ -35,50 +35,33 @@ pub struct ToonSource<'a> {
 /// diagnostics[0]{code,severity,message,file,line,column,end_line,end_column}:
 /// ```
 pub fn render_toon(diagnostics: &[Diagnostic], source: &str, file_path: &str) -> String {
-    render_toon_inner(
-        diagnostics,
-        source,
-        file_path,
-        |_| Some((source, file_path)),
-        |_| true,
-    )
+    render_toon_inner(diagnostics, file_path, |_| Some((source, file_path)))
 }
 
 /// Render diagnostics whose spans may refer to more than one source file.
 ///
-/// Diagnostic and label locations are resolved against the source matching
-/// each span's file id. Suggested fixes retain the existing single-file schema,
-/// so fixes outside `primary_file` are omitted rather than attributed to the
-/// wrong file.
+/// Diagnostic, label, and suggested-fix locations are resolved against the
+/// source matching each span's file id.
 pub fn render_toon_with_sources(
     diagnostics: &[Diagnostic],
     primary_file: FileId,
     sources: &[ToonSource<'_>],
 ) -> String {
     let primary_source = sources.iter().find(|source| source.file_id == primary_file);
-    let source = primary_source.map_or("", |source| source.source);
     let file_path = primary_source.map_or("unknown", |source| source.file_path);
 
-    render_toon_inner(
-        diagnostics,
-        source,
-        file_path,
-        |file_id| {
-            sources
-                .iter()
-                .find(|source| source.file_id == file_id)
-                .map(|source| (source.source, source.file_path))
-        },
-        |span| span.file == primary_file,
-    )
+    render_toon_inner(diagnostics, file_path, |file_id| {
+        sources
+            .iter()
+            .find(|source| source.file_id == file_id)
+            .map(|source| (source.source, source.file_path))
+    })
 }
 
 fn render_toon_inner<'a>(
     diagnostics: &[Diagnostic],
-    source: &'a str,
     file_path: &'a str,
     source_for_file: impl Fn(FileId) -> Option<(&'a str, &'a str)>,
-    include_fix: impl Fn(Span) -> bool,
 ) -> String {
     let error_count = diagnostics
         .iter()
@@ -170,30 +153,30 @@ fn render_toon_inner<'a>(
 
     let fix_count = diagnostics
         .iter()
-        .filter(|diag| {
-            diag.suggested_fix
-                .as_ref()
-                .is_some_and(|fix| include_fix(fix.span))
-        })
+        .filter(|diag| diag.suggested_fix.is_some())
         .count();
     out.push_str(&format!(
-        "suggested_fixes[{}]{{code,line,column,old_text,new_text,explanation}}:\n",
+        "suggested_fixes[{}]{{code,file,line,column,end_line,end_column,old_text,new_text,explanation}}:\n",
         fix_count
     ));
     for diag in diagnostics {
         if let Some(ref fix) = diag.suggested_fix {
-            if !include_fix(fix.span) {
-                continue;
-            }
-            let fix_source = source_for_file(fix.span.file)
-                .map(|(source, _)| source)
-                .unwrap_or(source);
-            let (fix_line, fix_col) = line_col(fix_source, fix.span.start);
+            let (fix_file_path, fix_line, fix_col, fix_end_line, fix_end_col) =
+                if let Some((fix_source, fix_file_path)) = source_for_file(fix.span.file) {
+                    let (line, col) = line_col(fix_source, fix.span.start);
+                    let (end_line, end_col) = line_col(fix_source, fix.span.end);
+                    (fix_file_path, line, col, end_line, end_col)
+                } else {
+                    ("unknown", 0, 0, 0, 0)
+                };
             out.push_str(&format!(
-                "  {},{},{},{},{},{}\n",
+                "  {},{},{},{},{},{},{},{},{}\n",
                 diag.code,
+                escape_toon_scalar(fix_file_path),
                 fix_line,
                 fix_col,
+                fix_end_line,
+                fix_end_col,
                 escape_toon_scalar(&fix.old_text),
                 escape_toon_scalar(&fix.new_text),
                 escape_toon_scalar(&fix.explanation)
@@ -223,7 +206,7 @@ mod tests {
         let result = render_toon(&[], "", "test.jett");
         assert_eq!(
             result,
-            "status: ok\nfile: test.jett\ntotal: 0\nerrors: 0\nwarnings: 0\ninfos: 0\ndiagnostics[0]{code,severity,message,file,line,column,end_line,end_column}:\nlabels[0]{code,message,file,line,column,end_line,end_column}:\nsuggested_fixes[0]{code,line,column,old_text,new_text,explanation}:\n"
+            "status: ok\nfile: test.jett\ntotal: 0\nerrors: 0\nwarnings: 0\ninfos: 0\ndiagnostics[0]{code,severity,message,file,line,column,end_line,end_column}:\nlabels[0]{code,message,file,line,column,end_line,end_column}:\nsuggested_fixes[0]{code,file,line,column,end_line,end_column,old_text,new_text,explanation}:\n"
         );
     }
 
@@ -239,7 +222,7 @@ mod tests {
         let result = render_toon(&diags, source, "test.jett");
         assert_eq!(
             result,
-            "status: ok\nfile: test.jett\ntotal: 1\nerrors: 0\nwarnings: 1\ninfos: 0\ndiagnostics[1]{code,severity,message,file,line,column,end_line,end_column}:\n  E0100,warning,unused variable,test.jett,2,10,2,11\nlabels[0]{code,message,file,line,column,end_line,end_column}:\nsuggested_fixes[0]{code,line,column,old_text,new_text,explanation}:\n"
+            "status: ok\nfile: test.jett\ntotal: 1\nerrors: 0\nwarnings: 1\ninfos: 0\ndiagnostics[1]{code,severity,message,file,line,column,end_line,end_column}:\n  E0100,warning,unused variable,test.jett,2,10,2,11\nlabels[0]{code,message,file,line,column,end_line,end_column}:\nsuggested_fixes[0]{code,file,line,column,end_line,end_column,old_text,new_text,explanation}:\n"
         );
     }
 
@@ -285,11 +268,11 @@ mod tests {
         let result = render_toon(&diags, source, "test.jett");
 
         assert!(
-            result.contains("suggested_fixes[1]{code,line,column,old_text,new_text,explanation}:")
+            result.contains("suggested_fixes[1]{code,file,line,column,end_line,end_column,old_text,new_text,explanation}:")
         );
-        assert!(
-            result.contains("E0300,2,11,a + b,a + int64.from_string(b),use explicit conversion")
-        );
+        assert!(result.contains(
+            "E0300,test.jett,2,11,2,16,a + b,a + int64.from_string(b),use explicit conversion"
+        ));
     }
 
     #[test]
@@ -340,8 +323,12 @@ mod tests {
 
         assert!(result.contains("E0207,error,private declaration,main.jett,1,5,1,11"));
         assert!(result.contains("E0207,declared private here,support.jett,2,1,2,16"));
-        assert!(result.contains("suggested_fixes[0]"));
-        assert!(!result.contains("export the declaration"));
+        assert!(result.contains(
+            "suggested_fixes[1]{code,file,line,column,end_line,end_column,old_text,new_text,explanation}:"
+        ));
+        assert!(result.contains(
+            "E0207,support.jett,2,1,2,9,function,export function,export the declaration"
+        ));
     }
 
     #[test]
