@@ -1256,7 +1256,10 @@ source-owned `log` module emits explicit events through a dedicated `Log`
 capability, preserves ordered string fields, rejects secret-bearing values, and
 keeps deterministic captures separate from stdout, diagnostics, and debugging
 channels. Filtering is a runtime observation after ordinary eager argument
-evaluation; release builds do not erase semantic log calls.
+evaluation; release builds do not erase semantic log calls. The public event,
+field, level, error, and wrapper declarations plus the capability/checker
+boundary are implemented; provider dispatch and capture remain staged runtime
+work.
 
 #### 1. Macro-Primitives — High-Level Operations as Built-Ins
 
