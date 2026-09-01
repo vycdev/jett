@@ -142,7 +142,11 @@ pub fn normalize_logical_path(path: &str) -> Result<String, FileRegistryError> {
     for component in path.split('/') {
         match component {
             "" | "." => {}
-            ".." => return Err(FileRegistryError::EscapesOrigin(path)),
+            ".." => {
+                if components.pop().is_none() {
+                    return Err(FileRegistryError::EscapesOrigin(path));
+                }
+            }
             component => components.push(component),
         }
     }
@@ -270,6 +274,19 @@ mod tests {
         assert!(normalize_logical_path("../main.jett").is_err());
         assert!(normalize_logical_path("/tmp/main.jett").is_err());
         assert!(normalize_logical_path("C:\\tmp\\main.jett").is_err());
+    }
+
+    #[test]
+    fn resolves_parent_components_that_stay_within_the_origin() {
+        assert_eq!(
+            normalize_logical_path("src/generated/../main.jett").unwrap(),
+            "src/main.jett"
+        );
+        assert_eq!(
+            normalize_logical_path("src/../main.jett").unwrap(),
+            "main.jett"
+        );
+        assert!(normalize_logical_path("src/../../main.jett").is_err());
     }
 
     #[test]
