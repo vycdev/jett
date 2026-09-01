@@ -1949,6 +1949,12 @@ metadata, lifecycle finalization, and composition with `RunOutput`; the CLI owns
 argument validation, output channels, and exit behavior. Runtimes only produce
 safe events and exclude collector metadata.
 
+The CLI parses decimal thresholds into exact integer basis points, enforces
+mode-specific rates and bounded limits, and materializes one backend-neutral
+`ProfileRequest`. Until a runtime advertises the required collector capability,
+that request fails setup before the program executes rather than silently
+running without a profile.
+
 ### CPU Profiling
 
 `jett run --profile` requests monotonic elapsed-time samples at 1000 Hz by

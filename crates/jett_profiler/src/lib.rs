@@ -1,5 +1,89 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+pub const DEFAULT_THRESHOLD_BASIS_POINTS: u16 = 500;
+pub const DEFAULT_BOTTLENECK_LIMIT: u16 = 10;
+pub const DEFAULT_CPU_RATE_HZ: u16 = 1_000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProfileMode {
+    Cpu,
+    Memory,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProfileRequest {
+    pub mode: ProfileMode,
+    pub threshold_basis_points: u16,
+    pub limit: u16,
+    pub cpu_rate_hz: Option<u16>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProfileRequestError {
+    OptionsRequireMode,
+    CpuRateRequiresCpuMode,
+}
+
+impl ProfileRequest {
+    pub fn from_cli(
+        mode: Option<ProfileMode>,
+        threshold_basis_points: Option<u16>,
+        limit: Option<u16>,
+        cpu_rate_hz: Option<u16>,
+    ) -> Result<Option<Self>, ProfileRequestError> {
+        let Some(mode) = mode else {
+            if threshold_basis_points.is_some() || limit.is_some() || cpu_rate_hz.is_some() {
+                return Err(ProfileRequestError::OptionsRequireMode);
+            }
+            return Ok(None);
+        };
+        if mode == ProfileMode::Memory && cpu_rate_hz.is_some() {
+            return Err(ProfileRequestError::CpuRateRequiresCpuMode);
+        }
+        Ok(Some(Self {
+            mode,
+            threshold_basis_points: threshold_basis_points
+                .unwrap_or(DEFAULT_THRESHOLD_BASIS_POINTS),
+            limit: limit.unwrap_or(DEFAULT_BOTTLENECK_LIMIT),
+            cpu_rate_hz: match mode {
+                ProfileMode::Cpu => Some(cpu_rate_hz.unwrap_or(DEFAULT_CPU_RATE_HZ)),
+                ProfileMode::Memory => None,
+            },
+        }))
+    }
+}
+
+pub fn parse_threshold_basis_points(value: &str) -> Result<u16, String> {
+    let mut parts = value.split('.');
+    let whole = parts.next().unwrap_or_default();
+    let fraction = parts.next();
+    if whole.is_empty()
+        || !whole.bytes().all(|byte| byte.is_ascii_digit())
+        || fraction.is_some_and(|digits| {
+            digits.is_empty()
+                || digits.len() > 2
+                || !digits.bytes().all(|byte| byte.is_ascii_digit())
+        })
+        || parts.next().is_some()
+    {
+        return Err(
+            "profile threshold must be a percentage with at most two decimal places".to_string(),
+        );
+    }
+    let whole = whole
+        .parse::<u16>()
+        .map_err(|_| "profile threshold must be between 0 and 100".to_string())?;
+    let fractional = match fraction {
+        Some(digits) if digits.len() == 1 => digits.parse::<u16>().unwrap_or(0) * 10,
+        Some(digits) => digits.parse::<u16>().unwrap_or(0),
+        None => 0,
+    };
+    if whole > 100 || (whole == 100 && fractional != 0) {
+        return Err("profile threshold must be between 0 and 100".to_string());
+    }
+    Ok(whole * 100 + fractional)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct FrameIdentity {
     pub namespace: String,
@@ -99,8 +183,8 @@ impl CpuConfig {
 impl Default for CpuConfig {
     fn default() -> Self {
         Self {
-            threshold_basis_points: 500,
-            limit: 10,
+            threshold_basis_points: DEFAULT_THRESHOLD_BASIS_POINTS,
+            limit: usize::from(DEFAULT_BOTTLENECK_LIMIT),
         }
     }
 }

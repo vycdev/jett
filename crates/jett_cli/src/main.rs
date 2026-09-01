@@ -52,6 +52,26 @@ enum Command {
         /// Emit TOON agent output
         #[arg(long)]
         agent: bool,
+
+        /// Collect an elapsed-time CPU profile
+        #[arg(long, conflicts_with = "profile_memory")]
+        profile: bool,
+
+        /// Collect a Jett-managed heap profile
+        #[arg(long, conflicts_with = "profile")]
+        profile_memory: bool,
+
+        /// Minimum bottleneck impact as a percentage
+        #[arg(long, value_parser = jett_profiler::parse_threshold_basis_points)]
+        profile_threshold: Option<u16>,
+
+        /// Maximum number of reported bottlenecks
+        #[arg(long, value_parser = clap::value_parser!(u16).range(1..=100))]
+        profile_limit: Option<u16>,
+
+        /// Requested CPU sampling rate in hertz
+        #[arg(long, value_parser = clap::value_parser!(u16).range(1..=1000))]
+        profile_rate: Option<u16>,
     },
 
     /// Run all verify and property blocks
@@ -265,7 +285,42 @@ fn main() {
                 }
             }
         }
-        Command::Run { file, agent } => {
+        Command::Run {
+            file,
+            agent,
+            profile,
+            profile_memory,
+            profile_threshold,
+            profile_limit,
+            profile_rate,
+        } => {
+            let profile_mode = if profile {
+                Some(jett_profiler::ProfileMode::Cpu)
+            } else if profile_memory {
+                Some(jett_profiler::ProfileMode::Memory)
+            } else {
+                None
+            };
+            let profile_request = match jett_profiler::ProfileRequest::from_cli(
+                profile_mode,
+                profile_threshold,
+                profile_limit,
+                profile_rate,
+            ) {
+                Ok(request) => request,
+                Err(jett_profiler::ProfileRequestError::OptionsRequireMode) => {
+                    eprintln!("error: profile options require --profile or --profile-memory");
+                    process::exit(2);
+                }
+                Err(jett_profiler::ProfileRequestError::CpuRateRequiresCpuMode) => {
+                    eprintln!("error: --profile-rate requires --profile");
+                    process::exit(2);
+                }
+            };
+            if profile_request.is_some() {
+                eprintln!("profiler: backend unsupported");
+                process::exit(1);
+            }
             let path = Path::new(&file);
             if agent {
                 match jett_driver::run_file_capture_output(path) {
