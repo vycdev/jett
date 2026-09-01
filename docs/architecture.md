@@ -90,8 +90,10 @@ The selected [`jett_profiler` contract](completed/cpu_memory_profiling_contract.
 defines CPU/memory events, attribution, bounded collection, deterministic
 reporting, security, and the interpreter/future-runtime handoff. The initial
 backend-neutral crate validates CPU report controls and aggregates injected
-samples into deterministic bottleneck records; rendering, CLI integration, and
-runtime adapters remain staged.
+samples into deterministic bottleneck records. It also sanitizes only
+manifest-authorized excerpts with checked secret metadata, replacing literals
+and secret-bearing spans before applying the 160-byte output bound. Rendering,
+CLI integration, and runtime adapters remain staged.
 
 ### Crate Dependency Graph
 
@@ -1948,6 +1950,13 @@ human/TOON rendering. The driver owns capability negotiation, run-manifest
 metadata, lifecycle finalization, and composition with `RunOutput`; the CLI owns
 argument validation, output channels, and exit behavior. Runtimes only produce
 safe events and exclude collector metadata.
+
+The source sanitizer accepts excerpts only when the driver proves manifest
+authorization and supplies checked secret metadata. It withholds unavailable or
+unsafe-to-tokenize source, replaces string and byte literals plus secret-typed
+spans with fixed markers, omits comments, escapes controls, and truncates at a
+UTF-8 boundary to 160 bytes. This helper does not authorize filesystem reads;
+the driver must supply source from the loaded run manifest.
 
 ### CPU Profiling
 
