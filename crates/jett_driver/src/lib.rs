@@ -218,6 +218,9 @@ pub type DefinitionAtQueryError = QueryError;
 /// Error returned by a detailed references-at query.
 pub type ReferencesAtQueryError = QueryError;
 
+/// Error returned by a detailed completion query.
+pub type CompletionsQueryError = QueryError;
+
 /// Result of `jett query --agent --type-at file:line:column`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeAtQueryResult {
@@ -943,32 +946,61 @@ pub fn query_completions_at(
     line: u32,
     column: u32,
 ) -> Result<CompletionsQueryResult, String> {
-    let source = fs::read_to_string(path)
-        .map_err(|e| format!("failed to read {}: {}", path.display(), e))?;
+    query_completions_at_detailed(path, line, column).map_err(|error| error.to_string())
+}
+
+/// Return completion candidates while retaining compiler diagnostics on failure.
+pub fn query_completions_at_detailed(
+    path: &Path,
+    line: u32,
+    column: u32,
+) -> Result<CompletionsQueryResult, CompletionsQueryError> {
+    let source = fs::read_to_string(path).map_err(|error| {
+        CompletionsQueryError::operational(format!("failed to read {}: {}", path.display(), error))
+    })?;
     let file_path = path.display().to_string();
     let file_id = FileId::new(0);
     let Some(offset) = line_col_to_offset(&source, line, column) else {
-        return Err(format!(
+        return Err(CompletionsQueryError::operational(format!(
             "position {line}:{column} is outside {}",
             path.display()
-        ));
+        )));
     };
     let prefix = completion_prefix_at(&source, offset);
 
     let parsed = parse(&source, file_id);
-    let parse_errors = error_messages_from_diagnostics(&parsed.errors);
-    if !parse_errors.is_empty() {
-        return Err(format!("parse errors:\n{}", parse_errors.join("\n")));
+    if has_error_diagnostics(&parsed.errors) {
+        return Err(CompletionsQueryError::compilation(
+            "parse errors:",
+            parsed.errors,
+            source,
+            file_path,
+        ));
     }
 
     let mut support_modules = discover_stdlib_modules_with_diagnostics();
     support_modules.extend(discover_project_modules_with_diagnostics(path));
     let support_errors = error_messages_from_diagnostics(&support_modules.diagnostics);
     if !support_errors.is_empty() {
-        return Err(format!(
+        let diagnostic_sources = query_diagnostic_sources(
+            file_id,
+            &source,
+            &file_path,
+            &support_modules,
+            &support_modules.diagnostics,
+        );
+        if diagnostics_have_source_context(&support_modules.diagnostics, &diagnostic_sources) {
+            return Err(CompletionsQueryError::compilation_with_sources(
+                "support parse errors:",
+                support_modules.diagnostics,
+                file_id,
+                diagnostic_sources,
+            ));
+        }
+        return Err(CompletionsQueryError::operational(format!(
             "support parse errors:\n{}",
             support_errors.join("\n")
-        ));
+        )));
     }
 
     let mut file_paths = support_modules.files.clone();
