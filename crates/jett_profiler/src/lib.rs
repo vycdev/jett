@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct FrameIdentity {
@@ -27,6 +27,23 @@ impl FrameIdentity {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct SourceLocation {
+    pub path: String,
+    pub line: u32,
+    pub column: u32,
+}
+
+impl SourceLocation {
+    pub fn new(path: impl Into<String>, line: u32, column: u32) -> Self {
+        Self {
+            path: path.into(),
+            line,
+            column,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CpuSampleState {
     Jett,
@@ -39,13 +56,26 @@ pub enum CpuSampleState {
 pub struct CpuSample {
     pub state: CpuSampleState,
     pub stack: Vec<FrameIdentity>,
+    pub leaf_location: Option<SourceLocation>,
 }
 
 impl CpuSample {
     pub fn jett(stack: Vec<FrameIdentity>) -> Self {
+        let leaf_location = stack
+            .last()
+            .map(|frame| SourceLocation::new(&frame.path, frame.line, frame.column));
         Self {
             state: CpuSampleState::Jett,
             stack,
+            leaf_location,
+        }
+    }
+
+    pub fn jett_at(stack: Vec<FrameIdentity>, leaf_location: SourceLocation) -> Self {
+        Self {
+            state: CpuSampleState::Jett,
+            stack,
+            leaf_location: Some(leaf_location),
         }
     }
 
@@ -65,6 +95,7 @@ impl CpuSample {
         Self {
             state,
             stack: Vec::new(),
+            leaf_location: None,
         }
     }
 }
@@ -124,12 +155,34 @@ pub enum CpuSuggestionRule {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CpuHotLine {
+    pub location: SourceLocation,
+    pub self_samples: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CpuCallChain {
+    pub frames: Vec<FrameIdentity>,
+    pub samples: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CpuBottleneck {
     pub frame: FrameIdentity,
     pub inclusive_samples: u64,
     pub self_samples: u64,
     pub cpu_percent_hundredths: u16,
     pub suggestion: CpuSuggestionRule,
+    pub hot_lines: Vec<CpuHotLine>,
+    pub call_chains: Vec<CpuCallChain>,
+}
+
+#[derive(Debug, Default)]
+struct CpuFunctionCounts {
+    inclusive_samples: u64,
+    self_samples: u64,
+    hot_lines: BTreeMap<SourceLocation, u64>,
+    call_chains: BTreeMap<Vec<FrameIdentity>, u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -156,18 +209,32 @@ impl CpuProfile {
             collector_dropped_ticks,
             ..CpuTotals::default()
         };
-        let mut counts: BTreeMap<FrameIdentity, (u64, u64)> = BTreeMap::new();
+        let mut counts: BTreeMap<FrameIdentity, CpuFunctionCounts> = BTreeMap::new();
 
         for sample in samples {
             match sample.state {
                 CpuSampleState::Jett if !sample.stack.is_empty() => {
                     totals.attributed_samples += 1;
-                    let unique_frames: BTreeSet<&FrameIdentity> = sample.stack.iter().collect();
-                    for frame in unique_frames {
-                        counts.entry(frame.clone()).or_default().0 += 1;
+                    let mut deepest_frames = BTreeMap::new();
+                    for (index, frame) in sample.stack.iter().enumerate() {
+                        deepest_frames.insert(frame, index);
                     }
+
+                    for (frame, index) in deepest_frames {
+                        let counts = counts.entry(frame.clone()).or_default();
+                        counts.inclusive_samples += 1;
+                        *counts
+                            .call_chains
+                            .entry(sample.stack[..=index].to_vec())
+                            .or_default() += 1;
+                    }
+
                     if let Some(frame) = sample.stack.last() {
-                        counts.entry(frame.clone()).or_default().1 += 1;
+                        let counts = counts.entry(frame.clone()).or_default();
+                        counts.self_samples += 1;
+                        if let Some(location) = sample.leaf_location {
+                            *counts.hot_lines.entry(location).or_default() += 1;
+                        }
                     }
                 }
                 CpuSampleState::Jett | CpuSampleState::Unavailable => {
@@ -180,24 +247,58 @@ impl CpuProfile {
 
         let mut bottlenecks: Vec<CpuBottleneck> = counts
             .into_iter()
-            .filter(|(_, (inclusive, _))| {
+            .filter(|(_, counts)| {
                 totals.attributed_samples != 0
-                    && *inclusive * 10_000
+                    && counts.inclusive_samples * 10_000
                         >= totals.attributed_samples * u64::from(config.threshold_basis_points)
             })
-            .map(|(frame, (inclusive_samples, self_samples))| CpuBottleneck {
-                frame,
-                inclusive_samples,
-                self_samples,
-                cpu_percent_hundredths: rounded_percent_hundredths(
-                    inclusive_samples,
-                    totals.attributed_samples,
-                ),
-                suggestion: if self_samples.saturating_mul(2) >= inclusive_samples {
-                    CpuSuggestionRule::HighSelf
-                } else {
-                    CpuSuggestionRule::CalleeDominated
-                },
+            .map(|(frame, counts)| {
+                let mut hot_lines: Vec<CpuHotLine> = counts
+                    .hot_lines
+                    .into_iter()
+                    .map(|(location, self_samples)| CpuHotLine {
+                        location,
+                        self_samples,
+                    })
+                    .collect();
+                hot_lines.sort_by(|left, right| {
+                    right
+                        .self_samples
+                        .cmp(&left.self_samples)
+                        .then_with(|| left.location.cmp(&right.location))
+                });
+                hot_lines.truncate(3);
+
+                let mut call_chains: Vec<CpuCallChain> = counts
+                    .call_chains
+                    .into_iter()
+                    .map(|(frames, samples)| CpuCallChain { frames, samples })
+                    .collect();
+                call_chains.sort_by(|left, right| {
+                    right
+                        .samples
+                        .cmp(&left.samples)
+                        .then_with(|| left.frames.cmp(&right.frames))
+                });
+                call_chains.truncate(3);
+
+                CpuBottleneck {
+                    frame,
+                    inclusive_samples: counts.inclusive_samples,
+                    self_samples: counts.self_samples,
+                    cpu_percent_hundredths: rounded_percent_hundredths(
+                        counts.inclusive_samples,
+                        totals.attributed_samples,
+                    ),
+                    suggestion: if counts.self_samples.saturating_mul(2) >= counts.inclusive_samples
+                    {
+                        CpuSuggestionRule::HighSelf
+                    } else {
+                        CpuSuggestionRule::CalleeDominated
+                    },
+                    hot_lines,
+                    call_chains,
+                }
             })
             .collect();
         bottlenecks.sort_by(|left, right| {
