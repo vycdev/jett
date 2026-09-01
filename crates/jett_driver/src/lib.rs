@@ -218,6 +218,12 @@ pub type DefinitionAtQueryError = QueryError;
 /// Error returned by a detailed references-at query.
 pub type ReferencesAtQueryError = QueryError;
 
+/// Error returned by a detailed namespace query.
+pub type NamespaceQueryError = QueryError;
+
+/// Error returned by a detailed signature query.
+pub type SignatureQueryError = QueryError;
+
 /// Result of `jett query --agent --type-at file:line:column`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeAtQueryResult {
@@ -1029,15 +1035,19 @@ pub fn query_signature(
     start_dir: &Path,
     function_name: &str,
 ) -> Result<Option<SignatureQueryResult>, String> {
+    query_signature_detailed(start_dir, function_name).map_err(|error| error.to_string())
+}
+
+/// Return a public function signature while retaining project parse diagnostics.
+pub fn query_signature_detailed(
+    start_dir: &Path,
+    function_name: &str,
+) -> Result<Option<SignatureQueryResult>, SignatureQueryError> {
     let mut support_modules = discover_stdlib_modules_with_diagnostics();
     support_modules.extend(discover_query_project_modules_with_diagnostics(start_dir));
 
-    let support_errors = error_messages_from_diagnostics(&support_modules.diagnostics);
-    if !support_errors.is_empty() {
-        return Err(format!(
-            "query support parse errors:\n{}",
-            support_errors.join("\n")
-        ));
+    if has_error_diagnostics(&support_modules.diagnostics) {
+        return Err(query_support_error(support_modules));
     }
 
     for module in &support_modules.modules {
@@ -1463,15 +1473,18 @@ fn completion_rank(match_kind: CompletionMatchKind) -> u32 {
 /// compiler-shipped stdlib modules. Without a `jett.proj`, the query still
 /// returns stdlib and language built-ins so agents can discover the base surface.
 pub fn query_namespaces(start_dir: &Path) -> Result<NamespaceQueryResult, String> {
+    query_namespaces_detailed(start_dir).map_err(|error| error.to_string())
+}
+
+/// Return the public namespace registry while retaining project parse diagnostics.
+pub fn query_namespaces_detailed(
+    start_dir: &Path,
+) -> Result<NamespaceQueryResult, NamespaceQueryError> {
     let mut support_modules = discover_stdlib_modules_with_diagnostics();
     support_modules.extend(discover_query_project_modules_with_diagnostics(start_dir));
 
-    let support_errors = error_messages_from_diagnostics(&support_modules.diagnostics);
-    if !support_errors.is_empty() {
-        return Err(format!(
-            "query support parse errors:\n{}",
-            support_errors.join("\n")
-        ));
+    if has_error_diagnostics(&support_modules.diagnostics) {
+        return Err(query_support_error(support_modules));
     }
 
     let mut definitions = query_builtin_definitions();
@@ -2505,6 +2518,47 @@ fn diagnostics_have_source_context(
                 .iter()
                 .any(|source| source.file_id == diagnostic.span.file)
         })
+}
+
+fn query_support_error(support_modules: DiscoveredModules) -> QueryError {
+    let Some(primary_file) = support_modules
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+        .map(|diagnostic| diagnostic.span.file)
+    else {
+        return QueryError::operational("query support parse errors");
+    };
+    let Some(primary_source) = support_modules.sources.get(&primary_file) else {
+        return query_support_operational_error(&support_modules.diagnostics);
+    };
+    let Some(primary_path) = support_modules.files.get(&primary_file) else {
+        return query_support_operational_error(&support_modules.diagnostics);
+    };
+    let primary_path = display_query_path(primary_path);
+    let sources = query_diagnostic_sources(
+        primary_file,
+        primary_source,
+        &primary_path,
+        &support_modules,
+        &support_modules.diagnostics,
+    );
+    if !diagnostics_have_source_context(&support_modules.diagnostics, &sources) {
+        return query_support_operational_error(&support_modules.diagnostics);
+    }
+    QueryError::compilation_with_sources(
+        "query support parse errors:",
+        support_modules.diagnostics,
+        primary_file,
+        sources,
+    )
+}
+
+fn query_support_operational_error(diagnostics: &[Diagnostic]) -> QueryError {
+    QueryError::operational(format!(
+        "query support parse errors:\n{}",
+        error_messages_from_diagnostics(diagnostics).join("\n")
+    ))
 }
 
 fn query_diagnostic_sources(

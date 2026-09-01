@@ -1883,7 +1883,7 @@ The Agent Server Protocol is not a persistent server — it's the `--agent` flag
 | `jett run --agent --profile` | Profiling bottleneck summary |
 | `jett bundle --output lib.jett` | Validated single-file bundle with source manifest |
 
-The ASP module formats `Diagnostic` structs and query results into TOON. It shares all data with the human-mode output — only the rendering differs.
+The ASP module formats `Diagnostic` structs and query results into TOON. It shares all data with the human-mode output — only the rendering differs. Global namespace and signature discovery retain project parse diagnostics and source ranges in the same structured failure envelope as file-position queries.
 
 ---
 
