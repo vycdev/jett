@@ -1783,10 +1783,10 @@ these public shapes:
 | `references_at(file, line, col)` | Find all references to the selected symbol with use-site ranges | LSP, ASP |
 | `diagnostics(file)` | All errors/warnings for a file | LSP |
 
-File-symbol parse failures, references-at parse/resolution failures, and
-type-at parse, resolution, and type-check failures with known source context
-retain `Diagnostic` values through the driver boundary. Type-at and
-references-at failures retain the source map used by the compiler, so
+File-symbol and completion parse failures, references-at parse/resolution
+failures, and type-at parse, resolution, and type-check failures with known
+source context retain `Diagnostic` values through the driver boundary. Type-at,
+references-at, and completion failures retain the source map used by the compiler, so
 diagnostics and labels in sibling project or stdlib files keep their own paths
 and ranges. Agent mode renders those failures with the build diagnostic
 envelope. Because the current suggested-fix table has no file column, fixes
