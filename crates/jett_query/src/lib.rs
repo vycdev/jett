@@ -8,6 +8,7 @@ use std::fmt;
 use std::sync::{Arc, Mutex};
 
 pub mod cache;
+pub mod compatibility;
 
 /// Stable source identity within a query database.
 ///
