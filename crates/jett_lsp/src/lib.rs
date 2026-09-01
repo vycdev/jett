@@ -76,6 +76,25 @@ fn server_capabilities() -> ServerCapabilities {
         completion_provider: Some(CompletionOptions::default()),
         document_symbol_provider: Some(OneOf::Left(true)),
         document_formatting_provider: Some(OneOf::Left(true)),
+        semantic_tokens_provider: Some(
+            SemanticTokensOptions {
+                work_done_progress_options: WorkDoneProgressOptions::default(),
+                legend: SemanticTokensLegend {
+                    token_types: vec![
+                        SemanticTokenType::KEYWORD,
+                        SemanticTokenType::TYPE,
+                        SemanticTokenType::NUMBER,
+                        SemanticTokenType::STRING,
+                        SemanticTokenType::OPERATOR,
+                        SemanticTokenType::COMMENT,
+                    ],
+                    token_modifiers: Vec::new(),
+                },
+                range: Some(false),
+                full: Some(SemanticTokensFullOptions::Bool(true)),
+            }
+            .into(),
+        ),
         position_encoding: Some(PositionEncodingKind::UTF16),
         ..ServerCapabilities::default()
     }
@@ -284,6 +303,130 @@ fn formatting_edits(source: &str) -> Option<Vec<TextEdit>> {
     }])
 }
 
+const SEMANTIC_KEYWORD: u32 = 0;
+const SEMANTIC_TYPE: u32 = 1;
+const SEMANTIC_NUMBER: u32 = 2;
+const SEMANTIC_STRING: u32 = 3;
+const SEMANTIC_OPERATOR: u32 = 4;
+const SEMANTIC_COMMENT: u32 = 5;
+
+fn semantic_token_type(kind: jett_lexer::TokenKind) -> Option<u32> {
+    use jett_lexer::TokenKind;
+
+    match kind {
+        TokenKind::Int8
+        | TokenKind::Int16
+        | TokenKind::Int32
+        | TokenKind::Int64
+        | TokenKind::Uint8
+        | TokenKind::Uint16
+        | TokenKind::Uint32
+        | TokenKind::Uint64
+        | TokenKind::Float32
+        | TokenKind::Float64
+        | TokenKind::String_
+        | TokenKind::Bool_
+        | TokenKind::Bytes_
+        | TokenKind::List_
+        | TokenKind::Map_
+        | TokenKind::Set_ => Some(SEMANTIC_TYPE),
+        TokenKind::IntLiteral | TokenKind::FloatLiteral => Some(SEMANTIC_NUMBER),
+        TokenKind::StringStart
+        | TokenKind::StringMid
+        | TokenKind::StringEnd
+        | TokenKind::StringLiteral => Some(SEMANTIC_STRING),
+        TokenKind::Eq
+        | TokenKind::EqEq
+        | TokenKind::NotEq
+        | TokenKind::Lt
+        | TokenKind::Gt
+        | TokenKind::LtEq
+        | TokenKind::GtEq
+        | TokenKind::Plus
+        | TokenKind::Minus
+        | TokenKind::Star
+        | TokenKind::Slash
+        | TokenKind::AmpAmp
+        | TokenKind::PipePipe
+        | TokenKind::Bang
+        | TokenKind::Modulo
+        | TokenKind::And
+        | TokenKind::Or
+        | TokenKind::Not
+        | TokenKind::Is
+        | TokenKind::Within => Some(SEMANTIC_OPERATOR),
+        TokenKind::Ident
+        | TokenKind::Value
+        | TokenKind::Dot
+        | TokenKind::Comma
+        | TokenKind::Colon
+        | TokenKind::LParen
+        | TokenKind::RParen
+        | TokenKind::LBracket
+        | TokenKind::RBracket
+        | TokenKind::Hash
+        | TokenKind::Newline
+        | TokenKind::Indent
+        | TokenKind::Dedent
+        | TokenKind::Eof
+        | TokenKind::InvalidToken => None,
+        _ => Some(SEMANTIC_KEYWORD),
+    }
+}
+
+fn semantic_tokens_for_source(source: &str) -> Vec<SemanticToken> {
+    let lexed = jett_lexer::tokenize(source, jett_common::FileId::new(0));
+    let mut spans = lexed
+        .tokens
+        .iter()
+        .filter_map(|token| {
+            semantic_token_type(token.kind)
+                .map(|token_type| (token.span.start, token.span.end, token_type))
+        })
+        .collect::<Vec<_>>();
+    spans.extend(
+        lexed
+            .comments
+            .iter()
+            .map(|comment| (comment.span.start, comment.span.end, SEMANTIC_COMMENT)),
+    );
+    spans.sort_unstable_by_key(|(start, end, token_type)| (*start, *end, *token_type));
+
+    let mut previous_line = 0u32;
+    let mut previous_start = 0u32;
+    let mut tokens = Vec::with_capacity(spans.len());
+    for (start, end, token_type) in spans {
+        let start = lsp_position(source, start);
+        let end = lsp_position(source, end);
+        if start.line != end.line || start.character >= end.character {
+            continue;
+        }
+        let delta_line = start.line - previous_line;
+        let delta_start = if delta_line == 0 {
+            start.character - previous_start
+        } else {
+            start.character
+        };
+        tokens.push(SemanticToken {
+            delta_line,
+            delta_start,
+            length: end.character - start.character,
+            token_type,
+            token_modifiers_bitset: 0,
+        });
+        previous_line = start.line;
+        previous_start = start.character;
+    }
+    tokens
+}
+
+fn semantic_tokens_response(source: &str) -> SemanticTokensResult {
+    SemanticTokensResult::Tokens(SemanticTokens {
+        result_id: None,
+        data: semantic_tokens_for_source(source),
+    })
+}
+
 #[tower_lsp::async_trait]
 impl LanguageServer for JettBackend {
     async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
@@ -436,6 +579,18 @@ impl LanguageServer for JettBackend {
         };
 
         Ok(formatting_edits(&document.text))
+    }
+
+    async fn semantic_tokens_full(
+        &self,
+        params: SemanticTokensParams,
+    ) -> Result<Option<SemanticTokensResult>> {
+        let documents = self.documents.read().await;
+        let Some(document) = documents.get(&params.text_document.uri) else {
+            return Ok(None);
+        };
+
+        Ok(Some(semantic_tokens_response(&document.text)))
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
@@ -749,6 +904,88 @@ mod tests {
         let capabilities = server_capabilities();
 
         assert_eq!(capabilities.references_provider, Some(OneOf::Left(true)));
+    }
+
+    #[test]
+    fn server_capabilities_advertise_full_semantic_tokens() {
+        let capabilities = server_capabilities();
+        let Some(SemanticTokensServerCapabilities::SemanticTokensOptions(options)) =
+            capabilities.semantic_tokens_provider
+        else {
+            panic!("expected semantic token options");
+        };
+
+        assert_eq!(options.range, Some(false));
+        assert_eq!(options.full, Some(SemanticTokensFullOptions::Bool(true)));
+        assert_eq!(
+            options.legend.token_types,
+            vec![
+                SemanticTokenType::KEYWORD,
+                SemanticTokenType::TYPE,
+                SemanticTokenType::NUMBER,
+                SemanticTokenType::STRING,
+                SemanticTokenType::OPERATOR,
+                SemanticTokenType::COMMENT,
+            ]
+        );
+    }
+
+    #[test]
+    fn semantic_tokens_cover_jett_syntax_with_utf16_lengths() {
+        let source = concat!(
+            "namespace demo\n",
+            "# note\n",
+            "function f(value: int64) returns bool:\n",
+            "    return value >= 42 and \"🙂\" != \"\"\n",
+        );
+
+        let tokens = semantic_tokens_for_source(source);
+        let mut line = 0u32;
+        let mut start = 0u32;
+        let absolute = tokens
+            .into_iter()
+            .map(|token| {
+                line += token.delta_line;
+                start = if token.delta_line == 0 {
+                    start + token.delta_start
+                } else {
+                    token.delta_start
+                };
+                (line, start, token.length, token.token_type)
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            absolute,
+            vec![
+                (0, 0, 9, 0),
+                (1, 0, 6, 5),
+                (2, 0, 8, 0),
+                (2, 18, 5, 1),
+                (2, 25, 7, 0),
+                (2, 33, 4, 1),
+                (3, 4, 6, 0),
+                (3, 17, 2, 4),
+                (3, 20, 2, 2),
+                (3, 23, 3, 4),
+                (3, 27, 4, 3),
+                (3, 32, 2, 4),
+                (3, 35, 2, 3),
+            ]
+        );
+    }
+
+    #[test]
+    fn semantic_tokens_response_wraps_full_document_tokens() {
+        let response = semantic_tokens_response("return 1\n");
+        let SemanticTokensResult::Tokens(tokens) = response else {
+            panic!("expected a full semantic token response");
+        };
+
+        assert_eq!(tokens.result_id, None);
+        assert_eq!(tokens.data.len(), 2);
+        assert_eq!(tokens.data[0].token_type, SEMANTIC_KEYWORD);
+        assert_eq!(tokens.data[1].token_type, SEMANTIC_NUMBER);
     }
 
     #[test]

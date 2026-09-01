@@ -1852,6 +1852,9 @@ Standard LSP implementation using the `tower-lsp` crate. Provides:
 - Document symbols from the latest in-memory source, including declaration
   kinds, signatures, and UTF-16 ranges for editor outlines.
 - Whole-document formatting is provided through `jett_fmt`.
+- Full-document semantic tokens classify keywords, primitive types, numbers,
+  strings, operators, and comments with UTF-16 positions from the latest
+  in-memory source.
 - Planned follow-up: rename symbol.
 
 The LSP server currently stores full document text, invokes driver operations,
