@@ -350,7 +350,7 @@ fn main() {
 
             if namespaces {
                 let cwd = std::env::current_dir().unwrap_or_default();
-                match jett_driver::query_namespaces(&cwd) {
+                match jett_driver::query_namespaces_detailed(&cwd) {
                     Ok(result) => {
                         if agent {
                             print!("{}", render_query_namespaces_agent_output(&result));
@@ -360,7 +360,7 @@ fn main() {
                     }
                     Err(e) => {
                         if agent {
-                            print!("{}", render_query_agent_error(&e));
+                            print!("{}", render_query_diagnostic_agent_error(&e));
                         } else {
                             eprintln!("error: {e}");
                         }
@@ -531,7 +531,7 @@ fn main() {
 
             if let Some(function_name) = signature {
                 let cwd = std::env::current_dir().unwrap_or_default();
-                match jett_driver::query_signature(&cwd, &function_name) {
+                match jett_driver::query_signature_detailed(&cwd, &function_name) {
                     Ok(result) => {
                         if agent {
                             print!(
@@ -547,7 +547,7 @@ fn main() {
                     }
                     Err(e) => {
                         if agent {
-                            print!("{}", render_query_agent_error(&e));
+                            print!("{}", render_query_diagnostic_agent_error(&e));
                         } else {
                             eprintln!("error: {e}");
                         }
