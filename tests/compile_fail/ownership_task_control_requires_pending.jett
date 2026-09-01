@@ -1,0 +1,7 @@
+# ERROR: E0403 x2
+function main() returns nothing:
+    int64 value = 7
+    int64 joined = join value handle error:
+        return nothing
+    cancel value
+    return nothing

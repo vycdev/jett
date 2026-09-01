@@ -63,6 +63,15 @@ fn cannot_consume_view(name: &str, span: Span) -> Diagnostic {
     )
 }
 
+/// E0403: `join` and `cancel` require a variable produced by `run`.
+fn task_control_requires_pending(operation: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        403,
+        format!("`{operation}` requires a pending task produced by `run`"),
+        span,
+    )
+}
+
 /// E0402: Closures may capture only implicitly copyable values.
 pub(crate) fn cannot_capture_move_only(name: &str, span: Span) -> Diagnostic {
     Diagnostic::error(
@@ -290,7 +299,11 @@ impl<'a> OwnershipChecker<'a> {
         self.states.insert(
             decl.name.name.clone(),
             VarInfo {
-                state: OwnershipState::Owned,
+                state: if matches!(decl.value, Expr::Run(_, _)) {
+                    OwnershipState::Pending
+                } else {
+                    OwnershipState::Owned
+                },
                 mutable: decl.mutable,
                 type_id,
                 consumed_span: None,
@@ -632,11 +645,11 @@ impl<'a> OwnershipChecker<'a> {
             | Expr::Send(inner, _)
             | Expr::Ask(inner, _)
             | Expr::Clone(inner, _)
-            | Expr::Run(inner, _)
-            | Expr::Join(inner, _)
-            | Expr::Cancel(inner, _) => {
+            | Expr::Run(inner, _) => {
                 self.check_expr_ownership(inner);
             }
+            Expr::Join(inner, span) => self.check_task_control("join", inner, *span, true),
+            Expr::Cancel(inner, span) => self.check_task_control("cancel", inner, *span, false),
             Expr::InlineFn(params, _, body, _) => {
                 let saved = std::mem::take(&mut self.states);
 
@@ -669,6 +682,35 @@ impl<'a> OwnershipChecker<'a> {
             | Expr::None(_)
             | Expr::EnumVariant(_, _, _)
             | Expr::Error(_) => {}
+        }
+    }
+
+    fn check_task_control(
+        &mut self,
+        operation: &str,
+        operand: &Expr,
+        span: Span,
+        resolves_task: bool,
+    ) {
+        let Expr::Ident(ident) = operand else {
+            self.check_expr_ownership(operand);
+            self.diagnostics
+                .push(task_control_requires_pending(operation, span));
+            return;
+        };
+        let Some(info) = self.states.get_mut(&ident.name) else {
+            self.diagnostics
+                .push(task_control_requires_pending(operation, span));
+            return;
+        };
+        if info.state != OwnershipState::Pending {
+            self.diagnostics
+                .push(task_control_requires_pending(operation, span));
+            return;
+        }
+        if resolves_task {
+            info.state = OwnershipState::Consumed;
+            info.consumed_span = Some(span);
         }
     }
 

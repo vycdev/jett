@@ -1175,6 +1175,10 @@ compile_fail_fixture!(
     "ownership_while_zero_iteration_rebind.jett"
 );
 compile_fail_fixture!(
+    compile_fail_ownership_task_control_requires_pending,
+    "ownership_task_control_requires_pending.jett"
+);
+compile_fail_fixture!(
     compile_fail_math_sum_consumes_list,
     "math_sum_consumes_list.jett"
 );
