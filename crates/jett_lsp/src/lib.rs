@@ -75,6 +75,7 @@ fn server_capabilities() -> ServerCapabilities {
         references_provider: Some(OneOf::Left(true)),
         completion_provider: Some(CompletionOptions::default()),
         document_symbol_provider: Some(OneOf::Left(true)),
+        workspace_symbol_provider: Some(OneOf::Left(true)),
         document_formatting_provider: Some(OneOf::Left(true)),
         position_encoding: Some(PositionEncodingKind::UTF16),
         ..ServerCapabilities::default()
@@ -242,6 +243,49 @@ fn document_symbols_for_source(source: &str) -> Option<Vec<DocumentSymbol>> {
         })
         .collect();
     Some(symbols)
+}
+
+#[allow(deprecated)]
+fn workspace_symbols_for_documents(
+    documents: &HashMap<Url, DocumentState>,
+    query: &str,
+) -> Vec<SymbolInformation> {
+    let query = query.to_lowercase();
+    let mut symbols = Vec::new();
+
+    for (uri, document) in documents {
+        let Ok(outline) = jett_driver::query_source_file_symbols(&document.text, "<lsp-document>")
+        else {
+            continue;
+        };
+
+        symbols.extend(outline.symbols.into_iter().filter_map(|symbol| {
+            if !symbol.name.to_lowercase().contains(&query) {
+                return None;
+            }
+            let start = lsp_position_from_driver(&document.text, symbol.line, symbol.column)?;
+            let end = lsp_position_from_driver(&document.text, symbol.end_line, symbol.end_column)?;
+            Some(SymbolInformation {
+                name: symbol.name,
+                kind: document_symbol_kind(&symbol.kind),
+                tags: None,
+                deprecated: None,
+                location: Location {
+                    uri: uri.clone(),
+                    range: Range::new(start, end),
+                },
+                container_name: symbol.namespace,
+            })
+        }));
+    }
+
+    symbols.sort_by(|left, right| {
+        left.name
+            .cmp(&right.name)
+            .then_with(|| left.location.uri.as_str().cmp(right.location.uri.as_str()))
+            .then_with(|| left.location.range.start.cmp(&right.location.range.start))
+    });
+    symbols
 }
 
 fn reference_locations(
@@ -500,6 +544,17 @@ impl LanguageServer for JettBackend {
 
         Ok(Some(DocumentSymbolResponse::Nested(symbols)))
     }
+
+    async fn symbol(
+        &self,
+        params: WorkspaceSymbolParams,
+    ) -> Result<Option<Vec<SymbolInformation>>> {
+        let documents = self.documents.read().await;
+        Ok(Some(workspace_symbols_for_documents(
+            &documents,
+            &params.query,
+        )))
+    }
 }
 
 fn diagnostics_for_source(source: &str, file_path: &str) -> Vec<Diagnostic> {
@@ -749,6 +804,52 @@ mod tests {
         let capabilities = server_capabilities();
 
         assert_eq!(capabilities.references_provider, Some(OneOf::Left(true)));
+    }
+
+    #[test]
+    fn server_capabilities_advertise_workspace_symbol_search() {
+        let capabilities = server_capabilities();
+
+        assert_eq!(
+            capabilities.workspace_symbol_provider,
+            Some(OneOf::Left(true))
+        );
+    }
+
+    #[test]
+    fn workspace_symbols_search_all_open_documents_case_insensitively() {
+        let first_uri = Url::parse("file:///workspace/auth.jett").unwrap();
+        let second_uri = Url::parse("file:///workspace/admin.jett").unwrap();
+        let mut documents = HashMap::new();
+        documents.insert(
+            first_uri.clone(),
+            DocumentState {
+                text:
+                    "namespace auth\n\nexport function LoginUser() returns int64:\n    return 1\n"
+                        .to_string(),
+                version: 1,
+            },
+        );
+        documents.insert(
+            second_uri,
+            DocumentState {
+                text: "namespace admin\n\nexport function logout() returns int64:\n    return 2\n"
+                    .to_string(),
+                version: 1,
+            },
+        );
+
+        let symbols = workspace_symbols_for_documents(&documents, "login");
+
+        assert_eq!(symbols.len(), 1);
+        assert_eq!(symbols[0].name, "auth.LoginUser");
+        assert_eq!(symbols[0].kind, SymbolKind::FUNCTION);
+        assert_eq!(symbols[0].location.uri, first_uri);
+        assert_eq!(
+            symbols[0].location.range,
+            Range::new(Position::new(2, 16), Position::new(2, 25))
+        );
+        assert_eq!(symbols[0].container_name.as_deref(), Some("auth"));
     }
 
     #[test]

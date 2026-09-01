@@ -1851,6 +1851,8 @@ Standard LSP implementation using the `tower-lsp` crate. Provides:
 - Code completion.
 - Document symbols from the latest in-memory source, including declaration
   kinds, signatures, and UTF-16 ranges for editor outlines.
+- Case-insensitive workspace symbol search across all open Jett documents,
+  using their latest unsaved text and deterministic name/location ordering.
 - Whole-document formatting is provided through `jett_fmt`.
 - Planned follow-up: rename symbol.
 
