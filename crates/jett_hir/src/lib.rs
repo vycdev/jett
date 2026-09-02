@@ -421,6 +421,20 @@ impl Validator<'_> {
         }
     }
 
+    fn check_evaluation_order(&mut self, order: &[usize], argument_count: usize, span: Span) {
+        let mut seen = vec![false; argument_count];
+        let valid = order.len() == argument_count
+            && order
+                .iter()
+                .all(|&index| index < argument_count && !std::mem::replace(&mut seen[index], true));
+        if !valid {
+            self.error(
+                span,
+                "argument evaluation order must be a permutation of the argument indexes",
+            );
+        }
+    }
+
     fn block(&mut self, block: &Block) {
         for statement in &block.statements {
             self.statement(statement);
@@ -540,27 +554,51 @@ impl Validator<'_> {
             | ExpressionKind::Run(value)
             | ExpressionKind::Join(value)
             | ExpressionKind::Cancel(value) => self.expression(value),
-            ExpressionKind::Call { function, args, .. } => {
+            ExpressionKind::Call {
+                function,
+                args,
+                evaluation_order,
+            } => {
                 if function.index() as usize >= self.program.functions.len() {
                     self.error(expression.span, "call references an unknown HIR function");
                 }
+                self.check_evaluation_order(evaluation_order, args.len(), expression.span);
                 for argument in args {
                     self.expression(argument);
                 }
             }
-            ExpressionKind::Intrinsic { args, .. } => {
+            ExpressionKind::Intrinsic {
+                args,
+                evaluation_order,
+                ..
+            } => {
+                self.check_evaluation_order(evaluation_order, args.len(), expression.span);
                 for argument in args {
                     self.expression(argument);
                 }
             }
-            ExpressionKind::IndirectCall { callee, args, .. } => {
+            ExpressionKind::IndirectCall {
+                callee,
+                args,
+                evaluation_order,
+            } => {
                 self.expression(callee);
+                self.check_evaluation_order(evaluation_order, args.len(), expression.span);
                 for argument in args {
                     self.expression(argument);
                 }
             }
-            ExpressionKind::StructConstruct { fields, .. }
-            | ExpressionKind::BitfieldConstruct { fields, .. } => {
+            ExpressionKind::StructConstruct {
+                fields,
+                evaluation_order,
+                ..
+            }
+            | ExpressionKind::BitfieldConstruct {
+                fields,
+                evaluation_order,
+                ..
+            } => {
+                self.check_evaluation_order(evaluation_order, fields.len(), expression.span);
                 for field in fields {
                     self.expression(field);
                 }
@@ -622,7 +660,12 @@ impl Validator<'_> {
                 }
                 self.block(body);
             }
-            ExpressionKind::ActorSpawn { args, .. } => {
+            ExpressionKind::ActorSpawn {
+                args,
+                evaluation_order,
+                ..
+            } => {
+                self.check_evaluation_order(evaluation_order, args.len(), expression.span);
                 for argument in args {
                     self.expression(argument);
                 }
@@ -2389,6 +2432,35 @@ function main() returns int64:
                 .iter()
                 .any(|error| error.message.contains("unknown HIR function"))
         );
+    }
+
+    #[test]
+    fn validator_rejects_invalid_argument_evaluation_orders() {
+        let mut program = lower_source(
+            r#"namespace app
+function difference(left: int64, right: int64) returns int64:
+    return left - right
+function main() returns int64:
+    return difference(right: 2, left: 7)
+"#,
+        );
+        let StatementKind::Return(Some(Expression {
+            kind: ExpressionKind::Call {
+                evaluation_order, ..
+            },
+            ..
+        })) = &mut program.functions[1].body.statements[0].kind
+        else {
+            panic!("expected call");
+        };
+        *evaluation_order = vec![0, 0];
+
+        let errors = validate(&program).expect_err("invalid evaluation order must fail validation");
+        assert!(errors.iter().any(|error| {
+            error
+                .message
+                .contains("argument evaluation order must be a permutation")
+        }));
     }
 
     #[test]
