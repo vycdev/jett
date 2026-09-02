@@ -1852,6 +1852,8 @@ Standard LSP implementation using the `tower-lsp` crate. Provides:
 - Document symbols from the latest in-memory source, including declaration
   kinds, signatures, and UTF-16 ranges for editor outlines.
 - Whole-document formatting is provided through `jett_fmt`.
+- Quick fixes replace tab-indented line prefixes with the required four-space
+  indentation while preserving the rest of the line.
 - Planned follow-up: rename symbol.
 
 The LSP server currently stores full document text, invokes driver operations,

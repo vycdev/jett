@@ -76,6 +76,7 @@ fn server_capabilities() -> ServerCapabilities {
         completion_provider: Some(CompletionOptions::default()),
         document_symbol_provider: Some(OneOf::Left(true)),
         document_formatting_provider: Some(OneOf::Left(true)),
+        code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
         position_encoding: Some(PositionEncodingKind::UTF16),
         ..ServerCapabilities::default()
     }
@@ -284,6 +285,54 @@ fn formatting_edits(source: &str) -> Option<Vec<TextEdit>> {
     }])
 }
 
+fn tab_indentation_code_actions(
+    source: &str,
+    uri: &Url,
+    diagnostics: &[Diagnostic],
+) -> CodeActionResponse {
+    diagnostics
+        .iter()
+        .filter_map(|diagnostic| {
+            if diagnostic.source.as_deref() != Some("jett")
+                || !diagnostic.message.starts_with("tabs are not allowed")
+            {
+                return None;
+            }
+
+            let line_index = usize::try_from(diagnostic.range.start.line).ok()?;
+            let indentation: String = source_line(source, line_index)?
+                .chars()
+                .take_while(|ch| matches!(ch, ' ' | '\t'))
+                .collect();
+            if !indentation.contains('\t') {
+                return None;
+            }
+
+            let end_character = u32::try_from(indentation.encode_utf16().count()).ok()?;
+            let edit = TextEdit {
+                range: Range::new(
+                    Position::new(diagnostic.range.start.line, 0),
+                    Position::new(diagnostic.range.start.line, end_character),
+                ),
+                new_text: indentation.replace('\t', "    "),
+            };
+            let changes = HashMap::from([(uri.clone(), vec![edit])]);
+
+            Some(CodeActionOrCommand::CodeAction(CodeAction {
+                title: "Replace tab indentation with spaces".to_string(),
+                kind: Some(CodeActionKind::QUICKFIX),
+                diagnostics: Some(vec![diagnostic.clone()]),
+                edit: Some(WorkspaceEdit {
+                    changes: Some(changes),
+                    ..WorkspaceEdit::default()
+                }),
+                is_preferred: Some(true),
+                ..CodeAction::default()
+            }))
+        })
+        .collect()
+}
+
 #[tower_lsp::async_trait]
 impl LanguageServer for JettBackend {
     async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
@@ -436,6 +485,20 @@ impl LanguageServer for JettBackend {
         };
 
         Ok(formatting_edits(&document.text))
+    }
+
+    async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
+        let documents = self.documents.read().await;
+        let Some(document) = documents.get(&params.text_document.uri) else {
+            return Ok(None);
+        };
+        let actions = tab_indentation_code_actions(
+            &document.text,
+            &params.text_document.uri,
+            &params.context.diagnostics,
+        );
+
+        Ok((!actions.is_empty()).then_some(actions))
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
@@ -774,6 +837,45 @@ mod tests {
         assert_eq!(
             capabilities.document_formatting_provider,
             Some(OneOf::Left(true))
+        );
+    }
+
+    #[test]
+    fn server_capabilities_advertise_code_actions() {
+        let capabilities = server_capabilities();
+
+        assert_eq!(
+            capabilities.code_action_provider,
+            Some(CodeActionProviderCapability::Simple(true))
+        );
+    }
+
+    #[test]
+    fn tab_indentation_diagnostic_offers_a_four_space_quick_fix() {
+        let source = "namespace app\nfunction main() returns int64:\n\treturn 1\n";
+        let uri = Url::parse("file:///workspace/main.jett").unwrap();
+        let diagnostics = diagnostics_for_source(source, "main.jett");
+
+        let actions = tab_indentation_code_actions(source, &uri, &diagnostics);
+
+        assert_eq!(actions.len(), 1);
+        let CodeActionOrCommand::CodeAction(action) = &actions[0] else {
+            panic!("expected a code action");
+        };
+        assert_eq!(action.title, "Replace tab indentation with spaces");
+        assert_eq!(action.kind, Some(CodeActionKind::QUICKFIX));
+        assert_eq!(action.diagnostics.as_deref(), Some(&diagnostics[..1]));
+        let changes = action
+            .edit
+            .as_ref()
+            .and_then(|edit| edit.changes.as_ref())
+            .expect("workspace edit changes");
+        assert_eq!(
+            changes.get(&uri),
+            Some(&vec![TextEdit {
+                range: Range::new(Position::new(2, 0), Position::new(2, 1)),
+                new_text: "    ".to_string(),
+            }])
         );
     }
 
