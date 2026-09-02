@@ -198,7 +198,7 @@
 |---|---|
 | Syntax highlighting (TextMate grammar) | Done |
 | Language configuration (brackets, indentation) | Done |
-| LSP integration (diagnostics and formatting) | Done (via `jett lsp`) |
+| LSP integration (diagnostics, formatting, and quick fixes) | Done (via `jett lsp`; tab-indentation diagnostics offer an apply-ready four-space fix) |
 
 ## CLI Commands
 
