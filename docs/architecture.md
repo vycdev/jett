@@ -89,7 +89,8 @@ jett/
 The selected [`jett_profiler` contract](completed/cpu_memory_profiling_contract.md)
 defines CPU/memory events, attribution, bounded collection, deterministic
 reporting, security, and the interpreter/future-runtime handoff. The initial
-backend-neutral crate validates CPU report controls and aggregates injected
+backend-neutral crate validates CPU report controls, bounds injected stacks to
+128 frames with an explicit truncation marker and counter, and aggregates
 samples into deterministic bottleneck records; rendering, CLI integration, and
 runtime adapters remain staged.
 
