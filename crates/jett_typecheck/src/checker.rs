@@ -2876,6 +2876,9 @@ impl<'a> TypeChecker<'a> {
                 | "Clock.__now"
                 | "Environment.__get"
                 | "Environment.__args"
+                | "test.mock.__random"
+                | "test.mock.__clock"
+                | "test.mock.__environment"
         );
         if private_stdlib_kernel && !span.file.is_stdlib() {
             self.sink
@@ -4040,6 +4043,25 @@ impl<'a> TypeChecker<'a> {
                 self.expect_no_type_args(&name, type_args, span);
                 let list_string = self.interner.intern(Type::List(TypeInterner::STRING));
                 Some((vec![TypeInterner::ERROR], list_string))
+            }
+            "test.mock.__random" => {
+                self.expect_no_type_args(&name, type_args, span);
+                let step = *self.named_types.get("test.mock.RandomStep")?;
+                let steps = self.interner.intern(Type::List(step));
+                Some((vec![steps], TypeInterner::ERROR))
+            }
+            "test.mock.__clock" => {
+                self.expect_no_type_args(&name, type_args, span);
+                let step = *self.named_types.get("test.mock.ClockStep")?;
+                let steps = self.interner.intern(Type::List(step));
+                Some((vec![steps], TypeInterner::ERROR))
+            }
+            "test.mock.__environment" => {
+                self.expect_no_type_args(&name, type_args, span);
+                let arguments = self.interner.intern(Type::List(TypeInterner::STRING));
+                let entry = *self.named_types.get("test.mock.EnvironmentEntry")?;
+                let entries = self.interner.intern(Type::List(entry));
+                Some((vec![arguments, entries], TypeInterner::ERROR))
             }
             // Private CSV kernels; public signatures live in stdlib/csv.jett.
             "csv.__parse" => {
@@ -8391,6 +8413,7 @@ impl<'a> TypeChecker<'a> {
                 let saved_return_type = self.current_return_type;
                 let saved_fn_name = self.current_function_name.take();
                 let saved_pure = self.current_function_pure;
+                let saved_in_property_block = self.in_property_block;
 
                 let ret = return_type
                     .as_ref()
@@ -8398,6 +8421,7 @@ impl<'a> TypeChecker<'a> {
                     .unwrap_or(TypeInterner::NOTHING);
                 self.current_return_type = Some(ret);
                 self.current_function_pure = false;
+                self.in_property_block = false;
                 self.closure_capture_scopes
                     .push(ClosureCaptureScope::default());
 
@@ -8420,6 +8444,7 @@ impl<'a> TypeChecker<'a> {
                 self.current_return_type = saved_return_type;
                 self.current_function_name = saved_fn_name;
                 self.current_function_pure = saved_pure;
+                self.in_property_block = saved_in_property_block;
 
                 self.interner.intern(Type::Function {
                     params: param_types,
@@ -9966,6 +9991,14 @@ impl<'a> TypeChecker<'a> {
                 self.check_expr(&arg.value);
             }
             return TypeInterner::ERROR;
+        }
+
+        if let Some(name @ ("test.mock.random" | "test.mock.clock" | "test.mock.environment")) =
+            callee_name.as_deref()
+            && !self.in_property_block
+        {
+            self.sink
+                .emit(errors::test_mock_outside_property(name, span));
         }
 
         if let Some(name) = callee_name.as_deref()
