@@ -1,6 +1,8 @@
 # Capability Mocking and Deterministic Test Harness Contract
 
-Status: accepted as the design for `test.mock`; implementation is pending.
+Status: accepted design. The source-owned script types, constructor surface, and
+property-only checker boundary are implemented; per-attempt providers, execution,
+replay, shrinking, and mismatch reporting remain staged.
 
 Tracked by [#145](https://github.com/vycdev/jett/issues/145).
 

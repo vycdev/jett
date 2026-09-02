@@ -1,0 +1,8 @@
+# ERROR: E0371
+# ERROR: E0371
+function forbidden() returns Clock:
+    return test.mock.clock(list())
+property closure_cannot_hide_provider_construction:
+    function() returns Clock maker = function() returns Clock:
+        return test.mock.clock(list())
+    assert true

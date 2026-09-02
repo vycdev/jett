@@ -288,6 +288,10 @@ macro_rules! run_pass_fixture {
 
 compile_pass_fixture!(compile_pass_basic, "basic.jett");
 compile_pass_fixture!(
+    compile_pass_test_mock_source_boundary,
+    "test_mock_source_boundary.jett"
+);
+compile_pass_fixture!(
     compile_pass_implicit_pure_call_remains_runtime,
     "implicit_pure_call_remains_runtime.jett"
 );
@@ -1466,6 +1470,10 @@ compile_fail_fixture!(
 compile_fail_fixture!(
     compile_fail_time_removed_ambient_calls,
     "time_removed_ambient_calls.jett"
+);
+compile_fail_fixture!(
+    compile_fail_test_mock_outside_property,
+    "test_mock_outside_property.jett"
 );
 compile_fail_fixture!(
     compile_fail_time_value_type_mismatch,
