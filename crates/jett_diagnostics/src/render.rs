@@ -65,6 +65,32 @@ fn get_source_line(source: &str, line_number: usize) -> &str {
     }
 }
 
+fn terminal_safe_text(text: &str, preserve_tabs: bool) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            '\t' if preserve_tabs => escaped.push(ch),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            '\0' => escaped.push_str("\\0"),
+            ch if ch.is_ascii_control() => escaped.push_str(&format!("\\x{:02x}", ch as u32)),
+            ch if ch.is_control() => escaped.push_str(&format!("\\u{{{:x}}}", ch as u32)),
+            ch => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
+fn terminal_safe_width(text: &str) -> usize {
+    terminal_safe_text(text, true).chars().count()
+}
+
+fn underline_padding(source_line: &str, column: usize) -> String {
+    let prefix: String = source_line.chars().take(column.saturating_sub(1)).collect();
+    " ".repeat(terminal_safe_width(&prefix))
+}
+
 fn span_underline_len(
     source: &str,
     source_line: &str,
@@ -77,13 +103,16 @@ fn span_underline_len(
     let span_len = source
         .get(start..end)
         .map(|span| {
-            span.chars()
+            let first_line: String = span
+                .chars()
                 .take_while(|ch| *ch != '\n' && *ch != '\r')
-                .count()
+                .collect();
+            terminal_safe_width(&first_line)
         })
         .unwrap_or(0)
         .max(1);
-    let line_remaining = source_line.chars().count().saturating_sub(column - 1);
+    let line_remaining: String = source_line.chars().skip(column.saturating_sub(1)).collect();
+    let line_remaining = terminal_safe_width(&line_remaining);
 
     span_len.min(line_remaining).max(1)
 }
@@ -113,13 +142,20 @@ pub fn render_diagnostic(diag: &Diagnostic, source: &str, file_path: &str) -> St
     // Header line: error[E0300]: message
     out.push_str(&format!(
         "{}[{}]: {}\n",
-        severity_str, diag.code, diag.message
+        severity_str,
+        diag.code,
+        terminal_safe_text(&diag.message, false)
     ));
 
     let (line, col) = line_col(source, diag.span.start);
 
     // Location line: --> file:line:col
-    out.push_str(&format!("  --> {}:{}:{}\n", file_path, line, col));
+    out.push_str(&format!(
+        "  --> {}:{}:{}\n",
+        terminal_safe_text(file_path, false),
+        line,
+        col
+    ));
 
     // Determine gutter width from every rendered line number so secondary labels align.
     let gutter_width = std::iter::once(line)
@@ -141,7 +177,7 @@ pub fn render_diagnostic(diag: &Diagnostic, source: &str, file_path: &str) -> St
     out.push_str(&format!(
         "{:>width$} | {}\n",
         line,
-        source_line,
+        terminal_safe_text(source_line, true),
         width = gutter_width + 1
     ));
 
@@ -150,12 +186,12 @@ pub fn render_diagnostic(diag: &Diagnostic, source: &str, file_path: &str) -> St
         span_underline_len(source, source_line, col, diag.span.start, diag.span.end);
 
     // Build the underline: spaces up to col, then carets
-    let padding = " ".repeat(col - 1);
+    let padding = underline_padding(source_line, col);
     let carets = "^".repeat(underline_len);
 
     // Primary label message: use the first label if present, otherwise empty
     let primary_message = if !diag.labels.is_empty() {
-        format!(" {}", diag.labels[0].message)
+        format!(" {}", terminal_safe_text(&diag.labels[0].message, false))
     } else {
         String::new()
     };
@@ -186,21 +222,24 @@ pub fn render_diagnostic(diag: &Diagnostic, source: &str, file_path: &str) -> St
         out.push_str(&format!(
             "{:>width$} | {}\n",
             lbl_line,
-            lbl_source_line,
+            terminal_safe_text(lbl_source_line, true),
             width = gutter_width + 1
         ));
         out.push_str(&format!(
             "{} | {}{} {}\n",
             " ".repeat(gutter_width + 1),
-            " ".repeat(lbl_col - 1),
+            underline_padding(lbl_source_line, lbl_col),
             "^".repeat(lbl_underline_len),
-            label.message
+            terminal_safe_text(&label.message, false)
         ));
     }
 
     // Suggested fix
     if let Some(ref fix) = diag.suggested_fix {
-        out.push_str(&format!("   hint: {}\n", fix.explanation));
+        out.push_str(&format!(
+            "   hint: {}\n",
+            terminal_safe_text(&fix.explanation, false)
+        ));
     }
 
     out
@@ -323,6 +362,41 @@ mod tests {
 
         assert_eq!(primary.matches('^').count(), 1);
         assert_eq!(secondary.matches('^').count(), 1);
+    }
+
+    #[test]
+    fn render_diagnostic_escapes_terminal_control_characters() {
+        let source = "let \u{1b}[31mvalue = 1\n";
+        let file_id = FileId::new(0);
+        let diag = Diagnostic::error(300, "invalid\u{1b}[2J\nmessage", Span::new(file_id, 9, 14))
+            .with_label(Span::new(file_id, 9, 14), "bad\0label")
+            .with_fix(
+                Span::new(file_id, 9, 14),
+                "value",
+                "replacement",
+                "avoid\u{7}control",
+            );
+
+        let rendered = render_diagnostic(&diag, source, "bad\u{1b}[2J.jett");
+        let source_line = rendered
+            .lines()
+            .find(|line| line.contains("value = 1"))
+            .expect("source line should be rendered");
+        let underline = rendered
+            .lines()
+            .find(|line| line.ends_with("bad\\0label"))
+            .expect("primary label should be rendered");
+
+        assert!(!rendered.contains(['\u{1b}', '\0', '\u{7}']));
+        assert!(rendered.contains("error[E0300]: invalid\\x1b[2J\\nmessage"));
+        assert!(rendered.contains("--> bad\\x1b[2J.jett:1:10"));
+        assert!(rendered.contains("let \\x1b[31mvalue = 1"));
+        assert!(rendered.contains("hint: avoid\\x07control"));
+        assert_eq!(
+            source_line.find("value"),
+            underline.find('^'),
+            "the underline should track the escaped source width"
+        );
     }
 
     #[test]
