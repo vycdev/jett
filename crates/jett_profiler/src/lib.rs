@@ -1,5 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+mod sampling;
+
+pub use sampling::{CpuSampleRequestCounts, CpuSampleRequestGate, CpuTickOutcome};
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct FrameIdentity {
     pub namespace: String,
