@@ -8675,6 +8675,11 @@ impl Interpreter {
                             match (va, vb) {
                                 (Some(Value::String(sa)), Some(Value::String(sb))) => sa.cmp(&sb),
                                 (Some(Value::Int64(ia)), Some(Value::Int64(ib))) => ia.cmp(&ib),
+                                (Some(Value::Uint64(ia)), Some(Value::Uint64(ib))) => ia.cmp(&ib),
+                                (Some(Value::Float64(ia)), Some(Value::Float64(ib))) => {
+                                    ia.partial_cmp(&ib).unwrap_or(std::cmp::Ordering::Equal)
+                                }
+                                (Some(Value::Bool(ia)), Some(Value::Bool(ib))) => ia.cmp(&ib),
                                 _ => std::cmp::Ordering::Equal,
                             }
                         });
@@ -8692,8 +8697,10 @@ impl Interpreter {
                     Value::List(items) => {
                         let sorted = items.windows(2).all(|w| match (&w[0], &w[1]) {
                             (Value::Int64(a), Value::Int64(b)) => a <= b,
+                            (Value::Uint64(a), Value::Uint64(b)) => a <= b,
                             (Value::Float64(a), Value::Float64(b)) => a <= b,
                             (Value::String(a), Value::String(b)) => a <= b,
+                            (Value::Bool(a), Value::Bool(b)) => a <= b,
                             _ => true,
                         });
                         Some(Ok(Value::Bool(sorted)))
