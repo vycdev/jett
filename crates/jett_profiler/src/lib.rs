@@ -1,5 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+const MAX_STACK_DEPTH: usize = 128;
+
+fn truncated_stack_frame() -> FrameIdentity {
+    FrameIdentity::new("<runtime>", "<truncated-stack>", "", 0, 0)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct FrameIdentity {
     pub namespace: String,
@@ -115,6 +121,7 @@ pub struct CpuTotals {
     pub unavailable_samples: u64,
     pub coalesced_ticks: u64,
     pub collector_dropped_ticks: u64,
+    pub truncated_stacks: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -158,7 +165,12 @@ impl CpuProfile {
         };
         let mut counts: BTreeMap<FrameIdentity, (u64, u64)> = BTreeMap::new();
 
-        for sample in samples {
+        for mut sample in samples {
+            if sample.stack.len() > MAX_STACK_DEPTH {
+                sample.stack.truncate(MAX_STACK_DEPTH - 1);
+                sample.stack.push(truncated_stack_frame());
+                totals.truncated_stacks += 1;
+            }
             match sample.state {
                 CpuSampleState::Jett if !sample.stack.is_empty() => {
                     totals.attributed_samples += 1;
@@ -345,5 +357,29 @@ mod tests {
 
         assert_eq!(main.suggestion, CpuSuggestionRule::CalleeDominated);
         assert_eq!(leaf.suggestion, CpuSuggestionRule::HighSelf);
+    }
+
+    #[test]
+    fn cpu_profile_bounds_deep_stacks_with_a_stable_marker() {
+        let stack = (0..130)
+            .map(|index| frame("app", &format!("frame_{index:03}")))
+            .collect();
+        let config = CpuConfig::new(0, 100).expect("valid config");
+
+        let profile = CpuProfile::aggregate(config, 1, 0, 0, vec![CpuSample::jett(stack)]);
+
+        assert_eq!(profile.totals.truncated_stacks, 1);
+        assert!(
+            profile
+                .bottlenecks
+                .iter()
+                .any(|entry| entry.frame.function == "<truncated-stack>")
+        );
+        assert!(
+            profile
+                .bottlenecks
+                .iter()
+                .all(|entry| entry.frame.function != "frame_129")
+        );
     }
 }
