@@ -73,6 +73,7 @@ fn server_capabilities() -> ServerCapabilities {
         hover_provider: Some(HoverProviderCapability::Simple(true)),
         definition_provider: Some(OneOf::Left(true)),
         references_provider: Some(OneOf::Left(true)),
+        document_highlight_provider: Some(OneOf::Left(true)),
         completion_provider: Some(CompletionOptions::default()),
         document_symbol_provider: Some(OneOf::Left(true)),
         document_formatting_provider: Some(OneOf::Left(true)),
@@ -271,6 +272,34 @@ fn reference_locations(
     })
 }
 
+fn document_highlights(source: &str, position: Position) -> Option<Vec<DocumentHighlight>> {
+    let (line, column) = driver_position(source, position)?;
+    let definition = jett_driver::goto_definition(source, line, column);
+    let mut spans = jett_driver::references_at(source, line, column);
+
+    if let Some(definition) = definition
+        && !spans.contains(&definition)
+    {
+        spans.push(definition);
+    }
+    spans.sort_unstable();
+    spans.dedup();
+
+    (!spans.is_empty()).then(|| {
+        spans
+            .into_iter()
+            .map(|span| DocumentHighlight {
+                range: Range::new(lsp_position(source, span.0), lsp_position(source, span.1)),
+                kind: Some(if Some(span) == definition {
+                    DocumentHighlightKind::WRITE
+                } else {
+                    DocumentHighlightKind::READ
+                }),
+            })
+            .collect()
+    })
+}
+
 fn formatting_edits(source: &str) -> Option<Vec<TextEdit>> {
     let result = jett_fmt::format_source(source, jett_common::FileId::new(0));
     if !result.errors.is_empty() || result.output == source {
@@ -427,6 +456,20 @@ impl LanguageServer for JettBackend {
             position,
             params.context.include_declaration,
         ))
+    }
+
+    async fn document_highlight(
+        &self,
+        params: DocumentHighlightParams,
+    ) -> Result<Option<Vec<DocumentHighlight>>> {
+        let uri = &params.text_document_position_params.text_document.uri;
+        let position = params.text_document_position_params.position;
+        let documents = self.documents.read().await;
+        let Some(document) = documents.get(uri) else {
+            return Ok(None);
+        };
+
+        Ok(document_highlights(&document.text, position))
     }
 
     async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
@@ -752,6 +795,16 @@ mod tests {
     }
 
     #[test]
+    fn server_capabilities_advertise_document_highlights() {
+        let capabilities = server_capabilities();
+
+        assert_eq!(
+            capabilities.document_highlight_provider,
+            Some(OneOf::Left(true))
+        );
+    }
+
+    #[test]
     fn reference_locations_map_driver_spans_to_lsp_ranges() {
         let source = "namespace app\n\nfunction double(value: int64) returns int64:\n    return value + value\n\nfunction main() returns int64:\n    return double(21)\n";
         let uri = Url::parse("file:///workspace/main.jett").unwrap();
@@ -786,6 +839,28 @@ mod tests {
             .expect("call should resolve");
 
         assert_eq!(locations.len(), 2);
+    }
+
+    #[test]
+    fn document_highlights_mark_the_declaration_as_write_and_uses_as_read() {
+        let source = "namespace app\n\nfunction double(value: int64) returns int64:\n    return value + value\n\nfunction main() returns int64:\n    return double(21)\n";
+
+        let highlights = document_highlights(source, Position::new(6, 11))
+            .expect("call should resolve to document highlights");
+
+        assert_eq!(
+            highlights,
+            vec![
+                DocumentHighlight {
+                    range: Range::new(Position::new(2, 9), Position::new(2, 15)),
+                    kind: Some(DocumentHighlightKind::WRITE),
+                },
+                DocumentHighlight {
+                    range: Range::new(Position::new(6, 11), Position::new(6, 17)),
+                    kind: Some(DocumentHighlightKind::READ),
+                },
+            ]
+        );
     }
 
     #[test]
