@@ -792,9 +792,11 @@ compiler-owned calls carry canonical intrinsic identity, typed arguments, and
 lexical evaluation order after type checking has authorized them. Inline
 functions and indirect calls retain explicit parameter/local identity;
 comptime type-bind scopes erase to checked HIR scopes; actor spawn/send/ask
-carry typed operands and message identity. Actor declaration/handler
-materialization remains actor-runtime work. Remaining source constructs are staged by the
-[initial HIR lowering plan](active/hir_lowering_plan.md).
+carry typed operands and message identity. Actor receive handlers are
+deterministic HIR functions whose locals preserve checked capability, state,
+and message bindings; actor construction, persistent state layout, scheduling,
+and dispatch remain actor-runtime work. Remaining source constructs are staged
+by the [initial HIR lowering plan](active/hir_lowering_plan.md).
 
 The initial implemented `jett_mir` boundary accepts only HIR that passes the
 structural validator. It lowers top-level `if`, `while`, exhaustive `match`,
