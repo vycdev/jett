@@ -2867,6 +2867,7 @@ impl<'a> TypeChecker<'a> {
                 | "crypto.__sha256"
                 | "crypto.__sha512"
                 | "crypto.__md5"
+                | "crypto.__hmac_sha256"
                 | "csv.__parse"
                 | "csv.__stringify"
                 | "csv.__parse_with_header"
@@ -4021,6 +4022,11 @@ impl<'a> TypeChecker<'a> {
                 vec![TypeInterner::BYTES],
                 TypeInterner::BYTES,
             ),
+            "crypto.__hmac_sha256" => {
+                self.expect_no_type_args(&name, type_args, span);
+                let secret_bytes = self.interner.intern(Type::Secret(TypeInterner::BYTES));
+                Some((vec![secret_bytes, TypeInterner::BYTES], secret_bytes))
+            }
             "Clock.__now" => self.no_type_args_signature(
                 &name,
                 type_args,

@@ -4748,14 +4748,24 @@ mod tests {
             assert_eq!(result.return_type, "string");
         }
 
-        for reserved in ["crypto.hmac_sha256", "crypto.hmac_sha512"] {
-            assert!(
-                query_signature(Path::new("."), reserved)
-                    .expect("reserved crypto query should succeed")
-                    .is_none(),
-                "{reserved} must remain undiscoverable until implemented"
-            );
-        }
+        let hmac = query_signature(Path::new("."), "crypto.hmac_sha256")
+            .expect("HMAC signature query should succeed")
+            .expect("HMAC-SHA-256 signature should be found");
+        assert_eq!(hmac.params.len(), 2);
+        assert_eq!(hmac.params[0].name, "key");
+        assert_eq!(hmac.params[0].type_name, "secret[bytes]");
+        assert!(hmac.params[0].view);
+        assert_eq!(hmac.params[1].name, "message");
+        assert_eq!(hmac.params[1].type_name, "bytes");
+        assert!(hmac.params[1].view);
+        assert_eq!(hmac.return_type, "secret[bytes]");
+
+        assert!(
+            query_signature(Path::new("."), "crypto.hmac_sha512")
+                .expect("reserved crypto query should succeed")
+                .is_none(),
+            "crypto.hmac_sha512 must remain undiscoverable until implemented"
+        );
     }
 
     #[test]
