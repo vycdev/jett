@@ -1831,7 +1831,7 @@ fn compile_fail_crypto_type_counts() {
 
 #[test]
 fn compile_fail_crypto_secret_exposure_counts() {
-    assert_compile_fail_error_count("crypto_secret_exposure.jett", 600, 3);
+    assert_compile_fail_error_count("crypto_secret_exposure.jett", 600, 4);
     assert_compile_fail_error_count("crypto_secret_exposure.jett", 603, 1);
 }
 

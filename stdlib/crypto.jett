@@ -11,3 +11,5 @@ export function md5(input: string) returns string:
     bytes input_bytes = bytes.from_string(input)
     bytes digest = crypto.__md5(view input_bytes)
     return bytes.to_hex(view digest)
+export function hmac_sha256(view key: secret[bytes], view message: bytes) returns secret[bytes]:
+    return crypto.__hmac_sha256(view key, view message)

@@ -1,7 +1,7 @@
 # Crypto Hashing and Security Contract
 
-Status: SHA-256/legacy-MD5 surface implemented on 2026-08-13; SHA-512 implemented on 2026-08-30.
-HMAC names remain reserved and undiscoverable until separately implemented.
+Status: SHA-256/legacy-MD5 surface implemented on 2026-08-13; SHA-512 implemented on 2026-08-30;
+HMAC-SHA-256 implemented on 2026-09-02. HMAC-SHA-512 remains reserved and undiscoverable.
 
 ## Context
 
@@ -12,12 +12,10 @@ hexadecimal text. That transitional state did not match the source-owned stdlib
 target recorded in the architecture; `stdlib/crypto.jett` now owns both public
 declarations and their byte/hex composition.
 
-The language design also names SHA-512 and HMAC without selecting signatures or
-security policy. That leaves agents without a stable answer for input encoding,
-output casing, password handling, secret propagation, or future backend
-behavior. This record fixes the initial text-digest surface, classifies the
-planned algorithms, and reserves one binary HMAC boundary without implementing
-new algorithms.
+The language design also names SHA-512 and HMAC. This record fixes the digest
+surface, input encoding, output casing, password handling, secret propagation,
+and future-backend behavior, including the implemented binary HMAC-SHA-256
+boundary.
 
 ## Implemented Initial Public Surface
 
@@ -85,8 +83,7 @@ an implementation and known-vector tests ship together.
 
 ### HMAC
 
-HMAC is also planned rather than implemented. Its first reserved operation is
-HMAC-SHA-256 with a binary, secret key and binary message:
+HMAC-SHA-256 is implemented with a binary, secret key and binary message:
 
 ```text
 crypto.hmac_sha256(
@@ -111,7 +108,7 @@ normally compares it with a compatible `secret[bytes]` by using
 A future HMAC-SHA-512 addition uses the same key-first order and raw secret-byte
 result under the name `crypto.hmac_sha512`. No generic
 `hmac(algorithm, key, message)` dispatcher is introduced: distinct names keep
-the algorithm visible to agents and reviewers. Neither HMAC name is discoverable
+the algorithm visible to agents and reviewers. HMAC-SHA-512 is not discoverable
 as a supported declaration until its runtime kernel and RFC vectors land.
 
 ## Failure, Purity, and Determinism
@@ -248,7 +245,7 @@ prerequisites for extracting the interpreter-facing source wrappers.
 3. **Add SHA-512 independently — complete**
    - implement the reserved text signature and fixed 128-character output;
    - land FIPS known vectors and cross-backend parity with the declaration.
-4. **Add HMAC independently — future additive work**
+4. **Add HMAC independently — HMAC-SHA-256 complete**
    - implement key-first HMAC-SHA-256 over secret key bytes and message bytes;
    - add RFC 4231 vectors, long-key coverage, empty key/message coverage, secret
      taint checks, and `secret.compare` integration;
@@ -268,7 +265,7 @@ prerequisites for extracting the interpreter-facing source wrappers.
   interpolated, or serialized without explicit policy.
 - Hashing is deterministic and requires no capability in pure/verify contexts.
 - MD5 documentation and generated examples never present it as secure.
-- Future HMAC tests pin key-first ordering, raw output bytes, RFC vectors,
+- HMAC-SHA-256 tests pin key-first ordering, raw output bytes, RFC vectors,
   long-key processing, taint preservation, and comparison through
   `secret.compare`.
 - Interpreter, bytecode, and native backends produce byte-identical results.

@@ -9336,6 +9336,16 @@ impl Interpreter {
                 }
             }
 
+            "crypto.__hmac_sha256" if self.current_function_trusted_stdlib => {
+                require_args!(name, 2, args);
+                match (&args[0], &args[1]) {
+                    (Value::Bytes(key), Value::Bytes(message)) => {
+                        Some(Ok(Value::Bytes(hmac_sha256_digest(key, message))))
+                    }
+                    _ => Some(Err(format!("{name} expects bytes arguments"))),
+                }
+            }
+
             // -- Wall-clock operation (stdlib/time.jett) ----------------------
             "Clock.__now" if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
@@ -16440,6 +16450,27 @@ fn sha256_digest(data: &[u8]) -> Vec<u8> {
     h.into_iter()
         .flat_map(u32::to_be_bytes)
         .collect::<Vec<u8>>()
+}
+
+fn hmac_sha256_digest(key: &[u8], message: &[u8]) -> Vec<u8> {
+    const BLOCK_SIZE: usize = 64;
+    let normalized_key = if key.len() > BLOCK_SIZE {
+        sha256_digest(key)
+    } else {
+        key.to_vec()
+    };
+    let mut key_block = [0u8; BLOCK_SIZE];
+    key_block[..normalized_key.len()].copy_from_slice(&normalized_key);
+
+    let mut inner = Vec::with_capacity(BLOCK_SIZE + message.len());
+    inner.extend(key_block.iter().map(|byte| byte ^ 0x36));
+    inner.extend_from_slice(message);
+    let inner_digest = sha256_digest(&inner);
+
+    let mut outer = Vec::with_capacity(BLOCK_SIZE + inner_digest.len());
+    outer.extend(key_block.iter().map(|byte| byte ^ 0x5c));
+    outer.extend_from_slice(&inner_digest);
+    sha256_digest(&outer)
 }
 
 // ---------------------------------------------------------------------------
