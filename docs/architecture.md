@@ -89,9 +89,10 @@ jett/
 The selected [`jett_profiler` contract](completed/cpu_memory_profiling_contract.md)
 defines CPU/memory events, attribution, bounded collection, deterministic
 reporting, security, and the interpreter/future-runtime handoff. The initial
-backend-neutral crate validates CPU report controls and aggregates injected
-samples into deterministic bottleneck records; rendering, CLI integration, and
-runtime adapters remain staged.
+backend-neutral crate validates CPU report controls, aggregates injected samples
+into deterministic bottleneck records, and provides the constant-space pending
+request gate used between a timer and one runtime worker; rendering, CLI
+integration, and runtime adapters remain staged.
 
 ### Crate Dependency Graph
 
@@ -1953,8 +1954,10 @@ safe events and exclude collector metadata.
 
 `jett run --profile` requests monotonic elapsed-time samples at 1000 Hz by
 default. The timer keeps at most one pending request per runtime worker. The
-current tree-walking interpreter acknowledges requests at statement/call safe
-points on its dedicated runtime thread; future native runtimes may use safe
+backend-neutral request gate counts every tick, coalesces requests while its
+single pending bit is set, and lets the runtime consume that bit at a safe point
+without allocating or growing a queue. Wiring those safe points into the current
+tree-walking interpreter remains staged; future native runtimes may use safe
 platform sampling. Backends report coalesced, unavailable, runtime, and waiting
 observations instead of charging them to the last user frame. Statement counts
 are not an allowed timing substitute.
