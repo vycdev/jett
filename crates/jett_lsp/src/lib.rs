@@ -504,6 +504,9 @@ impl LanguageServer for JettBackend {
 
 fn diagnostics_for_source(source: &str, file_path: &str) -> Vec<Diagnostic> {
     let result = jett_driver::build_source(source, file_path);
+    let uri = Url::parse(file_path)
+        .ok()
+        .or_else(|| Url::from_file_path(file_path).ok());
 
     result
         .diagnostics
@@ -519,6 +522,24 @@ fn diagnostics_for_source(source: &str, file_path: &str) -> Vec<Diagnostic> {
                 lsp_position(&result.source, d.span.start),
                 lsp_position(&result.source, d.span.end),
             );
+            let related_information = uri.as_ref().and_then(|uri| {
+                let labels = d
+                    .labels
+                    .iter()
+                    .filter(|label| label.span.file == d.span.file)
+                    .map(|label| DiagnosticRelatedInformation {
+                        location: Location {
+                            uri: uri.clone(),
+                            range: Range::new(
+                                lsp_position(&result.source, label.span.start),
+                                lsp_position(&result.source, label.span.end),
+                            ),
+                        },
+                        message: label.message.clone(),
+                    })
+                    .collect::<Vec<_>>();
+                (!labels.is_empty()).then_some(labels)
+            });
 
             Diagnostic {
                 range,
@@ -526,6 +547,7 @@ fn diagnostics_for_source(source: &str, file_path: &str) -> Vec<Diagnostic> {
                 code: Some(NumberOrString::String(d.code.to_string())),
                 source: Some("jett".to_string()),
                 message: d.message.clone(),
+                related_information,
                 ..Diagnostic::default()
             }
         })
@@ -670,6 +692,34 @@ mod tests {
                 )
             );
         }
+    }
+
+    #[test]
+    fn diagnostics_for_source_preserves_compiler_labels_as_related_information() {
+        let source = "namespace app\n\nfunction main() returns nothing:\n    int64 value = 1\n    int64 value = 2\n    return nothing\n";
+        let uri = Url::parse("file:///workspace/main.jett").unwrap();
+        let diagnostics = diagnostics_for_source(source, uri.as_str());
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| {
+                matches!(
+                    diagnostic.code,
+                    Some(NumberOrString::String(ref code)) if code == "E0204"
+                )
+            })
+            .expect("duplicate binding should diagnose");
+        let related = diagnostic
+            .related_information
+            .as_ref()
+            .expect("the original binding label should be preserved");
+
+        assert_eq!(related.len(), 1);
+        assert_eq!(related[0].location.uri, uri);
+        assert_eq!(related[0].message, "previously defined here");
+        assert_eq!(
+            related[0].location.range,
+            Range::new(Position::new(3, 10), Position::new(3, 15))
+        );
     }
 
     /// Verify that hover_type returns a type for a known expression.
