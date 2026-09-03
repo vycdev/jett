@@ -54,6 +54,9 @@ tie-breaker. This preserves Jett's local readability constraints:
 - It does not reorder declarations within a file.
 - It emits an agent-readable manifest table that maps source files to
   output line ranges.
+- Generated source records only project-relative source paths. It omits the
+  physical project root so unchanged projects produce byte-identical bundles
+  after checkout relocation.
 - If two files are mutually dependent in a way that requires interleaving
   declarations, the bundler fails and recommends extracting shared
   definitions into an earlier namespace/file.
