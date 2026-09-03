@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+
+use jett_lexer::{Lexer, TokenKind};
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer};
@@ -76,6 +78,7 @@ fn server_capabilities() -> ServerCapabilities {
         completion_provider: Some(CompletionOptions::default()),
         document_symbol_provider: Some(OneOf::Left(true)),
         document_formatting_provider: Some(OneOf::Left(true)),
+        folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
         position_encoding: Some(PositionEncodingKind::UTF16),
         ..ServerCapabilities::default()
     }
@@ -284,6 +287,48 @@ fn formatting_edits(source: &str) -> Option<Vec<TextEdit>> {
     }])
 }
 
+fn folding_ranges_for_source(source: &str) -> Vec<FoldingRange> {
+    let lexed = Lexer::new(source, jett_common::FileId::new(0)).tokenize();
+    let mut starts = Vec::new();
+    let mut ranges = Vec::new();
+
+    for token in lexed.tokens {
+        match token.kind {
+            TokenKind::Indent => {
+                let child_line = lsp_position(source, token.span.start).line;
+                starts.push(child_line.saturating_sub(1));
+            }
+            TokenKind::Dedent => {
+                let Some(start_line) = starts.pop() else {
+                    continue;
+                };
+                let dedent_line = lsp_position(source, token.span.start).line;
+                let at_unterminated_eof =
+                    token.span.start as usize == source.len() && !source.ends_with(['\n', '\r']);
+                let end_line = if at_unterminated_eof {
+                    dedent_line
+                } else {
+                    dedent_line.saturating_sub(1)
+                };
+                if end_line > start_line {
+                    ranges.push(FoldingRange {
+                        start_line,
+                        start_character: None,
+                        end_line,
+                        end_character: None,
+                        kind: Some(FoldingRangeKind::Region),
+                        collapsed_text: None,
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    ranges.sort_by_key(|range| (range.start_line, std::cmp::Reverse(range.end_line)));
+    ranges
+}
+
 #[tower_lsp::async_trait]
 impl LanguageServer for JettBackend {
     async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
@@ -436,6 +481,15 @@ impl LanguageServer for JettBackend {
         };
 
         Ok(formatting_edits(&document.text))
+    }
+
+    async fn folding_range(&self, params: FoldingRangeParams) -> Result<Option<Vec<FoldingRange>>> {
+        let documents = self.documents.read().await;
+        let Some(document) = documents.get(&params.text_document.uri) else {
+            return Ok(None);
+        };
+
+        Ok(Some(folding_ranges_for_source(&document.text)))
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
@@ -831,5 +885,33 @@ mod tests {
             edits[0].new_text,
             "namespace app\nfunction f() returns int64:\n    return 1\n"
         );
+    }
+
+    #[test]
+    fn folding_ranges_follow_nested_jett_blocks() {
+        let source = "namespace app\nfunction main() returns int64:\n    mutable int64 total = 2\n    if total > 0:\n        while total > 1:\n            total = total - 1\n    return total\n";
+
+        let ranges = folding_ranges_for_source(source);
+        let lines = ranges
+            .iter()
+            .map(|range| (range.start_line, range.end_line))
+            .collect::<Vec<_>>();
+
+        assert_eq!(lines, vec![(1, 6), (3, 5), (4, 5)]);
+        assert!(
+            ranges
+                .iter()
+                .all(|range| range.kind == Some(FoldingRangeKind::Region))
+        );
+    }
+
+    #[test]
+    fn server_capabilities_advertise_folding_ranges() {
+        let capabilities = server_capabilities();
+
+        assert!(matches!(
+            capabilities.folding_range_provider,
+            Some(FoldingRangeProviderCapability::Simple(true))
+        ));
     }
 }
