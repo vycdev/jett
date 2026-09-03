@@ -104,6 +104,10 @@ pub struct FileSymbolQueryEntry {
     pub column: u32,
     pub end_line: u32,
     pub end_column: u32,
+    pub range_line: u32,
+    pub range_column: u32,
+    pub range_end_line: u32,
+    pub range_end_column: u32,
 }
 
 /// Result of `jett query --agent --symbols file.jett`.
@@ -1565,6 +1569,7 @@ fn append_file_symbol_query_entries(
                     jett_resolve::scope::DefVisibility::Public,
                     None,
                     ns.name.span,
+                    ns.span,
                     source,
                 );
             }
@@ -1586,6 +1591,7 @@ fn append_file_symbol_query_entries(
                     file_symbol_visibility(current_namespace.as_deref(), func.exported),
                     Some(signature),
                     func.name.span,
+                    func.span,
                     source,
                 );
             }
@@ -1608,6 +1614,7 @@ fn append_file_symbol_query_entries(
                         file_symbol_visibility(current_namespace.as_deref(), decl.exported),
                         Some(signature),
                         decl.name.span,
+                        decl.span,
                         source,
                     );
                 }
@@ -1620,6 +1627,7 @@ fn append_file_symbol_query_entries(
                 file_symbol_visibility(current_namespace.as_deref(), interface.exported),
                 None,
                 interface.name.span,
+                interface.span,
                 source,
             ),
             Item::Implement(block) => push_file_symbol_query_entry(
@@ -1634,6 +1642,7 @@ fn append_file_symbol_query_entries(
                 jett_resolve::scope::DefVisibility::Private,
                 None,
                 block.interface_name.span,
+                block.span,
                 source,
             ),
             Item::Struct(strukt) => push_file_symbol_query_entry(
@@ -1644,6 +1653,7 @@ fn append_file_symbol_query_entries(
                 file_symbol_visibility(current_namespace.as_deref(), strukt.exported),
                 None,
                 strukt.name.span,
+                strukt.span,
                 source,
             ),
             Item::Bitfield(bitfield) => push_file_symbol_query_entry(
@@ -1654,6 +1664,7 @@ fn append_file_symbol_query_entries(
                 file_symbol_visibility(current_namespace.as_deref(), bitfield.exported),
                 None,
                 bitfield.name.span,
+                bitfield.span,
                 source,
             ),
             Item::Enum(enm) => push_file_symbol_query_entry(
@@ -1664,6 +1675,7 @@ fn append_file_symbol_query_entries(
                 file_symbol_visibility(current_namespace.as_deref(), enm.exported),
                 None,
                 enm.name.span,
+                enm.span,
                 source,
             ),
             Item::Machine(machine) => push_file_symbol_query_entry(
@@ -1674,6 +1686,7 @@ fn append_file_symbol_query_entries(
                 file_symbol_visibility(current_namespace.as_deref(), machine.exported),
                 None,
                 machine.name.span,
+                machine.span,
                 source,
             ),
             Item::Actor(actor) => push_file_symbol_query_entry(
@@ -1684,6 +1697,7 @@ fn append_file_symbol_query_entries(
                 file_symbol_visibility(current_namespace.as_deref(), actor.exported),
                 None,
                 actor.name.span,
+                actor.span,
                 source,
             ),
             Item::VarDecl(decl) => push_file_symbol_query_entry(
@@ -1694,6 +1708,7 @@ fn append_file_symbol_query_entries(
                 jett_resolve::scope::DefVisibility::Private,
                 None,
                 decl.name.span,
+                decl.span,
                 source,
             ),
             Item::Verify(verify) => push_file_symbol_query_entry(
@@ -1704,6 +1719,7 @@ fn append_file_symbol_query_entries(
                 jett_resolve::scope::DefVisibility::Private,
                 None,
                 verify.name.span,
+                verify.span,
                 source,
             ),
             Item::Property(prop) => push_file_symbol_query_entry(
@@ -1714,6 +1730,7 @@ fn append_file_symbol_query_entries(
                 jett_resolve::scope::DefVisibility::Private,
                 None,
                 prop.name.span,
+                prop.span,
                 source,
             ),
             Item::Resource(resource) => push_file_symbol_query_entry(
@@ -1724,6 +1741,7 @@ fn append_file_symbol_query_entries(
                 file_symbol_visibility(current_namespace.as_deref(), resource.exported),
                 None,
                 resource.name.span,
+                resource.span,
                 source,
             ),
             Item::TypeAlias(alias) => push_file_symbol_query_entry(
@@ -1734,6 +1752,7 @@ fn append_file_symbol_query_entries(
                 file_symbol_visibility(current_namespace.as_deref(), alias.exported),
                 None,
                 alias.name.span,
+                alias.span,
                 source,
             ),
         }
@@ -1747,11 +1766,17 @@ fn push_file_symbol_query_entry(
     namespace: Option<String>,
     visibility: jett_resolve::scope::DefVisibility,
     signature: Option<String>,
-    span: Span,
+    selection_span: Span,
+    range_span: Span,
     source: &str,
 ) {
-    let (line, column) = jett_diagnostics::render::line_col(source, span.start);
-    let (end_line, end_column) = jett_diagnostics::render::line_col(source, span.end);
+    let (line, column) = jett_diagnostics::render::line_col(source, selection_span.start);
+    let (end_line, end_column) = jett_diagnostics::render::line_col(source, selection_span.end);
+    let (range_line, range_column) = jett_diagnostics::render::line_col(source, range_span.start);
+    let range_end = source[..(range_span.end as usize).min(source.len())]
+        .trim_end_matches(char::is_whitespace)
+        .len() as u32;
+    let (range_end_line, range_end_column) = jett_diagnostics::render::line_col(source, range_end);
     symbols.push(FileSymbolQueryEntry {
         name,
         kind: kind.to_string(),
@@ -1762,6 +1787,10 @@ fn push_file_symbol_query_entry(
         column: column as u32,
         end_line: end_line as u32,
         end_column: end_column as u32,
+        range_line: range_line as u32,
+        range_column: range_column as u32,
+        range_end_line: range_end_line as u32,
+        range_end_column: range_end_column as u32,
     });
 }
 

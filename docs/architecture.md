@@ -1850,7 +1850,8 @@ Standard LSP implementation using the `tower-lsp` crate. Provides:
 - Find all references in the current document, optionally including the declaration.
 - Code completion.
 - Document symbols from the latest in-memory source, including declaration
-  kinds, signatures, and UTF-16 ranges for editor outlines.
+  kinds, signatures, full declaration ranges, and narrower name-selection
+  ranges in UTF-16 coordinates for editor outlines.
 - Whole-document formatting is provided through `jett_fmt`.
 - Planned follow-up: rename symbol.
 
