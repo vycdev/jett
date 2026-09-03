@@ -321,16 +321,29 @@ impl LanguageServer for JettBackend {
         // We requested FULL sync, so the last content change is the full text.
         if let Some(change) = params.content_changes.into_iter().last() {
             let uri = params.text_document.uri.clone();
+            let version = params.text_document.version;
             let text = change.text.clone();
-            self.documents.write().await.insert(
-                uri.clone(),
-                DocumentState {
-                    text: text.clone(),
-                    version: params.text_document.version,
-                },
-            );
-            self.validate(uri, params.text_document.version, &text)
-                .await;
+            let accepted = {
+                let mut documents = self.documents.write().await;
+                if documents
+                    .get(&uri)
+                    .is_some_and(|document| document.version >= version)
+                {
+                    false
+                } else {
+                    documents.insert(
+                        uri.clone(),
+                        DocumentState {
+                            text: text.clone(),
+                            version,
+                        },
+                    );
+                    true
+                }
+            };
+            if accepted {
+                self.validate(uri, version, &text).await;
+            }
         }
     }
 
@@ -566,6 +579,55 @@ mod tests {
 
         documents.remove(&uri);
         assert!(!should_publish_diagnostics(&documents, &uri, 2));
+    }
+
+    #[tokio::test]
+    async fn stale_changes_do_not_replace_the_latest_document() {
+        let (service, _socket) = tower_lsp::LspService::new(|client| JettBackend::new(client));
+        let backend = service.inner();
+        let uri = Url::parse("file:///workspace/main.jett").unwrap();
+
+        backend
+            .did_open(DidOpenTextDocumentParams {
+                text_document: TextDocumentItem {
+                    uri: uri.clone(),
+                    language_id: "jett".to_string(),
+                    version: 1,
+                    text: "initial source".to_string(),
+                },
+            })
+            .await;
+        backend
+            .did_change(DidChangeTextDocumentParams {
+                text_document: VersionedTextDocumentIdentifier {
+                    uri: uri.clone(),
+                    version: 3,
+                },
+                content_changes: vec![TextDocumentContentChangeEvent {
+                    range: None,
+                    range_length: None,
+                    text: "latest source".to_string(),
+                }],
+            })
+            .await;
+        backend
+            .did_change(DidChangeTextDocumentParams {
+                text_document: VersionedTextDocumentIdentifier {
+                    uri: uri.clone(),
+                    version: 2,
+                },
+                content_changes: vec![TextDocumentContentChangeEvent {
+                    range: None,
+                    range_length: None,
+                    text: "stale source".to_string(),
+                }],
+            })
+            .await;
+
+        let documents = backend.documents.read().await;
+        let document = documents.get(&uri).expect("open document");
+        assert_eq!(document.version, 3);
+        assert_eq!(document.text, "latest source");
     }
 
     #[test]
