@@ -5385,6 +5385,32 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn project_file_collection_rejects_external_source_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_test_dir("jett_driver_symlink_file_project");
+        let external = temp_test_dir("jett_driver_symlink_file_external");
+        fs::create_dir_all(root.join("src")).expect("temp project src dir should be created");
+        fs::create_dir_all(&external).expect("external source dir should be created");
+        fs::write(root.join("src/main.jett"), "namespace app\n")
+            .expect("project source should be written");
+        fs::write(external.join("outside.jett"), "namespace outside\n")
+            .expect("external source should be written");
+        symlink(external.join("outside.jett"), root.join("linked.jett"))
+            .expect("source file symlink should be created");
+
+        let mut files = Vec::new();
+        let result = collect_jett_files(&root, &mut files);
+
+        fs::remove_dir_all(&root).expect("temp project dir should be removed");
+        fs::remove_dir_all(&external).expect("external source dir should be removed");
+        let error = result.expect_err("an external source symlink must be rejected");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("resolves outside source root"));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn project_file_collection_ignores_symlinked_directories() {
         use std::os::unix::fs::symlink;
 
@@ -5456,21 +5482,41 @@ fn find_project_root(start_dir: &Path) -> Result<std::path::PathBuf, String> {
 }
 
 /// Recursively collect all `.jett` files in a directory, skipping hidden dirs,
-/// `target/`, and symlinked directories.
+/// `target/`, and symlinked directories. Source-file symlinks are accepted only
+/// when their canonical targets remain inside the source root.
 fn collect_jett_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) -> std::io::Result<()> {
+    let canonical_root = dir.canonicalize()?;
+    collect_jett_files_within(dir, &canonical_root, out)
+}
+
+fn collect_jett_files_within(
+    dir: &Path,
+    canonical_root: &Path,
+    out: &mut Vec<std::path::PathBuf>,
+) -> std::io::Result<()> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
         let file_type = entry.file_type()?;
         if file_type.is_symlink() {
-            // Preserve source-file symlinks without traversing linked trees.
             if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("jett") {
+                let canonical_path = path.canonicalize()?;
+                if !canonical_path.starts_with(canonical_root) {
+                    let logical_path = path.strip_prefix(dir).unwrap_or(&path);
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!(
+                            "source file '{}' resolves outside source root",
+                            logical_path.display()
+                        ),
+                    ));
+                }
                 out.push(path);
             }
         } else if file_type.is_dir() {
             let dir_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
             if !dir_name.starts_with('.') && dir_name != "target" {
-                collect_jett_files(&path, out)?;
+                collect_jett_files_within(&path, canonical_root, out)?;
             }
         } else if path.extension().and_then(|e| e.to_str()) == Some("jett") {
             out.push(path);

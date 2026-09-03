@@ -58,11 +58,25 @@ pub fn discover_project(
     if jett_files.is_empty() {
         return Err(DiscoverError::NoSourceFiles(project_dir));
     }
+    let canonical_project_dir = project_dir
+        .canonicalize()
+        .map_err(|error| DiscoverError::IoError(project_dir.clone(), error))?;
 
     let mut files = Vec::new();
     let mut entry_file = None;
 
     for (index, path) in jett_files.iter().enumerate() {
+        let canonical_path = path
+            .canonicalize()
+            .map_err(|error| DiscoverError::IoError(path.clone(), error))?;
+        if !canonical_path.starts_with(&canonical_project_dir) {
+            let logical_path = path.strip_prefix(&project_dir).unwrap_or(path);
+            return Err(DiscoverError::InvalidProjectFile(format!(
+                "source file '{}' resolves outside project root",
+                logical_path.display()
+            )));
+        }
+
         let id = FileId::new(index as u32);
         let content =
             fs::read_to_string(path).map_err(|e| DiscoverError::IoError(path.clone(), e))?;
@@ -476,6 +490,40 @@ mod tests {
             DiscoverError::NoSourceFiles(path) => assert_eq!(path, tmp),
             other => panic!("expected no-source-files error, got {other}"),
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn discover_project_rejects_source_symlinks_outside_the_project_root() {
+        use std::os::unix::fs::symlink;
+
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after the Unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("jett_symlink_file_project_{nanos}"));
+        let external = std::env::temp_dir().join(format!("jett_symlink_file_external_{nanos}"));
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::create_dir_all(&external).unwrap();
+        fs::write(
+            root.join("jett.proj"),
+            "name: symlinked-file\nentry: src/main.jett\n",
+        )
+        .unwrap();
+        fs::write(root.join("src/main.jett"), "namespace app\n").unwrap();
+        fs::write(external.join("outside.jett"), "namespace outside\n").unwrap();
+        symlink(external.join("outside.jett"), root.join("linked.jett")).unwrap();
+
+        let mut interner = SymbolInterner::new();
+        let result = discover_project(&root, &mut interner);
+
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&external);
+        let error = result.expect_err("an external source symlink must be rejected");
+        assert!(
+            error.to_string().contains("resolves outside project root"),
+            "unexpected error: {error}"
+        );
     }
 
     #[cfg(unix)]
