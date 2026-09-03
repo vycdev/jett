@@ -226,17 +226,21 @@ fn document_symbols_for_source(source: &str) -> Option<Vec<DocumentSymbol>> {
         .symbols
         .into_iter()
         .filter_map(|symbol| {
-            let start = lsp_position_from_driver(source, symbol.line, symbol.column)?;
-            let end = lsp_position_from_driver(source, symbol.end_line, symbol.end_column)?;
-            let range = Range::new(start, end);
+            let selection_start = lsp_position_from_driver(source, symbol.line, symbol.column)?;
+            let selection_end =
+                lsp_position_from_driver(source, symbol.end_line, symbol.end_column)?;
+            let range_start =
+                lsp_position_from_driver(source, symbol.range_line, symbol.range_column)?;
+            let range_end =
+                lsp_position_from_driver(source, symbol.range_end_line, symbol.range_end_column)?;
             Some(DocumentSymbol {
                 name: symbol.name,
                 detail: symbol.signature,
                 kind: document_symbol_kind(&symbol.kind),
                 tags: None,
                 deprecated: None,
-                range,
-                selection_range: range,
+                range: Range::new(range_start, range_end),
+                selection_range: Range::new(selection_start, selection_end),
                 children: None,
             })
         })
@@ -721,6 +725,10 @@ mod tests {
             .expect("function symbol");
         assert_eq!(login.kind, SymbolKind::FUNCTION);
         assert_eq!(login.detail.as_deref(), Some("api.login() returns int64"));
+        assert_eq!(
+            login.range,
+            Range::new(Position::new(2, 0), Position::new(3, 12))
+        );
         assert_eq!(login.selection_range.start, Position::new(2, 16));
         assert_eq!(login.selection_range.end, Position::new(2, 21));
     }
