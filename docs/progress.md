@@ -44,7 +44,7 @@
 | Component | Crate | Tests | Status |
 |---|---|---|---|
 | HIR (monomorphization) | `jett_hir` | 12 | Typed ordinary and generic function lowering implemented for the core subset, with canonical identity, deterministic IDs, separate per-instantiation facts, named-argument normalization, concrete source-method targets, struct/list/map construction, field access, unhandled pipeline normalization, generic calls, and core structured control flow; pipeline handles and remaining constructs are staged by the [HIR lowering plan](active/hir_lowering_plan.md) and [#20](https://github.com/vycdev/jett/issues/20) |
-| MIR (control flow graph) | `jett_mir` | — | Not started ([Tracked by #22](https://github.com/vycdev/jett/issues/22)) |
+| MIR (control flow graph) | `jett_mir` | — | Initial structured-control-flow lowering implemented with source-spanned statements and terminators; structural validation and ownership/drop dataflow continue under [#22](https://github.com/vycdev/jett/issues/22) |
 | LLVM native codegen | `jett_codegen_llvm` | — | Not started |
 | Runtime library | `jett_runtime` | — | Not started |
 | Core stdlib (.jett files) | `stdlib/` | — | Partial (bootstrap loader plus extracted `json`, complete source-owned `list`, `map`, `set`, `string`, `math`, `random`, and `time` public APIs, and other modules that remain Rust-backed) |

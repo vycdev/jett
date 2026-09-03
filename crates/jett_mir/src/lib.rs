@@ -35,7 +35,13 @@ pub struct BasicBlock {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Statement {
+pub struct Statement {
+    pub kind: StatementKind,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum StatementKind {
     Let {
         local: LocalId,
         value: Expression,
@@ -56,7 +62,13 @@ pub enum Statement {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Terminator {
+pub struct Terminator {
+    pub kind: TerminatorKind,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TerminatorKind {
     Return(Option<Expression>),
     Goto(BlockId),
     Branch {
@@ -102,7 +114,7 @@ pub fn lower(program: &hir::Program) -> Result<Program, Vec<LowerError>> {
 }
 
 fn lower_function(function: &hir::Function) -> Function {
-    let mut builder = Builder::new();
+    let mut builder = Builder::new(function.body.span);
     builder.lower_block(&function.body);
     Function {
         identity: function.identity.clone(),
@@ -120,48 +132,54 @@ struct Builder {
 }
 
 impl Builder {
-    fn new() -> Self {
+    fn new(span: Span) -> Self {
         Self {
             blocks: vec![BasicBlock {
                 id: BlockId(0),
                 statements: Vec::new(),
-                terminator: Terminator::Unreachable,
+                terminator: Terminator {
+                    kind: TerminatorKind::Unreachable,
+                    span,
+                },
             }],
             current: BlockId(0),
             loops: Vec::new(),
         }
     }
 
-    fn new_block(&mut self) -> BlockId {
+    fn new_block(&mut self, span: Span) -> BlockId {
         let id = BlockId(self.blocks.len() as u32);
         self.blocks.push(BasicBlock {
             id,
             statements: Vec::new(),
-            terminator: Terminator::Unreachable,
+            terminator: Terminator {
+                kind: TerminatorKind::Unreachable,
+                span,
+            },
         });
         id
     }
 
     fn open(&self) -> bool {
         matches!(
-            self.blocks[self.current.index() as usize].terminator,
-            Terminator::Unreachable
+            self.blocks[self.current.index() as usize].terminator.kind,
+            TerminatorKind::Unreachable
         )
     }
 
-    fn terminate(&mut self, terminator: Terminator) {
-        self.blocks[self.current.index() as usize].terminator = terminator;
+    fn terminate(&mut self, kind: TerminatorKind, span: Span) {
+        self.blocks[self.current.index() as usize].terminator = Terminator { kind, span };
     }
 
-    fn push(&mut self, statement: Statement) {
+    fn push(&mut self, kind: StatementKind, span: Span) {
         self.blocks[self.current.index() as usize]
             .statements
-            .push(statement);
+            .push(Statement { kind, span });
     }
 
-    fn close_to(&mut self, target: BlockId) {
+    fn close_to(&mut self, target: BlockId, span: Span) {
         if self.open() {
-            self.terminate(Terminator::Goto(target));
+            self.terminate(TerminatorKind::Goto(target), span);
         }
     }
 
@@ -176,50 +194,71 @@ impl Builder {
 
     fn lower_statement(&mut self, statement: &hir::Statement) {
         match &statement.kind {
-            hir::StatementKind::Let { local, value } => self.push(Statement::Let {
-                local: *local,
-                value: value.clone(),
-            }),
-            hir::StatementKind::Assign { target, value } => self.push(Statement::Assign {
-                target: target.clone(),
-                value: value.clone(),
-            }),
-            hir::StatementKind::Expression(value) => self.push(Statement::Evaluate(value.clone())),
-            hir::StatementKind::HandleDefault(value) => {
-                self.push(Statement::HandleDefault(value.clone()))
+            hir::StatementKind::Let { local, value } => self.push(
+                StatementKind::Let {
+                    local: *local,
+                    value: value.clone(),
+                },
+                statement.span,
+            ),
+            hir::StatementKind::Assign { target, value } => self.push(
+                StatementKind::Assign {
+                    target: target.clone(),
+                    value: value.clone(),
+                },
+                statement.span,
+            ),
+            hir::StatementKind::Expression(value) => {
+                self.push(StatementKind::Evaluate(value.clone()), statement.span)
             }
-            hir::StatementKind::Return(value) => self.terminate(Terminator::Return(value.clone())),
+            hir::StatementKind::HandleDefault(value) => {
+                self.push(StatementKind::HandleDefault(value.clone()), statement.span)
+            }
+            hir::StatementKind::Return(value) => {
+                self.terminate(TerminatorKind::Return(value.clone()), statement.span)
+            }
             hir::StatementKind::Break => {
                 let target = self.loops.last().expect("validated break has a loop").1;
-                self.terminate(Terminator::Goto(target));
+                self.terminate(TerminatorKind::Goto(target), statement.span);
             }
             hir::StatementKind::Continue => {
                 let target = self.loops.last().expect("validated continue has a loop").0;
-                self.terminate(Terminator::Goto(target));
+                self.terminate(TerminatorKind::Goto(target), statement.span);
             }
             hir::StatementKind::If {
                 condition,
                 then_block,
                 else_block,
-            } => self.lower_if(condition, then_block, else_block.as_ref()),
-            hir::StatementKind::While { condition, body } => self.lower_while(condition, body),
+            } => self.lower_if(condition, then_block, else_block.as_ref(), statement.span),
+            hir::StatementKind::While { condition, body } => {
+                self.lower_while(condition, body, statement.span)
+            }
             hir::StatementKind::For {
                 key,
                 value,
                 by_view,
                 iterable,
                 body,
-            } => self.lower_for(*key, *value, *by_view, iterable, body),
-            hir::StatementKind::Match { scrutinee, arms } => self.lower_match(scrutinee, arms),
-            hir::StatementKind::Assert { condition, message } => self.push(Statement::Assert {
-                condition: condition.clone(),
-                message: message.clone(),
-            }),
-            hir::StatementKind::Trace(local) => self.push(Statement::Trace(*local)),
-            hir::StatementKind::Breakpoint(condition) => {
-                self.push(Statement::Breakpoint(condition.clone()))
+            } => self.lower_for(*key, *value, *by_view, iterable, body, statement.span),
+            hir::StatementKind::Match { scrutinee, arms } => {
+                self.lower_match(scrutinee, arms, statement.span)
             }
-            hir::StatementKind::Respond(value) => self.push(Statement::Respond(value.clone())),
+            hir::StatementKind::Assert { condition, message } => self.push(
+                StatementKind::Assert {
+                    condition: condition.clone(),
+                    message: message.clone(),
+                },
+                statement.span,
+            ),
+            hir::StatementKind::Trace(local) => {
+                self.push(StatementKind::Trace(*local), statement.span)
+            }
+            hir::StatementKind::Breakpoint(condition) => {
+                self.push(StatementKind::Breakpoint(condition.clone()), statement.span)
+            }
+            hir::StatementKind::Respond(value) => {
+                self.push(StatementKind::Respond(value.clone()), statement.span)
+            }
             hir::StatementKind::Scope(block) => self.lower_block(block),
         }
     }
@@ -229,41 +268,49 @@ impl Builder {
         condition: &Expression,
         then_body: &hir::Block,
         else_body: Option<&hir::Block>,
+        statement_span: Span,
     ) {
-        let then_block = self.new_block();
-        let else_block = self.new_block();
-        let join = self.new_block();
-        self.terminate(Terminator::Branch {
-            condition: condition.clone(),
-            then_block,
-            else_block,
-        });
+        let then_block = self.new_block(then_body.span);
+        let else_span = else_body.map_or(statement_span, |body| body.span);
+        let else_block = self.new_block(else_span);
+        let join = self.new_block(statement_span);
+        self.terminate(
+            TerminatorKind::Branch {
+                condition: condition.clone(),
+                then_block,
+                else_block,
+            },
+            condition.span,
+        );
         self.current = then_block;
         self.lower_block(then_body);
-        self.close_to(join);
+        self.close_to(join, then_body.span);
         self.current = else_block;
         if let Some(body) = else_body {
             self.lower_block(body);
         }
-        self.close_to(join);
+        self.close_to(join, else_span);
         self.current = join;
     }
 
-    fn lower_while(&mut self, condition: &Expression, body: &hir::Block) {
-        let condition_block = self.new_block();
-        let body_block = self.new_block();
-        let exit = self.new_block();
-        self.terminate(Terminator::Goto(condition_block));
+    fn lower_while(&mut self, condition: &Expression, body: &hir::Block, statement_span: Span) {
+        let condition_block = self.new_block(condition.span);
+        let body_block = self.new_block(body.span);
+        let exit = self.new_block(statement_span);
+        self.terminate(TerminatorKind::Goto(condition_block), statement_span);
         self.current = condition_block;
-        self.terminate(Terminator::Branch {
-            condition: condition.clone(),
-            then_block: body_block,
-            else_block: exit,
-        });
+        self.terminate(
+            TerminatorKind::Branch {
+                condition: condition.clone(),
+                then_block: body_block,
+                else_block: exit,
+            },
+            condition.span,
+        );
         self.loops.push((condition_block, exit));
         self.current = body_block;
         self.lower_block(body);
-        self.close_to(condition_block);
+        self.close_to(condition_block, body.span);
         self.loops.pop();
         self.current = exit;
     }
@@ -275,29 +322,41 @@ impl Builder {
         by_view: bool,
         iterable: &Expression,
         body: &hir::Block,
+        statement_span: Span,
     ) {
         let header = self.current;
-        let body_block = self.new_block();
-        let exit = self.new_block();
-        self.terminate(Terminator::ForEach {
-            key,
-            value,
-            by_view,
-            iterable: iterable.clone(),
-            body: body_block,
-            exit,
-        });
+        let body_block = self.new_block(body.span);
+        let exit = self.new_block(statement_span);
+        self.terminate(
+            TerminatorKind::ForEach {
+                key,
+                value,
+                by_view,
+                iterable: iterable.clone(),
+                body: body_block,
+                exit,
+            },
+            iterable.span,
+        );
         self.loops.push((header, exit));
         self.current = body_block;
         self.lower_block(body);
-        self.close_to(header);
+        self.close_to(header, body.span);
         self.loops.pop();
         self.current = exit;
     }
 
-    fn lower_match(&mut self, scrutinee: &Expression, arms: &[hir::MatchArm]) {
-        let join = self.new_block();
-        let arm_blocks = arms.iter().map(|_| self.new_block()).collect::<Vec<_>>();
+    fn lower_match(
+        &mut self,
+        scrutinee: &Expression,
+        arms: &[hir::MatchArm],
+        statement_span: Span,
+    ) {
+        let join = self.new_block(statement_span);
+        let arm_blocks = arms
+            .iter()
+            .map(|arm| self.new_block(arm.span))
+            .collect::<Vec<_>>();
         let mut variants = Vec::new();
         let mut otherwise = None;
         for (arm, block) in arms.iter().zip(&arm_blocks) {
@@ -307,15 +366,18 @@ impl Builder {
                 otherwise = Some(*block);
             }
         }
-        self.terminate(Terminator::Switch {
-            scrutinee: scrutinee.clone(),
-            variants,
-            otherwise,
-        });
+        self.terminate(
+            TerminatorKind::Switch {
+                scrutinee: scrutinee.clone(),
+                variants,
+                otherwise,
+            },
+            scrutinee.span,
+        );
         for (arm, block) in arms.iter().zip(arm_blocks) {
             self.current = block;
             self.lower_block(&arm.body);
-            self.close_to(join);
+            self.close_to(join, arm.span);
         }
         self.current = join;
     }
@@ -377,13 +439,47 @@ function choose(value: int64) returns int64:
             function
                 .blocks
                 .iter()
-                .any(|block| matches!(block.terminator, Terminator::Branch { .. }))
+                .any(|block| matches!(block.terminator.kind, TerminatorKind::Branch { .. }))
         );
         assert!(
             function
                 .blocks
                 .iter()
-                .any(|block| matches!(block.terminator, Terminator::Return(_)))
+                .any(|block| matches!(block.terminator.kind, TerminatorKind::Return(_)))
         );
+    }
+
+    #[test]
+    fn preserves_source_spans_for_mir_statements_and_terminators() {
+        let source = r#"namespace app
+function choose(value: int64) returns int64:
+    int64 next = value + 1
+    if next > 1:
+        return next
+    return value
+"#;
+        let program = lower_source(source);
+        let function = &program.functions[0];
+        let entry = &function.blocks[function.entry.index() as usize];
+
+        assert_eq!(
+            &source[entry.statements[0].span.start as usize..entry.statements[0].span.end as usize],
+            "int64 next = value + 1"
+        );
+        assert_eq!(
+            &source[entry.terminator.span.start as usize..entry.terminator.span.end as usize],
+            "next > 1"
+        );
+
+        let return_spans = function
+            .blocks
+            .iter()
+            .filter_map(|block| match block.terminator.kind {
+                TerminatorKind::Return(_) => Some(block.terminator.span),
+                _ => None,
+            })
+            .map(|span| &source[span.start as usize..span.end as usize])
+            .collect::<Vec<_>>();
+        assert_eq!(return_spans, ["return next", "return value"]);
     }
 }
