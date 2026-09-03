@@ -1848,7 +1848,9 @@ Standard LSP implementation using the `tower-lsp` crate. Provides:
 - Hover information (type at cursor).
 - Go-to-definition.
 - Find all references in the current document, optionally including the declaration.
-- Code completion.
+- Prefix-filtered code completion from the latest in-memory source, with
+  deterministic match ranking, project/stdlib candidates, function signatures,
+  and leaf-name filtering for qualified symbols.
 - Document symbols from the latest in-memory source, including declaration
   kinds, signatures, and UTF-16 ranges for editor outlines.
 - Whole-document formatting is provided through `jett_fmt`.
