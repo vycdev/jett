@@ -1851,6 +1851,8 @@ Standard LSP implementation using the `tower-lsp` crate. Provides:
 - Code completion.
 - Document symbols from the latest in-memory source, including declaration
   kinds, signatures, and UTF-16 ranges for editor outlines.
+- Selection ranges that expand from lexer tokens to trimmed lines and the full
+  open document while preserving UTF-16 positions.
 - Whole-document formatting is provided through `jett_fmt`.
 - Planned follow-up: rename symbol.
 

@@ -76,6 +76,7 @@ fn server_capabilities() -> ServerCapabilities {
         completion_provider: Some(CompletionOptions::default()),
         document_symbol_provider: Some(OneOf::Left(true)),
         document_formatting_provider: Some(OneOf::Left(true)),
+        selection_range_provider: Some(SelectionRangeProviderCapability::Simple(true)),
         position_encoding: Some(PositionEncodingKind::UTF16),
         ..ServerCapabilities::default()
     }
@@ -86,37 +87,8 @@ fn server_capabilities() -> ServerCapabilities {
 /// Jett accepts LF, CRLF, and lone CR, so LSP conversions must recognize all
 /// three forms consistently with the compiler and query layer.
 fn source_line(source: &str, target_line: usize) -> Option<&str> {
-    let bytes = source.as_bytes();
-    let mut line = 0usize;
-    let mut start = 0usize;
-    let mut index = 0usize;
-
-    while index < bytes.len() {
-        match bytes[index] {
-            b'\r' => {
-                if line == target_line {
-                    return Some(&source[start..index]);
-                }
-                index += 1;
-                if bytes.get(index) == Some(&b'\n') {
-                    index += 1;
-                }
-                line += 1;
-                start = index;
-            }
-            b'\n' => {
-                if line == target_line {
-                    return Some(&source[start..index]);
-                }
-                index += 1;
-                line += 1;
-                start = index;
-            }
-            _ => index += 1,
-        }
-    }
-
-    (line == target_line).then_some(&source[start..])
+    let (start, end) = source_line_bounds(source, target_line)?;
+    Some(&source[start..end])
 }
 
 /// Convert a zero-based LSP UTF-16 position into the driver's one-based
@@ -202,6 +174,119 @@ fn lsp_position_from_driver(source: &str, line: u32, column: u32) -> Option<Posi
         u32::try_from(line_index).ok()?,
         u32::try_from(utf16_column).ok()?,
     ))
+}
+
+fn source_line_bounds(source: &str, target_line: usize) -> Option<(usize, usize)> {
+    let bytes = source.as_bytes();
+    let mut line = 0usize;
+    let mut start = 0usize;
+    let mut index = 0usize;
+
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\r' | b'\n' => {
+                if line == target_line {
+                    return Some((start, index));
+                }
+                if bytes[index] == b'\r' && bytes.get(index + 1) == Some(&b'\n') {
+                    index += 1;
+                }
+                index += 1;
+                line += 1;
+                start = index;
+            }
+            _ => index += 1,
+        }
+    }
+
+    (line == target_line).then_some((start, source.len()))
+}
+
+fn byte_offset_for_position(source: &str, position: Position) -> Option<u32> {
+    let line = usize::try_from(position.line).ok()?;
+    let (line_start, line_end) = source_line_bounds(source, line)?;
+    let mut utf16_column = 0u32;
+
+    for (relative_offset, ch) in source[line_start..line_end].char_indices() {
+        if utf16_column == position.character {
+            return u32::try_from(line_start + relative_offset).ok();
+        }
+        let next_column = utf16_column.checked_add(ch.len_utf16() as u32)?;
+        if position.character < next_column {
+            return None;
+        }
+        utf16_column = next_column;
+    }
+
+    (utf16_column == position.character)
+        .then(|| u32::try_from(line_end).ok())
+        .flatten()
+}
+
+fn selection_range_for_position(source: &str, position: Position) -> Option<SelectionRange> {
+    let byte_offset = byte_offset_for_position(source, position)?;
+    let line = usize::try_from(position.line).ok()?;
+    let (line_start, line_end) = source_line_bounds(source, line)?;
+    let line_source = &source[line_start..line_end];
+    let (trimmed_start, trimmed_end) = if line_source.trim().is_empty() {
+        (line_start, line_end)
+    } else {
+        (
+            line_start + (line_source.len() - line_source.trim_start().len()),
+            line_start + line_source.trim_end().len(),
+        )
+    };
+    let line_range = Range::new(
+        lsp_position(source, u32::try_from(trimmed_start).ok()?),
+        lsp_position(source, u32::try_from(trimmed_end).ok()?),
+    );
+    let document_range = Range::new(
+        Position::new(0, 0),
+        lsp_position(source, u32::try_from(source.len()).unwrap_or(u32::MAX)),
+    );
+
+    let mut selection = SelectionRange {
+        range: document_range,
+        parent: None,
+    };
+    if line_range != selection.range {
+        selection = SelectionRange {
+            range: line_range,
+            parent: Some(Box::new(selection)),
+        };
+    }
+
+    let token_range = jett_lexer::tokenize(source, jett_common::FileId::new(0))
+        .tokens
+        .into_iter()
+        .find(|token| {
+            token.span.start <= byte_offset
+                && byte_offset < token.span.end
+                && !matches!(
+                    token.kind,
+                    jett_lexer::TokenKind::Newline
+                        | jett_lexer::TokenKind::Indent
+                        | jett_lexer::TokenKind::Dedent
+                        | jett_lexer::TokenKind::Eof
+                        | jett_lexer::TokenKind::InvalidToken
+                )
+        })
+        .map(|token| {
+            Range::new(
+                lsp_position(source, token.span.start),
+                lsp_position(source, token.span.end),
+            )
+        });
+    if let Some(token_range) = token_range
+        && token_range != selection.range
+    {
+        selection = SelectionRange {
+            range: token_range,
+            parent: Some(Box::new(selection)),
+        };
+    }
+
+    Some(selection)
 }
 
 fn document_symbol_kind(kind: &str) -> SymbolKind {
@@ -500,6 +585,26 @@ impl LanguageServer for JettBackend {
 
         Ok(Some(DocumentSymbolResponse::Nested(symbols)))
     }
+
+    async fn selection_range(
+        &self,
+        params: SelectionRangeParams,
+    ) -> Result<Option<Vec<SelectionRange>>> {
+        let documents = self.documents.read().await;
+        let Some(document) = documents.get(&params.text_document.uri) else {
+            return Ok(None);
+        };
+        let Some(ranges) = params
+            .positions
+            .into_iter()
+            .map(|position| selection_range_for_position(&document.text, position))
+            .collect::<Option<Vec<_>>>()
+        else {
+            return Ok(None);
+        };
+
+        Ok(Some(ranges))
+    }
 }
 
 fn diagnostics_for_source(source: &str, file_path: &str) -> Vec<Diagnostic> {
@@ -749,6 +854,54 @@ mod tests {
         let capabilities = server_capabilities();
 
         assert_eq!(capabilities.references_provider, Some(OneOf::Left(true)));
+    }
+
+    #[test]
+    fn server_capabilities_advertise_selection_ranges() {
+        let capabilities = server_capabilities();
+
+        assert_eq!(
+            capabilities.selection_range_provider,
+            Some(SelectionRangeProviderCapability::Simple(true))
+        );
+    }
+
+    #[test]
+    fn selection_ranges_expand_from_token_to_line_and_document() {
+        let source = "function greet(name: string) returns string:\n    return \"🙂 \" + name\n";
+
+        let selection = selection_range_for_position(source, Position::new(1, 19))
+            .expect("name token should be selectable");
+        assert_eq!(
+            selection.range,
+            Range::new(Position::new(1, 19), Position::new(1, 23))
+        );
+
+        let line = selection.parent.expect("trimmed line parent");
+        assert_eq!(
+            line.range,
+            Range::new(Position::new(1, 4), Position::new(1, 23))
+        );
+
+        let document = line.parent.expect("document parent");
+        assert_eq!(
+            document.range,
+            Range::new(Position::new(0, 0), Position::new(2, 0))
+        );
+        assert!(document.parent.is_none());
+    }
+
+    #[test]
+    fn selection_ranges_keep_whitespace_positions_contained() {
+        let source = "function main() returns nothing:\n    \n";
+
+        let selection = selection_range_for_position(source, Position::new(1, 2))
+            .expect("whitespace position should be selectable");
+
+        assert_eq!(
+            selection.range,
+            Range::new(Position::new(1, 0), Position::new(1, 4))
+        );
     }
 
     #[test]
