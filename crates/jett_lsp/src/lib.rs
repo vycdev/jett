@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::Path;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer};
@@ -244,6 +245,122 @@ fn document_symbols_for_source(source: &str) -> Option<Vec<DocumentSymbol>> {
     Some(symbols)
 }
 
+fn completion_item_kind(kind_name: &str) -> CompletionItemKind {
+    match kind_name {
+        "function" => CompletionItemKind::FUNCTION,
+        "namespace" => CompletionItemKind::MODULE,
+        "struct" | "bitfield" => CompletionItemKind::STRUCT,
+        "enum" => CompletionItemKind::ENUM,
+        "interface" => CompletionItemKind::INTERFACE,
+        "machine" | "actor" | "resource" => CompletionItemKind::CLASS,
+        "type" => CompletionItemKind::TYPE_PARAMETER,
+        "constant" => CompletionItemKind::CONSTANT,
+        _ => CompletionItemKind::VARIABLE,
+    }
+}
+
+fn completion_item(
+    name: String,
+    kind_name: &str,
+    rank: u32,
+    detail: Option<String>,
+    prefix: &str,
+) -> CompletionItem {
+    let filter_text = if prefix.contains('.') {
+        name.clone()
+    } else {
+        name.rsplit_once('.')
+            .map_or_else(|| name.clone(), |(_, leaf)| leaf.to_string())
+    };
+
+    CompletionItem {
+        label: name.clone(),
+        kind: Some(completion_item_kind(kind_name)),
+        detail,
+        filter_text: Some(filter_text),
+        sort_text: Some(format!("{rank:03}:{name}:{kind_name}")),
+        ..CompletionItem::default()
+    }
+}
+
+fn completion_prefix_for_source(source: &str, position: Position) -> Option<String> {
+    let (_, column) = driver_position(source, position)?;
+    let line = source_line(source, usize::try_from(position.line).ok()?)?;
+    let before_cursor: String = line
+        .chars()
+        .take(usize::try_from(column.checked_sub(1)?).ok()?)
+        .collect();
+    let start = before_cursor
+        .char_indices()
+        .rev()
+        .find(|(_, ch)| !ch.is_ascii_alphanumeric() && *ch != '_' && *ch != '.')
+        .map_or(0, |(index, ch)| index + ch.len_utf8());
+    Some(before_cursor[start..].to_string())
+}
+
+fn completion_items_for_source(
+    source: &str,
+    path: &Path,
+    position: Position,
+) -> Option<Vec<CompletionItem>> {
+    let (line, column) = driver_position(source, position)?;
+    let prefix = completion_prefix_for_source(source, position)?;
+    let signatures: HashMap<String, String> =
+        jett_driver::query_source_file_symbols(source, "<lsp-document>")
+            .ok()?
+            .symbols
+            .into_iter()
+            .filter_map(|symbol| symbol.signature.map(|signature| (symbol.name, signature)))
+            .collect();
+    let mut items = Vec::new();
+
+    // The on-disk query contributes project and standard-library metadata. Its
+    // current-file rows are excluded because the open document is authoritative.
+    if let Ok(result) = jett_driver::query_completions_at(path, 1, 1) {
+        let current_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        for candidate in result.candidates {
+            let candidate_path = Path::new(&candidate.file_path)
+                .canonicalize()
+                .unwrap_or_else(|_| candidate.file_path.clone().into());
+            if candidate_path == current_path {
+                continue;
+            }
+            let Some(rank) = jett_driver::completion_match_rank(&candidate.name, &prefix) else {
+                continue;
+            };
+            let kind_name = jett_driver::query_kind_name(candidate.kind);
+            items.push(completion_item(
+                candidate.name,
+                kind_name,
+                rank,
+                candidate.signature,
+                &prefix,
+            ));
+        }
+    }
+
+    // Parse the open buffer separately so unsaved and private declarations take
+    // precedence over stale on-disk declarations while retaining their details.
+    for (name, kind) in jett_driver::completions_at(source, line, column) {
+        let kind_name = jett_driver::query_kind_name(kind);
+        let Some(rank) = jett_driver::completion_match_rank(&name, &prefix) else {
+            continue;
+        };
+        let item_kind = completion_item_kind(kind_name);
+        if items
+            .iter()
+            .any(|item| item.label == name && item.kind == Some(item_kind))
+        {
+            continue;
+        }
+        let detail = signatures.get(&name).cloned();
+        items.push(completion_item(name, kind_name, rank, detail, &prefix));
+    }
+
+    items.sort_by(|left, right| left.sort_text.cmp(&right.sort_text));
+    Some(items)
+}
+
 fn reference_locations(
     source: &str,
     uri: &Url,
@@ -445,44 +562,15 @@ impl LanguageServer for JettBackend {
         let Some(document) = docs.get(uri) else {
             return Ok(None);
         };
-        let source = &document.text;
-
         let position = params.text_document_position.position;
-        let Some((line, col)) = driver_position(source, position) else {
+        let path = uri
+            .to_file_path()
+            .unwrap_or_else(|_| std::path::PathBuf::from("<lsp-document>"));
+        let Some(items) = completion_items_for_source(&document.text, &path, position) else {
             return Ok(None);
         };
-        let candidates = jett_driver::completions_at(source, line, col);
-        if candidates.is_empty() {
-            return Ok(None);
-        }
 
-        use jett_resolve::scope::DefKind;
-        let items: Vec<CompletionItem> = candidates
-            .into_iter()
-            .map(|(name, kind)| {
-                let kind = match kind {
-                    DefKind::Function => CompletionItemKind::FUNCTION,
-                    DefKind::Struct => CompletionItemKind::STRUCT,
-                    DefKind::Enum => CompletionItemKind::ENUM,
-                    DefKind::Interface => CompletionItemKind::INTERFACE,
-                    DefKind::Machine => CompletionItemKind::CLASS,
-                    DefKind::Actor => CompletionItemKind::CLASS,
-                    DefKind::Resource => CompletionItemKind::CLASS,
-                    DefKind::Variable | DefKind::Param => CompletionItemKind::VARIABLE,
-                    DefKind::Type => CompletionItemKind::TYPE_PARAMETER,
-                    DefKind::Constant => CompletionItemKind::CONSTANT,
-                    DefKind::Namespace => CompletionItemKind::MODULE,
-                    DefKind::Bitfield => CompletionItemKind::STRUCT,
-                };
-                CompletionItem {
-                    label: name,
-                    kind: Some(kind),
-                    ..CompletionItem::default()
-                }
-            })
-            .collect();
-
-        Ok(Some(CompletionResponse::Array(items)))
+        Ok((!items.is_empty()).then_some(CompletionResponse::Array(items)))
     }
 
     async fn document_symbol(
@@ -547,6 +635,7 @@ pub async fn run_server() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
     use tower_lsp::lsp_types::Url;
 
     #[test]
@@ -699,6 +788,81 @@ mod tests {
             capabilities.document_symbol_provider,
             Some(OneOf::Left(true))
         );
+    }
+
+    #[test]
+    fn completion_items_preserve_driver_ranking_and_signature_metadata() {
+        let source = "namespace app\n\nexport function beta(value: int64) returns int64:\n    return value\n\nfunction better() returns int64:\n    return 1\n\nfunction main() returns int64:\n    return be\n";
+
+        let items = completion_items_for_source(
+            source,
+            Path::new("/workspace/main.jett"),
+            Position::new(9, 13),
+        )
+        .expect("valid completion query");
+
+        let beta = items
+            .iter()
+            .find(|item| item.label == "app.beta")
+            .expect("unsaved function completion");
+        assert_eq!(beta.kind, Some(CompletionItemKind::FUNCTION));
+        assert_eq!(
+            beta.detail.as_deref(),
+            Some("app.beta(value: int64) returns int64")
+        );
+        assert_eq!(beta.filter_text.as_deref(), Some("beta"));
+        assert_eq!(beta.sort_text.as_deref(), Some("020:app.beta:function"));
+        assert!(
+            items.iter().any(|item| item.label == "app.better"),
+            "private declarations in the current namespace must remain visible"
+        );
+        assert!(items.windows(2).all(|items| {
+            items[0].sort_text.as_deref().unwrap_or_default()
+                <= items[1].sort_text.as_deref().unwrap_or_default()
+        }));
+    }
+
+    #[test]
+    fn completion_items_merge_project_symbols_without_stale_document_declarations() {
+        let root = std::env::temp_dir().join(format!(
+            "jett-lsp-completions-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock after epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("temp project directory");
+        std::fs::write(root.join("jett.proj"), "name: lsp_completion_fixture\n")
+            .expect("project marker");
+        std::fs::write(
+            root.join("util.jett"),
+            "namespace util\n\nexport function helper(value: int64) returns int64:\n    return value\n",
+        )
+        .expect("project helper");
+        let path = root.join("main.jett");
+        std::fs::write(
+            &path,
+            "namespace app\n\nexport function helper_old() returns int64:\n    return 1\n",
+        )
+        .expect("stale on-disk document");
+        let source = "namespace app\n\nfunction helper_local() returns int64:\n    return 1\n\nfunction main() returns int64:\n    return hel\n";
+
+        let items = completion_items_for_source(source, &path, Position::new(6, 14))
+            .expect("valid completion query");
+
+        std::fs::remove_dir_all(&root).expect("remove temp project");
+
+        let project_helper = items
+            .iter()
+            .find(|item| item.label == "util.helper")
+            .expect("sibling project completion");
+        assert_eq!(
+            project_helper.detail.as_deref(),
+            Some("util.helper(value: int64) returns int64")
+        );
+        assert!(items.iter().any(|item| item.label == "app.helper_local"));
+        assert!(!items.iter().any(|item| item.label == "app.helper_old"));
     }
 
     #[test]

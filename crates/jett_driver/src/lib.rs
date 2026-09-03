@@ -1448,6 +1448,11 @@ fn completion_match_kind(name: &str, prefix: &str) -> Option<CompletionMatchKind
         .then_some(CompletionMatchKind::LeafPrefix)
 }
 
+/// Return the stable completion rank for a candidate matching `prefix`.
+pub fn completion_match_rank(name: &str, prefix: &str) -> Option<u32> {
+    completion_match_kind(name, prefix).map(completion_rank)
+}
+
 fn completion_rank(match_kind: CompletionMatchKind) -> u32 {
     match match_kind {
         CompletionMatchKind::Exact => 0,
