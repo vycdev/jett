@@ -8427,7 +8427,17 @@ impl Interpreter {
             "float64.from_int64" => {
                 require_args!(name, 1, args);
                 match &args[0] {
-                    Value::Int64(n) => Some(Ok(Value::Float64(*n as f64))),
+                    Value::Int64(n) => {
+                        let converted = *n as f64;
+                        if converted as i128 == i128::from(*n) {
+                            Some(Ok(Value::ResultOk(Box::new(Value::Float64(converted)))))
+                        } else {
+                            Some(Ok(Value::ResultFail(Box::new(Value::String(
+                                "float64.from_int64: value is not exactly representable as float64"
+                                    .to_string(),
+                            )))))
+                        }
+                    }
                     _ => Some(Err(format!("{name} expects an int64 argument"))),
                 }
             }
@@ -17840,8 +17850,19 @@ mod builtin_tests {
     #[test]
     fn builtin_float64_from_int64() {
         let mut interp = Interpreter::new();
-        let expr = dotted_call("float64", "from_int64", vec![int(42)]);
-        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Float64(42.0));
+        let exact = dotted_call("float64", "from_int64", vec![int(42)]);
+        assert_eq!(
+            interp.eval_expr(&exact).unwrap(),
+            Value::ResultOk(Box::new(Value::Float64(42.0)))
+        );
+
+        let imprecise = dotted_call("float64", "from_int64", vec![int(9_007_199_254_740_993)]);
+        assert_eq!(
+            interp.eval_expr(&imprecise).unwrap(),
+            Value::ResultFail(Box::new(Value::String(
+                "float64.from_int64: value is not exactly representable as float64".to_string()
+            )))
+        );
     }
 
     #[test]
