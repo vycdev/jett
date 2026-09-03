@@ -459,6 +459,10 @@ pub fn build_source(source: &str, file_path: &str) -> BuildResult {
     }
 }
 
+fn span_contains_offset(span: Span, file_id: FileId, offset: u32) -> bool {
+    span.file == file_id && span.start <= offset && offset < span.end
+}
+
 /// Return the inferred type name at the given (1-based) line and column in `source`.
 /// Returns `None` if the position is outside any typed expression or if the file
 /// does not compile cleanly past the parse phase.
@@ -493,7 +497,7 @@ pub fn hover_type(source: &str, line: u32, col: u32) -> Option<String> {
     // Find the smallest span in type_map that contains `offset`.
     let mut best: Option<(u32, jett_types::TypeId)> = None;
     for (span, ty_id) in &check_result.type_map {
-        if span.file == file_id && span.start <= offset && offset <= span.end {
+        if span_contains_offset(*span, file_id, offset) {
             let len = span.end - span.start;
             if best.is_none() || len < best.unwrap().0 {
                 best = Some((len, *ty_id));
@@ -619,7 +623,7 @@ pub fn query_type_at_detailed(
 
     let mut best: Option<(u32, Span, jett_types::TypeId)> = None;
     for (span, ty_id) in &check_result.type_map {
-        if span.file == file_id && span.start <= offset && offset <= span.end {
+        if span_contains_offset(*span, file_id, offset) {
             let len = span.end - span.start;
             if best.is_none() || len < best.unwrap().0 {
                 best = Some((len, *span, *ty_id));
@@ -739,7 +743,7 @@ pub fn query_definition_at_detailed(
 
     let mut best_def: Option<(u32, jett_resolve::scope::DefId)> = None;
     for (span, def_id) in &resolve_result.resolutions {
-        if span.file == file_id && span.start <= offset && offset <= span.end {
+        if span_contains_offset(*span, file_id, offset) {
             let len = span.end - span.start;
             if best_def.is_none() || len < best_def.unwrap().0 {
                 best_def = Some((len, *def_id));
@@ -2057,7 +2061,7 @@ fn best_resolved_definition_at(
 ) -> Option<(u32, jett_resolve::scope::DefId)> {
     let mut best_def: Option<(u32, jett_resolve::scope::DefId)> = None;
     for (span, def_id) in &resolve_result.resolutions {
-        if span.file == file_id && span.start <= offset && offset <= span.end {
+        if span_contains_offset(*span, file_id, offset) {
             let len = span.end - span.start;
             if best_def.is_none() || len < best_def.unwrap().0 {
                 best_def = Some((len, *def_id));
@@ -2066,7 +2070,7 @@ fn best_resolved_definition_at(
     }
     for definition in &resolve_result.scope_table.definitions {
         let span = definition.span;
-        if span.file == file_id && span.start <= offset && offset <= span.end {
+        if span_contains_offset(span, file_id, offset) {
             let len = span.end - span.start;
             if best_def.is_none() || len < best_def.unwrap().0 {
                 best_def = Some((len, definition.id));
@@ -4114,6 +4118,13 @@ mod tests {
             .expect("cross-file label source should be retained");
         assert!(label_source.file_path.ends_with("api.jett"));
         assert!(label_source.source.contains("function hidden"));
+    }
+
+    #[test]
+    fn hover_does_not_select_an_expression_at_its_end_offset() {
+        let source = "namespace test\n\nfunction main() returns nothing:\n    int64 value = 42\n    return nothing\n";
+
+        assert_eq!(hover_type(source, 4, 21), None);
     }
 
     #[test]
