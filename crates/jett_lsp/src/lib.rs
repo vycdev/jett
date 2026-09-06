@@ -236,9 +236,17 @@ fn selection_range_for_position(source: &str, position: Position) -> Option<Sele
             line_start + line_source.trim_end().len(),
         )
     };
+    // A selection must contain the requested cursor even in indentation or
+    // trailing whitespace on a nonblank line.
+    let (selection_start, selection_end) =
+        if (trimmed_start..=trimmed_end).contains(&(byte_offset as usize)) {
+            (trimmed_start, trimmed_end)
+        } else {
+            (line_start, line_end)
+        };
     let line_range = Range::new(
-        lsp_position(source, u32::try_from(trimmed_start).ok()?),
-        lsp_position(source, u32::try_from(trimmed_end).ok()?),
+        lsp_position(source, u32::try_from(selection_start).ok()?),
+        lsp_position(source, u32::try_from(selection_end).ok()?),
     );
     let document_range = Range::new(
         Position::new(0, 0),
@@ -279,6 +287,8 @@ fn selection_range_for_position(source: &str, position: Position) -> Option<Sele
         });
     if let Some(token_range) = token_range
         && token_range != selection.range
+        && selection.range.start <= token_range.start
+        && token_range.end <= selection.range.end
     {
         selection = SelectionRange {
             range: token_range,
@@ -902,6 +912,24 @@ mod tests {
             selection.range,
             Range::new(Position::new(1, 0), Position::new(1, 4))
         );
+    }
+
+    #[test]
+    fn selection_ranges_contain_nonblank_indentation_and_trailing_whitespace() {
+        for newline in ["\n", "\r", "\r\n"] {
+            let source =
+                format!("function main() returns nothing:{newline}    return nothing   {newline}");
+            for column in [0, 2, 20, 21] {
+                let position = Position::new(1, column);
+                let mut selection = selection_range_for_position(&source, position).unwrap();
+                assert!(selection.range.start <= position && position <= selection.range.end);
+                while let Some(parent) = selection.parent {
+                    assert!(parent.range.start <= selection.range.start);
+                    assert!(selection.range.end <= parent.range.end);
+                    selection = *parent;
+                }
+            }
+        }
     }
 
     #[test]
