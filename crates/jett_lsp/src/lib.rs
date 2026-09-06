@@ -291,14 +291,14 @@ fn folding_ranges_for_source(source: &str) -> Vec<FoldingRange> {
     let lexed = Lexer::new(source, jett_common::FileId::new(0)).tokenize();
     let mut starts = Vec::new();
     let mut ranges = Vec::new();
-    let mut previous_code_line = 0;
+    let mut previous_code_offset = 0;
 
     for token in lexed.tokens {
         match token.kind {
             TokenKind::Indent => {
                 // Blank and comment-only lines do not produce indentation
                 // tokens. Keep the actual header visible when folding.
-                starts.push(previous_code_line);
+                starts.push(lsp_position(source, previous_code_offset).line);
             }
             TokenKind::Dedent => {
                 let Some(start_line) = starts.pop() else {
@@ -324,7 +324,7 @@ fn folding_ranges_for_source(source: &str) -> Vec<FoldingRange> {
                 }
             }
             TokenKind::Newline | TokenKind::Eof => {}
-            _ => previous_code_line = lsp_position(source, token.span.start).line,
+            _ => previous_code_offset = token.span.start,
         }
     }
 
