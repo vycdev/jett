@@ -571,13 +571,13 @@ impl<'a> OwnershipChecker<'a> {
             }
             Expr::ListConstruct(elems, _) => {
                 for elem in elems {
-                    self.check_expr_ownership(elem);
+                    self.consume_expr(elem, elem.span());
                 }
             }
             Expr::MapConstruct(entries, _) => {
-                for (k, v) in entries {
-                    self.check_expr_ownership(k);
-                    self.check_expr_ownership(v);
+                for (key, value) in entries {
+                    self.consume_expr(key, key.span());
+                    self.consume_expr(value, value.span());
                 }
             }
             Expr::Handle(target, _, body, _) => {
