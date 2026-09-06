@@ -8276,7 +8276,8 @@ impl Interpreter {
                 require_args!(name, 3, args);
                 match (&args[0], &args[1], &args[2]) {
                     (Value::String(s), Value::String(from), Value::String(to)) => {
-                        Some(Ok(Value::String(s.replace(from.as_str(), to.as_str()))))
+                        let replaced = string_split_grapheme_matches(s, from).join(to);
+                        Some(Ok(Value::String(replaced)))
                     }
                     _ => Some(Err(format!("{name} expects three string arguments"))),
                 }
