@@ -305,99 +305,93 @@ fn signature_help_source_offset(source: &str, position: Position) -> Option<usiz
 }
 
 fn call_context_at(source: &str, position: Position) -> Option<(String, u32)> {
-    #[derive(Clone, Copy)]
+    use jett_lexer::TokenKind;
+
     struct Delimiter {
-        kind: u8,
-        offset: usize,
+        kind: TokenKind,
+        callee: Option<String>,
         commas: u32,
     }
 
     let cursor = signature_help_source_offset(source, position)?;
-    let bytes = source.as_bytes();
+    let lexed = jett_lexer::tokenize(source, jett_common::FileId::new(0));
     let mut delimiters = Vec::new();
-    let mut in_string = false;
-    let mut escaped = false;
-    let mut in_comment = false;
-    let mut index = 0usize;
-    while index < cursor {
-        let byte = bytes[index];
-        if in_comment {
-            if matches!(byte, b'\n' | b'\r') {
-                in_comment = false;
-            }
-            index += 1;
-            continue;
+    for (index, token) in lexed.tokens.iter().enumerate() {
+        if token.span.start as usize >= cursor {
+            break;
         }
-        if in_string {
-            if escaped {
-                escaped = false;
-            } else if byte == b'\\' {
-                escaped = true;
-            } else if byte == b'"' {
-                in_string = false;
-            }
-            index += 1;
-            continue;
-        }
-        if byte == b'"' {
-            in_string = true;
-        } else if byte == b'#' || (byte == b'/' && bytes.get(index + 1) == Some(&b'/')) {
-            in_comment = true;
-        } else if matches!(byte, b'(' | b'[' | b'{') {
-            delimiters.push(Delimiter {
-                kind: byte,
-                offset: index,
+        match token.kind {
+            TokenKind::LParen | TokenKind::LBracket => delimiters.push(Delimiter {
+                kind: token.kind,
+                callee: (token.kind == TokenKind::LParen)
+                    .then(|| signature_callee_before(source, &lexed.tokens[..index]))
+                    .flatten(),
                 commas: 0,
-            });
-        } else if matches!(byte, b')' | b']' | b'}') {
-            let opening = match byte {
-                b')' => b'(',
-                b']' => b'[',
-                _ => b'{',
-            };
-            if let Some(position) = delimiters.iter().rposition(|entry| entry.kind == opening) {
-                delimiters.truncate(position);
+            }),
+            TokenKind::RParen | TokenKind::RBracket => {
+                let opening = if token.kind == TokenKind::RParen {
+                    TokenKind::LParen
+                } else {
+                    TokenKind::LBracket
+                };
+                if let Some(position) = delimiters.iter().rposition(|entry| entry.kind == opening) {
+                    delimiters.truncate(position);
+                }
             }
-        } else if byte == b','
-            && let Some(delimiter) = delimiters.last_mut()
-            && delimiter.kind == b'('
-        {
-            delimiter.commas = delimiter.commas.saturating_add(1);
+            TokenKind::Comma => {
+                if let Some(delimiter) = delimiters.last_mut() {
+                    delimiter.commas = delimiter.commas.saturating_add(1);
+                }
+            }
+            _ => {}
         }
-        index += 1;
     }
+    delimiters
+        .into_iter()
+        .rev()
+        .find_map(|call| call.callee.map(|name| (name, call.commas)))
+}
 
-    let call = delimiters.iter().rev().find(|entry| entry.kind == b'(')?;
-    let mut end = call.offset;
-    while end > 0 && bytes[end - 1].is_ascii_whitespace() {
-        end -= 1;
-    }
-    if end > 0 && bytes[end - 1] == b']' {
+fn signature_callee_before(source: &str, tokens: &[jett_lexer::Token]) -> Option<String> {
+    use jett_lexer::TokenKind;
+    let mut end = tokens.len();
+    if tokens.last()?.kind == TokenKind::RBracket {
         let mut depth = 1usize;
         end -= 1;
         while end > 0 && depth > 0 {
             end -= 1;
-            match bytes[end] {
-                b']' => depth += 1,
-                b'[' => depth -= 1,
+            match tokens[end].kind {
+                TokenKind::RBracket => depth += 1,
+                TokenKind::LBracket => depth -= 1,
                 _ => {}
             }
         }
         if depth != 0 {
             return None;
         }
-        while end > 0 && bytes[end - 1].is_ascii_whitespace() {
-            end -= 1;
+    }
+    let last = tokens.get(end.checked_sub(1)?)?;
+    if !matches!(last.kind, TokenKind::Ident | TokenKind::Value) {
+        return None;
+    }
+    let mut start = end - 1;
+    while start >= 2 && tokens[start - 1].kind == TokenKind::Dot {
+        let component =
+            &source[tokens[start - 2].span.start as usize..tokens[start - 2].span.end as usize];
+        if !component
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        {
+            break;
         }
+        start -= 2;
     }
-    let mut start = end;
-    while start > 0
-        && (bytes[start - 1].is_ascii_alphanumeric() || matches!(bytes[start - 1], b'_' | b'.'))
-    {
-        start -= 1;
-    }
-    let callee = source.get(start..end)?;
-    (!callee.is_empty()).then(|| (callee.to_string(), call.commas))
+    Some(
+        tokens[start..end]
+            .iter()
+            .map(|token| &source[token.span.start as usize..token.span.end as usize])
+            .collect(),
+    )
 }
 
 fn signature_parameter_label(parameter: &jett_driver::SignatureParam) -> String {
@@ -416,7 +410,8 @@ fn signature_parameter_label(parameter: &jett_driver::SignatureParam) -> String 
 
 fn signature_help_for_source(source: &str, position: Position) -> Option<SignatureHelp> {
     let (callee, active_parameter) = call_context_at(source, position)?;
-    let signature = jett_driver::query_source_signature(source, &callee)
+    let offset = u32::try_from(signature_help_source_offset(source, position)?).ok()?;
+    let signature = jett_driver::query_source_signature_at(source, &callee, offset)
         .ok()
         .flatten()?;
     let type_params = if signature.type_params.is_empty() {
@@ -443,8 +438,12 @@ fn signature_help_for_source(source: &str, position: Position) -> Option<Signatu
             documentation: None,
         })
         .collect();
-    let active_parameter = (!signature.params.is_empty())
-        .then_some(active_parameter.min(u32::try_from(signature.params.len() - 1).ok()?));
+    let active_parameter = signature
+        .params
+        .len()
+        .checked_sub(1)
+        .and_then(|last| u32::try_from(last).ok())
+        .map(|last| active_parameter.min(last));
 
     Some(SignatureHelp {
         signatures: vec![SignatureInformation {
@@ -989,6 +988,45 @@ mod tests {
             "app.add(left: int64, right: int64) returns int64"
         );
         assert_eq!(help.active_parameter, Some(0));
+    }
+
+    #[test]
+    fn signature_help_supports_zero_parameters() {
+        let source = "namespace app\nfunction f() returns int64:\n    return 1\nfunction main() returns int64:\n    return f(";
+        let help =
+            signature_help_for_source(source, lsp_position(source, source.len() as u32)).unwrap();
+        assert_eq!(help.active_parameter, None);
+        assert_eq!(help.signatures[0].parameters.as_ref().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn signature_context_handles_grouping_and_interpolation() {
+        for (source, expected) in [
+            ("f(1, (2 + ", ("f", 1)),
+            ("f(\"{g(1, 2)}\")", ("g", 1)),
+            ("f(1, list.of[int64](2, ", ("list.of", 1)),
+        ] {
+            let offset = if source.contains("{g") {
+                source.find("2)").unwrap()
+            } else {
+                source.len()
+            };
+            assert_eq!(
+                call_context_at(source, lsp_position(source, offset as u32)),
+                Some((expected.0.to_string(), expected.1))
+            );
+        }
+    }
+
+    #[test]
+    fn signature_help_uses_the_calling_namespace() {
+        let source = "namespace first\nfunction helper(value: int64) returns int64:\n    return value\nnamespace second\nfunction helper(value: string) returns string:\n    return value\nfunction main() returns string:\n    return helper(";
+        let help =
+            signature_help_for_source(source, lsp_position(source, source.len() as u32)).unwrap();
+        assert_eq!(
+            help.signatures[0].label,
+            "second.helper(value: string) returns string"
+        );
     }
 
     #[test]

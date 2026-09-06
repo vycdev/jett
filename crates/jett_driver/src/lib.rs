@@ -1057,7 +1057,29 @@ pub fn query_source_signature(
     source: &str,
     function_name: &str,
 ) -> Result<Option<SignatureQueryResult>, String> {
+    query_source_signature_inner(source, function_name, None)
+}
+
+/// Resolve an unqualified call relative to the namespace at its source offset.
+pub fn query_source_signature_at(
+    source: &str,
+    function_name: &str,
+    offset: u32,
+) -> Result<Option<SignatureQueryResult>, String> {
+    query_source_signature_inner(source, function_name, Some(offset))
+}
+
+fn query_source_signature_inner(
+    source: &str,
+    function_name: &str,
+    offset: Option<u32>,
+) -> Result<Option<SignatureQueryResult>, String> {
     let parsed = parse_source_with_query(source, "<lsp-document>");
+    let scoped_name = offset
+        .filter(|_| !function_name.contains('.'))
+        .and_then(|offset| namespace_at_offset(&parsed.module, FileId::new(0), offset))
+        .map(|namespace| format!("{namespace}.{function_name}"));
+    let function_name = scoped_name.as_deref().unwrap_or(function_name);
 
     // Signature help is requested while calls are often syntactically
     // incomplete. Use parser-recovered declarations from the current document
