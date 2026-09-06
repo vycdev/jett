@@ -8,7 +8,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use jett_common::{FileId, Span, is_json_raw_facade, json_public_bridge_spec};
 use jett_parser::ast::{
     ActorDef, BinOp, BitfieldDef, BitfieldFieldKind, Block, CallArg, EnumDef, Expr, FunctionDef,
-    Ident, ImplementBlock, InterfaceDecl, Item, MachineDef, Module, Pattern, PipelineStep,
+    Ident, ImplementBlock, InterfaceDecl, Item, MachineDef, Module, Param, Pattern, PipelineStep,
     PipelineStepHandle, Stmt, StringPart, StructDef, TypeAlias, TypeExpr, UnaryOp,
 };
 use jett_types::{
@@ -1737,16 +1737,14 @@ impl Interpreter {
 
                 // Evaluate capability args.
                 let mut capabilities = HashMap::new();
-                for (arg, param) in args.iter().zip(actor_def.capability_params.iter()) {
+                let parameter_indices =
+                    Self::actor_argument_parameters(args, &actor_def.capability_params)?;
+                for (arg, index) in args.iter().zip(parameter_indices) {
+                    let param = &actor_def.capability_params[index];
                     let val = value_or_signal!(self, &arg.value);
                     let param_ty = self.substitute_type_expr(&param.ty);
                     let val = self.normalize_value_for_type(&param_ty, val)?;
-                    let name = arg
-                        .name
-                        .as_ref()
-                        .map(|n| n.name.clone())
-                        .unwrap_or_else(|| param.name.name.clone());
-                    capabilities.insert(name, val);
+                    capabilities.insert(param.name.name.clone(), val);
                 }
 
                 // Evaluate state field initializers in a temp scope with capabilities in scope.
@@ -2918,6 +2916,33 @@ impl Interpreter {
         }
     }
 
+    /// Resolve each lexical actor argument to its declared parameter.
+    fn actor_argument_parameters(args: &[CallArg], params: &[Param]) -> Result<Vec<usize>, String> {
+        if args.len() != params.len() {
+            return Err("actor argument count does not match parameter count".to_string());
+        }
+        let mut seen = vec![false; params.len()];
+        args.iter()
+            .enumerate()
+            .map(|(source_index, arg)| {
+                let index = match &arg.name {
+                    Some(name) => params
+                        .iter()
+                        .position(|param| param.name.name == name.name)
+                        .ok_or_else(|| format!("unknown actor argument '{}'", name.name))?,
+                    None => source_index,
+                };
+                if std::mem::replace(&mut seen[index], true) {
+                    return Err(format!(
+                        "duplicate actor argument '{}'",
+                        params[index].name.name
+                    ));
+                }
+                Ok(index)
+            })
+            .collect()
+    }
+
     /// Execute an actor message (send or ask).
     ///
     /// `inner` is the expression after the `send`/`ask` keyword:
@@ -2990,10 +3015,13 @@ impl Interpreter {
             .find(|h| h.name.name == handler_name)
             .ok_or_else(|| format!("actor '{type_name}' has no handler '{handler_name}'"))?
             .clone();
-        let mut normalized_args = Vec::with_capacity(arg_values.len());
-        for (param, value) in handler.params.iter().zip(arg_values) {
+        let parameter_indices =
+            Self::actor_argument_parameters(call_args.unwrap_or(&[]), &handler.params)?;
+        let mut normalized_args = vec![Value::Nothing; handler.params.len()];
+        for (index, value) in parameter_indices.into_iter().zip(arg_values) {
+            let param = &handler.params[index];
             let param_ty = self.substitute_type_expr(&param.ty);
-            normalized_args.push(self.normalize_value_for_type(&param_ty, value)?);
+            normalized_args[index] = self.normalize_value_for_type(&param_ty, value)?;
         }
 
         // Execute handler body in a new scope with state + caps + params.
