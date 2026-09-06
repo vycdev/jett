@@ -291,12 +291,14 @@ fn folding_ranges_for_source(source: &str) -> Vec<FoldingRange> {
     let lexed = Lexer::new(source, jett_common::FileId::new(0)).tokenize();
     let mut starts = Vec::new();
     let mut ranges = Vec::new();
+    let mut previous_code_line = 0;
 
     for token in lexed.tokens {
         match token.kind {
             TokenKind::Indent => {
-                let child_line = lsp_position(source, token.span.start).line;
-                starts.push(child_line.saturating_sub(1));
+                // Blank and comment-only lines do not produce indentation
+                // tokens. Keep the actual header visible when folding.
+                starts.push(previous_code_line);
             }
             TokenKind::Dedent => {
                 let Some(start_line) = starts.pop() else {
@@ -321,7 +323,8 @@ fn folding_ranges_for_source(source: &str) -> Vec<FoldingRange> {
                     });
                 }
             }
-            _ => {}
+            TokenKind::Newline | TokenKind::Eof => {}
+            _ => previous_code_line = lsp_position(source, token.span.start).line,
         }
     }
 
@@ -903,6 +906,29 @@ mod tests {
                 .iter()
                 .all(|range| range.kind == Some(FoldingRangeKind::Region))
         );
+    }
+
+    #[test]
+    fn folding_ranges_keep_headers_before_comments_and_blank_lines() {
+        for newline in ["\n", "\r", "\r\n"] {
+            let source = [
+                "function main() returns int64:",
+                "",
+                "    # explanation",
+                "    if true:",
+                "        # nested explanation",
+                "",
+                "        return 1",
+                "    return 0",
+            ]
+            .join(newline);
+            let ranges = folding_ranges_for_source(&source);
+            let lines: Vec<_> = ranges
+                .iter()
+                .map(|range| (range.start_line, range.end_line))
+                .collect();
+            assert_eq!(lines, vec![(0, 7), (3, 6)], "{newline:?}");
+        }
     }
 
     #[test]
