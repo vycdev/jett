@@ -809,7 +809,9 @@ HIR structural validator. It lowers top-level `if`, `while`, exhaustive
 blocks with explicit branch, switch, goto, and return terminators. Its public
 MIR validator rejects noncanonical block IDs, out-of-range function entries,
 and invalid goto, branch, switch, or for-loop edges before later backends
-consume a graph. Handle-internal control flow and definitive ownership/drop
+consume a graph. Its CFG analysis exposes deduplicated successors, canonical
+predecessors, and reachable reverse postorder for deterministic backend
+dataflow passes. Handle-internal control flow and definitive ownership/drop
 elaboration remain subsequent MIR work.
 
 ### Purpose
