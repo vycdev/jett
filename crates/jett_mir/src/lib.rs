@@ -311,21 +311,32 @@ impl Builder {
     ) {
         let then_block = self.new_block();
         let else_block = self.new_block();
-        let join = self.new_block();
         self.terminate(Terminator::Branch {
             condition: condition.clone(),
             then_block,
             else_block,
         });
+
         self.current = then_block;
         self.lower_block(then_body);
-        self.close_to(join);
+        let then_exit = self.current;
+        let then_falls_through = self.open();
+
         self.current = else_block;
         if let Some(body) = else_body {
             self.lower_block(body);
         }
-        self.close_to(join);
-        self.current = join;
+        let else_exit = self.current;
+        let else_falls_through = self.open();
+
+        if then_falls_through || else_falls_through {
+            let join = self.new_block();
+            self.current = then_exit;
+            self.close_to(join);
+            self.current = else_exit;
+            self.close_to(join);
+            self.current = join;
+        }
     }
 
     fn lower_while(&mut self, condition: &Expression, body: &hir::Block) {
@@ -377,7 +388,6 @@ impl Builder {
     }
 
     fn lower_match(&mut self, scrutinee: &Expression, arms: &[hir::MatchArm]) {
-        let join = self.new_block();
         let arm_blocks = arms.iter().map(|_| self.new_block()).collect::<Vec<_>>();
         let mut variants = Vec::new();
         let mut otherwise = None;
@@ -393,18 +403,28 @@ impl Builder {
             variants,
             otherwise,
         });
+
+        let mut arm_exits = Vec::with_capacity(arms.len());
         for (arm, block) in arms.iter().zip(arm_blocks) {
             self.current = block;
             self.lower_block(&arm.body);
-            self.close_to(join);
+            arm_exits.push((self.current, self.open()));
         }
-        self.current = join;
+
+        if arm_exits.iter().any(|(_, falls_through)| *falls_through) {
+            let join = self.new_block();
+            for (exit, _) in arm_exits {
+                self.current = exit;
+                self.close_to(join);
+            }
+            self.current = join;
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
 
     use jett_common::{FileId, SourceOrigin};
 
@@ -436,6 +456,42 @@ mod tests {
         )
         .expect("HIR lowering");
         lower(&hir).expect("MIR lowering")
+    }
+
+    fn reachable_blocks(function: &Function) -> HashSet<BlockId> {
+        let mut reachable = HashSet::new();
+        let mut pending = vec![function.entry];
+        while let Some(block_id) = pending.pop() {
+            if !reachable.insert(block_id) {
+                continue;
+            }
+            let block = &function.blocks[block_id.index() as usize];
+            match &block.terminator {
+                Terminator::Goto(target) => pending.push(*target),
+                Terminator::Branch {
+                    then_block,
+                    else_block,
+                    ..
+                } => {
+                    pending.push(*then_block);
+                    pending.push(*else_block);
+                }
+                Terminator::Switch {
+                    variants,
+                    otherwise,
+                    ..
+                } => {
+                    pending.extend(variants.iter().map(|(_, target, _)| *target));
+                    pending.extend(otherwise.iter().copied());
+                }
+                Terminator::ForEach { body, exit, .. } => {
+                    pending.push(*body);
+                    pending.push(*exit);
+                }
+                Terminator::Return(_) | Terminator::Unreachable => {}
+            }
+        }
+        reachable
     }
 
     #[test]
@@ -644,5 +700,41 @@ function total(items: list[int64]) returns int64:
             Terminator::Goto(loop_header),
             "for-loop back edge should not repeat preheader statements"
         );
+    }
+
+    #[test]
+    fn terminating_if_branches_do_not_leave_an_unreachable_join() {
+        let program = lower_source(
+            r#"namespace app
+function choose(flag: bool) returns int64:
+    if flag:
+        return 1
+    else:
+        return 2
+"#,
+        );
+        let function = &program.functions[0];
+
+        assert_eq!(reachable_blocks(function).len(), function.blocks.len());
+    }
+
+    #[test]
+    fn terminating_match_arms_do_not_leave_an_unreachable_join() {
+        let program = lower_source(
+            r#"namespace app
+enum Choice:
+    first
+    second
+function choose(value: Choice) returns int64:
+    match value:
+        first:
+            return 1
+        second:
+            return 2
+"#,
+        );
+        let function = &program.functions[0];
+
+        assert_eq!(reachable_blocks(function).len(), function.blocks.len());
     }
 }
