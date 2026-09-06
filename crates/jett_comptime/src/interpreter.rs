@@ -10509,9 +10509,15 @@ fn float_midpoint(left: f64, right: f64) -> f64 {
 }
 
 fn float_average(values: &[f64]) -> f64 {
+    let sum = values.iter().sum::<f64>();
+    // Rescaling can underflow small residuals after large values cancel.
+    // Keep ordinary summation whenever it did not overflow.
+    if sum.is_finite() {
+        return sum / values.len() as f64;
+    }
     let scale = values.iter().map(|value| value.abs()).fold(0.0, f64::max);
     if scale == 0.0 || !scale.is_finite() {
-        return values.iter().sum::<f64>() / values.len() as f64;
+        return sum / values.len() as f64;
     }
 
     let scaled_sum = values.iter().map(|value| value / scale).sum::<f64>();

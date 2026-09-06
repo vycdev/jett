@@ -11,6 +11,15 @@ function average_finite_extremes_test() returns bool:
     return math.average(extremes) == maximum
 verify average_finite_extremes_test:
     assert average_finite_extremes_test()
+function average_preserves_small_residual_test() returns bool:
+    float64 maximum = float64.from_string("1.7976931348623157e308") handle error:
+        return false
+    float64 residual = float64.from_string("3e-200") handle error:
+        return false
+    list[float64] values = list(maximum, -maximum, residual)
+    return math.average(values) == residual / 3.0
+verify average_preserves_small_residual_test:
+    assert average_preserves_small_residual_test()
 function median_odd_test() returns float64:
     list[float64] nums = list(1.0, 2.0, 3.0, 4.0, 5.0)
     return math.median(nums)
