@@ -672,8 +672,14 @@ impl Validator<'_> {
                     self.expression(argument);
                 }
             }
-            ExpressionKind::ActorMessage { actor, args, .. } => {
+            ExpressionKind::ActorMessage {
+                actor,
+                args,
+                evaluation_order,
+                ..
+            } => {
                 self.expression(actor);
+                self.check_evaluation_order(evaluation_order, args.len(), expression.span);
                 for argument in args {
                     self.expression(argument);
                 }
@@ -3114,6 +3120,40 @@ function main() returns nothing:
         assert!(matches!(args[0].kind, ExpressionKind::Int(3)));
         assert!(matches!(args[1].kind, ExpressionKind::Int(4)));
         assert_eq!(evaluation_order, &[1, 0]);
+    }
+
+    #[test]
+    fn validator_rejects_invalid_actor_message_evaluation_orders() {
+        let mut program = lower_source(
+            r#"namespace app
+actor Counter:
+    receive update(first: int64, second: int64):
+        return nothing
+function main() returns nothing:
+    Counter counter = spawn Counter()
+    send counter.update(second: 4, first: 3)
+    return nothing
+"#,
+        );
+        for invalid_order in [vec![0, 0], vec![2, 0], vec![0], vec![]] {
+            let StatementKind::Expression(Expression {
+                kind:
+                    ExpressionKind::ActorMessage {
+                        evaluation_order, ..
+                    },
+                ..
+            }) = &mut program.functions[0].body.statements[1].kind
+            else {
+                panic!("expected actor message");
+            };
+            *evaluation_order = invalid_order;
+            let errors = validate(&program).expect_err("invalid actor evaluation order");
+            assert!(errors.iter().any(|error| {
+                error
+                    .message
+                    .contains("argument evaluation order must be a permutation")
+            }));
+        }
     }
 
     #[test]
