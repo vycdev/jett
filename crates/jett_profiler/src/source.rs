@@ -46,6 +46,7 @@ pub fn sanitize_source_excerpt(
     let mut chars = source.chars().peekable();
     let mut output = String::with_capacity(source.len().min(MAX_EXCERPT_BYTES));
     let mut redacted = false;
+    let mut truncated = false;
 
     while let Some(character) = chars.next() {
         if character == '#' {
@@ -59,39 +60,49 @@ pub fn sanitize_source_excerpt(
         if character == 'b' && chars.peek() == Some(&'"') {
             chars.next();
             consume_quoted_literal(&mut chars)?;
-            output.push_str(REDACTED_LITERAL);
+            push_bounded(&mut output, REDACTED_LITERAL, &mut truncated);
             redacted = true;
             continue;
         }
 
         if character == '"' {
             consume_quoted_literal(&mut chars)?;
-            output.push_str(REDACTED_LITERAL);
+            push_bounded(&mut output, REDACTED_LITERAL, &mut truncated);
             redacted = true;
             continue;
         }
 
         if character.is_control() {
-            push_escaped_control(&mut output, character);
+            let mut escaped = String::new();
+            push_escaped_control(&mut escaped, character);
+            push_bounded(&mut output, &escaped, &mut truncated);
             redacted = true;
         } else {
-            output.push(character);
+            let mut bytes = [0; 4];
+            push_bounded(
+                &mut output,
+                character.encode_utf8(&mut bytes),
+                &mut truncated,
+            );
         }
-    }
-
-    if output.len() > MAX_EXCERPT_BYTES {
-        let mut boundary = MAX_EXCERPT_BYTES;
-        while !output.is_char_boundary(boundary) {
-            boundary -= 1;
-        }
-        output.truncate(boundary);
-        redacted = true;
     }
 
     Some(SanitizedSourceExcerpt {
         code: output,
-        source_redacted: redacted,
+        source_redacted: redacted || truncated,
     })
+}
+
+fn push_bounded(output: &mut String, text: &str, truncated: &mut bool) {
+    if *truncated {
+        return;
+    }
+    let mut boundary = text.len().min(MAX_EXCERPT_BYTES - output.len());
+    while !text.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    output.push_str(&text[..boundary]);
+    *truncated = boundary != text.len();
 }
 
 fn consume_quoted_literal<I>(chars: &mut std::iter::Peekable<I>) -> Option<()>

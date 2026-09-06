@@ -95,3 +95,19 @@ fn escapes_controls_and_limits_output_at_a_utf8_boundary() {
     assert_eq!(limited.code.len(), 160);
     assert!(limited.source_redacted);
 }
+
+#[test]
+fn truncation_keeps_a_contiguous_prefix_and_still_validates_later_literals() {
+    let prefix = "a".repeat(159);
+    let excerpt =
+        sanitize_source_excerpt(&format!("{prefix}érest"), metadata(Some(false))).unwrap();
+    assert_eq!(excerpt.code, prefix);
+    assert!(excerpt.source_redacted);
+    assert_eq!(
+        sanitize_source_excerpt(
+            &format!("{}\"unterminated", "a".repeat(200)),
+            metadata(Some(false))
+        ),
+        None
+    );
+}
