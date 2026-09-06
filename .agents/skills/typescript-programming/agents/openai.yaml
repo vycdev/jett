@@ -1,0 +1,4 @@
+interface:
+  display_name: "TypeScript Programming"
+  short_description: "Strict TypeScript programming and repair"
+  default_prompt: "Use $typescript-programming to implement and verify this TypeScript program."

@@ -1,10 +1,10 @@
 {
-  "benchmark_version": "0.1.1-pilot",
-  "subset": "jett-v0.1",
+  "benchmark_version": "0.5.4-pilot",
+  "subset": "jett-v0.5.4",
   "model": "gpt-5.6-luna",
   "model_snapshot": null,
   "reasoning_efforts": ["low", "medium", "high"],
-  "tracks": ["zero_shot", "onboarding"],
+  "tracks": ["zero_shot", "onboarding", "skill_assisted"],
   "languages": ["jett", "python", "typescript", "go", "rust"],
   "repetitions": 3,
   "study_minimum_repetitions": 10,

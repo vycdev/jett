@@ -1,0 +1,8 @@
+namespace benchmark
+function first_duplicate(values: list[int64]) returns optional[int64]:
+    mutable set[int64] seen = set.new[int64]()
+    for value in values:
+        if set.contains[int64](view seen, value):
+            return some(value)
+        seen = set.add[int64](seen, value)
+    return none

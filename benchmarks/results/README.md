@@ -8,3 +8,53 @@ than silently replacing an existing artifact.
 Backends are separate experimental treatments. Do not pool Codex subscription,
 Responses API, or future local-model rows unless a protocol explicitly defines
 that comparison.
+
+The typed-domain follow-up is in
+`2026-08-30_codex_luna_medium_v0.2_calibration/`. It records 40 subscription
+cells plus a manual compliance audit that found one Go lifecycle grader false
+positive. Treat it as calibration evidence only; lifecycle task v1.0.0 is not
+suitable for a larger study.
+
+The ten-task calibration is in
+`2026-08-30_codex_luna_medium_v0.4_calibration/`. It records 100 subscription
+cells, an 80/100 static-check result, token and code-size totals, and three
+behaviorally correct Python rows rejected by a strict-checker style diagnostic.
+
+Its paired one-prompt repair pass is in
+`2026-08-30_codex_luna_medium_v0.4_compile_repair/`. Ten of the 20 initial
+failures were repaired, producing a 90/100 pass-after-repair result. All seven
+established-language failures were repaired; Jett repaired 3 of 13.
+
+The parity programming-skill calibration is in
+`2026-08-30_codex_luna_medium_v0.5_calibration/`. It records 150 subscription
+cells across zero-shot, onboarding, and skill-assisted tracks. Initial grading
+passed 116/150. The established-language skill track tied onboarding at 37/40,
+but Jett's skill track passed only 1/10 because its reference lacked a concrete
+mutable-local example and repeatedly induced invalid declaration syntax.
+
+Its paired repair pass is in
+`2026-08-30_codex_luna_medium_v0.5_compile_repair/`. Fifteen of 34 failures
+were repaired, producing a 131/150 final result. Jett ended at 14/30; the four
+established languages ended at 117/120.
+
+The corrected Jett-skill smoke run is in
+`2026-08-30_codex_luna_medium_v0.5.1_jett_skill_smoke/`. It passed 8/10 initial
+tasks, and the prior mutable-local failure pattern disappeared. Its paired
+repair pass is in
+`2026-08-30_codex_luna_medium_v0.5.1_jett_skill_smoke_compile_repair/`; neither
+of the two remaining parse failures repaired. Those findings produced the
+versioned v0.5.2 skill correction.
+
+The v0.5.2 follow-up is in
+`2026-08-30_codex_luna_medium_v0.5.2_jett_skill_smoke/`. It passed 6/10
+initial tasks; both failures targeted by v0.5.2 now passed. Its paired repair
+pass is in
+`2026-08-30_codex_luna_medium_v0.5.2_jett_skill_smoke_compile_repair/` and
+repaired all four failures, producing 10/10 pass-after-repair. The failures
+exposed map-membership and complexity-accounting gaps, producing v0.5.3.
+
+The controlled v0.5.3 Jett 2x2 comparison is in
+`2026-08-30_codex_luna_medium_v0.5.3_jett_2x2/`. Zero-shot passed 0/10
+one-shot and 1/10 after repair. Skill-assisted passed 9/10 one-shot and 9/10
+after repair. Its sole repair used reserved word `result` as an identifier,
+producing the v0.5.4 lexical clarification.

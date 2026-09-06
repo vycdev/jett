@@ -1,0 +1,76 @@
+{
+  "id": "recursive_expression",
+  "version": "1.0.0",
+  "title": "Recursive typed expression evaluator",
+  "statement": "Implement evaluate for the exact recursive expression and result types. literal returns its value; add evaluates both children and adds their values; negate negates its child; divide evaluates numerator and denominator and uses integer division truncated toward zero. Any division_by_zero from a nested child propagates. A successfully evaluated denominator of zero also returns division_by_zero.",
+  "constraints": [
+    "model expressions and outcomes with the exact declared closed types",
+    "handle every expression and result variant explicitly without catch-all or default branches",
+    "inputs never overflow int64 and never divide the minimum int64 value by -1",
+    "do not throw, panic, perform input/output, add tests, or suppress static diagnostics"
+  ],
+  "adapters": {
+    "jett": {
+      "signature": "namespace benchmark\n\nenum Expr:\n    literal(value: int64)\n    add(left: Expr, right: Expr)\n    divide(numerator: Expr, denominator: Expr)\n    negate(inner: Expr)\n\nenum EvalResult:\n    value(number: int64)\n    division_by_zero\n\nfunction evaluate(expression: Expr) returns EvalResult",
+      "baseline": "baseline.jett",
+      "hidden": "hidden.jett",
+      "candidate": "solution.jett",
+      "grade_mode": "append",
+      "commands": [["{jett}", "build", "{candidate}"], ["{jett}", "test", "{candidate}"]],
+      "forbidden_patterns": [{"pattern": "(?m)^\\s*(?:other|_)\\s*:", "message": "catch-all match arms are forbidden; handle every Jett enum variant explicitly"}]
+    },
+    "python": {
+      "signature": "from __future__ import annotations\nfrom dataclasses import dataclass\n\n@dataclass(frozen=True)\nclass Literal:\n    value: int\n@dataclass(frozen=True)\nclass Add:\n    left: Expr\n    right: Expr\n@dataclass(frozen=True)\nclass Divide:\n    numerator: Expr\n    denominator: Expr\n@dataclass(frozen=True)\nclass Negate:\n    inner: Expr\ntype Expr = Literal | Add | Divide | Negate\n@dataclass(frozen=True)\nclass ValueResult:\n    value: int\n@dataclass(frozen=True)\nclass DivisionByZero:\n    pass\ntype EvalResult = ValueResult | DivisionByZero\ndef evaluate(expression: Expr) -> EvalResult",
+      "baseline": "baseline.py",
+      "hidden": "hidden.py",
+      "support_files": ["pyrightconfig.json"],
+      "candidate": "solution.py",
+      "grade_mode": "separate",
+      "commands": [["{pyright}", "--project", "pyrightconfig.json"], ["python", "hidden.py"]],
+      "forbidden_patterns": [
+        {"pattern": "\\bAny\\b|#\\s*(?:type:\\s*ignore|pyright:\\s*ignore)|\\bcast\\s*\\(", "message": "Python type bypasses such as Any, casts, and ignored diagnostics are forbidden"},
+        {"pattern": "(?m)^\\s*case\\s+_\\s*:", "message": "catch-all match cases are forbidden; handle every Python union member explicitly"},
+        {"pattern": "\\braise\\b", "message": "raising exceptions is forbidden; return DivisionByZero"}
+      ]
+    },
+    "typescript": {
+      "signature": "export type Expr = { readonly kind: \"literal\"; readonly value: bigint } | { readonly kind: \"add\"; readonly left: Expr; readonly right: Expr } | { readonly kind: \"divide\"; readonly numerator: Expr; readonly denominator: Expr } | { readonly kind: \"negate\"; readonly inner: Expr };\nexport type EvalResult = { readonly kind: \"value\"; readonly value: bigint } | { readonly kind: \"division_by_zero\" };\nexport function evaluate(expression: Expr): EvalResult",
+      "baseline": "baseline.ts",
+      "hidden": "hidden.ts",
+      "candidate": "solution.ts",
+      "grade_mode": "separate",
+      "commands": [["npx", "tsc", "--strict", "--noImplicitReturns", "--noFallthroughCasesInSwitch", "--exactOptionalPropertyTypes", "--target", "ES2022", "--module", "NodeNext", "--moduleResolution", "NodeNext", "solution.ts", "hidden.ts", "--outDir", "out"], ["node", "out/hidden.js"]],
+      "forbidden_patterns": [
+        {"pattern": "\\bany\\b|@ts-(?:ignore|nocheck)|\\bas\\s+(?:const|[A-Za-z_$][A-Za-z0-9_$]*)\\b", "message": "TypeScript type bypasses such as any, suppressed diagnostics, and unchecked assertions are forbidden"},
+        {"pattern": "(?m)^\\s*default\\s*:", "message": "default switch branches are forbidden; handle every TypeScript union member explicitly"},
+        {"pattern": "\\bthrow\\b", "message": "throwing exceptions is forbidden; return division_by_zero"}
+      ]
+    },
+    "go": {
+      "signature": "package benchmark\n\ntype Expr interface{ isExpr() }\ntype Literal struct{ Value int64 }\ntype Add struct{ Left, Right Expr }\ntype Divide struct{ Numerator, Denominator Expr }\ntype Negate struct{ Inner Expr }\nfunc (Literal) isExpr() {}\nfunc (Add) isExpr() {}\nfunc (Divide) isExpr() {}\nfunc (Negate) isExpr() {}\ntype EvalResult interface{ isEvalResult() }\ntype ValueResult struct{ Value int64 }\ntype DivisionByZero struct{}\nfunc (ValueResult) isEvalResult() {}\nfunc (DivisionByZero) isEvalResult() {}\nfunc Evaluate(expression Expr) EvalResult",
+      "baseline": "baseline.go",
+      "hidden": "hidden_test.go",
+      "candidate": "solution.go",
+      "grade_mode": "separate",
+      "commands": [["go", "test", "-run", "^$", "solution.go", "hidden_test.go"], ["go", "test", "solution.go", "hidden_test.go"]],
+      "forbidden_patterns": [
+        {"pattern": "\\bany\\b|interface\\s*\\{\\s*\\}", "message": "Go type erasure through any or interface{} is forbidden"},
+        {"pattern": "(?m)^\\s*default\\s*:", "message": "default switch branches are forbidden; handle every Go concrete type explicitly"},
+        {"pattern": "\\bpanic\\s*\\(", "message": "panic is forbidden; return DivisionByZero"}
+      ]
+    },
+    "rust": {
+      "signature": "pub enum Expr { Literal(i64), Add(Box<Expr>, Box<Expr>), Divide(Box<Expr>, Box<Expr>), Negate(Box<Expr>) }\n#[derive(Debug, PartialEq, Eq)]\npub enum EvalResult { Value(i64), DivisionByZero }\npub fn evaluate(expression: Expr) -> EvalResult",
+      "baseline": "baseline.rs",
+      "hidden": "hidden.rs",
+      "candidate": "solution.rs",
+      "grade_mode": "separate",
+      "commands": [["rustc", "--edition=2024", "--test", "hidden.rs", "-o", "{executable}"], ["{executable}"]],
+      "forbidden_patterns": [
+        {"pattern": "\\bunsafe\\b|\\b(?:transmute|unreachable_unchecked)\\b", "message": "unsafe Rust and unchecked type escapes are forbidden"},
+        {"pattern": "_\\s*=>", "message": "wildcard match arms are forbidden; handle every Rust enum variant explicitly"},
+        {"pattern": "\\bpanic\\s*!", "message": "panic is forbidden; return DivisionByZero"}
+      ]
+    }
+  }
+}

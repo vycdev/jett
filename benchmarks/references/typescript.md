@@ -1,4 +1,4 @@
-# TypeScript pilot reference v0.2
+# TypeScript pilot reference v0.5
 
 ## Type-driven development in TypeScript
 
@@ -13,3 +13,19 @@ Use `bigint` and `n`-suffixed literals where the signature uses bigint; do not
 mix bigint and number arithmetic. Arrays may be read through indexing or
 `for...of`. Use `===`, `&&`, `||`, `%`, and explicit returns. Do not print,
 read input, add tests, or rename/remove the requested export.
+
+Model closed domains as discriminated unions with literal `kind` fields. A
+`switch (value.kind)` narrows the payload in each case. Handle every literal
+case and return directly; do not add `default`, use `any`, suppress a diagnostic,
+or erase the union through assertions. Strict checking and implicit-return
+checking run before hidden tests.
+
+Discriminated unions may be recursive. When starter source is supplied, return
+one complete replacement module and update every exhaustive switch affected by
+the requested union change.
+
+Use readonly object fields for requested record shapes, `Set<T>` for
+membership, and `Map<K, V>` internally when returning `ReadonlyMap<K, V>`.
+Express an optional as `T | null`. `BigInt(text)` can fail, so catch conversion
+failure and then check the int64 bounds and canonical decimal rendering when
+the task requires them.

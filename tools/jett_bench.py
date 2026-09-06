@@ -30,6 +30,14 @@ BENCHMARKS = ROOT / "benchmarks"
 DEFAULT_CONFIG = BENCHMARKS / "config" / "pilot.json"
 DEFAULT_TARGET = ROOT / "target" / "jett-bench"
 API_URL = "https://api.openai.com/v1/responses"
+SKILL_ROOT = ROOT / ".agents" / "skills"
+LANGUAGE_SKILLS = {
+    "jett": "jett-programming",
+    "python": "python-programming",
+    "typescript": "typescript-programming",
+    "go": "go-programming",
+    "rust": "rust-programming",
+}
 TYPE_DRIVEN_GUIDANCE = (
     "Use type-driven development: treat the required signature and types as design "
     "constraints, derive typed helper boundaries and state before implementation, preserve "
@@ -70,6 +78,28 @@ def load_tasks() -> list[tuple[Path, dict[str, Any]]]:
     for path in sorted((BENCHMARKS / "tasks").glob("*/task.json")):
         tasks.append((path.parent, read_json(path)))
     return tasks
+
+
+def skill_instruction_files(language: str) -> list[Path]:
+    skill_name = LANGUAGE_SKILLS.get(language)
+    if skill_name is None:
+        raise BenchmarkError(f"no programming skill configured for {language}")
+    directory = SKILL_ROOT / skill_name
+    return [
+        directory / "SKILL.md",
+        *sorted((directory / "references").rglob("*.md")),
+    ]
+
+
+def skill_bundle(language: str) -> str:
+    sections = []
+    for path in skill_instruction_files(language):
+        if not path.is_file():
+            raise BenchmarkError(f"missing skill instruction file: {path}")
+        relative = path.relative_to(SKILL_ROOT).as_posix()
+        content = path.read_text(encoding="utf-8").strip()
+        sections.append(f"## {relative}\n\n{content}")
+    return "\n\n".join(sections) + "\n"
 
 
 def validate(config_path: Path = DEFAULT_CONFIG) -> list[str]:
@@ -123,16 +153,72 @@ def validate(config_path: Path = DEFAULT_CONFIG) -> list[str]:
                 filename = adapter.get(filename_field)
                 if filename and not (directory / filename).is_file():
                     errors.append(f"{task_id}/{language}: missing file {filename}")
+            starter = adapter.get("starter")
+            if starter is not None and (
+                not isinstance(starter, str)
+                or Path(starter).name != starter
+                or not (directory / starter).is_file()
+            ):
+                errors.append(f"{task_id}/{language}: missing starter file {starter}")
+            support_files = adapter.get("support_files", [])
+            if not isinstance(support_files, list) or any(
+                not isinstance(filename, str) or not filename for filename in support_files
+            ):
+                errors.append(f"{task_id}/{language}: support_files must be filenames")
+            else:
+                for filename in support_files:
+                    if Path(filename).name != filename or not (directory / filename).is_file():
+                        errors.append(f"{task_id}/{language}: missing support file {filename}")
             if adapter.get("grade_mode") not in {"append", "separate"}:
                 errors.append(f"{task_id}/{language}: invalid grade_mode")
             commands = adapter.get("commands", [])
             if not commands or any(not isinstance(command, list) or not command for command in commands):
                 errors.append(f"{task_id}/{language}: commands must be non-empty argv arrays")
+            forbidden_patterns = adapter.get("forbidden_patterns", [])
+            if not isinstance(forbidden_patterns, list):
+                errors.append(f"{task_id}/{language}: forbidden_patterns must be a list")
+            else:
+                for policy in forbidden_patterns:
+                    if not isinstance(policy, dict) or set(policy) != {"pattern", "message"}:
+                        errors.append(
+                            f"{task_id}/{language}: forbidden pattern needs pattern and message"
+                        )
+                        continue
+                    if not isinstance(policy["message"], str) or not policy["message"]:
+                        errors.append(
+                            f"{task_id}/{language}: forbidden pattern message must be text"
+                        )
+                    try:
+                        re.compile(policy["pattern"])
+                    except (re.error, TypeError) as error:
+                        errors.append(
+                            f"{task_id}/{language}: invalid forbidden pattern: {error}"
+                        )
 
     for language in languages:
         reference = BENCHMARKS / "references" / f"{language}.md"
         if not reference.is_file():
             errors.append(f"missing onboarding reference: {reference}")
+        try:
+            bundle = skill_bundle(language)
+        except BenchmarkError as error:
+            errors.append(str(error))
+            continue
+        required_skill_sections = (
+            "## Workflow",
+            "## Boundary",
+            "## Verification loop",
+            "## Provenance",
+        )
+        for section in required_skill_sections:
+            if section not in bundle:
+                errors.append(f"{language} programming skill missing {section}")
+        lowered_bundle = bundle.lower()
+        for _, task in tasks:
+            if task["id"].lower() in lowered_bundle:
+                errors.append(f"{language} programming skill mentions benchmark task {task['id']}")
+        if "benchmarks/tasks" in lowered_bundle or "hidden grader source" in lowered_bundle:
+            errors.append(f"{language} programming skill contains evaluation-only material")
 
     for schema_name in ("result.schema.json", "task.schema.json"):
         schema = BENCHMARKS / "schemas" / schema_name
@@ -148,8 +234,9 @@ def validate(config_path: Path = DEFAULT_CONFIG) -> list[str]:
     allowed_efforts = {"low", "medium", "high"}
     if not set(config.get("reasoning_efforts", [])).issubset(allowed_efforts):
         errors.append("pilot reasoning efforts must be low, medium, or high")
-    if set(config.get("tracks", [])) != {"zero_shot", "onboarding"}:
-        errors.append("pilot must contain zero_shot and onboarding tracks")
+    required_tracks = {"zero_shot", "onboarding", "skill_assisted"}
+    if set(config.get("tracks", [])) != required_tracks:
+        errors.append("pilot must contain zero_shot, onboarding, and skill_assisted tracks")
     calibration = config.get("codex_subscription_calibration", {})
     if calibration.get("reasoning_effort") not in allowed_efforts:
         errors.append("Codex calibration reasoning effort must be low, medium, or high")
@@ -181,11 +268,29 @@ def render_prompt(task: dict[str, Any], language: str, track: str) -> tuple[str,
         f"Required declaration:\n```\n{adapter['signature']}\n```\n\n"
         f"Constraints:\n{constraint_text}"
     )
+    starter = adapter.get("starter")
+    if starter:
+        starter_source = (BENCHMARKS / "tasks" / task["id"] / starter).read_text(
+            encoding="utf-8"
+        )
+        prompt += (
+            "\n\nExisting source to update. It predates the requested change; return one "
+            "complete replacement file, not a patch:\n```\n"
+            + starter_source.rstrip()
+            + "\n```"
+        )
     if track == "onboarding":
         reference = (BENCHMARKS / "references" / f"{language}.md").read_text(encoding="utf-8")
         prompt += (
             f"\n\nDevelopment method for this track:\n{TYPE_DRIVEN_GUIDANCE}"
             f"\n\nLanguage reference for this track:\n\n{reference}"
+        )
+    elif track == "skill_assisted":
+        prompt += (
+            f"\n\nDevelopment method for this track:\n{TYPE_DRIVEN_GUIDANCE}"
+            "\n\nProgramming skill for this track. Treat these as reusable language and "
+            "workflow instructions, not task-specific hints:\n\n"
+            + skill_bundle(language)
         )
     elif track != "zero_shot":
         raise BenchmarkError(f"unknown track: {track}")
@@ -216,6 +321,7 @@ def planned_runs(config_path: Path = DEFAULT_CONFIG) -> Iterable[dict[str, Any]]
         range(1, config["repetitions"] + 1),
     ):
         instructions, prompt = render_prompt(task, language, track)
+        bundled_skill = skill_bundle(language) if track == "skill_assisted" else None
         run_id = f"{config['benchmark_version']}:{task['id']}:{task['version']}:{language}:{track}:{effort}:{repetition:02d}"
         yield {
             "run_id": run_id,
@@ -231,13 +337,34 @@ def planned_runs(config_path: Path = DEFAULT_CONFIG) -> Iterable[dict[str, Any]]
             "reasoning_effort": effort,
             "repetition": repetition,
             "repair_attempt": 0,
+            "evaluation_mode": "one_shot",
             "prompt_sha256": sha256_text(instructions + "\n" + prompt),
-            "reference_bytes": 0 if track == "zero_shot" else len(
-                (
-                    TYPE_DRIVEN_GUIDANCE
-                    + "\n"
-                    + (BENCHMARKS / "references" / f"{language}.md").read_text(encoding="utf-8")
-                ).encode("utf-8")
+            "starter_sha256": (
+                sha256_text(
+                    (BENCHMARKS / "tasks" / task["id"] / task["adapters"][language]["starter"])
+                    .read_text(encoding="utf-8")
+                )
+                if task["adapters"][language].get("starter")
+                else None
+            ),
+            "skill_sha256": sha256_text(bundled_skill) if bundled_skill else None,
+            "skill_bytes": len(bundled_skill.encode("utf-8")) if bundled_skill else 0,
+            "reference_bytes": (
+                0
+                if track == "zero_shot"
+                else len(
+                    (
+                        TYPE_DRIVEN_GUIDANCE
+                        + "\n"
+                        + (
+                            (BENCHMARKS / "references" / f"{language}.md").read_text(
+                                encoding="utf-8"
+                            )
+                            if track == "onboarding"
+                            else bundled_skill or ""
+                        )
+                    ).encode("utf-8")
+                )
             ),
             "git_revision": revision,
             "status": "planned",
@@ -272,13 +399,24 @@ def request_rows(config_path: Path = DEFAULT_CONFIG) -> Iterable[dict[str, Any]]
         yield {"run": run, "request": response_request(run, config)}
 
 
-def codex_calibration_runs(config_path: Path = DEFAULT_CONFIG) -> list[dict[str, Any]]:
+def codex_calibration_runs(
+    config_path: Path = DEFAULT_CONFIG,
+    *,
+    language: str | None = None,
+    track: str | None = None,
+) -> list[dict[str, Any]]:
     config = require_valid(config_path)
+    if language is not None and language not in config["languages"]:
+        raise BenchmarkError(f"unknown calibration language: {language}")
+    if track is not None and track not in config["tracks"]:
+        raise BenchmarkError(f"unknown calibration track: {track}")
     calibration = config["codex_subscription_calibration"]
     rows = [
         run for run in planned_runs(config_path)
         if run["reasoning_effort"] == calibration["reasoning_effort"]
         and run["repetition"] <= calibration["repetitions"]
+        and (language is None or run["language"] == language)
+        and (track is None or run["track"] == track)
     ]
     # A stable shuffled order reduces correlation between language and rolling-alias drift.
     rows.sort(key=lambda run: sha256_text("codex-calibration-order:" + run["run_id"]))
@@ -358,6 +496,31 @@ def jett_executable() -> Path:
     raise BenchmarkError("Jett executable not found; run `cargo build -q -p jett_cli` first")
 
 
+def pyright_executable() -> Path:
+    configured = os.environ.get("JETT_BENCH_PYRIGHT")
+    executable_name = "pyright.cmd" if os.name == "nt" else "pyright"
+    candidates = [
+        Path(configured) if configured else None,
+        DEFAULT_TARGET / "tooling" / "node_modules" / ".bin" / executable_name,
+    ]
+    installed = shutil.which("pyright")
+    if installed:
+        candidates.append(Path(installed))
+    for candidate in candidates:
+        if candidate and candidate.is_file():
+            return candidate.resolve()
+    raise BenchmarkError(
+        "Pyright executable not found; install pyright@1.1.405 or set JETT_BENCH_PYRIGHT"
+    )
+
+
+def source_policy_diagnostic(adapter: dict[str, Any], source: str) -> str | None:
+    for policy in adapter.get("forbidden_patterns", []):
+        if re.search(policy["pattern"], source):
+            return policy["message"]
+    return None
+
+
 def grade_source(
     task_directory: Path,
     task: dict[str, Any],
@@ -366,6 +529,16 @@ def grade_source(
     timeout_seconds: int,
 ) -> dict[str, Any]:
     adapter = task["adapters"][language]
+    policy_diagnostic = source_policy_diagnostic(adapter, source)
+    if policy_diagnostic is not None:
+        return {
+            "status": "policy_error",
+            "passed": False,
+            "compile_succeeded": None,
+            "grader_runtime_ms": 0.0,
+            "diagnostic": policy_diagnostic,
+            "command_logs": [],
+        }
     temp_root = DEFAULT_TARGET / "tmp"
     temp_root.mkdir(parents=True, exist_ok=True)
     started = time.perf_counter()
@@ -378,6 +551,8 @@ def grade_source(
         else:
             candidate.write_text(source, encoding="utf-8", newline="\n")
             shutil.copy2(task_directory / adapter["hidden"], work / adapter["hidden"])
+        for support_file in adapter.get("support_files", []):
+            shutil.copy2(task_directory / support_file, work / support_file)
 
         executable = work / ("hidden_test.exe" if os.name == "nt" else "hidden_test")
         replacements = {
@@ -387,6 +562,8 @@ def grade_source(
         }
         if any("{jett}" in command for command in adapter["commands"]):
             replacements["{jett}"] = str(jett_executable())
+        if any("{pyright}" in command for command in adapter["commands"]):
+            replacements["{pyright}"] = str(pyright_executable())
         logs = []
         compile_succeeded: bool | None = None
         for index, template in enumerate(adapter["commands"]):
@@ -404,8 +581,13 @@ def grade_source(
                     command[1:1] = ["-C", "linker=lld-link"]
                 if libraries:
                     process_environment["LIB"] = libraries
-            if os.name == "nt" and command[0] in {"npx", "tsc"}:
+            if os.name == "nt" and (
+                command[0] in {"npx", "tsc", "pyright"}
+                or command[0].lower().endswith((".cmd", ".bat"))
+            ):
                 wrapper = shutil.which(command[0]) or shutil.which(command[0] + ".cmd")
+                if wrapper is None and Path(command[0]).is_file():
+                    wrapper = command[0]
                 if wrapper and wrapper.lower().endswith((".cmd", ".bat")):
                     command = [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/c", wrapper, *command[1:]]
             command_cwd = ROOT if command[0] == "cargo" else work
@@ -477,11 +659,20 @@ def toolchain_versions() -> dict[str, str | None]:
         "go": ["go", "version"],
         "rust": ["rustc", "--version"],
     }
+    try:
+        commands["pyright"] = [str(pyright_executable()), "--version"]
+    except BenchmarkError:
+        commands["pyright"] = ["pyright", "--version"]
     versions: dict[str, str | None] = {"platform": platform.platform()}
     for name, command in commands.items():
         try:
-            if os.name == "nt" and command[0] in {"npx", "tsc"}:
+            if os.name == "nt" and (
+                command[0] in {"npx", "tsc", "pyright"}
+                or command[0].lower().endswith((".cmd", ".bat"))
+            ):
                 wrapper = shutil.which(command[0]) or shutil.which(command[0] + ".cmd")
+                if wrapper is None and Path(command[0]).is_file():
+                    wrapper = command[0]
                 if wrapper and wrapper.lower().endswith((".cmd", ".bat")):
                     command = [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/c", wrapper, *command[1:]]
             result = subprocess.run(
@@ -607,7 +798,7 @@ def repair_envelope(
     run = dict(original["run"])
     parent_run_id = run["run_id"]
     source = prior_result.get("extracted_source", prior_result.get("raw_output", ""))
-    if prior_result.get("status") == "compile_error":
+    if prior_result.get("status") in {"compile_error", "policy_error"}:
         feedback = "The source did not compile against the required declaration. Re-check syntax, types, exports, and language-specific policy."
     elif prior_result.get("status") == "extraction_error":
         feedback = "The response was not one complete source file. Return only one complete source file."
@@ -616,6 +807,7 @@ def repair_envelope(
     run["run_id"] = f"{parent_run_id}:repair{attempt:02d}"
     run["parent_run_id"] = parent_run_id
     run["repair_attempt"] = attempt
+    run["evaluation_mode"] = "compile_repair"
     run["prompt"] = (
         original["run"]["prompt"]
         + "\n\nRepair attempt. Here is your previous source:\n```\n"
@@ -625,6 +817,98 @@ def repair_envelope(
     )
     run["prompt_sha256"] = sha256_text(run["instructions"] + "\n" + run["prompt"])
     return {"run": run, "request": response_request(run, config)}
+
+
+PRIVATE_DIAGNOSTIC_FILE = re.compile(
+    r"(?i)(?:^|[\\/])(?:hidden(?:_test)?|grader)(?:\.[a-z0-9]+)?(?:$|[:\\/])"
+)
+
+
+def repair_feedback(prior_result: dict[str, Any]) -> tuple[str, str]:
+    """Return bounded public feedback without leaking hidden grader details."""
+    status = prior_result.get("status")
+    diagnostic = str(prior_result.get("diagnostic") or "").strip()
+    source = prior_result.get("extracted_source")
+    source_line_count = len(str(source).splitlines()) if source else 0
+    diagnostic_lines = [
+        int(value)
+        for value in re.findall(r"solution\.[A-Za-z0-9]+(?:\(|:)(\d+)", diagnostic)
+    ]
+    appended_private_line = (
+        not source_line_count
+        or not diagnostic_lines
+        or any(line > source_line_count for line in diagnostic_lines)
+    )
+    if (
+        status == "compile_error"
+        and diagnostic
+        and not PRIVATE_DIAGNOSTIC_FILE.search(diagnostic)
+        and not appended_private_line
+    ):
+        diagnostic = re.sub(
+            r"(?:[A-Za-z]:)?[/\\][^\n:]*?[/\\]solution(?=\.[A-Za-z0-9]+)",
+            "solution",
+            diagnostic,
+        )
+        return "compiler_diagnostic", diagnostic[-8000:]
+    if status == "policy_error" and diagnostic:
+        return "public_policy", diagnostic[-8000:]
+    if status == "extraction_error":
+        return "response_format", (
+            "The response was not one complete source file. Return only one complete "
+            "revised source file."
+        )
+    if status == "compile_error":
+        return "normalized_compile", (
+            "The source did not compile against the required declaration. Re-check syntax, "
+            "types, exports, and language-specific policy."
+        )
+    return "private_test_summary", (
+        "The source compiled but failed private tests. Re-check every public requirement, "
+        "boundary case, and exact output spelling."
+    )
+
+
+def codex_repair_run(original_run: dict[str, Any], prior_result: dict[str, Any]) -> dict[str, Any]:
+    run = dict(original_run)
+    parent_run_id = prior_result["run_id"]
+    source = prior_result.get("extracted_source", prior_result.get("raw_output", ""))
+    feedback_kind, feedback = repair_feedback(prior_result)
+    run["run_id"] = f"{parent_run_id}:repair01"
+    run["parent_run_id"] = parent_run_id
+    run["parent_response_id"] = prior_result.get("response_id")
+    run["repair_attempt"] = 1
+    run["evaluation_mode"] = "compile_repair"
+    run["repair_feedback_kind"] = feedback_kind
+    run["prompt"] = (
+        original_run["prompt"]
+        + "\n\nThis is the single compile-and-repair prompt. Your previous submission was:\n```\n"
+        + str(source).strip()
+        + "\n```\n\nFeedback from the isolated grader:\n"
+        + feedback
+        + "\n\nReturn one complete revised source file only."
+    )
+    run["prompt_sha256"] = sha256_text(run["instructions"] + "\n" + run["prompt"])
+    return run
+
+
+def codex_repair_runs(input_path: Path, config_path: Path = DEFAULT_CONFIG) -> list[dict[str, Any]]:
+    planned = {run["run_id"]: run for run in planned_runs(config_path)}
+    repairs = []
+    with input_path.open(encoding="utf-8") as source:
+        for line in source:
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            if row.get("repair_attempt", 0) != 0 or row.get("passed"):
+                continue
+            if row.get("status") in {"planned", "generated", "api_error", "backend_error", "harness_error"}:
+                continue
+            original = planned.get(row.get("run_id"))
+            if original is None:
+                raise BenchmarkError(f"cannot match repair row to current plan: {row.get('run_id')}")
+            repairs.append(codex_repair_run(original, row))
+    return repairs
 
 
 def call_responses_api(body: dict[str, Any], api_key: str, timeout: int = 300) -> tuple[dict[str, Any], float]:
@@ -865,6 +1149,47 @@ def rollup_rows(rows: list[dict[str, Any]], dimensions: tuple[str, ...]) -> list
     return summaries
 
 
+def paired_repair_rollups(
+    initial_rows: list[dict[str, Any]],
+    repair_rows: list[dict[str, Any]],
+    dimensions: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    repairs_by_parent = {
+        row.get("parent_run_id"): row
+        for row in repair_rows
+        if row.get("parent_run_id")
+    }
+    groups: dict[tuple[Any, ...], list[dict[str, Any]]] = defaultdict(list)
+    for row in initial_rows:
+        groups[tuple(row.get(dimension) for dimension in dimensions)].append(row)
+    summaries = []
+    for key, group in sorted(groups.items()):
+        attempted = [
+            repairs_by_parent[row.get("run_id")]
+            for row in group
+            if row.get("run_id") in repairs_by_parent
+        ]
+        initial_passed = sum(bool(row.get("passed")) for row in group)
+        repaired = sum(bool(row.get("passed")) for row in attempted)
+        summary = {dimension: value for dimension, value in zip(dimensions, key)}
+        summary.update({
+            "initial_n": len(group),
+            "initial_passed": initial_passed,
+            "initial_pass_rate": initial_passed / len(group),
+            "repair_attempted": len(attempted),
+            "repair_passed": repaired,
+            "repair_success_rate": repaired / len(attempted) if attempted else None,
+            "final_passed": initial_passed + repaired,
+            "pass_after_repair_rate": (initial_passed + repaired) / len(group),
+            "total_initial_input_tokens": sum(row.get("input_tokens") or 0 for row in group),
+            "total_repair_input_tokens": sum(row.get("input_tokens") or 0 for row in attempted),
+            "total_initial_output_tokens": sum(row.get("output_tokens") or 0 for row in group),
+            "total_repair_output_tokens": sum(row.get("output_tokens") or 0 for row in attempted),
+        })
+        summaries.append(summary)
+    return summaries
+
+
 def aggregate(paths: list[Path]) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     for path in paths:
@@ -910,11 +1235,26 @@ def aggregate(paths: list[Path]) -> dict[str, Any]:
             "mean_source_lines": mean_present(group, "source_lines"),
             "mean_complexity_proxy": mean_present(group, "complexity_proxy"),
         })
+    paired_rollups = {}
+    if repair_rows:
+        paired_rollups = {
+            "overall": paired_repair_rollups(analysis_rows, repair_rows, ("backend",)),
+            "by_track": paired_repair_rollups(
+                analysis_rows, repair_rows, ("backend", "track")
+            ),
+            "by_language": paired_repair_rollups(
+                analysis_rows, repair_rows, ("backend", "language")
+            ),
+            "by_language_track": paired_repair_rollups(
+                analysis_rows, repair_rows, ("backend", "language", "track")
+            ),
+        }
     return {
         "row_count": len(rows),
         "initial_row_count": sum(row.get("repair_attempt", 0) == 0 for row in rows),
         "repair_row_count": len(repair_rows),
         "repair_pass_count": sum(bool(row.get("passed")) for row in repair_rows),
+        "paired_repair_rollups": paired_rollups,
         "group_count": len(summaries),
         "groups": summaries,
         "rollups": {
@@ -961,8 +1301,22 @@ def parse_args() -> argparse.Namespace:
         "--event-dir", type=Path, default=DEFAULT_TARGET / "codex-calibration" / "events"
     )
     codex_parser.add_argument("--limit", type=int, default=30)
+    codex_parser.add_argument("--language")
+    codex_parser.add_argument("--track")
     codex_parser.add_argument("--confirm-subscription-usage", action="store_true")
     codex_parser.add_argument("--resume", action="store_true")
+
+    repair_parser = subparsers.add_parser("codex-repair")
+    repair_parser.add_argument("input", type=Path)
+    repair_parser.add_argument(
+        "--output", type=Path, default=DEFAULT_TARGET / "codex-repair" / "raw.jsonl"
+    )
+    repair_parser.add_argument(
+        "--event-dir", type=Path, default=DEFAULT_TARGET / "codex-repair" / "events"
+    )
+    repair_parser.add_argument("--limit", type=int)
+    repair_parser.add_argument("--confirm-subscription-usage", action="store_true")
+    repair_parser.add_argument("--resume", action="store_true")
 
     grade_parser = subparsers.add_parser("grade-results")
     grade_parser.add_argument("input", type=Path)
@@ -1071,7 +1425,10 @@ def main() -> int:
                         json.loads(line)["run_id"] for line in existing if line.strip()
                     }
             backend = codex_backend_info()
-            selected = codex_calibration_runs(args.config)[:args.limit]
+            selected = codex_calibration_runs(
+                args.config, language=args.language, track=args.track
+            )[:args.limit]
+            selected_count = len(selected)
             completed = 0
             failures = 0
             for run in selected:
@@ -1101,13 +1458,78 @@ def main() -> int:
                 append_jsonl(args.output, result)
                 completed += 1
                 print(
-                    f"[{run['sequence']:02d}/30] {run['task_id']}/{run['language']}/"
+                    f"[{run['sequence']:02d}/{selected_count}] {run['task_id']}/{run['language']}/"
                     f"{run['track']}: {result['status']}",
                     flush=True,
                 )
             print(
                 f"appended {completed} Codex subscription results to {args.output}; "
                 "no API key was used",
+                flush=True,
+            )
+            return 1 if failures else 0
+
+        if args.command == "codex-repair":
+            config = require_valid(args.config)
+            if not args.confirm_subscription_usage:
+                raise BenchmarkError(
+                    "Codex subscription execution requires --confirm-subscription-usage"
+                )
+            if args.input.resolve() == args.output.resolve():
+                raise BenchmarkError("codex-repair input and output must differ")
+            existing_ids: set[str] = set()
+            if args.output.exists():
+                if not args.resume:
+                    raise BenchmarkError(
+                        f"output already exists: {args.output}; use --resume or a new path"
+                    )
+                with args.output.open(encoding="utf-8") as existing:
+                    existing_ids = {
+                        json.loads(line)["run_id"] for line in existing if line.strip()
+                    }
+            backend = codex_backend_info()
+            selected = codex_repair_runs(args.input, args.config)
+            if args.limit is not None:
+                selected = selected[:args.limit]
+            completed = 0
+            failures = 0
+            for sequence, run in enumerate(selected, start=1):
+                if run["run_id"] in existing_ids:
+                    continue
+                try:
+                    output, metrics, latency, event_path = call_codex_subscription(
+                        run, backend, args.event_dir
+                    )
+                    result = result_from_codex_subscription(
+                        run, backend, output, metrics, latency, event_path
+                    )
+                except BenchmarkError as error:
+                    result = {
+                        **{
+                            key: value
+                            for key, value in run.items()
+                            if key not in {"instructions", "prompt"}
+                        },
+                        "backend": "codex_subscription",
+                        "model_snapshot": None,
+                        "model_alias_is_rolling": True,
+                        "codex_cli_version": backend["version"],
+                        "subscription_login": backend["login"],
+                        "completed_at_utc": datetime.now(timezone.utc).isoformat(),
+                        "status": "backend_error",
+                        "passed": False,
+                        "diagnostic": str(error),
+                    }
+                    failures += 1
+                append_jsonl(args.output, result)
+                completed += 1
+                print(
+                    f"[{sequence:02d}/{len(selected)}] {run['task_id']}/{run['language']}/"
+                    f"{run['track']}/compile_repair: {result['status']}",
+                    flush=True,
+                )
+            print(
+                f"appended {completed} Codex repair results to {args.output}; no API key was used",
                 flush=True,
             )
             return 1 if failures else 0

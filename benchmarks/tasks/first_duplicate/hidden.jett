@@ -1,0 +1,11 @@
+function duplicate_label(values: list[int64]) returns string:
+    int64 value = first_duplicate(values) handle:
+        return "none"
+    return "some:{value}"
+verify first_duplicate_hidden:
+    assert duplicate_label(list()) == "none"
+    assert duplicate_label(list(7)) == "none"
+    assert duplicate_label(list(2, 1, 3, 1, 2)) == "some:1"
+    assert duplicate_label(list(4, 4, 5, 5)) == "some:4"
+    assert duplicate_label(list(-2, 0, -2)) == "some:-2"
+    assert duplicate_label(list(0, 1, 0, 1)) == "some:0"

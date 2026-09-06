@@ -1,0 +1,69 @@
+{
+  "benchmark_version": "0.5.1-pilot",
+  "run_kind": "codex-subscription-jett-skill-smoke-repair",
+  "parent_run": "../2026-08-30_codex_luna_medium_v0.5.1_jett_skill_smoke",
+  "generated_at_utc": {
+    "first": "2026-08-30T17:38:20.891636+00:00",
+    "last": "2026-08-30T17:38:36.816644+00:00"
+  },
+  "backend": "codex_subscription",
+  "authentication": "ChatGPT subscription",
+  "api_key_present": false,
+  "model": "gpt-5.6-luna",
+  "model_snapshot": null,
+  "model_alias_is_rolling": true,
+  "codex_cli_version": "codex-cli 0.145.0",
+  "reasoning_effort": "medium",
+  "evaluation_mode": "compile_repair",
+  "repair_attempts_per_failed_initial": 1,
+  "eligible_initial_failures": 2,
+  "row_count": 2,
+  "unique_response_ids": 2,
+  "feedback_kinds": {"compiler_diagnostic": 2},
+  "prompt_git_revision": "78999f08d8a1b07e3cfdfffaf7e2a4443c066ff6",
+  "generation_isolation": {
+    "ephemeral_sessions": true,
+    "empty_temporary_working_directory": true,
+    "user_config_ignored": true,
+    "project_rules_ignored": true,
+    "sandbox": "read-only",
+    "tools_forbidden_by_prompt": true,
+    "observed_tool_calls": 0
+  },
+  "grading_isolation": {
+    "container_image": "jett-bench:0.5.1",
+    "container_image_sha256": "7c9cadd0acf4d029eb249be5a3343483c68654501bec4ce7179f39d23e8a674f",
+    "network": "none",
+    "memory_limit": "2g",
+    "cpu_limit": 2,
+    "pid_limit": 256,
+    "capabilities": "all dropped",
+    "no_new_privileges": true
+  },
+  "usage": {
+    "input_tokens": 31139,
+    "cached_input_tokens": 20992,
+    "output_tokens": 1282,
+    "reasoning_tokens": 644,
+    "extracted_code_bytes": 2896,
+    "extracted_code_lines": 74,
+    "model_latency_ms": 28743.76169993775,
+    "estimated_api_cost_usd": null,
+    "subscription_allowance_consumed": true
+  },
+  "grading": {
+    "repair_passed": 0,
+    "repair_compile_errors": 2,
+    "grader_runtime_ms": 147.28173197363503
+  },
+  "paired_outcome": {
+    "initial_passed": 8,
+    "repair_passed": 0,
+    "final_passed": 8,
+    "total_initial_rows": 10
+  },
+  "artifacts": {
+    "results": {"path": "results.jsonl", "sha256": "2caffebbf84c12c656ceac4dacfcf70402bd72c7261407443560986f08d17e7b"},
+    "summary": {"path": "summary.json", "sha256": "92b0c10730e2565cc1a3d5e6fc5f2ba6b8499ea850a89d6323f23ac0b2ee4e26"}
+  }
+}

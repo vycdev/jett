@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://jett.dev/schemas/benchmark-task-v0.1.json",
+  "$id": "https://jett.dev/schemas/benchmark-task-v0.4.json",
   "title": "Jett LLM benchmark task",
   "type": "object",
   "required": ["id", "version", "title", "statement", "constraints", "adapters"],
@@ -25,6 +25,25 @@
             "type": "array",
             "minItems": 1,
             "items": {"type": "array", "minItems": 1, "items": {"type": "string"}}
+          },
+          "forbidden_patterns": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["pattern", "message"],
+              "properties": {
+                "pattern": {"type": "string"},
+                "message": {"type": "string"}
+              },
+              "additionalProperties": false
+            }
+          },
+          "support_files": {
+            "type": "array",
+            "items": {"type": "string"}
+          },
+          "starter": {
+            "type": "string"
           }
         },
         "additionalProperties": false

@@ -1,0 +1,21 @@
+namespace benchmark
+enum AccountState:
+    active
+    locked(failed_attempts: int64)
+    closed
+function can_sign_in(state: AccountState) returns bool:
+    match state:
+        active:
+            return true
+        locked(failed_attempts):
+            return false
+        closed:
+            return false
+function status_label(state: AccountState) returns string:
+    match state:
+        active:
+            return "active"
+        locked(failed_attempts):
+            return "locked:{failed_attempts}"
+        closed:
+            return "closed"
