@@ -137,6 +137,7 @@
 | LSP go-to-definition | Done |
 | LSP find references | Done (current document, with optional declaration inclusion) |
 | LSP completions | Done |
+| LSP signature help | Done (source-defined and standard-library calls from the latest in-memory document, with nested-call active-parameter tracking) |
 | LSP document symbols | Done (top-level file outline from the latest in-memory document, with declaration kinds, signatures, and UTF-16 ranges) |
 | MCP server | Not started; initial transport, tool/resource, and ASP handoff boundary tracked by [#37](https://github.com/vycdev/jett/issues/37) |
 | ASP query system | Partial (`jett query --agent --namespaces`, `--symbols`, `--type-at`, `--definition-at`, `--references-at`, prefix-filtered `--complete-at`, and `--signature` are implemented; namespace, type, symbol, definition, reference, and completion rows include source ranges; file-symbol parse failures, type-at parse/resolution/type-check failures, and definition-at/references-at parse/resolution failures with known source context preserve structured diagnostics and cross-file labels; completion rows also include deterministic rank, match kind, namespace, visibility, and source-level signatures where available) |
