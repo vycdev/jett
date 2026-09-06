@@ -71,3 +71,40 @@ fn profile_options_enforce_the_contract_at_the_cli_boundary() {
         );
     }
 }
+
+#[test]
+fn agent_profile_setup_failure_uses_the_run_error_envelope() {
+    let output = run_profile(&["--profile", "--agent"]);
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.starts_with("status: error\n"), "{stdout}");
+    assert!(
+        stdout.contains("error: profiler: backend unsupported\n"),
+        "{stdout}"
+    );
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn invalid_source_takes_precedence_over_profiler_setup() {
+    let missing = workspace_fixture("tests/missing-profile-source.jett");
+    for agent in [false, true] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_jett"));
+        command.arg("run").arg(&missing).arg("--profile");
+        if agent {
+            command.arg("--agent");
+        }
+        let output = command.output().unwrap();
+        assert!(!output.status.success());
+        let report = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            !report.contains("profiler: backend unsupported"),
+            "{report}"
+        );
+        assert!(report.contains("missing-profile-source.jett"), "{report}");
+    }
+}

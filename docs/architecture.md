@@ -1952,8 +1952,8 @@ safe events and exclude collector metadata.
 The CLI parses decimal thresholds into exact integer basis points, enforces
 mode-specific rates and bounded limits, and materializes one backend-neutral
 `ProfileRequest`. Until a runtime advertises the required collector capability,
-that request fails setup before the program executes rather than silently
-running without a profile.
+that request validates the source and then fails setup before the program
+executes. Agent launches report setup failures through the run-error envelope.
 
 ### CPU Profiling
 

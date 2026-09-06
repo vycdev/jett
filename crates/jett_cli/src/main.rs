@@ -318,7 +318,39 @@ fn main() {
                 }
             };
             if profile_request.is_some() {
-                eprintln!("profiler: backend unsupported");
+                let result = jett_driver::build_file(Path::new(&file));
+                if result.has_errors {
+                    if agent {
+                        print!(
+                            "{}",
+                            jett_diagnostics::toon::render_toon(
+                                &result.diagnostics,
+                                &result.source,
+                                &result.file_path
+                            )
+                        );
+                    } else {
+                        for diagnostic in &result.diagnostics {
+                            eprint!(
+                                "{}",
+                                jett_diagnostics::render::render_diagnostic(
+                                    diagnostic,
+                                    &result.source,
+                                    &result.file_path
+                                )
+                            );
+                        }
+                    }
+                    process::exit(1);
+                }
+                if agent {
+                    print!(
+                        "{}",
+                        render_run_agent_error(&file, "profiler: backend unsupported")
+                    );
+                } else {
+                    eprintln!("profiler: backend unsupported");
+                }
                 process::exit(1);
             }
             let path = Path::new(&file);
