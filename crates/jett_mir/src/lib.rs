@@ -1,5 +1,9 @@
 //! Jett's backend-neutral control-flow graph representation.
 
+mod analysis;
+
+pub use analysis::{AnalysisError, ControlFlowGraph};
+
 use jett_common::Span;
 use jett_hir::{self as hir, Expression, FunctionIdentity, LocalId, VariantId};
 use jett_types::TypeId;
@@ -96,6 +100,81 @@ pub enum TerminatorKind {
 pub struct LowerError {
     pub span: Span,
     pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidationError {
+    pub span: Span,
+    pub message: String,
+}
+
+/// Validate structural MIR invariants before a backend consumes the program.
+pub fn validate(program: &Program) -> Result<(), Vec<ValidationError>> {
+    let mut errors = Vec::new();
+    for function in &program.functions {
+        if function.entry.index() as usize >= function.blocks.len() {
+            errors.push(ValidationError {
+                span: function.span,
+                message: format!(
+                    "function entry block {} is out of range",
+                    function.entry.index()
+                ),
+            });
+        }
+        for (index, block) in function.blocks.iter().enumerate() {
+            if block.id.index() as usize != index {
+                errors.push(ValidationError {
+                    span: function.span,
+                    message: format!(
+                        "block at index {index} has noncanonical ID {}",
+                        block.id.index()
+                    ),
+                });
+            }
+            let block_count = function.blocks.len();
+            let mut check_target = |target: BlockId, edge: &str| {
+                if target.index() as usize >= block_count {
+                    errors.push(ValidationError {
+                        span: function.span,
+                        message: format!("{edge} target {} is out of range", target.index()),
+                    });
+                }
+            };
+            match &block.terminator.kind {
+                TerminatorKind::Goto(target) => check_target(*target, "goto"),
+                TerminatorKind::Branch {
+                    then_block,
+                    else_block,
+                    ..
+                } => {
+                    check_target(*then_block, "branch then");
+                    check_target(*else_block, "branch else");
+                }
+                TerminatorKind::Switch {
+                    variants,
+                    otherwise,
+                    ..
+                } => {
+                    for (variant, target, _) in variants {
+                        check_target(*target, &format!("switch variant {}", variant.index()));
+                    }
+                    if let Some(target) = otherwise {
+                        check_target(*target, "switch otherwise");
+                    }
+                }
+                TerminatorKind::ForEach { body, exit, .. } => {
+                    check_target(*body, "for body");
+                    check_target(*exit, "for exit");
+                }
+                TerminatorKind::Return(_) | TerminatorKind::Unreachable => {}
+            }
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
 }
 
 pub fn lower(program: &hir::Program) -> Result<Program, Vec<LowerError>> {
@@ -273,7 +352,6 @@ impl Builder {
         let then_block = self.new_block(then_body.span);
         let else_span = else_body.map_or(statement_span, |body| body.span);
         let else_block = self.new_block(else_span);
-        let join = self.new_block(statement_span);
         self.terminate(
             TerminatorKind::Branch {
                 condition: condition.clone(),
@@ -284,13 +362,23 @@ impl Builder {
         );
         self.current = then_block;
         self.lower_block(then_body);
-        self.close_to(join, then_body.span);
+        let then_exit = self.current;
+        let then_falls_through = self.open();
         self.current = else_block;
         if let Some(body) = else_body {
             self.lower_block(body);
         }
-        self.close_to(join, else_span);
-        self.current = join;
+        let else_exit = self.current;
+        let else_falls_through = self.open();
+
+        if then_falls_through || else_falls_through {
+            let join = self.new_block(statement_span);
+            self.current = then_exit;
+            self.close_to(join, then_body.span);
+            self.current = else_exit;
+            self.close_to(join, else_span);
+            self.current = join;
+        }
     }
 
     fn lower_while(&mut self, condition: &Expression, body: &hir::Block, statement_span: Span) {
@@ -324,9 +412,11 @@ impl Builder {
         body: &hir::Block,
         statement_span: Span,
     ) {
-        let header = self.current;
+        let header = self.new_block(iterable.span);
         let body_block = self.new_block(body.span);
         let exit = self.new_block(statement_span);
+        self.terminate(TerminatorKind::Goto(header), statement_span);
+        self.current = header;
         self.terminate(
             TerminatorKind::ForEach {
                 key,
@@ -352,7 +442,6 @@ impl Builder {
         arms: &[hir::MatchArm],
         statement_span: Span,
     ) {
-        let join = self.new_block(statement_span);
         let arm_blocks = arms
             .iter()
             .map(|arm| self.new_block(arm.span))
@@ -374,18 +463,28 @@ impl Builder {
             },
             scrutinee.span,
         );
+
+        let mut arm_exits = Vec::with_capacity(arms.len());
         for (arm, block) in arms.iter().zip(arm_blocks) {
             self.current = block;
             self.lower_block(&arm.body);
-            self.close_to(join, arm.span);
+            arm_exits.push((self.current, self.open(), arm.span));
         }
-        self.current = join;
+
+        if arm_exits.iter().any(|(_, falls_through, _)| *falls_through) {
+            let join = self.new_block(statement_span);
+            for (exit, _, span) in arm_exits {
+                self.current = exit;
+                self.close_to(join, span);
+            }
+            self.current = join;
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
 
     use jett_common::{FileId, SourceOrigin};
 
@@ -419,6 +518,42 @@ mod tests {
         lower(&hir).expect("MIR lowering")
     }
 
+    fn reachable_blocks(function: &Function) -> HashSet<BlockId> {
+        let mut reachable = HashSet::new();
+        let mut pending = vec![function.entry];
+        while let Some(block_id) = pending.pop() {
+            if !reachable.insert(block_id) {
+                continue;
+            }
+            let block = &function.blocks[block_id.index() as usize];
+            match &block.terminator.kind {
+                TerminatorKind::Goto(target) => pending.push(*target),
+                TerminatorKind::Branch {
+                    then_block,
+                    else_block,
+                    ..
+                } => {
+                    pending.push(*then_block);
+                    pending.push(*else_block);
+                }
+                TerminatorKind::Switch {
+                    variants,
+                    otherwise,
+                    ..
+                } => {
+                    pending.extend(variants.iter().map(|(_, target, _)| *target));
+                    pending.extend(otherwise.iter().copied());
+                }
+                TerminatorKind::ForEach { body, exit, .. } => {
+                    pending.push(*body);
+                    pending.push(*exit);
+                }
+                TerminatorKind::Return(_) | TerminatorKind::Unreachable => {}
+            }
+        }
+        reachable
+    }
+
     #[test]
     fn lowers_structured_control_flow_to_basic_blocks() {
         let program = lower_source(
@@ -447,6 +582,222 @@ function choose(value: int64) returns int64:
                 .iter()
                 .any(|block| matches!(block.terminator.kind, TerminatorKind::Return(_)))
         );
+    }
+
+    #[test]
+    fn validation_rejects_an_out_of_range_goto_target() {
+        let mut program = lower_source(
+            r#"namespace app
+function answer() returns int64:
+    return 42
+"#,
+        );
+        let span = program.functions[0].span;
+        program.functions[0].blocks[0].terminator.kind = TerminatorKind::Goto(BlockId(u32::MAX));
+
+        let errors = validate(&program).expect_err("invalid target must be rejected");
+
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].span, span);
+        assert_eq!(errors[0].message, "goto target 4294967295 is out of range");
+    }
+
+    #[test]
+    fn validation_rejects_an_out_of_range_branch_target() {
+        let mut program = lower_source(
+            r#"namespace app
+function choose(flag: bool) returns int64:
+    if flag:
+        return 1
+    return 2
+"#,
+        );
+        let span = program.functions[0].span;
+        let TerminatorKind::Branch { else_block, .. } =
+            &mut program.functions[0].blocks[0].terminator.kind
+        else {
+            panic!("expected branch terminator");
+        };
+        *else_block = BlockId(u32::MAX);
+
+        let errors = validate(&program).expect_err("invalid target must be rejected");
+
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].span, span);
+        assert_eq!(
+            errors[0].message,
+            "branch else target 4294967295 is out of range"
+        );
+    }
+
+    #[test]
+    fn validation_rejects_an_out_of_range_function_entry() {
+        let mut program = lower_source(
+            r#"namespace app
+function answer() returns int64:
+    return 42
+"#,
+        );
+        let span = program.functions[0].span;
+        program.functions[0].entry = BlockId(u32::MAX);
+
+        let errors = validate(&program).expect_err("invalid entry must be rejected");
+
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].span, span);
+        assert_eq!(
+            errors[0].message,
+            "function entry block 4294967295 is out of range"
+        );
+    }
+
+    #[test]
+    fn validation_rejects_a_noncanonical_block_id() {
+        let mut program = lower_source(
+            r#"namespace app
+function answer() returns int64:
+    return 42
+"#,
+        );
+        let span = program.functions[0].span;
+        program.functions[0].blocks[0].id = BlockId(7);
+
+        let errors = validate(&program).expect_err("noncanonical ID must be rejected");
+
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].span, span);
+        assert_eq!(errors[0].message, "block at index 0 has noncanonical ID 7");
+    }
+
+    #[test]
+    fn validation_rejects_an_out_of_range_switch_target() {
+        let mut program = lower_source(
+            r#"namespace app
+function answer() returns int64:
+    return 42
+"#,
+        );
+        let span = program.functions[0].span;
+        let TerminatorKind::Return(Some(scrutinee)) =
+            program.functions[0].blocks[0].terminator.kind.clone()
+        else {
+            panic!("expected return value");
+        };
+        program.functions[0].blocks[0].terminator.kind = TerminatorKind::Switch {
+            scrutinee,
+            variants: Vec::new(),
+            otherwise: Some(BlockId(u32::MAX)),
+        };
+
+        let errors = validate(&program).expect_err("invalid target must be rejected");
+
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].span, span);
+        assert_eq!(
+            errors[0].message,
+            "switch otherwise target 4294967295 is out of range"
+        );
+    }
+
+    #[test]
+    fn validation_rejects_an_out_of_range_for_target() {
+        let mut program = lower_source(
+            r#"namespace app
+function first(items: list[int64]) returns int64:
+    for item in view items:
+        return item
+    return 0
+"#,
+        );
+        let span = program.functions[0].span;
+        let block = program.functions[0]
+            .blocks
+            .iter_mut()
+            .find(|block| matches!(block.terminator.kind, TerminatorKind::ForEach { .. }))
+            .expect("expected for terminator");
+        let TerminatorKind::ForEach { exit, .. } = &mut block.terminator.kind else {
+            unreachable!();
+        };
+        *exit = BlockId(u32::MAX);
+
+        let errors = validate(&program).expect_err("invalid target must be rejected");
+
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].span, span);
+        assert_eq!(
+            errors[0].message,
+            "for exit target 4294967295 is out of range"
+        );
+    }
+
+    #[test]
+    fn for_loop_back_edge_skips_preheader_statements() {
+        let program = lower_source(
+            r#"namespace app
+function total(items: list[int64]) returns int64:
+    mutable int64 sum = 0
+    for item in view items:
+        sum = sum + item
+    return sum
+"#,
+        );
+        let function = &program.functions[0];
+        let entry = &function.blocks[function.entry.index() as usize];
+        assert_eq!(
+            entry.statements.len(),
+            1,
+            "preheader should initialize sum once"
+        );
+        let TerminatorKind::Goto(loop_header) = entry.terminator.kind else {
+            panic!("preheader should jump to a dedicated for-loop header");
+        };
+
+        let header = &function.blocks[loop_header.index() as usize];
+        assert!(header.statements.is_empty());
+        let TerminatorKind::ForEach { body, .. } = header.terminator.kind else {
+            panic!("dedicated loop header should own the for terminator");
+        };
+        assert_eq!(
+            function.blocks[body.index() as usize].terminator.kind,
+            TerminatorKind::Goto(loop_header),
+            "for-loop back edge should not repeat preheader statements"
+        );
+    }
+
+    #[test]
+    fn terminating_if_branches_do_not_leave_an_unreachable_join() {
+        let program = lower_source(
+            r#"namespace app
+function choose(flag: bool) returns int64:
+    if flag:
+        return 1
+    else:
+        return 2
+"#,
+        );
+        let function = &program.functions[0];
+
+        assert_eq!(reachable_blocks(function).len(), function.blocks.len());
+    }
+
+    #[test]
+    fn terminating_match_arms_do_not_leave_an_unreachable_join() {
+        let program = lower_source(
+            r#"namespace app
+enum Choice:
+    first
+    second
+function choose(value: Choice) returns int64:
+    match value:
+        first:
+            return 1
+        second:
+            return 2
+"#,
+        );
+        let function = &program.functions[0];
+
+        assert_eq!(reachable_blocks(function).len(), function.blocks.len());
     }
 
     #[test]
