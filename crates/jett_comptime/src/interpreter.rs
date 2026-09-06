@@ -9103,8 +9103,25 @@ impl Interpreter {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => {
-                        let lines: Vec<Value> =
-                            s.lines().map(|l| Value::String(l.to_string())).collect();
+                        let mut lines = Vec::new();
+                        let bytes = s.as_bytes();
+                        let mut start = 0;
+                        let mut index = 0;
+                        while index < bytes.len() {
+                            if matches!(bytes[index], b'\r' | b'\n') {
+                                lines.push(Value::String(s[start..index].to_string()));
+                                if bytes[index] == b'\r' && bytes.get(index + 1) == Some(&b'\n') {
+                                    index += 1;
+                                }
+                                index += 1;
+                                start = index;
+                            } else {
+                                index += 1;
+                            }
+                        }
+                        if start < bytes.len() {
+                            lines.push(Value::String(s[start..].to_string()));
+                        }
                         Some(Ok(Value::List(lines)))
                     }
                     _ => Some(Err(format!("{name} expects a string argument"))),
