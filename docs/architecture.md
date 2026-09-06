@@ -1403,7 +1403,8 @@ agent cannot leave the process paused indefinitely.
 
 The shared `jett_common::breakpoint` model now implements the protocol identity,
 session and pause lifecycle, operation-specific request validation, idempotent
-request-ID admission, stable failure envelopes, constant-work token comparison,
+request-ID admission with one outstanding command and one independent wait,
+terminal request invalidation, stable failure envelopes, constant-work token comparison,
 and manifest-relative source authorization. The current tree-walking
 interpreter's one-line binding snapshot remains the compatibility baseline, not
 the interactive implementation. The next stages are interpreter pause and

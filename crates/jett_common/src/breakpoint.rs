@@ -143,6 +143,8 @@ pub struct BreakpointSession {
     state: SessionState,
     next_pause_id: u64,
     requests: BTreeMap<u64, Request>,
+    command_request: Option<u64>,
+    wait_request: Option<u64>,
 }
 
 impl BreakpointSession {
@@ -152,6 +154,8 @@ impl BreakpointSession {
             state: SessionState::Starting,
             next_pause_id: 1,
             requests: BTreeMap::new(),
+            command_request: None,
+            wait_request: None,
         }
     }
 
@@ -196,11 +200,37 @@ impl BreakpointSession {
     }
 
     pub fn fail(&mut self) {
+        if self.state == SessionState::Closed {
+            return;
+        }
         self.state = SessionState::Failed;
+        self.invalidate_requests();
     }
 
     pub fn close(&mut self) {
         self.state = SessionState::Closed;
+        self.invalidate_requests();
+    }
+
+    fn invalidate_requests(&mut self) {
+        self.requests.clear();
+        self.command_request = None;
+        self.wait_request = None;
+    }
+
+    /// Release the request's lane once its response has been cached by the adapter.
+    pub fn complete_request(&mut self, request_id: u64) -> Result<(), ProtocolFailure> {
+        if self.wait_request == Some(request_id) {
+            self.wait_request = None;
+        } else if self.command_request == Some(request_id) {
+            self.command_request = None;
+        } else {
+            return Err(ProtocolFailure::new(
+                FailureKind::InvalidRequest,
+                "request is not outstanding",
+            ));
+        }
+        Ok(())
     }
 
     pub fn admit_request(
@@ -219,6 +249,9 @@ impl BreakpointSession {
                 "request does not belong to this breakpoint session",
             ));
         }
+        if matches!(self.state, SessionState::Failed | SessionState::Closed) {
+            return Err(invalid_state(self.state, request.operation));
+        }
         if let Some(previous) = self.requests.get(&request.request_id) {
             return if previous == &request {
                 Ok(RequestDisposition::Duplicate)
@@ -232,6 +265,18 @@ impl BreakpointSession {
 
         validate_arguments(&request)?;
         self.validate_request_state(&request)?;
+        let lane = if request.operation == Operation::Wait {
+            &mut self.wait_request
+        } else {
+            &mut self.command_request
+        };
+        if lane.is_some() {
+            return Err(ProtocolFailure::new(
+                FailureKind::InvalidRequest,
+                "request lane already has an outstanding request",
+            ));
+        }
+        *lane = Some(request.request_id);
         self.requests.insert(request.request_id, request);
         Ok(RequestDisposition::New)
     }
@@ -414,7 +459,12 @@ fn validate_source_entry(entry: &SourceEntry) -> Result<(), ProtocolFailure> {
     let invalid_segment = path.split('/').any(|segment| {
         segment.is_empty() || segment == "." || segment == ".." || segment.ends_with(':')
     });
-    if path.starts_with('/') || path.contains('\\') || invalid_segment {
+    if path.starts_with('/')
+        || path.contains('\\')
+        || path.as_bytes().get(1) == Some(&b':')
+        || path.chars().any(char::is_control)
+        || invalid_segment
+    {
         return Err(ProtocolFailure::new(
             FailureKind::InvalidRequest,
             "source path must be a normalized manifest-relative path",

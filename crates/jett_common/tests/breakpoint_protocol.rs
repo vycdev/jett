@@ -138,6 +138,7 @@ fn wait_and_disconnect_apply_state_dependent_pause_rules() {
         session.admit_request(running_disconnect).unwrap(),
         RequestDisposition::New
     );
+    session.complete_request(2).unwrap();
 
     session.begin_pause().unwrap();
     let pause_id = session.finish_pause().unwrap();
@@ -240,10 +241,94 @@ fn source_manifest_accepts_only_normalized_manifest_relative_paths() {
         "../secret.jett",
         "src/../secret.jett",
         "src\\main.jett",
+        "C:secret.jett",
+        "src/secret\0.jett",
+        "src/secret\n.jett",
     ] {
         let error =
             SourceManifest::new([SourceEntry::new("bad", path, SourceKind::Project)]).unwrap_err();
         assert_eq!(error.kind, FailureKind::InvalidRequest, "path: {path}");
+    }
+}
+
+#[test]
+fn event_wait_does_not_block_commands_but_each_lane_is_serialized() {
+    let mut session = BreakpointSession::new("session-a");
+    session.start().unwrap();
+    session.begin_pause().unwrap();
+    let pause = session.finish_pause().unwrap();
+    let wait = request(
+        "session-a",
+        None,
+        1,
+        Operation::Wait,
+        RequestArguments::None,
+    );
+    session.admit_request(wait.clone()).unwrap();
+    assert_eq!(
+        session.admit_request(wait).unwrap(),
+        RequestDisposition::Duplicate
+    );
+    let second_wait = request(
+        "session-a",
+        None,
+        2,
+        Operation::Wait,
+        RequestArguments::None,
+    );
+    assert_eq!(
+        session.admit_request(second_wait.clone()).unwrap_err().kind,
+        FailureKind::InvalidRequest
+    );
+    session
+        .admit_request(request(
+            "session-a",
+            Some(pause),
+            3,
+            Operation::Continue,
+            RequestArguments::None,
+        ))
+        .unwrap();
+    let competing = request(
+        "session-a",
+        Some(pause),
+        4,
+        Operation::Stack,
+        RequestArguments::None,
+    );
+    assert_eq!(
+        session.admit_request(competing.clone()).unwrap_err().kind,
+        FailureKind::InvalidRequest
+    );
+    session.complete_request(3).unwrap();
+    session.admit_request(competing).unwrap();
+    session.complete_request(1).unwrap();
+    session.admit_request(second_wait).unwrap();
+}
+
+#[test]
+fn terminal_sessions_invalidate_duplicate_requests_and_do_not_reopen() {
+    for failed in [false, true] {
+        let mut session = BreakpointSession::new("session-a");
+        session.start().unwrap();
+        let wait = request(
+            "session-a",
+            None,
+            1,
+            Operation::Wait,
+            RequestArguments::None,
+        );
+        session.admit_request(wait.clone()).unwrap();
+        if failed {
+            session.fail();
+        } else {
+            session.close();
+        }
+        assert!(session.admit_request(wait).is_err());
+        assert!(session.complete_request(1).is_err());
+        session.close();
+        session.fail();
+        assert_eq!(session.state(), SessionState::Closed);
     }
 }
 
