@@ -792,7 +792,8 @@ failure blocks distinguish local `default` fallback from function `return`,
 and step-local handles wrap only their intermediate pipeline call. Enum
 construction carries a dense checked variant ID and payloads; exhaustive
 matches carry variant arms, payload locals, and an optional catch-all. Typed
-parameters and locals, direct user calls, core expressions, returns, branches,
+parameters and locals, direct user calls, actor spawn/messages with normalized
+arguments and explicit lexical evaluation order, core expressions, returns, branches,
 loops, `for`, assertions/debug controls, string interpolation, comptime
 markers, explicit declassification/coarsening, state tests, and task-control
 markers are also covered. Bitfield and state-machine construction, transitions,
@@ -801,15 +802,22 @@ compiler-owned calls carry canonical intrinsic identity, typed arguments, and
 lexical evaluation order after type checking has authorized them. Inline
 functions and indirect calls retain explicit parameter/local identity;
 comptime type-bind scopes erase to checked HIR scopes; actor spawn/send/ask
-carry typed operands and message identity. Actor declaration/handler
-materialization remains actor-runtime work. Remaining source constructs are staged by the
-[initial HIR lowering plan](active/hir_lowering_plan.md).
+carry typed operands and message identity. Actor receive handlers are
+deterministic HIR functions whose locals preserve checked capability, state,
+and message bindings; actor construction, persistent state layout, scheduling,
+and dispatch remain actor-runtime work. Remaining source constructs are staged
+by the [initial HIR lowering plan](active/hir_lowering_plan.md).
 
 The initial implemented `jett_mir` boundary accepts only HIR that passes the
-structural validator. It lowers top-level `if`, `while`, exhaustive `match`,
-`break`, `continue`, and `return` into deterministic dense basic blocks with
-explicit branch, switch, goto, and return terminators. Handle-internal control
-flow and definitive ownership/drop elaboration remain subsequent MIR work.
+HIR structural validator. It lowers top-level `if`, `while`, exhaustive
+`match`, `break`, `continue`, `return`, and actor `respond` into deterministic dense basic
+blocks with explicit branch, switch, goto, return, and respond terminators. Its public
+MIR validator rejects noncanonical block IDs, out-of-range function entries,
+and invalid goto, branch, switch, or for-loop edges before later backends
+consume a graph. Its CFG analysis exposes deduplicated successors, canonical
+predecessors, and reachable reverse postorder for deterministic backend
+dataflow passes. Handle-internal control flow and definitive ownership/drop
+elaboration remain subsequent MIR work.
 
 ### Purpose
 
@@ -897,6 +905,12 @@ MirStatement {
     Nop,
 }
 ```
+
+Every MIR statement and terminator retains a source `Span`. Direct nodes use
+the originating HIR statement or condition span, while synthetic CFG edges use
+the controlling statement or body span. This provenance lets later ownership,
+optimization, diagnostic, and debug passes report the source construct that
+produced an edge without recovering locations from embedded expressions.
 
 ### Definitive Ownership Verification
 

@@ -374,6 +374,29 @@ fn minus_is_unary(prev: Option<TokenKind>) -> bool {
         prev,
         None | Some(
             TokenKind::Return
+                | TokenKind::If
+                | TokenKind::While
+                | TokenKind::Match
+                | TokenKind::Assert
+                | TokenKind::Breakpoint
+                | TokenKind::Respond
+                | TokenKind::Where
+                | TokenKind::In
+                | TokenKind::View
+                | TokenKind::Comptime
+                | TokenKind::Declassify
+                | TokenKind::Coarsen
+                | TokenKind::Spawn
+                | TokenKind::Clone
+                | TokenKind::Send
+                | TokenKind::Ask
+                | TokenKind::Run
+                | TokenKind::Join
+                | TokenKind::Cancel
+                | TokenKind::Not
+                | TokenKind::Bang
+                | TokenKind::And
+                | TokenKind::Or
                 | TokenKind::Default
                 | TokenKind::Eq
                 | TokenKind::Colon
@@ -477,6 +500,59 @@ mod tests {
         let formatted = fmt(source);
         assert!(formatted.contains("return -1"));
         assert!(!formatted.contains("return - 1"));
+    }
+
+    #[test]
+    fn format_keeps_unary_minus_attached_after_expression_introducers() {
+        let cases = [
+            "function f() returns nothing:\n    assert -1 < 0\n",
+            "function f() returns nothing:\n    if -1 < 0:\n        return nothing\n",
+            "function f() returns nothing:\n    while -1 < 0:\n        break\n",
+            "function f() returns nothing:\n    match -1:\n        other:\n            return nothing\n",
+            "function f() returns nothing:\n    breakpoint -1 < 0\n",
+            "actor Worker():\n    receive value() responds int64:\n        respond -1\n",
+            "function f() returns bool:\n    return not -1 < 0\n",
+            "function f() returns int64:\n    return comptime -1\n",
+            "type Negative = int64 where -1 < 0\n",
+        ];
+
+        for source in cases {
+            let formatted = fmt(source);
+            assert!(formatted.contains("-1"), "formatted output: {formatted}");
+            assert!(
+                !formatted.contains("- 1"),
+                "unary minus was detached in: {formatted}"
+            );
+        }
+    }
+
+    #[test]
+    fn format_keeps_unary_minus_attached_after_prefix_and_infix_operators() {
+        let cases = [
+            "function f() returns int64:\n    return view -1\n",
+            "function f() returns int64:\n    return declassify -1\n",
+            "function f() returns int64:\n    return coarsen -1\n",
+            "function f() returns int64:\n    return clone -1\n",
+            "function f() returns int64:\n    return spawn -1\n",
+            "function f() returns int64:\n    return send -1\n",
+            "function f() returns int64:\n    return ask -1\n",
+            "function f() returns int64:\n    return run -1\n",
+            "function f() returns int64:\n    return join -1\n",
+            "function f() returns int64:\n    return cancel -1\n",
+            "function f() returns bool:\n    return !-1 < 0\n",
+            "function f() returns nothing:\n    assert true and -1 < 0\n",
+            "function f() returns nothing:\n    assert false or -1 < 0\n",
+            "function f() returns nothing:\n    for value in -1:\n        break\n",
+        ];
+
+        for source in cases {
+            let formatted = fmt(source);
+            assert!(formatted.contains("-1"), "formatted output: {formatted}");
+            assert!(
+                !formatted.contains("- 1"),
+                "unary minus was detached in: {formatted}"
+            );
+        }
     }
 
     #[test]
