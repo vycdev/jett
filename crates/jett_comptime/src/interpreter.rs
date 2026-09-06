@@ -45,6 +45,9 @@ fn nonnegative_usize(value: i64) -> usize {
 
 fn repeat_string_checked(value: &str, count: i64) -> Result<String, String> {
     let count = nonnegative_usize(count);
+    if value.is_empty() || count == 0 {
+        return Ok(String::new());
+    }
     let output_len = value
         .len()
         .checked_mul(count)
@@ -8281,7 +8284,8 @@ impl Interpreter {
                 require_args!(name, 3, args);
                 match (&args[0], &args[1], &args[2]) {
                     (Value::String(s), Value::String(from), Value::String(to)) => {
-                        Some(Ok(Value::String(s.replace(from.as_str(), to.as_str()))))
+                        let replaced = string_split_grapheme_matches(s, from).join(to);
+                        Some(Ok(Value::String(replaced)))
                     }
                     _ => Some(Err(format!("{name} expects three string arguments"))),
                 }
@@ -9107,8 +9111,25 @@ impl Interpreter {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => {
-                        let lines: Vec<Value> =
-                            s.lines().map(|l| Value::String(l.to_string())).collect();
+                        let mut lines = Vec::new();
+                        let bytes = s.as_bytes();
+                        let mut start = 0;
+                        let mut index = 0;
+                        while index < bytes.len() {
+                            if matches!(bytes[index], b'\r' | b'\n') {
+                                lines.push(Value::String(s[start..index].to_string()));
+                                if bytes[index] == b'\r' && bytes.get(index + 1) == Some(&b'\n') {
+                                    index += 1;
+                                }
+                                index += 1;
+                                start = index;
+                            } else {
+                                index += 1;
+                            }
+                        }
+                        if start < bytes.len() {
+                            lines.push(Value::String(s[start..].to_string()));
+                        }
                         Some(Ok(Value::List(lines)))
                     }
                     _ => Some(Err(format!("{name} expects a string argument"))),
