@@ -49,10 +49,13 @@ fn reprint_tokens(tokens: &[Token], comments: &[CommentTrivia], source: &str) ->
     let mut index = 0usize;
     while index < tokens.len() {
         let token = &tokens[index];
+        let next_indent_level = indent_after_structural_tokens(tokens, index, indent_level);
         emit_comments_before(
             comments,
             &mut comment_index,
             token.span.start as usize,
+            indent_level,
+            next_indent_level,
             source,
             &mut output,
             &mut at_line_start,
@@ -135,6 +138,8 @@ fn reprint_tokens(tokens: &[Token], comments: &[CommentTrivia], source: &str) ->
         comments,
         &mut comment_index,
         source.len(),
+        indent_level,
+        indent_level,
         source,
         &mut output,
         &mut at_line_start,
@@ -161,6 +166,8 @@ fn emit_comments_before(
     comments: &[CommentTrivia],
     comment_index: &mut usize,
     limit: usize,
+    current_indent_level: u32,
+    next_indent_level: u32,
     source: &str,
     output: &mut String,
     at_line_start: &mut bool,
@@ -187,7 +194,13 @@ fn emit_comments_before(
             if !output.is_empty() && !output.ends_with('\n') {
                 output.push('\n');
             }
-            output.push_str(comment_line_prefix(source, start));
+            let source_indent_level = comment_indent_level(source, start);
+            let active_levels = current_indent_level.min(next_indent_level)
+                ..=current_indent_level.max(next_indent_level);
+            let indent_level = source_indent_level
+                .filter(|level| active_levels.contains(level))
+                .unwrap_or(next_indent_level);
+            output.push_str(&"    ".repeat(indent_level as usize));
             output.push_str(text);
             output.push('\n');
         }
@@ -207,16 +220,28 @@ fn has_newline_between(source: &str, start: usize, end: usize) -> bool {
         .any(|byte| byte == b'\n' || byte == b'\r')
 }
 
-fn comment_line_prefix(source: &str, comment_start: usize) -> &str {
+fn indent_after_structural_tokens(tokens: &[Token], index: usize, current: u32) -> u32 {
+    let mut indent = current;
+    for token in &tokens[index..] {
+        match token.kind {
+            TokenKind::Indent => indent += 1,
+            TokenKind::Dedent => indent = indent.saturating_sub(1),
+            _ => break,
+        }
+    }
+    indent
+}
+
+fn comment_indent_level(source: &str, comment_start: usize) -> Option<u32> {
     let line_start = source[..comment_start]
-        .rfind(|ch| ch == '\n' || ch == '\r')
+        .rfind(['\n', '\r'])
         .map(|index| index + 1)
         .unwrap_or(0);
     let prefix = &source[line_start..comment_start];
-    if prefix.bytes().all(|byte| byte == b' ' || byte == b'\t') {
-        prefix
+    if prefix.bytes().all(|byte| byte == b' ') && prefix.len().is_multiple_of(4) {
+        Some((prefix.len() / 4) as u32)
     } else {
-        ""
+        None
     }
 }
 
@@ -576,6 +601,29 @@ mod tests {
         let formatted = fmt(source);
         assert!(formatted.contains("    # keep me\n"));
         assert!(formatted.contains("    return nothing"));
+    }
+
+    #[test]
+    fn format_canonicalizes_standalone_comment_indentation() {
+        let source = "function f() returns nothing:\n        # keep me\n    return nothing\n";
+        let formatted = fmt(source);
+        assert_eq!(
+            formatted,
+            "function f() returns nothing:\n    # keep me\n    return nothing\n"
+        );
+    }
+
+    #[test]
+    fn format_preserves_comment_scope_across_a_dedent() {
+        let source = "function f() returns nothing:\n    if true:\n        return nothing\n    # parent scope\n    return nothing\n";
+        let formatted = fmt(source);
+        assert_eq!(formatted, source);
+    }
+
+    #[test]
+    fn format_preserves_intermediate_comment_scope_across_multiple_dedents() {
+        let source = "function f() returns nothing:\n    if true:\n        if true:\n            return nothing\n        # middle scope\n    # outer scope\nfunction g() returns nothing:\n    return nothing\n";
+        assert_eq!(fmt(source), source);
     }
 
     #[test]
