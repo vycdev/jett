@@ -45,6 +45,9 @@ fn nonnegative_usize(value: i64) -> usize {
 
 fn repeat_string_checked(value: &str, count: i64) -> Result<String, String> {
     let count = nonnegative_usize(count);
+    if value.is_empty() || count == 0 {
+        return Ok(String::new());
+    }
     let output_len = value
         .len()
         .checked_mul(count)
@@ -8131,15 +8134,20 @@ impl Interpreter {
         };
         let (seconds, nanoseconds) = match provider {
             ClockProvider::Production => production_wall_clock_sample(),
-            ClockProvider::Scripted(samples) => match samples.pop_front() {
+            ClockProvider::Scripted(samples) => match samples.front().copied() {
                 None => return Err("Clock.now: test clock exhausted".to_string()),
                 Some(ClockTestSample::Unavailable) => {
+                    samples.pop_front();
                     return Err("Clock.now: wall clock unavailable".to_string());
                 }
                 Some(ClockTestSample::Wall {
                     unix_seconds,
                     subsecond_nanoseconds,
-                }) => (unix_seconds, subsecond_nanoseconds),
+                }) => {
+                    checked_clock_milliseconds(unix_seconds, subsecond_nanoseconds)?;
+                    samples.pop_front();
+                    (unix_seconds, subsecond_nanoseconds)
+                }
             },
         };
         checked_clock_milliseconds(seconds, nanoseconds)
@@ -8276,7 +8284,8 @@ impl Interpreter {
                 require_args!(name, 3, args);
                 match (&args[0], &args[1], &args[2]) {
                     (Value::String(s), Value::String(from), Value::String(to)) => {
-                        Some(Ok(Value::String(s.replace(from.as_str(), to.as_str()))))
+                        let replaced = string_split_grapheme_matches(s, from).join(to);
+                        Some(Ok(Value::String(replaced)))
                     }
                     _ => Some(Err(format!("{name} expects three string arguments"))),
                 }
@@ -9107,8 +9116,25 @@ impl Interpreter {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => {
-                        let lines: Vec<Value> =
-                            s.lines().map(|l| Value::String(l.to_string())).collect();
+                        let mut lines = Vec::new();
+                        let bytes = s.as_bytes();
+                        let mut start = 0;
+                        let mut index = 0;
+                        while index < bytes.len() {
+                            if matches!(bytes[index], b'\r' | b'\n') {
+                                lines.push(Value::String(s[start..index].to_string()));
+                                if bytes[index] == b'\r' && bytes.get(index + 1) == Some(&b'\n') {
+                                    index += 1;
+                                }
+                                index += 1;
+                                start = index;
+                            } else {
+                                index += 1;
+                            }
+                        }
+                        if start < bytes.len() {
+                            lines.push(Value::String(s[start..].to_string()));
+                        }
                         Some(Ok(Value::List(lines)))
                     }
                     _ => Some(Err(format!("{name} expects a string argument"))),
@@ -17348,6 +17374,37 @@ mod builtin_tests {
                 .unwrap(),
             Err("Clock.now: test clock exhausted".to_string())
         );
+    }
+
+    #[test]
+    fn invalid_scripted_clock_sample_does_not_advance() {
+        let mut interp = Interpreter::new();
+        interp.current_function_trusted_stdlib = true;
+        interp.set_clock_test_samples(vec![
+            ClockTestSample::Wall {
+                unix_seconds: 0,
+                subsecond_nanoseconds: 1_000_000_000,
+            },
+            ClockTestSample::Wall {
+                unix_seconds: 1,
+                subsecond_nanoseconds: 0,
+            },
+        ]);
+
+        assert_eq!(
+            interp
+                .call_builtin("Clock.__now", &[Value::Nothing])
+                .unwrap(),
+            Err("Clock.now: invalid test sample".to_string())
+        );
+        assert_eq!(interp.clock_test_samples_remaining(), Some(2));
+        assert_eq!(
+            interp
+                .call_builtin("Clock.__now", &[Value::Nothing])
+                .unwrap(),
+            Err("Clock.now: invalid test sample".to_string())
+        );
+        assert_eq!(interp.clock_test_samples_remaining(), Some(2));
     }
 
     #[test]
