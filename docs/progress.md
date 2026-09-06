@@ -44,7 +44,7 @@
 | Component | Crate | Tests | Status |
 |---|---|---|---|
 | HIR (monomorphization) | `jett_hir` | 12 | Typed ordinary and generic function lowering implemented for the core subset, with canonical identity, deterministic IDs, separate per-instantiation facts, named-argument normalization, concrete source-method targets, struct/list/map construction, field access, unhandled pipeline normalization, generic calls, and core structured control flow; pipeline handles and remaining constructs are staged by the [HIR lowering plan](active/hir_lowering_plan.md) and [#20](https://github.com/vycdev/jett/issues/20) |
-| MIR (control flow graph) | `jett_mir` | — | Not started ([Tracked by #22](https://github.com/vycdev/jett/issues/22)) |
+| MIR (control flow graph) | `jett_mir` | 12 | Structured-control-flow lowering with source-spanned statements and terminators; structural entry/edge/ID validation and deterministic successor, predecessor, and reverse-postorder analysis are implemented. Definitive ownership/drop elaboration remains ([tracked by #22](https://github.com/vycdev/jett/issues/22)) |
 | LLVM native codegen | `jett_codegen_llvm` | — | Not started |
 | Runtime library | `jett_runtime` | — | Not started |
 | Core stdlib (.jett files) | `stdlib/` | — | Partial (bootstrap loader plus extracted `json`, complete source-owned `list`, `map`, `set`, `string`, `math`, `random`, and `time` public APIs, and other modules that remain Rust-backed) |
@@ -119,7 +119,7 @@
 | Unhandled result/optional detection (E0341, E0342) | Done |
 | Set value type and 12 set builtins (`new`, `add`, `remove`, `contains`, `union`, `intersection`, `difference`) | Done |
 | `print`/`println` builtins | Partial (interpreter support, secret blocking, and E0362 release diagnostics are done; [debug-only capability policy](open_design/print_debug_builtin_policy.md) is decided, while debug-event isolation and future-backend conformance remain pending) |
-| Type conversions: `int64.from_float64`, `float64.from_string`, `string.from_float64`, `string.from_bool` | Done |
+| Type conversions: exact fallible `int64.from_float64` and `float64.from_int64`, `float64.from_string`, `string.from_float64`, `string.from_bool` | Done |
 | `time.now_ms`, `time.now_s` | Removed (replaced by explicit `Clock.now`) |
 | `os.env`, `os.args` | Removed (replaced by explicit `Environment.get` and `Environment.args`, with focused migration diagnostics) |
 | Math: `pi`, `e`, `sin`, `cos`, `tan`, `mod`, `is_even`, `is_odd`, `sum` | Done |
@@ -182,7 +182,7 @@
 | `csv` | Done for the interpreter-backed compiler (all 3 public declarations are source-owned in `stdlib/csv.jett`, with only private trusted parse/stringify kernels in the interpreter; parsing returns `result[..., string]`, ignores one leading UTF-8 BOM, treats empty input as zero records, preserves blank records, whitespace, quoted data, Unicode, LF/CRLF endings, and ragged raw rows; malformed quoting, bare CR record endings, invalid headers, and header/data width mismatches fail explicitly; `stringify` emits canonical LF-separated records with no final newline; future backends retain the [CSV format and failure contract](completed/csv_format_failure_contract.md)) |
 | `regex` | Design selected, implementation not started (pure one-shot `is_match`, `find`, `captures`, and non-overlapping `find_all`; an exact grammar/error map, Unicode 17.0.0 grapheme/fold manifest, grapheme-indexed spans, canonical checked NFA sizing, a deterministic execution-work cap, structured values, and private trusted kernels are fixed by the [regular expression contract](completed/regex_matching_extraction_contract.md) from [#140](https://github.com/vycdev/jett/issues/140); replacement, splitting, Unicode property classes, and public compiled patterns remain deferred) |
 | `log` | Design selected, implementation not started (dedicated `Log` capability; source-owned event, level, field, and error types; eager runtime filtering; checked non-wrapping sequence allocation; complete `FileKey` source identity without physical-root leakage; ordered deterministic JSON records; compiler-enforced secret rejection; isolated injected sinks and captures; exact `RunOutput`/TOON channel composition; see the [structured logging contract](completed/structured_logging_contract.md) from [#143](https://github.com/vycdev/jett/issues/143)) |
-| `test.mock` | Not started (the property-only source facade, typed provider adapters, exact scripts, isolation, replay/shrinking boundary, and future-backend obligations are defined by the [capability mocking and deterministic test harness contract](completed/capability_mocking_test_harness_contract.md) from [#145](https://github.com/vycdev/jett/issues/145)) |
+| `test.mock` | Partial (host-side Random and Clock adapters now enforce exact script consumption after successful runs; the property-only source facade, per-attempt registry, mismatch schema, and replay/shrinking integration remain staged by the [capability mocking and deterministic test harness contract](completed/capability_mocking_test_harness_contract.md) from [#145](https://github.com/vycdev/jett/issues/145)) |
 
 ### Phase L: Incremental Compilation — NOT STARTED
 
