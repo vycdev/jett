@@ -488,6 +488,13 @@ impl LanguageServer for JettBackend {
     }
 
     async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
+        if params.context.only.as_ref().is_some_and(|kinds| {
+            !kinds
+                .iter()
+                .any(|kind| kind.as_str().is_empty() || *kind == CodeActionKind::QUICKFIX)
+        }) {
+            return Ok(None);
+        }
         let documents = self.documents.read().await;
         let Some(document) = documents.get(&params.text_document.uri) else {
             return Ok(None);
@@ -877,6 +884,41 @@ mod tests {
                 new_text: "    ".to_string(),
             }])
         );
+    }
+
+    #[tokio::test]
+    async fn tab_quick_fixes_respect_requested_code_action_kinds() {
+        let source = "function main() returns int64:\n\treturn 1\n";
+        let uri = Url::parse("file:///workspace/main.jett").unwrap();
+        let (service, _socket) = tower_lsp::LspService::new(JettBackend::new);
+        let backend = service.inner();
+        backend.documents.write().await.insert(
+            uri.clone(),
+            DocumentState {
+                text: source.to_string(),
+                version: 1,
+            },
+        );
+        for (kind, expected) in [
+            (CodeActionKind::SOURCE_ORGANIZE_IMPORTS, false),
+            (CodeActionKind::QUICKFIX, true),
+        ] {
+            let result = backend
+                .code_action(CodeActionParams {
+                    text_document: TextDocumentIdentifier { uri: uri.clone() },
+                    range: Range::new(Position::new(1, 0), Position::new(1, 1)),
+                    context: CodeActionContext {
+                        diagnostics: diagnostics_for_source(source, "main.jett"),
+                        only: Some(vec![kind]),
+                        trigger_kind: None,
+                    },
+                    work_done_progress_params: WorkDoneProgressParams::default(),
+                    partial_result_params: PartialResultParams::default(),
+                })
+                .await
+                .unwrap();
+            assert_eq!(result.is_some(), expected);
+        }
     }
 
     #[test]
