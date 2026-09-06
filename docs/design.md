@@ -1548,14 +1548,16 @@ string hex = encoding.hex_encode(view raw)
 
 `crypto.sha256` hashes exact UTF-8 text and returns 64 lowercase hexadecimal
 characters. `crypto.md5` keeps the same representation only for explicit legacy
-compatibility and is not a secure digest. SHA-512 and key-first binary HMAC are
-planned additions, not currently supported declarations. None of these
-operations is a password-hashing API.
+compatibility and is not a secure digest. `crypto.sha512` returns 128 lowercase
+hexadecimal characters. Key-first `crypto.hmac_sha256` borrows `secret[bytes]`
+and message `bytes`, returning a 32-byte `secret[bytes]` tag. HMAC-SHA-512 remains
+reserved. None of these operations is a password-hashing API.
 
-Both supported public declarations live in `stdlib/crypto.jett`. Source code
-converts exact UTF-8 input through the move-only byte API and formats the raw
-private-kernel digest with lowercase byte hex. Project code cannot call the
-private SHA-256 or MD5 kernels.
+All four supported public declarations live in `stdlib/crypto.jett`. Text-digest
+wrappers convert exact UTF-8 input through the move-only byte API and format
+the raw private-kernel digest with lowercase byte hex. HMAC preserves arbitrary
+binary keys and messages without text conversion. Project code cannot call the
+private digest or HMAC kernels.
 
 The encoding API uses strict padded RFC 4648 Base64 and lowercase
 hex over arbitrary `bytes`. Their decoders return `result[bytes, string]`.

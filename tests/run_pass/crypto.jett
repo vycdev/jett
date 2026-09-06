@@ -26,6 +26,18 @@ verify hmac_sha256_hashes_long_keys:
     assert hmac_sha256_hex(string.repeat("aa", 131), "Test Using Larger Than Block-Size Key - Hash Key First") == "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54"
 verify hmac_sha256_accepts_empty_key_and_message:
     assert hmac_sha256_hex("", "") == "b613679a0814d9ec772f95d778c35fc5ff1697c493715653c6c712144292c5ad"
+# RFC 4231 section 4.4: binary data must not pass through UTF-8 conversion.
+function hmac_sha256_binary_vector() returns bool:
+    secret[bytes] key = bytes.from_hex(string.repeat("aa", 20)) handle error:
+        return false
+    bytes message = bytes.from_hex(string.repeat("dd", 50)) handle error:
+        return false
+    secret[bytes] expected = bytes.from_hex("773ea91e36800e46854db8ebd09181a72959098b3ef8c122d9635514ced565fe") handle error:
+        return false
+    secret[bytes] tag = crypto.hmac_sha256(view key, view message)
+    return secret.compare(tag, expected)
+verify hmac_sha256_binary_vector:
+    assert hmac_sha256_binary_vector()
 verify sha256_vectors:
     assert crypto.sha256("") == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     assert crypto.sha256("abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
