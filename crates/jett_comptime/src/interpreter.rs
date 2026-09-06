@@ -8134,15 +8134,20 @@ impl Interpreter {
         };
         let (seconds, nanoseconds) = match provider {
             ClockProvider::Production => production_wall_clock_sample(),
-            ClockProvider::Scripted(samples) => match samples.pop_front() {
+            ClockProvider::Scripted(samples) => match samples.front().copied() {
                 None => return Err("Clock.now: test clock exhausted".to_string()),
                 Some(ClockTestSample::Unavailable) => {
+                    samples.pop_front();
                     return Err("Clock.now: wall clock unavailable".to_string());
                 }
                 Some(ClockTestSample::Wall {
                     unix_seconds,
                     subsecond_nanoseconds,
-                }) => (unix_seconds, subsecond_nanoseconds),
+                }) => {
+                    checked_clock_milliseconds(unix_seconds, subsecond_nanoseconds)?;
+                    samples.pop_front();
+                    (unix_seconds, subsecond_nanoseconds)
+                }
             },
         };
         checked_clock_milliseconds(seconds, nanoseconds)
@@ -17354,6 +17359,37 @@ mod builtin_tests {
                 .unwrap(),
             Err("Clock.now: test clock exhausted".to_string())
         );
+    }
+
+    #[test]
+    fn invalid_scripted_clock_sample_does_not_advance() {
+        let mut interp = Interpreter::new();
+        interp.current_function_trusted_stdlib = true;
+        interp.set_clock_test_samples(vec![
+            ClockTestSample::Wall {
+                unix_seconds: 0,
+                subsecond_nanoseconds: 1_000_000_000,
+            },
+            ClockTestSample::Wall {
+                unix_seconds: 1,
+                subsecond_nanoseconds: 0,
+            },
+        ]);
+
+        assert_eq!(
+            interp
+                .call_builtin("Clock.__now", &[Value::Nothing])
+                .unwrap(),
+            Err("Clock.now: invalid test sample".to_string())
+        );
+        assert_eq!(interp.clock_test_samples_remaining(), Some(2));
+        assert_eq!(
+            interp
+                .call_builtin("Clock.__now", &[Value::Nothing])
+                .unwrap(),
+            Err("Clock.now: invalid test sample".to_string())
+        );
+        assert_eq!(interp.clock_test_samples_remaining(), Some(2));
     }
 
     #[test]
