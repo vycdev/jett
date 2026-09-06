@@ -195,11 +195,11 @@ fn emit_comments_before(
                 output.push('\n');
             }
             let source_indent_level = comment_indent_level(source, start);
-            let indent_level = if source_indent_level == Some(current_indent_level) {
-                current_indent_level
-            } else {
-                next_indent_level
-            };
+            let active_levels = current_indent_level.min(next_indent_level)
+                ..=current_indent_level.max(next_indent_level);
+            let indent_level = source_indent_level
+                .filter(|level| active_levels.contains(level))
+                .unwrap_or(next_indent_level);
             output.push_str(&"    ".repeat(indent_level as usize));
             output.push_str(text);
             output.push('\n');
@@ -542,6 +542,12 @@ mod tests {
         let source = "function f() returns nothing:\n    if true:\n        return nothing\n    # parent scope\n    return nothing\n";
         let formatted = fmt(source);
         assert_eq!(formatted, source);
+    }
+
+    #[test]
+    fn format_preserves_intermediate_comment_scope_across_multiple_dedents() {
+        let source = "function f() returns nothing:\n    if true:\n        if true:\n            return nothing\n        # middle scope\n    # outer scope\nfunction g() returns nothing:\n    return nothing\n";
+        assert_eq!(fmt(source), source);
     }
 
     #[test]
