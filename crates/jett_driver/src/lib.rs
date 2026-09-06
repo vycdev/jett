@@ -3653,6 +3653,34 @@ fn bundle_file_is_in_cycle(start: usize, dependencies: &[HashSet<usize>]) -> boo
     false
 }
 
+fn logical_source_line_count(source: &str) -> u32 {
+    let bytes = source.as_bytes();
+    let mut count = 0_u32;
+    let mut index = 0_usize;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\r' => {
+                count += 1;
+                index += if bytes.get(index + 1) == Some(&b'\n') {
+                    2
+                } else {
+                    1
+                };
+            }
+            b'\n' => {
+                count += 1;
+                index += 1;
+            }
+            _ => index += 1,
+        }
+    }
+
+    if count == 0 || !matches!(bytes.last(), Some(b'\r' | b'\n')) {
+        count += 1;
+    }
+    count
+}
+
 /// Bundle a project while retaining candidate-validation diagnostics on error.
 pub fn bundle_project_detailed(
     start_dir: &Path,
@@ -3732,7 +3760,7 @@ pub fn bundle_project_detailed(
         current_line += 1;
 
         let start_line = current_line;
-        let source_line_count = file.source.lines().count().max(1) as u32;
+        let source_line_count = logical_source_line_count(&file.source);
         bundled.push_str(&file.source);
         if !file.source.ends_with('\n') {
             bundled.push('\n');
@@ -4998,6 +5026,28 @@ mod tests {
                 .output_path
                 .replace('\\', "/")
                 .ends_with("dist/lib.jett")
+        );
+    }
+
+    #[test]
+    fn bundle_project_manifest_counts_lone_carriage_return_lines() {
+        let root = temp_test_dir("jett_driver_bundle_lone_cr_manifest");
+        fs::create_dir_all(root.join("src")).expect("temp bundle dir should be created");
+        fs::write(root.join("jett.proj"), "name: bundle_fixture\n")
+            .expect("project marker should be written");
+        fs::write(
+            root.join("src/core.jett"),
+            "namespace core\r\rexport function answer() returns int64:\r    return 42\r",
+        )
+        .expect("bundle source should be written");
+        let output = root.join("dist/lib.jett");
+
+        let result = bundle_project(&root, &output).expect("bundle should accept lone-CR source");
+
+        fs::remove_dir_all(&root).expect("temp bundle dir should be removed");
+        assert_eq!(
+            (result.files[0].start_line, result.files[0].end_line),
+            (5, 8)
         );
     }
 
