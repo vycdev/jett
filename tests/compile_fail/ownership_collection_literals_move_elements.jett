@@ -1,0 +1,10 @@
+# ERROR: E0400 x2
+namespace app
+function list_literal_moves_elements() returns int64:
+    bytes item = bytes.from_string("value")
+    list[bytes] items = list(item)
+    return bytes.length(item) + list.length(items)
+function map_literal_moves_values() returns int64:
+    bytes value = bytes.from_string("value")
+    map[string, bytes] values = map("key": value)
+    return bytes.length(value) + map.length(values)
