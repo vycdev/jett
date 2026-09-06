@@ -278,13 +278,15 @@ fn rename_edit(
     position: Position,
     new_name: &str,
 ) -> Option<WorkspaceEdit> {
-    let lexed = jett_lexer::tokenize(new_name, jett_common::FileId::new(0));
-    if !lexed.errors.is_empty()
-        || !lexed.tokens.iter().any(|token| {
-            token.kind == jett_lexer::TokenKind::Ident
-                && token.span.start == 0
-                && token.span.end as usize == new_name.len()
-        })
+    // Contextual keywords (for example `value`) can be valid binding names;
+    // validate their actual declaration context with the compiler below.
+    if !new_name
+        .as_bytes()
+        .first()
+        .is_some_and(|byte| byte.is_ascii_alphabetic() || *byte == b'_')
+        || !new_name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
     {
         return None;
     }
@@ -933,6 +935,13 @@ mod tests {
             edits[1].range,
             Range::new(Position::new(4, 15), Position::new(4, 21))
         );
+    }
+
+    #[test]
+    fn rename_accepts_contextual_binding_names() {
+        let source = "function double(number: int64) returns int64:\n    return number + number\n";
+        let uri = Url::parse("file:///workspace/main.jett").unwrap();
+        assert!(rename_edit(source, &uri, Position::new(1, 12), "value").is_some());
     }
 
     #[test]
