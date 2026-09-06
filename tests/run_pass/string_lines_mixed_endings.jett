@@ -1,0 +1,6 @@
+namespace app
+function lines_mixed_endings_test() returns string:
+    list[string] lines = string.lines("one\rtwo\r\nthree\nfour")
+    return string.join(lines, "|")
+verify lines_mixed_endings_test:
+    assert lines_mixed_endings_test() == "one|two|three|four"
