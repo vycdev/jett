@@ -976,6 +976,10 @@ run_pass_fixture!(run_pass_string_extra, "string_extra.jett");
 run_pass_fixture!(run_pass_math_extra, "math_extra.jett");
 run_pass_fixture!(run_pass_pipeline_into, "pipeline_into.jett");
 run_pass_fixture!(run_pass_string_iteration, "string_iteration.jett");
+run_pass_fixture!(
+    run_pass_string_lines_mixed_endings,
+    "string_lines_mixed_endings.jett"
+);
 run_pass_fixture!(run_pass_list_map_extra, "list_map_extra.jett");
 run_pass_fixture!(run_pass_encoding, "encoding.jett");
 run_pass_fixture!(run_pass_string_chars, "string_chars.jett");
@@ -1008,6 +1012,7 @@ run_pass_fixture!(
     run_pass_string_split_grapheme_boundaries,
     "string_split_grapheme_boundaries.jett"
 );
+run_pass_fixture!(run_pass_string_split_max, "string_split_max.jett");
 run_pass_fixture!(run_pass_time_and_os, "time_and_os.jett");
 run_pass_fixture!(run_pass_time_values, "time_values.jett");
 run_pass_fixture!(run_pass_clock_production, "clock_production.jett");
