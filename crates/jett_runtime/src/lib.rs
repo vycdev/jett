@@ -1,6 +1,7 @@
 //! Backend-neutral runtime services for Jett execution contexts.
 
 use std::any::Any;
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_CONTEXT_ID: AtomicU64 = AtomicU64::new(1);
@@ -120,6 +121,7 @@ impl ResourceRegistry {
         F: FnOnce(T) + Send + 'static,
     {
         if self.shutting_down {
+            finalizer(payload);
             return Err(RegistryError::ShuttingDown);
         }
 
@@ -287,8 +289,18 @@ impl ResourceRegistry {
             })
             .collect::<Vec<_>>();
         live_slots.sort_unstable_by_key(|(sequence, _)| std::cmp::Reverse(*sequence));
+        let mut failure = None;
         for (_, slot_index) in live_slots {
-            self.finalize_slot(slot_index);
+            let result = catch_unwind(AssertUnwindSafe(|| self.finalize_slot(slot_index)));
+            if failure.is_none() {
+                failure = result.err();
+            }
+        }
+        if let Some(failure) = failure {
+            // Cleanup must finish even when Drop runs during an existing unwind.
+            if !std::thread::panicking() {
+                resume_unwind(failure);
+            }
         }
     }
 
@@ -332,10 +344,15 @@ impl ResourceRegistry {
             .take()
             .expect("live resource entry disappeared before finalization");
         self.retire_slot(slot_index);
-        if let Some(pending) = entry.pending.take() {
-            (pending.detach)();
+        let detach_failure = entry
+            .pending
+            .take()
+            .and_then(|pending| catch_unwind(AssertUnwindSafe(pending.detach)).err());
+        let finalizer_failure =
+            catch_unwind(AssertUnwindSafe(|| (entry.finalizer)(entry.payload))).err();
+        if let Some(failure) = detach_failure.or(finalizer_failure) {
+            resume_unwind(failure);
         }
-        (entry.finalizer)(entry.payload);
     }
 }
 

@@ -1359,7 +1359,9 @@ boundary. It type-erases provider payloads behind private keys, validates
 context/type/generation and authority provenance before access, gives pending
 operations separate generations so late completions cannot finish replacement
 work, and finalizes live entries in reverse creation order on explicit or
-implicit context shutdown. Interpreter trusted-hook dispatch and source-level
+implicit context shutdown. Provider cleanup panics do not skip remaining
+finalizers, and rejected insertions release their consumed provider payloads.
+Interpreter trusted-hook dispatch and source-level
 scope/drop integration remain later stages of the resource contract.
 
 Move dataflow transfers one cleanup obligation; views never own cleanup. Scope

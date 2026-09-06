@@ -1,3 +1,4 @@
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex};
 
 use jett_runtime::{AuthorityProvenance, ResourceRegistry, ResourceTypeId};
@@ -171,4 +172,80 @@ fn dropping_a_registry_finalizes_its_live_resources() {
     }
 
     assert_eq!(&*events.lock().unwrap(), &["resource"]);
+}
+
+#[test]
+fn failing_cleanup_still_detaches_and_finalizes_every_resource_once() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let mut registry = ResourceRegistry::new();
+    let resource_type = ResourceTypeId::new(7);
+    let authority = AuthorityProvenance::new(11, 13);
+    for name in ["first", "second"] {
+        let finalizer_events = Arc::clone(&events);
+        let key = registry
+            .insert(resource_type, name, authority, move |name| {
+                finalizer_events.lock().unwrap().push(name);
+                if name == "second" {
+                    panic!("provider finalizer failed");
+                }
+            })
+            .unwrap();
+        if name == "second" {
+            registry
+                .begin_pending(key, resource_type, &authority, || {
+                    panic!("provider detach failed");
+                })
+                .unwrap();
+        }
+    }
+    assert!(catch_unwind(AssertUnwindSafe(|| registry.shutdown())).is_err());
+    assert_eq!(registry.live_count(), 0);
+    registry.shutdown();
+    drop(registry);
+    assert_eq!(&*events.lock().unwrap(), &["second", "first"]);
+}
+
+#[test]
+fn rejected_insert_finalizes_the_payload_it_consumed() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let mut registry = ResourceRegistry::new();
+    registry.shutdown();
+    let finalized = Arc::clone(&events);
+    assert_eq!(
+        registry.insert(
+            ResourceTypeId::new(1),
+            "rejected",
+            AuthorityProvenance::new(1, 1),
+            move |payload| {
+                finalized.lock().unwrap().push(payload);
+            }
+        ),
+        Err(jett_runtime::RegistryError::ShuttingDown)
+    );
+    assert_eq!(&*events.lock().unwrap(), &["rejected"]);
+}
+
+#[test]
+fn cleanup_panics_do_not_abort_an_existing_unwind() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let finalized = Arc::clone(&events);
+    assert!(
+        catch_unwind(move || {
+            let mut registry = ResourceRegistry::new();
+            registry
+                .insert(
+                    ResourceTypeId::new(1),
+                    (),
+                    AuthorityProvenance::new(1, 1),
+                    move |_| {
+                        finalized.lock().unwrap().push("finalized");
+                        panic!("cleanup failed");
+                    },
+                )
+                .unwrap();
+            panic!("original failure");
+        })
+        .is_err()
+    );
+    assert_eq!(&*events.lock().unwrap(), &["finalized"]);
 }
