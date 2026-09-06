@@ -63,6 +63,15 @@ fn cannot_consume_view(name: &str, span: Span) -> Diagnostic {
     )
 }
 
+/// E0403: `cancel` requires a pending variable produced by `run`.
+fn task_control_requires_pending(operation: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        403,
+        format!("`{operation}` requires a pending task produced by `run`"),
+        span,
+    )
+}
+
 /// E0402: Closures may capture only implicitly copyable values.
 pub(crate) fn cannot_capture_move_only(name: &str, span: Span) -> Diagnostic {
     Diagnostic::error(
@@ -283,6 +292,7 @@ impl<'a> OwnershipChecker<'a> {
     }
 
     fn check_var_decl(&mut self, decl: &ast::VarDecl) {
+        let initial_state = self.initial_task_state(&decl.value);
         // Check the initializer expression for ownership violations.
         self.check_expr_ownership(&decl.value);
 
@@ -290,7 +300,7 @@ impl<'a> OwnershipChecker<'a> {
         self.states.insert(
             decl.name.name.clone(),
             VarInfo {
-                state: OwnershipState::Owned,
+                state: initial_state,
                 mutable: decl.mutable,
                 type_id,
                 consumed_span: None,
@@ -299,6 +309,7 @@ impl<'a> OwnershipChecker<'a> {
     }
 
     fn check_assign(&mut self, assign: &ast::AssignStmt) {
+        let initial_state = self.initial_task_state(&assign.value);
         // Check the value expression.
         self.check_expr_ownership(&assign.value);
 
@@ -306,8 +317,8 @@ impl<'a> OwnershipChecker<'a> {
         if let Expr::Ident(ident) = &assign.target {
             if let Some(info) = self.states.get_mut(&ident.name) {
                 if info.mutable {
-                    // Mutable variable: rebinding resets state to Owned.
-                    info.state = OwnershipState::Owned;
+                    // Rebinding may start a fresh pending task.
+                    info.state = initial_state;
                     info.consumed_span = None;
                 }
             }
@@ -319,6 +330,22 @@ impl<'a> OwnershipChecker<'a> {
     fn check_return(&mut self, ret: &ast::ReturnStmt) {
         if let Some(expr) = &ret.value {
             self.check_expr_ownership(expr);
+        }
+    }
+
+    fn initial_task_state(&self, expression: &Expr) -> OwnershipState {
+        match expression {
+            Expr::Run(_, _) => OwnershipState::Pending,
+            Expr::Paren(inner, _) => self.initial_task_state(inner),
+            Expr::Ident(ident)
+                if self
+                    .states
+                    .get(&ident.name)
+                    .is_some_and(|info| info.state == OwnershipState::Pending) =>
+            {
+                OwnershipState::Pending
+            }
+            _ => OwnershipState::Owned,
         }
     }
 
@@ -390,7 +417,17 @@ impl<'a> OwnershipChecker<'a> {
                     break;
                 }
                 if result.state != OwnershipState::Consumed {
-                    result.state = branch_info.state;
+                    // A task is cancellable only if every live branch leaves
+                    // it pending; one branch may already have joined it.
+                    result.state = if matches!(
+                        (result.state, branch_info.state),
+                        (OwnershipState::Pending, OwnershipState::Owned)
+                            | (OwnershipState::Owned, OwnershipState::Pending)
+                    ) {
+                        OwnershipState::Owned
+                    } else {
+                        branch_info.state
+                    };
                     result.consumed_span = branch_info.consumed_span;
                 }
             }
@@ -632,11 +669,11 @@ impl<'a> OwnershipChecker<'a> {
             | Expr::Send(inner, _)
             | Expr::Ask(inner, _)
             | Expr::Clone(inner, _)
-            | Expr::Run(inner, _)
-            | Expr::Join(inner, _)
-            | Expr::Cancel(inner, _) => {
+            | Expr::Run(inner, _) => {
                 self.check_expr_ownership(inner);
             }
+            Expr::Join(inner, span) => self.check_task_control("join", inner, *span, true),
+            Expr::Cancel(inner, span) => self.check_task_control("cancel", inner, *span, false),
             Expr::InlineFn(params, _, body, _) => {
                 let saved = std::mem::take(&mut self.states);
 
@@ -669,6 +706,55 @@ impl<'a> OwnershipChecker<'a> {
             | Expr::None(_)
             | Expr::EnumVariant(_, _, _)
             | Expr::Error(_) => {}
+        }
+    }
+
+    fn check_task_control(
+        &mut self,
+        operation: &str,
+        operand: &Expr,
+        span: Span,
+        resolves_task: bool,
+    ) {
+        if let Expr::Paren(inner, _) = operand {
+            self.check_task_control(operation, inner, span, resolves_task);
+            return;
+        }
+        // `join` ensures resolution, including already-resolved expressions.
+        // Only cancellation requires a still-pending task.
+        if resolves_task {
+            if let Expr::Ident(ident) = operand
+                && let Some(info) = self.states.get(&ident.name)
+                && info.state == OwnershipState::Pending
+            {
+                let copyable = self.is_copyable(info.type_id);
+                let info = self.states.get_mut(&ident.name).unwrap();
+                info.state = if copyable {
+                    OwnershipState::Owned
+                } else {
+                    OwnershipState::Consumed
+                };
+                info.consumed_span = (!copyable).then_some(span);
+            } else {
+                self.consume_expr(operand, span);
+            }
+            return;
+        }
+        let Expr::Ident(ident) = operand else {
+            self.check_expr_ownership(operand);
+            self.diagnostics
+                .push(task_control_requires_pending(operation, span));
+            return;
+        };
+        let Some(info) = self.states.get_mut(&ident.name) else {
+            self.diagnostics
+                .push(task_control_requires_pending(operation, span));
+            return;
+        };
+        if info.state != OwnershipState::Pending {
+            self.diagnostics
+                .push(task_control_requires_pending(operation, span));
+            return;
         }
     }
 

@@ -2232,7 +2232,7 @@ function fetch_all_data(view net: Network) returns result[DashboardData, HttpErr
 
 **Cancellation through capabilities:**
 
-`cancel` sets a cancellation flag on a task. The task is not killed immediately — instead, its next capability checkpoint terminates the pending task with a `CancelledError` before the operation takes effect. This task-control failure is surfaced by `join`; it is separate from the interrupted function's declared `result[T, E]` error type. No cancellation tokens or manual flag checking are needed — the capability system provides natural cancellation checkpoints:
+`cancel` requires a still-pending task variable; a value that has already been joined on any live branch cannot be cancelled. Unlike cancellation, `join` also accepts resolved values. `cancel` sets a cancellation flag on a task. The task is not killed immediately — instead, its next capability checkpoint terminates the pending task with a `CancelledError` before the operation takes effect. This task-control failure is surfaced by `join`; it is separate from the interrupted function's declared `result[T, E]` error type. No cancellation tokens or manual flag checking are needed — the capability system provides natural cancellation checkpoints:
 
 ```
 Data work = run expensive_operation(view net, data)

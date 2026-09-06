@@ -1180,6 +1180,10 @@ compile_fail_fixture!(
     "ownership_while_zero_iteration_rebind.jett"
 );
 compile_fail_fixture!(
+    compile_fail_ownership_task_control_requires_pending,
+    "ownership_task_control_requires_pending.jett"
+);
+compile_fail_fixture!(
     compile_fail_ownership_collection_literals_move_elements,
     "ownership_collection_literals_move_elements.jett"
 );

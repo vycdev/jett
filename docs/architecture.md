@@ -589,6 +589,9 @@ This sub-phase tracks the ownership state of every variable through the control 
 - **Run/join:** `run` marks a value as pending; it cannot be used until `join`ed.
 - **No orphaned tasks:** every `run` must have a matching `join` or `cancel` before the function returns.
 - **No rebinding while viewed:** The owner of a variable cannot rebind it while a `view` to it exists. This prevents `items = new_list` inside a `for item in view items:` loop body, and prevents rebinding a variable that was passed as `view` to a `run` task until the task is `join`ed or `cancel`led.
+- **Task-control operands:** cancellation requires a pending task variable on
+  every live control-flow path. Joins retain the ensure-resolved contract for
+  ordinary expressions, with move-only values subject to normal ownership.
 - **Cancellation semantics:** `cancel task` sets a cancellation flag. The task is
   not killed immediately — its next capability checkpoint terminates the pending
   task with `CancelledError` before the capability operation takes effect. The
