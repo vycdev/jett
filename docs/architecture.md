@@ -790,7 +790,8 @@ failure blocks distinguish local `default` fallback from function `return`,
 and step-local handles wrap only their intermediate pipeline call. Enum
 construction carries a dense checked variant ID and payloads; exhaustive
 matches carry variant arms, payload locals, and an optional catch-all. Typed
-parameters and locals, direct user calls, core expressions, returns, branches,
+parameters and locals, direct user calls, actor spawn/messages with normalized
+arguments and explicit lexical evaluation order, core expressions, returns, branches,
 loops, `for`, assertions/debug controls, string interpolation, comptime
 markers, explicit declassification/coarsening, state tests, and task-control
 markers are also covered. Bitfield and state-machine construction, transitions,

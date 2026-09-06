@@ -793,6 +793,7 @@ run_pass_fixture!(
     "type_construction_machine.jett"
 );
 run_pass_fixture!(run_pass_actor_counter, "actor_counter.jett");
+run_pass_fixture!(run_pass_actor_named_arguments, "actor_named_arguments.jett");
 run_pass_fixture!(
     run_pass_numeric_literal_contexts,
     "numeric_literal_contexts.jett"

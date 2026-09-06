@@ -9210,20 +9210,21 @@ impl<'a> TypeChecker<'a> {
         args: &[ast::CallArg],
         span: Span,
     ) {
-        if args.len() != params.len() {
-            self.sink.emit(errors::argument_count_mismatch(
-                label,
-                params.len(),
-                args.len(),
-                span,
-            ));
+        let parameter_names = params
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>();
+        let Some(argument_order) = self.bind_call_arguments(label, &parameter_names, args, span)
+        else {
             for arg in args {
                 self.check_expr(&arg.value);
             }
             return;
-        }
+        };
+        self.record_call_argument_order(span, argument_order.clone());
 
-        for (arg, (param_name, param_ty)) in args.iter().zip(params.iter()) {
+        for (&source_index, (param_name, param_ty)) in argument_order.iter().zip(params.iter()) {
+            let arg = &args[source_index];
             let arg_ty = self.check_expr_for_expected(&arg.value, *param_ty, false);
             if arg_ty != TypeInterner::ERROR
                 && *param_ty != TypeInterner::ERROR
