@@ -170,21 +170,48 @@ impl Parser {
     }
 
     fn parse_alternation(&mut self) -> Result<u64, CompileError> {
-        let mut states = self.parse_concatenation()?;
-        while self.peek() == Some('|') {
-            self.cursor += 1;
-            let branch_states = self.parse_concatenation()?;
-            states = self.add_states(states, branch_states)?;
-            states = self.add_states(states, 1)?;
-        }
-        Ok(states)
-    }
-
-    fn parse_concatenation(&mut self) -> Result<u64, CompileError> {
+        // Legal noncapturing nesting can exhaust a host thread's call stack.
+        // Keep group continuations explicitly on the heap instead.
+        let mut groups = Vec::new();
         let mut states = 0;
-        while let Some(ch) = self.peek() {
-            if matches!(ch, '|' | ')') {
-                break;
+        let mut alternatives = 0;
+        loop {
+            let Some(ch) = self.peek() else {
+                return if groups.is_empty() {
+                    self.add_states(alternatives, states)
+                } else {
+                    Err(self.invalid_here("unclosed group"))
+                };
+            };
+            if ch == '(' {
+                let capturing = self.begin_group()?;
+                groups.push((states, alternatives, capturing));
+                states = 0;
+                alternatives = 0;
+                continue;
+            }
+            if ch == '|' {
+                self.cursor += 1;
+                alternatives = self.add_states(alternatives, states)?;
+                alternatives = self.add_states(alternatives, 1)?;
+                states = 0;
+                continue;
+            }
+            if ch == ')' {
+                let Some((outer_states, outer_alternatives, capturing)) = groups.pop() else {
+                    return self.add_states(alternatives, states);
+                };
+                self.cursor += 1;
+                let body = self.add_states(alternatives, states)?;
+                let atom = if capturing {
+                    self.add_states(body, 2)?
+                } else {
+                    body
+                };
+                let quantified = self.parse_quantifier(atom)?;
+                states = self.add_states(outer_states, quantified)?;
+                alternatives = outer_alternatives;
+                continue;
             }
             if matches!(ch, ']' | '}') {
                 return Err(self.invalid_here("unexpected token"));
@@ -204,7 +231,6 @@ impl Parser {
                 states = self.add_states(states, quantified)?;
             }
         }
-        Ok(states)
     }
 
     fn parse_atom(&mut self) -> Result<u64, CompileError> {
@@ -214,7 +240,6 @@ impl Parser {
                 Ok(1)
             }
             Some('[') => self.parse_class(),
-            Some('(') => self.parse_group(),
             Some('\\') => {
                 self.parse_shorthand()?;
                 Ok(1)
@@ -225,7 +250,7 @@ impl Parser {
         }
     }
 
-    fn parse_group(&mut self) -> Result<u64, CompileError> {
+    fn begin_group(&mut self) -> Result<bool, CompileError> {
         let open = self.cursor;
         self.cursor += 1;
         let mut capturing = true;
@@ -261,16 +286,7 @@ impl Parser {
             None
         };
 
-        let body = self.parse_alternation()?;
-        if self.peek() != Some(')') {
-            return Err(self.invalid_here("unclosed group"));
-        }
-        self.cursor += 1;
-        if capture_index.is_some() {
-            self.add_states(body, 2)
-        } else {
-            Ok(body)
-        }
+        Ok(capture_index.is_some())
     }
 
     fn parse_capture_name(&mut self) -> Result<String, CompileError> {

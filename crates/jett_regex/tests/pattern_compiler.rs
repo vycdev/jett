@@ -14,6 +14,9 @@ fn computes_canonical_program_state_counts() {
         ("a{2,4}", 7),
         ("a{2,}", 5),
         ("(ab){2,3}", 14),
+        ("(a|(?:bc))d", 8),
+        ("(?:(?:a|b)?c){2}", 11),
+        ("(?:a{65536}){0}", 1),
     ];
 
     for (pattern, expected) in cases {
@@ -137,4 +140,22 @@ fn rejects_patterns_and_programs_above_portable_limits() {
         compile_pattern("a{65536}"),
         Err(CompileError::CompiledPatternTooLarge { limit: 65_536 })
     );
+}
+
+#[test]
+fn accepts_deep_noncapturing_groups_within_the_pattern_limit() {
+    let pattern = format!("{}a{}", "(?:".repeat(1_023), ")".repeat(1_023));
+    assert_eq!(compile_pattern(&pattern).unwrap().state_count(), 2);
+}
+
+#[test]
+fn raw_class_terminators_cannot_be_range_endpoints() {
+    assert_eq!(
+        compile_pattern("[A-]]"),
+        Err(CompileError::InvalidPattern(InvalidPattern {
+            position: 2,
+            message: "unexpected token",
+        }))
+    );
+    assert!(compile_pattern(r"[A-\]]").is_ok());
 }
