@@ -72,6 +72,23 @@ export function split(value: string, delimiter: string) returns list[string]:
     return string.__split(value, delimiter)
 export function join(items: list[string], separator: string) returns string:
     return string.__join(items, separator)
+export function split_max(value: string, delimiter: string, max_parts: int64) returns list[string]:
+    if max_parts <= 1:
+        return list(value)
+    list[string] parts = string.split(value, delimiter)
+    int64 part_count = list.length[string](view parts)
+    if part_count <= max_parts:
+        return parts
+    mutable list[string] output = list.new[string]()
+    mutable int64 index = 0
+    while index < max_parts - 1:
+        string part = list.get[string](view parts, index) handle:
+            default ""
+        output = list.append[string](output, part)
+        index = index + 1
+    list[string] remaining = list.skip[string](parts, max_parts - 1)
+    string remainder = string.join(remaining, delimiter)
+    return list.append[string](output, remainder)
 export function repeat(value: string, count: int64) returns string:
     return string.__repeat(value, count)
 export function reverse(value: string) returns string:
