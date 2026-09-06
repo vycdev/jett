@@ -287,6 +287,10 @@ macro_rules! run_pass_fixture {
 }
 
 compile_pass_fixture!(compile_pass_basic, "basic.jett");
+compile_fail_fixture!(
+    compile_fail_structured_logging_secrets,
+    "structured_logging_secrets.jett"
+);
 compile_pass_fixture!(
     compile_pass_structured_logging_source,
     "structured_logging_source.jett"
