@@ -2136,7 +2136,10 @@ only by the exact manifest `DeclarationId` with `SourceOrigin::Stdlib`, never by
 qualified-name or path spelling. Constructor calls are source-legal only as
 direct property-body expressions, excluding nested declarations, closures,
 actors, and spawned tasks. Normal functions, `main`, verify,
-comptime, and application runtime code cannot construct them.
+comptime, and application runtime code cannot construct them. The source checker
+enforces this boundary for calls and pipeline steps and rejects constructor
+function values; per-attempt runtime hooks and construction identities remain
+staged implementation work.
 
 Build, query, and LSP pipelines run the same parse, resolution, type, ownership,
 capability, and context checks over property source without executing it. Only a

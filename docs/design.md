@@ -5828,7 +5828,10 @@ query, and LSP modes parse, resolve, type-check, and diagnose those calls but do
 not execute them; `jett build` may accept a valid property while omitting it from
 the application artifact. Only `jett test` installs the private hooks and runs
 constructors. Ordinary functions, `main`, verify, comptime, global initializers,
-and application runtime code reject construction.
+and application runtime code reject construction. Calls and pipeline steps share
+the property-only source check; constructors cannot escape as function values.
+The source facade and these checks are implemented, while per-attempt runtime
+providers and replay remain staged work.
 
 Only a resolved manifest `DeclarationId` with `SourceOrigin::Stdlib` is
 authorized; matching project/dependency names cannot mint authority. Every

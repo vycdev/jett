@@ -1,7 +1,20 @@
-# ERROR: E0371
-# ERROR: E0371
+# ERROR: E0371 x7
 function forbidden() returns Clock:
     return test.mock.clock(list())
+function forbidden_pipeline() returns Clock:
+    return list(test.mock.ClockStep.unavailable) into test.mock.clock
+function forbidden_indirect() returns Clock:
+    function(list[test.mock.ClockStep]) returns Clock maker = test.mock.clock
+    return maker(list())
+property provider_constructors_are_not_function_values:
+    function(list[test.mock.ClockStep]) returns Clock maker = test.mock.clock
+    assert true
+property constructors_cannot_run_at_compile_time:
+    Clock clock = comptime test.mock.clock(list())
+    assert true
+property constructors_cannot_run_in_tasks:
+    Clock clock = run test.mock.clock(list())
+    assert true
 property closure_cannot_hide_provider_construction:
     function() returns Clock maker = function() returns Clock:
         return test.mock.clock(list())

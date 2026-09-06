@@ -8264,7 +8264,34 @@ impl<'a> TypeChecker<'a> {
     // Expressions
     // ------------------------------------------------------------------
 
+    fn is_test_mock_constructor(name: &str) -> bool {
+        matches!(
+            name,
+            "test.mock.random" | "test.mock.clock" | "test.mock.environment"
+        )
+    }
+
+    fn check_test_mock_constructor_call(&mut self, name: Option<&str>, span: Span) {
+        if let Some(name) = name
+            && Self::is_test_mock_constructor(name)
+            && (!self.in_property_block || self.comptime_expr_depth > 0)
+        {
+            self.sink
+                .emit(errors::test_mock_outside_property(name, span));
+        }
+    }
+
     fn check_expr(&mut self, expr: &Expr) -> TypeId {
+        // Provider constructors are direct property operations, not ordinary
+        // function values that can escape through aliases or callbacks.
+        if matches!(expr, Expr::Ident(_) | Expr::FieldAccess(_, _, _))
+            && let Some(name) = self.resolved_expr_name(expr)
+            && Self::is_test_mock_constructor(&name)
+        {
+            self.sink
+                .emit(errors::test_mock_outside_property(&name, expr.span()));
+            return TypeInterner::ERROR;
+        }
         let ty = match expr {
             Expr::IntLiteral(value, span) => {
                 if self.int_literal_fits_type(*value, TypeInterner::INT64) {
@@ -8401,7 +8428,11 @@ impl<'a> TypeChecker<'a> {
             }
             Expr::Run(inner, _) => {
                 // `run call` returns the same type as the call (pending tracked internally).
-                self.check_expr(inner)
+                let saved_in_property_block = self.in_property_block;
+                self.in_property_block = false;
+                let ty = self.check_expr(inner);
+                self.in_property_block = saved_in_property_block;
+                ty
             }
             Expr::Join(inner, _) => {
                 // `join task` returns result[T, string] so `handle error:` works.
@@ -8517,6 +8548,7 @@ impl<'a> TypeChecker<'a> {
     fn check_pipeline_step_call(&mut self, current_ty: TypeId, step: &ast::PipelineStep) -> TypeId {
         let (function, type_args, extra_args, piped_as_view) = Self::pipeline_step_call_parts(step);
         let callee_name = self.resolved_expr_name(function);
+        self.check_test_mock_constructor_call(callee_name.as_deref(), step.span);
         let callee_is_pure = callee_name
             .as_deref()
             .map(|name| self.named_call_is_pure(name))
@@ -10008,13 +10040,7 @@ impl<'a> TypeChecker<'a> {
             return TypeInterner::ERROR;
         }
 
-        if let Some(name @ ("test.mock.random" | "test.mock.clock" | "test.mock.environment")) =
-            callee_name.as_deref()
-            && !self.in_property_block
-        {
-            self.sink
-                .emit(errors::test_mock_outside_property(name, span));
-        }
+        self.check_test_mock_constructor_call(callee_name.as_deref(), span);
 
         if let Some(name) = callee_name.as_deref()
             && capability::is_capability_type(name)

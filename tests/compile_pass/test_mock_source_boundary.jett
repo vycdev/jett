@@ -2,5 +2,6 @@ property scripted_capabilities_are_constructible_in_properties:
     if false:
         Random rng = test.mock.random(list(test.mock.RandomStep.bounded(offset: 0), test.mock.RandomStep.unit53(bits: 1), test.mock.RandomStep.boolean(value: true), test.mock.RandomStep.entropy_unavailable))
         Clock clock = test.mock.clock(list(test.mock.ClockStep.wall(unix_milliseconds: 1250), test.mock.ClockStep.unavailable))
+        Clock piped = list(test.mock.ClockStep.unavailable) into test.mock.clock
         Environment env = test.mock.environment(list("jett", "test"), list(test.mock.EnvironmentEntry(name: "MODE", value: "test")))
     assert true
