@@ -945,6 +945,16 @@ pub fn query_completions_at(
 ) -> Result<CompletionsQueryResult, String> {
     let source = fs::read_to_string(path)
         .map_err(|e| format!("failed to read {}: {}", path.display(), e))?;
+    query_source_completions_at(&source, path, line, column)
+}
+
+/// Query completion metadata using the authoritative in-memory document.
+pub fn query_source_completions_at(
+    source: &str,
+    path: &Path,
+    line: u32,
+    column: u32,
+) -> Result<CompletionsQueryResult, String> {
     let file_path = path.display().to_string();
     let file_id = FileId::new(0);
     let Some(offset) = line_col_to_offset(&source, line, column) else {

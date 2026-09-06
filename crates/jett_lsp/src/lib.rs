@@ -314,9 +314,9 @@ fn completion_items_for_source(
             .collect();
     let mut items = Vec::new();
 
-    // The on-disk query contributes project and standard-library metadata. Its
-    // current-file rows are excluded because the open document is authoritative.
-    if let Ok(result) = jett_driver::query_completions_at(path, 1, 1) {
+    // The open buffer is authoritative even when the saved file is invalid or
+    // does not exist yet. Discover sibling/stdlib metadata around its path.
+    if let Ok(result) = jett_driver::query_source_completions_at(source, path, 1, 1) {
         let current_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         for candidate in result.candidates {
             let candidate_path = Path::new(&candidate.file_path)
@@ -358,6 +358,30 @@ fn completion_items_for_source(
     }
 
     items.sort_by(|left, right| left.sort_text.cmp(&right.sort_text));
+    let source_line = source_line(source, usize::try_from(position.line).ok()?)?;
+    let suffix_length = source_line
+        .chars()
+        .skip(column.saturating_sub(1) as usize)
+        .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_')
+        .count() as u32;
+    let replacement_range = Range::new(
+        Position::new(
+            position.line,
+            position
+                .character
+                .checked_sub(prefix.encode_utf16().count() as u32)?,
+        ),
+        Position::new(
+            position.line,
+            position.character.checked_add(suffix_length)?,
+        ),
+    );
+    for item in &mut items {
+        item.text_edit = Some(CompletionTextEdit::Edit(TextEdit {
+            range: replacement_range,
+            new_text: item.label.clone(),
+        }));
+    }
     Some(items)
 }
 
@@ -851,8 +875,6 @@ mod tests {
         let items = completion_items_for_source(source, &path, Position::new(6, 14))
             .expect("valid completion query");
 
-        std::fs::remove_dir_all(&root).expect("remove temp project");
-
         let project_helper = items
             .iter()
             .find(|item| item.label == "util.helper")
@@ -863,6 +885,41 @@ mod tests {
         );
         assert!(items.iter().any(|item| item.label == "app.helper_local"));
         assert!(!items.iter().any(|item| item.label == "app.helper_old"));
+
+        for saved_text in [Some("function broken("), None] {
+            if let Some(saved_text) = saved_text {
+                std::fs::write(&path, saved_text).unwrap();
+            } else {
+                std::fs::remove_file(&path).unwrap();
+            }
+            let items = completion_items_for_source(source, &path, Position::new(6, 14)).unwrap();
+            assert!(
+                items.iter().any(|item| item.label == "util.helper"),
+                "invalid or missing saved file must not suppress sibling completions"
+            );
+            assert!(items.iter().any(|item| item.label == "app.helper_local"));
+        }
+        std::fs::remove_dir_all(&root).expect("remove temp project");
+    }
+
+    #[test]
+    fn qualified_completion_replaces_namespace_prefix_and_identifier_suffix() {
+        let source = "namespace app\nfunction beta() returns int64:\n    return 1\nfunction main() returns int64:\n    return app.beta\n";
+        let offset = source.find("app.beta").unwrap() + "app.be".len();
+        let items = completion_items_for_source(
+            source,
+            Path::new("/workspace/main.jett"),
+            lsp_position(source, offset as u32),
+        )
+        .unwrap();
+        let item = items.iter().find(|item| item.label == "app.beta").unwrap();
+        assert_eq!(
+            item.text_edit,
+            Some(CompletionTextEdit::Edit(TextEdit {
+                range: Range::new(Position::new(4, 11), Position::new(4, 19)),
+                new_text: "app.beta".to_string(),
+            }))
+        );
     }
 
     #[test]
