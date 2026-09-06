@@ -977,6 +977,10 @@ run_pass_fixture!(run_pass_string_extra, "string_extra.jett");
 run_pass_fixture!(run_pass_math_extra, "math_extra.jett");
 run_pass_fixture!(run_pass_pipeline_into, "pipeline_into.jett");
 run_pass_fixture!(run_pass_string_iteration, "string_iteration.jett");
+run_pass_fixture!(
+    run_pass_string_lines_mixed_endings,
+    "string_lines_mixed_endings.jett"
+);
 run_pass_fixture!(run_pass_list_map_extra, "list_map_extra.jett");
 run_pass_fixture!(run_pass_encoding, "encoding.jett");
 run_pass_fixture!(run_pass_string_chars, "string_chars.jett");
@@ -1009,6 +1013,7 @@ run_pass_fixture!(
     run_pass_string_split_grapheme_boundaries,
     "string_split_grapheme_boundaries.jett"
 );
+run_pass_fixture!(run_pass_string_split_max, "string_split_max.jett");
 run_pass_fixture!(run_pass_time_and_os, "time_and_os.jett");
 run_pass_fixture!(run_pass_time_values, "time_values.jett");
 run_pass_fixture!(run_pass_clock_production, "clock_production.jett");
@@ -1174,6 +1179,14 @@ compile_fail_fixture!(
 compile_fail_fixture!(
     compile_fail_ownership_while_zero_iteration_rebind,
     "ownership_while_zero_iteration_rebind.jett"
+);
+compile_fail_fixture!(
+    compile_fail_ownership_task_control_requires_pending,
+    "ownership_task_control_requires_pending.jett"
+);
+compile_fail_fixture!(
+    compile_fail_ownership_collection_literals_move_elements,
+    "ownership_collection_literals_move_elements.jett"
 );
 compile_fail_fixture!(
     compile_fail_math_sum_consumes_list,
@@ -1570,6 +1583,24 @@ fn run_pass_random_scripted_contract() {
 }
 
 #[test]
+fn random_script_rejects_unconsumed_samples() {
+    let path = fixture_path("run_pass", "random_production.jett");
+    assert_eq!(
+        run_file_with_random_test_samples(
+            &path,
+            vec![
+                RandomTestSample::Bounded(0),
+                RandomTestSample::Unit53(0),
+                RandomTestSample::Boolean(false),
+                RandomTestSample::Boolean(true),
+            ],
+        )
+        .unwrap_err(),
+        "runtime error: Random: test provider has 1 unconsumed sample"
+    );
+}
+
+#[test]
 fn runtime_fail_random_script_provider_exhausted() {
     let path = fixture_path("runtime_fail", "random_provider_exhausted.jett");
     assert_eq!(
@@ -1617,6 +1648,28 @@ fn run_pass_clock_scripted_contract() {
     )
     .unwrap_or_else(|err| panic!("expected {} to run successfully: {err}", path.display()));
     assert_eq!(output, "0:0:-1:42123:40000\n");
+}
+
+#[test]
+fn clock_script_rejects_unconsumed_samples() {
+    let path = fixture_path("runtime_fail", "clock_provider_failure.jett");
+    assert_eq!(
+        run_file_with_clock_test_samples(
+            &path,
+            vec![
+                ClockTestSample::Wall {
+                    unix_seconds: 0,
+                    subsecond_nanoseconds: 0,
+                },
+                ClockTestSample::Wall {
+                    unix_seconds: 1,
+                    subsecond_nanoseconds: 0,
+                },
+            ],
+        )
+        .unwrap_err(),
+        "runtime error: Clock: test provider has 1 unconsumed sample"
+    );
 }
 
 #[test]
