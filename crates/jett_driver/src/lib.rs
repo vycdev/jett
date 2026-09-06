@@ -3015,14 +3015,32 @@ fn run_file_inner(path: &Path, options: RunOptions) -> Result<RunOutput, String>
     // Register items from the entry file (may override sibling definitions).
     register_module_items(&mut interp, &module);
 
-    // Call main()
+    // Call main(). Scripted providers are exact expectations: a successful
+    // deterministic run must consume every supplied operation sample.
     match interp.call_function_in_namespace(main_namespace.as_deref(), "main", main_args) {
-        Ok(_) => Ok(RunOutput {
-            stdout: interp.take_stdout_output(),
-            debug_output: interp.take_debug_output(),
-        }),
+        Ok(_) => {
+            reject_unconsumed_test_samples("Random", interp.random_test_samples_remaining())?;
+            reject_unconsumed_test_samples("Clock", interp.clock_test_samples_remaining())?;
+            Ok(RunOutput {
+                stdout: interp.take_stdout_output(),
+                debug_output: interp.take_debug_output(),
+            })
+        }
         Err(e) => Err(format!("runtime error: {}", e)),
     }
+}
+
+fn reject_unconsumed_test_samples(
+    capability: &str,
+    remaining: Option<usize>,
+) -> Result<(), String> {
+    let Some(remaining) = remaining.filter(|remaining| *remaining != 0) else {
+        return Ok(());
+    };
+    let suffix = if remaining == 1 { "sample" } else { "samples" };
+    Err(format!(
+        "runtime error: {capability}: test provider has {remaining} unconsumed {suffix}"
+    ))
 }
 
 fn default_runtime_args_for_main(main: &FunctionDef) -> Result<Vec<Value>, String> {

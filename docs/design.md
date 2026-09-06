@@ -386,7 +386,6 @@ Jett has **no implicit type conversions**. An `int64` is never silently promoted
 **Infallible conversions** (lossless — always succeed, return `T` directly):
 
 ```
-float64 x = float64.from_int64(42)          # → 42.0
 string s = string.from_int64(42)         # → "42"
 string s = string.from_float64(3.14)     # → "3.14"
 string s = string.from_bool(true)      # → "true"
@@ -400,6 +399,9 @@ int64 n = int64.from_string("42") handle error:
 
 float64 f = float64.from_string("3.14") handle error:
     return fail("not a float64")
+
+float64 x = float64.from_int64(42) handle error:
+    return fail("integer loses precision")
 
 int64 n = int64.from_float64(3.14) handle error:
     return fail("not a whole number")
@@ -419,7 +421,7 @@ int64 n = int64.from_float64(3.14) handle error:
 ```
 float64 x = 42
 # COMPILE ERROR: expected float64, got int64
-# hint: use float64.from_int64(42)
+# hint: use float64.from_int64(42) and handle the possible error
 
 int64 y = 3.14
 # COMPILE ERROR: expected int64, got float64
@@ -663,13 +665,15 @@ function fetch_data(view net: Network, url: string) returns result[map[string, s
         return fail(parse_error)
     return ok(data)
 
-function compute_stats(values: list[int64]) returns float64:
+function compute_stats(values: list[int64]) returns result[float64, string]:
     use math
     int64 count = list.length[int64](view values)
     int64 total = math.sum(values)
-    float64 total_f = float64.from_int64(total)
-    float64 count_f = float64.from_int64(count)
-    return total_f / count_f
+    float64 total_f = float64.from_int64(total) handle error:
+        return fail(error)
+    float64 count_f = float64.from_int64(count) handle error:
+        return fail(error)
+    return ok(total_f / count_f)
 ```
 
 **What this achieves:**
@@ -2235,7 +2239,7 @@ function fetch_all_data(view net: Network) returns result[DashboardData, HttpErr
 
 **Cancellation through capabilities:**
 
-`cancel` sets a cancellation flag on a task. The task is not killed immediately — instead, its next capability checkpoint terminates the pending task with a `CancelledError` before the operation takes effect. This task-control failure is surfaced by `join`; it is separate from the interrupted function's declared `result[T, E]` error type. No cancellation tokens or manual flag checking are needed — the capability system provides natural cancellation checkpoints:
+`cancel` requires a still-pending task variable; a value that has already been joined on any live branch cannot be cancelled. Unlike cancellation, `join` also accepts resolved values. `cancel` sets a cancellation flag on a task. The task is not killed immediately — instead, its next capability checkpoint terminates the pending task with a `CancelledError` before the operation takes effect. This task-control failure is surfaced by `join`; it is separate from the interrupted function's declared `result[T, E]` error type. No cancellation tokens or manual flag checking are needed — the capability system provides natural cancellation checkpoints:
 
 ```
 Data work = run expensive_operation(view net, data)
@@ -2805,8 +2809,10 @@ Each function is immediately followed by its contract. When the LLM generates `c
 type Percentage = float64 where value >= 0.0 && value <= 100.0
 
 function calculate_grade(score: int64, total: int64) returns Percentage:
-    float64 score_f = float64.from_int64(score)
-    float64 total_f = float64.from_int64(total)
+    float64 score_f = float64.from_int64(score) handle error:
+        default 0.0
+    float64 total_f = float64.from_int64(total) handle error:
+        default 1.0
     return score_f / total_f * 100.0
 
 verify calculate_grade:
