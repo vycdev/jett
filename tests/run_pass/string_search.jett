@@ -66,6 +66,16 @@ function grapheme_between_test() returns string:
     return string.between("{cluster}value{cluster}", cluster, cluster)
 verify grapheme_between_test:
     assert grapheme_between_test() == "value"
+function grapheme_replace_test() returns string:
+    string cluster = combining_grapheme_text()
+    string accent = utf8_from_hex("cc81")
+    string partial_base = string.replace(cluster, "e", "x")
+    string partial_mark = string.replace(cluster, accent, "x")
+    string whole = string.replace("a{cluster}b", cluster, "x")
+    string empty = string.replace(cluster, "", "-")
+    return "{bytes.to_hex(bytes.from_string(partial_base))}:{bytes.to_hex(bytes.from_string(partial_mark))}:{whole}:{bytes.to_hex(bytes.from_string(empty))}"
+verify grapheme_replace_test:
+    assert grapheme_replace_test() == "65cc81:65cc81:axb:2d65cc812d"
 # --- string.to_upper_first / string.to_lower_first ---
 function capitalize_test() returns string:
     return string.to_upper_first("hello world")
