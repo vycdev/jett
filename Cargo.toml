@@ -10,11 +10,14 @@ members = [
     "crates/jett_resolve",
     "crates/jett_types",
     "crates/jett_typecheck",
+    "crates/jett_hir",
+    "crates/jett_mir",
     "crates/jett_comptime",
     "crates/jett_fmt",
     "crates/jett_query",
     "crates/jett_driver",
     "crates/jett_lsp",
+    "crates/jett_profiler",
     "crates/jett_cli",
 ]
 
@@ -34,11 +37,14 @@ jett_ast = { path = "crates/jett_ast" }
 jett_resolve = { path = "crates/jett_resolve" }
 jett_types = { path = "crates/jett_types" }
 jett_typecheck = { path = "crates/jett_typecheck" }
+jett_hir = { path = "crates/jett_hir" }
+jett_mir = { path = "crates/jett_mir" }
 jett_comptime = { path = "crates/jett_comptime" }
 jett_fmt = { path = "crates/jett_fmt" }
 jett_query = { path = "crates/jett_query" }
 jett_driver = { path = "crates/jett_driver" }
 jett_lsp = { path = "crates/jett_lsp" }
+jett_profiler = { path = "crates/jett_profiler" }
 
 # External crates
 clap = { version = "4", features = ["derive"] }
@@ -49,3 +55,4 @@ rand = "0.8"
 salsa = "=0.28.2"
 subtle = "2"
 unicode-segmentation = "1"
+sha2 = "0.10"

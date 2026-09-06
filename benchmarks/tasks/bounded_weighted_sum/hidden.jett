@@ -1,0 +1,7 @@
+
+verify bounded_weighted_sum_hidden:
+    assert bounded_weighted_sum(list(), 5) == 0
+    assert bounded_weighted_sum(list(1, 2, 3), 10) == 14
+    assert bounded_weighted_sum(list(20, -20, 3), 10) == -1
+    assert bounded_weighted_sum(list(-1, 2, -3, 4), 2) == 5
+    assert bounded_weighted_sum(list(9, -4), 0) == 0

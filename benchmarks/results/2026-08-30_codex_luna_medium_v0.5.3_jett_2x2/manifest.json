@@ -1,0 +1,129 @@
+{
+  "benchmark_version": "0.5.3-pilot",
+  "run_kind": "codex-subscription-jett-2x2",
+  "generated_at_utc": {
+    "initial_first": "2026-08-30T18:03:47.478113+00:00",
+    "initial_last": "2026-08-30T18:09:30.514045+00:00",
+    "repair_first": "2026-08-30T18:10:43.188001+00:00",
+    "repair_last": "2026-08-30T18:13:44.027981+00:00"
+  },
+  "backend": "codex_subscription",
+  "authentication": "ChatGPT subscription",
+  "api_key_present": false,
+  "model": "gpt-5.6-luna",
+  "model_snapshot": null,
+  "model_alias_is_rolling": true,
+  "codex_cli_version": "codex-cli 0.145.0",
+  "reasoning_effort": "medium",
+  "languages": ["jett"],
+  "tracks": ["zero_shot", "skill_assisted"],
+  "evaluation_modes": ["one_shot", "compile_repair"],
+  "tasks": [
+    "account_state_evolution",
+    "bounded_weighted_sum",
+    "first_duplicate",
+    "inventory_batch",
+    "merge_sorted_intervals",
+    "order_lifecycle",
+    "recursive_expression",
+    "score_lines",
+    "signed_gcd",
+    "triangle_kind"
+  ],
+  "initial_row_count": 20,
+  "repair_row_count": 11,
+  "unique_initial_response_ids": 20,
+  "unique_repair_response_ids": 11,
+  "repair_attempts_per_failed_initial": 1,
+  "feedback_kinds": {"compiler_diagnostic": 10, "normalized_compile": 1},
+  "prompt_git_revision": "0a9eeb52e5f29883b7397e3c560b06fe7c3d94ce",
+  "selection": {
+    "language": "jett",
+    "tracks": ["zero_shot", "skill_assisted"],
+    "tasks_per_track": 10,
+    "selected_before_limit": true
+  },
+  "skill": {
+    "bytes": 8519,
+    "prompt_reference_bytes": 8795,
+    "sha256": "75aba9af03bb132ae01b9ed5c854d8fd7d2954de243bce2ac7628f0ad36cc74c"
+  },
+  "generation_isolation": {
+    "ephemeral_sessions": true,
+    "empty_temporary_working_directory": true,
+    "user_config_ignored": true,
+    "project_rules_ignored": true,
+    "sandbox": "read-only",
+    "tools_forbidden_by_prompt": true,
+    "observed_tool_calls": 0
+  },
+  "grading_isolation": {
+    "container_image": "jett-bench:0.5.3",
+    "container_image_sha256": "3af5c76850cd6daa57dbfbb1b8c0e466fc718ec1035f8c4c6f9df1fdc0e07d84",
+    "network": "none",
+    "memory_limit": "2g",
+    "cpu_limit": 2,
+    "pid_limit": 256,
+    "capabilities": "all dropped",
+    "no_new_privileges": true
+  },
+  "cells": {
+    "zero_shot_one_shot": {
+      "passed": 0,
+      "total": 10,
+      "input_tokens": 127706,
+      "cached_input_tokens": 117248,
+      "output_tokens": 9609,
+      "reasoning_tokens": 7176,
+      "code_bytes": 11448,
+      "code_lines": 344,
+      "model_latency_ms": 206820.95580000896,
+      "grader_runtime_ms": 128.86651195003651
+    },
+    "skill_assisted_one_shot": {
+      "passed": 9,
+      "total": 10,
+      "input_tokens": 146790,
+      "cached_input_tokens": 105216,
+      "output_tokens": 5884,
+      "reasoning_tokens": 3351,
+      "code_bytes": 11993,
+      "code_lines": 306,
+      "model_latency_ms": 135328.63200001884,
+      "grader_runtime_ms": 2390.1928680716082
+    },
+    "zero_shot_compile_repair": {
+      "repairs_passed": 1,
+      "repairs_attempted": 10,
+      "final_passed": 1,
+      "total": 10,
+      "repair_input_tokens": 135865,
+      "repair_cached_input_tokens": 120320,
+      "repair_output_tokens": 7188,
+      "repair_reasoning_tokens": 4863,
+      "repair_code_bytes": 11343,
+      "repair_code_lines": 333,
+      "repair_model_latency_ms": 160963.6389000807,
+      "repair_grader_runtime_ms": 801.7832870245911
+    },
+    "skill_assisted_compile_repair": {
+      "repairs_passed": 0,
+      "repairs_attempted": 1,
+      "final_passed": 9,
+      "total": 10,
+      "repair_input_tokens": 15456,
+      "repair_cached_input_tokens": 12032,
+      "repair_output_tokens": 1437,
+      "repair_reasoning_tokens": 924,
+      "repair_code_bytes": 2673,
+      "repair_code_lines": 62,
+      "repair_model_latency_ms": 29307.730500004254,
+      "repair_grader_runtime_ms": 5.884740996407345
+    }
+  },
+  "artifacts": {
+    "initial_results": {"path": "initial_results.jsonl", "sha256": "62bd249674606f9ad0252305b6bae4925a675145b83f4bec1dc76089cc95c597"},
+    "repair_results": {"path": "repair_results.jsonl", "sha256": "78ab260fc62159e4ec68850ff915b136a9085702d8d3c4a3e10cbe0da6daa929"},
+    "summary": {"path": "summary.json", "sha256": "6760f21984c1e16feefd1eca116aa548b2ebc1678bd02cc5414949b9fa5f0fc0"}
+  }
+}

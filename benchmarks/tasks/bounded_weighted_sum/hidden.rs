@@ -1,0 +1,10 @@
+include!("solution.rs");
+
+#[test]
+fn hidden_cases() {
+    assert_eq!(bounded_weighted_sum(&[], 5), 0);
+    assert_eq!(bounded_weighted_sum(&[1, 2, 3], 10), 14);
+    assert_eq!(bounded_weighted_sum(&[20, -20, 3], 10), -1);
+    assert_eq!(bounded_weighted_sum(&[-1, 2, -3, 4], 2), 5);
+    assert_eq!(bounded_weighted_sum(&[9, -4], 0), 0);
+}

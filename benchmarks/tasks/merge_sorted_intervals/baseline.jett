@@ -1,0 +1,24 @@
+namespace benchmark
+struct Interval:
+    start: int64
+    end: int64
+function merge_sorted_intervals(intervals: list[Interval]) returns list[Interval]:
+    mutable list[Interval] merged = list.new[Interval]()
+    mutable bool has_current = false
+    mutable int64 current_start = 0
+    mutable int64 current_end = 0
+    for interval in intervals:
+        if not has_current:
+            current_start = interval.start
+            current_end = interval.end
+            has_current = true
+        else if interval.start <= current_end:
+            if interval.end > current_end:
+                current_end = interval.end
+        else:
+            merged = list.append[Interval](merged, Interval(start: current_start, end: current_end))
+            current_start = interval.start
+            current_end = interval.end
+    if has_current:
+        merged = list.append[Interval](merged, Interval(start: current_start, end: current_end))
+    return merged

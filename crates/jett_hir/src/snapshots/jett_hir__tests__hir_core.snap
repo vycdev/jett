@@ -1,0 +1,439 @@
+---
+source: crates/jett_hir/src/lib.rs
+expression: program
+---
+Program {
+    functions: [
+        Function {
+            id: FunctionId(
+                0,
+            ),
+            identity: FunctionIdentity {
+                declaration: DeclarationId {
+                    origin: Project,
+                    namespace: "app",
+                    name: "add",
+                    kind: Function,
+                },
+                type_arguments: [],
+            },
+            source_definition: Some(
+                DefId(
+                    50,
+                ),
+            ),
+            params: [
+                Param {
+                    local: LocalId(
+                        0,
+                    ),
+                    name: "left",
+                    ty: TypeId(
+                        3,
+                    ),
+                    mode: Owned,
+                    mutable: false,
+                    span: Span {
+                        file: FileId(
+                            0,
+                        ),
+                        start: 27,
+                        end: 38,
+                    },
+                },
+                Param {
+                    local: LocalId(
+                        1,
+                    ),
+                    name: "right",
+                    ty: TypeId(
+                        3,
+                    ),
+                    mode: Owned,
+                    mutable: false,
+                    span: Span {
+                        file: FileId(
+                            0,
+                        ),
+                        start: 40,
+                        end: 52,
+                    },
+                },
+            ],
+            return_type: TypeId(
+                3,
+            ),
+            locals: [
+                Local {
+                    id: LocalId(
+                        0,
+                    ),
+                    name: "left",
+                    ty: TypeId(
+                        3,
+                    ),
+                    mutable: false,
+                    span: Span {
+                        file: FileId(
+                            0,
+                        ),
+                        start: 27,
+                        end: 38,
+                    },
+                },
+                Local {
+                    id: LocalId(
+                        1,
+                    ),
+                    name: "right",
+                    ty: TypeId(
+                        3,
+                    ),
+                    mutable: false,
+                    span: Span {
+                        file: FileId(
+                            0,
+                        ),
+                        start: 40,
+                        end: 52,
+                    },
+                },
+            ],
+            body: Block {
+                statements: [
+                    Statement {
+                        kind: Return(
+                            Some(
+                                Expression {
+                                    kind: Binary {
+                                        left: Expression {
+                                            kind: Local(
+                                                LocalId(
+                                                    0,
+                                                ),
+                                            ),
+                                            ty: TypeId(
+                                                3,
+                                            ),
+                                            span: Span {
+                                                file: FileId(
+                                                    0,
+                                                ),
+                                                start: 80,
+                                                end: 84,
+                                            },
+                                        },
+                                        op: Add,
+                                        right: Expression {
+                                            kind: Local(
+                                                LocalId(
+                                                    1,
+                                                ),
+                                            ),
+                                            ty: TypeId(
+                                                3,
+                                            ),
+                                            span: Span {
+                                                file: FileId(
+                                                    0,
+                                                ),
+                                                start: 87,
+                                                end: 92,
+                                            },
+                                        },
+                                    },
+                                    ty: TypeId(
+                                        3,
+                                    ),
+                                    span: Span {
+                                        file: FileId(
+                                            0,
+                                        ),
+                                        start: 80,
+                                        end: 92,
+                                    },
+                                },
+                            ),
+                        ),
+                        span: Span {
+                            file: FileId(
+                                0,
+                            ),
+                            start: 73,
+                            end: 92,
+                        },
+                    },
+                ],
+                span: Span {
+                    file: FileId(
+                        0,
+                    ),
+                    start: 73,
+                    end: 93,
+                },
+            },
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 14,
+                end: 93,
+            },
+        },
+        Function {
+            id: FunctionId(
+                1,
+            ),
+            identity: FunctionIdentity {
+                declaration: DeclarationId {
+                    origin: Project,
+                    namespace: "app",
+                    name: "main",
+                    kind: Function,
+                },
+                type_arguments: [],
+            },
+            source_definition: Some(
+                DefId(
+                    51,
+                ),
+            ),
+            params: [],
+            return_type: TypeId(
+                3,
+            ),
+            locals: [
+                Local {
+                    id: LocalId(
+                        0,
+                    ),
+                    name: "value",
+                    ty: TypeId(
+                        3,
+                    ),
+                    mutable: false,
+                    span: Span {
+                        file: FileId(
+                            0,
+                        ),
+                        start: 128,
+                        end: 164,
+                    },
+                },
+            ],
+            body: Block {
+                statements: [
+                    Statement {
+                        kind: Let {
+                            local: LocalId(
+                                0,
+                            ),
+                            value: Expression {
+                                kind: Call {
+                                    function: FunctionId(
+                                        0,
+                                    ),
+                                    args: [
+                                        Expression {
+                                            kind: Int(
+                                                1,
+                                            ),
+                                            ty: TypeId(
+                                                3,
+                                            ),
+                                            span: Span {
+                                                file: FileId(
+                                                    0,
+                                                ),
+                                                start: 162,
+                                                end: 163,
+                                            },
+                                        },
+                                        Expression {
+                                            kind: Int(
+                                                2,
+                                            ),
+                                            ty: TypeId(
+                                                3,
+                                            ),
+                                            span: Span {
+                                                file: FileId(
+                                                    0,
+                                                ),
+                                                start: 153,
+                                                end: 154,
+                                            },
+                                        },
+                                    ],
+                                    evaluation_order: [
+                                        1,
+                                        0,
+                                    ],
+                                },
+                                ty: TypeId(
+                                    3,
+                                ),
+                                span: Span {
+                                    file: FileId(
+                                        0,
+                                    ),
+                                    start: 142,
+                                    end: 164,
+                                },
+                            },
+                        },
+                        span: Span {
+                            file: FileId(
+                                0,
+                            ),
+                            start: 128,
+                            end: 164,
+                        },
+                    },
+                    Statement {
+                        kind: If {
+                            condition: Expression {
+                                kind: Binary {
+                                    left: Expression {
+                                        kind: Local(
+                                            LocalId(
+                                                0,
+                                            ),
+                                        ),
+                                        ty: TypeId(
+                                            3,
+                                        ),
+                                        span: Span {
+                                            file: FileId(
+                                                0,
+                                            ),
+                                            start: 172,
+                                            end: 177,
+                                        },
+                                    },
+                                    op: Greater,
+                                    right: Expression {
+                                        kind: Int(
+                                            0,
+                                        ),
+                                        ty: TypeId(
+                                            3,
+                                        ),
+                                        span: Span {
+                                            file: FileId(
+                                                0,
+                                            ),
+                                            start: 180,
+                                            end: 181,
+                                        },
+                                    },
+                                },
+                                ty: TypeId(
+                                    11,
+                                ),
+                                span: Span {
+                                    file: FileId(
+                                        0,
+                                    ),
+                                    start: 172,
+                                    end: 181,
+                                },
+                            },
+                            then_block: Block {
+                                statements: [
+                                    Statement {
+                                        kind: Return(
+                                            Some(
+                                                Expression {
+                                                    kind: Local(
+                                                        LocalId(
+                                                            0,
+                                                        ),
+                                                    ),
+                                                    ty: TypeId(
+                                                        3,
+                                                    ),
+                                                    span: Span {
+                                                        file: FileId(
+                                                            0,
+                                                        ),
+                                                        start: 198,
+                                                        end: 203,
+                                                    },
+                                                },
+                                            ),
+                                        ),
+                                        span: Span {
+                                            file: FileId(
+                                                0,
+                                            ),
+                                            start: 191,
+                                            end: 203,
+                                        },
+                                    },
+                                ],
+                                span: Span {
+                                    file: FileId(
+                                        0,
+                                    ),
+                                    start: 191,
+                                    end: 208,
+                                },
+                            },
+                            else_block: None,
+                        },
+                        span: Span {
+                            file: FileId(
+                                0,
+                            ),
+                            start: 169,
+                            end: 208,
+                        },
+                    },
+                    Statement {
+                        kind: Return(
+                            Some(
+                                Expression {
+                                    kind: Int(
+                                        0,
+                                    ),
+                                    ty: TypeId(
+                                        3,
+                                    ),
+                                    span: Span {
+                                        file: FileId(
+                                            0,
+                                        ),
+                                        start: 215,
+                                        end: 216,
+                                    },
+                                },
+                            ),
+                        ),
+                        span: Span {
+                            file: FileId(
+                                0,
+                            ),
+                            start: 208,
+                            end: 216,
+                        },
+                    },
+                ],
+                span: Span {
+                    file: FileId(
+                        0,
+                    ),
+                    start: 128,
+                    end: 217,
+                },
+            },
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 93,
+                end: 217,
+            },
+        },
+    ],
+}

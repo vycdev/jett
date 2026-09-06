@@ -1,0 +1,17 @@
+[package]
+name = "jett_hir"
+description = "Typed, backend-neutral high-level IR and AST lowering for Jett"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+jett_common.workspace = true
+jett_parser.workspace = true
+jett_resolve.workspace = true
+jett_typecheck.workspace = true
+jett_types.workspace = true
+
+[dev-dependencies]
+insta = "1.48.0"
+jett_diagnostics.workspace = true

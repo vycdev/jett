@@ -52,6 +52,42 @@ diagnostic order, query identity, or published artifacts.
 
 *Note: The `--agent` flag and the Agent Server Protocol (ASP) referenced above are defined in Rule Set 21. The ASP specifies how the compiler communicates structured TOON output to agents — including build errors, type queries, signature lookups, completions, and test results. The exact capabilities and query formats are still being refined and may evolve as the compiler is implemented. See Rule Set 21 for the current specification.*
 
+### Checked Program and HIR Boundary
+
+Jett's first backend-neutral execution boundary is a typed HIR lowered from the
+semantic AST, resolver facts, and typechecker facts. HIR does not reinterpret
+source spellings: it carries resolved declaration targets, checked types,
+explicit ownership operations, capabilities, trusted source origin, and source
+provenance. Generic function identity is the canonical declaration plus its
+concrete type arguments.
+
+Named call arguments reach HIR only as a checked permutation into canonical
+parameter order. Struct construction likewise carries canonical field order
+and whether refinement validation produces a `result`. Source-defined method
+calls carry the exact concrete body selected by type checking, including
+interface dispatch; HIR does not rediscover those decisions from dotted names.
+The current direct-AST pipeline node is transient: its steps lower to nested
+checked HIR calls with the piped value synthesized as argument 1. Result,
+optional, and refinement-boundary handles share one explicit HIR form holding
+the target, failure kind, optional error local, and failure block. `default`
+yields to that nearest handle while `return` still exits the function. A
+step-local handle wraps only its intermediate call, so its success or fallback
+continues into the next step. Source wrapper and collection constructors become
+typed HIR operations without changing lexical evaluation. Enum construction
+uses dense variant identities, and exhaustive `match` arms bind payload locals
+explicitly rather than preserving source patterns.
+
+Accepted compiler-owned calls become typed intrinsic HIR nodes only after the
+typechecker authorizes them; HIR records canonical identity and evaluation
+order without reapplying trusted-source policy. Inline functions, indirect
+calls, bitfields, state machines, and actor operations likewise use explicit
+backend-neutral nodes rather than retaining source AST fragments.
+
+The direct AST remains the initial frontend boundary, and the tree-walking
+interpreter remains available while HIR coverage grows. The later lossless CST
+will lower into that same AST. The staged compiler contract is recorded in the
+[initial HIR lowering plan](active/hir_lowering_plan.md).
+
 ---
 
 ## Foundational Rules
@@ -6640,6 +6676,11 @@ Every function always has a `returns` clause — functions that produce no value
 **Every code path must end with an explicit `return` — except `returns nothing` functions.** A function that `returns int64` must have `return <value>` on every code path. If any path is missing a return, the compiler rejects it. The one exception: functions that `returns nothing` may omit the final `return nothing` — the function implicitly returns when execution reaches the end. Early `return nothing` is still allowed for exiting mid-function.
 
 Named arguments work in both struct construction AND function calls. Any parameter can be passed by name for clarity. This allows `GuiCapability.create_text_field(gui, label, width: 200, height: 30)` — mixing positional and named arguments in a single call.
+
+Argument expressions are always evaluated once in lexical left-to-right source
+order. Named arguments change which parameter receives a value, not when the
+expression producing that value runs. HIR stores values in canonical parameter
+or field order and carries the original evaluation permutation explicitly.
 
 ### Conditionals
 

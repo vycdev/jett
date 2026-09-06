@@ -1,0 +1,17 @@
+[package]
+name = "jett_mir"
+description = "Backend-neutral control-flow graph lowering for Jett"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+jett_common.workspace = true
+jett_hir.workspace = true
+jett_types.workspace = true
+
+[dev-dependencies]
+jett_diagnostics.workspace = true
+jett_parser.workspace = true
+jett_resolve.workspace = true
+jett_typecheck.workspace = true

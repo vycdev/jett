@@ -1,0 +1,4 @@
+interface:
+  display_name: "Python Programming"
+  short_description: "Type-driven Python programming and repair"
+  default_prompt: "Use $python-programming to implement and verify this Python program."

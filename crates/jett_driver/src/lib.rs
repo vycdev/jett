@@ -1090,6 +1090,7 @@ fn module_signature_query_result(
             | Item::VarDecl(_)
             | Item::Verify(_)
             | Item::Property(_)
+            | Item::Resource(_)
             | Item::TypeAlias(_) => {}
         }
     }
@@ -1137,6 +1138,7 @@ fn append_module_signature_displays(
             | Item::VarDecl(_)
             | Item::Verify(_)
             | Item::Property(_)
+            | Item::Resource(_)
             | Item::TypeAlias(_) => {}
         }
     }
@@ -1506,25 +1508,42 @@ pub fn query_file_symbols_detailed(
     let source = fs::read_to_string(path).map_err(|error| {
         FileSymbolsQueryError::operational(format!("failed to read {}: {}", path.display(), error))
     })?;
-    let parsed = parse(&source, FileId::new(0));
+    let file_path = path.display().to_string();
+    let display_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    query_source_file_symbols_with_path(&source, file_path, display_path)
+}
+
+/// Return a file-local outline from source text that may not exist on disk.
+///
+/// LSP clients use this entry point so document symbols reflect the latest
+/// in-memory document revision rather than a stale saved file.
+pub fn query_source_file_symbols(
+    source: &str,
+    file_path: &str,
+) -> Result<FileSymbolsQueryResult, FileSymbolsQueryError> {
+    query_source_file_symbols_with_path(source, file_path.to_string(), PathBuf::from(file_path))
+}
+
+fn query_source_file_symbols_with_path(
+    source: &str,
+    file_path: String,
+    display_path: PathBuf,
+) -> Result<FileSymbolsQueryResult, FileSymbolsQueryError> {
+    let parsed = parse(source, FileId::new(0));
     if has_error_diagnostics(&parsed.errors) {
         return Err(FileSymbolsQueryError::compilation(
             "parse errors:",
             parsed.errors,
-            source,
-            path.display().to_string(),
+            source.to_string(),
+            file_path,
         ));
     }
 
     let mut symbols = Vec::new();
     let mut file_paths = HashMap::new();
-    let display_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     file_paths.insert(FileId::new(0), display_path);
-    append_file_symbol_query_entries(&mut symbols, &parsed.module, &source, &file_paths);
-    Ok(FileSymbolsQueryResult {
-        file_path: path.display().to_string(),
-        symbols,
-    })
+    append_file_symbol_query_entries(&mut symbols, &parsed.module, source, &file_paths);
+    Ok(FileSymbolsQueryResult { file_path, symbols })
 }
 
 fn append_file_symbol_query_entries(
@@ -1695,6 +1714,16 @@ fn append_file_symbol_query_entries(
                 jett_resolve::scope::DefVisibility::Private,
                 None,
                 prop.name.span,
+                source,
+            ),
+            Item::Resource(resource) => push_file_symbol_query_entry(
+                symbols,
+                file_symbol_name(&resource.name.name, current_namespace.as_deref()),
+                "resource",
+                current_namespace.clone(),
+                file_symbol_visibility(current_namespace.as_deref(), resource.exported),
+                None,
+                resource.name.span,
                 source,
             ),
             Item::TypeAlias(alias) => push_file_symbol_query_entry(
@@ -1908,6 +1937,16 @@ fn append_module_query_definitions(
                 current_source,
                 file_paths,
             ),
+            Item::Resource(resource) => push_exported_query_definition(
+                definitions,
+                &resource.name.name,
+                DefKind::Resource,
+                current_namespace.as_deref(),
+                resource.exported,
+                resource.name.span,
+                current_source,
+                file_paths,
+            ),
             Item::TypeAlias(alias) => {
                 push_exported_query_definition(
                     definitions,
@@ -2025,6 +2064,15 @@ fn best_resolved_definition_at(
             }
         }
     }
+    for definition in &resolve_result.scope_table.definitions {
+        let span = definition.span;
+        if span.file == file_id && span.start <= offset && offset <= span.end {
+            let len = span.end - span.start;
+            if best_def.is_none() || len < best_def.unwrap().0 {
+                best_def = Some((len, definition.id));
+            }
+        }
+    }
     best_def
 }
 
@@ -2065,6 +2113,7 @@ pub fn query_kind_name(kind: jett_resolve::scope::DefKind) -> &'static str {
         DefKind::Enum => "enum",
         DefKind::Machine => "machine",
         DefKind::Actor => "actor",
+        DefKind::Resource => "resource",
         DefKind::Variable => "variable",
         DefKind::Param => "param",
         DefKind::Type => "type",
@@ -2133,6 +2182,7 @@ fn item_span(item: &Item) -> jett_common::Span {
         Item::VarDecl(decl) => decl.span,
         Item::Verify(verify) => verify.span,
         Item::Property(prop) => prop.span,
+        Item::Resource(resource) => resource.span,
         Item::TypeAlias(alias) => alias.span,
     }
 }
@@ -2156,17 +2206,7 @@ pub fn goto_definition(source: &str, line: u32, col: u32) -> Option<(u32, u32)> 
     prepend_support_modules(&mut parse_result.module, discover_stdlib_modules());
 
     let resolve_result = resolve(&parse_result.module);
-
-    // Find the reference span that covers `offset`.
-    let mut best_def: Option<(u32, jett_resolve::scope::DefId)> = None;
-    for (span, def_id) in &resolve_result.resolutions {
-        if span.file == file_id && span.start <= offset && offset <= span.end {
-            let len = span.end - span.start;
-            if best_def.is_none() || len < best_def.unwrap().0 {
-                best_def = Some((len, *def_id));
-            }
-        }
-    }
+    let best_def = best_resolved_definition_at(&resolve_result, file_id, offset);
 
     best_def.and_then(|(_, def_id)| {
         let def_info = resolve_result.scope_table.def(def_id);
@@ -2176,6 +2216,41 @@ pub fn goto_definition(source: &str, line: u32, col: u32) -> Option<(u32, u32)> 
             None
         }
     })
+}
+
+/// Return byte spans for every use of the symbol selected at the given
+/// one-based line and column in `source`.
+pub fn references_at(source: &str, line: u32, col: u32) -> Vec<(u32, u32)> {
+    let file_id = FileId::new(0);
+    let Some(offset) = line_col_to_offset(source, line, col) else {
+        return Vec::new();
+    };
+
+    let mut parse_result = parse(source, file_id);
+    if parse_result
+        .errors
+        .iter()
+        .any(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+    {
+        return Vec::new();
+    }
+
+    prepend_support_modules(&mut parse_result.module, discover_stdlib_modules());
+    let resolve_result = resolve(&parse_result.module);
+    let Some((_, target_def_id)) = best_resolved_definition_at(&resolve_result, file_id, offset)
+    else {
+        return Vec::new();
+    };
+
+    let mut references = resolve_result
+        .resolutions
+        .iter()
+        .filter_map(|(span, def_id)| {
+            (*def_id == target_def_id && span.file == file_id).then_some((span.start, span.end))
+        })
+        .collect::<Vec<_>>();
+    references.sort_unstable();
+    references
 }
 
 /// Return the byte bounds of a 1-based logical source line.
@@ -2407,6 +2482,7 @@ fn item_file(item: &Item) -> FileId {
         Item::VarDecl(decl) => decl.span.file,
         Item::Verify(verify) => verify.span.file,
         Item::Property(prop) => prop.span.file,
+        Item::Resource(resource) => resource.span.file,
         Item::TypeAlias(alias) => alias.span.file,
     }
 }
@@ -3837,6 +3913,22 @@ mod tests {
     }
 
     #[test]
+    fn query_source_file_symbols_uses_unsaved_source_text() {
+        let source = "namespace api\n\nexport function login() returns int64:\n    return 1\n";
+
+        let result = query_source_file_symbols(source, "untitled:api.jett")
+            .expect("source symbols query should succeed");
+
+        assert_eq!(result.file_path, "untitled:api.jett");
+        assert!(
+            result
+                .symbols
+                .iter()
+                .any(|symbol| symbol.name == "api.login" && symbol.kind == "function")
+        );
+    }
+
+    #[test]
     fn query_file_symbols_preserves_parse_diagnostics() {
         let root = temp_test_dir("jett_driver_query_file_symbols_error");
         fs::create_dir_all(&root).expect("temp query dir should be created");
@@ -4637,7 +4729,7 @@ mod tests {
 
     #[test]
     fn query_signature_reports_source_owned_crypto_surface() {
-        for function in ["sha256", "md5"] {
+        for function in ["sha256", "sha512", "md5"] {
             let name = format!("crypto.{function}");
             let result = query_signature(Path::new("."), &name)
                 .expect("crypto signature query should succeed")
@@ -4656,7 +4748,7 @@ mod tests {
             assert_eq!(result.return_type, "string");
         }
 
-        for reserved in ["crypto.sha512", "crypto.hmac_sha256", "crypto.hmac_sha512"] {
+        for reserved in ["crypto.hmac_sha256", "crypto.hmac_sha512"] {
             assert!(
                 query_signature(Path::new("."), reserved)
                     .expect("reserved crypto query should succeed")
@@ -5313,6 +5405,27 @@ mod tests {
         fs::remove_dir_all(&root).expect("temp project dir should be removed");
         fs::remove_dir_all(&external).expect("external source dir should be removed");
         assert_eq!(files, vec![source]);
+    }
+
+    #[test]
+    fn references_at_returns_all_source_use_sites() {
+        let source = "namespace app\n\nfunction double(value: int64) returns int64:\n    return value + value\n\nfunction main() returns int64:\n    return double(21)\n";
+
+        let references = references_at(source, 7, 12);
+
+        assert_eq!(references.len(), 1);
+        let call_start = source.find("double(21)").expect("call should exist") as u32;
+        assert_eq!(references, vec![(call_start, call_start + 6)]);
+    }
+
+    #[test]
+    fn references_at_accepts_the_source_declaration() {
+        let source = "namespace app\n\nfunction double(value: int64) returns int64:\n    return value + value\n\nfunction main() returns int64:\n    return double(21)\n";
+
+        let references = references_at(source, 3, 10);
+
+        let call_start = source.find("double(21)").expect("call should exist") as u32;
+        assert_eq!(references, vec![(call_start, call_start + 6)]);
     }
 }
 

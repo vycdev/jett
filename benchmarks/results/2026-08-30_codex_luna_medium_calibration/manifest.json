@@ -1,0 +1,64 @@
+{
+  "benchmark_version": "0.1.1-pilot",
+  "run_kind": "codex-subscription-calibration",
+  "generated_at_utc": {
+    "first": "2026-08-30T11:59:02.789890+00:00",
+    "last": "2026-08-30T12:02:36.881708+00:00"
+  },
+  "backend": "codex_subscription",
+  "authentication": "ChatGPT subscription",
+  "api_key_present": false,
+  "model": "gpt-5.6-luna",
+  "model_snapshot": null,
+  "model_alias_is_rolling": true,
+  "codex_cli_version": "codex-cli 0.145.0",
+  "reasoning_effort": "medium",
+  "repetitions_per_cell": 1,
+  "repair_attempts": 0,
+  "output_token_limit_enforced": false,
+  "tasks": ["bounded_weighted_sum", "signed_gcd", "triangle_kind"],
+  "languages": ["jett", "python", "typescript", "go", "rust"],
+  "tracks": ["zero_shot", "onboarding"],
+  "row_count": 30,
+  "unique_response_ids": 30,
+  "deterministic_order": "sha256('codex-calibration-order:' + run_id)",
+  "prompt_git_revision": "ff6886f3b6bcf2410f0511364b7ec5167abb66a5",
+  "generation_isolation": {
+    "ephemeral_sessions": true,
+    "empty_temporary_working_directory": true,
+    "user_config_ignored": true,
+    "project_rules_ignored": true,
+    "sandbox": "read-only",
+    "tools_forbidden_by_prompt": true,
+    "observed_tool_calls": 0
+  },
+  "grading_isolation": {
+    "container_image": "jett-bench:0.1",
+    "container_image_sha256": "61e3657db54157b6c2d7ca28ce1e9e1cc83c078f2242956967e6a9c7bf67e34a",
+    "network": "none",
+    "memory_limit": "2g",
+    "cpu_limit": 2,
+    "pid_limit": 256,
+    "capabilities": "all dropped",
+    "no_new_privileges": true
+  },
+  "usage": {
+    "input_tokens": 381342,
+    "cached_input_tokens": 284160,
+    "output_tokens": 5647,
+    "reasoning_tokens": 2538,
+    "model_latency_ms": 206991.14059988642,
+    "estimated_api_cost_usd": null,
+    "subscription_allowance_consumed": true
+  },
+  "artifacts": {
+    "results": {
+      "path": "results.jsonl",
+      "sha256": "a5af2d3157241546c2d129916658ac3e1ee5212e044a2eef60499092801c0962"
+    },
+    "summary": {
+      "path": "summary.json",
+      "sha256": "a941f10c27b39bc61b3de60c9e6c295223175b7ac976e29a8320bcfd77747ad0"
+    }
+  }
+}

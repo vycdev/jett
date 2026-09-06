@@ -88,8 +88,10 @@ jett/
 
 The selected [`jett_profiler` contract](completed/cpu_memory_profiling_contract.md)
 defines CPU/memory events, attribution, bounded collection, deterministic
-reporting, security, and the interpreter/future-runtime handoff. Implementation
-remains staged.
+reporting, security, and the interpreter/future-runtime handoff. The initial
+backend-neutral crate validates CPU report controls and aggregates injected
+samples into deterministic bottleneck records; rendering, CLI integration, and
+runtime adapters remain staged.
 
 ### Crate Dependency Graph
 
@@ -458,9 +460,12 @@ This is the most complex phase of the compiler. It enforces the majority of Jett
 **Input:** AST + `ResolveResult`.
 
 **Output:** checked diagnostics, a `Span -> TypeId` expression type map,
-checked reflection metadata, and ownership/capability diagnostics. Later HIR
-lowering can materialize this as a typed tree, but the current driver already
-uses the expression map for hover/tooling and for interpreter runtime facts.
+definition types, checked reflection metadata, normalized call-argument
+orders, source-defined method and struct-construction targets, an ordered
+concrete generic instantiation manifest with the same per-instantiation facts,
+and ownership/capability diagnostics. HIR materializes this as typed nodes; the
+current driver also uses the global expression map for hover/tooling and
+interpreter runtime facts.
 
 ### Sub-Phases (executed in order)
 
@@ -756,23 +761,71 @@ These are compile errors, not warnings.
 
 > Tracked by [#20](https://github.com/vycdev/jett/issues/20).
 
-**Input:** TypedTree from Phase 6.
+**Input:** semantic AST + `ResolveResult` + `CheckResult` from Phase 6. The
+current checked-program boundary is maps plus the shared type interner rather
+than a duplicate `TypedTree`; HIR materializes those facts into typed nodes.
 
-**Output:** HIR — a fully monomorphized intermediate representation.
+**Output:** HIR — a typed, backend-neutral, fully monomorphized intermediate
+representation.
+
+**Implementation status:** the `jett_hir` crate lowers ordinary functions and
+the typechecker's ordered concrete generic-instantiation manifest. Explicit,
+inferred, repeated, and nested generic calls resolve to deterministic concrete
+HIR functions while each instantiation retains its own checked facts. Named
+arguments are normalized to parameter order while retaining lexical evaluation
+order explicitly; source-defined interface and type-module calls select
+concrete method bodies; struct construction records canonical field order and
+refinement validation; struct field access uses dense field IDs; list/map
+constructors preserve lexical element order; and pipelines become nested
+checked calls with the piped value as synthetic argument 1. Result, optional,
+and refinement-boundary handles are explicit typed HIR operations; their
+failure blocks distinguish local `default` fallback from function `return`,
+and step-local handles wrap only their intermediate pipeline call. Enum
+construction carries a dense checked variant ID and payloads; exhaustive
+matches carry variant arms, payload locals, and an optional catch-all. Typed
+parameters and locals, direct user calls, core expressions, returns, branches,
+loops, `for`, assertions/debug controls, string interpolation, comptime
+markers, explicit declassification/coarsening, state tests, and task-control
+markers are also covered. Bitfield and state-machine construction, transitions,
+and fields carry explicit checked types plus dense field/state IDs. Remaining
+compiler-owned calls carry canonical intrinsic identity, typed arguments, and
+lexical evaluation order after type checking has authorized them. Inline
+functions and indirect calls retain explicit parameter/local identity;
+comptime type-bind scopes erase to checked HIR scopes; actor spawn/send/ask
+carry typed operands and message identity. Actor declaration/handler
+materialization remains actor-runtime work. Remaining source constructs are staged by the
+[initial HIR lowering plan](active/hir_lowering_plan.md).
+
+The initial implemented `jett_mir` boundary accepts only HIR that passes the
+structural validator. It lowers top-level `if`, `while`, exhaustive `match`,
+`break`, `continue`, and `return` into deterministic dense basic blocks with
+explicit branch, switch, goto, and return terminators. Handle-internal control
+flow and definitive ownership/drop elaboration remain subsequent MIR work.
 
 ### Purpose
 
 The HIR is the first representation where generic functions are fully expanded. Each call to `sort[int64]` and `sort[string]` produces a separate HIR function. The HIR is also where desugaring is complete — no more syntax sugar, just core operations.
 
+Resolver `DefId` and `TypeId` values remain session-local join keys. An
+in-memory HIR function identity is the compiler-supplied source origin,
+canonical namespace, canonical declaration name and kind, plus concrete type
+arguments. Persistent artifacts replace raw type interner IDs with canonical
+structural type identities. Lowering never infers source authority from
+`FileId` ranges or trusted-looking names.
+Interface-implementation method declarations additionally include both the
+concrete owner and canonical interface in their identity.
+
 ### Key Transformations
 
 1. **Monomorphization:** Generate concrete versions of all generic functions for each type parameter combination used in the program.
-2. **Method resolution:** `Dog.speak(view my_dog)` is resolved to the specific `implement Speaker for Dog` function.
-3. **Auto-view for field access:** `self.x` is annotated as an implicit view operation.
-4. **Explicit copyability:** Numeric primitives, `bool`, `nothing`, and immutable
+2. **Method-target materialization:** the checked target for `Speaker.speak(view my_dog)` becomes the specific `implement Speaker for Dog` HIR function.
+3. **Pipeline normalization:** `value into f(extra)` steps become nested checked calls with `value` as synthetic argument 1; a step-local handle explicitly wraps that step before its unwrapped value continues.
+4. **Collection construction:** source `list(...)` and `map(...)` become typed HIR aggregate constructors while preserving lexical evaluation order.
+5. **Auto-view for field access:** `self.x` is annotated as an implicit view operation.
+6. **Explicit copyability:** Numeric primitives, `bool`, `nothing`, and immutable
    `string` are implicitly copyable. The primitive `bytes` type remains
    move-only and follows the same view/consume rules as other owned storage.
-5. **Comptime reflection lowering:** Preserve enough type metadata for comptime code to inspect `type.name[T]()`, `type.kind[T]()`, `type.has_secret[T]()`, `type.fields[T]()`, bitfield layout metadata, state-machine state/transition metadata, active machine states, and reflected active-state payload fields. JSON serialization is expressible in terms of these reflection primitives rather than as format-specific HIR magic. Struct, bitfield, enum, and state-machine deserialization use the explicit `TypeConstruction` builder family to build `T` from parsed field values; that builder is the sole canonical source form, with no parallel construction-block syntax.
+7. **Comptime reflection lowering:** Preserve enough type metadata for comptime code to inspect `type.name[T]()`, `type.kind[T]()`, `type.has_secret[T]()`, `type.fields[T]()`, bitfield layout metadata, state-machine state/transition metadata, active machine states, and reflected active-state payload fields. JSON serialization is expressible in terms of these reflection primitives rather than as format-specific HIR magic. Struct, bitfield, enum, and state-machine deserialization use the explicit `TypeConstruction` builder family to build `T` from parsed field values; that builder is the sole canonical source form, with no parallel construction-block syntax.
 
 ---
 
@@ -1727,7 +1780,7 @@ these public shapes:
 | `complete_at(file, line, col)` | Prefix-filtered completion candidates with deterministic rank, match kind, namespace, source range, and signature metadata | LSP, ASP |
 | `namespaces()` | All namespaces with public functions/types and declaration ranges | ASP |
 | `definition_at(file, line, col)` | Go-to-definition target with declaration-name range | LSP, ASP |
-| `references_at(file, line, col)` | Find all references to the selected symbol with use-site ranges | ASP |
+| `references_at(file, line, col)` | Find all references to the selected symbol with use-site ranges | LSP, ASP |
 | `diagnostics(file)` | All errors/warnings for a file | LSP |
 
 File-symbol parse failures, references-at parse/resolution failures, and
@@ -1765,7 +1818,10 @@ The selected
 adds a separate local, cross-process performance layer after in-process Salsa
 memoization. Its first artifact is a successful whole-file direct AST plus
 non-error parser diagnostics. Exact source bytes, a canonical artifact schema,
-and a deterministic compiler compatibility identity form its SHA-256 key.
+and a deterministic compiler compatibility identity form its SHA-256 key. The
+current `jett_query` cache module implements the exact v1 parse-key record,
+digest, strict decoder, and current-source validation. Artifact serialization,
+authenticated storage, and persistent query read-through remain pending.
 
 The wire format is compiler-owned and independent of Rust layout, Salsa handles,
 process-local `FileId` values, pointers, and checkout paths. A hit reconstructs
@@ -1791,9 +1847,12 @@ Standard LSP implementation using the `tower-lsp` crate. Provides:
 - Real-time diagnostics (errors/warnings as you type).
 - Hover information (type at cursor).
 - Go-to-definition.
+- Find all references in the current document, optionally including the declaration.
 - Code completion.
-- Planned follow-ups: find all references and rename symbol. Whole-document
-  formatting is provided through `jett_fmt`.
+- Document symbols from the latest in-memory source, including declaration
+  kinds, signatures, and UTF-16 ranges for editor outlines.
+- Whole-document formatting is provided through `jett_fmt`.
+- Planned follow-up: rename symbol.
 
 The LSP server currently stores full document text, invokes driver operations,
 and suppresses diagnostics from stale document versions. After `jett_query`

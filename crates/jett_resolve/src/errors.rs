@@ -133,3 +133,12 @@ pub fn type_name_must_be_pascal_case(name: &str, suggested_name: &str, span: Spa
         span,
     )
 }
+
+/// E0213: Opaque runtime resources are compiler-shipped declarations.
+pub fn resource_declaration_requires_stdlib(span: Span) -> Diagnostic {
+    Diagnostic::error(
+        213,
+        "resource declarations are reserved for compiler-shipped standard library files",
+        span,
+    )
+}

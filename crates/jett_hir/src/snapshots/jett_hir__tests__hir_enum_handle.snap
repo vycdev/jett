@@ -1,0 +1,503 @@
+---
+source: crates/jett_hir/src/lib.rs
+expression: program
+---
+Program {
+    functions: [
+        Function {
+            id: FunctionId(
+                0,
+            ),
+            identity: FunctionIdentity {
+                declaration: DeclarationId {
+                    origin: Project,
+                    namespace: "app",
+                    name: "parse",
+                    kind: Function,
+                },
+                type_arguments: [],
+            },
+            source_definition: Some(
+                DefId(
+                    51,
+                ),
+            ),
+            params: [
+                Param {
+                    local: LocalId(
+                        0,
+                    ),
+                    name: "raw",
+                    ty: TypeId(
+                        10,
+                    ),
+                    mode: Owned,
+                    mutable: false,
+                    span: Span {
+                        file: FileId(
+                            0,
+                        ),
+                        start: 78,
+                        end: 89,
+                    },
+                },
+            ],
+            return_type: TypeId(
+                36,
+            ),
+            locals: [
+                Local {
+                    id: LocalId(
+                        0,
+                    ),
+                    name: "raw",
+                    ty: TypeId(
+                        10,
+                    ),
+                    mutable: false,
+                    span: Span {
+                        file: FileId(
+                            0,
+                        ),
+                        start: 78,
+                        end: 89,
+                    },
+                },
+            ],
+            body: Block {
+                statements: [
+                    Statement {
+                        kind: Return(
+                            Some(
+                                Expression {
+                                    kind: ResultOk(
+                                        Expression {
+                                            kind: EnumConstruct {
+                                                enum_type: TypeId(
+                                                    35,
+                                                ),
+                                                variant: VariantId(
+                                                    0,
+                                                ),
+                                                payloads: [
+                                                    Expression {
+                                                        kind: Int(
+                                                            1,
+                                                        ),
+                                                        ty: TypeId(
+                                                            3,
+                                                        ),
+                                                        span: Span {
+                                                            file: FileId(
+                                                                0,
+                                                            ),
+                                                            start: 149,
+                                                            end: 150,
+                                                        },
+                                                    },
+                                                ],
+                                            },
+                                            ty: TypeId(
+                                                35,
+                                            ),
+                                            span: Span {
+                                                file: FileId(
+                                                    0,
+                                                ),
+                                                start: 136,
+                                                end: 151,
+                                            },
+                                        },
+                                    ),
+                                    ty: TypeId(
+                                        36,
+                                    ),
+                                    span: Span {
+                                        file: FileId(
+                                            0,
+                                        ),
+                                        start: 133,
+                                        end: 152,
+                                    },
+                                },
+                            ),
+                        ),
+                        span: Span {
+                            file: FileId(
+                                0,
+                            ),
+                            start: 126,
+                            end: 152,
+                        },
+                    },
+                ],
+                span: Span {
+                    file: FileId(
+                        0,
+                    ),
+                    start: 126,
+                    end: 153,
+                },
+            },
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 63,
+                end: 153,
+            },
+        },
+        Function {
+            id: FunctionId(
+                1,
+            ),
+            identity: FunctionIdentity {
+                declaration: DeclarationId {
+                    origin: Project,
+                    namespace: "app",
+                    name: "main",
+                    kind: Function,
+                },
+                type_arguments: [],
+            },
+            source_definition: Some(
+                DefId(
+                    52,
+                ),
+            ),
+            params: [],
+            return_type: TypeId(
+                3,
+            ),
+            locals: [
+                Local {
+                    id: LocalId(
+                        0,
+                    ),
+                    name: "value",
+                    ty: TypeId(
+                        35,
+                    ),
+                    mutable: false,
+                    span: Span {
+                        file: FileId(
+                            0,
+                        ),
+                        start: 188,
+                        end: 261,
+                    },
+                },
+                Local {
+                    id: LocalId(
+                        1,
+                    ),
+                    name: "error",
+                    ty: TypeId(
+                        10,
+                    ),
+                    mutable: false,
+                    span: Span {
+                        file: FileId(
+                            0,
+                        ),
+                        start: 220,
+                        end: 225,
+                    },
+                },
+                Local {
+                    id: LocalId(
+                        2,
+                    ),
+                    name: "number",
+                    ty: TypeId(
+                        3,
+                    ),
+                    mutable: false,
+                    span: Span {
+                        file: FileId(
+                            0,
+                        ),
+                        start: 289,
+                        end: 295,
+                    },
+                },
+            ],
+            body: Block {
+                statements: [
+                    Statement {
+                        kind: Let {
+                            local: LocalId(
+                                0,
+                            ),
+                            value: Expression {
+                                kind: Handle {
+                                    target: Expression {
+                                        kind: Call {
+                                            function: FunctionId(
+                                                0,
+                                            ),
+                                            args: [
+                                                Expression {
+                                                    kind: String(
+                                                        "x",
+                                                    ),
+                                                    ty: TypeId(
+                                                        10,
+                                                    ),
+                                                    span: Span {
+                                                        file: FileId(
+                                                            0,
+                                                        ),
+                                                        start: 208,
+                                                        end: 211,
+                                                    },
+                                                },
+                                            ],
+                                            evaluation_order: [
+                                                0,
+                                            ],
+                                        },
+                                        ty: TypeId(
+                                            36,
+                                        ),
+                                        span: Span {
+                                            file: FileId(
+                                                0,
+                                            ),
+                                            start: 202,
+                                            end: 212,
+                                        },
+                                    },
+                                    kind: Result,
+                                    error_local: Some(
+                                        LocalId(
+                                            1,
+                                        ),
+                                    ),
+                                    failure: Block {
+                                        statements: [
+                                            Statement {
+                                                kind: HandleDefault(
+                                                    Expression {
+                                                        kind: EnumConstruct {
+                                                            enum_type: TypeId(
+                                                                35,
+                                                            ),
+                                                            variant: VariantId(
+                                                                1,
+                                                            ),
+                                                            payloads: [],
+                                                        },
+                                                        ty: TypeId(
+                                                            35,
+                                                        ),
+                                                        span: Span {
+                                                            file: FileId(
+                                                                0,
+                                                            ),
+                                                            start: 243,
+                                                            end: 256,
+                                                        },
+                                                    },
+                                                ),
+                                                span: Span {
+                                                    file: FileId(
+                                                        0,
+                                                    ),
+                                                    start: 235,
+                                                    end: 256,
+                                                },
+                                            },
+                                        ],
+                                        span: Span {
+                                            file: FileId(
+                                                0,
+                                            ),
+                                            start: 235,
+                                            end: 261,
+                                        },
+                                    },
+                                },
+                                ty: TypeId(
+                                    35,
+                                ),
+                                span: Span {
+                                    file: FileId(
+                                        0,
+                                    ),
+                                    start: 202,
+                                    end: 261,
+                                },
+                            },
+                        },
+                        span: Span {
+                            file: FileId(
+                                0,
+                            ),
+                            start: 188,
+                            end: 261,
+                        },
+                    },
+                    Statement {
+                        kind: Match {
+                            scrutinee: Expression {
+                                kind: Local(
+                                    LocalId(
+                                        0,
+                                    ),
+                                ),
+                                ty: TypeId(
+                                    35,
+                                ),
+                                span: Span {
+                                    file: FileId(
+                                        0,
+                                    ),
+                                    start: 267,
+                                    end: 272,
+                                },
+                            },
+                            arms: [
+                                MatchArm {
+                                    variant: Some(
+                                        VariantId(
+                                            0,
+                                        ),
+                                    ),
+                                    bindings: [
+                                        LocalId(
+                                            2,
+                                        ),
+                                    ],
+                                    body: Block {
+                                        statements: [
+                                            Statement {
+                                                kind: Return(
+                                                    Some(
+                                                        Expression {
+                                                            kind: Local(
+                                                                LocalId(
+                                                                    2,
+                                                                ),
+                                                            ),
+                                                            ty: TypeId(
+                                                                3,
+                                                            ),
+                                                            span: Span {
+                                                                file: FileId(
+                                                                    0,
+                                                                ),
+                                                                start: 317,
+                                                                end: 323,
+                                                            },
+                                                        },
+                                                    ),
+                                                ),
+                                                span: Span {
+                                                    file: FileId(
+                                                        0,
+                                                    ),
+                                                    start: 310,
+                                                    end: 323,
+                                                },
+                                            },
+                                        ],
+                                        span: Span {
+                                            file: FileId(
+                                                0,
+                                            ),
+                                            start: 310,
+                                            end: 332,
+                                        },
+                                    },
+                                    span: Span {
+                                        file: FileId(
+                                            0,
+                                        ),
+                                        start: 282,
+                                        end: 332,
+                                    },
+                                },
+                                MatchArm {
+                                    variant: Some(
+                                        VariantId(
+                                            1,
+                                        ),
+                                    ),
+                                    bindings: [],
+                                    body: Block {
+                                        statements: [
+                                            Statement {
+                                                kind: Return(
+                                                    Some(
+                                                        Expression {
+                                                            kind: Int(
+                                                                0,
+                                                            ),
+                                                            ty: TypeId(
+                                                                3,
+                                                            ),
+                                                            span: Span {
+                                                                file: FileId(
+                                                                    0,
+                                                                ),
+                                                                start: 360,
+                                                                end: 361,
+                                                            },
+                                                        },
+                                                    ),
+                                                ),
+                                                span: Span {
+                                                    file: FileId(
+                                                        0,
+                                                    ),
+                                                    start: 353,
+                                                    end: 361,
+                                                },
+                                            },
+                                        ],
+                                        span: Span {
+                                            file: FileId(
+                                                0,
+                                            ),
+                                            start: 353,
+                                            end: 362,
+                                        },
+                                    },
+                                    span: Span {
+                                        file: FileId(
+                                            0,
+                                        ),
+                                        start: 332,
+                                        end: 362,
+                                    },
+                                },
+                            ],
+                        },
+                        span: Span {
+                            file: FileId(
+                                0,
+                            ),
+                            start: 261,
+                            end: 362,
+                        },
+                    },
+                ],
+                span: Span {
+                    file: FileId(
+                        0,
+                    ),
+                    start: 188,
+                    end: 362,
+                },
+            },
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 153,
+                end: 362,
+            },
+        },
+    ],
+}
